@@ -97,9 +97,7 @@ pub(crate) async fn advance_object_iterator_from_caller_async(
         let (fulfilled, rejected) = {
             let table_p = caller
                 .data()
-                .promise_table
-                .lock()
-                .expect("promise table mutex");
+                .promise_table.lock().unwrap_or_else(|e| e.into_inner());
             match promise_entry(&table_p, promise_handle).map(|e| &e.state) {
                 Some(PromiseState::Fulfilled(v)) => (Some(*v), None),
                 Some(PromiseState::Rejected(r)) => (None, Some(*r)),
@@ -133,9 +131,7 @@ pub(crate) async fn advance_object_iterator_from_caller_async(
 
 pub(crate) fn create_async_generator_identity(state: &RuntimeState, generator: i64) -> i64 {
     let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(NativeCallable::AsyncGeneratorIdentity { generator });
     value::encode_native_callable_idx(handle)
@@ -143,9 +139,7 @@ pub(crate) fn create_async_generator_identity(state: &RuntimeState, generator: i
 
 pub(crate) fn create_map_set_method(state: &RuntimeState, kind: MapSetMethodKind) -> i64 {
     let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(NativeCallable::MapSetMethod { kind });
     value::encode_native_callable_idx(handle)
@@ -153,9 +147,7 @@ pub(crate) fn create_map_set_method(state: &RuntimeState, kind: MapSetMethodKind
 
 pub(crate) fn create_date_method(state: &RuntimeState, kind: DateMethodKind) -> i64 {
     let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(NativeCallable::DateMethod { kind });
     value::encode_native_callable_idx(handle)
@@ -163,9 +155,7 @@ pub(crate) fn create_date_method(state: &RuntimeState, kind: DateMethodKind) -> 
 
 pub(crate) fn create_weakmap_method(state: &RuntimeState, kind: WeakMapMethodKind) -> i64 {
     let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(NativeCallable::WeakMapMethod { kind });
     value::encode_native_callable_idx(handle)
@@ -173,9 +163,7 @@ pub(crate) fn create_weakmap_method(state: &RuntimeState, kind: WeakMapMethodKin
 
 pub(crate) fn create_weakset_method(state: &RuntimeState, kind: WeakSetMethodKind) -> i64 {
     let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(NativeCallable::WeakSetMethod { kind });
     value::encode_native_callable_idx(handle)
@@ -242,9 +230,7 @@ fn invoke_bigint_primitive_method(
             };
             let table = caller
                 .data()
-                .bigint_table
-                .lock()
-                .expect("bigint_table mutex");
+                .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
             let Some(bi) = table.get(handle) else {
                 return store_runtime_string(caller, "0".to_string());
             };
@@ -401,7 +387,7 @@ fn advance_array_like_values_iterator(
     length: u32,
 ) -> i64 {
     let idx = {
-        let mut index = index.lock().expect("array-like iterator index mutex");
+        let mut index = index.lock().unwrap_or_else(|e| e.into_inner());
         if *index >= length {
             return alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
         }
@@ -436,9 +422,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
     let record = {
         let table = caller
             .data()
-            .native_callables
-            .lock()
-            .expect("native callable table mutex");
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
         table.get(idx).cloned()
     }?;
     let argument = args
@@ -480,7 +464,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             already_resolved,
             kind,
         } => {
-            let mut already = already_resolved.lock().expect("promise resolver mutex");
+            let mut already = already_resolved.lock().unwrap_or_else(|e| e.into_inner());
             if *already {
                 return Some(value::encode_undefined());
             }
@@ -508,9 +492,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let completed = {
                 let mut table = caller
                     .data()
-                    .async_generator_table
-                    .lock()
-                    .expect("async generator table mutex");
+                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
                 else {
                     return Some(result_promise);
@@ -595,9 +577,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             };
             let mut table = caller
                 .data()
-                .symbol_table
-                .lock()
-                .expect("symbol_table mutex");
+                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
             let handle = table.len() as u32;
             table.push(SymbolEntry {
                 description,
@@ -704,7 +684,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 make_type_error_exception(caller, "TypeError: Proxy handler must be an object")
             } else {
                 let handle = {
-                    let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    let mut table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(ProxyEntry {
                         target,
@@ -717,7 +697,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             }
         }),
         NativeCallable::ProxyRevoker { proxy_handle } => {
-            let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let mut table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get_mut(proxy_handle as usize) {
                 entry.revoked = true;
             }
@@ -741,7 +721,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 return Some(value::encode_undefined());
             };
             let gc_arc = caller.data().gc_algorithm.clone();
-            let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
             let mut ctx =
                 crate::runtime_gc::GcContext::new(&mut *caller, memory, gc.algorithm_name());
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
@@ -776,7 +756,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 Some(s) => s,
                 None => return Some(value::encode_undefined()),
             };
-            let report = shared.agent_state.reports.lock().unwrap().pop();
+            let report = shared.agent_state.reports.lock().unwrap_or_else(|e| e.into_inner()).pop();
             match report {
                 Some(r) => Some(store_runtime_string(caller, r)),
                 None => Some(value::encode_null()),
@@ -811,9 +791,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let (_sync_iter_handle, sync_done) = {
                 let table = caller
                     .data()
-                    .async_from_sync_iterators
-                    .lock()
-                    .expect("async-from-sync iterators mutex");
+                    .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = match table.get(handle as usize) {
                     Some(e) => e,
                     None => return Some(value::encode_undefined()),
@@ -828,9 +806,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .async_from_sync_iterators
-                    .lock()
-                    .expect("async-from-sync iterators mutex");
+                    .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.sync_done = true;
                 }
@@ -887,7 +863,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ReadableStreamAsyncIteratorReturn { reader_handle } => {
             // releaseLock：释放流的锁定
             let stream_handle = {
-                let reader_table = caller.data().reader_table.lock().expect("reader mutex");
+                let reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
                 reader_table
                     .get(reader_handle as usize)
                     .map(|e| e.stream_handle)
@@ -895,9 +871,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             if let Some(sh) = stream_handle {
                 let mut stream_table = caller
                     .data()
-                    .readable_stream_table
-                    .lock()
-                    .expect("stream mutex");
+                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = stream_table.get_mut(sh as usize) {
                     entry.locked = false;
                 }
@@ -956,9 +930,7 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
     let record = {
         let table = caller
             .data()
-            .native_callables
-            .lock()
-            .expect("native callable table mutex");
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
         table.get(idx).cloned()
     }?;
     let argument = args
@@ -985,7 +957,7 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
                 Some(s) => s,
                 None => return Some(value::encode_undefined()),
             };
-            let report = shared.agent_state.reports.lock().unwrap().pop();
+            let report = shared.agent_state.reports.lock().unwrap_or_else(|e| e.into_inner()).pop();
             match report {
                 Some(r) => Some(store_runtime_string(caller, r)),
                 None => Some(value::encode_null()),
@@ -1004,9 +976,7 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
             let (sync_iter_handle, sync_done) = {
                 let table = caller
                     .data()
-                    .async_from_sync_iterators
-                    .lock()
-                    .expect("async-from-sync iterators mutex");
+                    .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = match table.get(handle as usize) {
                     Some(e) => e,
                     None => return Some(value::encode_undefined()),
@@ -1022,9 +992,7 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
             {
                 let mut table = caller
                     .data()
-                    .async_from_sync_iterators
-                    .lock()
-                    .expect("async-from-sync iterators mutex");
+                    .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.sync_done = true;
                 }
@@ -1046,16 +1014,14 @@ pub(crate) fn create_async_from_sync_iterator(
     caller: &mut Caller<'_, RuntimeState>,
     sync_iter_handle: i64,
 ) -> i64 {
-    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
     let iter_handle = iters.len() as u32;
     let outer_iter = value::encode_handle(value::TAG_ITERATOR, iter_handle);
 
     let table_idx = {
         let mut table = caller
             .data()
-            .async_from_sync_iterators
-            .lock()
-            .expect("async-from-sync iterators mutex");
+            .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
         let idx = table.len() as u32;
         table.push(AsyncFromSyncIteratorEntry {
             sync_iterator: sync_iter_handle,
@@ -1069,9 +1035,7 @@ pub(crate) fn create_async_from_sync_iterator(
     let next_callable = {
         let mut nc = caller
             .data()
-            .native_callables
-            .lock()
-            .expect("native callables mutex");
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
         let handle = nc.len() as u32;
         nc.push(NativeCallable::AsyncFromSyncNext { handle: table_idx });
         value::encode_native_callable_idx(handle)
@@ -1079,9 +1043,7 @@ pub(crate) fn create_async_from_sync_iterator(
     let return_callable = {
         let mut nc = caller
             .data()
-            .native_callables
-            .lock()
-            .expect("native callables mutex");
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
         let handle = nc.len() as u32;
         nc.push(NativeCallable::AsyncFromSyncReturn { handle: table_idx });
         value::encode_native_callable_idx(handle)
@@ -1108,7 +1070,7 @@ async fn call_sync_iter_and_wrap_async(
     let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
 
     let (iterator, method_to_call) = {
-        let iters = caller.data().iterators.lock().expect("iterators mutex");
+        let iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
         match iters.get(sync_handle_idx) {
             Some(IteratorState::ObjectIter {
                 iterator,
@@ -1142,7 +1104,7 @@ async fn call_sync_iter_and_wrap_async(
 
     if value::is_exception(raw_result) {
         {
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(IteratorState::ObjectIter { done, .. }) = iters.get_mut(sync_handle_idx) {
                 *done = true;
             }
@@ -1182,9 +1144,7 @@ pub(crate) async fn advance_async_from_sync_async(
     let (sync_iter_handle, sync_done) = {
         let table = caller
             .data()
-            .async_from_sync_iterators
-            .lock()
-            .expect("async-from-sync iterators mutex");
+            .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
         let entry = match table.get(handle as usize) {
             Some(e) => e,
             None => return value::encode_undefined(),
@@ -1202,7 +1162,7 @@ pub(crate) async fn advance_async_from_sync_async(
 
     // Direct advancement for non-ObjectIter types
     let direct_result = {
-        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
         match iters.get_mut(sync_handle_idx) {
             Some(IteratorState::ArrayIter { ptr, index, length }) => {
                 if *index < *length {
@@ -1218,7 +1178,7 @@ pub(crate) async fn advance_async_from_sync_async(
                 }
             }
             Some(IteratorState::MapKeyIter { map_handle, index }) => {
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
                     let idx = *index as usize;
@@ -1237,7 +1197,7 @@ pub(crate) async fn advance_async_from_sync_async(
                 }
             }
             Some(IteratorState::MapValueIter { map_handle, index }) => {
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
                     let idx = *index as usize;
@@ -1256,7 +1216,7 @@ pub(crate) async fn advance_async_from_sync_async(
                 }
             }
             Some(IteratorState::SetValueIter { set_handle, index }) => {
-                let table = caller.data().set_table.lock().expect("set table mutex");
+                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
                     let idx = *index as usize;
@@ -1347,9 +1307,7 @@ pub(crate) async fn advance_async_from_sync_async(
         if done {
             let mut table = caller
                 .data()
-                .async_from_sync_iterators
-                .lock()
-                .expect("async-from-sync iterators mutex");
+                .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get_mut(handle as usize) {
                 entry.sync_done = true;
             }
@@ -1363,16 +1321,14 @@ pub(crate) async fn advance_async_from_sync_async(
     let promise = call_sync_iter_and_wrap_async(caller, sync_iter_handle, None, false).await;
 
     {
-        let iters = caller.data().iterators.lock().expect("iterators mutex");
+        let iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(IteratorState::ObjectIter { done, .. }) = iters.get(sync_handle_idx)
             && *done
         {
             drop(iters);
             let mut table = caller
                 .data()
-                .async_from_sync_iterators
-                .lock()
-                .expect("async-from-sync iterators mutex");
+                .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get_mut(handle as usize) {
                 entry.sync_done = true;
             }
@@ -1393,9 +1349,7 @@ pub(crate) fn weakref_deref_impl(caller: &mut Caller<'_, RuntimeState>, this_val
         .unwrap_or(0);
     let table = caller
         .data()
-        .weakref_table
-        .lock()
-        .expect("weakref table mutex");
+        .weakref_table.lock().unwrap_or_else(|e| e.into_inner());
     if handle >= table.len() {
         return value::encode_undefined();
     }
@@ -1422,9 +1376,7 @@ pub(crate) fn fr_unregister_impl(
     };
     let mut table = caller
         .data()
-        .finalization_registry_table
-        .lock()
-        .expect("finalization registry table mutex");
+        .finalization_registry_table.lock().unwrap_or_else(|e| e.into_inner());
     if handle >= table.len() {
         return value::encode_bool(false);
     }
@@ -1475,9 +1427,7 @@ pub(crate) fn fr_register_impl_with_args(
     {
         let mut table = caller
             .data()
-            .finalization_registry_table
-            .lock()
-            .expect("finalization registry table mutex");
+            .finalization_registry_table.lock().unwrap_or_else(|e| e.into_inner());
         if handle < table.len() {
             table[handle].registrations.push(FinalizationRegistration {
                 target_handle,

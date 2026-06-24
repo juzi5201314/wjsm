@@ -13,7 +13,7 @@ pub(crate) fn define_collections_buffers(
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
-                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.push(MapEntry {
                     keys: Vec::new(),
                     values: Vec::new(),
@@ -43,7 +43,7 @@ pub(crate) fn define_collections_buffers(
                         }
                     }
                 }
-                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (handle as usize) < table.len() {
                     let map_entry = &mut table[handle as usize];
                     for (key, val) in pairs {
@@ -133,7 +133,7 @@ pub(crate) fn define_collections_buffers(
             let handle = handle_val
                 .map(|v| value::decode_f64(v) as usize)
                 .unwrap_or(0);
-            let mut table = caller.data().map_table.lock().expect("map table mutex");
+            let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -164,7 +164,7 @@ pub(crate) fn define_collections_buffers(
             let handle = handle_val
                 .map(|v| value::decode_f64(v) as usize)
                 .unwrap_or(0);
-            let table = caller.data().map_table.lock().expect("map table mutex");
+            let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -185,7 +185,7 @@ pub(crate) fn define_collections_buffers(
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
-                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.push(SetEntry { values: Vec::new() });
                 handle = table.len() as u32 - 1;
             }
@@ -210,7 +210,7 @@ pub(crate) fn define_collections_buffers(
                         }
                     }
                 }
-                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (handle as usize) < table.len() {
                     let set_entry = &mut table[handle as usize];
                     for val in values {
@@ -295,7 +295,7 @@ pub(crate) fn define_collections_buffers(
             let handle = handle_val
                 .map(|v| value::decode_f64(v) as usize)
                 .unwrap_or(0);
-            let mut table = caller.data().set_table.lock().expect("set table mutex");
+            let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -324,7 +324,7 @@ pub(crate) fn define_collections_buffers(
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
                     let handle = value::decode_f64(mh) as usize;
-                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         let entry = &table[handle];
                         for i in 0..entry.keys.len() {
@@ -338,7 +338,7 @@ pub(crate) fn define_collections_buffers(
                 let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
                 if let Some(sh) = set_handle {
                     let handle = value::decode_f64(sh) as usize;
-                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         let entry = &table[handle];
                         for i in 0..entry.values.len() {
@@ -367,7 +367,7 @@ pub(crate) fn define_collections_buffers(
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
                     let handle = value::decode_f64(mh) as usize;
-                    let mut table = caller.data().map_table.lock().expect("map table mutex");
+                    let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         let entry = &mut table[handle];
                         for i in 0..entry.keys.len() {
@@ -383,7 +383,7 @@ pub(crate) fn define_collections_buffers(
                 let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
                 if let Some(sh) = set_handle {
                     let handle = value::decode_f64(sh) as usize;
-                    let mut table = caller.data().set_table.lock().expect("set table mutex");
+                    let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         let entry = &mut table[handle];
                         for i in 0..entry.values.len() {
@@ -413,7 +413,7 @@ pub(crate) fn define_collections_buffers(
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
                     let handle = value::decode_f64(mh) as usize;
-                    let mut table = caller.data().map_table.lock().expect("map table mutex");
+                    let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         table[handle].keys.clear();
                         table[handle].values.clear();
@@ -423,7 +423,7 @@ pub(crate) fn define_collections_buffers(
                 let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
                 if let Some(sh) = set_handle {
                     let handle = value::decode_f64(sh) as usize;
-                    let mut table = caller.data().set_table.lock().expect("set table mutex");
+                    let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         table[handle].values.clear();
                     }
@@ -447,7 +447,7 @@ pub(crate) fn define_collections_buffers(
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
                     let handle = value::decode_f64(mh) as usize;
-                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         return value::encode_f64(table[handle].keys.len() as f64);
                     }
@@ -456,7 +456,7 @@ pub(crate) fn define_collections_buffers(
                 let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
                 if let Some(sh) = set_handle {
                     let handle = value::decode_f64(sh) as usize;
-                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         return value::encode_f64(table[handle].values.len() as f64);
                     }
@@ -486,12 +486,12 @@ pub(crate) fn define_collections_buffers(
             } else {
                 return value::encode_undefined();
             };
-            let table = caller.data().map_table.lock().expect("map table mutex");
+            let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
             if (map_handle_u32 as usize) >= table.len() {
                 return value::encode_undefined();
             }
             drop(table);
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
             let iter_handle = iters.len() as u32;
             iters.push(IteratorState::MapKeyIter {
                 map_handle: map_handle_u32,
@@ -526,9 +526,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut table = caller
                     .data()
-                    .weakmap_table
-                    .lock()
-                    .expect("weakmap_table mutex");
+                    .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
                 handle = table.len() as u32;
                 table.push(WeakMapEntry {
                     map: HashMap::new(),
@@ -572,7 +570,7 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
             if !is_object_key(key) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
+                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: Invalid value used as weak map key".to_string());
                 return this_val;
             }
@@ -587,9 +585,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut table = caller
                     .data()
-                    .weakmap_table
-                    .lock()
-                    .expect("weakmap_table mutex");
+                    .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].map.insert(key_handle, val);
                 }
@@ -615,9 +611,7 @@ pub(crate) fn define_collections_buffers(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakmap_table
-                .lock()
-                .expect("weakmap_table mutex");
+                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len()
                 && let Some(&val) = table[handle].map.get(&key_handle)
             {
@@ -644,9 +638,7 @@ pub(crate) fn define_collections_buffers(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakmap_table
-                .lock()
-                .expect("weakmap_table mutex");
+                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.contains_key(&key_handle));
             }
@@ -671,9 +663,7 @@ pub(crate) fn define_collections_buffers(
             let key_handle = value::decode_object_handle(key);
             let mut table = caller
                 .data()
-                .weakmap_table
-                .lock()
-                .expect("weakmap_table mutex");
+                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
             }
@@ -695,9 +685,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut table = caller
                     .data()
-                    .weakset_table
-                    .lock()
-                    .expect("weakset_table mutex");
+                    .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
                 handle = table.len() as u32;
                 table.push(WeakSetEntry {
                     set: HashSet::new(),
@@ -739,7 +727,7 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
+                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: Invalid value used in weak set".to_string());
                 return this_val;
             }
@@ -754,9 +742,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut table = caller
                     .data()
-                    .weakset_table
-                    .lock()
-                    .expect("weakset_table mutex");
+                    .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].set.insert(key_handle);
                 }
@@ -782,9 +768,7 @@ pub(crate) fn define_collections_buffers(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakset_table
-                .lock()
-                .expect("weakset_table mutex");
+                .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.contains(&key_handle));
             }
@@ -809,9 +793,7 @@ pub(crate) fn define_collections_buffers(
             let key_handle = value::decode_object_handle(key);
             let mut table = caller
                 .data()
-                .weakset_table
-                .lock()
-                .expect("weakset_table mutex");
+                .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.remove(&key_handle));
             }
@@ -830,7 +812,7 @@ pub(crate) fn define_collections_buffers(
         |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
             let len_f64 = value::decode_f64(byte_length);
             if len_f64 < 0.0 {
-                *caller.data().runtime_error.lock().expect("error mutex") =
+                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("RangeError: Invalid array buffer length".to_string());
                 return value::encode_undefined();
             }
@@ -839,9 +821,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut table = caller
                     .data()
-                    .arraybuffer_table
-                    .lock()
-                    .expect("arraybuffer_table mutex");
+                    .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
                 handle = table.len() as u32;
                 table.push(ArrayBufferEntry {
                     data: vec![0; len as usize],
@@ -919,9 +899,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut ab_table = caller
                     .data()
-                    .arraybuffer_table
-                    .lock()
-                    .expect("arraybuffer_table mutex");
+                    .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
                 new_buf_handle = ab_table.len() as u32;
                 let mut new_data = vec![0u8; new_len as usize];
                 if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
@@ -986,9 +964,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut table = caller
                     .data()
-                    .dataview_table
-                    .lock()
-                    .expect("dataview_table mutex");
+                    .dataview_table.lock().unwrap_or_else(|e| e.into_inner());
                 handle = table.len() as u32;
                 table.push(DataViewEntry {
                     buffer_handle: buf_handle,
@@ -1046,7 +1022,7 @@ pub(crate) fn define_collections_buffers(
                             .data()
                             .dataview_table
                             .lock()
-                            .expect("dataview_table mutex");
+                            .unwrap_or_else(|e| e.into_inner());
                         if dv_handle < dv_table.len() {
                             let e = &dv_table[dv_handle];
                             (e.buffer_handle, e.byte_offset, e.byte_length, e.is_shared)
@@ -1056,7 +1032,7 @@ pub(crate) fn define_collections_buffers(
                     };
                     let abs_offset = dv_offset as usize + offset as usize;
                     if offset + $size as u32 > dv_length {
-                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                        *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                             "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
@@ -1069,7 +1045,7 @@ pub(crate) fn define_collections_buffers(
                         abs_offset,
                         &mut bytes[..$size],
                     ) {
-                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                        *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                             "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
@@ -1171,7 +1147,7 @@ pub(crate) fn define_collections_buffers(
                             .data()
                             .dataview_table
                             .lock()
-                            .expect("dataview_table mutex");
+                            .unwrap_or_else(|e| e.into_inner());
                         if dv_handle < dv_table.len() {
                             let e = &dv_table[dv_handle];
                             (e.buffer_handle, e.byte_offset, e.byte_length, e.is_shared)
@@ -1181,7 +1157,7 @@ pub(crate) fn define_collections_buffers(
                     };
                     let abs_offset = dv_offset as usize + offset as usize;
                     if offset + $size as u32 > dv_length {
-                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                        *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                             "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
@@ -1194,7 +1170,7 @@ pub(crate) fn define_collections_buffers(
                         abs_offset,
                         &bytes[..$size],
                     ) {
-                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                        *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                             "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
@@ -1466,9 +1442,7 @@ pub(crate) fn define_collections_buffers(
             let handle = value::decode_f64(h) as usize;
             let ta_table = caller
                 .data()
-                .typedarray_table
-                .lock()
-                .expect("typedarray_table mutex");
+                .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = ta_table.get(handle) else {
                 return value::encode_undefined();
             };
@@ -1509,9 +1483,7 @@ pub(crate) fn define_collections_buffers(
                 {
                     let mut ab_table = caller
                         .data()
-                        .arraybuffer_table
-                        .lock()
-                        .expect("arraybuffer_table mutex");
+                        .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
                     new_buf_handle = ab_table.len() as u32;
                     ab_table.push(ArrayBufferEntry { data: Vec::new() });
                 }
@@ -1519,9 +1491,7 @@ pub(crate) fn define_collections_buffers(
                 {
                     let mut ta_table = caller
                         .data()
-                        .typedarray_table
-                        .lock()
-                        .expect("typedarray_table mutex");
+                        .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
                     new_ta_handle = ta_table.len() as u32;
                     ta_table.push(TypedArrayEntry {
                         buffer_handle: new_buf_handle,
@@ -1572,7 +1542,7 @@ pub(crate) fn define_collections_buffers(
                     .shared_state
                     .clone()
                     .expect("SharedArrayBuffer requires shared_state");
-                let sab_table = shared.sab_table.lock().expect("sab_table mutex");
+                let sab_table = shared.sab_table.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(buf_entry) = sab_table.get(buf_handle as usize) else {
                     return value::encode_undefined();
                 };
@@ -1588,9 +1558,7 @@ pub(crate) fn define_collections_buffers(
             } else {
                 let ab_table = caller
                     .data()
-                    .arraybuffer_table
-                    .lock()
-                    .expect("arraybuffer_table mutex");
+                    .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(buf_entry) = ab_table.get(buf_handle as usize) else {
                     return value::encode_undefined();
                 };
@@ -1606,9 +1574,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut ab_table = caller
                     .data()
-                    .arraybuffer_table
-                    .lock()
-                    .expect("arraybuffer_table mutex");
+                    .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
                 new_buf_handle = ab_table.len() as u32;
                 ab_table.push(ArrayBufferEntry { data: sliced_data });
             }
@@ -1618,9 +1584,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut ta_table = caller
                     .data()
-                    .typedarray_table
-                    .lock()
-                    .expect("typedarray_table mutex");
+                    .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
                 new_ta_handle = ta_table.len() as u32;
                 ta_table.push(TypedArrayEntry {
                     buffer_handle: new_buf_handle,
@@ -1693,9 +1657,7 @@ pub(crate) fn define_collections_buffers(
             let handle = value::decode_f64(h) as usize;
             let ta_table = caller
                 .data()
-                .typedarray_table
-                .lock()
-                .expect("typedarray_table mutex");
+                .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = ta_table.get(handle) else {
                 return value::encode_undefined();
             };
@@ -1737,9 +1699,7 @@ pub(crate) fn define_collections_buffers(
             {
                 let mut ta_table = caller
                     .data()
-                    .typedarray_table
-                    .lock()
-                    .expect("typedarray_table mutex");
+                    .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
                 new_ta_handle = ta_table.len() as u32;
                 ta_table.push(TypedArrayEntry {
                     buffer_handle: buf_handle,
@@ -1859,7 +1819,7 @@ pub(crate) fn define_collections_buffers(
             ];
 
             for (name, callable) in builtin_pairs {
-                let mut native_callables = caller.data().native_callables.lock().unwrap();
+                let mut native_callables = caller.data().native_callables.lock().unwrap_or_else(|e| e.into_inner());
                 let idx = native_callables.len() as u32;
                 native_callables.push(callable.clone());
                 let val = value::encode_native_callable_idx(idx);
@@ -1884,7 +1844,7 @@ pub(crate) fn define_collections_buffers(
                 ("monotonicNow", NativeCallable::AgentMonotonicNow),
             ];
             for (name, callable) in agent_methods {
-                let mut nc = caller.data().native_callables.lock().unwrap();
+                let mut nc = caller.data().native_callables.lock().unwrap_or_else(|e| e.into_inner());
                 let idx = nc.len() as u32;
                 nc.push(callable.clone());
                 let val = value::encode_native_callable_idx(idx);
@@ -1913,7 +1873,7 @@ pub(crate) fn define_collections_buffers(
         |mut caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
             let rendered =
                 render_value(&mut caller, thrown_value).unwrap_or_else(|_| "unknown".to_string());
-            let mut errors = caller.data().error_table.lock().unwrap();
+            let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
             let idx = errors.len() as u32;
             errors.push(ErrorEntry {
                 name: String::new(),
@@ -1929,7 +1889,7 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |caller: Caller<'_, RuntimeState>, exception_handle: i64| -> i64 {
             let idx = value::decode_handle(exception_handle) as usize;
-            let errors = caller.data().error_table.lock().unwrap();
+            let errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
             errors
                 .get(idx)
                 .map(|e| e.value)
@@ -2376,9 +2336,7 @@ pub(crate) fn define_collections_buffers(
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: cannot write private member to non-object".to_string());
                 return value::encode_undefined();
             }

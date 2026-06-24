@@ -7,13 +7,9 @@ pub(crate) fn create_combinator_context(
     result_array: i64,
 ) -> usize {
     let mut contexts = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex");
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner());
     let mut free = state
-        .combinator_context_free_slots
-        .lock()
-        .expect("combinator context free slots mutex");
+        .combinator_context_free_slots.lock().unwrap_or_else(|e| e.into_inner());
     while let Some(idx) = free.pop() {
         if idx < contexts.len() {
             contexts[idx] = CombinatorContext {
@@ -39,9 +35,7 @@ pub(crate) fn create_combinator_context(
 
 pub(crate) fn set_combinator_remaining(state: &RuntimeState, context: usize, remaining: usize) {
     if let Some(entry) = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex")
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner())
         .get_mut(context)
     {
         entry.remaining = remaining;
@@ -50,9 +44,7 @@ pub(crate) fn set_combinator_remaining(state: &RuntimeState, context: usize, rem
 
 pub(crate) fn mark_combinator_settled(state: &RuntimeState, context: usize) {
     if let Some(entry) = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex")
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner())
         .get_mut(context)
     {
         entry.settled = true;
@@ -61,9 +53,7 @@ pub(crate) fn mark_combinator_settled(state: &RuntimeState, context: usize) {
 
 pub(crate) fn increment_combinator_outstanding_settlements(state: &RuntimeState, context: usize) {
     if let Some(entry) = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex")
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner())
         .get_mut(context)
     {
         entry.outstanding_settlements += 1;
@@ -72,9 +62,7 @@ pub(crate) fn increment_combinator_outstanding_settlements(state: &RuntimeState,
 
 pub(crate) fn decrement_combinator_outstanding_settlements(state: &RuntimeState, context: usize) {
     if let Some(entry) = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex")
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner())
         .get_mut(context)
     {
         entry.outstanding_settlements = entry.outstanding_settlements.saturating_sub(1);
@@ -83,13 +71,9 @@ pub(crate) fn decrement_combinator_outstanding_settlements(state: &RuntimeState,
 
 pub(crate) fn try_recycle_combinator_context(state: &RuntimeState, context: usize) {
     let mut contexts = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex");
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner());
     let mut free = state
-        .combinator_context_free_slots
-        .lock()
-        .expect("combinator context free slots mutex");
+        .combinator_context_free_slots.lock().unwrap_or_else(|e| e.into_inner());
     let Some(entry) = contexts.get_mut(context) else {
         return;
     };
@@ -129,9 +113,7 @@ pub(crate) fn combinator_reaction_record(
     }
     let idx = value::decode_native_callable_idx(handler) as usize;
     let record = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex")
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner())
         .get(idx)
         .cloned()?;
     match record {
@@ -146,9 +128,7 @@ pub(crate) fn combinator_reaction_record(
 
 pub(crate) fn open_combinator_context(state: &RuntimeState, context: usize) -> Option<(i64, i64)> {
     let contexts = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex");
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner());
     let entry = contexts.get(context)?;
     if entry.settled {
         None
@@ -162,9 +142,7 @@ pub(crate) fn decrement_combinator_remaining(
     context: usize,
 ) -> Option<(i64, i64)> {
     let mut contexts = state
-        .combinator_contexts
-        .lock()
-        .expect("combinator context mutex");
+        .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner());
     let entry = contexts.get_mut(context)?;
     if entry.settled {
         return None;
@@ -211,9 +189,7 @@ pub(crate) fn handle_combinator_reaction<
     let settled = {
         let state = ctx.state_mut();
         state
-            .combinator_contexts
-            .lock()
-            .expect("combinator context mutex")
+            .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner())
             .get(context)
             .map(|e| e.settled)
             .unwrap_or(true)
@@ -255,9 +231,7 @@ pub(crate) fn handle_combinator_reaction<
             let result_promise = {
                 let state = ctx.state_mut();
                 state
-                    .combinator_contexts
-                    .lock()
-                    .expect("combinator context mutex")
+                    .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner())
                     .get(context)
                     .map(|e| e.result_promise)
                     .unwrap_or(value::encode_undefined())
@@ -297,9 +271,7 @@ pub(crate) fn handle_combinator_reaction<
             let result_promise = {
                 let state = ctx.state_mut();
                 state
-                    .combinator_contexts
-                    .lock()
-                    .expect("combinator context mutex")
+                    .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner())
                     .get(context)
                     .map(|e| e.result_promise)
                     .unwrap_or(value::encode_undefined())
@@ -346,9 +318,7 @@ mod tests {
         try_recycle_combinator_context(&state, ctx_idx);
         {
             let contexts = state
-                .combinator_contexts
-                .lock()
-                .expect("combinator context mutex");
+                .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner());
             assert!(
                 contexts
                     .get(ctx_idx)
@@ -359,9 +329,7 @@ mod tests {
         try_recycle_combinator_context(&state, ctx_idx);
         {
             let contexts = state
-                .combinator_contexts
-                .lock()
-                .expect("combinator context mutex");
+                .combinator_contexts.lock().unwrap_or_else(|e| e.into_inner());
             assert!(
                 contexts
                     .get(ctx_idx)

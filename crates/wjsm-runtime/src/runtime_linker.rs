@@ -166,9 +166,7 @@ pub(super) fn register_common_bridges(
             let record = {
                 let table = caller
                     .data()
-                    .native_callables
-                    .lock()
-                    .expect("native callable table mutex");
+                    .native_callables.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(idx).cloned()
             };
             match record {
@@ -215,11 +213,11 @@ pub(super) fn register_common_bridges(
                 let mut values = Vec::new();
                 loop {
                     let pending = {
-                        let mut iters = caller.data().iterators.lock().expect("iters");
+                        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                         match iters.get_mut(handle_idx) {
                             Some(IteratorState::MapKeyIter { map_handle, index }) => {
                                 let table =
-                                    caller.data().map_table.lock().expect("map table mutex");
+                                    caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                                 let pending = if *map_handle < table.len() as u32 {
                                     let entry = &table[*map_handle as usize];
                                     let idx = *index as usize;
@@ -238,7 +236,7 @@ pub(super) fn register_common_bridges(
                             }
                             Some(IteratorState::MapValueIter { map_handle, index }) => {
                                 let table =
-                                    caller.data().map_table.lock().expect("map table mutex");
+                                    caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                                 let pending = if *map_handle < table.len() as u32 {
                                     let entry = &table[*map_handle as usize];
                                     let idx = *index as usize;
@@ -257,7 +255,7 @@ pub(super) fn register_common_bridges(
                             }
                             Some(IteratorState::SetValueIter { set_handle, index }) => {
                                 let table =
-                                    caller.data().set_table.lock().expect("set table mutex");
+                                    caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                                 let pending = if *set_handle < table.len() as u32 {
                                     let entry = &table[*set_handle as usize];
                                     let idx = *index as usize;
@@ -496,14 +494,14 @@ pub(super) fn register_complex_bridges(
                     || value::is_function(iterable)
                     || value::is_proxy(iterable))
                 {
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = iters.len() as u32;
                     iters.push(IteratorState::Error);
                     return value::encode_handle(value::TAG_ITERATOR, handle);
                 }
 
                 let Some(_ptr) = resolve_handle(&mut caller, iterable) else {
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = iters.len() as u32;
                     iters.push(IteratorState::Error);
                     return value::encode_handle(value::TAG_ITERATOR, handle);
@@ -515,7 +513,7 @@ pub(super) fn register_complex_bridges(
                     let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
                     let sync_iter_handle = {
                         let mut iters =
-                            caller.data().iterators.lock().expect("iterators mutex");
+                            caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                         let sync_handle = iters.len() as u32;
                         iters.push(IteratorState::ArrayIter {
                             ptr: arr_ptr,
@@ -553,7 +551,7 @@ pub(super) fn register_complex_bridges(
                                 )
                                 .filter(|c| value::is_callable(*c));
                                 let mut iters =
-                                    caller.data().iterators.lock().expect("iterators mutex");
+                                    caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                                 let handle = iters.len() as u32;
                                 iters.push(IteratorState::ObjectIter {
                                     iterator,
@@ -600,9 +598,7 @@ pub(super) fn register_complex_bridges(
                                 let sync_iter_handle = {
                                     let mut iters = caller
                                         .data()
-                                        .iterators
-                                        .lock()
-                                        .expect("iterators mutex");
+                                        .iterators.lock().unwrap_or_else(|e| e.into_inner());
                                     let sync_handle = iters.len() as u32;
                                     iters.push(IteratorState::ObjectIter {
                                         iterator: sync_iter,
@@ -642,18 +638,14 @@ pub(super) fn register_complex_bridges(
                 if value::is_null(items) || value::is_undefined(items) {
                     *caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                         Some("TypeError: Cannot group null or undefined".to_string());
                     return value::encode_undefined();
                 }
                 if !value::is_callable(callbackfn) {
                     *caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                         Some("TypeError: callbackfn is not callable".to_string());
                     return value::encode_undefined();
                 }
@@ -680,7 +672,7 @@ pub(super) fn register_complex_bridges(
                             Err(_) => return value::encode_undefined(),
                         };
                         let key_str = to_property_key(&mut caller, key);
-                        if caller.data().runtime_error.lock().expect("mutex").is_some() {
+                        if caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
                             return value::encode_undefined();
                         }
                         groups.entry(key_str).or_default().push(elem);
@@ -711,23 +703,19 @@ pub(super) fn register_complex_bridges(
                 if value::is_null(items) || value::is_undefined(items) {
                     *caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                         Some("TypeError: Cannot group null or undefined".to_string());
                     return value::encode_undefined();
                 }
                 if !value::is_callable(callbackfn) {
                     *caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                         Some("TypeError: callbackfn is not callable".to_string());
                     return value::encode_undefined();
                 }
                 let map_handle = {
-                    let mut map_table = caller.data().map_table.lock().expect("map table mutex");
+                    let mut map_table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = map_table.len();
                     map_table.push(MapEntry {
                         keys: Vec::new(),
@@ -835,7 +823,7 @@ pub(super) fn register_complex_bridges(
                             write_array_length(&mut caller, arr_ptr, elements.len() as u32);
                         }
                         let mut table =
-                            caller.data().map_table.lock().expect("map table mutex");
+                            caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                         table[map_handle].keys.push(*group_key);
                         table[map_handle].values.push(arr);
                     }

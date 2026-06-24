@@ -53,9 +53,7 @@ pub(crate) fn define_object_builtins_async(
                 let result = proxy_or_target_prevent_extensions_impl_async(&mut caller, obj).await;
                 let has_error = caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex")
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
                     .is_some();
                 if !result && value::is_proxy(obj) && !has_error {
                     set_runtime_error(

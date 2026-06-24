@@ -6,9 +6,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
             let handle = value::decode_runtime_string_handle(val) as usize;
             let strings = caller
                 .data()
-                .runtime_strings
-                .lock()
-                .expect("runtime strings mutex");
+                .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(value) = strings.get(handle) {
                 return Ok(value.clone());
             }
@@ -95,7 +93,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
                 let keys_values = {
-                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         let entry = &table[handle];
                         Some((entry.keys.clone(), entry.values.clone()))
@@ -118,7 +116,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
                 let vals = {
-                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     if handle < table.len() {
                         Some(table[handle].values.clone())
                     } else {
@@ -140,16 +138,12 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
                 let (entry, buf_data) = {
                     let ta_table = caller
                         .data()
-                        .typedarray_table
-                        .lock()
-                        .expect("typedarray_table mutex");
+                        .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
                     let entry = ta_table.get(ta_handle).cloned();
                     let buf_data = entry.as_ref().and_then(|e| {
                         let ab_table = caller
                             .data()
-                            .arraybuffer_table
-                            .lock()
-                            .expect("arraybuffer_table mutex");
+                            .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
                         ab_table
                             .get(e.buffer_handle as usize)
                             .map(|b| b.data.clone())
@@ -276,9 +270,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         let handle = value::decode_bigint_handle(val) as usize;
         let table = caller
             .data()
-            .bigint_table
-            .lock()
-            .expect("bigint_table mutex");
+            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bigint) = table.get(handle) {
             return Ok(format!("{bigint}n"));
         }
@@ -289,9 +281,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         let handle = value::decode_symbol_handle(val) as usize;
         let table = caller
             .data()
-            .symbol_table
-            .lock()
-            .expect("symbol_table mutex");
+            .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get(handle) {
             if let Some(ref desc) = entry.description {
                 // Escape the description for display
@@ -304,7 +294,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
 
     if value::is_regexp(val) {
         let handle = value::decode_regexp_handle(val) as usize;
-        let table = caller.data().regex_table.lock().expect("regex_table mutex");
+        let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get(handle) {
             return Ok(format!(
                 "/{}/{}",
@@ -334,9 +324,7 @@ pub(crate) fn write_console_value(
     let rendered = render_value(caller, val).unwrap_or_else(|_| "unknown".to_string());
     let mut buffer = caller
         .data()
-        .output
-        .lock()
-        .expect("runtime output buffer mutex should not be poisoned");
+        .output.lock().unwrap_or_else(|e| e.into_inner());
     match prefix {
         Some(p) => writeln!(&mut *buffer, "[{p}] {rendered}"),
         None => writeln!(&mut *buffer, "{rendered}"),
@@ -358,9 +346,7 @@ pub(crate) fn write_console_values(
     let line = rendered.join(" ");
     let mut buffer = caller
         .data()
-        .output
-        .lock()
-        .expect("runtime output buffer mutex should not be poisoned");
+        .output.lock().unwrap_or_else(|e| e.into_inner());
     match prefix {
         Some(p) => writeln!(&mut *buffer, "[{p}] {line}"),
         None => writeln!(&mut *buffer, "{line}"),
@@ -563,9 +549,7 @@ async fn serialize_json_property_async(
     if value::is_bigint(value) {
         *caller
             .data()
-            .runtime_error
-            .lock()
-            .expect("runtime error mutex") =
+            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
             Some("TypeError: Do not know how to serialize a BigInt".to_string());
         return "null".to_string();
     }
@@ -774,9 +758,7 @@ pub(crate) fn read_runtime_string(caller: &mut Caller<'_, RuntimeState>, val: i6
         let handle = value::decode_runtime_string_handle(val) as usize;
         let strings = caller
             .data()
-            .runtime_strings
-            .lock()
-            .expect("runtime strings mutex");
+            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
         strings.get(handle).cloned().unwrap_or_default()
     } else if value::is_string(val) {
         let ptr = value::decode_string_ptr(val);
@@ -834,9 +816,7 @@ pub(crate) fn read_value_string_bytes(
         let handle = value::decode_runtime_string_handle(val) as usize;
         let strings = caller
             .data()
-            .runtime_strings
-            .lock()
-            .expect("runtime strings mutex");
+            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
         return strings.get(handle).map(|string| string.as_bytes().to_vec());
     }
 
@@ -918,16 +898,14 @@ pub(crate) fn read_eval_var_map(caller: &mut Caller<'_, RuntimeState>) -> Vec<Ev
 pub(crate) fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i64 {
     let mut strings = caller
         .data()
-        .runtime_strings
-        .lock()
-        .expect("runtime strings mutex");
+        .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
     let handle = strings.len() as u32;
     strings.push(string);
     value::encode_runtime_string_handle(handle)
 }
 
 pub(crate) fn store_runtime_string_in_state(state: &RuntimeState, string: String) -> i64 {
-    let mut strings = state.runtime_strings.lock().expect("runtime strings mutex");
+    let mut strings = state.runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
     let handle = strings.len() as u32;
     strings.push(string);
     value::encode_runtime_string_handle(handle)

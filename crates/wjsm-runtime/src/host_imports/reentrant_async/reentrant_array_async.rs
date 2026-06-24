@@ -293,9 +293,7 @@ async fn arr_proto_reduce_async(
         if args_count < 2 {
             *caller
                 .data()
-                .runtime_error
-                .lock()
-                .expect("runtime error mutex") =
+                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some("TypeError: Reduce of empty array with no initial value".to_string());
             return value::encode_undefined();
         }
@@ -345,9 +343,7 @@ async fn arr_proto_reduce_right_async(
         if args_count < 2 {
             *caller
                 .data()
-                .runtime_error
-                .lock()
-                .expect("runtime error mutex") =
+                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some("TypeError: Reduce of empty array with no initial value".to_string());
             return value::encode_undefined();
         }

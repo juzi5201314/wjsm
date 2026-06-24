@@ -595,7 +595,7 @@ fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(
 fn make_exception(caller: &mut Caller<'_, RuntimeState>, name: &str, message: String) -> i64 {
     let message_val = store_runtime_string(caller, message.clone());
     let error_obj = create_error_object(caller, name, message_val);
-    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(ErrorEntry {
         name: name.to_string(),
@@ -620,9 +620,7 @@ pub(crate) fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value:
         let handle = value::decode_bigint_handle(value) as usize;
         let table = caller
             .data()
-            .bigint_table
-            .lock()
-            .expect("bigint_table mutex");
+            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
         return Ok(table
             .get(handle)
             .map(|bigint| bigint.to_string())
@@ -660,9 +658,7 @@ async fn json_parse_to_string_async(
         let handle = value::decode_bigint_handle(value) as usize;
         let table = caller
             .data()
-            .bigint_table
-            .lock()
-            .expect("bigint_table mutex");
+            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
         return Ok(table
             .get(handle)
             .map(|bigint| bigint.to_string())

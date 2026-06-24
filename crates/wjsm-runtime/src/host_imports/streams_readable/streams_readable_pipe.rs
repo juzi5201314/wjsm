@@ -16,18 +16,14 @@ pub(super) fn readable_stream_pipe_to(
     let (controller_handle, stream_state) = {
         let table = caller
             .data()
-            .readable_stream_table
-            .lock()
-            .expect("stream mutex");
+            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         let entry = table.get(readable_handle as usize)?;
         (entry.controller_handle, entry.state.clone())
     };
     let chunks = if let Some(ctrl_handle) = controller_handle {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(ctrl_handle as usize) {
             ctrl.chunk_queue.drain(..).collect::<Vec<_>>()
         } else {
@@ -88,7 +84,7 @@ pub(crate) fn call_default_reader_method_from_caller(
         ReadableStreamDefaultReaderMethodKind::Read => {
             // 1. 从 reader_table 获取 stream_handle / reader kind
             let (stream_handle, reader_kind) = {
-                let reader_table = caller.data().reader_table.lock().expect("reader mutex");
+                let reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
                 let reader = reader_table.get(handle as usize)?;
                 (reader.stream_handle, reader.kind)
             };
@@ -106,9 +102,7 @@ pub(crate) fn call_default_reader_method_from_caller(
             let (controller_handle, http_response_handle, stream_state) = {
                 let stream_table = caller
                     .data()
-                    .readable_stream_table
-                    .lock()
-                    .expect("stream mutex");
+                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get(stream_handle as usize)?;
                 (
                     entry.controller_handle,
@@ -122,9 +116,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                 let chunk = {
                     let mut ctrl_table = caller
                         .data()
-                        .stream_controller_table
-                        .lock()
-                        .expect("controller mutex");
+                        .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                     ctrl_table
                         .get_mut(ctrl_handle as usize)
                         .and_then(|ctrl| ctrl.chunk_queue.pop_front())
@@ -150,9 +142,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                 let close_requested = {
                     let ctrl_table = caller
                         .data()
-                        .stream_controller_table
-                        .lock()
-                        .expect("controller mutex");
+                        .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                     ctrl_table
                         .get(ctrl_handle as usize)
                         .map(|c| c.close_requested)
@@ -176,7 +166,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                 // pending：存储 pending_read_promise
                 let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
                 {
-                    let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
+                    let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(reader) = reader_table.get_mut(handle as usize) {
                         reader.pending_read_promise = Some(p);
                         reader.pending_byob_view = byob_view;
@@ -188,9 +178,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                     let byob_handle = {
                         let mut table = caller
                             .data()
-                            .byob_request_table
-                            .lock()
-                            .expect("byob_request mutex");
+                            .byob_request_table.lock().unwrap_or_else(|e| e.into_inner());
                         let h = table.len() as u32;
                         table.push(ByobRequestEntry {
                             controller_handle: ctrl_handle,
@@ -203,9 +191,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                     };
                     let mut ctrl_table = caller
                         .data()
-                        .stream_controller_table
-                        .lock()
-                        .expect("controller mutex");
+                        .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
                         ctrl.active_byob_request = Some(byob_handle);
                     }
@@ -215,9 +201,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                 let pull_info = {
                     let ctrl_table = caller
                         .data()
-                        .stream_controller_table
-                        .lock()
-                        .expect("controller mutex");
+                        .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                     ctrl_table
                         .get(ctrl_handle as usize)
                         .and_then(|ctrl| ctrl.pull_callback.map(|cb| (cb, ctrl.underlying_source)))
@@ -226,9 +210,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                     let controller_obj = create_controller_object(caller, ctrl_handle);
                     let mut queue = caller
                         .data()
-                        .microtask_queue
-                        .lock()
-                        .expect("microtask queue mutex");
+                        .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
                     queue.push_back(Microtask::ReadableStreamPull {
                         callback: pull_callback,
                         this_val: this_val.unwrap_or_else(value::encode_undefined),
@@ -259,14 +241,12 @@ pub(crate) fn call_default_reader_method_from_caller(
         ReadableStreamDefaultReaderMethodKind::ReleaseLock => {
             // 设 stream.locked = false
             let stream_handle = {
-                let reader_table = caller.data().reader_table.lock().expect("reader mutex");
+                let reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
                 reader_table.get(handle as usize)?.stream_handle
             };
             let mut stream_table = caller
                 .data()
-                .readable_stream_table
-                .lock()
-                .expect("stream mutex");
+                .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = stream_table.get_mut(stream_handle as usize) {
                 entry.locked = false;
             }
@@ -274,7 +254,7 @@ pub(crate) fn call_default_reader_method_from_caller(
         }
         ReadableStreamDefaultReaderMethodKind::GetClosed => {
             // 返回 closed_promise
-            let reader_table = caller.data().reader_table.lock().expect("reader mutex");
+            let reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
             let reader = reader_table.get(handle as usize)?;
             let promise = reader
                 .closed_promise
@@ -314,7 +294,7 @@ pub(crate) fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let ab_handle = {
         let mut store = ctx.as_context_mut();
-        let mut ab_table = store.data_mut().arraybuffer_table.lock().expect("mutex");
+        let mut ab_table = store.data_mut().arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = ab_table.len() as u32;
         ab_table.push(ArrayBufferEntry {
             data: bytes.to_vec(),
@@ -323,7 +303,7 @@ pub(crate) fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
     };
     let ta_handle = {
         let mut store = ctx.as_context_mut();
-        let mut ta_table = store.data_mut().typedarray_table.lock().expect("mutex");
+        let mut ta_table = store.data_mut().typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = ta_table.len() as u32;
         ta_table.push(TypedArrayEntry {
             buffer_handle: ab_handle,
@@ -393,9 +373,7 @@ pub(crate) fn call_default_controller_method_from_caller(
             // 计算 high_water_mark - queue.len() 返回 number
             let table = caller
                 .data()
-                .stream_controller_table
-                .lock()
-                .expect("controller mutex");
+                .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(ctrl) = table.get(handle as usize) {
                 let desired = ctrl.high_water_mark - ctrl.chunk_queue.len() as f64;
                 Some(value::encode_f64(desired))
@@ -417,9 +395,7 @@ fn controller_get_byob_request(
     let active = {
         let table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         table
             .get(controller_handle as usize)
             .and_then(|c| c.active_byob_request)
@@ -432,9 +408,7 @@ fn controller_get_byob_request(
     let (view, responded) = {
         let table = caller
             .data()
-            .byob_request_table
-            .lock()
-            .expect("byob_request mutex");
+            .byob_request_table.lock().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = table.get(byob_handle as usize) else {
             return value::encode_null();
         };
@@ -478,9 +452,7 @@ fn typedarray_entry_from_object(
     let handle = value::decode_f64(handle_raw) as usize;
     let table = caller
         .data()
-        .typedarray_table
-        .lock()
-        .expect("typedarray mutex");
+        .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
     table.get(handle).cloned()
 }
 
@@ -503,9 +475,7 @@ pub(crate) fn call_byob_request_method_from_caller(
             // 直接返回 view（data property 已经设置；此分支作为防御保留）
             let table = caller
                 .data()
-                .byob_request_table
-                .lock()
-                .expect("byob_request mutex");
+                .byob_request_table.lock().unwrap_or_else(|e| e.into_inner());
             let entry = table.get(handle as usize)?;
             if entry.responded {
                 Some(value::encode_null())
@@ -540,9 +510,7 @@ pub(crate) fn call_byob_request_method_from_caller(
             let entry_info = {
                 let table = caller
                     .data()
-                    .byob_request_table
-                    .lock()
-                    .expect("byob_request mutex");
+                    .byob_request_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| {
                     (
                         e.controller_handle,
@@ -581,9 +549,7 @@ pub(crate) fn call_byob_request_method_from_caller(
                 let new_ta = {
                     let mut ta_table = caller
                         .data()
-                        .typedarray_table
-                        .lock()
-                        .expect("typedarray mutex");
+                        .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
                     let h = ta_table.len() as u32;
                     ta_table.push(TypedArrayEntry {
                         buffer_handle: entry.buffer_handle,
@@ -626,9 +592,7 @@ pub(crate) fn call_byob_request_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .byob_request_table
-                    .lock()
-                    .expect("byob_request mutex");
+                    .byob_request_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.responded = true;
                 }
@@ -636,9 +600,7 @@ pub(crate) fn call_byob_request_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .stream_controller_table
-                    .lock()
-                    .expect("controller mutex");
+                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = table.get_mut(controller_handle as usize)
                     && ctrl.active_byob_request == Some(handle)
                 {
@@ -647,7 +609,7 @@ pub(crate) fn call_byob_request_method_from_caller(
             }
             // 清理 reader 的 pending 状态
             {
-                let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
+                let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
                     reader.pending_read_promise = None;
                     reader.pending_byob_view = None;

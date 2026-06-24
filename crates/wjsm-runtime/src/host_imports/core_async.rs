@@ -22,7 +22,7 @@ pub(crate) fn define_core_async(
         if value::is_proxy(object) {
             let handle = value::decode_proxy_handle(object) as usize;
             let entry = {
-                let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle).cloned()
             };
             if let Some(entry) = entry {
@@ -61,9 +61,7 @@ pub(crate) fn define_core_async(
         {
             let table = caller
                 .data()
-                .async_from_sync_iterators
-                .lock()
-                .expect("async-from-sync iterators mutex");
+                .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
             let handle_idx = value::decode_handle(handle);
             if let Some(i) = table
                 .iter()
@@ -76,9 +74,7 @@ pub(crate) fn define_core_async(
             let idx = value::decode_native_callable_idx(next);
             let nc = caller
                 .data()
-                .native_callables
-                .lock()
-                .expect("native callables mutex");
+                .native_callables.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(NativeCallable::AsyncFromSyncNext { handle: h }) = nc.get(idx as usize) {
                 return Some(*h);
             }
@@ -109,9 +105,7 @@ pub(crate) fn define_core_async(
         let outer_handle_idx = {
             let table = caller
                 .data()
-                .async_from_sync_iterators
-                .lock()
-                .expect("async-from-sync iterators mutex");
+                .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
             table
                 .get(afs_handle as usize)
                 .map(|e| e.outer_handle_idx as usize)
@@ -135,9 +129,7 @@ pub(crate) fn define_core_async(
                     ..
                 }) = caller
                     .data()
-                    .iterators
-                    .lock()
-                    .expect("iterators mutex")
+                    .iterators.lock().unwrap_or_else(|e| e.into_inner())
                     .get_mut(outer_handle_idx)
                 {
                     *stored_value = current_value;
@@ -153,9 +145,7 @@ pub(crate) fn define_core_async(
         let (fulfilled, rejected) = {
             let table_p = caller
                 .data()
-                .promise_table
-                .lock()
-                .expect("promise table mutex");
+                .promise_table.lock().unwrap_or_else(|e| e.into_inner());
             match promise_entry(&table_p, promise_handle).map(|e| &e.state) {
                 Some(PromiseState::Fulfilled(v)) => (Some(*v), None),
                 Some(PromiseState::Rejected(r)) => (None, Some(*r)),
@@ -176,9 +166,7 @@ pub(crate) fn define_core_async(
                     ..
                 }) = caller
                     .data()
-                    .iterators
-                    .lock()
-                    .expect("iterators mutex")
+                    .iterators.lock().unwrap_or_else(|e| e.into_inner())
                     .get_mut(outer_handle_idx)
             {
                 *stored_value = current_value;
@@ -209,9 +197,7 @@ pub(crate) fn define_core_async(
         if let Some(afs_handle) = {
             let table = caller
                 .data()
-                .async_from_sync_iterators
-                .lock()
-                .expect("async-from-sync iterators mutex");
+                .async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
             let decoded = value::decode_handle(handle);
             table
                 .iter()
@@ -221,7 +207,7 @@ pub(crate) fn define_core_async(
             return materialize_async_from_sync_next(caller, afs_handle).await;
         }
         let (iterator, next) = {
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
             let Some(iter) = iters.get_mut(handle_idx) else {
                 return value::encode_undefined();
             };
@@ -302,9 +288,7 @@ pub(crate) fn define_core_async(
             let (fulfilled, rejected) = {
                 let table_p = caller
                     .data()
-                    .promise_table
-                    .lock()
-                    .expect("promise table mutex");
+                    .promise_table.lock().unwrap_or_else(|e| e.into_inner());
                 match promise_entry(&table_p, promise_handle).map(|e| &e.state) {
                     Some(PromiseState::Fulfilled(v)) => (Some(*v), None),
                     Some(PromiseState::Rejected(r)) => (None, Some(*r)),
@@ -335,9 +319,7 @@ pub(crate) fn define_core_async(
             ..
         }) = caller
             .data()
-            .iterators
-            .lock()
-            .expect("iterators mutex")
+            .iterators.lock().unwrap_or_else(|e| e.into_inner())
             .get_mut(handle_idx)
         {
             *stored_value = current_value;
@@ -359,7 +341,7 @@ pub(crate) fn define_core_async(
     async fn iterator_done_async(caller: &mut Caller<'_, RuntimeState>, handle: i64) -> i64 {
         let handle_idx = value::decode_handle(handle) as usize;
         let (iterator, next) = {
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
             let Some(iter) = iters.get_mut(handle_idx) else {
                 return value::encode_bool(true);
             };
@@ -371,7 +353,7 @@ pub(crate) fn define_core_async(
                     return value::encode_bool(*index as usize >= *length as usize);
                 }
                 IteratorState::MapKeyIter { index, map_handle } => {
-                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     let done = if *map_handle < table.len() as u32 {
                         *index as usize >= table[*map_handle as usize].keys.len()
                     } else {
@@ -381,7 +363,7 @@ pub(crate) fn define_core_async(
                     return value::encode_bool(done);
                 }
                 IteratorState::MapValueIter { index, map_handle } => {
-                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     let done = if *map_handle < table.len() as u32 {
                         *index as usize >= table[*map_handle as usize].values.len()
                     } else {
@@ -391,7 +373,7 @@ pub(crate) fn define_core_async(
                     return value::encode_bool(done);
                 }
                 IteratorState::SetValueIter { index, set_handle } => {
-                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     let done = if *set_handle < table.len() as u32 {
                         *index as usize >= table[*set_handle as usize].values.len()
                     } else {
@@ -401,7 +383,7 @@ pub(crate) fn define_core_async(
                     return value::encode_bool(done);
                 }
                 IteratorState::MapEntryIter { index, map_handle } => {
-                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                     let done = if *map_handle < table.len() as u32 {
                         *index as usize >= table[*map_handle as usize].keys.len()
                     } else {
@@ -413,7 +395,7 @@ pub(crate) fn define_core_async(
                 IteratorState::HeadersKeyIter { index, headers_handle }
                 | IteratorState::HeadersValueIter { index, headers_handle }
                 | IteratorState::HeadersEntryIter { index, headers_handle } => {
-                    let table = caller.data().headers_table.lock().expect("headers table mutex");
+                    let table = caller.data().headers_table.lock().unwrap_or_else(|e| e.into_inner());
                     let done = if *headers_handle < table.len() as u32 {
                         *index as usize >= table[*headers_handle as usize].pairs.len()
                     } else {
@@ -462,9 +444,7 @@ pub(crate) fn define_core_async(
             ..
         }) = caller
             .data()
-            .iterators
-            .lock()
-            .expect("iterators mutex")
+            .iterators.lock().unwrap_or_else(|e| e.into_inner())
             .get_mut(handle_idx)
         {
             *current_value = next_value;
@@ -477,7 +457,7 @@ pub(crate) fn define_core_async(
     async fn iterator_close_async(caller: &mut Caller<'_, RuntimeState>, handle: i64) {
         let handle_idx = value::decode_handle(handle) as usize;
         let (iterator, return_method) = {
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
             match iters.get_mut(handle_idx) {
                 Some(IteratorState::ObjectIter {
                     iterator,
@@ -505,9 +485,7 @@ pub(crate) fn define_core_async(
         }
         if let Some(IteratorState::ObjectIter { done, .. }) = caller
             .data()
-            .iterators
-            .lock()
-            .expect("iterators mutex")
+            .iterators.lock().unwrap_or_else(|e| e.into_inner())
             .get_mut(handle_idx)
         {
             *done = true;

@@ -35,7 +35,7 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -75,7 +75,7 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -115,7 +115,7 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -173,7 +173,7 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().unwrap();
+                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -237,7 +237,7 @@ pub(crate) fn define_proxy_reflect_async(
                 };
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
-                    let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
+                    let entry = { let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner()); table.get(handle).cloned() };
                     if let Some(entry) = entry {
                         if let Some(exc) = check_proxy_revoked(&mut caller, &entry, "construct") {
                             return exc;
@@ -298,7 +298,7 @@ pub(crate) fn define_proxy_reflect_async(
             }
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
-                let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
+                let entry = { let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner()); table.get(handle).cloned() };
                 if let Some(entry) = entry {
                     if let Some(exc) = check_proxy_revoked(&mut caller, &entry, "setPrototypeOf") {
                         return exc;
@@ -393,7 +393,7 @@ pub(crate) fn define_proxy_reflect_async(
         Box::new(async move {
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
-                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                let entry = { let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner()); table.get(handle).cloned() };
                 if let Some(entry) = entry {
                     if let Some(exc) = check_proxy_revoked(&mut caller, &entry, "getOwnPropertyDescriptor") {
                         return exc;
@@ -456,9 +456,7 @@ pub(crate) fn define_proxy_reflect_async(
                     }
                     if caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex")
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
                         .is_some()
                     {
                         return value::encode_undefined();
@@ -466,9 +464,7 @@ pub(crate) fn define_proxy_reflect_async(
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = caller
                         .data()
-                        .proxy_table
-                        .lock()
-                        .expect("proxy_table mutex")
+                        .proxy_table.lock().unwrap_or_else(|e| e.into_inner())
                         .get(handle)
                         .cloned();
                     if let Some(entry) = entry {
@@ -489,7 +485,7 @@ pub(crate) fn define_proxy_reflect_async(
             Box::new(async move {
                 let handle = value::decode_proxy_handle(proxy) as usize;
                 let entry = {
-                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                     table.get(handle).cloned()
                 };
                 if let Some(entry) = entry {
@@ -551,7 +547,7 @@ pub(crate) fn define_proxy_reflect_async(
             Box::new(async move {
                 let handle = value::decode_proxy_handle(proxy) as usize;
                 let entry = {
-                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                     table.get(handle).cloned()
                 };
                 if let Some(entry) = entry {

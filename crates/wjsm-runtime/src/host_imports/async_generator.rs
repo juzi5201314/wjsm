@@ -59,9 +59,7 @@ pub(crate) fn define_async_generator(
             let handle = value::decode_object_handle(generator) as usize;
             let mut table = caller
                 .data()
-                .async_generator_table
-                .lock()
-                .expect("async generator table mutex");
+                .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
             if table.len() <= handle {
                 table.resize_with(handle + 1, || AsyncGeneratorEntry {
                     state: AsyncGeneratorState::Completed,
@@ -97,9 +95,7 @@ pub(crate) fn define_async_generator(
             {
                 let table = caller
                     .data()
-                    .async_generator_table
-                    .lock()
-                    .expect("async generator table mutex");
+                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get(handle)
                     && matches!(entry.state, AsyncGeneratorState::Completed)
                 {
@@ -116,9 +112,7 @@ pub(crate) fn define_async_generator(
             let request_to_fulfill = {
                 let mut table = caller
                     .data()
-                    .async_generator_table
-                    .lock()
-                    .expect("async generator table mutex");
+                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = table.get_mut(handle) else {
                     return resume_promise;
                 };
@@ -149,9 +143,7 @@ pub(crate) fn define_async_generator(
             let action = {
                 let mut table = caller
                     .data()
-                    .async_generator_table
-                    .lock()
-                    .expect("async generator table mutex");
+                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = table.get_mut(handle) else {
                     return value::encode_undefined();
                 };
@@ -215,9 +207,7 @@ pub(crate) fn define_async_generator(
             let action = {
                 let mut table = caller
                     .data()
-                    .async_generator_table
-                    .lock()
-                    .expect("async generator table mutex");
+                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = table.get_mut(handle) else {
                     return value::encode_undefined();
                 };

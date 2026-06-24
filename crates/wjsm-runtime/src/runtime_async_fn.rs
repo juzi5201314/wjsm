@@ -26,13 +26,9 @@ pub(crate) fn alloc_continuation_handle(
     captured_var_count: usize,
 ) -> u32 {
     let mut table = state
-        .continuation_table
-        .lock()
-        .expect("continuation table mutex");
+        .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
     let mut free = state
-        .continuation_free_slots
-        .lock()
-        .expect("continuation free slots mutex");
+        .continuation_free_slots.lock().unwrap_or_else(|e| e.into_inner());
     while let Some(slot) = free.pop() {
         let idx = slot as usize;
         if idx < table.len() {
@@ -51,13 +47,9 @@ pub(crate) fn alloc_continuation_handle(
 
 pub(crate) fn recycle_completed_continuations(state: &RuntimeState) {
     let mut table = state
-        .continuation_table
-        .lock()
-        .expect("continuation table mutex");
+        .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
     let mut free = state
-        .continuation_free_slots
-        .lock()
-        .expect("continuation free slots mutex");
+        .continuation_free_slots.lock().unwrap_or_else(|e| e.into_inner());
     for (idx, entry) in table.iter_mut().enumerate() {
         if !entry.completed {
             continue;
@@ -106,9 +98,7 @@ pub(crate) fn enqueue_async_resume_from_caller(
     let fn_table_idx = {
         let mut table = caller
             .data()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
+            .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = table.get_mut(cont_handle) else {
             return;
         };
@@ -121,9 +111,7 @@ pub(crate) fn enqueue_async_resume_from_caller(
     };
     caller
         .data()
-        .microtask_queue
-        .lock()
-        .expect("microtask queue mutex")
+        .microtask_queue.lock().unwrap_or_else(|e| e.into_inner())
         .push_back(Microtask::AsyncResume {
             fn_table_idx,
             continuation,
@@ -164,9 +152,7 @@ pub(crate) fn pump_async_generator_from_caller(
     let action = {
         let mut table = caller
             .data()
-            .async_generator_table
-            .lock()
-            .expect("async generator table mutex");
+            .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = table.get_mut(handle) else {
             return;
         };
@@ -306,9 +292,7 @@ pub(crate) async fn resume_async_function_async<
         let cont_handle = value::decode_object_handle(continuation) as usize;
         let mut c_table = ctx
             .state_mut()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
+            .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = c_table.get_mut(cont_handle) {
             while entry.captured_vars.len() < 2 {
                 entry.captured_vars.push(value::encode_undefined());
@@ -337,9 +321,7 @@ pub(crate) async fn resume_async_function_async<
     let outer_promise = {
         let c_table = ctx
             .state_mut()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
+            .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
         c_table.get(cont_handle).map(|entry| entry.outer_promise)
     };
     if let Some(outer_promise) = outer_promise {
@@ -347,9 +329,7 @@ pub(crate) async fn resume_async_function_async<
         if settled {
             let mut c_table = ctx
                 .state_mut()
-                .continuation_table
-                .lock()
-                .expect("continuation table mutex");
+                .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = c_table.get_mut(cont_handle) {
                 entry.completed = true;
             }
@@ -381,9 +361,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
                 let idx = value::decode_handle(return_val) as usize;
                 if let Some(entry) = store
                     .data()
-                    .error_table
-                    .lock()
-                    .expect("error_table mutex")
+                    .error_table.lock().unwrap_or_else(|e| e.into_inner())
                     .get(idx)
                 {
                     let msg = if entry.message.is_empty() {
@@ -391,13 +369,11 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
                     } else {
                         format!("Uncaught exception: {}", entry.message)
                     };
-                    let mut buffer = store.data().output.lock().expect("output mutex");
+                    let mut buffer = store.data().output.lock().unwrap_or_else(|e| e.into_inner());
                     writeln!(&mut *buffer, "{msg}").ok();
                     *store
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime_error mutex") = Some(msg);
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
                 }
                 // 跳过后续 microtasks/timers
                 false
@@ -408,9 +384,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
         Err(ref trap) => {
             if store
                 .data()
-                .runtime_error
-                .lock()
-                .expect("runtime_error mutex")
+                .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
                 .is_some()
             {
                 // throw import 已经记录了 JS 层异常；先走统一输出/错误收集路径。
@@ -434,9 +408,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
         crate::scheduler::run_post_main_scheduler_async(&mut store, &wasm_env, completion_rx)
             .await?;
     }
-    let bytes = output
-        .lock()
-        .expect("runtime output buffer mutex should not be poisoned")
+    let bytes = output.lock().unwrap_or_else(|e| e.into_inner())
         .clone();
     drop(store);
 
@@ -444,7 +416,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     writer.write_all(&bytes)?;
 
     // ── Check errors ─────────────────────────────────────────────────────
-    if let Some(message) = runtime_error.lock().expect("runtime error mutex").clone() {
+    if let Some(message) = runtime_error.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         anyhow::bail!(message);
     }
 
@@ -464,9 +436,7 @@ mod continuation_tests {
         let h0 = alloc_continuation_handle(&state, 1, value::encode_f64(1.0), 4);
         {
             let mut table = state
-                .continuation_table
-                .lock()
-                .expect("continuation table mutex");
+                .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
             table[h0 as usize].completed = true;
         }
         recycle_completed_continuations(&state);

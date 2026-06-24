@@ -401,9 +401,7 @@ pub(crate) fn define_string_methods(
             if args_count < 1 {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") = Some(
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                     "TypeError: String.prototype.matchAll requires a regexp argument".to_string(),
                 );
                 return value::encode_undefined();
@@ -412,23 +410,19 @@ pub(crate) fn define_string_methods(
             if !value::is_regexp(regexp) {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: String.prototype.matchAll called with non-RegExp".to_string());
                 return value::encode_undefined();
             }
             let handle = value::decode_regexp_handle(regexp);
             let is_global = {
-                let table = caller.data().regex_table.lock().unwrap();
+                let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 match table.get(handle as usize) {
                     Some(e) => e.flags.contains('g'),
                     None => {
                         *caller
                             .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") = Some(
+                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                             "TypeError: String.prototype.matchAll called with a non-global RegExp"
                                 .to_string(),
                         );
@@ -439,23 +433,21 @@ pub(crate) fn define_string_methods(
             if !is_global {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") = Some(
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                     "TypeError: String.prototype.matchAll called with a non-global RegExp"
                         .to_string(),
                 );
                 return value::encode_undefined();
             }
             {
-                let mut table = caller.data().regex_table.lock().unwrap();
+                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = table.get_mut(handle as usize) {
                     e.last_index = 0;
                 }
             }
             let s = get_string_value(&mut caller, this_val);
             let entry = {
-                let table = caller.data().regex_table.lock().unwrap();
+                let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 match table.get(handle as usize) {
                     Some(e) => e.clone(),
                     None => return value::encode_undefined(),
@@ -476,7 +468,7 @@ pub(crate) fn define_string_methods(
                 }
             }
             {
-                let mut table = caller.data().regex_table.lock().unwrap();
+                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = table.get_mut(handle as usize) {
                     e.last_index = 0;
                 }
@@ -568,9 +560,7 @@ pub(crate) fn define_string_methods(
             if c < 0.0 || c.is_infinite() {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("RangeError: Invalid count value".to_string());
                 return value::encode_undefined();
             }
@@ -585,7 +575,7 @@ pub(crate) fn define_string_methods(
             if value::is_regexp(search) {
                 let handle = value::decode_regexp_handle(search);
                 let is_global = {
-                    let table = caller.data().regex_table.lock().unwrap();
+                    let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                     match table.get(handle as usize) {
                         Some(e) => e.flags.contains('g'),
                         None => false,
@@ -594,9 +584,7 @@ pub(crate) fn define_string_methods(
                 if !is_global {
                     *caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") = Some(
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                         "TypeError: String.prototype.replaceAll called with a non-global RegExp argument"
                             .to_string(),
                     );
@@ -763,7 +751,7 @@ pub(crate) fn define_string_methods(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
             let handle = iters.len() as u32;
             iters.push(IteratorState::StringIter {
                 data: s.into_bytes(),

@@ -20,9 +20,7 @@ const BROADCAST_WAIT_MS: u64 = 60_000;
 pub(crate) fn push_agent_report(shared: &Arc<SharedRuntimeState>, text: String) {
     shared
         .agent_state
-        .reports
-        .lock()
-        .expect("agent reports")
+        .reports.lock().unwrap_or_else(|e| e.into_inner())
         .push(text);
 }
 
@@ -65,9 +63,7 @@ fn wait_broadcast_callback_done(shared: &Arc<SharedRuntimeState>) {
     let agent = &shared.agent_state;
     let deadline = Instant::now() + Duration::from_millis(BROADCAST_WAIT_MS);
     let mut done = agent
-        .broadcast_callback_done
-        .lock()
-        .expect("broadcast_callback_done");
+        .broadcast_callback_done.lock().unwrap_or_else(|e| e.into_inner());
     while !*done {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -85,9 +81,7 @@ fn signal_broadcast_callback_done(shared: &Arc<SharedRuntimeState>) {
     let agent = &shared.agent_state;
     {
         let mut done = agent
-            .broadcast_callback_done
-            .lock()
-            .expect("broadcast_callback_done");
+            .broadcast_callback_done.lock().unwrap_or_else(|e| e.into_inner());
         *done = true;
     }
     agent.broadcast_callback_done_cv.notify_all();
@@ -99,13 +93,11 @@ pub(crate) fn agent_broadcast(caller: &mut Caller<'_, RuntimeState>, sab_obj: i6
     let agent = &shared.agent_state;
     let deadline = Instant::now() + Duration::from_millis(BROADCAST_WAIT_MS);
     loop {
-        let mut slot = agent.broadcast_slot.lock().expect("broadcast lock");
+        let mut slot = agent.broadcast_slot.lock().unwrap_or_else(|e| e.into_inner());
         if slot.lock == 0 {
             {
                 let mut done = agent
-                    .broadcast_callback_done
-                    .lock()
-                    .expect("broadcast_callback_done");
+                    .broadcast_callback_done.lock().unwrap_or_else(|e| e.into_inner());
                 *done = false;
             }
             slot.sab_handle = Some(handle);
@@ -199,7 +191,7 @@ fn wait_broadcast_sab_handle(
     let agent = &shared.agent_state;
     let deadline = Instant::now() + Duration::from_millis(BROADCAST_WAIT_MS);
     loop {
-        let mut slot = agent.broadcast_slot.lock().expect("broadcast lock");
+        let mut slot = agent.broadcast_slot.lock().unwrap_or_else(|e| e.into_inner());
         if slot.lock == 1 {
             let h = slot.sab_handle.take();
             slot.lock = 0;

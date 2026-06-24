@@ -338,9 +338,7 @@ fn same_value(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> bool {
         }
         let table = caller
             .data()
-            .bigint_table
-            .lock()
-            .expect("bigint_table mutex");
+            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
         return table
             .get(a_handle)
             .zip(table.get(b_handle))

@@ -886,7 +886,7 @@ pub(crate) fn define_typedarray_new_methods(
             let length = entry.length;
             let handle;
             {
-                let mut iter_table = caller.data().iterators.lock().expect("iterators mutex");
+                let mut iter_table = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                 handle = iter_table.len() as u32;
                 iter_table.push(IteratorState::TypedArrayEntryIter {
                     entry,
@@ -916,7 +916,7 @@ pub(crate) fn define_typedarray_new_methods(
             let values = (0..length).map(|i| value::encode_f64(i as f64)).collect();
             let handle;
             {
-                let mut iter_table = caller.data().iterators.lock().expect("iterators mutex");
+                let mut iter_table = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                 handle = iter_table.len() as u32;
                 iter_table.push(IteratorState::IndexValueIter { values, index: 0 });
             }
@@ -940,7 +940,7 @@ pub(crate) fn define_typedarray_new_methods(
             let length = entry.length;
             let handle;
             {
-                let mut iter_table = caller.data().iterators.lock().expect("iterators mutex");
+                let mut iter_table = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                 handle = iter_table.len() as u32;
                 iter_table.push(IteratorState::TypedArrayValueIter {
                     entry,

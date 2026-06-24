@@ -45,9 +45,7 @@ pub(crate) async fn construct_readable_stream(
     let controller_handle = {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(StreamControllerEntry {
             kind: ControllerKind::ReadableDefault,
@@ -74,9 +72,7 @@ pub(crate) async fn construct_readable_stream(
     let stream_handle = {
         let mut table = caller
             .data()
-            .readable_stream_table
-            .lock()
-            .expect("stream mutex");
+            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(ReadableStreamEntry {
             state: StreamState::Readable,
@@ -96,9 +92,7 @@ pub(crate) async fn construct_readable_stream(
     {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.stream_handle = stream_handle;
         }
@@ -118,9 +112,7 @@ pub(crate) async fn construct_readable_stream(
             {
                 let mut table = caller
                     .data()
-                    .stream_controller_table
-                    .lock()
-                    .expect("controller mutex");
+                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = table.get_mut(controller_handle as usize) {
                     ctrl.underlying_source = Some(source);
                     if value::is_callable(pull_fn) {
@@ -145,9 +137,7 @@ pub(crate) async fn construct_readable_stream(
     {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.started = true;
         }
@@ -176,9 +166,7 @@ pub(crate) fn controller_enqueue(
     let (close_requested, stream_handle) = {
         let table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         let ctrl = table.get(controller_handle as usize)?;
         (ctrl.close_requested, ctrl.stream_handle)
     };
@@ -193,9 +181,7 @@ pub(crate) fn controller_enqueue(
     let stream_state = {
         let table = caller
             .data()
-            .readable_stream_table
-            .lock()
-            .expect("stream mutex");
+            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         table.get(stream_handle as usize).map(|e| e.state.clone())
     };
     if matches!(
@@ -210,7 +196,7 @@ pub(crate) fn controller_enqueue(
 
     // 3. 检查 reader 是否有 pending read promise
     let pending = {
-        let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
+        let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
         let mut pending_info: Option<(ReaderKind, Option<i64>, i64)> = None;
         for reader in reader_table.iter_mut() {
             if reader.stream_handle == stream_handle
@@ -239,9 +225,7 @@ pub(crate) fn controller_enqueue(
         // 无等待 → 推入 chunk_queue
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.chunk_queue.push_back(chunk);
         }
@@ -255,9 +239,7 @@ pub(crate) fn controller_close(caller: &mut Caller<'_, RuntimeState>, controller
     let (already_closed, stream_handle) = {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         let ctrl = table.get_mut(controller_handle as usize)?;
         if ctrl.close_requested {
             (true, ctrl.stream_handle)
@@ -278,9 +260,7 @@ pub(crate) fn controller_close(caller: &mut Caller<'_, RuntimeState>, controller
     {
         let mut table = caller
             .data()
-            .readable_stream_table
-            .lock()
-            .expect("stream mutex");
+            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(stream_handle as usize) {
             entry.state = StreamState::Closed;
         }
@@ -288,7 +268,7 @@ pub(crate) fn controller_close(caller: &mut Caller<'_, RuntimeState>, controller
 
     // 检查 pending_read_promise → resolve {done: true, value: undefined}
     let pending = {
-        let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
+        let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
         let mut pending_info: Option<(Option<i64>, i64)> = None;
         for reader in reader_table.iter_mut() {
             if reader.stream_handle == stream_handle
@@ -322,9 +302,7 @@ pub(crate) fn controller_error(
     let stream_handle = {
         let table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         let ctrl = table.get(controller_handle as usize)?;
         ctrl.stream_handle
     };
@@ -333,9 +311,7 @@ pub(crate) fn controller_error(
     {
         let mut table = caller
             .data()
-            .readable_stream_table
-            .lock()
-            .expect("stream mutex");
+            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(stream_handle as usize) {
             entry.state = StreamState::Errored;
             // 尝试存储错误消息
@@ -347,7 +323,7 @@ pub(crate) fn controller_error(
 
     // 检查 pending_read_promise → reject
     let pending = {
-        let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
+        let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
         let mut pending_promise: Option<i64> = None;
         for reader in reader_table.iter_mut() {
             if reader.stream_handle == stream_handle

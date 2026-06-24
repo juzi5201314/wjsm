@@ -19,7 +19,7 @@ pub(crate) fn make_range_error_exception(caller: &mut Caller<'_, RuntimeState>, 
 fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
     let error_obj = create_error_object(caller, error_name, msg_val);
-    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(crate::ErrorEntry {
         name: error_name.to_string(),
@@ -33,7 +33,7 @@ fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str,
 /// 用于需要 reject promise 或传播真实错误值的场景（如 async 迭代器异常、array spread）。
 pub(crate) fn exception_reason(caller: &mut Caller<'_, RuntimeState>, exception: i64) -> i64 {
     let idx = value::decode_handle(exception) as usize;
-    let errors = caller.data().error_table.lock().expect("error table mutex");
+    let errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
     errors
         .get(idx)
         .map(|entry| entry.value)

@@ -13,9 +13,7 @@ pub(crate) fn proxy_is_revoked(caller: &mut Caller<'_, RuntimeState>, value: i64
     let handle = value::decode_proxy_handle(value) as usize;
     caller
         .data()
-        .proxy_table
-        .lock()
-        .expect("proxy_table mutex")
+        .proxy_table.lock().unwrap_or_else(|e| e.into_inner())
         .get(handle)
         .map(|entry| entry.revoked)
         .unwrap_or(false)
@@ -38,7 +36,7 @@ pub(crate) fn proxy_trap_proxy_entry(
     }
     let handle = value::decode_proxy_handle(proxy) as usize;
     let entry = {
-        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
         table.get(handle).cloned()
     };
     let entry = match entry {

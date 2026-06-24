@@ -17,9 +17,7 @@ pub(crate) fn define_primitive_core(
             if let Ok(bigint) = trimmed.parse::<num_bigint::BigInt>() {
                 let mut table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(bigint);
                 value::encode_bigint_handle(handle)
@@ -47,9 +45,7 @@ pub(crate) fn define_primitive_core(
         let (a_val, b_val) = {
             let table = caller
                 .data()
-                .bigint_table
-                .lock()
-                .expect("bigint_table mutex");
+                .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
             (table.get(a_handle).cloned(), table.get(b_handle).cloned())
         };
         match (a_val, b_val) {
@@ -57,9 +53,7 @@ pub(crate) fn define_primitive_core(
                 let result = op(&av, &bv);
                 let mut table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(result);
                 value::encode_bigint_handle(handle)
@@ -97,9 +91,7 @@ pub(crate) fn define_primitive_core(
             let (av, bv) = {
                 let table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
@@ -107,18 +99,14 @@ pub(crate) fn define_primitive_core(
                     if y == 0u32.into() {
                         *caller
                             .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
+                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some("RangeError: BigInt division by zero".to_string());
                         return value::encode_undefined();
                     }
                     let result = x / y;
                     let mut table = caller
                         .data()
-                        .bigint_table
-                        .lock()
-                        .expect("bigint_table mutex");
+                        .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -136,9 +124,7 @@ pub(crate) fn define_primitive_core(
             let (av, bv) = {
                 let table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
@@ -146,18 +132,14 @@ pub(crate) fn define_primitive_core(
                     if y == 0u32.into() {
                         *caller
                             .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
+                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some("RangeError: BigInt division by zero".to_string());
                         return value::encode_undefined();
                     }
                     let result = x % y;
                     let mut table = caller
                         .data()
-                        .bigint_table
-                        .lock()
-                        .expect("bigint_table mutex");
+                        .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -175,9 +157,7 @@ pub(crate) fn define_primitive_core(
             let (av, bv) = {
                 let table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
@@ -186,9 +166,7 @@ pub(crate) fn define_primitive_core(
                     if y.sign() == num_bigint::Sign::Minus {
                         *caller
                             .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
+                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some("RangeError: BigInt exponent must be non-negative".to_string());
                         return value::encode_undefined();
                     }
@@ -197,9 +175,7 @@ pub(crate) fn define_primitive_core(
                         None => {
                             *caller
                                 .data()
-                                .runtime_error
-                                .lock()
-                                .expect("runtime error mutex") =
+                                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                                 Some("RangeError: BigInt exponent too large".to_string());
                             return value::encode_undefined();
                         }
@@ -207,9 +183,7 @@ pub(crate) fn define_primitive_core(
                     let result = x.pow(exp);
                     let mut table = caller
                         .data()
-                        .bigint_table
-                        .lock()
-                        .expect("bigint_table mutex");
+                        .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -226,18 +200,14 @@ pub(crate) fn define_primitive_core(
             let a_val = {
                 let table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(a_handle).cloned()
             };
             if let Some(av) = a_val {
                 let result = -av;
                 let mut table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(result);
                 value::encode_bigint_handle(handle)
@@ -255,9 +225,7 @@ pub(crate) fn define_primitive_core(
             let eq = {
                 let table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 table
                     .get(a_handle)
                     .zip(table.get(b_handle))
@@ -276,9 +244,7 @@ pub(crate) fn define_primitive_core(
             let cmp = {
                 let table = caller
                     .data()
-                    .bigint_table
-                    .lock()
-                    .expect("bigint_table mutex");
+                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
                 match (table.get(a_handle), table.get(b_handle)) {
                     (Some(x), Some(y)) => {
                         use std::cmp::Ordering;
@@ -314,9 +280,7 @@ pub(crate) fn define_primitive_core(
             };
             let mut table = caller
                 .data()
-                .symbol_table
-                .lock()
-                .expect("symbol_table mutex");
+                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
             let handle = table.len() as u32;
             table.push(SymbolEntry {
                 description,
@@ -339,9 +303,7 @@ pub(crate) fn define_primitive_core(
             };
             let mut table = caller
                 .data()
-                .symbol_table
-                .lock()
-                .expect("symbol_table mutex");
+                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
             // 查找是否已有同 key 的 symbol
             for (idx, entry) in table.iter().enumerate() {
                 if entry.global_key.as_deref() == Some(&key_str) {
@@ -372,9 +334,7 @@ pub(crate) fn define_primitive_core(
             let handle = value::decode_symbol_handle(sym) as usize;
             let table = caller
                 .data()
-                .symbol_table
-                .lock()
-                .expect("symbol_table mutex");
+                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
             let key_to_return = table.get(handle).and_then(|entry| entry.global_key.clone());
             drop(table);
             if let Some(key) = key_to_return {
@@ -395,9 +355,7 @@ pub(crate) fn define_primitive_core(
             }
             let table = caller
                 .data()
-                .symbol_table
-                .lock()
-                .expect("symbol_table mutex");
+                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
             let id_usize = id as usize;
             if id_usize < table.len() {
                 value::encode_symbol_handle(id as u32)
@@ -457,9 +415,7 @@ pub(crate) fn define_primitive_core(
                 if !VALID_FLAGS.contains(&c) {
                     *caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") = Some(format!(
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
                         "SyntaxError: Invalid regular expression flag: '{}'",
                         c
                     ));
@@ -470,9 +426,7 @@ pub(crate) fn define_primitive_core(
                     if seen[idx] {
                         *caller
                             .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") = Some(format!(
+                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
                             "SyntaxError: Duplicate regular expression flag: '{}'",
                             c
                         ));
@@ -486,9 +440,7 @@ pub(crate) fn define_primitive_core(
             if seen['u' as usize] && seen['v' as usize] {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") = Some(
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
                     "SyntaxError: Invalid regular expression flags: u and v cannot be combined".to_string(),
                 );
                 return value::encode_undefined();
@@ -503,7 +455,7 @@ pub(crate) fn define_primitive_core(
             // 编译正则表达式
             match regress::Regex::with_flags(&pattern, engine_flags.as_str()) {
                 Ok(compiled) => {
-                    let mut table = caller.data_mut().regex_table.lock().unwrap();
+                    let mut table = caller.data_mut().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(RegexEntry {
                         pattern,
@@ -516,9 +468,7 @@ pub(crate) fn define_primitive_core(
                 Err(e) => {
                     *caller
                         .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
+                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                         Some(format!("SyntaxError: Invalid regular expression: {}", e));
                     value::encode_undefined()
                 }
@@ -541,7 +491,7 @@ pub(crate) fn define_primitive_core(
 
             // 单次锁定获取正则信息：is_global、is_sticky、start_pos、entry clone
             let (entry, is_global, is_sticky, start_pos) = {
-                let table = caller.data().regex_table.lock().unwrap();
+                let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 match table.get(handle as usize) {
                     Some(e) => {
                         let is_global = e.flags.contains('g');
@@ -578,7 +528,7 @@ pub(crate) fn define_primitive_core(
 
             // 更新 lastIndex（全局或粘性模式）
             if is_global || is_sticky {
-                let mut table = caller.data().regex_table.lock().unwrap();
+                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = table.get_mut(handle as usize) {
                     if let Some(end) = match_end {
                         // 找到匹配：更新 lastIndex 到匹配结束位置
@@ -734,7 +684,7 @@ pub(crate) fn define_primitive_core(
             // 单次锁定获取正则信息：is_global、lastIndex、entry clone
             // 单次锁定获取正则信息：is_global、is_sticky、lastIndex、entry clone
             let (entry, is_global, is_sticky, start_pos) = {
-                let table = caller.data().regex_table.lock().unwrap();
+                let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 match table.get(handle as usize) {
                     Some(e) => {
                         let is_global = e.flags.contains('g');
@@ -757,7 +707,7 @@ pub(crate) fn define_primitive_core(
                 Some(ref m) if is_sticky && m.start() != start_pos => {
                     // 粘性模式匹配失败：匹配位置不在 lastIndex
                     if is_global || is_sticky {
-                        let mut table = caller.data().regex_table.lock().unwrap();
+                        let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(e) = table.get_mut(handle as usize) {
                             e.last_index = 0;
                         }
@@ -767,7 +717,7 @@ pub(crate) fn define_primitive_core(
                 Some(m) => {
                     // 更新 lastIndex（全局或粘性模式）
                     if is_global || is_sticky {
-                        let mut table = caller.data().regex_table.lock().unwrap();
+                        let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(e) = table.get_mut(handle as usize) {
                             e.last_index = m.end() as i64;
                         }
@@ -783,7 +733,7 @@ pub(crate) fn define_primitive_core(
                 None => {
                     // 无匹配时重置 lastIndex
                     if is_global || is_sticky {
-                        let mut table = caller.data().regex_table.lock().unwrap();
+                        let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(e) = table.get_mut(handle as usize) {
                             e.last_index = 0;
                         }
@@ -826,9 +776,7 @@ pub(crate) fn define_primitive_core(
                         // 创建 RegExp 失败，抛出 SyntaxError
                         *caller
                             .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
+                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some(format!("SyntaxError: Invalid regular expression: {}", e));
                         return value::encode_null();
                     }
@@ -837,7 +785,7 @@ pub(crate) fn define_primitive_core(
 
             let handle = value::decode_regexp_handle(regexp);
             let (entry, is_global) = {
-                let mut table = caller.data().regex_table.lock().unwrap();
+                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = match table.get_mut(handle as usize) {
                     Some(e) => e,
                     None => return value::encode_null(),
@@ -921,9 +869,7 @@ pub(crate) fn define_primitive_core(
                     Err(e) => {
                         *caller
                             .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
+                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some(format!("SyntaxError: Invalid regular expression: {}", e));
                         return value::encode_undefined();
                     }
@@ -931,7 +877,7 @@ pub(crate) fn define_primitive_core(
             }
             let handle = value::decode_regexp_handle(regexp);
             let (entry, prev_last_index) = {
-                let mut table = caller.data().regex_table.lock().unwrap();
+                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = match table.get_mut(handle as usize) {
                     Some(e) => e,
                     None => return value::encode_f64(-1.0),
@@ -951,7 +897,7 @@ pub(crate) fn define_primitive_core(
 
             // 恢复 lastIndex（ECMAScript 22.2.6.11 §4）
             {
-                let mut table = caller.data().regex_table.lock().unwrap();
+                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = table.get_mut(handle as usize) {
                     e.last_index = prev_last_index;
                 }
@@ -1014,7 +960,7 @@ pub(crate) fn define_primitive_core(
             if value::is_regexp(sep) {
                 // 正则分割
                 let handle = value::decode_regexp_handle(sep);
-                let table = caller.data().regex_table.lock().unwrap();
+                let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = match table.get(handle as usize) {
                     Some(e) => e.clone(),
                     None => return value::encode_null(),

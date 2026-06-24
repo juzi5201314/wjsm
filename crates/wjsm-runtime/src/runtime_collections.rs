@@ -28,10 +28,10 @@ pub(crate) fn map_set_create_iterator(
         MapSetMethodKind::Keys => {
             if let Some(mh) = map_handle {
                 let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapKeyIter {
                         map_handle: map_handle_u32,
@@ -42,10 +42,10 @@ pub(crate) fn map_set_create_iterator(
             }
             if let Some(sh) = set_handle {
                 let set_handle_u32 = value::decode_f64(sh) as u32;
-                let table = caller.data().set_table.lock().expect("set table mutex");
+                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
@@ -59,10 +59,10 @@ pub(crate) fn map_set_create_iterator(
         MapSetMethodKind::Values => {
             if let Some(mh) = map_handle {
                 let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapValueIter {
                         map_handle: map_handle_u32,
@@ -73,10 +73,10 @@ pub(crate) fn map_set_create_iterator(
             }
             if let Some(sh) = set_handle {
                 let set_handle_u32 = value::decode_f64(sh) as u32;
-                let table = caller.data().set_table.lock().expect("set table mutex");
+                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
@@ -90,10 +90,10 @@ pub(crate) fn map_set_create_iterator(
         MapSetMethodKind::Entries => {
             if let Some(mh) = map_handle {
                 let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapEntryIter {
                         map_handle: map_handle_u32,
@@ -104,10 +104,10 @@ pub(crate) fn map_set_create_iterator(
             }
             if let Some(sh) = set_handle {
                 let set_handle_u32 = value::decode_f64(sh) as u32;
-                let table = caller.data().set_table.lock().expect("set table mutex");
+                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
@@ -149,7 +149,7 @@ pub(crate) fn map_set_for_each_impl(
     if let Some(mh) = map_handle {
         let handle = value::decode_f64(mh) as usize;
         let pairs: Vec<(i64, i64)> = {
-            let table = caller.data().map_table.lock().expect("map table mutex");
+            let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -176,7 +176,7 @@ pub(crate) fn map_set_for_each_impl(
     if let Some(sh) = set_handle {
         let handle = value::decode_f64(sh) as usize;
         let values: Vec<i64> = {
-            let table = caller.data().set_table.lock().expect("set table mutex");
+            let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -210,7 +210,7 @@ pub(crate) fn call_weakmap_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             if !is_object_key(key) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
+                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: Invalid value used as weak map key".to_string());
                 return this_val;
             }
@@ -219,9 +219,7 @@ pub(crate) fn call_weakmap_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .weakmap_table
-                    .lock()
-                    .expect("weakmap_table mutex");
+                    .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].map.insert(key_handle, val);
                 }
@@ -240,9 +238,7 @@ pub(crate) fn call_weakmap_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakmap_table
-                .lock()
-                .expect("weakmap_table mutex");
+                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len()
                 && let Some(&val) = table[handle].map.get(&key_handle)
             {
@@ -262,9 +258,7 @@ pub(crate) fn call_weakmap_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakmap_table
-                .lock()
-                .expect("weakmap_table mutex");
+                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.contains_key(&key_handle));
             }
@@ -282,9 +276,7 @@ pub(crate) fn call_weakmap_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let mut table = caller
                 .data()
-                .weakmap_table
-                .lock()
-                .expect("weakmap_table mutex");
+                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
             }
@@ -306,7 +298,7 @@ pub(crate) fn call_weakset_method_from_caller(
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
             if !is_object_key(key) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
+                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: Invalid value used in weak set".to_string());
                 return this_val;
             }
@@ -315,9 +307,7 @@ pub(crate) fn call_weakset_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .weakset_table
-                    .lock()
-                    .expect("weakset_table mutex");
+                    .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].set.insert(key_handle);
                 }
@@ -336,9 +326,7 @@ pub(crate) fn call_weakset_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakset_table
-                .lock()
-                .expect("weakset_table mutex");
+                .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.contains(&key_handle));
             }
@@ -356,9 +344,7 @@ pub(crate) fn call_weakset_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let mut table = caller
                 .data()
-                .weakset_table
-                .lock()
-                .expect("weakset_table mutex");
+                .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.remove(&key_handle));
             }
@@ -391,7 +377,7 @@ pub(crate) fn call_map_set_method_from_caller(
             let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.keys.len() {
@@ -413,7 +399,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.keys.len() {
@@ -432,7 +418,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.values.len() {
@@ -452,7 +438,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.keys.len() {
@@ -465,7 +451,7 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let table = caller.data().set_table.lock().expect("set table mutex");
+                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.values.len() {
@@ -485,7 +471,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.keys.len() {
@@ -500,7 +486,7 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.values.len() {
@@ -517,7 +503,7 @@ pub(crate) fn call_map_set_method_from_caller(
         MapSetMethodKind::Clear => {
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].keys.clear();
                     table[handle].values.clear();
@@ -526,7 +512,7 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].values.clear();
                 }
@@ -537,7 +523,7 @@ pub(crate) fn call_map_set_method_from_caller(
         MapSetMethodKind::Size => {
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let table = caller.data().map_table.lock().expect("map table mutex");
+                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     return value::encode_f64(table[handle].keys.len() as f64);
                 }
@@ -545,7 +531,7 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let table = caller.data().set_table.lock().expect("set table mutex");
+                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     return value::encode_f64(table[handle].values.len() as f64);
                 }

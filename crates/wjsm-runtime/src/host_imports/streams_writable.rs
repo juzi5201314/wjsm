@@ -15,9 +15,7 @@ pub(crate) fn create_writable_abort_signal_object(caller: &mut Caller<'_, Runtim
     let signal_handle = {
         let mut table = caller
             .data()
-            .abort_signal_table
-            .lock()
-            .expect("abort_signal mutex");
+            .abort_signal_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(AbortSignalEntry {
             aborted: false,
@@ -54,9 +52,7 @@ fn mark_writable_abort_signal_aborted(
     if let Some(handle) = signal_handle {
         let mut table = caller
             .data()
-            .abort_signal_table
-            .lock()
-            .expect("abort_signal mutex");
+            .abort_signal_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(handle) {
             entry.aborted = true;
             entry.reason = Some(reason);
@@ -74,9 +70,7 @@ fn mark_writable_stream_signal_aborted(
     let signal_obj = {
         let table = caller
             .data()
-            .writable_stream_table
-            .lock()
-            .expect("writable stream mutex");
+            .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         table
             .get(stream_handle as usize)
             .and_then(|entry| entry.abort_signal)
@@ -303,9 +297,7 @@ pub(crate) async fn construct_writable_stream(
     let controller_handle = {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(StreamControllerEntry {
             kind: ControllerKind::Writable,
@@ -334,9 +326,7 @@ pub(crate) async fn construct_writable_stream(
     let stream_handle = {
         let mut table = caller
             .data()
-            .writable_stream_table
-            .lock()
-            .expect("writable stream mutex");
+            .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(WritableStreamEntry {
             state: WritableStreamState::Writable,
@@ -352,9 +342,7 @@ pub(crate) async fn construct_writable_stream(
     {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.stream_handle = stream_handle;
         }
@@ -379,9 +367,7 @@ pub(crate) async fn construct_writable_stream(
     {
         let mut table = caller
             .data()
-            .stream_controller_table
-            .lock()
-            .expect("controller mutex");
+            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.started = true;
         }
@@ -408,9 +394,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             // 从 writable_stream_table 读取 locked 返回 bool
             let table = caller
                 .data()
-                .writable_stream_table
-                .lock()
-                .expect("writable stream mutex");
+                .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
             let locked = table
                 .get(handle as usize)
                 .map(|e| e.locked)
@@ -422,9 +406,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             let locked = {
                 let mut stream_table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
                 if entry.locked {
                     true
@@ -447,9 +429,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             {
                 let table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get(handle as usize)
                     && entry.state == WritableStreamState::Writable
                 {
@@ -462,7 +442,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             }
 
             let writer_handle = {
-                let mut table = caller.data().writer_table.lock().expect("writer mutex");
+                let mut table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 let wh = table.len() as u32;
                 table.push(WriterEntry {
                     writable_stream_handle: handle,
@@ -476,9 +456,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             {
                 let table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get(handle as usize) {
                     if entry.state == WritableStreamState::Closed {
                         settle_promise(
@@ -518,9 +496,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.state = WritableStreamState::Errored;
                     entry.error = Some(reason);
@@ -530,7 +506,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
 
             // 如果有 writer，reject 其 closed 和 ready promise
             {
-                let writer_table = caller.data().writer_table.lock().expect("writer mutex");
+                let writer_table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 for writer_entry in writer_table.iter() {
                     if writer_entry.writable_stream_handle == handle {
                         if let Some(cp) = writer_entry.closed_promise {
@@ -557,9 +533,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             let (ctrl_handle, current_state) = {
                 let table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 table
                     .get(handle as usize)
                     .map(|e| (e.controller_handle, e.state))
@@ -577,9 +551,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.state = WritableStreamState::Closing;
                 }
@@ -589,9 +561,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             if let Some(ch) = ctrl_handle {
                 let mut ctrl_table = caller
                     .data()
-                    .stream_controller_table
-                    .lock()
-                    .expect("controller mutex");
+                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = ctrl_table.get_mut(ch as usize) {
                     ctrl.close_requested = true;
                 }
@@ -601,9 +571,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.state = WritableStreamState::Closed;
                 }
@@ -611,7 +579,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
 
             // resolve writer 的 closed_promise
             {
-                let writer_table = caller.data().writer_table.lock().expect("writer mutex");
+                let writer_table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 for writer_entry in writer_table.iter() {
                     if writer_entry.writable_stream_handle == handle
                         && let Some(cp) = writer_entry.closed_promise
@@ -658,7 +626,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
             // 获取 stream handle
             let stream_handle = {
-                let table = caller.data().writer_table.lock().expect("writer mutex");
+                let table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
             };
             let stream_handle = match stream_handle {
@@ -673,9 +641,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             let state = {
                 let table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(stream_handle as usize).map(|e| e.state)
             };
             match state {
@@ -683,9 +649,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     let err = {
                         let table = caller
                             .data()
-                            .writable_stream_table
-                            .lock()
-                            .expect("writable stream mutex");
+                            .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                         table.get(stream_handle as usize).and_then(|e| e.error)
                     };
                     settle_promise(
@@ -704,9 +668,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     let is_transform = {
                         let ts_table = caller
                             .data()
-                            .transform_stream_table
-                            .lock()
-                            .expect("transform stream mutex");
+                            .transform_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                         ts_table
                             .iter()
                             .any(|e| e.writable_stream_handle == Some(stream_handle))
@@ -735,7 +697,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
 
             let stream_handle = {
-                let table = caller.data().writer_table.lock().expect("reader mutex");
+                let table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
             };
 
@@ -744,9 +706,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let (ctrl_handle, current_state) = {
                     let table = caller
                         .data()
-                        .writable_stream_table
-                        .lock()
-                        .expect("writable stream mutex");
+                        .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                     table
                         .get(sh as usize)
                         .map(|e| (e.controller_handle, e.state))
@@ -759,9 +719,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     {
                         let mut table = caller
                             .data()
-                            .writable_stream_table
-                            .lock()
-                            .expect("writable stream mutex");
+                            .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = table.get_mut(sh as usize) {
                             entry.state = WritableStreamState::Closing;
                         }
@@ -771,9 +729,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     if let Some(ch) = ctrl_handle {
                         let mut ctrl_table = caller
                             .data()
-                            .stream_controller_table
-                            .lock()
-                            .expect("controller mutex");
+                            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(ctrl) = ctrl_table.get_mut(ch as usize) {
                             ctrl.close_requested = true;
                         }
@@ -783,9 +739,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     {
                         let mut table = caller
                             .data()
-                            .writable_stream_table
-                            .lock()
-                            .expect("writable stream mutex");
+                            .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = table.get_mut(sh as usize) {
                             entry.state = WritableStreamState::Closed;
                         }
@@ -797,9 +751,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 {
                     let mut table = caller
                         .data()
-                        .writable_stream_table
-                        .lock()
-                        .expect("writable stream mutex");
+                        .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(sh as usize) {
                         entry.locked = false;
                     }
@@ -807,7 +759,7 @@ pub(crate) fn call_default_writer_method_from_caller(
 
                 // resolve writer closed_promise
                 {
-                    let writer_table = caller.data().writer_table.lock().expect("writer mutex");
+                    let writer_table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                     for writer_entry in writer_table.iter() {
                         if writer_entry.writable_stream_handle == sh
                             && let Some(cp) = writer_entry.closed_promise
@@ -844,7 +796,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
 
             let stream_handle = {
-                let table = caller.data().writer_table.lock().expect("writer mutex");
+                let table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
             };
 
@@ -853,9 +805,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 {
                     let mut table = caller
                         .data()
-                        .writable_stream_table
-                        .lock()
-                        .expect("writable stream mutex");
+                        .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(sh as usize) {
                         entry.state = WritableStreamState::Errored;
                         entry.error = Some(reason);
@@ -867,9 +817,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 {
                     let mut table = caller
                         .data()
-                        .writable_stream_table
-                        .lock()
-                        .expect("writable stream mutex");
+                        .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(sh as usize) {
                         entry.locked = false;
                     }
@@ -877,7 +825,7 @@ pub(crate) fn call_default_writer_method_from_caller(
 
                 // reject writer closed 和 ready promise
                 {
-                    let writer_table = caller.data().writer_table.lock().expect("writer mutex");
+                    let writer_table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                     for writer_entry in writer_table.iter() {
                         if writer_entry.writable_stream_handle == sh {
                             if let Some(cp) = writer_entry.closed_promise {
@@ -912,15 +860,13 @@ pub(crate) fn call_default_writer_method_from_caller(
         }
         WritableStreamDefaultWriterMethodKind::ReleaseLock => {
             let stream_handle = {
-                let table = caller.data().writer_table.lock().expect("writer mutex");
+                let table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
             };
             if let Some(sh) = stream_handle {
                 let mut table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(sh as usize) {
                     entry.locked = false;
                 }
@@ -929,18 +875,18 @@ pub(crate) fn call_default_writer_method_from_caller(
         }
         WritableStreamDefaultWriterMethodKind::GetClosed => {
             // 返回 closed promise
-            let table = caller.data().writer_table.lock().expect("writer mutex");
+            let table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.closed_promise)
         }
         WritableStreamDefaultWriterMethodKind::GetReady => {
             // 返回 ready promise
-            let table = caller.data().writer_table.lock().expect("writer mutex");
+            let table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.ready_promise)
         }
         WritableStreamDefaultWriterMethodKind::GetDesiredSize => {
             // 返回 controller.desiredSize 值
             let stream_handle = {
-                let table = caller.data().writer_table.lock().expect("writer mutex");
+                let table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
             };
 
@@ -948,18 +894,14 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let ctrl_handle = {
                     let table = caller
                         .data()
-                        .writable_stream_table
-                        .lock()
-                        .expect("writable stream mutex");
+                        .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                     table.get(sh as usize).and_then(|e| e.controller_handle)
                 };
 
                 if let Some(ch) = ctrl_handle {
                     let ctrl_table = caller
                         .data()
-                        .stream_controller_table
-                        .lock()
-                        .expect("controller mutex");
+                        .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get(ch as usize) {
                         let desired = ctrl.high_water_mark - ctrl.chunk_queue.len() as f64;
                         return Some(value::encode_f64(desired));
@@ -993,9 +935,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
             let stream_handle = {
                 let table = caller
                     .data()
-                    .stream_controller_table
-                    .lock()
-                    .expect("controller mutex");
+                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.stream_handle)
             };
 
@@ -1004,9 +944,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
                 {
                     let mut table = caller
                         .data()
-                        .writable_stream_table
-                        .lock()
-                        .expect("writable stream mutex");
+                        .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(sh as usize) {
                         entry.state = WritableStreamState::Errored;
                         entry.error = Some(error_val);
@@ -1015,7 +953,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
 
                 // reject writer 的 closed 和 ready promise
                 {
-                    let writer_table = caller.data().writer_table.lock().expect("writer mutex");
+                    let writer_table = caller.data().writer_table.lock().unwrap_or_else(|e| e.into_inner());
                     for writer_entry in writer_table.iter() {
                         if writer_entry.writable_stream_handle == sh {
                             if let Some(cp) = writer_entry.closed_promise {
@@ -1043,17 +981,13 @@ pub(crate) fn call_writable_controller_method_from_caller(
             let stream_handle = {
                 let table = caller
                     .data()
-                    .stream_controller_table
-                    .lock()
-                    .expect("controller mutex");
+                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.stream_handle)
             };
             let signal_obj = stream_handle.and_then(|sh| {
                 let table = caller
                     .data()
-                    .writable_stream_table
-                    .lock()
-                    .expect("writable stream mutex");
+                    .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(sh as usize).and_then(|entry| entry.abort_signal)
             });
             Some(signal_obj.unwrap_or_else(value::encode_undefined))

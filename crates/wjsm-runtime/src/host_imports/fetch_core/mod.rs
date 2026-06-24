@@ -7,9 +7,7 @@ use wasmtime::Caller;
 pub(crate) fn create_empty_headers(caller: &mut Caller<'_, RuntimeState>) -> u32 {
     let mut table = caller
         .data()
-        .headers_table
-        .lock()
-        .expect("headers_table mutex");
+        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
     let h = table.len() as u32;
     table.push(HeadersEntry {
         pairs: Vec::new(),
@@ -32,9 +30,7 @@ pub(crate) fn create_response_object(
 ) -> i64 {
     let mut table = caller
         .data()
-        .fetch_response_table
-        .lock()
-        .expect("fetch_response_table mutex");
+        .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(FetchResponseEntry {
         status,
@@ -81,9 +77,7 @@ pub(crate) fn create_response_object(
     let body_bytes_opt = {
         let table = caller
             .data()
-            .fetch_response_table
-            .lock()
-            .expect("fetch_response_table mutex");
+            .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
         table
             .get(handle as usize)
             .filter(|entry| !entry.body.is_empty())
@@ -137,9 +131,7 @@ pub(crate) fn create_response_object_with_http_handle(
 ) -> i64 {
     let mut table = caller
         .data()
-        .fetch_response_table
-        .lock()
-        .expect("fetch_response_table mutex");
+        .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(FetchResponseEntry {
         status,
@@ -182,9 +174,7 @@ pub(crate) fn create_response_object_with_http_handle(
     let stream_handle = {
         let mut stream_table = caller
             .data()
-            .readable_stream_table
-            .lock()
-            .expect("readable_stream mutex");
+            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
         let sh = stream_table.len() as u32;
         stream_table.push(ReadableStreamEntry {
             state: StreamState::Readable,
@@ -226,9 +216,7 @@ pub(crate) fn create_request_object(
 ) -> i64 {
     let mut table = caller
         .data()
-        .fetch_request_table
-        .lock()
-        .expect("fetch_request_table mutex");
+        .fetch_request_table.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(FetchRequestEntry {
         method: method.clone(),
