@@ -188,9 +188,76 @@ fn expr_has_dynamic_import(expr: &ast::Expr) -> bool {
             }
             ast::BlockStmtOrExpr::Expr(e) => expr_has_dynamic_import(e),
         },
+        ast::Expr::Object(obj) => obj.props.iter().any(|prop| match prop {
+            ast::PropOrSpread::Prop(p) => match p.as_ref() {
+                ast::Prop::KeyValue(kv) => expr_has_dynamic_import(&kv.value),
+                ast::Prop::Getter(g) => g
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
+                ast::Prop::Setter(s) => s
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
+                ast::Prop::Method(m) => m
+                    .function
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
+                _ => false,
+            },
+            ast::PropOrSpread::Spread(spread) => expr_has_dynamic_import(&spread.expr),
+        }),
+        ast::Expr::Array(arr) => arr
+            .elems
+            .iter()
+            .flatten()
+            .any(|elem| expr_has_dynamic_import(&elem.expr)),
+        ast::Expr::New(new_expr) => {
+            expr_has_dynamic_import(&new_expr.callee)
+                || new_expr
+                    .args
+                    .as_ref()
+                    .is_some_and(|args| args.iter().any(|a| expr_has_dynamic_import(&a.expr)))
+        }
+        ast::Expr::Tpl(tpl) => tpl.exprs.iter().any(|e| expr_has_dynamic_import(e)),
+        ast::Expr::TaggedTpl(tagged) => {
+            expr_has_dynamic_import(&tagged.tag)
+                || tagged.tpl.exprs.iter().any(|e| expr_has_dynamic_import(e))
+        }
+        ast::Expr::Await(await_expr) => expr_has_dynamic_import(&await_expr.arg),
+        ast::Expr::Yield(yield_expr) => yield_expr
+            .arg
+            .as_ref()
+            .is_some_and(|e| expr_has_dynamic_import(e)),
+        ast::Expr::OptChain(opt_chain) => match opt_chain.base.as_ref() {
+            ast::OptChainBase::Member(member) => expr_has_dynamic_import(&member.obj),
+            ast::OptChainBase::Call(call) => {
+                expr_has_dynamic_import(&call.callee)
+                    || call
+                        .args
+                        .iter()
+                        .any(|a| expr_has_dynamic_import(&a.expr))
+            }
+        },
+        ast::Expr::Class(class_expr) => class_expr
+            .class
+            .body
+            .iter()
+            .any(|member| match member {
+                ast::ClassMember::Method(method) => method
+                    .function
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
+                ast::ClassMember::Constructor(ctor) => ctor
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
+                _ => false,
+            }),
         ast::Expr::Fn(fn_expr) => fn_expr
             .function
-            .as_ref()
             .body
             .as_ref()
             .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
@@ -201,6 +268,22 @@ fn expr_has_dynamic_import(expr: &ast::Expr) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn parse_module(source: &str) -> ast::Module {
+        wjsm_parser::parse_module(source).expect("parse should succeed")
+    }
+
+    #[test]
+    fn is_es_module_detects_await_dynamic_import_in_export() {
+        let module = parse_module("export const mod = await import('./dynamic.js');");
+        assert!(is_es_module(&module));
+    }
+
+    #[test]
+    fn is_es_module_detects_dynamic_import_in_object_literal() {
+        let module = parse_module("const x = { m: import('./dynamic.js') };");
+        assert!(is_es_module(&module));
+    }
 
     #[test]
     fn public_bundle_function_works() {
