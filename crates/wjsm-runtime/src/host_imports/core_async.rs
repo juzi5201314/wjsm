@@ -246,6 +246,16 @@ pub(crate) fn define_core_async(
                     *index += 1;
                     return value::encode_undefined();
                 }
+                IteratorState::MapEntryIter { index, .. } => {
+                    *index += 1;
+                    return value::encode_undefined();
+                }
+                IteratorState::HeadersKeyIter { index, .. }
+                | IteratorState::HeadersValueIter { index, .. }
+                | IteratorState::HeadersEntryIter { index, .. } => {
+                    *index += 1;
+                    return value::encode_undefined();
+                }
                 IteratorState::IndexValueIter { index, .. } => {
                     *index += 1;
                     return value::encode_undefined();
@@ -384,6 +394,28 @@ pub(crate) fn define_core_async(
                     let table = caller.data().set_table.lock().expect("set table mutex");
                     let done = if *set_handle < table.len() as u32 {
                         *index as usize >= table[*set_handle as usize].values.len()
+                    } else {
+                        true
+                    };
+                    drop(table);
+                    return value::encode_bool(done);
+                }
+                IteratorState::MapEntryIter { index, map_handle } => {
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let done = if *map_handle < table.len() as u32 {
+                        *index as usize >= table[*map_handle as usize].keys.len()
+                    } else {
+                        true
+                    };
+                    drop(table);
+                    return value::encode_bool(done);
+                }
+                IteratorState::HeadersKeyIter { index, headers_handle }
+                | IteratorState::HeadersValueIter { index, headers_handle }
+                | IteratorState::HeadersEntryIter { index, headers_handle } => {
+                    let table = caller.data().headers_table.lock().expect("headers table mutex");
+                    let done = if *headers_handle < table.len() as u32 {
+                        *index as usize >= table[*headers_handle as usize].pairs.len()
                     } else {
                         true
                     };

@@ -9,6 +9,193 @@ pub(crate) fn is_object_key(key: i64) -> bool {
     value::is_object(key) || value::is_array(key) || value::is_function(key)
 }
 
+/// 为 Map/Set 创建 keys / values / entries 迭代器（与 NativeCallable 路径共用）。
+pub(crate) fn map_set_create_iterator(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: MapSetMethodKind,
+) -> i64 {
+    if !value::is_object(this_val) {
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let Some(op) = obj_ptr else {
+        return value::encode_undefined();
+    };
+    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+    match kind {
+        MapSetMethodKind::Keys => {
+            if let Some(mh) = map_handle {
+                let map_handle_u32 = value::decode_f64(mh) as u32;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if (map_handle_u32 as usize) < table.len() {
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::MapKeyIter {
+                        map_handle: map_handle_u32,
+                        index: 0,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            if let Some(sh) = set_handle {
+                let set_handle_u32 = value::decode_f64(sh) as u32;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if (set_handle_u32 as usize) < table.len() {
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::SetValueIter {
+                        set_handle: set_handle_u32,
+                        index: 0,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Values => {
+            if let Some(mh) = map_handle {
+                let map_handle_u32 = value::decode_f64(mh) as u32;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if (map_handle_u32 as usize) < table.len() {
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::MapValueIter {
+                        map_handle: map_handle_u32,
+                        index: 0,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            if let Some(sh) = set_handle {
+                let set_handle_u32 = value::decode_f64(sh) as u32;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if (set_handle_u32 as usize) < table.len() {
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::SetValueIter {
+                        set_handle: set_handle_u32,
+                        index: 0,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Entries => {
+            if let Some(mh) = map_handle {
+                let map_handle_u32 = value::decode_f64(mh) as u32;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if (map_handle_u32 as usize) < table.len() {
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::MapEntryIter {
+                        map_handle: map_handle_u32,
+                        index: 0,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            if let Some(sh) = set_handle {
+                let set_handle_u32 = value::decode_f64(sh) as u32;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if (set_handle_u32 as usize) < table.len() {
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::SetValueIter {
+                        set_handle: set_handle_u32,
+                        index: 0,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            value::encode_undefined()
+        }
+        _ => value::encode_undefined(),
+    }
+}
+
+/// Map/Set.prototype.forEach：遍历并调用 callback（同步宿主 import 路径）。
+pub(crate) fn map_set_for_each_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args: &[i64],
+) -> i64 {
+    let Some(cb) = args.first().copied() else {
+        return value::encode_undefined();
+    };
+    if !value::is_callable(cb) {
+        return value::encode_undefined();
+    }
+    let this_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+    if !value::is_object(this_val) {
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let Some(op) = obj_ptr else {
+        return value::encode_undefined();
+    };
+    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let rt = tokio::runtime::Handle::current();
+    if let Some(mh) = map_handle {
+        let handle = value::decode_f64(mh) as usize;
+        let pairs: Vec<(i64, i64)> = {
+            let table = caller.data().map_table.lock().expect("map table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &table[handle];
+            entry
+                .keys
+                .iter()
+                .zip(entry.values.iter())
+                .map(|(&k, &v)| (k, v))
+                .collect()
+        };
+        for (key, val) in pairs {
+            if rt
+                .block_on(invoke_resolved_callback_async_option(
+                    caller, &env, cb, this_arg, &[val, key, this_val],
+                ))
+                .is_none()
+            {
+                return value::encode_undefined();
+            }
+        }
+        return value::encode_undefined();
+    }
+    if let Some(sh) = set_handle {
+        let handle = value::decode_f64(sh) as usize;
+        let values: Vec<i64> = {
+            let table = caller.data().set_table.lock().expect("set table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            table[handle].values.clone()
+        };
+        for val in values {
+            if rt
+                .block_on(invoke_resolved_callback_async_option(
+                    caller, &env, cb, this_arg, &[val, val, this_val],
+                ))
+                .is_none()
+            {
+                return value::encode_undefined();
+            }
+        }
+    }
+    value::encode_undefined()
+}
+
 pub(crate) fn call_weakmap_method_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
@@ -366,55 +553,13 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             value::encode_f64(0.0)
         }
-        MapSetMethodKind::ForEach => value::encode_undefined(),
-        MapSetMethodKind::Keys => {
-            if let Some(mh) = map_handle {
-                let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().expect("map table mutex");
-                if (map_handle_u32 as usize) < table.len() {
-                    drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                    let iter_handle = iters.len() as u32;
-                    iters.push(IteratorState::MapKeyIter {
-                        map_handle: map_handle_u32,
-                        index: 0,
-                    });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
-                }
-            }
-            value::encode_undefined()
-        }
+        MapSetMethodKind::ForEach => map_set_for_each_impl(caller, this_val, &args),
+        MapSetMethodKind::Keys => map_set_create_iterator(caller, this_val, MapSetMethodKind::Keys),
         MapSetMethodKind::Values => {
-            if let Some(mh) = map_handle {
-                let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().expect("map table mutex");
-                if (map_handle_u32 as usize) < table.len() {
-                    drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                    let iter_handle = iters.len() as u32;
-                    iters.push(IteratorState::MapValueIter {
-                        map_handle: map_handle_u32,
-                        index: 0,
-                    });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
-                }
-            }
-            if let Some(sh) = set_handle {
-                let set_handle_u32 = value::decode_f64(sh) as u32;
-                let table = caller.data().set_table.lock().expect("set table mutex");
-                if (set_handle_u32 as usize) < table.len() {
-                    drop(table);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                    let iter_handle = iters.len() as u32;
-                    iters.push(IteratorState::SetValueIter {
-                        set_handle: set_handle_u32,
-                        index: 0,
-                    });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
-                }
-            }
-            value::encode_undefined()
+            map_set_create_iterator(caller, this_val, MapSetMethodKind::Values)
         }
-        MapSetMethodKind::Entries => value::encode_undefined(),
+        MapSetMethodKind::Entries => {
+            map_set_create_iterator(caller, this_val, MapSetMethodKind::Entries)
+        }
     }
 }
