@@ -138,7 +138,7 @@ impl ModuleResolver {
             .with_context(|| format!("Failed to read module: {}", path.display()))?;
 
         // 解析 AST
-        let ast = wjsm_parser::parse_module(&source)
+        let ast = wjsm_parser::parse_module_with_filename(&source, &path.to_string_lossy())
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
         // 检测并转换 CommonJS 模块

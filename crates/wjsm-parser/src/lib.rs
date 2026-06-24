@@ -2,7 +2,7 @@ use anyhow::Result;
 use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast as swc_ast;
-use swc_core::ecma::parser::{Parser, StringInput, Syntax, lexer::Lexer};
+use swc_core::ecma::parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
 
 pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
     let cm: Lrc<SourceMap> = Default::default();
@@ -16,6 +16,61 @@ pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
             tsx: true,
             ..Default::default()
         }),
+        Default::default(),
+        StringInput::from(&*fm),
+        None,
+    );
+
+    let mut parser = Parser::new_from(lexer);
+    parser
+        .parse_module()
+        .map_err(|error| anyhow::anyhow!("Parse error: {:?}", error))
+}
+
+/// 根据文件路径选择 SWC 语法模式。
+fn syntax_for_filename(filename: &str) -> Syntax {
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
+    match ext.as_deref() {
+        Some("ts") => Syntax::Typescript(TsSyntax {
+            tsx: false,
+            ..Default::default()
+        }),
+        Some("tsx") => Syntax::Typescript(TsSyntax {
+            tsx: true,
+            ..Default::default()
+        }),
+        Some("jsx") => Syntax::Es(EsSyntax {
+            jsx: true,
+            allow_super_outside_method: true,
+            ..Default::default()
+        }),
+        Some("js") | Some("mjs") | Some("cjs") => Syntax::Es(EsSyntax {
+            jsx: false,
+            allow_super_outside_method: true,
+            ..Default::default()
+        }),
+        _ => Syntax::Typescript(TsSyntax {
+            tsx: true,
+            ..Default::default()
+        }),
+    }
+}
+
+/// 按文件名扩展名选择 TypeScript / ECMAScript 语法解析模块。
+pub fn parse_module_with_filename(source: &str, filename: &str) -> Result<swc_ast::Module> {
+    let cm: Lrc<SourceMap> = Default::default();
+    let fm = cm.new_source_file(
+        FileName::Custom(filename.to_string()).into(),
+        source.to_string(),
+    );
+
+    let syntax = syntax_for_filename(filename);
+    let lexer = Lexer::new(
+        syntax,
         Default::default(),
         StringInput::from(&*fm),
         None,
