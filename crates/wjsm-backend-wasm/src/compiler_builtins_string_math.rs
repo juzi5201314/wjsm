@@ -153,6 +153,9 @@ impl Compiler {
             | Builtin::ArrayIsArray
             | Builtin::ArrayFrom
             | Builtin::DateConstructor => self.compile_proto_method_call(dest, builtin, args).map(Some),
+            Builtin::DateConstructorNew => {
+                self.compile_date_constructor_new(dest, args).map(Some)
+            }
             Builtin::AbortShadowStackOverflow => {
                 bail!("AbortShadowStackOverflow should not appear in compile_builtin_call");
             }

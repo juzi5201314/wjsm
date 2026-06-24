@@ -299,6 +299,8 @@ pub enum Builtin {
     MapSetEntries,
     // ── Date built-in ─────────────────────────────────────────────────
     DateConstructor,
+    /// `new Date(...)` lowering：编译时设置 new.target，与 DateConstructor 共用宿主实现。
+    DateConstructorNew,
     DateNow,
     DateParse,
     DateUTC,
@@ -805,6 +807,7 @@ impl Builtin {
             Self::MapSetValues => "MapSet.values",
             Self::MapSetEntries => "MapSet.entries",
             Self::DateConstructor => "Date",
+            Self::DateConstructorNew => "new Date",
             Self::DateNow => "Date.now",
             Self::DateParse => "Date.parse",
             Self::DateUTC => "Date.UTC",

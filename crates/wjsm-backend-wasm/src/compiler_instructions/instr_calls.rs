@@ -424,6 +424,7 @@ impl Compiler {
                     | Builtin::MathMax
                     | Builtin::MathMin
                     | Builtin::MathHypot
+                    | Builtin::DateUTC
                     | Builtin::DateConstructor
             ) {
                 (None, None, args)
@@ -481,6 +482,35 @@ impl Compiler {
         } else {
             self.emit(WasmInstruction::Drop);
         }
+        Ok(())
+    }
+
+    /// `new Date(...)`：调用前将 new.target 设为全局 Date 构造器，再走 date_constructor 宿主。
+    pub(crate) fn compile_date_constructor_new(
+        &mut self,
+        dest: Option<ValueId>,
+        args: &[ValueId],
+    ) -> Result<()> {
+        use crate::host_import_registry::SpecialHostImport;
+
+        let saved_new_target = self.string_concat_scratch_idx;
+        let date_name_ptr = self.ensure_string_ptr_const("Date");
+        self.emit(WasmInstruction::I64Const(value::encode_string_ptr(date_name_ptr)));
+        self.emit(WasmInstruction::Call(
+            self.builtin_func_indices[&Builtin::GetBuiltinGlobal],
+        ));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NewTargetSet],
+        ));
+        self.emit(WasmInstruction::LocalSet(saved_new_target));
+
+        self.compile_proto_method_call(dest, &Builtin::DateConstructor, args)?;
+
+        self.emit(WasmInstruction::LocalGet(saved_new_target));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NewTargetSet],
+        ));
+        self.emit(WasmInstruction::Drop);
         Ok(())
     }
 

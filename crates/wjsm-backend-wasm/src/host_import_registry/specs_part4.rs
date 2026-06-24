@@ -382,7 +382,7 @@ pub(crate) static SPECS_PART4: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "date_utc",
-        type_idx: 3,
+        type_idx: 19,
         key: Some(HostImportKey::Builtin(Builtin::DateUTC)),
         group: None,
     },
