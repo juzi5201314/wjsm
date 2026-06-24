@@ -769,6 +769,12 @@ pub mod wk_symbol {
     pub const DISPOSE: u32 = 6;
     pub const MATCH: u32 = 7;
     pub const ASYNC_DISPOSE: u32 = 8;
+    pub const IS_CONCAT_SPREADABLE: u32 = 9;
+    pub const MATCH_ALL: u32 = 10;
+    pub const REPLACE: u32 = 11;
+    pub const SEARCH: u32 = 12;
+    pub const SPLIT: u32 = 13;
+    pub const UNSCOPABLES: u32 = 14;
 }
 
 // ── Heap type tags ──────────────────────────────────────────────────────
