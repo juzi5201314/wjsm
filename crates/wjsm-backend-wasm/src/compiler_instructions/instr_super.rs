@@ -43,10 +43,22 @@ impl Compiler {
     pub(crate) fn compile_get_super_constructor(&mut self, dest: &ValueId) -> Result<()> {
         if let Some(function_id) = self.current_function_id {
             let constructor = self.encode_function_ref_id(function_id)?;
+            let super_key = self.ensure_string_ptr_const("__super_constructor__");
+            let super_ctor_scratch = self.call_env_obj_scratch();
+            self.emit(WasmInstruction::I64Const(constructor));
+            self.emit(WasmInstruction::I32Const(super_key as i32));
+            self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+            self.emit(WasmInstruction::LocalTee(super_ctor_scratch));
+            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+            self.emit(WasmInstruction::I64Ne);
+            self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+            self.emit(WasmInstruction::LocalGet(super_ctor_scratch));
+            self.emit(WasmInstruction::Else);
             self.emit(WasmInstruction::I64Const(constructor));
             self.emit(WasmInstruction::Call(
                 self.builtin_func_indices[&Builtin::ObjectGetPrototypeOf],
             ));
+            self.emit(WasmInstruction::End);
         } else {
             self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         }

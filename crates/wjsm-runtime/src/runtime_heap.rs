@@ -4,7 +4,10 @@ use crate::wasm_env::WasmEnv;
 use wjsm_ir::SHADOW_STACK_SIZE;
 
 /// handle 表上界（止于 shadow stack 基址），与 WASM emit_handle_table_alloc_check 一致。
-fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(env: &WasmEnv, ctx: &mut C) -> usize {
+fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(
+    env: &WasmEnv,
+    ctx: &mut C,
+) -> usize {
     let Some(g) = env.shadow_stack_end else {
         return env.memory.data(&*ctx).len();
     };
@@ -247,7 +250,8 @@ pub(crate) fn ensure_error_prototypes_initialized<C: AsContextMut<Data = Runtime
 
     let error_proto = alloc_host_object(ctx, env, 2);
     set_object_proto_header(ctx, env, error_proto, object_proto);
-    let to_string = create_native_callable(ctx.as_context().data(), NativeCallable::ErrorProtoToString);
+    let to_string =
+        create_native_callable(ctx.as_context().data(), NativeCallable::ErrorProtoToString);
     let _ = define_host_data_property_with_env(ctx, env, error_proto, "toString", to_string);
 
     let mut make_subclass = |name: &str, parent_proto: i64| -> i64 {
@@ -311,53 +315,9 @@ pub(crate) fn native_callable_error_prototype(
     }
 }
 
-/// 共享的错误对象创建逻辑：分配 host 对象，设置 name/message 属性和 __error_brand__ 隐藏标记。
-/// `create_error_object`（Caller 路径）和 `alloc_type_error_with_env`（泛型 C 路径）均委托此函数。
-pub(crate) fn alloc_error_object_with_env<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    error_name: &str,
-    message: String,
-) -> i64 {
-    let name_val = {
-        let state = ctx.as_context().data();
-        store_runtime_string_in_state(state, error_name.to_string())
-    };
-    let message_val = {
-        let state = ctx.as_context().data();
-        store_runtime_string_in_state(state, message)
-    };
-    let obj = alloc_host_object(ctx, env, 3);
-    let _ = define_host_data_property_with_env(ctx, env, obj, "name", name_val);
-    let _ = define_host_data_property_with_env(ctx, env, obj, "message", message_val);
-    // C2: 隐藏品牌标记，用于 render_value 区分真实 Error vs 普通对象 {name:"TypeError"}。
-    let brand_val = value::encode_bool(true);
-    let name_id = find_memory_c_string_with_env(ctx, env, "__error_brand__")
-        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "__error_brand__"))
-        .unwrap();
-    let _ = define_host_data_property_by_name_id_with_env(
-        ctx,
-        env,
-        obj,
-        encode_string_name_id(name_id),
-        brand_val,
-        0,
-    );
-    if let Some(proto) = {
-        let state = ctx.as_context().data();
-        state.error_prototypes.proto_for_error_name(error_name)
-    } {
-        set_object_proto_header(ctx, env, obj, proto);
-    }
-    obj
-}
-
-pub(crate) fn create_error_object(
-    caller: &mut Caller<'_, RuntimeState>,
-    error_name: &str,
-    arg: i64,
-) -> i64 {
-    let message = if value::is_undefined(arg) {
+/// 将 `message` 参数转换为 Error message 文本。
+fn error_message_from_arg(caller: &mut Caller<'_, RuntimeState>, arg: i64) -> String {
+    if value::is_undefined(arg) {
         String::new()
     } else if value::is_string(arg) {
         read_value_string_bytes(caller, arg)
@@ -375,18 +335,101 @@ pub(crate) fn create_error_object(
         }
     } else {
         String::new()
-    };
-    {
-        let mut table = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
-        table.push(ErrorEntry {
-            name: error_name.to_string(),
-            message: message.clone(),
-            value: value::encode_undefined(),
-        });
     }
+}
+
+fn define_error_properties_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    obj: i64,
+    error_name: &str,
+    message: String,
+) {
+    let name_val = {
+        let state = ctx.as_context().data();
+        store_runtime_string_in_state(state, error_name.to_string())
+    };
+    let message_val = {
+        let state = ctx.as_context().data();
+        store_runtime_string_in_state(state, message)
+    };
+    let _ = define_host_data_property_with_env(ctx, env, obj, "name", name_val);
+    let _ = define_host_data_property_with_env(ctx, env, obj, "message", message_val);
+    // C2: 隐藏品牌标记，用于 render_value 区分真实 Error vs 普通对象 {name:"TypeError"}。
+    let brand_val = value::encode_bool(true);
+    let name_id = find_memory_c_string_with_env(ctx, env, "__error_brand__")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "__error_brand__"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(name_id),
+        brand_val,
+        0,
+    );
+}
+
+/// 共享的错误对象创建逻辑：分配 host 对象，设置 name/message 属性和 __error_brand__ 隐藏标记。
+/// `create_error_object`（Caller 路径）和 `alloc_type_error_with_env`（泛型 C 路径）均委托此函数。
+pub(crate) fn alloc_error_object_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    error_name: &str,
+    message: String,
+) -> i64 {
+    let obj = alloc_host_object(ctx, env, 3);
+    define_error_properties_with_env(ctx, env, obj, error_name, message);
+    if let Some(proto) = {
+        let state = ctx.as_context().data();
+        state.error_prototypes.proto_for_error_name(error_name)
+    } {
+        set_object_proto_header(ctx, env, obj, proto);
+    }
+    obj
+}
+
+fn record_error_entry(caller: &mut Caller<'_, RuntimeState>, error_name: &str, message: String) {
+    let mut table = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    table.push(ErrorEntry {
+        name: error_name.to_string(),
+        message,
+        value: value::encode_undefined(),
+    });
+}
+
+pub(crate) fn create_error_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    error_name: &str,
+    arg: i64,
+) -> i64 {
+    let message = error_message_from_arg(caller, arg);
+    record_error_entry(caller, error_name, message.clone());
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     ensure_error_prototypes_initialized(caller, &env);
     alloc_error_object_with_env(caller, &env, error_name, message)
+}
+
+pub(crate) fn create_error_object_with_receiver(
+    caller: &mut Caller<'_, RuntimeState>,
+    error_name: &str,
+    arg: i64,
+    receiver: i64,
+) -> i64 {
+    let message = error_message_from_arg(caller, arg);
+    record_error_entry(caller, error_name, message.clone());
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    ensure_error_prototypes_initialized(caller, &env);
+    if value::is_js_object(receiver) {
+        define_error_properties_with_env(caller, &env, receiver, error_name, message);
+        receiver
+    } else {
+        alloc_error_object_with_env(caller, &env, error_name, message)
+    }
 }
 
 pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
