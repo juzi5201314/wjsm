@@ -1,3 +1,4 @@
+use base64::Engine;
 use crate::host_imports::fetch_core::*;
 use crate::*;
 use wasmtime::Caller;
@@ -41,10 +42,21 @@ pub(crate) fn perform_data_url_fetch(
     caller: &mut Caller<'_, RuntimeState>,
     url: &str,
 ) -> std::result::Result<i64, String> {
-    let body = url.split(',').nth(1).unwrap_or("").to_string();
-    let decoded = urlencoding_decode(&body);
-    let bytes = decoded.into_bytes();
+    let (mediatype, is_base64, data_part) = parse_data_url(url)?;
+    let bytes = if is_base64 {
+        base64::engine::general_purpose::STANDARD
+            .decode(data_part.as_bytes())
+            .map_err(|e| format!("invalid base64 in data URL: {}", e))?
+    } else {
+        percent_decode_to_bytes(&data_part)
+    };
     let resp_headers = create_empty_headers(caller);
+    {
+        let mut htable = caller.data().headers_table.lock().expect("headers mutex");
+        if let Some(entry) = htable.get_mut(resp_headers as usize) {
+            entry.pairs.push(("content-type".to_string(), mediatype));
+        }
+    }
     Ok(create_response_object(
         caller,
         200,
@@ -187,23 +199,55 @@ pub(crate) fn is_signal_aborted(state: &RuntimeState, handle: u32) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn urlencoding_decode(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
+const DATA_URL_DEFAULT_MEDIATYPE: &str = "text/plain;charset=US-ASCII";
+
+/// RFC 2397: `data:[<mediatype>][;base64],<data>`
+fn parse_data_url(url: &str) -> std::result::Result<(String, bool, String), String> {
+    let rest = url
+        .strip_prefix("data:")
+        .ok_or_else(|| "invalid data URL".to_string())?;
+    let comma = rest
+        .find(',')
+        .ok_or_else(|| "invalid data URL: missing ','".to_string())?;
+    let meta = &rest[..comma];
+    let data_part = rest[comma + 1..].to_string();
+    let meta_lower = meta.to_ascii_lowercase();
+    let is_base64 = meta_lower.contains(";base64");
+    let mediatype_raw = if is_base64 {
+        meta_lower
+            .split_once(";base64")
+            .map(|(before, _)| before)
+            .unwrap_or("")
+    } else {
+        meta
+    };
+    let mediatype = if mediatype_raw.is_empty() {
+        DATA_URL_DEFAULT_MEDIATYPE.to_string()
+    } else {
+        mediatype_raw.to_string()
+    };
+    Ok((mediatype, is_base64, data_part))
+}
+
+fn percent_decode_to_bytes(input: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(input.len());
     let mut chars = input.chars();
     while let Some(ch) = chars.next() {
         if ch == '%' {
             let high = chars.next().and_then(|c| c.to_digit(16));
             let low = chars.next().and_then(|c| c.to_digit(16));
             if let (Some(h), Some(l)) = (high, low) {
-                result.push(char::from_u32(h * 16 + l).unwrap_or('?'));
+                bytes.push((h * 16 + l) as u8);
             } else {
-                result.push('%');
+                bytes.push(b'%');
             }
         } else if ch == '+' {
-            result.push(' ');
+            bytes.push(b' ');
         } else {
-            result.push(ch);
+            let mut buf = [0u8; 4];
+            let encoded = ch.encode_utf8(&mut buf);
+            bytes.extend_from_slice(encoded.as_bytes());
         }
     }
-    result
+    bytes
 }
