@@ -15,14 +15,14 @@ impl Compiler {
     pub(crate) fn compile_get_super_base(&mut self, dest: &ValueId) -> Result<()> {
         match self.current_home_object {
             Some(HomeObject::Prototype(constructor_id)) => {
-                let constructor = self.encode_function_ref_id(constructor_id);
+                let constructor = self.encode_function_ref_id(constructor_id)?;
                 let prototype_key = self.ensure_string_ptr_const("prototype");
                 self.emit(WasmInstruction::I64Const(constructor));
                 self.emit(WasmInstruction::I32Const(prototype_key as i32));
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
             }
             Some(HomeObject::Constructor(constructor_id)) => {
-                let constructor = self.encode_function_ref_id(constructor_id);
+                let constructor = self.encode_function_ref_id(constructor_id)?;
                 self.emit(WasmInstruction::I64Const(constructor));
             }
             None => {
@@ -42,7 +42,7 @@ impl Compiler {
 
     pub(crate) fn compile_get_super_constructor(&mut self, dest: &ValueId) -> Result<()> {
         if let Some(function_id) = self.current_function_id {
-            let constructor = self.encode_function_ref_id(function_id);
+            let constructor = self.encode_function_ref_id(function_id)?;
             self.emit(WasmInstruction::I64Const(constructor));
             self.emit(WasmInstruction::Call(
                 self.builtin_func_indices[&Builtin::ObjectGetPrototypeOf],
