@@ -200,13 +200,15 @@ impl Compiler {
         // shadow_sp (i32) at local_count+2
         // call_func_idx (i32) at local_count+3
         // safepoint_sp_saved (i32) at local_count+4  (P2: safepoint spill save/restore)
+        // computed_idx_scratch (i32) at local_count+5  (emit_computed_get/set 暂存规范数字索引)
         self.string_concat_scratch_idx = local_count;
         self.shadow_sp_scratch_idx = local_count + 2;
         self.safepoint_sp_saved_idx = local_count + 4;
-        self.eval_var_base_local_idx = local_count + 5;
+        self.computed_idx_scratch_idx = local_count + 5;
+        self.eval_var_base_local_idx = local_count + 6;
         let param_i64_count = self.ssa_local_base;
         let total_i64_locals = local_count.saturating_sub(param_i64_count) + 2; // string_concat + call_env_obj
-        let total_i32_locals = 3 + u32::from(!self.var_memory_offsets.is_empty());
+        let total_i32_locals = 4 + u32::from(!self.var_memory_offsets.is_empty());
         let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
             Vec::new()
         } else {
@@ -380,14 +382,16 @@ impl Compiler {
         // shadow_sp (i32) at total_locals+2
         // call_func_idx (i32) at total_locals+3
         // safepoint_sp_saved (i32) at total_locals+4  (P2: safepoint spill save/restore)
+        // computed_idx_scratch (i32) at total_locals+5  (emit_computed_get/set 暂存规范数字索引)
         self.string_concat_scratch_idx = total_locals;
         // call_env_obj scratch = string_concat + 1 (i64), computed by call_env_obj_scratch()
         self.shadow_sp_scratch_idx = total_locals + 2;
         self.safepoint_sp_saved_idx = total_locals + 4;
-        self.eval_var_base_local_idx = total_locals + 5;
+        self.computed_idx_scratch_idx = total_locals + 5;
+        self.eval_var_base_local_idx = total_locals + 6;
         // call_func_idx = shadow_sp + 1 (i32), computed by call_func_idx_scratch()
         let total_i64_locals = total_locals.saturating_sub(4) + 2; // string_concat + call_env_obj
-        let total_i32_locals = 3 + u32::from(!self.var_memory_offsets.is_empty());
+        let total_i32_locals = 4 + u32::from(!self.var_memory_offsets.is_empty());
 
         let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
             Vec::new()

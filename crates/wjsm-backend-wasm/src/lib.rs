@@ -135,6 +135,11 @@ struct Compiler {
     /// safepoint prologue 保存 spill 前 shadow_sp，epilogue 恢复。
     /// 独立于 shadow_sp_scratch_idx（Call arg-save 用），避免冲突。
     safepoint_sp_saved_idx: u32,
+    /// WASM local index for computed get/set index scratch (i32)。
+    /// emit_computed_get/emit_computed_set 内部按 key 类型分派时暂存规范数字索引。
+    /// 独立于 safepoint_sp_saved_idx：GetElem/SetElem 现为 safepoint，
+    /// safepoint_sp_saved_idx 被 spill prologue 占用，不可复用。
+    computed_idx_scratch_idx: u32,
     /// WASM local index for the base address of eval-visible variable storage.
     eval_var_base_local_idx: u32,
     /// WASM global index for alloc_counter (GC heuristic).

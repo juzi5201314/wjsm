@@ -30,6 +30,15 @@ impl Compiler {
                 // 可能触发 GC；保守标记所有 Const 为 safepoint（非分配型 Const 无 live handles
                 // 时 spill prologue 直接 return，无额外开销）。
                 | Instruction::Const { .. }
+                // 属性访问调用 support module helper（obj_get/obj_set/elem_get 等），
+                // 内部经 host import 可能触发 GC。
+                | Instruction::GetProp { .. }
+                | Instruction::SetProp { .. }
+                | Instruction::DeleteProp { .. }
+                | Instruction::GetElem { .. }
+                | Instruction::SetElem { .. }
+                | Instruction::OptionalGetProp { .. }
+                | Instruction::OptionalGetElem { .. }
         )
     }
 
@@ -92,13 +101,12 @@ impl Compiler {
     ///
     /// 旧实现把所有 computed key `to_int32` 后只走 `$elem_get`，导致 `a[变量]` 读 undefined、
     /// `o[字符串]` 读写错位。按 key 类型分派 + CanonicalNumericIndexString 后均正确。
-    /// 索引 scratch 复用 `safepoint_sp_saved_idx`（i32）：GetElem/SetElem 非 safepoint，
-    /// 其发射期间该 local 不被 spill 占用。
+    /// 索引 scratch 使用独立的 `computed_idx_scratch_idx`（i32）。
     pub(super) fn emit_computed_get(&mut self, object: ValueId, key: ValueId) {
         let box_base = value::BOX_BASE as i64;
         let obj_l = self.local_idx(object.0);
         let key_l = self.local_idx(key.0);
-        let idx_scratch = self.safepoint_sp_saved_idx;
+        let idx_scratch = self.computed_idx_scratch_idx;
         let to_int32 = self.to_int32_func_idx;
         let elem_get = self.elem_get_func_idx;
         let obj_get = self.obj_get_func_idx;
@@ -329,7 +337,7 @@ impl Compiler {
         let obj_l = self.local_idx(object.0);
         let key_l = self.local_idx(key.0);
         let val_l = self.local_idx(value.0);
-        let idx_scratch = self.safepoint_sp_saved_idx;
+        let idx_scratch = self.computed_idx_scratch_idx;
         let to_int32 = self.to_int32_func_idx;
         let elem_set = self.elem_set_func_idx;
         let obj_set = self.obj_set_func_idx;
