@@ -48,6 +48,16 @@ pub(crate) fn define_host_data_property_by_name_id_with_env<
         ]);
         (capacity, num_props)
     };
+    if let Some((slot_offset, _, _)) =
+        find_property_slot_by_name_id_with_env(ctx, env, obj_ptr, name_id)
+    {
+        let data = env.memory.data_mut(&mut *ctx);
+        if slot_offset + 16 > data.len() {
+            return None;
+        }
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        return Some(());
+    }
     if num_props >= capacity {
         return None;
     }
