@@ -310,12 +310,7 @@ pub(crate) fn define_primitive_core(
                 // 字符串直接使用原始值，不裁剪引号（ES §20.4.1.1）
                 Some(get_string_value(&mut caller, desc))
             } else {
-                Some(
-                    render_value(&mut caller, desc)
-                        .unwrap_or_default()
-                        .trim_matches('"')
-                        .to_string(),
-                )
+                Some(render_value(&mut caller, desc).unwrap_or_default())
             };
             let mut table = caller
                 .data()
