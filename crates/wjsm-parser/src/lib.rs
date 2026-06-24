@@ -1,30 +1,65 @@
+mod diagnostic;
+
 use anyhow::Result;
 use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast as swc_ast;
 use swc_core::ecma::parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
 
-pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
-    let cm: Lrc<SourceMap> = Default::default();
+pub use diagnostic::format_byte_diagnostic;
+
+fn parse_module_inner(
+    cm: &Lrc<SourceMap>,
+    filename: &str,
+    source: &str,
+    syntax: Syntax,
+    script: bool,
+) -> Result<swc_ast::Module> {
     let fm = cm.new_source_file(
-        FileName::Custom("input.ts".into()).into(),
+        FileName::Custom(filename.to_string()).into(),
         source.to_string(),
     );
 
     let lexer = Lexer::new(
-        Syntax::Typescript(swc_core::ecma::parser::TsSyntax {
-            tsx: true,
-            ..Default::default()
-        }),
+        syntax,
         Default::default(),
         StringInput::from(&*fm),
         None,
     );
 
     let mut parser = Parser::new_from(lexer);
-    parser
-        .parse_module()
-        .map_err(|error| anyhow::anyhow!("Parse error: {:?}", error))
+    if script {
+        let script_ast = parser.parse_script().map_err(|error| {
+            anyhow::anyhow!(diagnostic::format_parse_error(cm, filename, source, error))
+        })?;
+        Ok(swc_ast::Module {
+            span: script_ast.span,
+            body: script_ast
+                .body
+                .into_iter()
+                .map(swc_ast::ModuleItem::Stmt)
+                .collect(),
+            shebang: script_ast.shebang,
+        })
+    } else {
+        parser.parse_module().map_err(|error| {
+            anyhow::anyhow!(diagnostic::format_parse_error(cm, filename, source, error))
+        })
+    }
+}
+
+pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
+    let cm: Lrc<SourceMap> = Default::default();
+    parse_module_inner(
+        &cm,
+        "input.ts",
+        source,
+        Syntax::Typescript(swc_core::ecma::parser::TsSyntax {
+            tsx: true,
+            ..Default::default()
+        }),
+        false,
+    )
 }
 
 /// 根据文件路径选择 SWC 语法模式。
@@ -63,58 +98,23 @@ fn syntax_for_filename(filename: &str) -> Syntax {
 /// 按文件名扩展名选择 TypeScript / ECMAScript 语法解析模块。
 pub fn parse_module_with_filename(source: &str, filename: &str) -> Result<swc_ast::Module> {
     let cm: Lrc<SourceMap> = Default::default();
-    let fm = cm.new_source_file(
-        FileName::Custom(filename.to_string()).into(),
-        source.to_string(),
-    );
-
-    let syntax = syntax_for_filename(filename);
-    let lexer = Lexer::new(
-        syntax,
-        Default::default(),
-        StringInput::from(&*fm),
-        None,
-    );
-
-    let mut parser = Parser::new_from(lexer);
-    parser
-        .parse_module()
-        .map_err(|error| anyhow::anyhow!("Parse error: {:?}", error))
+    parse_module_inner(&cm, filename, source, syntax_for_filename(filename), false)
 }
 /// 以 Script 模式解析源码并转换为 Module。
 /// Script 模式下 `await` 在非 async 上下文中是合法标识符，
 /// 适用于 test262 等需要严格 ECMAScript 合规性的场景。
 pub fn parse_script_as_module(source: &str) -> Result<swc_ast::Module> {
     let cm: Lrc<SourceMap> = Default::default();
-    let fm = cm.new_source_file(
-        FileName::Custom("input.js".into()).into(),
-        source.to_string(),
-    );
-
-    let lexer = Lexer::new(
+    parse_module_inner(
+        &cm,
+        "input.js",
+        source,
         Syntax::Es(swc_core::ecma::parser::EsSyntax {
             allow_super_outside_method: true,
             ..Default::default()
         }),
-        Default::default(),
-        StringInput::from(&*fm),
-        None,
-    );
-
-    let mut parser = Parser::new_from(lexer);
-    let script = parser
-        .parse_script()
-        .map_err(|error| anyhow::anyhow!("Parse error: {:?}", error))?;
-
-    Ok(swc_ast::Module {
-        span: script.span,
-        body: script
-            .body
-            .into_iter()
-            .map(swc_ast::ModuleItem::Stmt)
-            .collect(),
-        shebang: script.shebang,
-    })
+        true,
+    )
 }
 
 #[cfg(test)]
@@ -148,7 +148,8 @@ mod tests {
             .expect_err("parser should reject invalid syntax");
 
         let message = error.to_string();
-        assert!(message.starts_with("Parse error: "));
+        assert!(message.starts_with("error: "));
+        assert!(message.contains(" --> input.ts:"));
         assert!(message.contains("Expected"));
     }
 

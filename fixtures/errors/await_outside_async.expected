@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [18..25]: await is only valid in async functions
+Error: error: await is only valid in async functions
+ --> errors/await_outside_async.js:1:18
+1 | function foo() { await 1; }
+  |                  ^^^^^^^
+

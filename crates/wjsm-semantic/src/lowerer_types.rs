@@ -112,6 +112,8 @@ pub(crate) struct Lowerer {
     /// 当前函数形参个数，供 emit_arguments_init 使用。
     pub(crate) arguments_param_count: u32,
     pub(crate) script_mode: bool,
+    pub(crate) diagnostic_source: Option<std::sync::Arc<str>>,
+    pub(crate) diagnostic_filename: String,
     pub(crate) eval_mode: bool,
     pub(crate) eval_has_scope_bridge: bool,
     pub(crate) eval_var_writes_to_scope: bool,

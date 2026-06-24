@@ -1,4 +1,5 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [1..7]: break outside of loop or switch
+Error: error: break outside of loop or switch
+ --> input:1:1

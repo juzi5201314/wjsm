@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 swc_core = { workspace = true }
 thiserror = { workspace = true }
+wjsm-parser = { path = "../wjsm-parser" }
 wjsm-ir = { path = "../wjsm-ir" }
 
-[dev-dependencies]
-wjsm-parser = { path = "../wjsm-parser" }

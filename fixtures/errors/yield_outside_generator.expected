@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Parse error: Error { error: (20..25, TS1109) }
+Error: error: Expression expected
+ --> errors/yield_outside_generator.js:2:3
+2 |   yield 1;
+  |   ^^^^^
+

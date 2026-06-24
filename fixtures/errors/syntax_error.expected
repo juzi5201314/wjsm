@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Parse error: Error { error: (36..37, Expected(",", ";")) }
+Error: error: Expected ',', got ';'
+ --> errors/syntax_error.js:1:36
+1 | console.log("missing closing paren";
+  |                                    ^
+

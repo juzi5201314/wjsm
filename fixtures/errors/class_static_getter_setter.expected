@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [104..112]: cannot access `Settings` before initialisation
+Error: error: cannot access `Settings` before initialisation
+ --> errors/class_static_getter_setter.js:6:12
+6 |     return Settings.#mode;
+  |            ^^^^^^^^
+

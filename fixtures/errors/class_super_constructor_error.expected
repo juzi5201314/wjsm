@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [86..91]: super() is only valid inside derived constructors
+Error: error: super() is only valid inside derived constructors
+ --> errors/class_super_constructor_error.js:4:5
+4 |     super();
+  |     ^^^^^
+

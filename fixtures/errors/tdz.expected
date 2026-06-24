@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [15..16]: cannot access `x` before initialisation
+Error: error: cannot access `x` before initialisation
+ --> errors/tdz.js:1:15
+1 | { console.log(x); let x = 1; }
+  |               ^
+

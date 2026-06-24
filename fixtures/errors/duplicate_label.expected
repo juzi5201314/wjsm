@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [12..17]: duplicate label `again`
+Error: error: duplicate label `again`
+ --> errors/duplicate_label.js:2:3
+2 |   again: {
+  |   ^^^^^
+

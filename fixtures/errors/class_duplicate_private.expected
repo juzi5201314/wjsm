@@ -1,4 +1,5 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [84..86]: Identifier '#x' has already been declared
+Error: error: Identifier '#x' has already been declared
+ --> input:84:1

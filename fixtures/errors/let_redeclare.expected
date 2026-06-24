@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [12..22]: cannot redeclare identifier `x` in the same scope
+Error: error: cannot redeclare identifier `x` in the same scope
+ --> errors/let_redeclare.js:2:1
+2 | let x = 2;
+  | ^^^^^^^^^^
+

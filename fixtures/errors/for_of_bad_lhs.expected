@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [7..8]: undeclared identifier `x`
+Error: error: undeclared identifier `x`
+ --> errors/for_of_bad_lhs.js:1:7
+1 | for ([x] of "ab") {
+  |       ^
+

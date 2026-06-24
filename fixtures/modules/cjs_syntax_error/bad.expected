@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Parse error: Error { error: (38..39, ExpectedIdent) }
+Error: error: Expected ident
+ --> modules/cjs_syntax_error/bad.js:2:10
+2 | function {{{ invalid
+  |          ^
+

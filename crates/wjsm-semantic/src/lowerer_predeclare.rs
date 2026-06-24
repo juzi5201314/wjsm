@@ -505,6 +505,12 @@ impl Lowerer {
     }
 
     pub(crate) fn error(&self, span: Span, message: impl Into<String>) -> LoweringError {
-        LoweringError::Diagnostic(Diagnostic::new(span.lo.0, span.hi.0, message))
+        LoweringError::Diagnostic(Diagnostic::with_source_context(
+            span.lo.0,
+            span.hi.0,
+            message,
+            self.diagnostic_source.clone(),
+            self.diagnostic_filename.clone(),
+        ))
     }
 }

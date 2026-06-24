@@ -124,6 +124,8 @@ impl Lowerer {
             is_method: false,
             arguments_param_count: 0,
             script_mode: false,
+            diagnostic_source: None,
+            diagnostic_filename: "input".into(),
             eval_mode: false,
             eval_has_scope_bridge: false,
             eval_var_writes_to_scope: false,

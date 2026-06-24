@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [66..79]: unsupported member property in update expression target
+Error: error: unsupported member property in update expression target
+ --> errors/class_private_field.js:6:5
+6 |     this.#count++;
+  |     ^^^^^^^^^^^^^
+
