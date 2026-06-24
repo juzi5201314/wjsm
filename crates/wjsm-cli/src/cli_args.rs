@@ -109,6 +109,10 @@ pub(crate) enum Commands {
     Check {
         /// The input file to check, or - for stdin
         input: String,
+
+        /// The root directory for module resolution
+        #[arg(long)]
+        root: Option<String>,
     },
 
     /// Evaluate a JS expression and print the result
@@ -125,12 +129,20 @@ pub(crate) enum Commands {
         /// Output format (text or dot for Graphviz)
         #[arg(long, default_value = "text")]
         format: DumpFormat,
+
+        /// The root directory for module resolution
+        #[arg(long)]
+        root: Option<String>,
     },
 
     /// Dump SWC AST as JSON for a JS/TS file
     DumpAst {
         /// The input file, or - for stdin
         input: String,
+
+        /// The root directory for module resolution
+        #[arg(long)]
+        root: Option<String>,
     },
 
     /// Dump WAT (WebAssembly Text) for a compiled JS/TS file
@@ -175,6 +187,10 @@ pub(crate) enum Commands {
     Init {
         /// The project directory to create
         path: String,
+
+        /// Overwrite existing project files
+        #[arg(long)]
+        force: bool,
     },
 
     /// Show extended version information

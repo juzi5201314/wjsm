@@ -163,13 +163,17 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             }
         }
 
-        Commands::Check { ref input } => cmd_check(&cli, input),
+        Commands::Check { ref input, ref root } => cmd_check(&cli, input, root.as_deref()),
 
         Commands::Eval { ref code } => cmd_eval(&cli, code),
 
-        Commands::DumpIr { ref input, format } => cmd_dump_ir(&cli, input, format),
+        Commands::DumpIr {
+            ref input,
+            format,
+            ref root,
+        } => cmd_dump_ir(&cli, input, format, root.as_deref()),
 
-        Commands::DumpAst { ref input } => cmd_dump_ast(&cli, input),
+        Commands::DumpAst { ref input, ref root } => cmd_dump_ast(&cli, input, root.as_deref()),
 
         Commands::DumpWat {
             ref input,
@@ -184,7 +188,7 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
 
         Commands::Disasm { ref input } => cmd_disasm(input),
 
-        Commands::Init { ref path } => cmd_init(path),
+        Commands::Init { ref path, force } => cmd_init(path, force),
         Commands::Version { extended } => cmd_version(extended),
     }
 }
@@ -218,10 +222,6 @@ fn resolve_auto_colors() -> bool {
     io::stdout().is_terminal() || io::stderr().is_terminal()
 }
 
-// ============================================================================
-// Command Implementations
-// ============================================================================
-
 fn cmd_build(
     cli: &Cli,
     input: &str,
@@ -231,23 +231,49 @@ fn cmd_build(
 ) -> Result<ExitCode> {
     let stage = stage.unwrap_or(Stage::Compile);
 
+    if matches!(stage, Stage::Parse | Stage::Lower) && output != "out.wasm" {
+        bail!("`-o` / `--output` cannot be used with `--stage parse` or `--stage lower` (output goes to stdout)");
+    }
+
     match stage {
         Stage::Parse | Stage::Lower => {
-            let source = read_input(input)?;
-            let result = run_pipeline(&source, Some(input), stage, cli.verbose, cli.time, cli.target, false)?;
+            let result = if input == "-" {
+                let mut source = String::new();
+                io::stdin().read_to_string(&mut source)?;
+                run_pipeline(
+                    &source,
+                    None,
+                    stage,
+                    cli.verbose,
+                    cli.time,
+                    cli.target,
+                    false,
+                )?
+            } else {
+                run_file_input_pipeline(input, root, stage, cli)?
+            };
 
             if matches!(stage, Stage::Parse) {
                 if let Some(ast) = &result.ast {
                     let json = serde_json::to_string_pretty(ast)?;
                     println!("{}", json);
                 }
-            } else {
-                if let Some(program) = &result.program {
-                    print_ir(program);
-                }
+            } else if let Some(program) = &result.program {
+                print_ir(program);
             }
         }
         Stage::Compile => {
+            if output == "-" && io::stdout().is_terminal() {
+                bail!("refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`");
+            }
+
+            if output != "-" && output == "out.wasm" && Path::new(output).exists() {
+                eprintln!(
+                    "warning: '{}' already exists and will be overwritten (use `-o` to choose another path)",
+                    output
+                );
+            }
+
             let wasm = if input == "-" {
                 let mut source = String::new();
                 io::stdin().read_to_string(&mut source)?;
@@ -270,6 +296,10 @@ fn cmd_build(
             }
         }
         Stage::Execute => {
+            if output == "-" && io::stdout().is_terminal() {
+                bail!("refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`");
+            }
+
             let result = if input == "-" {
                 let mut source = String::new();
                 io::stdin().read_to_string(&mut source)?;
@@ -379,18 +409,21 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
     Ok(last_exit)
 }
 
-fn cmd_check(cli: &Cli, input: &str) -> Result<ExitCode> {
-    let (source, filename) = read_input_for_parse(input)?;
-
-    let result = run_pipeline(
-        &source,
-        filename.as_deref(),
-        Stage::Lower,
-        cli.verbose,
-        cli.time,
-        cli.target,
-        false,
-    )?;
+fn cmd_check(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
+    let result = if input == "-" {
+        let (source, filename) = read_input_for_parse(input)?;
+        run_pipeline(
+            &source,
+            filename.as_deref(),
+            Stage::Lower,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            false,
+        )?
+    } else {
+        run_file_input_pipeline(input, root, Stage::Lower, cli)?
+    };
 
     if cli.verbose >= 1 {
         eprintln!("✓ No errors found");
@@ -408,18 +441,26 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
     cmd_run_eval(cli, &wrapped, false)
 }
 
-fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
-    let (source, filename) = read_input_for_parse(input)?;
-
-    let result = run_pipeline(
-        &source,
-        filename.as_deref(),
-        Stage::Lower,
-        cli.verbose,
-        cli.time,
-        cli.target,
-        false,
-    )?;
+fn cmd_dump_ir(
+    cli: &Cli,
+    input: &str,
+    format: DumpFormat,
+    root: Option<&str>,
+) -> Result<ExitCode> {
+    let result = if input == "-" {
+        let (source, filename) = read_input_for_parse(input)?;
+        run_pipeline(
+            &source,
+            filename.as_deref(),
+            Stage::Lower,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            false,
+        )?
+    } else {
+        run_file_input_pipeline(input, root, Stage::Lower, cli)?
+    };
 
     if let Some(program) = &result.program {
         match format {
@@ -431,18 +472,21 @@ fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_dump_ast(cli: &Cli, input: &str) -> Result<ExitCode> {
-    let (source, filename) = read_input_for_parse(input)?;
-
-    let result = run_pipeline(
-        &source,
-        filename.as_deref(),
-        Stage::Parse,
-        cli.verbose,
-        cli.time,
-        cli.target,
-        false,
-    )?;
+fn cmd_dump_ast(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
+    let result = if input == "-" {
+        let (source, filename) = read_input_for_parse(input)?;
+        run_pipeline(
+            &source,
+            filename.as_deref(),
+            Stage::Parse,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            false,
+        )?
+    } else {
+        run_file_input_pipeline(input, root, Stage::Parse, cli)?
+    };
 
     if let Some(ast) = &result.ast {
         let json = serde_json::to_string_pretty(ast)?;
@@ -591,33 +635,42 @@ fn cmd_disasm(input: &str) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_init(path: &str) -> Result<ExitCode> {
+fn cmd_init(path: &str, force: bool) -> Result<ExitCode> {
     let dir = PathBuf::from(path);
     let name = dir
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("Invalid path"))?
         .to_string_lossy();
 
-    // Create directory
     fs::create_dir_all(&dir)?;
 
-    // Create main.js
+    let main_path = dir.join("main.js");
+    let package_path = dir.join("package.json");
+
+    for file_path in [&main_path, &package_path] {
+        if file_path.exists() && !force {
+            bail!(
+                "'{}' already exists. Use --force to overwrite.",
+                file_path.display()
+            );
+        }
+    }
+
     let main_js = format!(
         r#"// {} - wjsm project
 console.log("Hello from {}!");
 "#,
         name, name
     );
-    fs::write(dir.join("main.js"), main_js)?;
+    fs::write(&main_path, main_js)?;
 
-    // Create package.json (optional, for IDE support)
     let package_json = serde_json::json!({
         "name": name,
         "version": "0.1.0",
         "type": "module",
     });
     fs::write(
-        dir.join("package.json"),
+        &package_path,
         serde_json::to_string_pretty(&package_json)?,
     )?;
 
@@ -724,6 +777,60 @@ fn run_pipeline(
     }
 
     Ok(result)
+}
+
+/// 文件输入走 compile plan（含 `--root` bundling），在指定 stage 停止。
+fn run_file_input_pipeline(
+    input: &str,
+    root: Option<&str>,
+    stop_at: Stage,
+    cli: &Cli,
+) -> Result<PipelineResult> {
+    let plan = build_compile_plan(Path::new(input), root)?;
+    match plan {
+        CompilePlan::Bundle { entry, root } => {
+            if cli.verbose >= 1 {
+                eprintln!("Bundling modules...");
+            }
+            let start = Instant::now();
+            let mut result = PipelineResult {
+                ast: None,
+                program: None,
+                wasm: None,
+                timings: PipelineTimings::default(),
+            };
+            match stop_at {
+                Stage::Parse => {
+                    let ast = wjsm_module::parse_entry_ast(&entry, &root)?;
+                    result.timings.parse_us = start.elapsed().as_micros() as u64;
+                    result.ast = Some(ast);
+                }
+                Stage::Lower => {
+                    let program = wjsm_module::lower_bundle(&entry, &root)?;
+                    result.timings.lower_us = start.elapsed().as_micros() as u64;
+                    result.program = Some(program);
+                }
+                Stage::Compile | Stage::Execute => {
+                    let wasm = wjsm_module::bundle(&entry, &root)?;
+                    result.timings.compile_us = start.elapsed().as_micros() as u64;
+                    result.wasm = Some(wasm);
+                }
+            }
+            if cli.time {
+                result.timings.print(cli.verbose);
+            }
+            Ok(result)
+        }
+        CompilePlan::SingleSource { source, filename } => run_pipeline(
+            &source,
+            Some(filename.as_str()),
+            stop_at,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            false,
+        ),
+    }
 }
 
 // ============================================================================
