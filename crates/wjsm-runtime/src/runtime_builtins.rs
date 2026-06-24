@@ -283,7 +283,10 @@ fn invoke_number_primitive_method(
             } else if value::is_f64(radix_or_digits) {
                 let r = value::decode_f64(radix_or_digits) as i32;
                 if !(2..=36).contains(&r) {
-                    return store_runtime_string(caller, "NaN".to_string());
+                    return make_range_error_exception(
+                        caller,
+                        "toString() radix argument must be between 2 and 36",
+                    );
                 }
                 r
             } else {
@@ -301,8 +304,7 @@ fn invoke_number_primitive_method(
             if radix == 10 {
                 return store_runtime_string(caller, format_number_js(x));
             }
-            let int_part = x.trunc() as i64;
-            store_runtime_string(caller, format_radix(int_part, radix as u32))
+            store_runtime_string(caller, format_f64_radix_to_string(x, radix))
         }
         1 => this_val,
         2 => {
@@ -316,9 +318,9 @@ fn invoke_number_primitive_method(
                 0
             };
             if !(0..=100).contains(&digits) {
-                return store_runtime_string(
+                return make_range_error_exception(
                     caller,
-                    "RangeError: toFixed() digits argument must be between 0 and 100".to_string(),
+                    "toFixed() digits argument must be between 0 and 100",
                 );
             }
             store_runtime_string(caller, format_number_to_fixed_js(x, digits))
@@ -347,9 +349,9 @@ fn invoke_number_primitive_method(
             if let Some(precision) = precision
                 && !(1..=21).contains(&precision)
             {
-                return store_runtime_string(
+                return make_range_error_exception(
                     caller,
-                    "RangeError: toPrecision() argument must be between 1 and 21".to_string(),
+                    "toPrecision() argument must be between 1 and 21",
                 );
             }
             store_runtime_string(caller, format_number_to_precision_js(x, precision))

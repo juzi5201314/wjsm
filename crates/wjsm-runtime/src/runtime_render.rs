@@ -1035,6 +1035,45 @@ pub(crate) fn format_radix(mut value: i64, radix: u32) -> String {
     String::from_utf8(result).unwrap_or_else(|_| "0".to_string())
 }
 
+/// `Number.prototype.toString(radix)`：整数部分 + 小数部分（乘 radix 取整），最多 52 位小数。
+pub(crate) fn format_f64_radix_to_string(x: f64, radix: i32) -> String {
+    if x == 0.0 && !x.is_sign_negative() {
+        return "0".to_string();
+    }
+    let radix_u = radix as u32;
+    let negative = x.is_sign_negative();
+    let abs_x = x.abs();
+    let int_part = abs_x.trunc() as i64;
+    let mut int_str = if int_part == 0 {
+        "0".to_string()
+    } else {
+        format_radix(int_part, radix_u)
+    };
+    let mut frac = abs_x - abs_x.trunc();
+    if frac > 0.0 {
+        int_str.push('.');
+        let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+        const MAX_FRAC_DIGITS: usize = 52;
+        for _ in 0..MAX_FRAC_DIGITS {
+            if frac == 0.0 {
+                break;
+            }
+            frac *= radix_u as f64;
+            let digit = frac.trunc() as usize;
+            if digit >= radix as usize {
+                break;
+            }
+            int_str.push(digits[digit] as char);
+            frac -= digit as f64;
+        }
+    }
+    if negative {
+        format!("-{int_str}")
+    } else {
+        int_str
+    }
+}
+
 pub(crate) fn normalize_exponent(s: &str) -> String {
     if let Some(pos) = s.find('e') {
         let mantissa = &s[..pos];
@@ -1107,4 +1146,15 @@ pub(crate) fn alloc_heap_c_string_global(
         let _ = global.set(&mut *caller, Val::I32(aligned_end as i32));
     }
     Some(heap_ptr as u32)
+}
+
+#[cfg(test)]
+mod format_radix_tests {
+    use super::*;
+
+    #[test]
+    fn format_f64_radix_fractional() {
+        assert_eq!(format_f64_radix_to_string(255.5, 16), "ff.8");
+        assert_eq!(format_f64_radix_to_string(255.0, 16), "ff");
+    }
 }
