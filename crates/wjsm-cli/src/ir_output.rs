@@ -18,6 +18,59 @@ pub(crate) fn print_ir(program: &Program) {
     }
 }
 
+/// DOT 标签字符串转义：反斜杠、双引号、换行。
+fn escape_dot_label(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// 在双引号字符串字面量之外对片段着色（避免 string("call") 内误匹配关键字）。
+fn colorize_outside_string_literals<F>(line: &str, mut colorize: F) -> String
+where
+    F: FnMut(&str) -> String,
+{
+    let mut out = String::with_capacity(line.len() * 2);
+    let mut in_string = false;
+    let mut segment_start = 0usize;
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' && (i == 0 || bytes[i - 1] != b'\\') {
+            if !in_string {
+                let segment = &line[segment_start..i];
+                out.push_str(&colorize(segment));
+                in_string = true;
+                segment_start = i;
+            } else {
+                out.push_str(&line[segment_start..=i]);
+                in_string = false;
+                segment_start = i + 1;
+            }
+        }
+        i += 1;
+    }
+    if segment_start < line.len() {
+        let segment = &line[segment_start..];
+        if in_string {
+            out.push_str(segment);
+        } else {
+            out.push_str(&colorize(segment));
+        }
+    }
+    out
+}
+
+
 fn colorize_ir_line(line: &str) -> String {
     static VALUE_RE: OnceLock<regex::Regex> = OnceLock::new();
     static SCOPE_RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -30,14 +83,22 @@ fn colorize_ir_line(line: &str) -> String {
 
     let mut result = line.to_string();
 
-    // Color keywords
-    for kw in &keywords {
-        result = result.replace(kw, &kw.blue().to_string());
-    }
+    // Color types (like "number", "string") in green — 跳过字符串字面量内部
+    result = colorize_outside_string_literals(&result, |seg| {
+        let mut s = seg.to_string();
+        s = s.replace("number(", &"number(".green().to_string());
+        s = s.replace("string(", &"string(".green().to_string());
+        s
+    });
 
-    // Color types (like "number", "string") in green
-    result = result.replace("number(", &"number(".green().to_string());
-    result = result.replace("string(", &"string(".green().to_string());
+    // Color keywords in blue — 跳过字符串字面量内部
+    result = colorize_outside_string_literals(&result, |seg| {
+        let mut s = seg.to_string();
+        for kw in &keywords {
+            s = s.replace(kw, &kw.blue().to_string());
+        }
+        s
+    });
 
     // Color values (like %0, $0.x) in cyan
     if result.contains('%') {
@@ -76,23 +137,23 @@ pub(crate) fn print_ir_dot(program: &Program) {
 
     // For each function
     for func in program.functions() {
-        println!("  subgraph cluster_{} {{", func.name());
-        println!("    label=\"{}\";", func.name());
+        let func_name = escape_dot_label(func.name());
+        println!("  subgraph \"cluster_{}\" {{", func_name);
+        println!("    label=\"{}\";", func_name);
+
         println!("    style=rounded;");
         println!();
 
         // Create nodes for each basic block using actual block IDs
         for bb in func.blocks() {
             let bb_id = bb.id();
-            let label = format!(
-                "{}\\l{}",
-                bb_id,
-                bb.instructions()
-                    .iter()
-                    .map(|inst| format!("  {}", inst))
-                    .collect::<Vec<_>>()
-                    .join("\\l")
-            );
+            let inst_lines: String = bb
+                .instructions()
+                .iter()
+                .map(|inst| escape_dot_label(&format!("  {}", inst)))
+                .collect::<Vec<_>>()
+                .join("\\l");
+            let label = format!("{}\\l{}", bb_id, inst_lines);
             println!("    bb{} [label=\"{}\"];", bb_id.0, label);
         }
 
