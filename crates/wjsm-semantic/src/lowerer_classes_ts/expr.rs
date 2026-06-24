@@ -329,7 +329,6 @@ impl Lowerer {
             },
         );
 
-
         // 创建 prototype 对象
         let proto_dest = self.alloc_value();
         // 计算非构造函数方法数量，作为原型对象的容量
@@ -378,6 +377,25 @@ impl Lowerer {
                 block,
                 Instruction::SetProto {
                     object: ctor_dest,
+                    value: super_ctor,
+                },
+            );
+            let super_key_const = self
+                .module
+                .add_constant(Constant::String("__super_constructor__".to_string()));
+            let super_key_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: super_key_dest,
+                    constant: super_key_const,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: ctor_dest,
+                    key: super_key_dest,
                     value: super_ctor,
                 },
             );
@@ -862,8 +880,7 @@ impl Lowerer {
                         },
                     );
                 }
-                swc_ast::ClassMember::Constructor(_)
-                | swc_ast::ClassMember::PrivateMethod(_) => {}
+                swc_ast::ClassMember::Constructor(_) | swc_ast::ClassMember::PrivateMethod(_) => {}
                 swc_ast::ClassMember::PrivateProp(p) if !p.is_static => {}
                 swc_ast::ClassMember::ClassProp(p) if !p.is_static => {}
                 other => {
@@ -946,8 +963,6 @@ impl Lowerer {
             );
             self.scopes.pop_scope();
         }
-
-
 
         Ok(ctor_dest)
     }

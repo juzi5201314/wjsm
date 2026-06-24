@@ -343,19 +343,13 @@ impl Lowerer {
                 self.emit_throw_value(exc_block, thrown_val)?;
                 return Ok((dest, continue_block));
             }
-            // Error constructors: new Error(msg), new TypeError(msg), etc.
+            // 这些宿主构造器当前直接返回宿主对象；Error 构造器不能走这里，
+            // 它们需要通用 ConstructCall 传入 new.target 并把已分配 receiver 初始化为错误对象。
             if self.scopes.lookup(&ident.sym).is_err()
                 && let Some(builtin) = builtin_from_global_ident(&ident.sym)
                 && matches!(
                     builtin,
-                    Builtin::ErrorConstructor
-                        | Builtin::TypeErrorConstructor
-                        | Builtin::RangeErrorConstructor
-                        | Builtin::SyntaxErrorConstructor
-                        | Builtin::ReferenceErrorConstructor
-                        | Builtin::URIErrorConstructor
-                        | Builtin::EvalErrorConstructor
-                        | Builtin::MapConstructor
+                    Builtin::MapConstructor
                         | Builtin::SetConstructor
                         | Builtin::WeakMapConstructor
                         | Builtin::WeakSetConstructor
@@ -468,5 +462,4 @@ impl Lowerer {
 
         Ok((obj_val, call_block))
     }
-
 }

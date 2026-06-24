@@ -1,0 +1,24 @@
+exit_code: 0
+--- stdout ---
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+TypeError
+derived
+TypeError: derived
+true
+true
+true
+explicit
+true
+reflected
+--- stderr ---

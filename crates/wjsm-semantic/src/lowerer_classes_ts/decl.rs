@@ -15,7 +15,6 @@ impl Lowerer {
             .declare(&class_name, VarKind::Const, false)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
 
-
         let constructor = class_decl
             .class
             .body
@@ -374,6 +373,25 @@ impl Lowerer {
                 outer_block,
                 Instruction::SetProto {
                     object: ctor_dest,
+                    value: super_ctor,
+                },
+            );
+            let super_key_const = self
+                .module
+                .add_constant(Constant::String("__super_constructor__".to_string()));
+            let super_key_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::Const {
+                    dest: super_key_dest,
+                    constant: super_key_const,
+                },
+            );
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::SetProp {
+                    object: ctor_dest,
+                    key: super_key_dest,
                     value: super_ctor,
                 },
             );
@@ -829,8 +847,7 @@ impl Lowerer {
                         false,
                     )?;
                 }
-                swc_ast::ClassMember::Constructor(_)
-                | swc_ast::ClassMember::PrivateMethod(_) => {}
+                swc_ast::ClassMember::Constructor(_) | swc_ast::ClassMember::PrivateMethod(_) => {}
                 swc_ast::ClassMember::PrivateProp(p) if !p.is_static => {}
                 swc_ast::ClassMember::ClassProp(p) if !p.is_static => {}
                 other => {
@@ -902,7 +919,6 @@ impl Lowerer {
                 value: ctor_dest,
             },
         );
-
 
         Ok(StmtFlow::Open(outer_block))
     }

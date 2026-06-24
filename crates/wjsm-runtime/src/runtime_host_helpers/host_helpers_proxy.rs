@@ -275,7 +275,11 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -363,7 +367,11 @@ pub(crate) async fn proxy_or_target_is_extensible_impl_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -420,7 +428,11 @@ pub(crate) async fn proxy_or_target_prevent_extensions_impl_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -509,7 +521,11 @@ async fn define_property_on_target_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         let entry = match entry {
@@ -639,7 +655,11 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -678,6 +698,25 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         Ok(name) => name,
         Err(_) => return value::encode_undefined(),
     };
+
+    if value::is_native_callable(target) {
+        if prop_name != "prototype" {
+            return value::encode_undefined();
+        }
+        let idx = value::decode_native_callable_idx(target) as usize;
+        let record = {
+            let table = caller
+                .data()
+                .native_callables
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            table.get(idx).cloned()
+        };
+        return record
+            .as_ref()
+            .and_then(|record| native_callable_error_prototype(caller, record))
+            .unwrap_or_else(value::encode_undefined);
+    }
     let obj_ptr = match resolve_handle(caller, target) {
         Some(ptr) => ptr,
         None => return value::encode_undefined(),
@@ -818,7 +857,9 @@ pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: Promis
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
             .data()
-            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         insert_promise_entry(&mut table, handle, entry);
     }
     promise
