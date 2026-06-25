@@ -568,7 +568,11 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         let try_body = self.current_function.new_block();
-        let finally_entry = self.current_function.new_block();
+        let finally_entry = if try_stmt.finalizer.is_some() {
+            Some(self.current_function.new_block())
+        } else {
+            None
+        };
         let exit = self.current_function.new_block();
 
         self.current_function
@@ -595,10 +599,8 @@ impl Lowerer {
 
         // Lower try body
         let try_flow = self.lower_block_body(&try_stmt.block, StmtFlow::Open(try_body))?;
-
-        // After try body, if not terminated, jump to finally
         if let Some(finally) = &try_stmt.finalizer {
-            // There is a finally block
+            let finally_entry = finally_entry.expect("finalizer present");
             self.finally_stack.push(FinallyContext {
                 _finally_block: finally_entry,
                 _after_finally_block: exit,
@@ -607,10 +609,8 @@ impl Lowerer {
                 .current_function
                 .ensure_jump_or_terminated(try_flow, finally_entry);
 
-            // Lower catch body if present
             if let Some(catch) = &try_stmt.handler {
                 let catch_entry = catch_entry.expect("has_catch implies catch_entry");
-                // Lower catch clause: bind parameter if present
                 self.scopes.push_scope(ScopeKind::Block);
                 if let Some(param) = &catch.param {
                     match param {
@@ -664,12 +664,9 @@ impl Lowerer {
                         }
                     }
                 }
-                // 推入 try_context 是为了 catch try body 中的 throw；进入 catch body 前弹出，
-                // 避免 catch body 内部的 throw 被同一个 catch 重新捕获形成自循环。
                 self.try_contexts.pop();
                 try_ctx_popped = true;
 
-                // Lower catch body
                 let catch_body_flow =
                     self.lower_block_body(&catch.body, StmtFlow::Open(catch_entry))?;
                 let _ = self
@@ -680,7 +677,6 @@ impl Lowerer {
 
             self.active_finalizers.pop();
 
-            // Lower finally
             let finally_flow = self.lower_block_body(finally, StmtFlow::Open(finally_entry))?;
             let _ = self
                 .current_function

@@ -1,9 +1,6 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
+seq
+arg
+binary
 --- stderr ---
-Runtime error: WASM trap: error while executing at wasm backtrace:
-    0:   <wasm-addr> - <unknown>!<wasm function <idx>>
-
-Caused by:
-    wasm trap: wasm `unreachable` instruction executed
-

@@ -262,7 +262,6 @@ impl Compiler {
                     self.if_depth -= 1;
 
                     if true_terminates && false_terminates {
-                        self.emit(WasmInstruction::Unreachable);
                         break;
                     }
 

@@ -1,0 +1,4 @@
+exit_code: 0
+--- stdout ---
+add:TypeError,sub:TypeError,mul:TypeError,div:TypeError,mod:TypeError,exp:TypeError,add_bigint:3,add_number:3
+--- stderr ---

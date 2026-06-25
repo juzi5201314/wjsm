@@ -34,6 +34,23 @@ pub(super) fn resolve_jump_chain(blocks: &[BasicBlock], start: usize) -> usize {
     current
 }
 
+pub(super) fn count_predecessors(blocks: &[BasicBlock], target: usize) -> usize {
+    blocks
+        .iter()
+        .filter(|b| match b.terminator() {
+            Terminator::Jump { target: t } => t.0 as usize == target,
+            Terminator::Branch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                true_block.0 as usize == target || false_block.0 as usize == target
+            }
+            _ => false,
+        })
+        .count()
+}
+
 
 impl Compiler {
     pub(crate) fn compile_region_tree(

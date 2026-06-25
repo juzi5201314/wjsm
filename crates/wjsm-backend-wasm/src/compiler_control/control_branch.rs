@@ -142,6 +142,7 @@ impl Compiler {
                 } else if self.if_depth > 0
                     && target_idx < idx
                     && !self.compiled_blocks.contains(&target_idx)
+                    && count_predecessors(blocks, target_idx) <= 1
                 {
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.compiled_blocks.insert(target_idx);
@@ -153,9 +154,19 @@ impl Compiler {
                         extra_depth,
                     )
                 } else if self.if_depth > 0 && target_idx > idx {
-                    // if/else 内的前向 Jump 由外层分支编译器在 if 之后继续编译目标块。
-                    // 这里不能 br 到函数隐式标签；当前函数有返回值时会破坏 WASM 栈类型。
                     self.emit_phi_moves(blocks, idx, target_idx);
+                    let should_follow = !self.compiled_blocks.contains(&target_idx)
+                        && count_predecessors(blocks, target_idx) <= 1;
+                    if should_follow {
+                        self.compiled_blocks.insert(target_idx);
+                        return self.compile_branch_body_with_context(
+                            module,
+                            blocks,
+                            target_idx,
+                            case_start,
+                            extra_depth,
+                        );
+                    }
                     Ok(false)
                 } else {
                     self.emit_phi_moves(blocks, idx, target_idx);
@@ -370,7 +381,6 @@ impl Compiler {
                 self.if_depth -= 1;
 
                 if true_terminates && false_terminates {
-                    self.emit(WasmInstruction::Unreachable);
                     Ok(true)
                 } else {
                     // 处理内层 merge block（如嵌套三元的中间 Phi）
@@ -407,12 +417,18 @@ impl Compiler {
                         // 仅对非 loop 的简单 Jump 做内联 merge 编译
                         // 条件：merge 必须为 Jump 终止，且目标非 loop 头/exit
                         let is_simple_merge = blocks.get(merge).is_some_and(|b| {
+                            if !b.instructions().is_empty() {
+                                return false;
+                            }
+                            if count_predecessors(blocks, merge) > 1 {
+                                return false;
+                            }
                             if let Terminator::Jump { target } = b.terminator() {
                                 let t = target.0 as usize;
                                 !self.loop_continue_depth(t).is_some()
                                     && !self.loop_break_depth(t).is_some()
                             } else {
-                                false // 非 Jump 终止（如 Branch）不内联编译
+                                false
                             }
                         });
                         if is_simple_merge {
@@ -501,16 +517,21 @@ impl Compiler {
             _ => {}
         }
 
-        // Check where the true block jumps to
+        // 单分支 Jump 到 merge 时，优先用另一分支的 continuation（try/catch 汇合）
         if let Some(true_block) = blocks.get(true_idx)
             && let Terminator::Jump { target } = true_block.terminator()
         {
+            if let Some(cont) = false_continuation {
+                return cont;
+            }
             return target.0 as usize;
         }
-        // Check where the false block jumps to
         if let Some(false_block) = blocks.get(false_idx)
             && let Terminator::Jump { target } = false_block.terminator()
         {
+            if let Some(cont) = true_continuation {
+                return cont;
+            }
             return target.0 as usize;
         }
         // Default: the block after the false block

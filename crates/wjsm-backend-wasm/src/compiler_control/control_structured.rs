@@ -180,7 +180,9 @@ impl Compiler {
                                     Terminator::Jump {
                                         target: false_target,
                                     },
-                                ) if true_target == false_target => Some(true_target.0 as usize),
+                                ) if true_target == false_target => {
+                                    Some(true_target.0 as usize)
+                                }
                                 _ => None,
                             }
                         }
@@ -196,24 +198,45 @@ impl Compiler {
                         self.if_depth += 1;
                         self.emit(WasmInstruction::If(BlockType::Empty));
 
+                        let true_jumps_direct = blocks.get(true_idx).is_some_and(|b| {
+                            matches!(
+                                b.terminator(),
+                                Terminator::Jump { target } if target.0 as usize == common_idx
+                            )
+                        });
+                        let false_jumps_direct = blocks.get(false_idx).is_some_and(|b| {
+                            matches!(
+                                b.terminator(),
+                                Terminator::Jump { target } if target.0 as usize == common_idx
+                            )
+                        });
+
                         self.compiled_blocks.insert(true_idx);
-                        for (instr_idx, instruction) in
-                            blocks[true_idx].instructions().iter().enumerate()
-                        {
-                            self.set_emit_cursor(true_idx, instr_idx);
-                            self.compile_instruction(module, instruction)?;
+                        if true_jumps_direct {
+                            for (instr_idx, instruction) in
+                                blocks[true_idx].instructions().iter().enumerate()
+                            {
+                                self.set_emit_cursor(true_idx, instr_idx);
+                                self.compile_instruction(module, instruction)?;
+                            }
+                            self.emit_phi_moves(blocks, true_idx, common_idx);
+                        } else {
+                            self.compile_branch_body(module, blocks, true_idx)?;
                         }
-                        self.emit_phi_moves(blocks, true_idx, common_idx);
 
                         self.emit(WasmInstruction::Else);
                         self.compiled_blocks.insert(false_idx);
-                        for (instr_idx, instruction) in
-                            blocks[false_idx].instructions().iter().enumerate()
-                        {
-                            self.set_emit_cursor(false_idx, instr_idx);
-                            self.compile_instruction(module, instruction)?;
+                        if false_jumps_direct {
+                            for (instr_idx, instruction) in
+                                blocks[false_idx].instructions().iter().enumerate()
+                            {
+                                self.set_emit_cursor(false_idx, instr_idx);
+                                self.compile_instruction(module, instruction)?;
+                            }
+                            self.emit_phi_moves(blocks, false_idx, common_idx);
+                        } else {
+                            self.compile_branch_body(module, blocks, false_idx)?;
                         }
-                        self.emit_phi_moves(blocks, false_idx, common_idx);
 
                         self.emit(WasmInstruction::End);
                         self.if_depth -= 1;
@@ -268,12 +291,11 @@ impl Compiler {
                         }
                     };
 
+
                     if both_jump_same && !true_terminates && !false_terminates {
                         // 两分支都以Jump到common target结束，但compile_branch_body返回false
                         // 说明Jump被当作fall-through，实际应该br到合并点
                         // 这里不插入unreachable
-                    } else if true_terminates && false_terminates {
-                        self.emit(WasmInstruction::Unreachable);
                     }
 
                     // 继续到 merge block
