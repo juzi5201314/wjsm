@@ -497,6 +497,25 @@ pub(crate) async fn perform_eval_from_caller_async(
             if value::is_exception(value) {
                 return value;
             }
+            let new_error_idx = {
+                let errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                if errors.len() > previous_error_count {
+                    Some((errors.len() - 1) as u32)
+                } else {
+                    None
+                }
+            };
+            if let Some(idx) = new_error_idx {
+                caller
+                    .data()
+                    .output.lock().unwrap_or_else(|e| e.into_inner())
+                    .truncate(output_len);
+                *caller
+                    .data()
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                    previous_runtime_error;
+                return value::encode_handle(value::TAG_EXCEPTION, idx);
+            }
             let current_runtime_error = caller
                 .data()
                 .runtime_error.lock().unwrap_or_else(|e| e.into_inner())

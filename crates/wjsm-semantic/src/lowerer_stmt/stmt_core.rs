@@ -104,16 +104,30 @@ impl Lowerer {
         Ok(self.resolve_store_block(continue_block))
     }
 
+    fn is_unqualified_direct_eval_call(call: &swc_ast::CallExpr) -> bool {
+        matches!(
+            &call.callee,
+            swc_ast::Callee::Expr(expr)
+                if matches!(expr.as_ref(), swc_ast::Expr::Ident(ident) if ident.sym.as_ref() == "eval")
+        )
+    }
+
     pub(crate) fn lower_call(
         &mut self,
         call: &swc_ast::CallExpr,
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
+        let is_direct_eval =
+            Self::is_unqualified_direct_eval_call(call) && self.scopes.lookup("eval").is_err();
         let result = self.lower_call_expr(call, block)?;
 
         // eval 调用已在 lower_direct_eval_call 内处理异常分叉，
         // 此时 block 可能已被终结；resolve_store_block 获取正确的继续块
         let working_block = self.resolve_store_block(block);
+
+        if is_direct_eval {
+            return Ok(working_block);
+        }
 
         // 跨函数异常检查：call 返回值可能是 TAG_EXCEPTION
         let is_exception = self.alloc_value();
@@ -200,7 +214,12 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
-        let cond = self.lower_expr(&if_stmt.test, block)?;
+        let cond = if self.expr_exception_fork_allowed() && self.expr_can_throw(&if_stmt.test) {
+            let mut cond_block = block;
+            self.lower_expr_then_continue(&if_stmt.test, &mut cond_block)?
+        } else {
+            self.lower_expr(&if_stmt.test, block)?
+        };
         let branch_block = self.resolve_store_block(block);
         let then_block = self.current_function.new_block();
         let else_or_merge = self.current_function.new_block();
