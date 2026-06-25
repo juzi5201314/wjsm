@@ -348,6 +348,14 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "primitive_symbol_get_property",
+        type_idx: 8,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::PrimitiveSymbolGetProperty,
+        )),
+        group: None,
+    },
+    HostImportSpec {
         name: "symbol_property_key",
         type_idx: 10,
         key: Some(HostImportKey::Special(SpecialHostImport::SymbolPropertyKey)),

@@ -393,6 +393,14 @@ pub(crate) enum NativeCallable {
     NumberPrimitiveMethod {
         method: u8,
     },
+    /// symbol handle 上 Symbol.prototype 方法；`method`: 0=toString, 1=valueOf
+    SymbolPrimitiveMethod {
+        method: u8,
+    },
+    /// Symbol.prototype.description getter
+    SymbolProtoDescriptionGetter,
+    /// Symbol.prototype[Symbol.toPrimitive]
+    SymbolProtoToPrimitive,
     ArgumentsStrictCalleeGetter,
     EvalFunction(EvalFunction),
     PromiseResolvingFunction {

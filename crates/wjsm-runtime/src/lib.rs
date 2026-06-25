@@ -301,6 +301,7 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
         let _ = bootstrap_fn.call_async(&mut store, ()).await;
     }
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut store, &wasm_env);
+    crate::runtime_heap::ensure_symbol_prototype_initialized(&mut store, &wasm_env);
     timings.bootstrap_cold = start.elapsed();
 
     // snapshot build = capture + encode；解码与恢复在新 instance 上重测一次。
@@ -495,6 +496,7 @@ impl Clone for RuntimeState {
             async_iterator_prototype: self.async_iterator_prototype,
             async_gen_prototype: self.async_gen_prototype,
             error_prototypes: self.error_prototypes,
+            symbol_prototype: self.symbol_prototype,
             array_proto_values: AtomicI64::new(self.array_proto_values.load(Ordering::Relaxed)),
             combinator_contexts: self.combinator_contexts.clone(),
             module_namespace_cache: self.module_namespace_cache.clone(),
@@ -601,6 +603,8 @@ struct RuntimeState {
     async_gen_prototype: i64,
     /// Error 及其子类的 prototype 对象（bootstrap 后初始化）
     error_prototypes: crate::runtime_heap::ErrorPrototypes,
+    /// %SymbolPrototype% 对象
+    symbol_prototype: i64,
     /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
     /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
@@ -834,6 +838,7 @@ impl RuntimeState {
             async_iterator_prototype: value::encode_undefined(),
             async_gen_prototype: value::encode_undefined(),
             error_prototypes: crate::runtime_heap::ErrorPrototypes::default(),
+            symbol_prototype: value::encode_undefined(),
             combinator_contexts: Arc::new(Mutex::new(Vec::new())),
             module_namespace_cache: Arc::new(Mutex::new(HashMap::new())),
             error_table: Arc::new(Mutex::new(Vec::new())),

@@ -282,6 +282,198 @@ pub(crate) fn ensure_error_prototypes_initialized<C: AsContextMut<Data = Runtime
     };
 }
 
+/// ECMAScript §20.4.3.2 Symbol.prototype.description getter
+pub(crate) fn symbol_proto_description_getter_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+) -> i64 {
+    if !value::is_symbol(this_val) {
+        return make_type_error_exception(
+            caller,
+            "TypeError: Symbol.prototype.description getter called on incompatible receiver",
+        );
+    }
+    let handle = value::decode_symbol_handle(this_val) as usize;
+    let table = caller
+        .data()
+        .symbol_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(entry) = table.get(handle) else {
+        return value::encode_undefined();
+    };
+    match &entry.description {
+        Some(desc) => store_runtime_string(caller, desc.clone()),
+        None => value::encode_undefined(),
+    }
+}
+
+/// ECMAScript §20.4.3.4 Symbol.prototype.toString
+pub(crate) fn symbol_proto_to_string_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+) -> i64 {
+    if !value::is_symbol(this_val) {
+        return make_type_error_exception(
+            caller,
+            "TypeError: Symbol.prototype.toString called on incompatible receiver",
+        );
+    }
+    let handle = value::decode_symbol_handle(this_val) as usize;
+    let table = caller
+        .data()
+        .symbol_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let s = if let Some(entry) = table.get(handle) {
+        if let Some(ref desc) = entry.description {
+            format!("Symbol({desc})")
+        } else {
+            "Symbol()".to_string()
+        }
+    } else {
+        "Symbol()".to_string()
+    };
+    store_runtime_string(caller, s)
+}
+
+/// ECMAScript §20.4.3.5 Symbol.prototype.valueOf
+pub(crate) fn symbol_proto_value_of_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+) -> i64 {
+    if value::is_symbol(this_val) {
+        this_val
+    } else {
+        make_type_error_exception(
+            caller,
+            "TypeError: Symbol.prototype.valueOf called on incompatible receiver",
+        )
+    }
+}
+
+/// `sym.*` 属性读取：委托 %SymbolPrototype%（含 description 访问器）。
+pub(crate) fn primitive_symbol_get_property_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    boxed: i64,
+    name_id: u32,
+) -> i64 {
+    if !value::is_symbol(boxed) {
+        return value::encode_undefined();
+    }
+    let Some(env) = WasmEnv::from_caller(caller) else {
+        return value::encode_undefined();
+    };
+    ensure_symbol_prototype_initialized(caller, &env);
+
+    if name_id == encode_symbol_name_id(5) {
+        return create_native_callable(
+            caller.data(),
+            NativeCallable::SymbolProtoToPrimitive,
+        );
+    }
+    if name_id == encode_symbol_name_id(2) {
+        return store_runtime_string_in_state(caller.data(), "Symbol".to_string());
+    }
+
+    let key = read_string_bytes(caller, name_id);
+    match key.as_slice() {
+        b"toString" => create_native_callable(
+            caller.data(),
+            NativeCallable::SymbolPrimitiveMethod { method: 0 },
+        ),
+        b"valueOf" => create_native_callable(
+            caller.data(),
+            NativeCallable::SymbolPrimitiveMethod { method: 1 },
+        ),
+        b"description" => symbol_proto_description_getter_impl(caller, boxed),
+        _ => value::encode_undefined(),
+    }
+}
+
+/// 在 bootstrap 后建立 %SymbolPrototype% 并挂到 RuntimeState（供 Symbol 构造函数 .prototype）。
+pub(crate) fn ensure_symbol_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().symbol_prototype) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let object_proto = value::encode_object_handle(object_proto_handle as u32);
+    let symbol_proto = alloc_host_object(ctx, env, 6);
+    set_object_proto_header(ctx, env, symbol_proto, object_proto);
+
+    let to_string =
+        create_native_callable(ctx.as_context().data(), NativeCallable::SymbolPrimitiveMethod {
+            method: 0,
+        });
+    let value_of =
+        create_native_callable(ctx.as_context().data(), NativeCallable::SymbolPrimitiveMethod {
+            method: 1,
+        });
+    let description_getter = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::SymbolProtoDescriptionGetter,
+    );
+    let to_primitive = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::SymbolProtoToPrimitive,
+    );
+    let _ = define_host_data_property_with_env(ctx, env, symbol_proto, "toString", to_string);
+    let _ = define_host_data_property_with_env(ctx, env, symbol_proto, "valueOf", value_of);
+    let _ = define_host_accessor_property_with_env(
+        ctx,
+        env,
+        symbol_proto,
+        "description",
+        description_getter,
+        value::encode_undefined(),
+    );
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        symbol_proto,
+        encode_symbol_name_id(5),
+        to_primitive,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    );
+    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Symbol".to_string());
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        symbol_proto,
+        encode_symbol_name_id(2),
+        tag,
+        constants::FLAG_CONFIGURABLE,
+    );
+
+    ctx.as_context_mut().data_mut().symbol_prototype = symbol_proto;
+}
+
+pub(crate) fn native_callable_symbol_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+) -> Option<i64> {
+    if !matches!(record, NativeCallable::SymbolConstructor) {
+        return None;
+    }
+    if !value::is_object(caller.data().symbol_prototype) {
+        if let Some(env) = WasmEnv::from_caller(caller) {
+            ensure_symbol_prototype_initialized(caller, &env);
+        }
+    }
+    let proto = caller.data().symbol_prototype;
+    if value::is_object(proto) {
+        Some(proto)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn native_callable_error_prototype(
     caller: &mut Caller<'_, RuntimeState>,
     record: &NativeCallable,

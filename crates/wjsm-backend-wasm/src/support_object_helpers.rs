@@ -101,6 +101,19 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
 
+    // TAG_SYMBOL：Symbol.prototype 方法 / description
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::I32Const(value::TAG_SYMBOL as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(
+        HOST_PRIMITIVE_SYMBOL_GET_PROPERTY,
+    ));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+
     // raw f64：Number.prototype 方法名 → NativeCallable
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
     func.instruction(&WasmInstruction::LocalGet(0));

@@ -1188,6 +1188,19 @@ pub(crate) fn define_math_number_error(
         primitive_number_get_method_fn,
     )?;
 
+    let primitive_symbol_get_property_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
+            primitive_symbol_get_property_impl(&mut caller, boxed, name_id as u32)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_symbol_get_property",
+        primitive_symbol_get_property_fn,
+    )?;
+
     // ── Map / Set helper: SameValueZero equality ──────────────────────
     Ok(())
 }

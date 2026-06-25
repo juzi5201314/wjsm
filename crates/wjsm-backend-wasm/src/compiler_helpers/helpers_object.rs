@@ -261,6 +261,19 @@ impl Compiler {
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
 
+            // TAG_SYMBOL：Symbol.prototype 方法 / description getter
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_SYMBOL as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::PrimitiveSymbolGetProperty],
+            ));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
             // raw f64：Number.prototype 方法名 → NativeCallable
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));

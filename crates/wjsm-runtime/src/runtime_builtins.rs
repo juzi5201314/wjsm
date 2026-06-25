@@ -260,6 +260,18 @@ fn invoke_bigint_primitive_method(
     }
 }
 
+fn invoke_symbol_primitive_method(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    method: u8,
+) -> i64 {
+    match method {
+        0 => symbol_proto_to_string_impl(caller, this_val),
+        1 => symbol_proto_value_of_impl(caller, this_val),
+        _ => value::encode_undefined(),
+    }
+}
+
 /// `NumberPrimitiveMethod`：this 为 raw f64，按 method 调用已有 number_proto 语义。
 fn invoke_number_primitive_method(
     caller: &mut Caller<'_, RuntimeState>,
@@ -466,6 +478,13 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::NumberPrimitiveMethod { method } => Some(invoke_number_primitive_method(
             caller, this_val, method, &args,
         )),
+        NativeCallable::SymbolPrimitiveMethod { method } => {
+            Some(invoke_symbol_primitive_method(caller, this_val, method))
+        }
+        NativeCallable::SymbolProtoDescriptionGetter => {
+            Some(symbol_proto_description_getter_impl(caller, this_val))
+        }
+        NativeCallable::SymbolProtoToPrimitive => Some(symbol_proto_value_of_impl(caller, this_val)),
         NativeCallable::EvalIndirect | NativeCallable::EvalFunction(_) => {
             // sync 路径已退役（参见 docs/async-scheduler.md / async_reentry_audit）；
             // 唯一进入点是 sync eval 解释器内嵌套 eval，本身已改为错误返回。
@@ -571,8 +590,21 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ErrorProtoToString => Some(error_proto_to_string_impl(caller, this_val)),
         NativeCallable::ObjectProtoToString => Some(obj_proto_to_string_impl(caller, this_val)),
         NativeCallable::ObjectProtoValueOf => Some(this_val),
+        NativeCallable::StringConstructor => {
+            let arg = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if value::is_undefined(arg) {
+                Some(store_runtime_string(caller, String::new()))
+            } else if value::is_symbol(arg) {
+                Some(symbol_proto_to_string_impl(caller, arg))
+            } else {
+                let s = render_value(caller, arg).unwrap_or_default();
+                Some(store_runtime_string(caller, s))
+            }
+        }
         NativeCallable::FunctionConstructor
-        | NativeCallable::StringConstructor
         | NativeCallable::BooleanConstructor
         | NativeCallable::NumberConstructor
         | NativeCallable::BigIntConstructor

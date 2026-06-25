@@ -80,6 +80,9 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::StubGlobal => NativeCallable::StubGlobal(()),
             Self::BigIntPrimitiveMethod => NativeCallable::BigIntPrimitiveMethod { method },
             Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method },
+            Self::SymbolPrimitiveMethod => NativeCallable::SymbolPrimitiveMethod { method },
+            Self::SymbolProtoDescriptionGetter => NativeCallable::SymbolProtoDescriptionGetter,
+            Self::SymbolProtoToPrimitive => NativeCallable::SymbolProtoToPrimitive,
             Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
             Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(()),
             Self::ErrorProtoToString => NativeCallable::ErrorProtoToString,
@@ -155,6 +158,9 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::ArgumentsStrictCalleeGetter => Self::ArgumentsStrictCalleeGetter,
             NativeCallable::BigIntPrimitiveMethod { method: _ } => Self::BigIntPrimitiveMethod,
             NativeCallable::NumberPrimitiveMethod { method: _ } => Self::NumberPrimitiveMethod,
+            NativeCallable::SymbolPrimitiveMethod { method: _ } => Self::SymbolPrimitiveMethod,
+            NativeCallable::SymbolProtoDescriptionGetter => Self::SymbolProtoDescriptionGetter,
+            NativeCallable::SymbolProtoToPrimitive => Self::SymbolProtoToPrimitive,
             NativeCallable::TypedArrayConstructor(()) => Self::TypedArrayConstructor,
             NativeCallable::EvalFunction(_)
             | NativeCallable::PromiseResolvingFunction { .. }

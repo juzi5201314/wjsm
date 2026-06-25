@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+Symbol(x)
+Symbol()
+true
+x
+undefined
+Symbol(x)
+Symbol()
+Symbol
+--- stderr ---

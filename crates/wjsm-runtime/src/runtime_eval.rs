@@ -1781,6 +1781,8 @@ pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
         "null".to_string()
     } else if value::is_undefined(val) {
         "undefined".to_string()
+    } else if value::is_symbol(val) {
+        render_value(caller, val).unwrap_or_else(|_| "Symbol()".to_string())
     } else {
         "[object Object]".to_string()
     }
