@@ -869,7 +869,7 @@ pub(crate) fn call_date_method_from_caller(
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
-                    let s = dt.format("%a %b %e %Y %H:%M:%S GMT%:z").to_string();
+                    let s = dt.format("%a %b %e %Y %H:%M:%S GMT%z (%Z)").to_string();
                     store_runtime_string(caller, s)
                 }
                 None => store_runtime_string(caller, "Invalid Date".to_string()),
@@ -893,7 +893,7 @@ pub(crate) fn call_date_method_from_caller(
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
-                    let s = dt.format("%H:%M:%S GMT%:z").to_string();
+                    let s = dt.format("%H:%M:%S GMT%z (%Z)").to_string();
                     store_runtime_string(caller, s)
                 }
                 None => store_runtime_string(caller, "Invalid Date".to_string()),
