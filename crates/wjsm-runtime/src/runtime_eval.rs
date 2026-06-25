@@ -1766,7 +1766,7 @@ pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
 /// ToPropertyKey 抽象操作 (ECMAScript 7.1.14)
 /// 先 ToPrimitive hint String，若结果是 Symbol 则抛出 TypeError
 pub(crate) fn to_property_key(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
-    let key = to_primitive(caller, val);
+    let key = to_primitive_with_hint(caller, val, ToPrimitiveHint::String);
     if value::is_symbol(key) {
         *caller
             .data()

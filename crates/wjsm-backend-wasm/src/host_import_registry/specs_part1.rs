@@ -119,7 +119,7 @@ pub(crate) static SPECS_PART1: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "define_property",
-        type_idx: 9,
+        type_idx: 32,
         key: Some(HostImportKey::Builtin(Builtin::DefineProperty)),
         group: None,
     },

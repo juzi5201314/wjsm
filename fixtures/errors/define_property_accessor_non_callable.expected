@@ -1,4 +1,5 @@
 exit_code: 2
 --- stdout ---
+Uncaught exception: TypeError: property getter must be callable
 --- stderr ---
-Runtime error: TypeError: property getter must be callable
+Runtime error: Uncaught exception: TypeError: property getter must be callable

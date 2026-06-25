@@ -128,7 +128,8 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::DefineProperty => {
-                // define_property(obj: i64, key: i64, desc: i64) -> ()
+                // define_property(obj: i64, key: i32, desc: i64) -> i64
+                // 成功返回该对象，失败返回可捕获 TAG_EXCEPTION（由语句级 IsException 分叉抛出）。
                 let obj_arg = args.first().context("DefineProperty expects 3 args")?;
                 let key_arg = args.get(1).context("DefineProperty expects 3 args")?;
                 let desc_arg = args.get(2).context("DefineProperty expects 3 args")?;
@@ -145,8 +146,9 @@ impl Compiler {
                     .unwrap_or(17);
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
                 }
                 Ok(Some(()))
             }
