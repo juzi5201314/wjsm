@@ -272,9 +272,9 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
             .data()
             .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bigint) = table.get(handle) {
-            return Ok(format!("{bigint}n"));
+            return Ok(format!("{bigint}"));
         }
-        return Ok("0n".to_string());
+        return Ok("0".to_string());
     }
 
     if value::is_symbol(val) {
