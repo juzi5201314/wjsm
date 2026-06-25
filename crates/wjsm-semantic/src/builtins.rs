@@ -95,6 +95,8 @@ pub(crate) fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "ByteLengthQueuingStrategy" => Some(Builtin::ByteLengthQueuingStrategyConstructor),
         "Symbol" => Some(Builtin::SymbolCreate),
         "queueMicrotask" => Some(Builtin::QueueMicrotask),
+        "parseInt" => Some(Builtin::NumberParseInt),
+        "parseFloat" => Some(Builtin::NumberParseFloat),
         "Proxy" => Some(Builtin::ProxyCreate),
         "Number" => Some(Builtin::NumberConstructor),
         "Boolean" => Some(Builtin::BooleanConstructor),

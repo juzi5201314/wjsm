@@ -4,6 +4,131 @@ use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
+fn parse_int_digit_value(c: char, radix: u32) -> Option<u32> {
+    let digit = if c.is_ascii_digit() {
+        c as u32 - '0' as u32
+    } else if c.is_ascii_alphabetic() {
+        c.to_ascii_lowercase() as u32 - 'a' as u32 + 10
+    } else {
+        return None;
+    };
+    if digit < radix {
+        Some(digit)
+    } else {
+        None
+    }
+}
+
+fn parse_int_take_valid_prefix(s: &str, radix: u32) -> String {
+    s.chars()
+        .take_while(|c| parse_int_digit_value(*c, radix).is_some())
+        .collect()
+}
+
+fn parse_int_radix_and_body(trimmed: &str, radix: i32) -> (i32, &str) {
+    if radix == 0 {
+        if trimmed.starts_with("0b") || trimmed.starts_with("0B") {
+            (2, &trimmed[2..])
+        } else if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
+            (8, &trimmed[2..])
+        } else if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+            (16, &trimmed[2..])
+        } else {
+            (10, trimmed)
+        }
+    } else {
+        let body = if radix == 16 && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
+            &trimmed[2..]
+        } else {
+            trimmed
+        };
+        (radix, body)
+    }
+}
+
+fn format_u64_radix(mut value: u64, radix: u32) -> String {
+    if value == 0 {
+        return "0".to_string();
+    }
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut result = Vec::new();
+    let r = radix as u64;
+    while value > 0 {
+        result.push(digits[(value % r) as usize]);
+        value /= r;
+    }
+    result.reverse();
+    String::from_utf8(result).unwrap_or_else(|_| "0".to_string())
+}
+
+fn format_f64_uint_radix(mut value: f64, radix: u32) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let r = radix as f64;
+    let mut result = Vec::new();
+    while value >= 1.0 {
+        let rem = (value % r).trunc();
+        let digit = rem as usize;
+        if digit >= radix as usize {
+            break;
+        }
+        result.push(digits[digit]);
+        value = (value / r).trunc();
+        if value.is_nan() || value.is_infinite() {
+            break;
+        }
+    }
+    if result.is_empty() {
+        return "0".to_string();
+    }
+    result.reverse();
+    String::from_utf8(result).unwrap_or_else(|_| "0".to_string())
+}
+
+/// ECMA-262 §21.1.3.6 Number.prototype.toString(radix)（非 10 进制）
+fn number_proto_to_string_radix(x: f64, radix: i32) -> String {
+    if x == 0.0 && !x.is_sign_negative() {
+        return "0".to_string();
+    }
+    let radix_u = radix as u32;
+    let negative = x.is_sign_negative();
+    let abs_x = x.abs();
+    let int_whole = abs_x.trunc();
+    let mut int_str = if int_whole == 0.0 {
+        "0".to_string()
+    } else if int_whole <= u64::MAX as f64 {
+        format_u64_radix(int_whole as u64, radix_u)
+    } else {
+        format_f64_uint_radix(int_whole, radix_u)
+    };
+    let mut frac = abs_x - int_whole;
+    if frac > 0.0 {
+        int_str.push('.');
+        let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+        const MAX_FRAC_DIGITS: usize = 52;
+        for _ in 0..MAX_FRAC_DIGITS {
+            if frac == 0.0 {
+                break;
+            }
+            frac *= radix_u as f64;
+            let digit = frac.trunc() as usize;
+            if digit >= radix as usize {
+                break;
+            }
+            int_str.push(digits[digit] as char);
+            frac -= digit as f64;
+        }
+    }
+    if negative {
+        format!("-{int_str}")
+    } else {
+        int_str
+    }
+}
+
+
 pub(crate) fn define_math_number_error(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -482,46 +607,24 @@ pub(crate) fn define_math_number_error(
             if radix != 0 && !(2..=36).contains(&radix) {
                 return value::encode_f64(f64::NAN);
             }
-            let (actual_radix, parse_str): (i32, &str) = if radix == 0 {
-                if trimmed.starts_with("0b") || trimmed.starts_with("0B") {
-                    (2, &trimmed[2..])
-                } else if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
-                    (8, &trimmed[2..])
-                } else if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-                    (16, &trimmed[2..])
-                } else {
-                    (10, trimmed)
-                }
-            } else {
-                let s: &str =
-                    if (radix == 16) && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
-                        &trimmed[2..]
-                    } else {
-                        trimmed
-                    };
-                (radix, s)
-            };
+            let mut core = trimmed;
+            let mut sign = 1.0_f64;
+            if let Some(rest) = core.strip_prefix('+') {
+                core = rest;
+            } else if let Some(rest) = core.strip_prefix('-') {
+                core = rest;
+                sign = -1.0;
+            }
+            let (actual_radix, parse_str) = parse_int_radix_and_body(core, radix);
             if parse_str.is_empty() {
                 return value::encode_f64(f64::NAN);
             }
-            let valid_chars: String = parse_str
-                .chars()
-                .take_while(|c| {
-                    let digit = if c.is_ascii_digit() {
-                        *c as u32 - '0' as u32
-                    } else if c.is_ascii_alphabetic() {
-                        c.to_ascii_lowercase() as u32 - 'a' as u32 + 10
-                    } else {
-                        return false;
-                    };
-                    digit < actual_radix as u32
-                })
-                .collect();
+            let valid_chars = parse_int_take_valid_prefix(parse_str, actual_radix as u32);
             if valid_chars.is_empty() {
                 return value::encode_f64(f64::NAN);
             }
             match i64::from_str_radix(&valid_chars, actual_radix as u32) {
-                Ok(v) => value::encode_f64(v as f64),
+                Ok(v) => value::encode_f64(sign * v as f64),
                 Err(_) => value::encode_f64(f64::NAN),
             }
         },
@@ -647,7 +750,7 @@ pub(crate) fn define_math_number_error(
                 let s = format_number_js(x);
                 return store_runtime_string(&caller, s);
             }
-            let result = format_f64_radix_to_string(x, radix);
+            let result = number_proto_to_string_radix(x, radix);
             store_runtime_string(&caller, result)
         },
     );
