@@ -20,9 +20,10 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = string("test")
-    c21 = string("finally")
+    c20 = string("Error")
+    c21 = string("test")
     c22 = string("finally")
+    c23 = string("finally")
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -70,27 +71,33 @@ module {
       store var $this, %20
       jump bb1
     bb1:
-      %21 = const c20
-      %22 = call builtin.Error(%21)
-      %23 = const c21
-      %24 = call builtin.console.log(%23)
-      %25 = is_exception %24
-      branch %25, bb5, bb4
-    bb2:
+      %21 = load var $0.$global
+      %22 = const c20
+      %23 = get_prop %21, %22
+      %24 = new_object(capacity=4)
+      %25 = call builtin.get_prototype_from_constructor(%23)
+      set_proto %24, %25
+      %26 = const c21
+      construct_call %23, this=%24, args=[%26]
       %27 = const c22
       %28 = call builtin.console.log(%27)
       %29 = is_exception %28
-      branch %29, bb7, bb6
+      branch %29, bb5, bb4
+    bb2:
+      %31 = const c23
+      %32 = call builtin.console.log(%31)
+      %33 = is_exception %32
+      branch %33, bb7, bb6
     bb3:
       return
     bb4:
-      throw %22
+      throw %24
     bb5:
-      %26 = call builtin.exception_value(%24)
-      throw %26
+      %30 = call builtin.exception_value(%28)
+      throw %30
     bb6:
       jump bb3
     bb7:
-      %30 = call builtin.exception_value(%28)
-      throw %30
+      %34 = call builtin.exception_value(%32)
+      throw %34
 }

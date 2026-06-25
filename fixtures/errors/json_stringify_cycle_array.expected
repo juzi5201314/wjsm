@@ -1,4 +1,5 @@
 exit_code: 2
 --- stdout ---
+Uncaught exception: TypeError: Converting circular structure to JSON
 --- stderr ---
-Runtime error: TypeError: Converting circular structure to JSON
+Runtime error: Uncaught exception: TypeError: Converting circular structure to JSON
