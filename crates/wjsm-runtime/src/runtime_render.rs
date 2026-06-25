@@ -465,6 +465,33 @@ async fn get_to_json_async(caller: &mut Caller<'_, RuntimeState>, key: &str, val
         .await
         .unwrap_or_else(|_| value::encode_undefined())
 }
+
+/// ES §24.5.2 step 10.a：顶层 replacer 调用前构造 `{"": value}` 包装对象。
+fn make_stringify_root_wrapper(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
+    let env = match WasmEnv::from_caller(caller) {
+        Some(e) => e,
+        None => return value::encode_undefined(),
+    };
+    let root = alloc_host_object(caller, &env, 1);
+    let empty_name_id = find_memory_c_string_with_env(caller, &env, "")
+        .or_else(|| alloc_heap_c_string_with_env(caller, &env, ""));
+    let Some(nid) = empty_name_id else {
+        return root;
+    };
+    let Some(ptr) = resolve_handle(caller, root) else {
+        return root;
+    };
+    write_object_property_by_name_id(
+        caller,
+        ptr,
+        root,
+        nid,
+        val,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
+    );
+    root
+}
+
 /// 完整的 JSON.stringify（ES §24.5.2），返回 boxed JS 值。
 /// async 版本：使用 call_wasm_callback_async 替代 sync call_wasm_callback
 pub(crate) async fn runtime_json_stringify_full_async(
@@ -477,11 +504,17 @@ pub(crate) async fn runtime_json_stringify_full_async(
     let property_list = build_replacer_whitelist(caller, replacer);
     let replacer_is_fn = is_callable_in_runtime(caller, replacer);
     let replacer_fn = if replacer_is_fn { Some(replacer) } else { None };
+    let holder = if replacer_is_fn {
+        make_stringify_root_wrapper(caller, val)
+    } else {
+        value::encode_undefined()
+    };
     let mut stack = Vec::new();
     match serialize_json_property_async(
         caller,
         "",
         val,
+        holder,
         replacer_is_fn,
         replacer_fn,
         property_list.as_deref(),
@@ -509,6 +542,7 @@ async fn serialize_json_property_async(
     caller: &mut Caller<'_, RuntimeState>,
     key: &str,
     val: i64,
+    holder: i64,
     replacer_is_fn: bool,
     replacer_fn: Option<i64>,
     property_list: Option<&[String]>,
@@ -523,7 +557,7 @@ async fn serialize_json_property_async(
     let mut replacer_returned_undefined = false;
     if let Some(rf) = replacer_fn.filter(|_| replacer_is_fn) {
         let key_str = store_runtime_string(caller, key.to_string());
-        match call_wasm_callback_async(caller, rf, value, &[key_str, value]).await {
+        match call_wasm_callback_async(caller, rf, holder, &[key_str, value]).await {
             Ok(new_val) => {
                 if value::is_exception(new_val) {
                     return Err(new_val);
@@ -601,6 +635,7 @@ async fn serialize_json_property_async(
                 caller,
                 &i.to_string(),
                 elem,
+                value,
                 replacer_is_fn,
                 replacer_fn,
                 property_list,
@@ -668,6 +703,7 @@ async fn serialize_json_property_async(
                         caller,
                         name,
                         prop_val,
+                        value,
                         replacer_is_fn,
                         replacer_fn,
                         Some(property_list),
@@ -735,6 +771,7 @@ async fn serialize_json_property_async(
                     caller,
                     &name,
                     prop_val,
+                    value,
                     replacer_is_fn,
                     replacer_fn,
                     None,
