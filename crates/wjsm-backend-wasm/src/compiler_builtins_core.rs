@@ -421,10 +421,19 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::IteratorClose => {
-                let handle = args.first().context("IteratorClose expects 1 arg")?;
+                let handle = args.first().context("IteratorClose expects handle arg")?;
+                let completion = args
+                    .get(1)
+                    .context("IteratorClose expects completion arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(handle.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(completion.0)));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
                 Ok(Some(()))
             }
             Builtin::AsyncIteratorFrom => {

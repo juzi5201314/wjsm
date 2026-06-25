@@ -100,17 +100,10 @@ impl Lowerer {
 
         self.label_stack.pop();
 
-
-        self.current_function.append_instruction(
-            close,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::IteratorClose,
-                args: vec![enum_handle],
-            },
-        );
+        let after_close =
+            self.emit_single_iterator_close_normal(close, enum_handle)?;
         self.current_function
-            .set_terminator(close, Terminator::Jump { target: exit });
+            .set_terminator(after_close, Terminator::Jump { target: exit });
 
         Ok(StmtFlow::Open(exit))
     }
@@ -210,16 +203,10 @@ impl Lowerer {
         self.label_stack.pop();
 
         // close block: iterator clean-up on break
-        self.current_function.append_instruction(
-            close,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::IteratorClose,
-                args: vec![iter_handle],
-            },
-        );
+        let after_close =
+            self.emit_single_iterator_close_normal(close, iter_handle)?;
         self.current_function
-            .set_terminator(close, Terminator::Jump { target: exit });
+            .set_terminator(after_close, Terminator::Jump { target: exit });
 
         // next: advance iterator
         self.current_function.append_instruction(
@@ -493,16 +480,10 @@ impl Lowerer {
                 name: iter_ir_name,
             },
         );
-        self.current_function.append_instruction(
-            close,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::IteratorClose,
-                args: vec![iter_for_close],
-            },
-        );
+        let after_close =
+            self.emit_single_iterator_close_normal(close, iter_for_close)?;
         self.current_function
-            .set_terminator(close, Terminator::Jump { target: exit });
+            .set_terminator(after_close, Terminator::Jump { target: exit });
 
         Ok(StmtFlow::Open(exit))
     }

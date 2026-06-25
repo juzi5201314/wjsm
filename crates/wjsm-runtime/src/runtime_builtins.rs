@@ -73,9 +73,10 @@ pub(crate) async fn call_iterator_method_async(
     } else {
         std::slice::from_ref(&argument)
     };
-    call_wasm_callback_async(caller, method, iterator, args)
-        .await
-        .unwrap_or_else(|_| value::encode_undefined())
+    match call_wasm_callback_async(caller, method, iterator, args).await {
+        Ok(val) => val,
+        Err(_) => value::encode_undefined(),
+    }
 }
 
 pub(crate) async fn advance_object_iterator_from_caller_async(

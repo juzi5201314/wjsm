@@ -47,7 +47,7 @@ pub(crate) static SPECS_PART1: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "iterator_close",
-        type_idx: 0,
+        type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::IteratorClose)),
         group: None,
     },

@@ -338,14 +338,7 @@ impl Lowerer {
 
         // 无 rest 元素时关闭迭代器
         if !saw_rest {
-            self.current_function.append_instruction(
-                block,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin: Builtin::IteratorClose,
-                    args: vec![iter_handle],
-                },
-            );
+            block = self.emit_single_iterator_close_normal(block, iter_handle)?;
         }
 
         Ok(block)
@@ -436,14 +429,7 @@ impl Lowerer {
             .set_terminator(loop_body, Terminator::Jump { target: header });
 
         // exit: 关闭迭代器
-        self.current_function.append_instruction(
-            exit,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::IteratorClose,
-                args: vec![iter_handle],
-            },
-        );
+        let exit = self.emit_single_iterator_close_normal(exit, iter_handle)?;
 
         let _ = self.lower_destructure_pattern(rest_pat, result_arr, exit, kind)?;
 

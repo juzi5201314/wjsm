@@ -18,9 +18,11 @@ impl Lowerer {
 
         match self.lower_pending_finalizers(block)? {
             StmtFlow::Open(after_finally) => {
-                self.emit_iterator_closes(after_finally, &iterator_cleanups);
+                let completion = self.alloc_undefined_value(after_finally);
+                let after_close =
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?;
                 self.current_function
-                    .set_terminator(after_finally, Terminator::Jump { target });
+                    .set_terminator(after_close, Terminator::Jump { target });
             }
             StmtFlow::Terminated => {}
         }
@@ -53,9 +55,11 @@ impl Lowerer {
 
         match self.lower_pending_finalizers(block)? {
             StmtFlow::Open(after_finally) => {
-                self.emit_iterator_closes(after_finally, &iterator_cleanups);
+                let completion = self.alloc_undefined_value(after_finally);
+                let after_close =
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?;
                 self.current_function
-                    .set_terminator(after_finally, Terminator::Jump { target });
+                    .set_terminator(after_close, Terminator::Jump { target });
             }
             StmtFlow::Terminated => {}
         }
@@ -144,17 +148,139 @@ impl Lowerer {
         self.iterator_cleanups_from_depth(0)
     }
 
-    pub(crate) fn emit_iterator_closes(&mut self, block: BasicBlockId, iterators: &[ValueId]) {
+    pub(crate) fn alloc_undefined_value(&mut self, block: BasicBlockId) -> ValueId {
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: undef_val,
+                constant: undef_const,
+            },
+        );
+        undef_val
+    }
+
+    /// 按 ES §7.4.6 关闭迭代器；`completion` 为 abrupt 时的完成值（正常关闭传 undefined）。
+    pub(crate) fn emit_iterator_closes(
+        &mut self,
+        block: BasicBlockId,
+        iterators: &[ValueId],
+        completion: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let mut current = block;
         for iterator in iterators {
+            current = self.resolve_store_block(current);
+            let close_result = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                current,
                 Instruction::CallBuiltin {
-                    dest: None,
+                    dest: Some(close_result),
                     builtin: Builtin::IteratorClose,
-                    args: vec![*iterator],
+                    args: vec![*iterator, completion],
                 },
             );
+            let is_exception = self.alloc_value();
+            self.current_function.append_instruction(
+                current,
+                Instruction::IsException {
+                    dest: is_exception,
+                    value: close_result,
+                },
+            );
+            let continue_block = self.current_function.new_block();
+            let exc_block = self.current_function.new_block();
+            self.current_function.set_terminator(
+                current,
+                Terminator::Branch {
+                    condition: is_exception,
+                    true_block: exc_block,
+                    false_block: continue_block,
+                },
+            );
+            let thrown_val = self.alloc_value();
+            self.current_function.append_instruction(
+                exc_block,
+                Instruction::CallBuiltin {
+                    dest: Some(thrown_val),
+                    builtin: Builtin::ExceptionValue,
+                    args: vec![close_result],
+                },
+            );
+            self.emit_propagate_exception_without_iterator_cleanups(exc_block, thrown_val)?;
+            current = continue_block;
         }
+        Ok(current)
+    }
+
+    /// IteratorClose 失败后的 abrupt 传播（不再嵌套 IteratorClose，避免与 emit_throw_value 互递归）。
+    fn emit_propagate_exception_without_iterator_cleanups(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Result<StmtFlow, LoweringError> {
+        if let Some(try_ctx) = self.try_contexts.last()
+            && let Some(catch_entry) = try_ctx.catch_entry
+        {
+            self.current_function.append_instruction(
+                block,
+                Instruction::StoreVar {
+                    name: try_ctx.exception_var.clone(),
+                    value,
+                },
+            );
+            self.current_function.set_terminator(
+                block,
+                Terminator::Jump {
+                    target: catch_entry,
+                },
+            );
+            return Ok(StmtFlow::Terminated);
+        }
+
+        let throw_block = self.resolve_store_block(block);
+        match self.lower_pending_finalizers(throw_block)? {
+            StmtFlow::Open(after_finally) => {
+                if self.is_async_generator_fn {
+                    let gen_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: gen_val,
+                            name: format!("${}.$generator", self.async_generator_scope_id),
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::CallBuiltin {
+                            dest: None,
+                            builtin: Builtin::AsyncGeneratorThrow,
+                            args: vec![gen_val, value],
+                        },
+                    );
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Return { value: None });
+                } else if self.is_async_fn {
+                    self.emit_async_reject(after_finally, value);
+                } else {
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Throw { value });
+                }
+            }
+            StmtFlow::Terminated => {}
+        }
+        Ok(StmtFlow::Terminated)
+    }
+
+    /// 正常完成路径上的单次 IteratorClose（completion 为 undefined）。
+    pub(crate) fn emit_single_iterator_close_normal(
+        &mut self,
+        block: BasicBlockId,
+        handle: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let block = self.resolve_store_block(block);
+        let completion = self.alloc_undefined_value(block);
+        self.emit_iterator_closes(block, std::slice::from_ref(&handle), completion)
     }
 
     // ── labeled ─────────────────────────────────────────────────────────────
@@ -242,18 +368,22 @@ impl Lowerer {
             let return_block = self.resolve_store_block(block);
             match self.lower_pending_finalizers(return_block)? {
                 StmtFlow::Open(after_finally) => {
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups);
+                    let after_close = self.emit_iterator_closes(
+                        after_finally,
+                        &iterator_cleanups,
+                        value,
+                    )?;
                     if self.is_async_generator_fn {
                         let gen_val = self.alloc_value();
                         self.current_function.append_instruction(
-                            after_finally,
+                            after_close,
                             Instruction::LoadVar {
                                 dest: gen_val,
                                 name: format!("${}.$generator", self.async_generator_scope_id),
                             },
                         );
                         self.current_function.append_instruction(
-                            after_finally,
+                            after_close,
                             Instruction::CallBuiltin {
                                 dest: None,
                                 builtin: Builtin::AsyncGeneratorReturn,
@@ -263,14 +393,14 @@ impl Lowerer {
                     } else {
                         let promise_val = self.alloc_value();
                         self.current_function.append_instruction(
-                            after_finally,
+                            after_close,
                             Instruction::LoadVar {
                                 dest: promise_val,
                                 name: format!("${}.$promise", self.async_promise_scope_id),
                             },
                         );
                         self.current_function.append_instruction(
-                            after_finally,
+                            after_close,
                             Instruction::PromiseResolve {
                                 promise: promise_val,
                                 value,
@@ -278,7 +408,7 @@ impl Lowerer {
                         );
                     }
                     self.current_function
-                        .set_terminator(after_finally, Terminator::Return { value: None });
+                        .set_terminator(after_close, Terminator::Return { value: None });
                 }
                 StmtFlow::Terminated => {}
             }
@@ -294,9 +424,14 @@ impl Lowerer {
         let return_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(return_block)? {
             StmtFlow::Open(after_finally) => {
-                self.emit_iterator_closes(after_finally, &iterator_cleanups);
+                let completion = match value {
+                    Some(v) => v,
+                    None => self.alloc_undefined_value(after_finally),
+                };
+                let after_close =
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?;
                 self.current_function
-                    .set_terminator(after_finally, Terminator::Return { value });
+                    .set_terminator(after_close, Terminator::Return { value });
             }
             StmtFlow::Terminated => {}
         }
@@ -499,9 +634,10 @@ impl Lowerer {
                     value,
                 },
             );
-            self.emit_iterator_closes(block, &iterator_cleanups);
+            let after_close =
+                self.emit_iterator_closes(block, &iterator_cleanups, value)?;
             self.current_function.set_terminator(
-                block,
+                after_close,
                 Terminator::Jump {
                     target: catch_entry,
                 },
@@ -513,18 +649,22 @@ impl Lowerer {
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
                 let iterator_cleanups = self.active_iterator_cleanups();
-                self.emit_iterator_closes(after_finally, &iterator_cleanups);
+                let after_close = self.emit_iterator_closes(
+                    after_finally,
+                    &iterator_cleanups,
+                    value,
+                )?;
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
                     self.current_function.append_instruction(
-                        after_finally,
+                        after_close,
                         Instruction::LoadVar {
                             dest: gen_val,
                             name: format!("${}.$generator", self.async_generator_scope_id),
                         },
                     );
                     self.current_function.append_instruction(
-                        after_finally,
+                        after_close,
                         Instruction::CallBuiltin {
                             dest: None,
                             builtin: Builtin::AsyncGeneratorThrow,
@@ -532,12 +672,12 @@ impl Lowerer {
                         },
                     );
                     self.current_function
-                        .set_terminator(after_finally, Terminator::Return { value: None });
+                        .set_terminator(after_close, Terminator::Return { value: None });
                 } else if self.is_async_fn {
-                    self.emit_async_reject(after_finally, value);
+                    self.emit_async_reject(after_close, value);
                 } else {
                     self.current_function
-                        .set_terminator(after_finally, Terminator::Throw { value });
+                        .set_terminator(after_close, Terminator::Throw { value });
                 }
             }
             StmtFlow::Terminated => {}

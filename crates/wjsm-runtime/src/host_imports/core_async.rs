@@ -454,7 +454,13 @@ pub(crate) fn define_core_async(
         value::encode_bool(next_done)
     }
 
-    async fn iterator_close_async(caller: &mut Caller<'_, RuntimeState>, handle: i64) {
+    /// ES §7.4.6 IteratorClose：接受 completion，在 `return` 抛错时以该异常替换 completion，
+    /// 若 `return` 结果非 Object（含 undefined）则抛出 TypeError，否则返回原 completion。
+    async fn iterator_close_async(
+        caller: &mut Caller<'_, RuntimeState>,
+        handle: i64,
+        completion: i64,
+    ) -> i64 {
         let handle_idx = value::decode_handle(handle) as usize;
         let (iterator, return_method) = {
             let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
@@ -465,31 +471,73 @@ pub(crate) fn define_core_async(
                     done,
                     ..
                 }) if !*done => (*iterator, *return_method),
-                _ => return,
+                _ => return completion,
             }
         };
 
         let Some(return_method) = return_method else {
-            return;
+            if let Some(IteratorState::ObjectIter { done, .. }) = caller
+                .data()
+                .iterators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(handle_idx)
+            {
+                *done = true;
+            }
+            return completion;
         };
-        let result =
-            call_iterator_method_async(caller, return_method, iterator, value::encode_undefined())
-                .await;
-        if !(value::is_object(result) || value::is_function(result) || value::is_array(result))
-            && !value::is_undefined(result)
-        {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: iterator return must return an object".to_string(),
+
+        let result = call_iterator_method_async(
+            caller,
+            return_method,
+            iterator,
+            value::encode_undefined(),
+        )
+        .await;
+
+        if value::is_exception(result) {
+            if let Some(IteratorState::ObjectIter { done, .. }) = caller
+                .data()
+                .iterators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(handle_idx)
+            {
+                *done = true;
+            }
+            return result;
+        }
+
+        let is_object_like = value::is_object(result)
+            || value::is_function(result)
+            || value::is_array(result);
+        if !is_object_like {
+            if let Some(IteratorState::ObjectIter { done, .. }) = caller
+                .data()
+                .iterators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(handle_idx)
+            {
+                *done = true;
+            }
+            return make_type_error_exception(
+                caller,
+                "TypeError: iterator return must return an object",
             );
         }
+
         if let Some(IteratorState::ObjectIter { done, .. }) = caller
             .data()
-            .iterators.lock().unwrap_or_else(|e| e.into_inner())
+            .iterators
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get_mut(handle_idx)
         {
             *done = true;
         }
+        completion
     }
 
     /// 合并 IteratorDone + IteratorValue + IteratorNext，供数组解构等线性 IR 使用
@@ -530,8 +578,8 @@ pub(crate) fn define_core_async(
     linker.func_wrap_async(
         "env",
         "iterator_close",
-        |mut caller: Caller<'_, RuntimeState>, (handle,): (i64,)| {
-            Box::new(async move { iterator_close_async(&mut caller, handle).await })
+        |mut caller: Caller<'_, RuntimeState>, (handle, completion): (i64, i64)| {
+            Box::new(async move { iterator_close_async(&mut caller, handle, completion).await })
         },
     )?;
 
