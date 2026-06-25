@@ -487,6 +487,9 @@ impl Lowerer {
         let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
             let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+            if self.expr_exception_fork_allowed() {
+                call_block = self.lower_value_exception_branch(call_block, arg_val)?;
+            }
             args.push(arg_val);
         }
 

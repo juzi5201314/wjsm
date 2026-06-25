@@ -822,29 +822,11 @@ impl Lowerer {
                     )?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if prop.is_static => {
-                    let prop_name = match &prop.key {
-                        swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                        swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                        swc_ast::PropName::Num(n) => n.value.to_string(),
-                        swc_ast::PropName::Computed(_) => {
-                            return Err(self.error(
-                                prop.span,
-                                "unsupported computed key on static class field",
-                            ));
-                        }
-                        other => {
-                            return Err(self.error(
-                                other.span(),
-                                "unsupported property key kind on static class field",
-                            ));
-                        }
-                    };
-                    self.emit_static_field_init(
+                    self.emit_static_field_init_with_key(
                         outer_block,
                         ctor_dest,
-                        &prop_name,
+                        &prop.key,
                         prop.value.as_deref(),
-                        false,
                     )?;
                 }
                 swc_ast::ClassMember::Constructor(_) | swc_ast::ClassMember::PrivateMethod(_) => {}

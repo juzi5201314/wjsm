@@ -229,29 +229,11 @@ impl Lowerer {
                     )?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
-                    let prop_name = match &prop.key {
-                        swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                        swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                        swc_ast::PropName::Num(n) => n.value.to_string(),
-                        swc_ast::PropName::Computed(_) => {
-                            return Err(self.error(
-                                prop.span,
-                                "unsupported computed key on instance class field",
-                            ));
-                        }
-                        other => {
-                            return Err(self.error(
-                                other.span(),
-                                "unsupported property key kind on instance class field",
-                            ));
-                        }
-                    };
-                    block = self.emit_field_init(
+                    block = self.emit_field_init_with_key(
                         block,
                         this_scope_id,
-                        &prop_name,
+                        &prop.key,
                         prop.value.as_deref(),
-                        false,
                     )?;
                 }
                 swc_ast::ClassMember::Constructor(_)

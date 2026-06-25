@@ -464,6 +464,37 @@ impl Lowerer {
 
         let (result, end_block) =
             self.select_construct_result(call_block, ctor_result, obj_val);
+        if self.expr_exception_fork_allowed() {
+            let is_exc = self.alloc_value();
+            self.current_function.append_instruction(
+                end_block,
+                Instruction::IsException {
+                    dest: is_exc,
+                    value: result,
+                },
+            );
+            let continue_block = self.current_function.new_block();
+            let exc_block = self.current_function.new_block();
+            self.current_function.set_terminator(
+                end_block,
+                Terminator::Branch {
+                    condition: is_exc,
+                    true_block: exc_block,
+                    false_block: continue_block,
+                },
+            );
+            let thrown_val = self.alloc_value();
+            self.current_function.append_instruction(
+                exc_block,
+                Instruction::CallBuiltin {
+                    dest: Some(thrown_val),
+                    builtin: Builtin::ExceptionValue,
+                    args: vec![result],
+                },
+            );
+            self.emit_throw_value(exc_block, thrown_val)?;
+            return Ok((result, self.resolve_store_block(continue_block)));
+        }
         Ok((result, end_block))
     }
 }

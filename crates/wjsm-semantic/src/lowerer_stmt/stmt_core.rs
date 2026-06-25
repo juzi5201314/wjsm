@@ -220,7 +220,12 @@ impl Lowerer {
         } else {
             self.lower_expr(&if_stmt.test, cond_entry)?
         };
-        let branch_block = self.resolve_store_block(cond_entry);
+        let branch_block = if self.expr_exception_fork_allowed() && self.expr_can_throw(&if_stmt.test) {
+            let resolved = self.resolve_store_block(cond_entry);
+            self.lower_value_exception_branch(resolved, cond)?
+        } else {
+            self.resolve_store_block(cond_entry)
+        };
         let then_block = self.current_function.new_block();
         let else_or_merge = self.current_function.new_block();
 

@@ -599,6 +599,9 @@ impl Lowerer {
                     }
                 }
             }
+            swc_ast::Expr::SuperProp(super_prop) => {
+                return self.lower_update_super_prop(update, super_prop, block);
+            }
             swc_ast::Expr::Member(member) => {
                 let mut current_block = block;
                 let obj = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
@@ -755,7 +758,7 @@ impl Lowerer {
         Ok(if update.prefix { new_val } else { num_val })
     }
 
-    fn append_update_math(
+    pub(crate) fn append_update_math(
         &mut self,
         block: BasicBlockId,
         old_val: ValueId,

@@ -259,6 +259,40 @@ impl Lowerer {
                 constant: key_const,
             },
         );
+        self.emit_field_init_common(block, this_scope_id, key_dest, init_value, is_private)
+    }
+
+    /// 公有实例字段（含计算属性名 `[expr]`）。
+    pub(crate) fn emit_field_init_with_key(
+        &mut self,
+        block: BasicBlockId,
+        this_scope_id: usize,
+        key: &swc_ast::PropName,
+        init_value: Option<&swc_ast::Expr>,
+    ) -> Result<BasicBlockId, LoweringError> {
+        if let swc_ast::PropName::Computed(computed) = key
+            && let swc_ast::Expr::Ident(id) = computed.expr.as_ref()
+        {
+            return self.emit_field_init(
+                block,
+                this_scope_id,
+                id.sym.as_ref(),
+                init_value,
+                false,
+            );
+        }
+        let key_dest = self.lower_prop_name(key, block)?;
+        self.emit_field_init_common(block, this_scope_id, key_dest, init_value, false)
+    }
+
+    fn emit_field_init_common(
+        &mut self,
+        block: BasicBlockId,
+        this_scope_id: usize,
+        key_dest: ValueId,
+        init_value: Option<&swc_ast::Expr>,
+        is_private: bool,
+    ) -> Result<BasicBlockId, LoweringError> {
         let this_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -322,6 +356,29 @@ impl Lowerer {
                 constant: key_const,
             },
         );
+        self.emit_static_field_init_common(block, ctor_dest, key_dest, init_value, is_private)
+    }
+
+    /// 公有静态字段（含计算属性名 `[expr]`）。
+    pub(crate) fn emit_static_field_init_with_key(
+        &mut self,
+        block: BasicBlockId,
+        ctor_dest: ValueId,
+        key: &swc_ast::PropName,
+        init_value: Option<&swc_ast::Expr>,
+    ) -> Result<(), LoweringError> {
+        let key_dest = self.lower_prop_name(key, block)?;
+        self.emit_static_field_init_common(block, ctor_dest, key_dest, init_value, false)
+    }
+
+    fn emit_static_field_init_common(
+        &mut self,
+        block: BasicBlockId,
+        ctor_dest: ValueId,
+        key_dest: ValueId,
+        init_value: Option<&swc_ast::Expr>,
+        is_private: bool,
+    ) -> Result<(), LoweringError> {
         let init_val = if let Some(value) = init_value {
             self.lower_expr(value, block)?
         } else {

@@ -111,6 +111,12 @@ impl Lowerer {
         assign: &swc_ast::AssignExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        if let swc_ast::AssignTarget::Simple(simple) = &assign.left
+            && let swc_ast::SimpleAssignTarget::SuperProp(super_prop) = simple
+        {
+            return self.lower_assign_super_prop(assign, super_prop, block);
+        }
+
         // Handle member expression assignment targets (e.g. obj.prop = value).
         if let swc_ast::AssignTarget::Simple(simple) = &assign.left
             && let swc_ast::SimpleAssignTarget::Member(member_expr) = simple
