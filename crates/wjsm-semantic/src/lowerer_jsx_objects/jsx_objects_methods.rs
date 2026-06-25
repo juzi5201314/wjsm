@@ -56,8 +56,13 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        let fn_value =
-                            self.lower_method_to_fn(&getter.key, body, None, home_object, block)?;
+                        let fn_value = self.lower_method_to_fn(
+                            &getter.key,
+                            body,
+                            None,
+                            home_object,
+                            block,
+                        )?;
                         let desc = self.build_descriptor("get", fn_value, true, true, block)?;
                         self.current_function.append_instruction(
                             block,
@@ -82,7 +87,7 @@ impl Lowerer {
                         let fn_value = self.lower_method_to_fn(
                             &setter.key,
                             body,
-                            Some(true),
+                            Some(std::slice::from_ref(&*setter.param)),
                             home_object,
                             block,
                         )?;
@@ -299,7 +304,7 @@ impl Lowerer {
         &mut self,
         key: &swc_ast::PropName,
         body: &swc_ast::BlockStmt,
-        _is_setter: Option<bool>,
+        accessor_params: Option<&[swc_ast::Pat]>,
         home_object: Option<ValueId>,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
@@ -324,10 +329,14 @@ impl Lowerer {
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(key.span(), msg))?;
 
-        let method_param_ir_names = vec![
-            format!("${env_scope_id}.$env"),
-            format!("${this_scope_id}.$this"),
-        ];
+        let method_param_ir_names = if let Some(pats) = accessor_params {
+            self.build_arrow_param_ir_names(pats, env_scope_id, this_scope_id)?
+        } else {
+            vec![
+                format!("${env_scope_id}.$env"),
+                format!("${this_scope_id}.$this"),
+            ]
+        };
 
         // 预声明提升变量
         self.predeclare_block_stmts(&body.stmts)?;
