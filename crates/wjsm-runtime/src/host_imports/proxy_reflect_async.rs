@@ -7,7 +7,7 @@ use super::proxy_reflect::{
     check_proxy_revoked, extract_array_like_elements, proxy_own_keys_trap_async,
     reflect_apply_impl_async, reflect_construct_impl_async, reflect_delete_property_impl,
     reflect_get_own_property_descriptor_impl, reflect_get_prototype_of_async, reflect_has_impl,
-    reflect_own_keys_impl, reflect_set_impl, reflect_set_prototype_of_fn_impl,
+    reflect_own_keys_impl, reflect_set_impl_with_receiver, reflect_set_prototype_of_fn_impl,
 };
 use super::proxy_traps::proxy_is_revoked;
 use crate::*;
@@ -58,11 +58,11 @@ pub(crate) fn define_proxy_reflect_async(
                                 return value::encode_bool(nanbox_to_bool(result));
                             }
                         }
-                        return reflect_set_impl(&mut caller, entry.target, prop, val);
+                        return reflect_set_impl_with_receiver(&mut caller, entry.target, prop, val, receiver).await;
                     }
                     return value::encode_bool(false);
                 }
-                reflect_set_impl(&mut caller, target, prop, val)
+                reflect_set_impl_with_receiver(&mut caller, target, prop, val, receiver).await
             })
         },
     )?;

@@ -2,6 +2,7 @@ use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Extern, Func, Linker, Val};
 
+use super::proxy_traps::proxy_trap_property_key_value;
 use crate::*;
 
 /// D4: 检查 proxy 是否已撤销，返回 Some(exception) 如果已撤销，否则 None。
@@ -20,33 +21,287 @@ pub(crate) fn check_proxy_revoked(
     }
 }
 
-pub(crate) fn reflect_set_impl(
+fn read_object_proto_ptr(caller: &mut Caller<'_, RuntimeState>, obj_ptr: usize) -> Option<usize> {
+    let env = WasmEnv::from_caller(caller)?;
+    let proto_handle = {
+        let data = env.memory.data(&*caller);
+        if obj_ptr + 4 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr],
+            data[obj_ptr + 1],
+            data[obj_ptr + 2],
+            data[obj_ptr + 3],
+        ])
+    };
+    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+        return None;
+    }
+    resolve_handle_idx_with_env(caller, &env, proto_handle as usize)
+}
+
+fn read_setter_from_slot(caller: &mut Caller<'_, RuntimeState>, slot_offset: usize) -> i64 {
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return value::encode_undefined();
+    };
+    let data = memory.data(&*caller);
+    if slot_offset + 32 > data.len() {
+        return value::encode_undefined();
+    }
+    i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap())
+}
+
+async fn invoke_property_setter(
+    caller: &mut Caller<'_, RuntimeState>,
+    setter: i64,
+    receiver: i64,
+    val: i64,
+) -> bool {
+    if value::is_undefined(setter) || value::is_null(setter) {
+        return false;
+    }
+    if !value::is_callable(setter) {
+        return false;
+    }
+    // §10.1.9.2：调用 setter 后返回 true（忽略 setter 自身返回值）；仅当 setter 抛异常时视为失败。
+    match call_wasm_callback_async(caller, setter, receiver, &[val]).await {
+        Ok(r) => !value::is_exception(r),
+        Err(_) => false,
+    }
+}
+
+
+fn receiver_own_descriptor_from_trap_result(
+    caller: &mut Caller<'_, RuntimeState>,
+    desc_handle: i64,
+) -> Option<PropertyDescriptor> {
+    if value::is_undefined(desc_handle) {
+        return None;
+    }
+    parse_descriptor(caller, desc_handle).ok()
+}
+
+fn make_data_descriptor_object_for_define(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+) -> i64 {
+    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let desc = alloc_host_object(caller, &_wjsm_env, 4);
+    let _ = define_host_data_property_from_caller(caller, desc, "value", val);
+    let _ = define_host_data_property_from_caller(caller, desc, "writable", value::encode_bool(true));
+    let _ = define_host_data_property_from_caller(caller, desc, "enumerable", value::encode_bool(true));
+    let _ = define_host_data_property_from_caller(
+        caller,
+        desc,
+        "configurable",
+        value::encode_bool(true),
+    );
+    desc
+}
+
+/// §10.1.9.2: define {value:V} on Receiver (Proxy traps or ordinary CreateDataProperty).
+pub(crate) async fn define_value_on_receiver(
+    caller: &mut Caller<'_, RuntimeState>,
+    receiver: i64,
+    name_id: u32,
+    val: i64,
+) -> bool {
+    if !value::is_object(receiver)
+        && !value::is_function(receiver)
+        && !value::is_array(receiver)
+        && !value::is_proxy(receiver)
+    {
+        return false;
+    }
+
+    let prop_key = proxy_trap_property_key_value(caller, name_id as i32);
+    let existing_handle =
+        reflect_get_own_property_descriptor_on_object_async(caller, receiver, prop_key).await;
+    if value::is_exception(existing_handle) {
+        return false;
+    }
+
+    let existing = receiver_own_descriptor_from_trap_result(caller, existing_handle);
+    if let Some(ref desc) = existing {
+        let completed = complete_property_descriptor(desc.clone());
+        if is_accessor_descriptor(&completed) {
+            return false;
+        }
+        if completed.writable == Some(false) {
+            return false;
+        }
+        let desc_obj = make_data_descriptor_object_for_define(caller, val);
+        return match define_property_internal_async(caller, receiver, prop_key, desc_obj).await {
+            Ok(ok) => ok,
+            Err(_) => false,
+        };
+    }
+
+    if !is_extensible_impl(caller, receiver) {
+        return false;
+    }
+
+    let desc_obj = make_data_descriptor_object_for_define(caller, val);
+    match define_property_internal_async(caller, receiver, prop_key, desc_obj).await {
+        Ok(ok) => ok,
+        Err(_) => false,
+    }
+}
+
+/// ECMAScript OrdinarySet / OrdinarySetWithOwnDescriptor (§10.1.9, §10.1.9.2).
+pub(crate) async fn ordinary_set_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    receiver: i64,
+    name_id: u32,
+    val: i64,
+) -> bool {
+    let mut current = obj;
+    let mut visited = std::collections::HashSet::new();
+
+    loop {
+        let Some(current_ptr) = resolve_handle(caller, current) else {
+            return false;
+        };
+        if !visited.insert(current_ptr) {
+            return false;
+        }
+
+        if let Some((slot_offset, flags, _)) =
+            find_property_slot_by_name_id(caller, current_ptr, name_id)
+        {
+            let is_accessor = (flags & constants::FLAG_IS_ACCESSOR) != 0;
+            if is_accessor {
+                let setter = read_setter_from_slot(caller, slot_offset);
+                return invoke_property_setter(caller, setter, receiver, val).await;
+            }
+            if (flags & constants::FLAG_WRITABLE) == 0 {
+                return false;
+            }
+            if current == receiver {
+                write_object_property_by_name_id(caller, current_ptr, current, name_id, val, flags);
+                return true;
+            }
+            return define_value_on_receiver(caller, receiver, name_id, val).await;
+        }
+
+        let Some(proto_ptr) = read_object_proto_ptr(caller, current_ptr) else {
+            return define_value_on_receiver(caller, receiver, name_id, val).await;
+        };
+
+        if let Some((slot_offset, parent_flags, _)) =
+            find_property_slot_by_name_id(caller, proto_ptr, name_id)
+        {
+            let parent_accessor = (parent_flags & constants::FLAG_IS_ACCESSOR) != 0;
+            if parent_accessor {
+                let setter = read_setter_from_slot(caller, slot_offset);
+                return invoke_property_setter(caller, setter, receiver, val).await;
+            }
+            if (parent_flags & constants::FLAG_WRITABLE) == 0 {
+                return false;
+            }
+            return define_value_on_receiver(caller, receiver, name_id, val).await;
+        }
+
+        let proto_handle = {
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            let data = env.memory.data(&*caller);
+            u32::from_le_bytes(data[current_ptr..current_ptr + 4].try_into().unwrap())
+        };
+        current = value::encode_object_handle(proto_handle);
+    }
+}
+
+fn has_property_by_name_id_proto_walk(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    name_id: u32,
+    visited: &mut std::collections::HashSet<usize>,
+) -> bool {
+    if !visited.insert(obj_ptr) {
+        return false;
+    }
+    if find_property_slot_by_name_id(caller, obj_ptr, name_id).is_some() {
+        return true;
+    }
+    let Some(proto_ptr) = read_object_proto_ptr(caller, obj_ptr) else {
+        return false;
+    };
+    has_property_by_name_id_proto_walk(caller, proto_ptr, name_id, visited)
+}
+
+pub(crate) async fn reflect_set_impl_with_receiver(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
     prop: i64,
     val: i64,
+    receiver: i64,
 ) -> i64 {
-    let Ok(prop_name) = render_value(caller, prop) else {
-        return value::encode_bool(false);
-    };
-    let name_id = find_memory_c_string(caller, &prop_name);
-    let existing = name_id.and_then(|id| {
-        let obj_ptr = resolve_handle(caller, target)?;
-        find_property_slot_by_name_id(caller, obj_ptr, id)
-    });
-    if let Some((_, flags, _)) = existing {
-        let is_accessor = (flags & constants::FLAG_IS_ACCESSOR) != 0;
-        if !is_accessor {
-            let writable = (flags & constants::FLAG_WRITABLE) != 0;
-            if !writable {
-                return value::encode_bool(false);
-            }
-        }
-    } else if !is_extensible_impl(caller, target) {
+    if !value::is_js_object(target) && !value::is_array(target) && !value::is_function(target) {
         return value::encode_bool(false);
     }
-    let _ = define_host_data_property_from_caller(caller, target, &prop_name, val);
-    value::encode_bool(true)
+    let Ok(_prop_name) = render_value(caller, prop) else {
+        return value::encode_bool(false);
+    };
+    let Some(name_id) = find_memory_c_string(caller, &_prop_name) else {
+        return value::encode_bool(false);
+    };
+    let ok = ordinary_set_by_name_id(caller, target, receiver, name_id, val).await;
+    value::encode_bool(ok)
+}
+
+/// Object.assign (§20.1.2.1): Set(target, key, value, true) for each enumerable own key.
+pub(crate) async fn object_assign_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    args_base: i32,
+    args_count: i32,
+) -> i64 {
+    if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: target is not an object".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    for i in 0..args_count {
+        let mut source_val = read_shadow_arg(caller, args_base, i as u32);
+        if value::is_undefined(source_val) || value::is_null(source_val) {
+            continue;
+        }
+        if !value::is_js_object(source_val) {
+            source_val = to_object(caller, source_val);
+        }
+        let Some(source_ptr) = resolve_handle(caller, source_val) else {
+            continue;
+        };
+        let names = collect_own_property_names(caller, source_ptr, true);
+        for name in names {
+            let name_val = store_runtime_string(caller, name);
+            let Ok(prop_name) = render_value(caller, name_val) else {
+                return make_type_error_exception(
+                    caller,
+                    "Cannot assign to read only property",
+                );
+            };
+            let prop_val = read_object_property_by_name(caller, source_ptr, &prop_name)
+                .unwrap_or_else(value::encode_undefined);
+            let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
+                return make_type_error_exception(
+                    caller,
+                    "Cannot assign to read only property",
+                );
+            };
+            if !ordinary_set_by_name_id(caller, target, target, name_id, prop_val).await {
+                return make_type_error_exception(
+                    caller,
+                    "Cannot assign to read only property",
+                );
+            }
+        }
+    }
+    target
 }
 
 pub(crate) fn reflect_has_impl(
@@ -54,15 +309,21 @@ pub(crate) fn reflect_has_impl(
     target: i64,
     prop: i64,
 ) -> i64 {
-    let obj_ptr = resolve_handle(caller, target);
-    if let Some(ptr) = obj_ptr
-        && let Ok(prop_name) = render_value(caller, prop)
-        && let Some(name_id) = find_memory_c_string(caller, &prop_name)
-    {
-        let found = find_property_slot_by_name_id(caller, ptr, name_id).is_some();
-        return value::encode_bool(found);
+    if !value::is_js_object(target) && !value::is_array(target) && !value::is_function(target) {
+        return value::encode_bool(false);
     }
-    value::encode_bool(false)
+    let Some(ptr) = resolve_handle(caller, target) else {
+        return value::encode_bool(false);
+    };
+    let Ok(_prop_name) = render_value(caller, prop) else {
+        return value::encode_bool(false);
+    };
+    let Some(name_id) = find_memory_c_string(caller, &_prop_name) else {
+        return value::encode_bool(false);
+    };
+    let mut visited = std::collections::HashSet::new();
+    let found = has_property_by_name_id_proto_walk(caller, ptr, name_id, &mut visited);
+    value::encode_bool(found)
 }
 
 pub(crate) fn reflect_delete_property_impl(

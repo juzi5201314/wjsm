@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+setter_called: true
+setter_return: true
+writable_update: 2
+own_prop_count: 1
+inherited_has: true
+in_operator: true
+set_inherited_nonwritable: false
+--- stderr ---

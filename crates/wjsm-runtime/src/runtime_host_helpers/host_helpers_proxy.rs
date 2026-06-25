@@ -1,5 +1,5 @@
 use super::*;
-fn define_property_on_normal_object(
+pub(crate) fn define_property_on_normal_object(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
     name_id: u32,
