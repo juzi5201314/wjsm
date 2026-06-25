@@ -270,17 +270,6 @@ impl Lowerer {
         key: &swc_ast::PropName,
         init_value: Option<&swc_ast::Expr>,
     ) -> Result<BasicBlockId, LoweringError> {
-        if let swc_ast::PropName::Computed(computed) = key
-            && let swc_ast::Expr::Ident(id) = computed.expr.as_ref()
-        {
-            return self.emit_field_init(
-                block,
-                this_scope_id,
-                id.sym.as_ref(),
-                init_value,
-                false,
-            );
-        }
         let key_dest = self.lower_prop_name(key, block)?;
         self.emit_field_init_common(block, this_scope_id, key_dest, init_value, false)
     }

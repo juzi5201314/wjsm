@@ -312,18 +312,12 @@ impl Lowerer {
 
         let outer_block = self.ensure_open(flow)?;
 
-        // Create constructor FunctionRef constant.
-        let ctor_dest = self.alloc_value();
-        let ctor_ref_const = self
-            .module
-            .add_constant(Constant::FunctionRef(ctor_function_id));
-        self.current_function.append_instruction(
+        let ctor_dest = self.materialize_constructor_value(
             outer_block,
-            Instruction::Const {
-                dest: ctor_dest,
-                constant: ctor_ref_const,
-            },
-        );
+            ctor_function_id,
+            &ctor_captured,
+            class_decl.span(),
+        )?;
 
         // Create prototype object.
         let proto_dest = self.alloc_value();

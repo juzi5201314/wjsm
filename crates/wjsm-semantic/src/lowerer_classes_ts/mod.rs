@@ -209,6 +209,43 @@ pub(super) fn class_member_kind(member: &swc_ast::ClassMember) -> &'static str {
 }
 
 impl Lowerer {
+    /// 将类构造器 IR 函数物化为运行时可调用值：无捕获时为 FunctionRef，有捕获时为 CreateClosure + 共享 env。
+    fn materialize_constructor_value(
+        &mut self,
+        block: BasicBlockId,
+        function_id: FunctionId,
+        captured: &[CapturedBinding],
+        span: Span,
+    ) -> Result<ValueId, LoweringError> {
+        let func_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(function_id));
+        let func_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: func_ref_const,
+            },
+        );
+        if captured.is_empty() {
+            return Ok(func_ref_val);
+        }
+        let mut closure_block = block;
+        let env_val = self.ensure_shared_env(closure_block, captured, span)?;
+        closure_block = self.resolve_store_block(closure_block);
+        let closure_val = self.alloc_value();
+        self.current_function.append_instruction(
+            closure_block,
+            Instruction::CallBuiltin {
+                dest: Some(closure_val),
+                builtin: Builtin::CreateClosure,
+                args: vec![func_ref_val, env_val],
+            },
+        );
+        Ok(closure_val)
+    }
+
     fn emit_instance_initializers(
         &mut self,
         mut block: BasicBlockId,
