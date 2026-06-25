@@ -298,7 +298,187 @@ pub(crate) fn define_object_builtins(
         object_get_own_property_descriptor_fn,
     )?;
 
+
+    let object_has_own_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, prop: i64| -> i64 {
+            if value::is_null(obj) || value::is_undefined(obj) {
+                return make_type_error_exception(
+                    &mut caller,
+                    "TypeError: Cannot convert undefined or null to object",
+                );
+            }
+            let boxed = if value::is_js_object(obj) {
+                obj
+            } else {
+                to_object(&mut caller, obj)
+            };
+            let Some(ptr) = resolve_handle(&mut caller, boxed) else {
+                return value::encode_bool(false);
+            };
+            let Some(name_id) = object_property_name_id_from_key(&mut caller, prop) else {
+                return value::encode_bool(false);
+            };
+            let found = find_property_slot_by_name_id(&mut caller, ptr, name_id);
+            value::encode_bool(found.is_some())
+        },
+    );
+    linker.define(&mut store, "env", "object.has_own", object_has_own_fn)?;
+
+    let object_freeze_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            if !value::is_js_object(obj) {
+                return obj;
+            }
+            let _ = object_seal_or_freeze_impl(&mut caller, obj, true);
+            obj
+        },
+    );
+    linker.define(&mut store, "env", "object.freeze", object_freeze_fn)?;
+
+    let object_seal_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            if !value::is_js_object(obj) {
+                return obj;
+            }
+            let _ = object_seal_or_freeze_impl(&mut caller, obj, false);
+            obj
+        },
+    );
+    linker.define(&mut store, "env", "object.seal", object_seal_fn)?;
+
+    let object_is_frozen_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            value::encode_bool(object_is_frozen_impl(&mut caller, obj))
+        },
+    );
+    linker.define(&mut store, "env", "object.is_frozen", object_is_frozen_fn)?;
+
+    let object_is_sealed_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            value::encode_bool(object_is_sealed_impl(&mut caller, obj))
+        },
+    );
+    linker.define(&mut store, "env", "object.is_sealed", object_is_sealed_fn)?;
+
     Ok(())
+}
+
+fn object_property_name_id_from_key(
+    caller: &mut Caller<'_, RuntimeState>,
+    prop: i64,
+) -> Option<u32> {
+    if let Some(name_id) = symbol_value_to_name_id(prop) {
+        return Some(name_id);
+    }
+    let prop_name = render_value(caller, prop).ok()?;
+    find_memory_c_string(caller, &prop_name)
+}
+
+fn write_slot_flags(
+    caller: &mut Caller<'_, RuntimeState>,
+    slot_offset: usize,
+    flags: i32,
+) -> bool {
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return false;
+    };
+    let data = memory.data_mut(caller);
+    if slot_offset + 8 > data.len() {
+        return false;
+    }
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    true
+}
+
+fn collect_own_property_slots(caller: &mut Caller<'_, RuntimeState>, obj_ptr: usize) -> Vec<(usize, i32)> {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return vec![];
+    };
+    let data = mem.data(caller);
+    if obj_ptr + 16 > data.len() {
+        return vec![];
+    }
+    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
+        return vec![];
+    }
+    let num_props = u32::from_le_bytes([
+        data[obj_ptr + 12],
+        data[obj_ptr + 13],
+        data[obj_ptr + 14],
+        data[obj_ptr + 15],
+    ]) as usize;
+    let mut slots = Vec::with_capacity(num_props);
+    for i in 0..num_props {
+        let slot_offset = obj_ptr + 16 + i * 32;
+        if slot_offset + 32 > data.len() {
+            break;
+        }
+        let flags = i32::from_le_bytes([
+            data[slot_offset + 4],
+            data[slot_offset + 5],
+            data[slot_offset + 6],
+            data[slot_offset + 7],
+        ]);
+        slots.push((slot_offset, flags));
+    }
+    slots
+}
+
+fn object_seal_or_freeze_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    freeze: bool,
+) -> bool {
+    if !value::is_js_object(obj) {
+        return false;
+    }
+    if !prevent_extensions_impl(caller, obj) {
+        return false;
+    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return false;
+    };
+    let slots = collect_own_property_slots(caller, ptr);
+    for (slot_offset, flags) in slots {
+        let mut new_flags = flags & !constants::FLAG_CONFIGURABLE;
+        if freeze && (flags & constants::FLAG_IS_ACCESSOR) == 0 {
+            new_flags &= !constants::FLAG_WRITABLE;
+        }
+        let _ = write_slot_flags(caller, slot_offset, new_flags);
+    }
+    true
+}
+
+fn object_is_sealed_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> bool {
+    if !value::is_js_object(obj) {
+        return true;
+    }
+    if is_extensible_impl(caller, obj) {
+        return false;
+    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return false;
+    };
+    collect_own_property_slots(caller, ptr)
+        .iter()
+        .all(|(_, flags)| (flags & constants::FLAG_CONFIGURABLE) == 0)
+}
+
+fn object_is_frozen_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> bool {
+    if !object_is_sealed_impl(caller, obj) {
+        return false;
+    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return false;
+    };
+    collect_own_property_slots(caller, ptr).iter().all(|(_, flags)| {
+        (flags & constants::FLAG_IS_ACCESSOR) != 0 || (flags & constants::FLAG_WRITABLE) == 0
+    })
 }
 
 // ── SameValue algorithm (ECMAScript 7.2.12) ───────────────────────────

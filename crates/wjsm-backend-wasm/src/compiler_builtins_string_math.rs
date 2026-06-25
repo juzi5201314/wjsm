@@ -294,6 +294,10 @@ impl Compiler {
             | Builtin::ObjectGetPrototypeOf
             | Builtin::ObjectGetOwnPropertyNames
             | Builtin::ObjectGetOwnPropertySymbols
+            | Builtin::ObjectFreeze
+            | Builtin::ObjectSeal
+            | Builtin::ObjectIsFrozen
+            | Builtin::ObjectIsSealed
             | Builtin::ObjectIsExtensible
             | Builtin::ObjectPreventExtensions
             | Builtin::ObjectProtoToString
@@ -311,7 +315,11 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
-            Builtin::ObjectSetPrototypeOf | Builtin::ObjectIs | Builtin::ObjectGroupBy | Builtin::MapGroupBy => {
+            Builtin::ObjectHasOwn
+            | Builtin::ObjectSetPrototypeOf
+            | Builtin::ObjectIs
+            | Builtin::ObjectGroupBy
+            | Builtin::MapGroupBy => {
                 let name = builtin.to_string();
                 let a = args.first().context(format!("{name} expects 2 args"))?;
                 let b = args.get(1).context(format!("{name} expects 2 args"))?;

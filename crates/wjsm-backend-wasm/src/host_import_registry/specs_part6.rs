@@ -469,4 +469,34 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         key: Some(HostImportKey::Builtin(Builtin::IteratorStepValue)),
         group: None,
     },
+    HostImportSpec {
+        name: "object.has_own",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectHasOwn)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.freeze",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectFreeze)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.seal",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectSeal)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.is_frozen",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectIsFrozen)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.is_sealed",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectIsSealed)),
+        group: None,
+    },
 ];
