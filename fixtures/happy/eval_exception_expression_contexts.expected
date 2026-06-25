@@ -1,6 +1,9 @@
 exit_code: 0
 --- stdout ---
+if
 seq
 arg
 binary
+new
+nested
 --- stderr ---
