@@ -216,7 +216,131 @@ pub(crate) fn define_primitive_core(
             }
         },
     );
+    fn bigint_push_result(caller: &mut Caller<'_, RuntimeState>, result: num_bigint::BigInt) -> i64 {
+        let mut table = caller
+            .data()
+            .bigint_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let handle = table.len() as u32;
+        table.push(result);
+        value::encode_bigint_handle(handle)
+    }
+
+    /// ES BigInt 移位：ℝ(y) mod 2^64，且结果非负。
+    fn bigint_shift_amount(y: &num_bigint::BigInt) -> Result<u64, &'static str> {
+        let modulus = num_bigint::BigInt::from(1u64) << 64;
+        let reduced: num_bigint::BigInt = y % &modulus;
+        if reduced.sign() == num_bigint::Sign::Minus {
+            return Err("RangeError: BigInt shift amount must be non-negative");
+        }
+        reduced
+            .to_u64()
+            .ok_or("RangeError: BigInt shift amount too large")
+    }
+
     linker.define(&mut store, "env", "bigint_neg", bigint_neg_fn)?;
+    let bigint_bit_and_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            bigint_binary_op(&mut caller, a, b, |x, y| x & y)
+        },
+    );
+    linker.define(&mut store, "env", "bigint_bit_and", bigint_bit_and_fn)?;
+    let bigint_bit_or_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            bigint_binary_op(&mut caller, a, b, |x, y| x | y)
+        },
+    );
+    linker.define(&mut store, "env", "bigint_bit_or", bigint_bit_or_fn)?;
+    let bigint_bit_xor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            bigint_binary_op(&mut caller, a, b, |x, y| x ^ y)
+        },
+    );
+    linker.define(&mut store, "env", "bigint_bit_xor", bigint_bit_xor_fn)?;
+    let bigint_shl_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let (a_val, b_val) = {
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                (table.get(a_handle).cloned(), table.get(b_handle).cloned())
+            };
+            match (a_val, b_val) {
+                (Some(x), Some(y)) => match bigint_shift_amount(&y) {
+                    Ok(shift) => bigint_push_result(&mut caller, x << shift),
+                    Err(msg) => {
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(msg.to_string());
+                        value::encode_undefined()
+                    }
+                },
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+    linker.define(&mut store, "env", "bigint_shl", bigint_shl_fn)?;
+    let bigint_shr_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let (a_val, b_val) = {
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                (table.get(a_handle).cloned(), table.get(b_handle).cloned())
+            };
+            match (a_val, b_val) {
+                (Some(x), Some(y)) => match bigint_shift_amount(&y) {
+                    Ok(shift) => bigint_push_result(&mut caller, x >> shift),
+                    Err(msg) => {
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(msg.to_string());
+                        value::encode_undefined()
+                    }
+                },
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+    linker.define(&mut store, "env", "bigint_shr", bigint_shr_fn)?;
+    let bigint_bit_not_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let a_val = {
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                table.get(a_handle).cloned()
+            };
+            if let Some(av) = a_val {
+                bigint_push_result(&mut caller, !av)
+            } else {
+                value::encode_undefined()
+            }
+        },
+    );
+    linker.define(&mut store, "env", "bigint_bit_not", bigint_bit_not_fn)?;
     let bigint_eq_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {

@@ -226,6 +226,42 @@ pub(crate) static SPECS_PART2: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "bigint_bit_and",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::BigIntBitAnd)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "bigint_bit_or",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::BigIntBitOr)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "bigint_bit_xor",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::BigIntBitXor)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "bigint_shl",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::BigIntShl)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "bigint_shr",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::BigIntShr)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "bigint_bit_not",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::BigIntBitNot)),
+        group: None,
+    },
+    HostImportSpec {
         name: "bigint_eq",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::BigIntEq)),

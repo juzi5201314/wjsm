@@ -97,50 +97,24 @@ impl Compiler {
                         self.emit_bigint_or_f64_binary(lhs_l, rhs_l, bigint_builtin, f64_op)?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
-                    // 位运算（i32 操作）
+                    // 位运算：BigInt 无限精度补码；Number 走 ToInt32
                     BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                        // 左操作数：ToNumber → ToInt32
-                        self.emit_to_number(self.local_idx(lhs.0))?;
-                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-                        // 右操作数：ToNumber → ToInt32
-                        self.emit_to_number(self.local_idx(rhs.0))?;
-                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-                        // 执行位运算
-                        match op {
-                            BinaryOp::BitAnd => self.emit(WasmInstruction::I32And),
-                            BinaryOp::BitOr => self.emit(WasmInstruction::I32Or),
-                            BinaryOp::BitXor => self.emit(WasmInstruction::I32Xor),
+                        let lhs_l = self.local_idx(lhs.0);
+                        let rhs_l = self.local_idx(rhs.0);
+                        let (bigint_builtin, i32_op) = match op {
+                            BinaryOp::BitAnd => (Builtin::BigIntBitAnd, WasmInstruction::I32And),
+                            BinaryOp::BitOr => (Builtin::BigIntBitOr, WasmInstruction::I32Or),
+                            BinaryOp::BitXor => (Builtin::BigIntBitXor, WasmInstruction::I32Xor),
                             _ => unreachable!(),
-                        }
-                        // 转换回 Number
-                        self.emit(WasmInstruction::F64ConvertI32S);
-                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        };
+                        self.emit_bigint_or_i32_bitwise_binary(lhs_l, rhs_l, bigint_builtin, i32_op)?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
-                    // 移位运算（需要掩码右操作数）
+                    // 移位：BigInt 禁止 `>>>`；Number 掩码右操作数
                     BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr => {
-                        // 左操作数：ToNumber → ToInt32
-                        self.emit_to_number(self.local_idx(lhs.0))?;
-                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-                        // 右操作数：ToNumber → ToInt32 并掩码 0x1F
-                        self.emit_to_number(self.local_idx(rhs.0))?;
-                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-                        self.emit(WasmInstruction::I32Const(0x1F));
-                        self.emit(WasmInstruction::I32And);
-                        // 执行移位
-                        match op {
-                            BinaryOp::Shl => self.emit(WasmInstruction::I32Shl),
-                            BinaryOp::Shr => self.emit(WasmInstruction::I32ShrS),
-                            BinaryOp::UShr => self.emit(WasmInstruction::I32ShrU),
-                            _ => unreachable!(),
-                        }
-                        // 转换回 Number
-                        if matches!(op, BinaryOp::UShr) {
-                            self.emit(WasmInstruction::F64ConvertI32U);
-                        } else {
-                            self.emit(WasmInstruction::F64ConvertI32S);
-                        }
-                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        let lhs_l = self.local_idx(lhs.0);
+                        let rhs_l = self.local_idx(rhs.0);
+                        self.emit_bigint_or_i32_shift_binary(lhs_l, rhs_l, *op)?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     BinaryOp::Mod | BinaryOp::Exp => {
@@ -199,16 +173,7 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::BitNot => {
-                        // ~x: ToInt32(x) XOR 0xFFFFFFFF
-                        // 1. ToNumber → ToInt32(x)
-                        self.emit_to_number(self.local_idx(value.0))?;
-                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-                        // 2. XOR with -1 (all ones)
-                        self.emit(WasmInstruction::I32Const(-1));
-                        self.emit(WasmInstruction::I32Xor);
-                        // 3. Convert back to Number (f64) and NaN-box
-                        self.emit(WasmInstruction::F64ConvertI32S);
-                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit_bigint_or_i32_bitnot_unary(self.local_idx(value.0))?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::Void => {

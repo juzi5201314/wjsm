@@ -231,6 +231,136 @@ impl Compiler {
         Ok(())
     }
 
+    /// 二元位运算：两操作数均为 BigInt → `bigint_*`；恰有一方 BigInt → TypeError；否则 ToInt32 路径（结果 i64 留栈）。
+    pub(super) fn emit_bigint_or_i32_bitwise_binary(
+        &mut self,
+        lhs_l: u32,
+        rhs_l: u32,
+        bigint_builtin: Builtin,
+        i32_op: WasmInstruction,
+    ) -> anyhow::Result<()> {
+        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+        self.emit(WasmInstruction::I32And);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(lhs_l));
+        self.emit(WasmInstruction::LocalGet(rhs_l));
+        let func_idx = self
+            .builtin_func_indices
+            .get(&bigint_builtin)
+            .copied()
+            .with_context(|| format!("no WASM func index for {bigint_builtin}"))?;
+        self.emit(WasmInstruction::Call(func_idx));
+        self.emit(WasmInstruction::Else);
+        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+        self.emit(WasmInstruction::I32Xor);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit_bigint_mixed_type_error_value()?;
+        self.emit(WasmInstruction::Else);
+        self.emit_to_number(lhs_l)?;
+        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+        self.emit_to_number(rhs_l)?;
+        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+        self.emit(i32_op);
+        self.emit(WasmInstruction::F64ConvertI32S);
+        self.emit(WasmInstruction::I64ReinterpretF64);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+        Ok(())
+    }
+
+    /// 二元移位：BigInt 走 host；`>>>` 任一为 BigInt → TypeError；否则 Number ToInt32 路径。
+    pub(super) fn emit_bigint_or_i32_shift_binary(
+        &mut self,
+        lhs_l: u32,
+        rhs_l: u32,
+        op: BinaryOp,
+    ) -> anyhow::Result<()> {
+        let (bigint_builtin, i32_op, unsigned_number) = match op {
+            BinaryOp::Shl => (Builtin::BigIntShl, WasmInstruction::I32Shl, false),
+            BinaryOp::Shr => (Builtin::BigIntShr, WasmInstruction::I32ShrS, false),
+            BinaryOp::UShr => {
+                self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+                self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+                self.emit(WasmInstruction::I32Or);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                self.emit_bigint_mixed_type_error_value()?;
+                self.emit(WasmInstruction::Else);
+                self.emit_to_number(lhs_l)?;
+                self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                self.emit_to_number(rhs_l)?;
+                self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                self.emit(WasmInstruction::I32Const(0x1F));
+                self.emit(WasmInstruction::I32And);
+                self.emit(WasmInstruction::I32ShrU);
+                self.emit(WasmInstruction::F64ConvertI32U);
+                self.emit(WasmInstruction::I64ReinterpretF64);
+                self.emit(WasmInstruction::End);
+                return Ok(());
+            }
+            _ => bail!("emit_bigint_or_i32_shift_binary: not a shift op"),
+        };
+
+        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+        self.emit(WasmInstruction::I32And);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(lhs_l));
+        self.emit(WasmInstruction::LocalGet(rhs_l));
+        let func_idx = self
+            .builtin_func_indices
+            .get(&bigint_builtin)
+            .copied()
+            .with_context(|| format!("no WASM func index for {bigint_builtin}"))?;
+        self.emit(WasmInstruction::Call(func_idx));
+        self.emit(WasmInstruction::Else);
+        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+        self.emit(WasmInstruction::I32Xor);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit_bigint_mixed_type_error_value()?;
+        self.emit(WasmInstruction::Else);
+        self.emit_to_number(lhs_l)?;
+        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+        self.emit_to_number(rhs_l)?;
+        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+        self.emit(WasmInstruction::I32Const(0x1F));
+        self.emit(WasmInstruction::I32And);
+        self.emit(i32_op);
+        if unsigned_number {
+            self.emit(WasmInstruction::F64ConvertI32U);
+        } else {
+            self.emit(WasmInstruction::F64ConvertI32S);
+        }
+        self.emit(WasmInstruction::I64ReinterpretF64);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+        Ok(())
+    }
+
+    /// 一元 `~`：BigInt → `bigint_bit_not`；否则 ToInt32 XOR -1。
+    pub(super) fn emit_bigint_or_i32_bitnot_unary(&mut self, val_l: u32) -> anyhow::Result<()> {
+        let bigint_bit_not_idx = self
+            .builtin_func_indices
+            .get(&Builtin::BigIntBitNot)
+            .copied()
+            .with_context(|| "no WASM func index for BigIntBitNot")?;
+        self.emit_tag_eq(val_l, value::TAG_BIGINT);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(val_l));
+        self.emit(WasmInstruction::Call(bigint_bit_not_idx));
+        self.emit(WasmInstruction::Else);
+        self.emit_to_number(val_l)?;
+        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+        self.emit(WasmInstruction::I32Const(-1));
+        self.emit(WasmInstruction::I32Xor);
+        self.emit(WasmInstruction::F64ConvertI32S);
+        self.emit(WasmInstruction::I64ReinterpretF64);
+        self.emit(WasmInstruction::End);
+        Ok(())
+    }
+
 
     /// 混合 BigInt/Number 二元运算：返回可捕获的 TypeError 异常值。
     fn emit_bigint_mixed_type_error_value(&mut self) -> anyhow::Result<()> {

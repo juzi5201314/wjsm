@@ -439,6 +439,11 @@ impl Compiler {
             | Builtin::BigIntDiv
             | Builtin::BigIntMod
             | Builtin::BigIntPow
+            | Builtin::BigIntBitAnd
+            | Builtin::BigIntBitOr
+            | Builtin::BigIntBitXor
+            | Builtin::BigIntShl
+            | Builtin::BigIntShr
             | Builtin::BigIntEq
             | Builtin::BigIntCmp => {
                 let a = args.first().context("BigInt binary op expects 2 args")?;
@@ -456,7 +461,7 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
-            Builtin::BigIntNeg => {
+            Builtin::BigIntNeg | Builtin::BigIntBitNot => {
                 let a = args.first().context("BigIntNeg expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
                 let func_idx = self
