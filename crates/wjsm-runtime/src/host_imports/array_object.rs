@@ -11,6 +11,64 @@ fn array_length_would_overflow(len: u32, add: u32) -> bool {
     len.checked_add(add).is_none_or(|n| n > MAX_ARRAY_LENGTH)
 }
 
+/// ToUint32（ECMAScript §6.1.6），用于 ArraySetLength 步骤 3。
+fn array_length_to_uint32(n: f64) -> u32 {
+    if !n.is_finite() || n == 0.0 {
+        return 0;
+    }
+    let v = n.trunc().rem_euclid(4294967296.0);
+    v as u32
+}
+
+/// ECMAScript §23.1.3.2 ArraySetLength：设置 `array.length`（截断 / 扩展空洞）。
+pub(crate) fn array_set_length_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    len_val: i64,
+) -> i64 {
+    if !value::is_array(arr) {
+        return arr;
+    }
+    let Some(ptr) = resolve_array_ptr(caller, arr) else {
+        return arr;
+    };
+    let old_len = read_array_length(caller, ptr).unwrap_or(0);
+
+    if same_value_zero(caller, len_val, value::encode_f64(old_len as f64)) {
+        return arr;
+    }
+
+    let num = to_number(caller, len_val);
+    let new_len = array_length_to_uint32(value::decode_f64(num));
+
+    if !same_value_zero(caller, num, value::encode_f64(new_len as f64)) {
+        set_runtime_error(caller.data(), format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"));
+        return arr;
+    }
+
+    if new_len < old_len {
+        for i in new_len..old_len {
+            write_array_hole(caller, ptr, i);
+        }
+    } else if new_len > old_len {
+        let cap = read_array_capacity(caller, ptr).unwrap_or(0);
+        let mut ptr = ptr;
+        if new_len > cap {
+            let Some(needed) = array_grow_capacity_u32(cap, new_len) else {
+                set_runtime_error(caller.data(), format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"));
+                return arr;
+            };
+            ptr = grow_array(caller, ptr, arr, needed).unwrap_or(ptr);
+        }
+        for i in old_len..new_len {
+            write_array_hole(caller, ptr, i);
+        }
+    }
+
+    write_array_length(caller, ptr, new_len);
+    arr
+}
+
 /// 将容量按倍增策略翻倍（至少为 1），溢出时返回 None。
 fn doubled_capacity_u32(cap: u32) -> Option<u32> {
     cap.max(1).checked_mul(2)

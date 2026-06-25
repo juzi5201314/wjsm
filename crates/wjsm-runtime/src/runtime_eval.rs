@@ -1357,15 +1357,19 @@ pub(crate) fn eval_assign(
             };
             let val = eval_assignment_value(caller, assign.op, current, rhs)?;
             if value::is_array(obj) {
-                let idx = key
-                    .parse::<u32>()
-                    .map_err(|_| "SyntaxError: invalid array index in eval".to_string())?;
-                let Some(ptr) = resolve_array_ptr(caller, obj) else {
-                    return Ok(val);
-                };
-                write_array_elem(caller, ptr, idx, val);
-                if read_array_length(caller, ptr).is_some_and(|len| idx >= len) {
-                    write_array_length(caller, ptr, idx + 1);
+                if key == "length" {
+                    crate::host_imports::array_set_length_impl(caller, obj, val);
+                } else {
+                    let idx = key
+                        .parse::<u32>()
+                        .map_err(|_| "SyntaxError: invalid array index in eval".to_string())?;
+                    let Some(ptr) = resolve_array_ptr(caller, obj) else {
+                        return Ok(val);
+                    };
+                    write_array_elem(caller, ptr, idx, val);
+                    if read_array_length(caller, ptr).is_some_and(|len| idx >= len) {
+                        write_array_length(caller, ptr, idx + 1);
+                    }
                 }
             } else if value::is_js_object(obj) {
                 set_host_data_property_from_caller(caller, obj, &key, val);

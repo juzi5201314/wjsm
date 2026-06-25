@@ -52,6 +52,7 @@ pub enum SpecialHostImport {
     PrimitiveBigIntGetMethod,
     PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
+    ArraySetLength,
     ToNumber,
     ToBool,
     // ── P4 GC framework host imports ──

@@ -522,6 +522,7 @@ impl Compiler {
         // ── $obj_set (param $boxed i64) (param $name_id i32) (param $value i64) — Type 9 ──
         // 通过 handle 表解析 boxed value，设置属性。
         {
+            let length_name_id = self.ensure_string_ptr_const("length");
             // local 0 = $boxed (i64), local 1 = $name_id (i32), local 2 = $value (i64)
             // local 3 = proto_handle (i32, reused from unused pad)
             // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
@@ -599,6 +600,28 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalSet(8));
+            func.instruction(&WasmInstruction::End);
+
+            // 数组 length 赋值：ECMAScript §23.1.3.2 ArraySetLength
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::I32Load8U(MemArg {
+                offset: 4,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(length_name_id as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ArraySetLength],
+            ));
+            func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
 
             // ── 搜索已有属性 ──

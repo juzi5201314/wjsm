@@ -494,6 +494,12 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "array_set_length",
+        type_idx: 2,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArraySetLength)),
+        group: None,
+    },
+    HostImportSpec {
         name: "object.is_sealed",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::ObjectIsSealed)),

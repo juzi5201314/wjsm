@@ -186,19 +186,17 @@ pub(crate) fn define_timers_arrays(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return arr;
-            };
-            let len = if value::is_f64(len_val) {
-                value::decode_f64(len_val) as u32
-            } else {
-                return arr;
-            };
-            write_array_length(&mut caller, ptr, len);
-            arr
+            super::array_object::array_set_length_impl(&mut caller, arr, len_val)
         },
     );
     linker.define(&mut store, "env", "arr_init_length", f)?;
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
+            super::array_object::array_set_length_impl(&mut caller, arr, len_val)
+        },
+    );
+    linker.define(&mut store, "env", "array_set_length", f)?;
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {

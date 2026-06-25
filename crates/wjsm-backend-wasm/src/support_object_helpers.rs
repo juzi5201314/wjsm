@@ -429,6 +429,25 @@ fn emit_obj_set() -> Function {
     }));
     func.instruction(&WasmInstruction::LocalSet(8));
     func.instruction(&WasmInstruction::End);
+    // 数组 length 赋值：ECMAScript §23.1.3.2 ArraySetLength
+    func.instruction(&WasmInstruction::LocalGet(8));
+    func.instruction(&WasmInstruction::I32Load8U(MemArg {
+        offset: 4,
+        align: 0,
+        memory_index: 0,
+    }));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Const(constants::PRIMORDIAL_LENGTH_OFFSET as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Call(HOST_ARRAY_SET_LENGTH));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
     // ── 搜索已有属性 ──
     func.instruction(&WasmInstruction::LocalGet(8));
     func.instruction(&WasmInstruction::I32Load(MemArg {
