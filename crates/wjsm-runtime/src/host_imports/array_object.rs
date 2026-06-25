@@ -1435,8 +1435,8 @@ pub(crate) fn define_array_object(
     );
     linker.define(&mut store, "env", "arr_proto_splice", arr_proto_splice_fn)?;
 
-    // ── arr_proto_is_array (#75) ──────────────────────────────────────
-    let arr_proto_is_array_fn = Func::wrap(
+    // ── arr_static_is_array (#75) ──────────────────────────────────────
+    let arr_static_is_array_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
@@ -1451,8 +1451,8 @@ pub(crate) fn define_array_object(
     linker.define(
         &mut store,
         "env",
-        "arr_proto_is_array",
-        arr_proto_is_array_fn,
+        "arr_static_is_array",
+        arr_static_is_array_fn,
     )?;
 
     // ── abort_shadow_stack_overflow (#76) ─────────────────────────────

@@ -52,10 +52,10 @@ pub(crate) static SPECS_PART2: &[HostImportSpec] = &[
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
-        name: "arr_proto_is_array",
+        name: "arr_static_is_array",
         type_idx: 12,
         key: Some(HostImportKey::Builtin(Builtin::ArrayIsArray)),
-        group: Some(HostImportGroup::ArrayPrototypeMethod),
+        group: None,
     },
     HostImportSpec {
         name: "abort_shadow_stack_overflow",
