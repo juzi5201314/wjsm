@@ -1,4 +1,5 @@
 exit_code: 2
 --- stdout ---
+Uncaught exception: TypeError: Do not know how to serialize a BigInt
 --- stderr ---
-Runtime error: TypeError: Do not know how to serialize a BigInt
+Runtime error: Uncaught exception: TypeError: Do not know how to serialize a BigInt
