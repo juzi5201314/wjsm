@@ -1400,28 +1400,27 @@ pub(crate) fn define_array_object(
                 write_array_elem(&mut caller, deleted_ptr, i as u32, elem);
             }
             write_array_length(&mut caller, deleted_ptr, actual_delete as u32);
-            // 移动元素（右移或左移）
+            // 移动元素 — 遵循 ES2024 §23.1.3.31
             if insert_count != actual_delete {
                 if insert_count < actual_delete {
-                    // 左移
-                    for i in start_idx..(len - actual_delete + insert_count) {
-                        let src = i + actual_delete - insert_count;
-                        let elem = read_array_elem(&mut caller, ptr, src as u32)
+                    // 左移 (§23.1.3.31 step 13): k 从 actualStart 递增至 len - actualDeleteCount - 1
+                    for k in start_idx..(len - actual_delete) {
+                        let from = k + actual_delete;
+                        let to = k + insert_count;
+                        let elem = read_array_elem(&mut caller, ptr, from as u32)
                             .unwrap_or(value::encode_undefined());
-                        write_array_elem(&mut caller, ptr, i as u32, elem);
+                        write_array_elem(&mut caller, ptr, to as u32, elem);
                     }
                 } else {
-                    // 右移（从后往前）
-                    for i in (start_idx..(len - actual_delete + insert_count)).rev() {
-                        let src = i - insert_count + actual_delete;
-                        let elem = read_array_elem(&mut caller, ptr, src as u32)
+                    // 右移 (§23.1.3.31 step 14): k 从 len - actualDeleteCount 递减至 actualStart + 1
+                    let mut k = len - actual_delete;
+                    while k > start_idx {
+                        let from = k + actual_delete - 1;
+                        let to = k + insert_count - 1;
+                        let elem = read_array_elem(&mut caller, ptr, from as u32)
                             .unwrap_or(value::encode_undefined());
-                        write_array_elem(
-                            &mut caller,
-                            ptr,
-                            i as u32 + insert_count as u32 - actual_delete as u32,
-                            elem,
-                        );
+                        write_array_elem(&mut caller, ptr, to as u32, elem);
+                        k -= 1;
                     }
                 }
             }

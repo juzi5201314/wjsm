@@ -1,15 +1,15 @@
 exit_code: 0
 --- stdout ---
 BigInt64Array length: 2
-b64[0]: 10n
-b64[1]: -20n
-set: 0n,1n,2n,0n
+b64[0]: 10
+b64[1]: -20
+set: 0,1,2,0
 slice length: 1
-slice[0]: 10n
+slice[0]: 10
 BigUint64Array length: 3
-bu64[0]: 100n
-bu64[1]: 200n
-join: 100n-200n-0n
+bu64[0]: 100
+bu64[1]: 200
+join: 100-200-0
 indexOf: 1
 includes: true
 --- stderr ---
