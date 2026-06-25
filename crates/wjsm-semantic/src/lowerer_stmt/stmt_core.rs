@@ -214,13 +214,13 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
+        let mut cond_entry = block;
         let cond = if self.expr_exception_fork_allowed() && self.expr_can_throw(&if_stmt.test) {
-            let mut cond_block = block;
-            self.lower_expr_then_continue(&if_stmt.test, &mut cond_block)?
+            self.lower_expr_then_continue(&if_stmt.test, &mut cond_entry)?
         } else {
-            self.lower_expr(&if_stmt.test, block)?
+            self.lower_expr(&if_stmt.test, cond_entry)?
         };
-        let branch_block = self.resolve_store_block(block);
+        let branch_block = self.resolve_store_block(cond_entry);
         let then_block = self.current_function.new_block();
         let else_or_merge = self.current_function.new_block();
 

@@ -10,6 +10,36 @@ pub(crate) struct ScopeRecord {
     pub(crate) is_strict: bool,
 }
 
+/// 与 linker `create_exception` 宿主导入一致：将抛出值编码为 TAG_EXCEPTION。
+fn host_create_exception_from_eval(caller: &mut Caller<'_, RuntimeState>, thrown_value: i64) -> i64 {
+    let rendered = render_value(caller, thrown_value).unwrap_or_else(|_| "unknown".to_string());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: String::new(),
+        message: rendered,
+        value: thrown_value,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
+fn host_exception_value_from_eval(caller: &Caller<'_, RuntimeState>, exception_handle: i64) -> i64 {
+    let idx = value::decode_handle(exception_handle) as usize;
+    let errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    errors
+        .get(idx)
+        .map(|e| e.value)
+        .unwrap_or_else(value::encode_undefined)
+}
+
 fn sync_eval_new_target_from_scope_record(
     caller: &mut Caller<'_, RuntimeState>,
     scope_env: Option<i64>,
@@ -364,6 +394,22 @@ pub(crate) fn compiled_eval_import(
                         Ok(n) if (n as i64) < i32::MAX as i64 && n.to_string() == s => n as i32,
                         _ => -1,
                     }
+                },
+            );
+        }
+        "create_exception" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
+                    host_create_exception_from_eval(&mut caller, thrown_value)
+                },
+            );
+        }
+        "exception_value" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, exception_handle: i64| -> i64 {
+                    host_exception_value_from_eval(&caller, exception_handle)
                 },
             );
         }
