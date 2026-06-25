@@ -93,13 +93,14 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
-            // Reflect.set(target, prop, val[, receiver]) — 签名需要 4 个参数，缺 receiver 时补 undefined
+            // Reflect.set(target, prop, val[, receiver]) — 省略 receiver 时按规范使用 target（与 ReflectGet 一致）。
             Builtin::ReflectSet => {
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
                 if args.len() < 4 {
-                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    let receiver = args.first().copied().unwrap_or(ValueId(0));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
                 }
                 let func_idx = self
                     .builtin_func_indices

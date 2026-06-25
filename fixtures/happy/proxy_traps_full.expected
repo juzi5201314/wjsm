@@ -4,13 +4,15 @@ exit_code: 0
 get trap: a
 get: 11
 set trap: a to 100
-after set target: 1
+getOwnPropertyDescriptor trap: a
+defineProperty trap: a
+after set target: 105
 get trap: a
-after set proxy: 11
+after set proxy: 115
 has trap: a
 has: true
 deleteProperty trap: a
-after delete target: 105
+after delete target: undefined
 defineProperty trap: b
 after defineProperty target: 42
 getOwnPropertyDescriptor trap: b
