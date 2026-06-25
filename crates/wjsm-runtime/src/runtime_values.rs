@@ -1093,17 +1093,12 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
         return num.to_bits() as i64;
     }
 
-    // BigInt → ToNumber: 转为 f64（可能丢失精度）
+    // BigInt → ToNumber: 抛 TypeError (§7.1.4)
     if value::is_bigint(val) {
-        let handle = value::decode_bigint_handle(val) as usize;
-        let table = caller
+        *caller
             .data()
-            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(bi) = table.get(handle)
-            && let Some(f) = bi.to_f64()
-        {
-            return f.to_bits() as i64;
-        }
+            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some("TypeError: Cannot convert a BigInt value to a number".to_string());
         return f64::NAN.to_bits() as i64;
     }
 
