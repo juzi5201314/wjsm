@@ -71,6 +71,22 @@ pub(crate) fn define_timers_arrays(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            match super::array_object::push_array_hole(&mut caller, arr) {
+                Ok(()) => {
+                    let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                        return value::encode_undefined();
+                    };
+                    let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                    value::encode_f64(len as f64)
+                }
+                Err(exc) => exc,
+            }
+        },
+    );
+    linker.define(&mut store, "env", "arr_push_hole", f)?;
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_undefined();
             };

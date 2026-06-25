@@ -244,6 +244,12 @@ pub(crate) static SPECS_PART1: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "arr_push_hole",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayPushHole)),
+        group: None,
+    },
+    HostImportSpec {
         name: "array_push_spread",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::ArrayPushSpread)),

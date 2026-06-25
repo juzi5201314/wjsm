@@ -52,6 +52,8 @@ pub enum Builtin {
     CreateClosure,
     // 数组方法
     ArrayPush,
+    /// 数组字面量 elision：在末尾追加一个 hole。
+    ArrayPushHole,
     ArrayPushSpread,
     ArrayPop,
     ArrayIncludes,
@@ -540,6 +542,7 @@ impl Builtin {
     fn fmt_array_str(&self) -> Option<&'static str> {
         Some(match self {
             Self::ArrayPush => "array.push",
+            Self::ArrayPushHole => "array.push_hole",
             Self::ArrayPushSpread => "array.push_spread",
             Self::ArrayPop => "array.pop",
             Self::ArrayIncludes => "array.includes",

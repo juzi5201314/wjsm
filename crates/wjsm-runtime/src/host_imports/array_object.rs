@@ -740,6 +740,28 @@ pub(crate) fn push_array_value(
     Ok(())
 }
 
+/// 数组字面量 elision：length+1 并在新下标写入 hole。
+pub(crate) fn push_array_hole(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+) -> Result<(), i64> {
+    let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    if array_length_would_overflow(len, 1) {
+        return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
+    }
+    let cap = read_array_capacity(caller, ptr).unwrap_or(0);
+    if len >= cap {
+        let Some(needed) = array_grow_capacity_u32(cap, len + 1) else {
+            return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
+        };
+        ptr = grow_array(caller, ptr, arr, needed).ok_or_else(value::encode_undefined)?;
+    }
+    write_array_hole(caller, ptr, len);
+    write_array_length(caller, ptr, len + 1);
+    Ok(())
+}
+
 async fn push_iterator_values_async(
     caller: &mut Caller<'_, RuntimeState>,
     arr: i64,

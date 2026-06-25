@@ -174,6 +174,7 @@ impl Compiler {
             }
             // ── Array method builtins ─────────────────────────────────────
             Builtin::ArrayPush
+            | Builtin::ArrayPushHole
             | Builtin::ArrayPushSpread
             | Builtin::ArrayPop
             | Builtin::ArrayIncludes

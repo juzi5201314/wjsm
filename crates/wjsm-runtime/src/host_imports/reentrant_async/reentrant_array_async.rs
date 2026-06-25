@@ -18,6 +18,12 @@ async fn sort_compare_async(
     }
 }
 
+/// SortCompareList 条目：仅包含参与排序的已定义且非 undefined 元素。
+struct SortableElem {
+    value: i64,
+    original_index: u32,
+}
+
 async fn arr_proto_sort_async_body(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
@@ -27,45 +33,90 @@ async fn arr_proto_sort_async_body(
     let Some(ptr) = resolve_array_ptr(caller, this_val) else {
         return this_val;
     };
-    let len = read_array_length(caller, ptr).unwrap_or(0) as usize;
+    let len = read_array_length(caller, ptr).unwrap_or(0);
     if len <= 1 {
         return this_val;
     }
-    let mut elems: Vec<i64> = (0..len)
-        .map(|i| read_array_elem(caller, ptr, i as u32).unwrap_or(value::encode_undefined()))
-        .collect();
-    if args_count > 0 && value::is_callable(read_shadow_arg(caller, args_base, 0)) {
-        let cmp = read_shadow_arg(caller, args_base, 0);
-        for i in 0..elems.len() {
-            for j in i + 1..elems.len() {
-                if sort_compare_async(caller, cmp, elems[i], elems[j]).await
-                    == std::cmp::Ordering::Greater
-                {
-                    elems.swap(i, j);
+
+    let mut sort_list: Vec<SortableElem> = Vec::new();
+    let mut undefined_count: u32 = 0;
+    let mut hole_count: u32 = 0;
+
+    for i in 0..len {
+        if !array_elem_present(caller, ptr, i) {
+            hole_count += 1;
+            continue;
+        }
+        let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
+        if value::is_undefined(elem) {
+            undefined_count += 1;
+        } else {
+            sort_list.push(SortableElem {
+                value: elem,
+                original_index: i,
+            });
+        }
+    }
+
+    if !sort_list.is_empty() {
+        if args_count > 0 && value::is_callable(read_shadow_arg(caller, args_base, 0)) {
+            let cmp = read_shadow_arg(caller, args_base, 0);
+            for i in 0..sort_list.len() {
+                for j in i + 1..sort_list.len() {
+                    if sort_compare_async(
+                        caller,
+                        cmp,
+                        sort_list[i].value,
+                        sort_list[j].value,
+                    )
+                    .await
+                        == std::cmp::Ordering::Greater
+                    {
+                        sort_list.swap(i, j);
+                    }
                 }
             }
+        } else {
+            let keys: Vec<String> = sort_list
+                .iter()
+                .map(|e| render_value(caller, e.value).unwrap_or_default())
+                .collect();
+            let mut order: Vec<usize> = (0..sort_list.len()).collect();
+            order.sort_by(|&ia, &ib| {
+                let ord = keys[ia].cmp(&keys[ib]);
+                if ord == std::cmp::Ordering::Equal {
+                    sort_list[ia]
+                        .original_index
+                        .cmp(&sort_list[ib].original_index)
+                } else {
+                    ord
+                }
+            });
+            let sorted: Vec<SortableElem> = order
+                .into_iter()
+                .map(|i| SortableElem {
+                    value: sort_list[i].value,
+                    original_index: sort_list[i].original_index,
+                })
+                .collect();
+            sort_list = sorted;
         }
-    } else {
-        let keys: Vec<String> = elems
-            .iter()
-            .map(|e| render_value(caller, *e).unwrap_or_default())
-            .collect();
-        let mut indexed: Vec<(usize, &i64)> = (0..len).map(|i| (i, &elems[i])).collect();
-        indexed.sort_by(|(ia, _), (ib, _)| {
-            let ka = &keys[*ia];
-            let kb = &keys[*ib];
-            let cmp = ka.cmp(kb);
-            if cmp == std::cmp::Ordering::Equal {
-                ia.cmp(ib)
-            } else {
-                cmp
-            }
-        });
-        elems = indexed.iter().map(|(_, e)| **e).collect();
     }
-    for (i, &elem) in elems.iter().enumerate() {
-        write_array_elem(caller, ptr, i as u32, elem);
+
+    let mut write_idx: u32 = 0;
+    for item in &sort_list {
+        write_array_elem(caller, ptr, write_idx, item.value);
+        write_idx += 1;
     }
+    for _ in 0..undefined_count {
+        write_array_elem(caller, ptr, write_idx, value::encode_undefined());
+        write_idx += 1;
+    }
+    for _ in 0..hole_count {
+        write_array_hole(caller, ptr, write_idx);
+        write_idx += 1;
+    }
+
     this_val
 }
 

@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+1 2 3 undefined NaN
+true true true true false
+10 5 NaN true true false
+--- stderr ---
