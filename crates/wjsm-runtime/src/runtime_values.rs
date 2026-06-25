@@ -1129,6 +1129,67 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     f64::NAN.to_bits() as i64
 }
 
+/// ToNumeric 抽象操作 (ECMAScript §7.1.16)
+/// 对 BigInt 原样返回，否则调用 ToNumber
+pub(crate) fn to_numeric(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
+    if value::is_bigint(val) {
+        return val;
+    }
+    to_number(caller, val)
+}
+
+/// 比较 ℝ(BigInt) < ℝ(Number)  (§7.2.13 step 5m)
+/// bigint_is_left: 调用时 BigInt 是左操作数 (a < b) 还是右操作数 (b < a)
+pub(crate) fn number_less_than_bigint(
+    num_f: f64,
+    bi: &num_bigint::BigInt,
+    bigint_is_left: bool,
+) -> bool {
+    // 将 Number 转换为精确整数（若为整数）后比较
+    let truncated = num_f.trunc();
+    let is_exact_int = num_f == truncated;
+
+    // Try to get exact integer within BigInt range
+    if num_f.is_finite() && (num_f.abs() <= (1i64 << 53) as f64) {
+        // Within safe integer range — representable exactly as f64's integer
+        let int_val = num_f as i64;
+        // Re-check: round-trip must be exact
+        if (num_f - (int_val as f64)).abs() < 1.0 {
+            let num_bi = num_bigint::BigInt::from(int_val);
+            if is_exact_int {
+                return if bigint_is_left { *bi < num_bi } else { num_bi < *bi };
+            } else {
+                // 带小数：bi 是整数，小数部分让比较略偏向一侧
+                return if bigint_is_left { *bi <= num_bi } else { num_bi <= *bi };
+            }
+        }
+    }
+
+    // Fallback: f64 超出精确整数范围或非整数很大值
+    // 用 BigInt 的 to_f64 近似比较
+    let bi_f64_op = bi.to_f64();
+    let result = match bi_f64_op {
+        Some(bi_f64) => {
+            if bigint_is_left {
+                bi_f64 < num_f
+            } else {
+                num_f < bi_f64
+            }
+        }
+        None => {
+            // BigInt 超出 f64 范围（≳ 2^1024）
+            if bi.sign() == num_bigint::Sign::Minus {
+                // 极大负数 < 任何有限数 → true
+                bigint_is_left
+            } else {
+                // 极大正数 < 任何有限数 → false
+                !bigint_is_left
+            }
+        }
+    };
+    result
+}
+
 /// ToPrimitive 抽象操作 (ECMAScript §7.1.1)
 pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
     to_primitive_with_hint(caller, val, ToPrimitiveHint::Default)

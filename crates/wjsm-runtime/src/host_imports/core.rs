@@ -1146,7 +1146,7 @@ pub(crate) fn define_core(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-            // 实现 Abstract Relational Comparison (ECMAScript 7.2.17)
+            // 实现 Abstract Relational Comparison (ECMAScript §7.2.13)
             // 返回值: true (a < b), false (a >= b 或无法比较)
 
             let pa = to_primitive_with_hint(&mut caller, a, ToPrimitiveHint::Number);
@@ -1159,18 +1159,80 @@ pub(crate) fn define_core(
                 return value::encode_bool(a_str < b_str);
             }
 
-            // 3. 否则 → ToNumber(px), ToNumber(py)
-            let na = to_number(&mut caller, pa);
-            let nb = to_number(&mut caller, pb);
+            // 3. 否则 → ToNumeric(px), ToNumeric(py) (§7.2.13 step 5)
+            //    ToNumeric 对 BigInt 原样返回，不调用 ToNumber
+            let na = to_numeric(&mut caller, pa);
+            let nb = to_numeric(&mut caller, pb);
 
-            // 4. 若任一为 NaN → 返回 false
+            // BigInt vs BigInt: 精确值比较 (§7.2.13 step 5f.iii)
+            if value::is_bigint(na) && value::is_bigint(nb) {
+                let a_handle = value::decode_bigint_handle(na) as usize;
+                let b_handle = value::decode_bigint_handle(nb) as usize;
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let lt = match (table.get(a_handle), table.get(b_handle)) {
+                    (Some(x), Some(y)) => x < y,
+                    _ => false,
+                };
+                return value::encode_bool(lt);
+            }
+
+            // 混用 BigInt + Number: 比较数学值 (§7.2.13 step 5g-5m)
+            if value::is_bigint(na) || value::is_bigint(nb) {
+                let (bigint_val, num_val) = if value::is_bigint(na) {
+                    (na, nb)
+                } else {
+                    (nb, na)
+                };
+                let nf = value::decode_f64(num_val);
+
+                // h. NaN → undefined (false)
+                if nf.is_nan() {
+                    return value::encode_bool(false);
+                }
+                // i. -∞ < BigInt ∨ BigInt < +∞ → true
+                if nf.is_infinite() {
+                    // bigint < +∞: always true; bigint < -∞: always false
+                    // But we need to know which side the bigint is on
+                    // a < b: if bigint is on left, nx = bigint, ny = number
+                    //   +∞: bigint < +∞ → true
+                    //   -∞: bigint < -∞ → false
+                    // a < b: if number is on left, nx = number, ny = bigint
+                    //   +∞: +∞ < bigint → false
+                    //   -∞: -∞ < bigint → true
+                    let bigint_is_left = value::is_bigint(na);
+                    if nf.is_sign_positive() {
+                        return value::encode_bool(bigint_is_left);
+                    } else {
+                        return value::encode_bool(!bigint_is_left);
+                    }
+                }
+
+                // k-m. ℝ(nBigInt) < ℝ(nNumber) (§7.2.13 step 5m)
+                let big_handle = value::decode_bigint_handle(bigint_val) as usize;
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let Some(bi) = table.get(big_handle) else {
+                    return value::encode_bool(false);
+                };
+
+                // 将数字转精确数学值并比较
+                let num_less = number_less_than_bigint(nf, bi, value::is_bigint(na));
+                return value::encode_bool(num_less);
+            }
+
+            // 纯 Number 比较
             let af = value::decode_f64(na);
             let bf = value::decode_f64(nb);
             if af.is_nan() || bf.is_nan() {
                 return value::encode_bool(false);
             }
-
-            // 5. 否则 → px < py 的数值比较
             value::encode_bool(af < bf)
         },
     );
