@@ -16,20 +16,121 @@ pub(crate) fn define_string_methods(
         }
     }
 
-    fn to_uint16(val: i64) -> u16 {
-        if value::is_f64(val) {
-            value::decode_f64(val) as u16
+    fn to_uint16_number(n: f64) -> u16 {
+        if !n.is_finite() || n == 0.0 {
+            return 0;
+        }
+        let v = n.trunc().rem_euclid(65536.0);
+        v as u16
+    }
+
+    fn to_uint32_number(n: f64) -> u32 {
+        if !n.is_finite() || n == 0.0 {
+            return 0;
+        }
+        let v = n.trunc().rem_euclid(4294967296.0);
+        v as u32
+    }
+
+    fn to_uint16_caller(caller: &mut Caller<'_, RuntimeState>, val: i64) -> u16 {
+        to_uint16_number(value::decode_f64(to_number(caller, val)))
+    }
+
+    fn to_uint32_caller(caller: &mut Caller<'_, RuntimeState>, val: i64) -> u32 {
+        to_uint32_number(value::decode_f64(to_number(caller, val)))
+    }
+
+
+    /// String value consisting of a single UTF-16 code unit (ECMAScript §22.1.3.1).
+    fn string_from_utf16_code_unit(unit: u16) -> String {
+        if !(0xD800..=0xDFFF).contains(&unit) {
+            if let Some(ch) = char::from_u32(unit as u32) {
+                return ch.to_string();
+            }
+        }
+        let bytes = if unit < 0x800 {
+            vec![0xC0 | ((unit >> 6) as u8), 0x80 | ((unit & 0x3F) as u8)]
         } else {
-            0
+            vec![
+                0xE0 | ((unit >> 12) as u8),
+                0x80 | (((unit >> 6) & 0x3F) as u8),
+                0x80 | ((unit & 0x3F) as u8),
+            ]
+        };
+        unsafe { String::from_utf8_unchecked(bytes) }
+    }
+
+    fn js_utf16_units(s: &str) -> Vec<u16> {
+        let mut units = Vec::new();
+        let b = s.as_bytes();
+        let mut i = 0usize;
+        while i < b.len() {
+            if b[i] < 0x80 {
+                units.push(b[i] as u16);
+                i += 1;
+                continue;
+            }
+            if i + 2 < b.len() && (b[i] & 0xF0) == 0xE0 {
+                let unit = (((b[i] as u32 & 0x0F) << 12)
+                    | ((b[i + 1] as u32 & 0x3F) << 6)
+                    | (b[i + 2] as u32 & 0x3F)) as u16;
+                if (0xD800..=0xDFFF).contains(&unit) {
+                    units.push(unit);
+                    i += 3;
+                    continue;
+                }
+            }
+            if i + 1 < b.len() && (b[i] & 0xE0) == 0xC0 {
+                let unit =
+                    (((b[i] as u32 & 0x1F) << 6) | (b[i + 1] as u32 & 0x3F)) as u16;
+                if (0xD800..=0xDFFF).contains(&unit) {
+                    units.push(unit);
+                    i += 2;
+                    continue;
+                }
+            }
+            if let Some(ch) = std::str::from_utf8(&b[i..])
+                .ok()
+                .and_then(|tail| tail.chars().next())
+            {
+                let cp = ch as u32;
+                if cp > 0xFFFF {
+                    let base = cp - 0x10000;
+                    units.push((0xD800 + (base >> 10)) as u16);
+                    units.push((0xDC00 + (base & 0x3FF)) as u16);
+                } else {
+                    units.push(cp as u16);
+                }
+                i += ch.len_utf8();
+                continue;
+            }
+            i += 1;
+        }
+        units
+    }
+
+    fn utf16_code_unit_at_stored(s: &str, utf16_idx: usize) -> Option<u16> {
+        js_utf16_units(s).get(utf16_idx).copied()
+    }
+
+    fn js_utf16_len(s: &str) -> usize {
+        js_utf16_units(s).len()
+    }
+
+    fn concat_arg_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+        if value::is_string(val) {
+            get_string_value(caller, val)
+        } else {
+            render_value(caller, val).unwrap_or_default()
         }
     }
 
-    fn to_uint32(val: i64) -> u32 {
-        if value::is_f64(val) {
-            value::decode_f64(val) as u32
-        } else {
-            0
-        }
+    fn is_valid_code_point(cp: u32) -> bool {
+        cp <= 0x10FFFF && !(0xD800..=0xDFFF).contains(&cp)
+    }
+
+    fn push_utf16_code_unit(result: &mut String, unit: u16) {
+        result.push_str(&string_from_utf16_code_unit(unit));
     }
     /// 从 regress::Match 构建 RegExp 执行结果数组。
     // 返回的数组包含 .index, .input, .groups 属性；
@@ -161,7 +262,7 @@ pub(crate) fn define_string_methods(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, index: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s) as i64;
+            let len = js_utf16_len(&s) as i64;
             let idx = to_f64_or(index, 0.0);
             let mut i = idx as i64;
             if idx < 0.0 {
@@ -170,13 +271,8 @@ pub(crate) fn define_string_methods(
             if i < 0 || i >= len {
                 return value::encode_undefined();
             }
-            let byte_off = utf16_index_to_byte_offset(&s, i as usize);
-            let ch = s[byte_off..]
-                .chars()
-                .next()
-                .map(|c| c.to_string())
-                .unwrap_or_default();
-            store_runtime_string(&caller, ch)
+            let unit = utf16_code_unit_at_stored(&s, i as usize).unwrap_or(0);
+            store_runtime_string(&caller, string_from_utf16_code_unit(unit))
         },
     );
     linker.define(&mut store, "env", "string_at", f)?;
@@ -185,18 +281,13 @@ pub(crate) fn define_string_methods(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s);
-            let p = to_uint32(pos) as usize;
+            let len = js_utf16_len(&s);
+            let p = to_uint32_caller(&mut caller, pos) as usize;
             if p >= len {
-                return value::encode_f64(f64::NAN);
+                return store_runtime_string(&caller, String::new());
             }
-            let byte_off = utf16_index_to_byte_offset(&s, p);
-            let ch = s[byte_off..]
-                .chars()
-                .next()
-                .map(|c| c.to_string())
-                .unwrap_or_default();
-            store_runtime_string(&caller, ch)
+            let unit = utf16_code_unit_at_stored(&s, p).unwrap_or(0);
+            store_runtime_string(&caller, string_from_utf16_code_unit(unit))
         },
     );
     linker.define(&mut store, "env", "string_char_at", f)?;
@@ -205,22 +296,13 @@ pub(crate) fn define_string_methods(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s);
-            let p = to_uint32(pos) as usize;
+            let len = js_utf16_len(&s);
+            let p = to_uint32_caller(&mut caller, pos) as usize;
             if p >= len {
                 return value::encode_f64(f64::NAN);
             }
-            let byte_off = utf16_index_to_byte_offset(&s, p);
-            let ch = s[byte_off..].chars().next();
-            match ch {
-                Some(c) if (c as u32) <= 0xFFFF => value::encode_f64(c as u32 as f64),
-                Some(c) => {
-                    let code = c as u32;
-                    let hi = (((code - 0x10000) >> 10) + 0xD800) as u16;
-                    value::encode_f64(hi as f64)
-                }
-                None => value::encode_f64(f64::NAN),
-            }
+            let unit = utf16_code_unit_at_stored(&s, p).unwrap_or(0);
+            value::encode_f64(unit as f64)
         },
     );
     linker.define(&mut store, "env", "string_char_code_at", f)?;
@@ -229,17 +311,23 @@ pub(crate) fn define_string_methods(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s);
-            let p = to_uint32(pos) as usize;
+            let len = js_utf16_len(&s);
+            let p = to_uint32_caller(&mut caller, pos) as usize;
             if p >= len {
                 return value::encode_undefined();
             }
-            let byte_off = utf16_index_to_byte_offset(&s, p);
-            let ch = s[byte_off..].chars().next();
-            match ch {
-                Some(c) => value::encode_f64(c as u32 as f64),
-                None => value::encode_undefined(),
+            let units = js_utf16_units(&s);
+            let Some(&unit) = units.get(p) else {
+                return value::encode_undefined();
+            };
+            if (0xD800..=0xDBFF).contains(&unit) && p + 1 < units.len() {
+                let lo = units[p + 1];
+                if (0xDC00..=0xDFFF).contains(&lo) {
+                    let cp = 0x10000 + (((unit as u32 - 0xD800) << 10) | (lo as u32 - 0xDC00));
+                    return value::encode_f64(cp as f64);
+                }
             }
+            value::encode_f64(unit as f64)
         },
     );
     linker.define(&mut store, "env", "string_code_point_at", f)?;
@@ -264,7 +352,7 @@ pub(crate) fn define_string_methods(
             let parts: Vec<String> = (0..args_count as u32)
                 .map(|i| {
                     let arg = read_shadow_arg(&mut caller, args_base, i);
-                    get_string_value(&mut caller, arg)
+                    concat_arg_to_string(&mut caller, arg)
                 })
                 .collect();
             for p in parts {
@@ -773,10 +861,8 @@ pub(crate) fn define_string_methods(
             let mut result = String::new();
             for i in 0..args_count as u32 {
                 let arg = read_shadow_arg(&mut caller, args_base, i);
-                let code = to_uint16(arg) as u32;
-                if let Some(c) = char::from_u32(code) {
-                    result.push(c);
-                }
+                let code = to_uint16_caller(&mut caller, arg);
+                push_utf16_code_unit(&mut result, code);
             }
             store_runtime_string(&caller, result)
         },
@@ -794,7 +880,13 @@ pub(crate) fn define_string_methods(
             let mut result = String::new();
             for i in 0..args_count as u32 {
                 let arg = read_shadow_arg(&mut caller, args_base, i);
-                let code = to_uint32(arg);
+                let code = to_uint32_caller(&mut caller, arg);
+                if !is_valid_code_point(code) {
+                    return make_range_error_exception(
+                        &mut caller,
+                        "Invalid code point",
+                    );
+                }
                 if let Some(c) = char::from_u32(code) {
                     result.push(c);
                 }
