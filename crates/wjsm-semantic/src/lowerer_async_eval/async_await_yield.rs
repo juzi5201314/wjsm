@@ -451,15 +451,19 @@ impl Lowerer {
         }
 
         // Call the constructor with the new object as `this`.
+        let ctor_result = self.alloc_value();
         self.current_function.append_instruction(
             call_block,
             Instruction::ConstructCall {
+                dest: Some(ctor_result),
                 callee: callee_val,
                 this_val: obj_val,
                 args: arg_vals,
             },
         );
 
-        Ok((obj_val, call_block))
+        let (result, end_block) =
+            self.select_construct_result(call_block, ctor_result, obj_val);
+        Ok((result, end_block))
     }
 }

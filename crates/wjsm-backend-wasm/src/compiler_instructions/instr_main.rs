@@ -342,6 +342,7 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::ConstructCall {
+                dest,
                 callee,
                 this_val,
                 args,
@@ -349,7 +350,7 @@ impl Compiler {
                 // ConstructCall 保守保留 spill（构造调用几乎必分配）
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);
-                self.compile_call_with_new_target(&None, *callee, *this_val, args, Some(*callee))?;
+                self.compile_call_with_new_target(dest, *callee, *this_val, args, Some(*callee))?;
                 self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }

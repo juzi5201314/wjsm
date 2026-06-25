@@ -17,6 +17,12 @@ pub(crate) fn define_misc(
     );
     linker.define(&mut store, "env", "is_callable", is_callable_fn)?;
 
+    // ECMAScript [[Construct]] step 12 / Type(argument) is Object（wjsm: is_js_object）
+    let is_js_object_fn = Func::wrap(&mut store, |val: i64| -> i64 {
+        value::encode_bool(value::is_js_object(val))
+    });
+    linker.define(&mut store, "env", "is_js_object", is_js_object_fn)?;
+
     // ── Import 129: queue_microtask(i64) -> () ──────────────────────────────
     let queue_microtask_fn = Func::wrap(
         &mut store,

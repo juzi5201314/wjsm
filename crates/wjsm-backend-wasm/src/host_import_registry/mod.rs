@@ -224,7 +224,7 @@ mod registry_consistency {
 
     /// IR `Builtin` 变体数与 registry 中 Builtin 绑定数必须一致（见 `wjsm-ir::Builtin`）。
     /// 新增 Builtin 时：改 enum + 在此常量加 1 + 登记 `HOST_IMPORT_SPECS`。
-    const EXPECTED_BUILTIN_REGISTRY_BINDINGS: usize = 387;
+    const EXPECTED_BUILTIN_REGISTRY_BINDINGS: usize = 388;
 
     #[test]
     fn builtin_registry_binding_count_matches_ir_contract() {

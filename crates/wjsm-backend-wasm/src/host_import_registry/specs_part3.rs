@@ -65,6 +65,12 @@ pub(crate) static SPECS_PART3: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "is_js_object",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::IsJsObject)),
+        group: None,
+    },
+    HostImportSpec {
         name: "promise_with_resolvers",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::PromiseWithResolvers)),

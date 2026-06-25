@@ -466,18 +466,20 @@ impl Lowerer {
                 for arg in &call.args {
                     args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
                 }
-                let dest = self.alloc_value();
+                let ctor_result = self.alloc_value();
                 self.current_function.append_instruction(
                     call_block,
                     Instruction::SuperCall {
-                        dest: Some(dest),
+                        dest: Some(ctor_result),
                         callee,
                         this_val,
                         args,
                         forward_args: false,
                     },
                 );
-                return Ok(dest);
+                let (result, _) =
+                    self.select_construct_result(call_block, ctor_result, this_val);
+                return Ok(result);
             }
         }
         // 性能优化：预分配容量避免循环中多次 reallocation

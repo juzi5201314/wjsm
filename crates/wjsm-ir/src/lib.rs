@@ -392,6 +392,7 @@ pub enum Instruction {
         forward_args: bool,
     },
     ConstructCall {
+        dest: Option<ValueId>,
         callee: ValueId,
         this_val: ValueId,
         args: Vec<ValueId>,
@@ -611,10 +612,14 @@ impl fmt::Display for Instruction {
                 Ok(())
             }
             Self::ConstructCall {
+                dest,
                 callee,
                 this_val,
                 args,
             } => {
+                if let Some(dest) = dest {
+                    write!(formatter, "{dest} = ")?;
+                }
                 write!(formatter, "construct_call {callee}, this={this_val}")?;
                 if !args.is_empty() {
                     formatter.write_str(", args=[")?;

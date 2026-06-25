@@ -653,13 +653,14 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
             |max, arg| max.max(arg.0),
         ),
         Instruction::ConstructCall {
+            dest,
             callee,
             this_val,
             args,
-        } => {
-            let args_max = args.iter().map(|v| v.0).max().unwrap_or(0);
-            callee.0.max(this_val.0).max(args_max)
-        }
+        } => args.iter().fold(
+            dest.map_or(callee.0.max(this_val.0), |d| d.0.max(callee.0).max(this_val.0)),
+            |max, arg| max.max(arg.0),
+        ),
         Instruction::NewObject { dest, capacity: _ } => dest.0,
         Instruction::GetProp { dest, object, key } => dest.0.max(object.0).max(key.0),
         Instruction::SetProp { object, key, value } => object.0.max(key.0).max(value.0),

@@ -1107,6 +1107,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 15);
+        assert_eq!(HOST_IMPORTS.len(), 16);
     }
 }

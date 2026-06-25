@@ -208,6 +208,7 @@ impl Compiler {
             | Builtin::PromiseCreateResolveFunction
             | Builtin::PromiseCreateRejectFunction
             | Builtin::IsCallable
+            | Builtin::IsJsObject
             | Builtin::IsPromise
             | Builtin::AsyncGeneratorStart => {
                 let val = args.first().context("expects 1 arg")?;

@@ -177,6 +177,8 @@ pub enum Builtin {
     AsyncGeneratorThrow,
     PromiseWithResolvers,
     IsCallable,
+    /// ECMAScript Type(argument) is Object（含 array/function 等可构造返回值类型）
+    IsJsObject,
     // ── 动态 import ──────────────────────────────────────────────────
     DynamicImport,
     RegisterModuleNamespace,
@@ -674,6 +676,7 @@ impl Builtin {
             Self::AsyncGeneratorReturn => "async_generator.return",
             Self::PromiseWithResolvers => "promise.with_resolvers",
             Self::IsCallable => "is_callable",
+            Self::IsJsObject => "is_js_object",
             Self::AsyncGeneratorThrow => "async_generator.throw",
             _ => return None,
         })

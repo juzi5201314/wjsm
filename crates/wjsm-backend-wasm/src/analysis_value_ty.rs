@@ -200,7 +200,7 @@ pub fn builtin_returns_scalar(b: &Builtin) -> bool {
         // ── 迭代器完成态查询（返回 bool）──
         | IteratorDone | EnumeratorDone
         // ── 类型/存在性判断（返回 bool）──
-        | IsCallable | IsPromise | ObjectIs
+        | IsCallable | IsJsObject | IsPromise | ObjectIs
         // ── 运算符（返回 bool）──
         | In | InstanceOf | AtomicsIsLockFree
         // ── RegExp.test（返回 bool）──
@@ -304,7 +304,9 @@ fn dest_and_kind(ins: &Instruction, constants: &[Constant]) -> Option<(ValueId, 
         // 层 3 的 callee no-GC 分析可进一步省掉 Call 的 safepoint spill，
         // 但那是基于 callee "是否触发 GC" 的分析，与 "返回值是否标量" 是不同维度。
         // 返回值类型仍取决于被调函数实际 return 什么，保守 Handle。
-        Call { dest, .. } | SuperCall { dest, .. } => ((*dest)?, ValueTy::Handle),
+        Call { dest, .. } | SuperCall { dest, .. } | ConstructCall { dest, .. } => {
+            ((*dest)?, ValueTy::Handle)
+        }
 
         // ── 非 producing（无 dest 或 void）──
         StoreVar { .. }
@@ -313,7 +315,6 @@ fn dest_and_kind(ins: &Instruction, constants: &[Constant]) -> Option<(ValueId, 
         | SetElem { .. }
         | PromiseResolve { .. }
         | PromiseReject { .. }
-        | Suspend { .. }
-        | ConstructCall { .. } => return None,
+        | Suspend { .. } => return None,
     })
 }
