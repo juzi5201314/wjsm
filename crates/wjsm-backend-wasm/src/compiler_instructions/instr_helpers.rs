@@ -288,7 +288,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// 两操作数均为 BigInt 时调用 `bigint_*` host；否则调用 `f64_mod` / `f64_pow` host（结果 i64 留栈）。
+    /// 两操作数均为 BigInt 时调用 `bigint_*` host；恰有一方为 BigInt → TypeError；否则调用 `f64_*` host（结果 i64 留栈）。
     pub(super) fn emit_bigint_or_f64_host_binary(
         &mut self,
         lhs_l: u32,
@@ -309,6 +309,12 @@ impl Compiler {
             .with_context(|| format!("no WASM func index for {bigint_builtin}"))?;
         self.emit(WasmInstruction::Call(bigint_idx));
         self.emit(WasmInstruction::Else);
+        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+        self.emit(WasmInstruction::I32Xor);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit_bigint_mixed_type_error_value()?;
+        self.emit(WasmInstruction::Else);
         self.emit(WasmInstruction::LocalGet(lhs_l));
         self.emit(WasmInstruction::LocalGet(rhs_l));
         let f64_idx = self
@@ -317,6 +323,7 @@ impl Compiler {
             .copied()
             .with_context(|| format!("no WASM func index for {f64_builtin}"))?;
         self.emit(WasmInstruction::Call(f64_idx));
+        self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::End);
         Ok(())
     }

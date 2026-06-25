@@ -13,11 +13,19 @@ impl Lowerer {
             | swc_ast::Expr::Member(_)
             | swc_ast::Expr::OptChain(_)
             | swc_ast::Expr::TaggedTpl(_) => true,
-            swc_ast::Expr::Bin(bin) => {
-                matches!(
-                    bin.op,
-                    swc_ast::BinaryOp::In | swc_ast::BinaryOp::InstanceOf
-                )
+            swc_ast::Expr::Bin(bin) => match bin.op {
+                swc_ast::BinaryOp::Add
+                | swc_ast::BinaryOp::Sub
+                | swc_ast::BinaryOp::Mul
+                | swc_ast::BinaryOp::Div
+                | swc_ast::BinaryOp::Mod
+                | swc_ast::BinaryOp::Exp
+                | swc_ast::BinaryOp::In
+                | swc_ast::BinaryOp::InstanceOf => true,
+                _ => {
+                    self.expr_can_throw(bin.left.as_ref())
+                        || self.expr_can_throw(bin.right.as_ref())
+                }
             }
             swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
             swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),

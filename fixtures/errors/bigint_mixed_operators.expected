@@ -1,5 +1,7 @@
 exit_code: 0
 --- stdout ---
+7n+3 TypeError
+3+7n TypeError
 7n-3 TypeError
 7n*3 TypeError
 7n/3 TypeError

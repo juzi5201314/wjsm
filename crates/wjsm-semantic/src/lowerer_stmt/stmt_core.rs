@@ -55,22 +55,8 @@ impl Lowerer {
 
         let result_block = match expr_stmt.expr.as_ref() {
             swc_ast::Expr::Call(call) => self.lower_call(call, block)?,
-            swc_ast::Expr::Member(_) | swc_ast::Expr::OptChain(_) => {
-                let value = self.lower_expr(expr_stmt.expr.as_ref(), block)?;
-                self.lower_value_exception_branch(block, value)?
-            }
-            swc_ast::Expr::Bin(bin)
-                if self.expr_exception_fork_allowed()
-                    && matches!(
-                        bin.op,
-                        swc_ast::BinaryOp::Sub
-                            | swc_ast::BinaryOp::Mul
-                            | swc_ast::BinaryOp::Div
-                            | swc_ast::BinaryOp::Mod
-                            | swc_ast::BinaryOp::Exp
-                    ) =>
-            {
-                let value = self.lower_expr(expr_stmt.expr.as_ref(), block)?;
+            expr if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) => {
+                let value = self.lower_expr(expr, block)?;
                 self.lower_value_exception_branch(block, value)?
             }
             expr => {

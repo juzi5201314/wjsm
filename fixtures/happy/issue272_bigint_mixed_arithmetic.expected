@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+1n+2 TypeError
+1n-2 TypeError
+10n*3 TypeError
+5n/2 TypeError
+5n%2 TypeError
+2n**3 TypeError
+1n+2n no throw
+1+2 no throw
+--- stderr ---

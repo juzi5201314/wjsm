@@ -59,11 +59,13 @@ impl Compiler {
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
                 match op {
-                    // 加法：先尝试字符串连接，失败再做数值加法
+                    // 加法：先尝试字符串连接，失败再做数值/BigInt 加法
                     BinaryOp::Add => {
+                        let lhs_l = self.local_idx(lhs.0);
+                        let rhs_l = self.local_idx(rhs.0);
                         // 调用 string_concat(lhs, rhs)
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        self.emit(WasmInstruction::LocalGet(lhs_l));
+                        self.emit(WasmInstruction::LocalGet(rhs_l));
                         self.emit(WasmInstruction::Call(
                             self.special_host_import_indices[&SpecialHostImport::StringConcat],
                         ));
@@ -74,13 +76,8 @@ impl Compiler {
                         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                         self.emit(WasmInstruction::I64Eq);
                         self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        // 结果是 undefined → 走数值加法 (F64Add)
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                        self.emit(WasmInstruction::F64ReinterpretI64);
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                        self.emit(WasmInstruction::F64ReinterpretI64);
-                        self.emit(WasmInstruction::F64Add);
-                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        // 结果是 undefined → 走 BigInt 检查
+                        self.emit_bigint_or_f64_binary(lhs_l, rhs_l, Builtin::BigIntAdd, WasmInstruction::F64Add)?;
                         self.emit(WasmInstruction::Else);
                         // 结果是字符串 → 直接使用
                         self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));

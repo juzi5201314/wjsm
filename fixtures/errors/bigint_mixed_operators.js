@@ -6,6 +6,8 @@ function check(label, fn) {
     console.log(label, e.name);
   }
 }
+check("7n+3", function () { 7n + 3; });
+check("3+7n", function () { 3 + 7n; });
 check("7n-3", function () { 7n - 3; });
 check("7n*3", function () { 7n * 3; });
 check("7n/3", function () { 7n / 3; });
