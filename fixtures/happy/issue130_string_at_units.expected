@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+d835
+dc00
+undefined
+--- stderr ---
