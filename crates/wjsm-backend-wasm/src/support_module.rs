@@ -57,6 +57,8 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("obj_get_by_index", 8),              // (i64, i32) -> i64
     ("typedarray_set_by_index", 32),      // (i64, i32, i64) -> i64
     ("array_set_length", 2),              // (i64, i64) -> i64
+    ("array_named_get", 8),               // (i64, i32) -> i64
+    ("array_named_set", 9),               // (i64, i32, i64) -> ()
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
@@ -77,8 +79,10 @@ const HOST_SYMBOL_PROPERTY_KEY: u32 = 13;
 const HOST_OBJ_GET_BY_INDEX: u32 = 14;
 const HOST_TYPEDARRAY_SET_BY_INDEX: u32 = 15;
 const HOST_ARRAY_SET_LENGTH: u32 = 16;
+const HOST_ARRAY_NAMED_GET: u32 = 17;
+const HOST_ARRAY_NAMED_SET: u32 = 18;
 
-const NUM_HOST_IMPORTS: u32 = 17;
+const NUM_HOST_IMPORTS: u32 = 19;
 
 
 // ── Defined function indices ──────────────────────────────────────────

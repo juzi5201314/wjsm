@@ -166,6 +166,12 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
         if let Ok(index) = prop_str.parse::<u32>() {
             return value::encode_bool(array_elem_present(caller, ptr, index));
         }
+        if let Some(symbol_name_id) = prop_symbol_name_id
+            && crate::array_named_props::array_named_get_sync(caller, object, symbol_name_id)
+                != value::encode_undefined()
+        {
+            return value::encode_bool(true);
+        }
     }
 
     // 搜索属性，遍历原型链

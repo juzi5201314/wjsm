@@ -508,6 +508,18 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "array_named_get",
+        type_idx: 8,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayNamedGet)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "array_named_set",
+        type_idx: 9,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayNamedSet)),
+        group: None,
+    },
+    HostImportSpec {
         name: "object.is_sealed",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::ObjectIsSealed)),

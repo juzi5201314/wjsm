@@ -114,7 +114,7 @@ impl Lowerer {
         if let swc_ast::AssignTarget::Simple(simple) = &assign.left
             && let swc_ast::SimpleAssignTarget::SuperProp(super_prop) = simple
         {
-            return self.lower_assign_super_prop(assign, super_prop, block);
+            return self.lower_assign_super_prop(assign, block, super_prop);
         }
 
         // Handle member expression assignment targets (e.g. obj.prop = value).

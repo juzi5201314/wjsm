@@ -16,6 +16,7 @@ use wasmtime::*;
 use wjsm_ir::{constants, value};
 use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
+mod array_named_props;
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
@@ -500,6 +501,7 @@ impl Clone for RuntimeState {
             error_prototypes: self.error_prototypes,
             symbol_prototype: self.symbol_prototype,
             array_proto_values: AtomicI64::new(self.array_proto_values.load(Ordering::Relaxed)),
+            array_named_props: self.array_named_props.clone(),
             combinator_contexts: self.combinator_contexts.clone(),
             module_namespace_cache: self.module_namespace_cache.clone(),
             error_table: self.error_table.clone(),
@@ -627,6 +629,8 @@ struct RuntimeState {
     weakref_table: Arc<Mutex<Vec<WeakRefEntry>>>,
     /// Array.prototype.values 缓存，用于规范要求复用该函数对象的 @@iterator。
     array_proto_values: AtomicI64,
+    /// 数组实例上的 symbol 等非索引命名属性（@@isConcatSpreadable 等）。
+    array_named_props: array_named_props::ArrayNamedPropsStore,
     /// FinalizationRegistry 侧表：存储 registry 对象、callback 和注册信息
     finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>>,
     /// GC 后待调度的清理回调
@@ -860,6 +864,7 @@ impl RuntimeState {
             typedarray_table: Arc::new(Mutex::new(Vec::new())),
             headers_table: Arc::new(Mutex::new(Vec::new())),
             array_proto_values: AtomicI64::new(value::encode_undefined()),
+            array_named_props: array_named_props::ArrayNamedPropsStore::new(),
             fetch_response_table: Arc::new(Mutex::new(Vec::new())),
             fetch_request_table: Arc::new(Mutex::new(Vec::new())),
             abort_signal_table: Arc::new(Mutex::new(Vec::new())),

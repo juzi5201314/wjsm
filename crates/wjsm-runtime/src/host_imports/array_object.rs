@@ -1,7 +1,10 @@
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
+use wjsm_ir::wk_symbol;
 
+use crate::host_imports::get_method::get_by_name_id_sync;
+use crate::property_key::encode_symbol_name_id;
 use crate::*;
 /// Maximum array length per ECMAScript (2^32 - 1).
 const MAX_ARRAY_LENGTH: u32 = u32::MAX;
@@ -173,18 +176,22 @@ fn object_define_property_or_throw(
             return false;
         }
     };
-    let Ok(prop_name) = render_value(caller, prop) else {
-        set_runtime_error(
-            caller.data(),
-            "TypeError: Invalid property key".to_string(),
-        );
-        return false;
-    };
-    let name_id = match find_memory_c_string(caller, &prop_name)
-        .or_else(|| alloc_heap_c_string(caller, &prop_name))
-    {
-        Some(id) => id,
-        None => return false,
+    let name_id = if let Some(id) = crate::property_key::symbol_value_to_name_id(prop) {
+        id
+    } else {
+        let Ok(prop_name) = render_value(caller, prop) else {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Invalid property key".to_string(),
+            );
+            return false;
+        };
+        match find_memory_c_string(caller, &prop_name)
+            .or_else(|| alloc_heap_c_string(caller, &prop_name))
+        {
+            Some(id) => id,
+            None => return false,
+        }
     };
     match define_property_on_normal_object_for_create(caller, target, name_id, &desc) {
         Ok(_) => true,
@@ -202,6 +209,21 @@ fn define_property_on_normal_object_for_create(
     name_id: u32,
     desc: &PropertyDescriptor,
 ) -> Result<bool, String> {
+    if value::is_array(target) {
+        if desc.get.is_some() || desc.set.is_some() {
+            return Err(
+                "TypeError: Accessor properties are not supported on array symbol slots"
+                    .to_string(),
+            );
+        }
+        let val = desc
+            .value
+            .unwrap_or_else(value::encode_undefined);
+        return crate::array_named_props::define_data_property_on_array_named(
+            caller, target, name_id, val,
+        );
+    }
+
     let obj_ptr = match resolve_handle(caller, target) {
         Some(p) => p,
         None => return Err("TypeError: Invalid target object".to_string()),
@@ -455,6 +477,110 @@ pub(crate) fn array_includes_from(
     value::encode_bool(false)
 }
 
+/// ECMAScript `Get(O, P)`（同步宿主路径；Proxy / 访问器经 reflect_get）。
+fn concat_get_sync(caller: &mut Caller<'_, RuntimeState>, obj: i64, prop: i64) -> i64 {
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::block_in_place(|| {
+        rt.block_on(
+            crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
+                caller, obj, prop, obj,
+            ),
+        )
+    })
+}
+
+/// ECMAScript §23.1.3.1.1 IsConcatSpreadable ( O )
+fn is_concat_spreadable(caller: &mut Caller<'_, RuntimeState>, o: i64) -> Result<bool, i64> {
+    if !value::is_js_object(o) {
+        return Ok(false);
+    }
+    let name_id = encode_symbol_name_id(wk_symbol::IS_CONCAT_SPREADABLE);
+    let spreadable = get_by_name_id_sync(caller, o, name_id);
+    if value::is_exception(spreadable) {
+        return Err(spreadable);
+    }
+    if !value::is_undefined(spreadable) {
+        return Ok(nanbox_to_bool(spreadable));
+    }
+    Ok(value::is_array(o))
+}
+
+/// ToLength（§7.1.25）
+fn array_concat_to_length(caller: &mut Caller<'_, RuntimeState>, len_val: i64) -> Result<u32, i64> {
+    let num = to_number(caller, len_val);
+    let f = value::decode_f64(num);
+    if !f.is_finite() {
+        return Ok(0);
+    }
+    let int = f.trunc();
+    if int < 0.0 {
+        return Ok(0);
+    }
+    const MAX_SAFE: f64 = 9007199254740991.0;
+    Ok(array_length_to_uint32(int.min(MAX_SAFE)))
+}
+
+fn concat_element_contribution(
+    caller: &mut Caller<'_, RuntimeState>,
+    e: i64,
+) -> Result<usize, i64> {
+    if !is_concat_spreadable(caller, e)? {
+        return Ok(1);
+    }
+    if value::is_array(e) {
+        if let Some(ptr) = resolve_array_ptr(caller, e) {
+            return Ok(read_array_length(caller, ptr).unwrap_or(0) as usize);
+        }
+        return Ok(0);
+    }
+    let len_prop = store_runtime_string(caller, "length".to_string());
+    let len_val = concat_get_sync(caller, e, len_prop);
+    if value::is_exception(len_val) {
+        return Err(len_val);
+    }
+    Ok(array_concat_to_length(caller, len_val)? as usize)
+}
+
+fn concat_append_element(
+    caller: &mut Caller<'_, RuntimeState>,
+    new_ptr: usize,
+    write_idx: &mut u32,
+    e: i64,
+) -> Result<(), i64> {
+    if !is_concat_spreadable(caller, e)? {
+        write_array_elem(caller, new_ptr, *write_idx, e);
+        *write_idx += 1;
+        return Ok(());
+    }
+    if value::is_array(e) {
+        if let Some(arg_ptr) = resolve_array_ptr(caller, e) {
+            let arg_len = read_array_length(caller, arg_ptr).unwrap_or(0);
+            for j in 0..arg_len {
+                if let Some(elem) = read_array_elem(caller, arg_ptr, j) {
+                    write_array_elem(caller, new_ptr, *write_idx, elem);
+                    *write_idx += 1;
+                }
+            }
+        }
+        return Ok(());
+    }
+    let len_prop = store_runtime_string(caller, "length".to_string());
+    let len_val = concat_get_sync(caller, e, len_prop);
+    if value::is_exception(len_val) {
+        return Err(len_val);
+    }
+    let len_u32 = array_concat_to_length(caller, len_val)?;
+    for j in 0..len_u32 {
+        let elem = concat_get_sync(caller, e, value::encode_f64(j as f64));
+        if value::is_exception(elem) {
+            return Err(elem);
+        }
+        write_array_elem(caller, new_ptr, *write_idx, elem);
+        *write_idx += 1;
+    }
+    Ok(())
+}
+
 pub(crate) fn array_concat_two(
     caller: &mut Caller<'_, RuntimeState>,
     left: i64,
@@ -464,15 +590,17 @@ pub(crate) fn array_concat_two(
         return value::encode_undefined();
     };
     let left_len = read_array_length(caller, left_ptr).unwrap_or(0);
-    let mut total_len = left_len as usize;
-    if value::is_array(right) {
-        if let Some(right_ptr) = resolve_array_ptr(caller, right) {
-            total_len += read_array_length(caller, right_ptr).unwrap_or(0) as usize;
-        }
-    } else {
-        total_len += 1;
-    }
-    let new_arr = array_species_create(caller, left, total_len as u32);
+    let add_right = match concat_element_contribution(caller, right) {
+        Ok(n) => n,
+        Err(exc) => return exc,
+    };
+    let Some(total_len) = (left_len as usize).checked_add(add_right) else {
+        return make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR);
+    };
+    let Ok(total_len_u32) = u32::try_from(total_len) else {
+        return make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR);
+    };
+    let new_arr = array_species_create(caller, left, total_len_u32);
     let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
         return value::encode_undefined();
     };
@@ -483,19 +611,8 @@ pub(crate) fn array_concat_two(
             write_idx += 1;
         }
     }
-    if value::is_array(right) {
-        if let Some(right_ptr) = resolve_array_ptr(caller, right) {
-            let right_len = read_array_length(caller, right_ptr).unwrap_or(0);
-            for j in 0..right_len {
-                if let Some(elem) = read_array_elem(caller, right_ptr, j) {
-                    write_array_elem(caller, new_ptr, write_idx, elem);
-                    write_idx += 1;
-                }
-            }
-        }
-    } else {
-        write_array_elem(caller, new_ptr, write_idx, right);
-        write_idx += 1;
+    if let Err(exc) = concat_append_element(caller, new_ptr, &mut write_idx, right) {
+        return exc;
     }
     write_array_length(caller, new_ptr, write_idx);
     new_arr
@@ -507,19 +624,19 @@ pub(crate) fn array_concat_args(
     args_base: i32,
     args_count: i32,
 ) -> i64 {
-    let Some(this_ptr) = resolve_array_ptr(caller, this_val) else {
+    if resolve_array_ptr(caller, this_val).is_none() {
         return value::encode_undefined();
     };
-    let this_len = read_array_length(caller, this_ptr).unwrap_or(0);
-    let mut total_len = this_len as usize;
+    let mut total_len = 0usize;
+    let mut items: Vec<i64> = Vec::with_capacity(1 + args_count.max(0) as usize);
+    items.push(this_val);
     for i in 0..args_count as u32 {
-        let arg = read_shadow_arg(caller, args_base, i);
-        let add = if value::is_array(arg) {
-            resolve_array_ptr(caller, arg)
-                .and_then(|ptr| read_array_length(caller, ptr))
-                .unwrap_or(0) as usize
-        } else {
-            1
+        items.push(read_shadow_arg(caller, args_base, i));
+    }
+    for &e in &items {
+        let add = match concat_element_contribution(caller, e) {
+            Ok(n) => n,
+            Err(exc) => return exc,
         };
         let Some(next_len) = total_len.checked_add(add) else {
             return make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR);
@@ -534,27 +651,9 @@ pub(crate) fn array_concat_args(
         return value::encode_undefined();
     };
     let mut write_idx = 0u32;
-    for i in 0..this_len {
-        if let Some(elem) = read_array_elem(caller, this_ptr, i) {
-            write_array_elem(caller, new_ptr, write_idx, elem);
-            write_idx += 1;
-        }
-    }
-    for i in 0..args_count as u32 {
-        let arg = read_shadow_arg(caller, args_base, i);
-        if value::is_array(arg) {
-            if let Some(arg_ptr) = resolve_array_ptr(caller, arg) {
-                let arg_len = read_array_length(caller, arg_ptr).unwrap_or(0);
-                for j in 0..arg_len {
-                    if let Some(elem) = read_array_elem(caller, arg_ptr, j) {
-                        write_array_elem(caller, new_ptr, write_idx, elem);
-                        write_idx += 1;
-                    }
-                }
-            }
-        } else {
-            write_array_elem(caller, new_ptr, write_idx, arg);
-            write_idx += 1;
+    for &e in &items {
+        if let Err(exc) = concat_append_element(caller, new_ptr, &mut write_idx, e) {
+            return exc;
         }
     }
     write_array_length(caller, new_ptr, write_idx);

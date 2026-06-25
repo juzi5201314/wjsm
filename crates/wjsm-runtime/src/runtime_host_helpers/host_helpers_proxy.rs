@@ -5,6 +5,21 @@ pub(crate) fn define_property_on_normal_object(
     name_id: u32,
     desc: &PropertyDescriptor,
 ) -> Result<bool, String> {
+    if value::is_array(target) {
+        if desc.get.is_some() || desc.set.is_some() {
+            return Err(
+                "TypeError: Accessor properties are not supported on array symbol slots"
+                    .to_string(),
+            );
+        }
+        let val = desc
+            .value
+            .unwrap_or_else(value::encode_undefined);
+        return crate::array_named_props::define_data_property_on_array_named(
+            caller, target, name_id, val,
+        );
+    }
+
     let obj_ptr = match resolve_handle(caller, target) {
         Some(p) => p,
         None => return Err("TypeError: Invalid target object".to_string()),
@@ -496,15 +511,19 @@ pub(crate) async fn define_property_internal_async(
 
     let desc = parse_descriptor(caller, descriptor)?;
 
-    let prop_name = match render_value(caller, prop) {
-        Ok(s) => s,
-        Err(_) => return Err("TypeError: Cannot convert property key to string".to_string()),
-    };
-    let name_id = match find_memory_c_string(caller, &prop_name)
-        .or_else(|| alloc_heap_c_string(caller, &prop_name))
-    {
-        Some(id) => id,
-        None => return Err("TypeError: Failed to allocate property name string".to_string()),
+    let name_id = if let Some(id) = symbol_value_to_name_id(prop) {
+        id
+    } else {
+        let prop_name = match render_value(caller, prop) {
+            Ok(s) => s,
+            Err(_) => return Err("TypeError: Cannot convert property key to string".to_string()),
+        };
+        match find_memory_c_string(caller, &prop_name)
+            .or_else(|| alloc_heap_c_string(caller, &prop_name))
+        {
+            Some(id) => id,
+            None => return Err("TypeError: Failed to allocate property name string".to_string()),
+        }
     };
 
     define_property_on_target_async(caller, target, name_id, prop, descriptor, &desc).await

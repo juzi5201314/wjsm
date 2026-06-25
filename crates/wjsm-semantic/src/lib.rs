@@ -12,7 +12,6 @@ use wjsm_ir::{
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
 
 use wjsm_ir::wk_symbol;
-
 const WK_SYMBOL_DISPOSE: u32 = wk_symbol::DISPOSE;
 const WK_SYMBOL_ASYNC_DISPOSE: u32 = wk_symbol::ASYNC_DISPOSE;
 
@@ -23,7 +22,6 @@ mod function_builder;
 mod lowerer_types;
 mod lowerer_modules;
 mod scan_await;
-
 pub(crate) use scope::*;
 pub(crate) use function_builder::*;
 pub(crate) use lowerer_types::*;

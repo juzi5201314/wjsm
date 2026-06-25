@@ -1,6 +1,8 @@
-use crate::runtime_values::resolve_handle;
-use crate::{WasmEnv, value};
-use wasmtime::Caller;
+use crate::array_named_props::array_named_get_sync;
+use crate::property_key::{is_symbol_name_id, name_id_to_property_key_value};
+use crate::runtime_values::{find_property_slot_by_name_id, resolve_handle};
+use crate::{WasmEnv, constants, value};
+use wasmtime::{Caller, Extern};
 
 use crate::RuntimeState;
 
@@ -38,14 +40,122 @@ pub(crate) fn get_method_by_name_id(
     Ok(Some(func))
 }
 
-/// GetV 的 symbol name_id 版本（支持原型链和 Proxy）
+/// ECMAScript `Get(O, P)`（well-known symbol name_id），供 `IsConcatSpreadable` 等 builtin 路径使用。
+pub(crate) fn get_by_name_id_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name_id: u32,
+) -> i64 {
+    let prop = match name_id_to_property_key_value(name_id) {
+        Some(v) => v,
+        None => return value::encode_undefined(),
+    };
+    if value::is_array(obj) && is_symbol_name_id(name_id) {
+        return array_named_get_sync(caller, obj, name_id);
+    }
+    if value::is_proxy(obj) {
+        let rt = tokio::runtime::Handle::current();
+        return tokio::task::block_in_place(|| {
+            rt.block_on(
+                crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
+                    caller, obj, prop, obj,
+                ),
+            )
+        });
+    }
+    if !value::is_js_object(obj) {
+        return value::encode_undefined();
+    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return value::encode_undefined();
+    };
+    let mut visited = std::collections::HashSet::new();
+    get_by_name_id_on_proto_chain(caller, obj, ptr, name_id, &mut visited)
+        .unwrap_or_else(value::encode_undefined)
+}
+
+fn read_getter_from_slot(caller: &mut Caller<'_, RuntimeState>, slot_offset: usize) -> i64 {
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return value::encode_undefined();
+    };
+    let data = memory.data(&*caller);
+    if slot_offset + 24 > data.len() {
+        return value::encode_undefined();
+    }
+    i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap())
+}
+
+fn invoke_getter_sync(caller: &mut Caller<'_, RuntimeState>, getter: i64, receiver: i64) -> i64 {
+    if value::is_undefined(getter) || value::is_null(getter) {
+        return value::encode_undefined();
+    }
+    if !value::is_callable(getter) {
+        return value::encode_undefined();
+    }
+    if value::is_native_callable(getter) {
+        return crate::call_native_callable_with_args_from_caller(
+            caller,
+            getter,
+            receiver,
+            vec![],
+        )
+        .unwrap_or_else(value::encode_undefined);
+    }
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::block_in_place(|| {
+        rt.block_on(crate::call_wasm_callback_async(
+            caller, getter, receiver, &[],
+        ))
+    })
+    .unwrap_or_else(|_| value::encode_undefined())
+}
+
+fn get_by_name_id_on_proto_chain(
+    caller: &mut Caller<'_, RuntimeState>,
+    receiver: i64,
+    obj_ptr: usize,
+    name_id: u32,
+    visited: &mut std::collections::HashSet<usize>,
+) -> Option<i64> {
+    if !visited.insert(obj_ptr) {
+        return None;
+    }
+    if let Some((slot_offset, flags, val)) =
+        find_property_slot_by_name_id(caller, obj_ptr, name_id)
+    {
+        if (flags & constants::FLAG_IS_ACCESSOR) == 0 {
+            return Some(val);
+        }
+        let getter = read_getter_from_slot(caller, slot_offset);
+        return Some(invoke_getter_sync(caller, getter, receiver));
+    }
+    let env = WasmEnv::from_caller(caller)?;
+    let proto_handle = {
+        let data = env.memory.data(&*caller);
+        if obj_ptr + 4 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr],
+            data[obj_ptr + 1],
+            data[obj_ptr + 2],
+            data[obj_ptr + 3],
+        ])
+    };
+    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+        return None;
+    }
+    let proto_ptr =
+        crate::runtime_values::resolve_handle_idx_with_env(caller, &env, proto_handle as usize)?;
+    get_by_name_id_on_proto_chain(caller, receiver, proto_ptr, name_id, visited)
+}
+
+/// GetV 的 symbol name_id 版本（不调用访问器；仅 GetMethod 等简单路径使用）
 fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_id: u32) -> i64 {
-    // 对于 Proxy，使用 Proxy [[Get]] trap
     if value::is_proxy(value_val) {
         return get_v_proxy_by_name_id(caller, value_val, name_id);
     }
 
-    // 对于普通对象，沿原型链查找
     let Some(ptr) = resolve_handle(caller, value_val) else {
         return value::encode_undefined();
     };
@@ -54,31 +164,23 @@ fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_
         .unwrap_or_else(value::encode_undefined)
 }
 
-/// Proxy [[Get]] 的 name_id 版本
-fn get_v_proxy_by_name_id(caller: &mut Caller<'_, RuntimeState>, proxy: i64, _name_id: u32) -> i64 {
-    // 简化实现：直接查找 target
-    let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
-    let handle = value::decode_proxy_handle(proxy) as usize;
-    if handle >= table.len() {
-        return value::encode_undefined();
-    }
-    let entry = &table[handle];
-    if entry.revoked {
-        drop(table);
-        return crate::runtime_heap::create_error_object(
-            caller,
-            "TypeError",
-            value::encode_undefined(),
-        );
-    }
-    let target = entry.target;
-    drop(table);
-
-    // 递归查找 target
-    get_v_by_name_id(caller, target, _name_id)
+/// Proxy [[Get]] 的 name_id 版本（完整 trap；用于 GetMethod）
+fn get_v_proxy_by_name_id(caller: &mut Caller<'_, RuntimeState>, proxy: i64, name_id: u32) -> i64 {
+    let prop = match name_id_to_property_key_value(name_id) {
+        Some(v) => v,
+        None => return value::encode_undefined(),
+    };
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::block_in_place(|| {
+        rt.block_on(
+            crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
+                caller, proxy, prop, proxy,
+            ),
+        )
+    })
 }
 
-/// 沿原型链查找 symbol name_id 属性
+/// 沿原型链查找 symbol name_id 属性（数据属性槽值，不调用 getter）
 fn read_object_property_by_name_id_proto_walk(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
@@ -95,17 +197,15 @@ fn read_object_property_by_name_id_proto_walk_impl(
     visited: &mut std::collections::HashSet<usize>,
 ) -> Option<i64> {
     if !visited.insert(obj_ptr) {
-        return None; // 循环检测
+        return None;
     }
 
-    // 在当前对象查找
     if let Some(val) =
         crate::runtime_values::read_object_property_by_name_id(caller, obj_ptr, name_id)
     {
         return Some(val);
     }
 
-    // 沿原型链继续
     let env = WasmEnv::from_caller(caller)?;
     let proto_handle = {
         let data = env.memory.data(&*caller);

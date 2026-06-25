@@ -56,6 +56,36 @@ impl Lowerer {
         member: &swc_ast::MemberExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // Symbol.xxx → well-known symbol（须在 GetProp 之前，否则 key 会变成普通字符串）
+        if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
+            && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+            && obj_ident.sym == "Symbol"
+            && let Some(idx) = crate::wk_symbol_map::well_known_symbol_property_index(
+                &prop_ident.sym,
+            )
+        {
+            let idx_const = self.module.add_constant(Constant::Number(idx as f64));
+            let idx_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: idx_val,
+                    constant: idx_const,
+                },
+            );
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin: Builtin::SymbolWellKnown,
+                    args: vec![idx_val],
+                },
+            );
+            self.expr_merge_block = Some(block);
+            return Ok(dest);
+        }
+
         // 拦截 Math 常量属性访问（Math.PI, Math.E 等）
         if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
             && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()

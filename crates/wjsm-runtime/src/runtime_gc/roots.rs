@@ -405,6 +405,11 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                 out.push(t.callback);
             }
         }
+
+        crate::array_named_props::ArrayNamedPropsStore::trace_roots(
+            &st.array_named_props,
+            &mut out,
+        );
     });
 
     out

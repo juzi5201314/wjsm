@@ -193,6 +193,30 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I64ReinterpretF64);
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
+    // 数组上的 symbol 等非索引命名属性 → 宿主侧表
+    func.instruction(&WasmInstruction::Block(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(5));
+    func.instruction(&WasmInstruction::I32Load8U(MemArg {
+        offset: 4,
+        align: 0,
+        memory_index: 0,
+    }));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Const(constants::NAME_ID_SYMBOL_FLAG as i32));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Ne);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_ARRAY_NAMED_GET));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::End);
     // ── 原型链遍历 ──
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
     func.instruction(&WasmInstruction::Loop(BlockType::Empty));
@@ -460,6 +484,31 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::Call(HOST_ARRAY_SET_LENGTH));
     func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    // 数组 symbol 命名属性 → 宿主侧表
+    func.instruction(&WasmInstruction::Block(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(8));
+    func.instruction(&WasmInstruction::I32Load8U(MemArg {
+        offset: 4,
+        align: 0,
+        memory_index: 0,
+    }));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Const(constants::NAME_ID_SYMBOL_FLAG as i32));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Ne);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Call(HOST_ARRAY_NAMED_SET));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
     // ── 搜索已有属性 ──
     func.instruction(&WasmInstruction::LocalGet(8));

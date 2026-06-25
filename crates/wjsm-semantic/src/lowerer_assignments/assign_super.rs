@@ -95,14 +95,17 @@ impl Lowerer {
     pub(crate) fn lower_assign_super_prop(
         &mut self,
         assign: &swc_ast::AssignExpr,
-        super_prop: &swc_ast::SuperPropExpr,
         block: BasicBlockId,
+        super_prop: &swc_ast::SuperPropExpr,
     ) -> Result<ValueId, LoweringError> {
-        let access = self.lower_super_prop_access(super_prop, block)?;
+        let mut current_block = block;
+        let access = self.lower_super_prop_access(super_prop, current_block)?;
 
         if assign.op == swc_ast::AssignOp::Assign {
-            let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-            self.emit_super_prop_set(block, &access, rhs);
+            let rhs =
+                self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
+            self.emit_super_prop_set(current_block, &access, rhs);
+            self.expr_merge_block = Some(current_block);
             return Ok(rhs);
         }
 
@@ -112,18 +115,19 @@ impl Lowerer {
                 | swc_ast::AssignOp::OrAssign
                 | swc_ast::AssignOp::NullishAssign
         ) {
-            return self.lower_logical_assign_super(assign, block, access);
+            return self.lower_logical_assign_super(assign, current_block, access);
         }
 
         let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
             self.error(assign.span, "unsupported compound assignment operator")
         })?;
 
-        let loaded = self.emit_super_prop_get(block, &access);
-        let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+        let loaded = self.emit_super_prop_get(current_block, &access);
+        let rhs =
+            self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            current_block,
             Instruction::Binary {
                 dest,
                 op: bin_op,
@@ -131,7 +135,8 @@ impl Lowerer {
                 rhs,
             },
         );
-        self.emit_super_prop_set(block, &access, dest);
+        self.emit_super_prop_set(current_block, &access, dest);
+        self.expr_merge_block = Some(current_block);
         Ok(dest)
     }
 
@@ -200,7 +205,7 @@ impl Lowerer {
                 ],
             },
         );
-
+        self.expr_merge_block = Some(merge);
         Ok(result)
     }
 
