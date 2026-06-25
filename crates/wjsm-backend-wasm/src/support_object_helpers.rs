@@ -528,7 +528,16 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::Drop); // 丢弃返回值
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
-    // 是数据属性，更新 value (offset 8)
+    // 是数据属性，检查 writable 位
+    func.instruction(&WasmInstruction::LocalGet(10));
+    func.instruction(&WasmInstruction::I32Const(constants::FLAG_WRITABLE));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Eqz);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    // 不可写：sloppy 模式静默失败
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    // 可写，更新 value (offset 8)
     func.instruction(&WasmInstruction::LocalGet(6));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I64Store(MemArg {
@@ -824,6 +833,18 @@ fn emit_obj_set() -> Function {
         memory_index: 0,
     }));
     func.instruction(&WasmInstruction::End); // end if reallocation
+    // 不可扩展对象不能添加新属性（header offset 5）
+    func.instruction(&WasmInstruction::LocalGet(8));
+    func.instruction(&WasmInstruction::I32Load8U(MemArg {
+        offset: 5,
+        align: 0,
+        memory_index: 0,
+    }));
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Ne);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
     // 添加新属性（无论是否扩容）
     func.instruction(&WasmInstruction::LocalGet(8));
     func.instruction(&WasmInstruction::I32Const(16));

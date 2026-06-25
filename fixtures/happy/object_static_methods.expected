@@ -45,5 +45,5 @@ extensible: true
 
 === Object.preventExtensions ===
 after prevent, extensible: false
-z after add attempt: 3
+z after add attempt: undefined
 --- stderr ---

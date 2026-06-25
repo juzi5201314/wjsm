@@ -3,14 +3,6 @@ use wasmtime::{Caller, Linker};
 
 use crate::*;
 
-/// 对象槽位容量倍增（capacity 为 0 时视为 1），乘法溢出时返回 None。
-fn doubled_object_capacity_usize(cap: usize) -> Option<usize> {
-    if cap == 0 {
-        Some(1)
-    } else {
-        cap.checked_mul(2)
-    }
-}
 
 /// 根据 UTF-8 首字节返回该码点的字节长度（字符串迭代器按码点步进）。
 pub(crate) fn utf8_code_unit_len(lead: u8) -> usize {
@@ -46,12 +38,49 @@ pub(crate) fn string_iter_advance_byte_pos(data: &[u8], byte_pos: &mut usize) {
     }
 }
 
+/// ECMAScript `Object.defineProperty` / `DefineProperty`（§10.1.6.3 ValidateAndApplyPropertyDescriptor）。
+/// 成功返回该对象（Object.defineProperty 的返回值）；失败返回可捕获 `TypeError`（`TAG_EXCEPTION`）。
+pub(crate) fn define_property_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name_id: u32,
+    desc_handle: i64,
+) -> i64 {
+    if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
+        return make_type_error_exception(
+            caller,
+            "Object.defineProperty called on non-object",
+        );
+    }
+    if value::is_proxy(obj) {
+        return make_type_error_exception(
+            caller,
+            "Object.defineProperty called on non-object",
+        );
+    }
+    let desc = match parse_descriptor(caller, desc_handle) {
+        Ok(d) => d,
+        Err(msg) => return make_type_error_exception(caller, &msg),
+    };
+    match define_property_on_normal_object(caller, obj, name_id, &desc) {
+        Ok(_) => obj,
+        Err(msg) => make_type_error_exception(caller, &msg),
+    }
+}
+
 fn concat_operand_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<u8> {
     if value::is_string(val) {
         return read_value_string_bytes(caller, val).unwrap_or_default();
     }
     if value::is_array(val) {
         return array_to_string_bytes(caller, val);
+    }
+    if value::is_object(val) || value::is_callable(val) {
+        let prim = to_primitive_with_hint(caller, val, ToPrimitiveHint::String);
+        if value::is_exception(prim) {
+            return Vec::new();
+        }
+        return get_string_value(caller, prim).into_bytes();
     }
     render_value(caller, val).unwrap_or_default().into_bytes()
 }
@@ -843,8 +872,7 @@ pub(crate) fn define_core(
             let mut result = Vec::new();
             for i in 0..args_count as u32 {
                 let arg = read_shadow_arg(&mut caller, args_base, i);
-                let s = render_value(&mut caller, arg).unwrap_or_default();
-                result.extend(s.into_bytes());
+                result.extend(concat_operand_bytes(&mut caller, arg));
             }
             let s = String::from_utf8(result).unwrap_or_default();
             store_runtime_string(&caller, s)
@@ -852,248 +880,11 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "string_concat_va", f)?;
 
-    // ── Import 18: define_property(i64, i32, i64) → () ────────────────────
+    // ── Import 18: define_property(i64, i32, i64) → i64 ────────────────────
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| {
-            // 检查 obj 和 desc 是否是对象或函数
-            if (!value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj))
-                || (!value::is_object(desc) && !value::is_function(desc) && !value::is_array(desc))
-            {
-                *caller
-                    .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some("TypeError: Object.defineProperty called on non-object".to_string());
-                return;
-            }
-            let obj_ptr = match resolve_handle(&mut caller, obj) {
-                Some(p) => p,
-                None => return,
-            };
-            let desc_ptr = match resolve_handle(&mut caller, desc) {
-                Some(p) => p,
-                None => return,
-            };
-            let name_id = key as u32;
-            // 读取描述符属性
-            let prop_value = read_object_property_by_name(&mut caller, desc_ptr, "value");
-            let prop_writable = read_object_property_by_name(&mut caller, desc_ptr, "writable");
-            let prop_enumerable = read_object_property_by_name(&mut caller, desc_ptr, "enumerable");
-            let prop_configurable =
-                read_object_property_by_name(&mut caller, desc_ptr, "configurable");
-            let prop_get = read_object_property_by_name(&mut caller, desc_ptr, "get");
-            let prop_set = read_object_property_by_name(&mut caller, desc_ptr, "set");
-
-            // 检查是否为访问器属性（有 get 或 set）
-            if let Some(getter) = prop_get
-                && !value::is_undefined(getter)
-                && !value::is_callable(getter)
-            {
-                *caller
-                    .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some("TypeError: property getter must be callable".to_string());
-                return;
-            }
-            if let Some(setter) = prop_set
-                && !value::is_undefined(setter)
-                && !value::is_callable(setter)
-            {
-                *caller
-                    .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some("TypeError: property setter must be callable".to_string());
-                return;
-            }
-
-            let is_accessor = prop_get.is_some() || prop_set.is_some();
-
-            // 检查 descriptor 冲突：accessor 和 data 字段不能共存
-            // ToPropertyDescriptor: 如果同时有 get/set 和 value/writable，应抛 TypeError
-            if is_accessor {
-                // 访问器属性不能有 value 或 writable 字段
-                if prop_value.is_some() {
-                    *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some("TypeError: Invalid property descriptor: cannot specify both accessor and value".to_string());
-                    return;
-                }
-                if prop_writable.is_some() {
-                    *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some("TypeError: Invalid property descriptor: cannot specify both accessor and writable".to_string());
-                    return;
-                }
-            }
-
-            // 计算 flags: bit0=configurable, bit1=enumerable, bit2=writable, bit3=is_accessor
-            // JS 规范：缺省的属性特性默认为 false
-            let mut flags: i32 = 0;
-            if is_accessor {
-                flags |= constants::FLAG_IS_ACCESSOR; // is_accessor
-            }
-            if !is_accessor && prop_writable.is_some_and(|v| !value::is_falsy(v)) {
-                flags |= constants::FLAG_WRITABLE; // writable (仅数据属性)
-            }
-            if prop_enumerable.is_some_and(|v| !value::is_falsy(v)) {
-                flags |= constants::FLAG_ENUMERABLE; // enumerable
-            }
-            if prop_configurable.is_some_and(|v| !value::is_falsy(v)) {
-                flags |= constants::FLAG_CONFIGURABLE; // configurable
-            }
-
-            let val = prop_value.unwrap_or(value::encode_undefined());
-            let getter = prop_get.unwrap_or(value::encode_undefined());
-            let setter = prop_set.unwrap_or(value::encode_undefined());
-
-            // 查找已有属性
-            let found = find_property_slot_by_name_id(&mut caller, obj_ptr, name_id);
-            if let Some((slot_offset, old_flags, _old_val)) = found {
-                // 读取旧的 getter/setter 以保留未被描述符覆盖的值
-                let old_accessor = (old_flags & constants::FLAG_IS_ACCESSOR) != 0;
-                let (old_getter, old_setter) = {
-                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                        return;
-                    };
-                    let data = memory.data(&caller);
-                    if old_accessor {
-                        let g = i64::from_le_bytes(
-                            data[slot_offset + 16..slot_offset + 24].try_into().unwrap(),
-                        );
-                        let s = i64::from_le_bytes(
-                            data[slot_offset + 24..slot_offset + 32].try_into().unwrap(),
-                        );
-                        (g, s)
-                    } else {
-                        (value::encode_undefined(), value::encode_undefined())
-                    }
-                };
-                // 使用描述符值或保留旧值
-                let final_getter = prop_get.unwrap_or(old_getter);
-                let final_setter = prop_set.unwrap_or(old_setter);
-                // 更新已有属性
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return;
-                };
-                let data = memory.data_mut(&mut caller);
-                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-                data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-                data[slot_offset + 16..slot_offset + 24]
-                    .copy_from_slice(&final_getter.to_le_bytes());
-                data[slot_offset + 24..slot_offset + 32]
-                    .copy_from_slice(&final_setter.to_le_bytes());
-            } else {
-                // 添加新属性
-                let (capacity, num_props) = {
-                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                        return;
-                    };
-                    let data = memory.data(&caller);
-                    if obj_ptr + 16 > data.len() {
-                        return;
-                    }
-                    let capacity = u32::from_le_bytes([
-                        data[obj_ptr + 8],
-                        data[obj_ptr + 9],
-                        data[obj_ptr + 10],
-                        data[obj_ptr + 11],
-                    ]) as usize;
-                    let num_props = u32::from_le_bytes([
-                        data[obj_ptr + 12],
-                        data[obj_ptr + 13],
-                        data[obj_ptr + 14],
-                        data[obj_ptr + 15],
-                    ]) as usize;
-                    (capacity, num_props)
-                };
-
-                // 实际写入用的对象指针（可能因扩容而改变）
-                let mut actual_obj_ptr = obj_ptr;
-
-                // 如果容量不足，执行 host 侧扩容
-                if num_props >= capacity {
-                    // 读取全局变量
-                    let obj_table_ptr = {
-                        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-                            return;
-                        };
-                        g.get(&mut caller).i32().unwrap_or(0) as usize
-                    };
-                    let heap_ptr = {
-                        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-                            return;
-                        };
-                        g.get(&mut caller).i32().unwrap_or(0) as usize
-                    };
-                    // 扩容写回 obj_table 槽：必须与上面 resolve_handle 读取的 handle 一致。
-                    // 函数 target 的属性对象 handle 经 __function_props_base 重定位，故走 handle_index_of，
-                    // 不能直接用 obj 低 32 位（那是函数表索引，会写错槽 → 扩容后读到旧对象）。
-                    let handle_idx =
-                        crate::runtime_values::handle_index_of(&mut caller, obj) as u32;
-
-                    // 计算新容量和新大小
-                    let Some(new_capacity) = doubled_object_capacity_usize(capacity) else {
-                        return;
-                    };
-                    let Some(new_size) = new_capacity
-                        .checked_mul(32)
-                        .and_then(|payload| 16_usize.checked_add(payload))
-                    else {
-                        return;
-                    };
-                    // 复制旧数据到新位置并更新元数据
-                    {
-                        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                            return;
-                        };
-                        let data = memory.data_mut(&mut caller);
-                        if heap_ptr + new_size > data.len() {
-                            return;
-                        }
-
-                        // 复制旧数据（header + 已有属性）
-                        let old_size = 16 + num_props * 32;
-                        data.copy_within(actual_obj_ptr..actual_obj_ptr + old_size, heap_ptr);
-
-                        // 更新新对象的 capacity
-                        data[heap_ptr + 8..heap_ptr + 12]
-                            .copy_from_slice(&(new_capacity as u32).to_le_bytes());
-
-                        // 更新 handle 表
-                        let slot_addr = obj_table_ptr + handle_idx as usize * 4;
-                        if slot_addr + 4 <= data.len() {
-                            data[slot_addr..slot_addr + 4]
-                                .copy_from_slice(&(heap_ptr as u32).to_le_bytes());
-                        }
-                    }
-
-                    // 更新 __heap_ptr 全局变量
-                    {
-                        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-                            return;
-                        };
-                        let _ = g.set(&mut caller, Val::I32((heap_ptr + new_size) as i32));
-                    }
-
-                    actual_obj_ptr = heap_ptr;
-                }
-
-                // 写入新属性
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return;
-                };
-                let data = memory.data_mut(&mut caller);
-                let slot_offset = actual_obj_ptr + 16 + num_props * 32;
-                if slot_offset + 32 > data.len() {
-                    return;
-                }
-                data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-                data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-                data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
-                data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
-                let new_num_props = num_props + 1;
-                data[actual_obj_ptr + 12..actual_obj_ptr + 16]
-                    .copy_from_slice(&(new_num_props as u32).to_le_bytes());
-            }
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| -> i64 {
+            define_property_impl(&mut caller, obj, key as u32, desc)
         },
     );
     linker.define(&mut store, "env", "define_property", f)?;
@@ -1358,9 +1149,8 @@ pub(crate) fn define_core(
             // 实现 Abstract Relational Comparison (ECMAScript 7.2.17)
             // 返回值: true (a < b), false (a >= b 或无法比较)
 
-            // 1. ToPrimitive(a, hint Number), ToPrimitive(b, hint Number)
-            let pa = to_primitive(&mut caller, a);
-            let pb = to_primitive(&mut caller, b);
+            let pa = to_primitive_with_hint(&mut caller, a, ToPrimitiveHint::Number);
+            let pb = to_primitive_with_hint(&mut caller, b, ToPrimitiveHint::Number);
 
             // 2. 若都是 String → 字典序比较
             if value::is_string(pa) && value::is_string(pb) {

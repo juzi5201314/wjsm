@@ -1,15 +1,51 @@
 use super::*;
-pub(crate) fn value_to_number(arg: i64) -> f64 {
+/// ECMAScript §7.1.4 ToNumber for sync host imports (e.g. Math).
+pub(crate) fn value_to_number_wasm(
+    caller: &mut Caller<'_, RuntimeState>,
+    arg: i64,
+) -> Result<f64, i64> {
     if value::is_f64(arg) {
-        value::decode_f64(arg)
-    } else if value::is_bool(arg) {
-        if value::decode_bool(arg) { 1.0 } else { 0.0 }
-    } else if value::is_undefined(arg) {
-        f64::NAN
-    } else if value::is_null(arg) {
-        0.0
-    } else {
-        f64::NAN
+        return Ok(value::decode_f64(arg));
+    }
+    if value::is_bool(arg) {
+        return Ok(if value::decode_bool(arg) { 1.0 } else { 0.0 });
+    }
+    if value::is_undefined(arg) {
+        return Ok(f64::NAN);
+    }
+    if value::is_null(arg) {
+        return Ok(0.0);
+    }
+    if value::is_string(arg) {
+        let s = get_string_value(caller, arg);
+        return Ok(crate::runtime_string_to_number::js_string_content_to_f64(&s));
+    }
+    if value::is_symbol(arg) {
+        return Err(make_type_error_exception(
+            caller,
+            "TypeError: Cannot convert a Symbol value to a number",
+        ));
+    }
+    if value::is_bigint(arg) {
+        return Err(make_type_error_exception(
+            caller,
+            "TypeError: Cannot convert a BigInt value to a number",
+        ));
+    }
+    if value::is_object(arg) || value::is_callable(arg) {
+        let num = to_number(caller, arg);
+        if value::is_exception(num) {
+            return Err(num);
+        }
+        return Ok(value::decode_f64(num));
+    }
+    Ok(f64::NAN)
+}
+
+pub(crate) fn value_to_number_or_exception(caller: &mut Caller<'_, RuntimeState>, arg: i64) -> i64 {
+    match value_to_number_wasm(caller, arg) {
+        Ok(x) => value::encode_f64(x),
+        Err(exc) => exc,
     }
 }
 
@@ -69,10 +105,26 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
         }
         return false;
     }
-    let set = caller
+    let key = target as u64;
+    if caller
         .data()
-        .non_extensible_handles.lock().unwrap_or_else(|e| e.into_inner());
-    !set.contains(&(target as u64))
+        .non_extensible_handles
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&key)
+    {
+        return false;
+    }
+    if let Some(ptr) = resolve_handle(caller, target) {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return true;
+        };
+        let data = memory.data(&*caller);
+        if ptr + 6 <= data.len() && data[ptr + 5] != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> bool {
@@ -93,10 +145,22 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
         }
         return false;
     }
-    let mut set = caller
-        .data()
-        .non_extensible_handles.lock().unwrap_or_else(|e| e.into_inner());
-    set.insert(target as u64);
+    {
+        let mut set = caller
+            .data()
+            .non_extensible_handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        set.insert(target as u64);
+    }
+    if let Some(ptr) = resolve_handle(caller, target) {
+        if let Some(Extern::Memory(memory)) = caller.get_export("memory") {
+            let data = memory.data_mut(&mut *caller);
+            if ptr + 6 <= data.len() {
+                data[ptr + 5] = 1;
+            }
+        }
+    }
     true
 }
 pub(crate) fn prototype_handle_to_value(
@@ -145,11 +209,11 @@ pub(crate) fn parse_descriptor(
         && !value::is_array(desc_handle)
         && !value::is_proxy(desc_handle)
     {
-        return Err("TypeError: Invalid property descriptor".to_string());
+        return Err("Invalid property descriptor".to_string());
     }
     let desc_ptr = match resolve_handle(caller, desc_handle) {
         Some(p) => p,
-        None => return Err("TypeError: Invalid property descriptor".to_string()),
+        None => return Err("Invalid property descriptor".to_string()),
     };
 
     let prop_value = read_object_property_by_name(caller, desc_ptr, "value");
@@ -164,27 +228,26 @@ pub(crate) fn parse_descriptor(
         && !value::is_null(getter)
         && !is_callable_in_runtime(caller, getter)
     {
-        return Err("TypeError: property getter must be callable".to_string());
+        return Err("property getter must be callable".to_string());
     }
     if let Some(setter) = prop_set
         && !value::is_undefined(setter)
         && !value::is_null(setter)
         && !is_callable_in_runtime(caller, setter)
     {
-        return Err("TypeError: property setter must be callable".to_string());
+        return Err("property setter must be callable".to_string());
     }
 
     let has_accessor = prop_get.is_some() || prop_set.is_some();
     if has_accessor {
         if prop_value.is_some() {
             return Err(
-                "TypeError: Invalid property descriptor: cannot specify both accessor and value"
-                    .to_string(),
+                "Invalid property descriptor: cannot specify both accessor and value".to_string(),
             );
         }
         if prop_writable.is_some() {
             return Err(
-                "TypeError: Invalid property descriptor: cannot specify both accessor and writable"
+                "Invalid property descriptor: cannot specify both accessor and writable"
                     .to_string(),
             );
         }

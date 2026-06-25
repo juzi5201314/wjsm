@@ -927,6 +927,91 @@ pub(crate) fn allocate_descriptor_object(
 
 // ── 辅助函数用于 abstract_eq 和 abstract_compare ─────────────────────────
 
+/// ECMAScript §7.1.1 ToPrimitive hint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToPrimitiveHint {
+    Default,
+    Number,
+    String,
+}
+
+const WELL_KNOWN_SYMBOL_TO_PRIMITIVE: u32 = 5;
+
+fn to_primitive_hint_string(hint: ToPrimitiveHint) -> String {
+    match hint {
+        ToPrimitiveHint::String => "string".to_string(),
+        ToPrimitiveHint::Number => "number".to_string(),
+        ToPrimitiveHint::Default => "default".to_string(),
+    }
+}
+
+fn is_object_like(val: i64) -> bool {
+    value::is_object(val) || value::is_callable(val) || value::is_function(val)
+}
+
+fn read_object_method(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+) -> Option<i64> {
+    let ptr = resolve_handle(caller, obj)?;
+    read_object_property_by_name(caller, ptr, name)
+}
+
+fn invoke_to_primitive_method_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    func: i64,
+    this_val: i64,
+    hint: ToPrimitiveHint,
+) -> i64 {
+    let hint_arg = store_runtime_string(caller, to_primitive_hint_string(hint));
+    if value::is_native_callable(func) {
+        return call_native_callable_with_args_from_caller(caller, func, this_val, vec![hint_arg])
+            .unwrap_or_else(value::encode_undefined);
+    }
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::block_in_place(|| {
+        rt.block_on(call_wasm_callback_async(
+            caller,
+            func,
+            this_val,
+            &[hint_arg],
+        ))
+    })
+    .unwrap_or_else(|_| value::encode_undefined())
+}
+
+fn ordinary_to_primitive(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    hint: ToPrimitiveHint,
+) -> i64 {
+    let effective_hint = match hint {
+        ToPrimitiveHint::Default => ToPrimitiveHint::Number,
+        other => other,
+    };
+    let (first, second) = match effective_hint {
+        ToPrimitiveHint::String => ("toString", "valueOf"),
+        ToPrimitiveHint::Number => ("valueOf", "toString"),
+        ToPrimitiveHint::Default => unreachable!(),
+    };
+    for method_name in [first, second] {
+        let Some(method) = read_object_method(caller, val, method_name) else {
+            continue;
+        };
+        if !is_callable_in_runtime(caller, method) {
+            continue;
+        }
+        let result = invoke_to_primitive_method_sync(caller, method, val, hint);
+        if value::is_exception(result) {
+            return result;
+        }
+        if !is_object_like(result) {
+            return result;
+        }
+    }
+    make_type_error_exception(caller, "TypeError: Cannot convert object to primitive value")
+}
 /// ToBoolean 抽象操作 (ECMAScript 7.1.2)
 pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> bool {
     if value::is_undefined(val) || value::is_null(val) {
@@ -1037,9 +1122,11 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     }
 
     // object/function → ToPrimitive(hint: Number) → ToNumber
-    // 简化实现：调用 render_value 返回字符串，然后解析
     if value::is_object(val) || value::is_callable(val) {
-        let prim = to_primitive(caller, val);
+        let prim = to_primitive_with_hint(caller, val, ToPrimitiveHint::Number);
+        if value::is_exception(prim) {
+            return prim;
+        }
         return to_number(caller, prim);
     }
 
@@ -1047,11 +1134,16 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     f64::NAN.to_bits() as i64
 }
 
-/// ToPrimitive 抽象操作 (ECMAScript 7.1.1)
-/// 将对象转换为原始值
-/// 简化实现：调用 render_value 返回字符串
+/// ToPrimitive 抽象操作 (ECMAScript §7.1.1)
 pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
-    // 已经是原始类型
+    to_primitive_with_hint(caller, val, ToPrimitiveHint::Default)
+}
+
+pub(crate) fn to_primitive_with_hint(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    hint: ToPrimitiveHint,
+) -> i64 {
     if value::is_f64(val)
         || value::is_string(val)
         || value::is_bool(val)
@@ -1063,21 +1155,35 @@ pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i
         return val;
     }
 
-    // object/function → 调用 render_value 返回字符串表示
-    if (value::is_object(val) || value::is_callable(val))
-        && let Ok(s) = render_value(caller, val)
-    {
-        // 将字符串存入 runtime_strings
-        let mut strings = caller
-            .data()
-            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
-        let handle = strings.len() as u32;
-        strings.push(s);
-        return value::encode_runtime_string_handle(handle);
+    if !is_object_like(val) {
+        return val;
     }
 
-    // 其他类型直接返回
-    val
+    if let Some(ptr) = resolve_handle(caller, val) {
+        let exotic = read_object_property_by_name_id(
+            caller,
+            ptr,
+            encode_symbol_name_id(WELL_KNOWN_SYMBOL_TO_PRIMITIVE),
+        )
+        .or_else(|| read_object_property_by_name(caller, ptr, "Symbol.toPrimitive"));
+        if let Some(method) = exotic {
+            if is_callable_in_runtime(caller, method) {
+                let result = invoke_to_primitive_method_sync(caller, method, val, hint);
+                if value::is_exception(result) {
+                    return result;
+                }
+                if !is_object_like(result) {
+                    return result;
+                }
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot convert object to primitive value",
+                );
+            }
+        }
+    }
+
+    ordinary_to_primitive(caller, val, hint)
 }
 
 /// ToObject 抽象操作 (ECMAScript 7.1.13)：原始值包装为对象，已是对象则原样返回。
