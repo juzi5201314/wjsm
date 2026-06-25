@@ -208,6 +208,7 @@ pub(crate) fn reset_primordial_heap_before_restore(
     let state = store.data_mut();
     state.runtime_strings.lock().unwrap_or_else(|e| e.into_inner()).clear();
     state.native_callables.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    crate::symbol_well_known::clear_symbol_constructor_static_props(state);
     state.async_iterator_prototype = value::encode_undefined();
     state.async_gen_prototype = value::encode_undefined();
     state

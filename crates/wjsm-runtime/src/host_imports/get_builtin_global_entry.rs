@@ -78,7 +78,15 @@ pub(crate) fn define_get_builtin_global(
                     "gc" => native_callables.push(NativeCallable::GcCollect),
                     _ => return value::encode_undefined(),
                 }
-                value::encode_native_callable_idx(idx)
+                drop(native_callables);
+                let val = value::encode_native_callable_idx(idx);
+                if name == "Symbol" {
+                    crate::symbol_well_known::install_well_known_symbols_on_symbol_constructor(
+                        &mut caller,
+                        val,
+                    );
+                }
+                val
             },
         );
         linker.define(

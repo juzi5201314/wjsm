@@ -700,6 +700,13 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     };
 
     if value::is_native_callable(target) {
+        if let Some(val) = crate::symbol_well_known::native_callable_symbol_constructor_static_property(
+            caller,
+            target,
+            &prop_name,
+        ) {
+            return val;
+        }
         if prop_name != "prototype" {
             return value::encode_undefined();
         }

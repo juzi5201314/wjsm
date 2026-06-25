@@ -487,6 +487,7 @@ impl Clone for RuntimeState {
             eval_cache: self.eval_cache.clone(),
             bigint_table: self.bigint_table.clone(),
             symbol_table: self.symbol_table.clone(),
+            symbol_constructor_static_props: self.symbol_constructor_static_props.clone(),
             regex_table: self.regex_table.clone(),
             promise_table: self.promise_table.clone(),
             pending_unhandled_rejections: self.pending_unhandled_rejections.clone(),
@@ -584,6 +585,8 @@ struct RuntimeState {
     bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>>,
     /// Symbol 侧表：存储 symbol 条目（description + global_key）
     symbol_table: Arc<Mutex<Vec<SymbolEntry>>>,
+    /// `Symbol` 构造器（NativeCallable）上的 well-known 等静态属性
+    symbol_constructor_static_props: symbol_well_known::SymbolConstructorStaticProps,
     /// RegExp 侧表：存储编译后的正则表达式和元数据
     regex_table: Arc<Mutex<Vec<RegexEntry>>>,
     /// Promise 侧表：object handle → Promise 内部槽；非 Promise object handle 使用空占位。
@@ -829,6 +832,7 @@ impl RuntimeState {
                     global_key: None,
                 },
             ])),
+            symbol_constructor_static_props: symbol_well_known::new_symbol_constructor_static_props(),
             regex_table: Arc::new(Mutex::new(Vec::new())),
             promise_table: Arc::new(Mutex::new(Vec::new())),
             pending_unhandled_rejections: Arc::new(Mutex::new(HashSet::new())),

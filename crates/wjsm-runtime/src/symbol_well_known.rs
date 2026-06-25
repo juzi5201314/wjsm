@@ -1,9 +1,14 @@
-//! ECMAScript §6.1.5.1 — 在 `Symbol` 构造器上安装 well-known 静态属性（供 `Symbol.foo` / `Symbol['foo']` / `get_prop`）。
+//! ECMAScript §6.1.5.1 — `Symbol` 构造器 well-known 静态属性（`Symbol.foo` / `Symbol['foo']`）。
+//!
+//! NativeCallable 值无堆对象槽，`define_host_data_property` 无法挂属性；用侧表按
+//! `native_callable` 索引存储，经 `native_callable_get_property` 与 `reflect_get` 暴露。
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use wasmtime::Caller;
 use wjsm_ir::wk_symbol;
 
-use crate::runtime_heap::define_host_data_property_from_caller;
 use crate::value;
 use crate::RuntimeState;
 
@@ -25,13 +30,62 @@ const WELL_KNOWN_SYMBOL_STATIC_PROPS: &[(&str, u32)] = &[
     ("unscopables", wk_symbol::UNSCOPABLES),
 ];
 
-/// 将 `symbol_table` 中预分配的 well-known symbol 挂到 `Symbol` 函数对象上。
+/// `native_callable` 表索引 → 静态属性名 → 值
+pub(crate) type SymbolConstructorStaticProps =
+    Arc<Mutex<HashMap<u32, HashMap<String, i64>>>>;
+
+pub(crate) fn new_symbol_constructor_static_props() -> SymbolConstructorStaticProps {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn clear_symbol_constructor_static_props(state: &RuntimeState) {
+    state
+        .symbol_constructor_static_props
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
+
+/// 在 `Symbol` 构造器（NativeCallable 索引）上安装全部 well-known 静态属性。
 pub(crate) fn install_well_known_symbols_on_symbol_constructor(
     caller: &mut Caller<'_, RuntimeState>,
-    symbol_ctor: i64,
+    symbol_ctor_native: i64,
 ) {
-    for (name, idx) in WELL_KNOWN_SYMBOL_STATIC_PROPS {
-        let sym = value::encode_symbol_handle(*idx);
-        let _ = define_host_data_property_from_caller(caller, symbol_ctor, name, sym);
+    let idx = value::decode_native_callable_idx(symbol_ctor_native);
+    let mut map = caller
+        .data()
+        .symbol_constructor_static_props
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let entry = map.entry(idx).or_default();
+    for (name, sym_idx) in WELL_KNOWN_SYMBOL_STATIC_PROPS {
+        entry.insert(name.to_string(), value::encode_symbol_handle(*sym_idx));
     }
+}
+
+/// 读取 `Symbol` 构造器静态属性（well-known Symbol 等）。
+pub(crate) fn native_callable_symbol_constructor_static_property(
+    caller: &mut Caller<'_, RuntimeState>,
+    native: i64,
+    prop_name: &str,
+) -> Option<i64> {
+    let idx = value::decode_native_callable_idx(native);
+    let table = caller
+        .data()
+        .native_callables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let is_symbol_ctor = table
+        .get(idx as usize)
+        .is_some_and(|r| matches!(r, crate::NativeCallable::SymbolConstructor));
+    drop(table);
+    if !is_symbol_ctor {
+        return None;
+    }
+    let map = caller
+        .data()
+        .symbol_constructor_static_props
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.get(&idx).and_then(|m| m.get(prop_name).copied())
 }

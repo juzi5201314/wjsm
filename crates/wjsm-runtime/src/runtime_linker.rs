@@ -158,15 +158,31 @@ pub(super) fn register_common_bridges(
         &mut *store,
         |mut caller: Caller<'_, RuntimeState>, native: i64, name_id: i32| -> i64 {
             let name_id = name_id as u32;
-            if is_symbol_name_id(name_id) || read_string_bytes(&mut caller, name_id) != b"prototype"
-            {
+            if is_symbol_name_id(name_id) {
+                return value::encode_undefined();
+            }
+            let prop_bytes = read_string_bytes(&mut caller, name_id);
+            let prop_name = match std::str::from_utf8(&prop_bytes) {
+                Ok(s) => s,
+                Err(_) => return value::encode_undefined(),
+            };
+            if let Some(val) = crate::symbol_well_known::native_callable_symbol_constructor_static_property(
+                &mut caller,
+                native,
+                prop_name,
+            ) {
+                return val;
+            }
+            if prop_name != "prototype" {
                 return value::encode_undefined();
             }
             let idx = value::decode_native_callable_idx(native) as usize;
             let record = {
                 let table = caller
                     .data()
-                    .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+                    .native_callables
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table.get(idx).cloned()
             };
             match record {
