@@ -70,6 +70,7 @@ fn builtin_js_bundle_hash() -> u64 {
     h.finish()
 }
 mod startup_snapshot_native_bridge;
+mod symbol_well_known;
 mod types;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;

@@ -1851,6 +1851,12 @@ pub(crate) fn define_collections_buffers(
                 let val = value::encode_native_callable_idx(idx);
                 drop(native_callables);
                 let _ = define_host_data_property_from_caller(&mut caller, obj, name, val);
+                if *name == "Symbol" {
+                    crate::symbol_well_known::install_well_known_symbols_on_symbol_constructor(
+                        &mut caller,
+                        val,
+                    );
+                }
             }
 
             let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);

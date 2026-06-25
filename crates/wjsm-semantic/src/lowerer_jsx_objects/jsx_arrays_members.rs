@@ -183,20 +183,9 @@ impl Lowerer {
                     && obj_ident.sym == "Symbol"
                 {
                     let prop_name = ident.sym.to_string();
-                    // 将 Symbol.dispose 等映射为 well-known symbol
-                    let wk_index = match prop_name.as_str() {
-                        "iterator" => Some(WK_SYMBOL_ITERATOR),
-                        "species" => Some(WK_SYMBOL_SPECIES),
-                        "toStringTag" => Some(WK_SYMBOL_TO_STRING_TAG),
-                        "asyncIterator" => Some(WK_SYMBOL_ASYNC_ITERATOR),
-                        "hasInstance" => Some(WK_SYMBOL_HAS_INSTANCE),
-                        "toPrimitive" => Some(WK_SYMBOL_TO_PRIMITIVE),
-                        "dispose" => Some(WK_SYMBOL_DISPOSE),
-                        "match" => Some(WK_SYMBOL_MATCH),
-                        "asyncDispose" => Some(WK_SYMBOL_ASYNC_DISPOSE),
-                        _ => None,
-                    };
-                    if let Some(idx) = wk_index {
+                    if let Some(idx) = crate::wk_symbol_map::well_known_symbol_property_index(
+                        &prop_name,
+                    ) {
                         let idx_const = self.module.add_constant(Constant::Number(idx as f64));
                         let idx_val = self.alloc_value();
                         self.current_function.append_instruction(

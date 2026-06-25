@@ -12,18 +12,12 @@ use wjsm_ir::{
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
 
 use wjsm_ir::wk_symbol;
-// 保留旧常量名作为别名，避免改动所有引用点
-const WK_SYMBOL_ITERATOR: u32 = wk_symbol::ITERATOR;
-const WK_SYMBOL_SPECIES: u32 = wk_symbol::SPECIES;
-const WK_SYMBOL_TO_STRING_TAG: u32 = wk_symbol::TO_STRING_TAG;
-const WK_SYMBOL_ASYNC_ITERATOR: u32 = wk_symbol::ASYNC_ITERATOR;
-const WK_SYMBOL_HAS_INSTANCE: u32 = wk_symbol::HAS_INSTANCE;
-const WK_SYMBOL_TO_PRIMITIVE: u32 = wk_symbol::TO_PRIMITIVE;
+
 const WK_SYMBOL_DISPOSE: u32 = wk_symbol::DISPOSE;
-const WK_SYMBOL_MATCH: u32 = wk_symbol::MATCH;
 const WK_SYMBOL_ASYNC_DISPOSE: u32 = wk_symbol::ASYNC_DISPOSE;
 
 // ── 提取到子模块的类型 ──────────────────────────────────────────────────
+mod wk_symbol_map;
 mod scope;
 mod function_builder;
 mod lowerer_types;

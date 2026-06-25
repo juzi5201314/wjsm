@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+isConcatSpreadable symbol true
+replace symbol true
+search symbol true
+split symbol true
+matchAll symbol true
+unscopables symbol true
+symbol symbol
+--- stderr ---
