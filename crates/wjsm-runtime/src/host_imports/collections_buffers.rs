@@ -28,19 +28,24 @@ pub(crate) fn define_collections_buffers(
                 let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
                 let mut pairs: Vec<(i64, i64)> = Vec::new();
                 for i in 0..len {
-                    if let Some(entry_val) = read_array_elem(&mut caller, arr_ptr, i)
-                        && value::is_array(entry_val)
+                    let Some(entry_val) = read_array_elem(&mut caller, arr_ptr, i) else {
+                        continue;
+                    };
+                    if !value::is_js_object(entry_val) {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Iterator value is not an entry object".to_string(),
+                        );
+                        return value::encode_undefined();
+                    }
+                    if value::is_array(entry_val)
                         && let Some(entry_ptr) = resolve_handle(&mut caller, entry_val)
                     {
-                        let entry_len =
-                            read_array_length(&mut caller, entry_ptr).unwrap_or(0);
-                        if entry_len >= 2 {
-                            let key = read_array_elem(&mut caller, entry_ptr, 0)
-                                .unwrap_or_else(value::encode_undefined);
-                            let val = read_array_elem(&mut caller, entry_ptr, 1)
-                                .unwrap_or_else(value::encode_undefined);
-                            pairs.push((key, val));
-                        }
+                        let key = read_array_elem(&mut caller, entry_ptr, 0)
+                            .unwrap_or_else(value::encode_undefined);
+                        let val = read_array_elem(&mut caller, entry_ptr, 1)
+                            .unwrap_or_else(value::encode_undefined);
+                        pairs.push((key, val));
                     }
                 }
                 let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
@@ -130,9 +135,16 @@ pub(crate) fn define_collections_buffers(
                 resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let handle_val = obj_ptr
                 .and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
+            let handle = match handle_val {
+                Some(v) => value::decode_f64(v) as usize,
+                None => {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: Method Map.prototype.set called on incompatible receiver".to_string(),
+                    );
+                    return this_val;
+                }
+            };
             let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
@@ -161,9 +173,16 @@ pub(crate) fn define_collections_buffers(
                 resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let handle_val = obj_ptr
                 .and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
+            let handle = match handle_val {
+                Some(v) => value::decode_f64(v) as usize,
+                None => {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: Method Map.prototype.get called on incompatible receiver".to_string(),
+                    );
+                    return value::encode_undefined();
+                }
+            };
             let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
@@ -292,9 +311,16 @@ pub(crate) fn define_collections_buffers(
                 resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let handle_val = obj_ptr
                 .and_then(|p| read_object_property_by_name(&mut caller, p, "__set_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
+            let handle = match handle_val {
+                Some(v) => value::decode_f64(v) as usize,
+                None => {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: Method Set.prototype.add called on incompatible receiver".to_string(),
+                    );
+                    return this_val;
+                }
+            };
             let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();

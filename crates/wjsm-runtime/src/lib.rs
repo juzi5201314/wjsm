@@ -764,63 +764,63 @@ impl RuntimeState {
             bigint_table: Arc::new(Mutex::new(Vec::new())),
             symbol_table: Arc::new(Mutex::new(vec![
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.iterator)".into()),
+                    description: Some("Symbol.iterator".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.species)".into()),
+                    description: Some("Symbol.species".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.toStringTag)".into()),
+                    description: Some("Symbol.toStringTag".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.asyncIterator)".into()),
+                    description: Some("Symbol.asyncIterator".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.hasInstance)".into()),
+                    description: Some("Symbol.hasInstance".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.toPrimitive)".into()),
+                    description: Some("Symbol.toPrimitive".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.dispose)".into()),
+                    description: Some("Symbol.dispose".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.match)".into()),
+                    description: Some("Symbol.match".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.asyncDispose)".into()),
+                    description: Some("Symbol.asyncDispose".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.isConcatSpreadable)".into()),
+                    description: Some("Symbol.isConcatSpreadable".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.matchAll)".into()),
+                    description: Some("Symbol.matchAll".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.replace)".into()),
+                    description: Some("Symbol.replace".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.search)".into()),
+                    description: Some("Symbol.search".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.split)".into()),
+                    description: Some("Symbol.split".into()),
                     global_key: None,
                 },
                 SymbolEntry {
-                    description: Some("Symbol(Symbol.unscopables)".into()),
+                    description: Some("Symbol.unscopables".into()),
                     global_key: None,
                 },
             ])),
