@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+threw: true true ro: 0
+setterCalls: 1
+--- stderr ---

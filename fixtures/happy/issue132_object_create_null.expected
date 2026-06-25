@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+proto null: true
+has toString: false
+--- stderr ---

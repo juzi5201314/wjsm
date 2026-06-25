@@ -27,12 +27,302 @@ fn array_grow_capacity_u32(cap: u32, needed: u32) -> Option<u32> {
     }
 }
 
-/// 对象槽位扩容目标容量：翻倍后与 needed 取较大值，且必须能表示为 u32。
-fn object_grow_capacity_usize(cap: usize, needed: usize) -> Option<u32> {
-    let doubled = cap.max(1).checked_mul(2)?;
-    let grown = needed.max(doubled);
-    u32::try_from(grown).ok()
+/// ECMAScript §20.1.2.2 / §20.1.2.21：将 proto 值编码为对象头中的 handle。
+fn object_proto_handle_from_value(caller: &mut Caller<'_, RuntimeState>, proto: i64) -> u32 {
+    if value::is_null(proto) {
+        0xFFFF_FFFF
+    } else if value::is_object(proto) {
+        value::decode_object_handle(proto)
+    } else if value::is_array(proto) {
+        value::decode_array_handle(proto)
+    } else if value::is_proxy(proto) {
+        value::decode_proxy_handle(proto)
+    } else if value::is_function(proto) {
+        let func_idx = value::decode_function_idx(proto);
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(|e| e.into_global())
+            .and_then(|g| g.get(caller).i32())
+            .unwrap_or(0) as u32;
+        base.saturating_add(func_idx)
+    } else if value::is_closure(proto) {
+        let closure_idx = value::decode_closure_idx(proto) as usize;
+        let func_idx = caller
+            .data()
+            .closures
+            .lock()
+            .ok()
+            .and_then(|g| g.get(closure_idx).map(|e| e.func_idx))
+            .unwrap_or(0);
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(|e| e.into_global())
+            .and_then(|g| g.get(caller).i32())
+            .unwrap_or(0) as u32;
+        base.saturating_add(func_idx)
+    } else {
+        0xFFFF_FFFF
+    }
 }
+
+fn object_read_current_proto_handle(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
+    let ptr = resolve_handle(caller, obj)?;
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return None;
+    };
+    let data = mem.data(caller);
+    if ptr + 4 > data.len() {
+        return None;
+    }
+    Some(u32::from_le_bytes([
+        data[ptr],
+        data[ptr + 1],
+        data[ptr + 2],
+        data[ptr + 3],
+    ]))
+}
+
+fn object_write_proto_handle(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    proto_handle: u32,
+) -> bool {
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return false;
+    };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return false;
+    };
+    let data = mem.data_mut(caller);
+    if ptr + 4 > data.len() {
+        return false;
+    }
+    data[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
+    true
+}
+
+
+fn object_define_property_or_throw(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    prop: i64,
+    desc_handle: i64,
+) -> bool {
+    let desc = match parse_descriptor(caller, desc_handle) {
+        Ok(d) => d,
+        Err(msg) => {
+            set_runtime_error(caller.data(), msg);
+            return false;
+        }
+    };
+    let Ok(prop_name) = render_value(caller, prop) else {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Invalid property key".to_string(),
+        );
+        return false;
+    };
+    let name_id = match find_memory_c_string(caller, &prop_name)
+        .or_else(|| alloc_heap_c_string(caller, &prop_name))
+    {
+        Some(id) => id,
+        None => return false,
+    };
+    match define_property_on_normal_object_for_create(caller, target, name_id, &desc) {
+        Ok(_) => true,
+        Err(msg) => {
+            set_runtime_error(caller.data(), msg);
+            false
+        }
+    }
+}
+
+/// 与 `define_property_on_normal_object` 等价的同步 DefineProperty（仅供 Object.create properties）。
+fn define_property_on_normal_object_for_create(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    name_id: u32,
+    desc: &PropertyDescriptor,
+) -> Result<bool, String> {
+    let obj_ptr = match resolve_handle(caller, target) {
+        Some(p) => p,
+        None => return Err("TypeError: Invalid target object".to_string()),
+    };
+    let found = find_property_slot_by_name_id(caller, obj_ptr, name_id);
+    if let Some((slot_offset, old_flags, old_val)) = found {
+        let old_configurable = (old_flags & constants::FLAG_CONFIGURABLE) != 0;
+        let old_enumerable = (old_flags & constants::FLAG_ENUMERABLE) != 0;
+        let old_writable = (old_flags & constants::FLAG_WRITABLE) != 0;
+        let old_accessor = (old_flags & constants::FLAG_IS_ACCESSOR) != 0;
+        let (old_getter, old_setter) = if old_accessor {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return Err("TypeError: Memory not found".to_string());
+            };
+            let data = memory.data(&*caller);
+            let g =
+                i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
+            let s =
+                i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
+            (g, s)
+        } else {
+            (value::encode_undefined(), value::encode_undefined())
+        };
+        if !old_configurable {
+            if desc.configurable == Some(true) {
+                return Err("TypeError: Cannot redefine non-configurable property".to_string());
+            }
+            if let Some(new_enum) = desc.enumerable
+                && new_enum != old_enumerable
+            {
+                return Err(
+                    "TypeError: Cannot redefine enumerable attribute of non-configurable property"
+                        .to_string(),
+                );
+            }
+            let is_new_accessor = desc.get.is_some() || desc.set.is_some();
+            if is_new_accessor != old_accessor {
+                return Err("TypeError: Cannot change property type from data to accessor or vice versa on non-configurable property".to_string());
+            }
+            if !old_accessor {
+                if !old_writable {
+                    if desc.writable == Some(true) {
+                        return Err(
+                            "TypeError: Cannot make non-writable property writable".to_string(),
+                        );
+                    }
+                    if let Some(new_val) = desc.value {
+                        let same = strict_eq(caller, old_val, new_val);
+                        if value::is_falsy(same) {
+                            return Err("TypeError: Cannot change value of non-configurable non-writable property".to_string());
+                        }
+                    }
+                }
+            } else {
+                if let Some(new_getter) = desc.get
+                    && new_getter != old_getter
+                {
+                    return Err(
+                        "TypeError: Cannot change getter of non-configurable property".to_string(),
+                    );
+                }
+                if let Some(new_setter) = desc.set
+                    && new_setter != old_setter
+                {
+                    return Err(
+                        "TypeError: Cannot change setter of non-configurable property".to_string(),
+                    );
+                }
+            }
+        }
+        let is_accessor = desc.get.is_some()
+            || desc.set.is_some()
+            || (desc.value.is_none() && desc.writable.is_none() && old_accessor);
+        let mut flags: i32 = 0;
+        if is_accessor {
+            flags |= constants::FLAG_IS_ACCESSOR;
+        }
+        let writable = desc
+            .writable
+            .unwrap_or(if !is_accessor { old_writable } else { false });
+        if writable {
+            flags |= constants::FLAG_WRITABLE;
+        }
+        let enumerable = desc.enumerable.unwrap_or(old_enumerable);
+        if enumerable {
+            flags |= constants::FLAG_ENUMERABLE;
+        }
+        let configurable = desc.configurable.unwrap_or(old_configurable);
+        if configurable {
+            flags |= constants::FLAG_CONFIGURABLE;
+        }
+        let val = desc.value.unwrap_or(old_val);
+        let getter = desc.get.unwrap_or(old_getter);
+        let setter = desc.set.unwrap_or(old_setter);
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return Ok(false);
+        };
+        let data = memory.data_mut(caller);
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
+        data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
+        Ok(true)
+    } else {
+        if !is_extensible_impl(caller, target) {
+            return Err("TypeError: Cannot add property to non-extensible object".to_string());
+        }
+        let is_accessor = desc.get.is_some() || desc.set.is_some();
+        let mut flags: i32 = 0;
+        if is_accessor {
+            flags |= constants::FLAG_IS_ACCESSOR;
+        }
+        if desc.writable.unwrap_or(false) && !is_accessor {
+            flags |= constants::FLAG_WRITABLE;
+        }
+        if desc.enumerable.unwrap_or(false) {
+            flags |= constants::FLAG_ENUMERABLE;
+        }
+        if desc.configurable.unwrap_or(false) {
+            flags |= constants::FLAG_CONFIGURABLE;
+        }
+        let val = desc.value.unwrap_or(value::encode_undefined());
+        let getter = desc.get.unwrap_or(value::encode_undefined());
+        let setter = desc.set.unwrap_or(value::encode_undefined());
+        write_new_property_to_memory(caller, target, name_id, flags, val, getter, setter);
+        Ok(true)
+    }
+}
+
+fn object_create_apply_properties(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    properties: i64,
+) -> bool {
+    if value::is_undefined(properties) {
+        return true;
+    }
+    if !value::is_js_object(properties) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Object.create properties must be an object".to_string(),
+        );
+        return false;
+    }
+    let Some(props_ptr) = resolve_handle(caller, properties) else {
+        return false;
+    };
+    let string_keys = collect_own_property_names(caller, props_ptr, false);
+    for name in string_keys {
+        let key_val = store_runtime_string(caller, name.clone());
+        let desc_obj = read_object_property_by_string_key_simple(caller, properties, key_val);
+        if !object_define_property_or_throw(caller, obj, key_val, desc_obj) {
+            return false;
+        }
+    }
+    let symbols = collect_own_property_key_values(caller, props_ptr, true);
+    for sym in symbols {
+        let desc_obj = read_object_property_by_string_key_simple(caller, properties, sym);
+        if !object_define_property_or_throw(caller, obj, sym, desc_obj) {
+            return false;
+        }
+    }
+    true
+}
+
+fn read_object_property_by_string_key_simple(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    key_val: i64,
+) -> i64 {
+    let Ok(name) = render_value(caller, key_val) else {
+        return value::encode_undefined();
+    };
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return value::encode_undefined();
+    };
+    read_object_property_by_name(caller, ptr, &name).unwrap_or_else(value::encode_undefined)
+}
+
 /// Array.prototype.join 对单个元素：null/undefined/空洞渲染为空字符串。
 pub(crate) fn array_join_element_string(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1260,206 +1550,35 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "obj_values", obj_values_fn)?;
-    // ── Import 87: obj_assign(i64, i64, i32, i32) -> i64 ──────────────────────
-    let obj_assign_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env: i64,
-         target: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target)
-            {
-                *caller
-                    .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some("TypeError: target is not an object".to_string());
-                return value::encode_undefined();
-            }
-            let mut target_ptr = match resolve_handle(&mut caller, target) {
-                Some(p) => p,
-                None => return target,
-            };
-            for i in 0..args_count {
-                let mut source_val = read_shadow_arg(&mut caller, args_base, i as u32);
-                if value::is_undefined(source_val) || value::is_null(source_val) {
-                    continue;
-                }
-                if !value::is_js_object(source_val) {
-                    source_val = to_object(&mut caller, source_val);
-                }
-                let Some(source_ptr) = resolve_handle(&mut caller, source_val) else {
-                    continue;
-                };
-                // 收集源对象的可枚举属性
-                let source_props: Vec<(u32, i32, i64)> = {
-                    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                        continue;
-                    };
-                    let d = mem.data(&caller);
-                    if source_ptr + 16 > d.len() {
-                        continue;
-                    }
-                    let num_props = u32::from_le_bytes([
-                        d[source_ptr + 12],
-                        d[source_ptr + 13],
-                        d[source_ptr + 14],
-                        d[source_ptr + 15],
-                    ]) as usize;
-                    let mut props = Vec::new();
-                    for j in 0..num_props {
-                        let slot_offset = source_ptr + 16 + j * 32;
-                        if slot_offset + 32 > d.len() {
-                            break;
-                        }
-                        let flags = i32::from_le_bytes([
-                            d[slot_offset + 4],
-                            d[slot_offset + 5],
-                            d[slot_offset + 6],
-                            d[slot_offset + 7],
-                        ]);
-                        if (flags & 2) == 0 {
-                            continue;
-                        }
-                        let nid = u32::from_le_bytes([
-                            d[slot_offset],
-                            d[slot_offset + 1],
-                            d[slot_offset + 2],
-                            d[slot_offset + 3],
-                        ]);
-                        let vl = i64::from_le_bytes([
-                            d[slot_offset + 8],
-                            d[slot_offset + 9],
-                            d[slot_offset + 10],
-                            d[slot_offset + 11],
-                            d[slot_offset + 12],
-                            d[slot_offset + 13],
-                            d[slot_offset + 14],
-                            d[slot_offset + 15],
-                        ]);
-                        props.push((nid, flags, vl));
-                    }
-                    props
-                };
-                // 写入目标对象 — 先检查容量再写入，避免静默丢弃属性
-                // 1) 统计需新增的属性数（源有而目标无）
-                let mut new_count: usize = 0;
-                for (name_id, _, _) in &source_props {
-                    if find_property_slot_by_name_id(&mut caller, target_ptr, *name_id).is_none() {
-                        new_count += 1;
-                    }
-                }
-                // 2) 容量不足则扩容（capacity × 2 倍增）
-                if new_count > 0 {
-                    let need_grow = {
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                            continue;
-                        };
-                        let d = mem.data(&caller);
-                        let num = u32::from_le_bytes([
-                            d[target_ptr + 12],
-                            d[target_ptr + 13],
-                            d[target_ptr + 14],
-                            d[target_ptr + 15],
-                        ]) as usize;
-                        let cap = u32::from_le_bytes([
-                            d[target_ptr + 8],
-                            d[target_ptr + 9],
-                            d[target_ptr + 10],
-                            d[target_ptr + 11],
-                        ]) as usize;
-                        num + new_count > cap
-                    };
-                    if need_grow {
-                        let (num, cap) = {
-                            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                                continue;
-                            };
-                            let d = mem.data(&caller);
-                            let n = u32::from_le_bytes([
-                                d[target_ptr + 12],
-                                d[target_ptr + 13],
-                                d[target_ptr + 14],
-                                d[target_ptr + 15],
-                            ]) as usize;
-                            let c = u32::from_le_bytes([
-                                d[target_ptr + 8],
-                                d[target_ptr + 9],
-                                d[target_ptr + 10],
-                                d[target_ptr + 11],
-                            ]) as usize;
-                            (n, c)
-                        };
-                        let Some(new_cap) = object_grow_capacity_usize(cap, num + new_count) else {
-                            return value::encode_undefined();
-                        };
-                        if let Some(new_ptr) = grow_object(&mut caller, target_ptr, target, new_cap)
-                        {
-                            target_ptr = new_ptr;
-                        }
-                    }
-                }
-                // 3) 写入属性（存在则覆盖值，不存在则追加）
-                for (name_id, flags, val) in &source_props {
-                    let existing = find_property_slot_by_name_id(&mut caller, target_ptr, *name_id);
-                    if let Some((existing_offset, _, _)) = existing {
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                            continue;
-                        };
-                        let d = mem.data_mut(&mut caller);
-                        d[existing_offset + 8..existing_offset + 16]
-                            .copy_from_slice(&val.to_le_bytes());
-                    } else {
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                            continue;
-                        };
-                        let d = mem.data_mut(&mut caller);
-                        let target_num_props = u32::from_le_bytes([
-                            d[target_ptr + 12],
-                            d[target_ptr + 13],
-                            d[target_ptr + 14],
-                            d[target_ptr + 15],
-                        ]) as usize;
-                        let new_slot_offset = target_ptr + 16 + target_num_props * 32;
-                        d[new_slot_offset..new_slot_offset + 4]
-                            .copy_from_slice(&name_id.to_le_bytes());
-                        d[new_slot_offset + 4..new_slot_offset + 8]
-                            .copy_from_slice(&flags.to_le_bytes());
-                        d[new_slot_offset + 8..new_slot_offset + 16]
-                            .copy_from_slice(&val.to_le_bytes());
-                        let zero: u64 = 0;
-                        d[new_slot_offset + 16..new_slot_offset + 24]
-                            .copy_from_slice(&zero.to_le_bytes());
-                        d[new_slot_offset + 24..new_slot_offset + 32]
-                            .copy_from_slice(&zero.to_le_bytes());
-                        d[target_ptr + 12..target_ptr + 16]
-                            .copy_from_slice(&((target_num_props + 1) as u32).to_le_bytes());
-                    }
-                }
-            }
-            target
-        },
-    );
-    linker.define(&mut store, "env", "obj_assign", obj_assign_fn)?;
     // ── Import 88: obj_create(i64, i64) -> i64 ────────────────────────────────
     let obj_create_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, proto: i64, _properties: i64| -> i64 {
-            let obj_handle = alloc_object(&mut caller, 0);
-            if !value::is_null(proto) && !value::is_undefined(proto) {
-                // 设置 __proto__：通过内存写 proto 槽位
-                let Some(ptr) = resolve_handle(&mut caller, obj_handle) else {
-                    return obj_handle;
-                };
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                    return obj_handle;
-                };
-                let d = mem.data_mut(&mut caller);
-                if value::is_object(proto) || value::is_function(proto) || value::is_array(proto) {
-                    let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
-                    d[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
+        |mut caller: Caller<'_, RuntimeState>, proto: i64, properties: i64| -> i64 {
+            if !value::is_undefined(proto)
+                && !value::is_null(proto)
+                && !value::is_js_object(proto)
+            {
+                return make_type_error_exception(
+                    &mut caller,
+                    "Object.create prototype may only be an object or null",
+                );
+            }
+            let env = match WasmEnv::from_caller(&mut caller) {
+                Some(e) => e,
+                None => return value::encode_undefined(),
+            };
+            let obj_handle = if value::is_null(proto) {
+                alloc_host_null_proto_object(&mut caller, &env, 0)
+            } else {
+                let o = alloc_host_object(&mut caller, &env, 0);
+                if !value::is_undefined(proto) {
+                    let proto_handle = object_proto_handle_from_value(&mut caller, proto);
+                    let _ = object_write_proto_handle(&mut caller, o, proto_handle);
                 }
+                o
+            };
+            if !object_create_apply_properties(&mut caller, obj_handle, properties) {
+                return value::encode_undefined();
             }
             obj_handle
         },
@@ -1470,67 +1589,61 @@ pub(crate) fn define_array_object(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, proto: i64| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
-                return obj; // primitive → no-op per spec
-            }
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return obj;
-            };
-            if value::is_null(proto) || value::is_undefined(proto) {
-                // 设置为 null
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                    return obj;
-                };
-                let d = mem.data_mut(&mut caller);
-                let null_handle: u32 = 0xFFFF_FFFF;
-                d[ptr..ptr + 4].copy_from_slice(&null_handle.to_le_bytes());
                 return obj;
             }
-            if value::is_object(proto) || value::is_function(proto) || value::is_array(proto) {
-                // 循环检测：遍历 proto 的原型链，若 obj 出现在其中则抛出 TypeError
-                {
-                    let mut current_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
-                    let mut depth = 0;
-                    const MAX_PROTO_DEPTH: u32 = 1000;
-                    let obj_handle = (obj as u64 & 0xFFFF_FFFF) as u32;
-                    while current_handle != 0xFFFF_FFFF
-                        && current_handle != 0
-                        && depth < MAX_PROTO_DEPTH
-                    {
-                        if current_handle == obj_handle {
-                            *caller
-                                .data()
-                                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                                Some("TypeError: Cyclic __proto__ value".to_string());
-                            return obj;
-                        }
-                        let Some(current_ptr) =
-                            resolve_handle_idx(&mut caller, current_handle as usize)
-                        else {
-                            break;
-                        };
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                            break;
-                        };
-                        let d = mem.data(&caller);
-                        if current_ptr + 4 > d.len() {
-                            break;
-                        }
-                        current_handle = u32::from_le_bytes([
-                            d[current_ptr],
-                            d[current_ptr + 1],
-                            d[current_ptr + 2],
-                            d[current_ptr + 3],
-                        ]);
-                        depth += 1;
+            if !value::is_js_object(proto) && !value::is_null(proto) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Object.setPrototypeOf prototype must be an object or null"
+                        .to_string(),
+                );
+                return obj;
+            }
+            let new_handle = object_proto_handle_from_value(&mut caller, proto);
+            let current_handle = object_read_current_proto_handle(&mut caller, obj);
+            if current_handle == Some(new_handle) {
+                return obj;
+            }
+            if !is_extensible_impl(&mut caller, obj) {
+                return make_type_error_exception(
+                    &mut caller,
+                    "Object.setPrototypeOf: object is not extensible",
+                );
+            }
+            if !value::is_null(proto) && value::is_js_object(proto) {
+                let mut current = new_handle;
+                let mut depth = 0u32;
+                const MAX_PROTO_DEPTH: u32 = 1000;
+                let obj_handle_raw = (obj as u64 & 0xFFFF_FFFF) as u32;
+                while current != 0xFFFF_FFFF && current != 0 && depth < MAX_PROTO_DEPTH {
+                    if current == obj_handle_raw {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Cyclic __proto__ value".to_string(),
+                        );
+                        return obj;
                     }
+                    let Some(current_ptr) = resolve_handle_idx(&mut caller, current as usize)
+                    else {
+                        break;
+                    };
+                    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                        break;
+                    };
+                    let d = mem.data(&caller);
+                    if current_ptr + 4 > d.len() {
+                        break;
+                    }
+                    current = u32::from_le_bytes([
+                        d[current_ptr],
+                        d[current_ptr + 1],
+                        d[current_ptr + 2],
+                        d[current_ptr + 3],
+                    ]);
+                    depth += 1;
                 }
-                let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                    return obj;
-                };
-                let d = mem.data_mut(&mut caller);
-                d[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
             }
+            let _ = object_write_proto_handle(&mut caller, obj, new_handle);
             obj
         },
     );
