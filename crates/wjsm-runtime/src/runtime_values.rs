@@ -724,6 +724,106 @@ pub(crate) fn write_object_property_by_name_id(
     }
 }
 
+/// 在对象上安装或合并私有访问器槽（ES 类私有 getter/setter）。
+pub(crate) fn write_private_accessor_slot(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    obj_handle: i64,
+    name_id: u32,
+    getter: i64,
+    setter: i64,
+) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let undef = value::encode_undefined();
+    let accessor_flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_IS_ACCESSOR;
+    if let Some((slot_offset, flags, _)) =
+        find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = memory.data_mut(&mut *caller);
+        if slot_offset + 32 > data.len() {
+            return;
+        }
+        if (flags & constants::FLAG_IS_ACCESSOR) != 0 {
+            if !value::is_undefined(getter) {
+                data[slot_offset + 16..slot_offset + 24]
+                    .copy_from_slice(&getter.to_le_bytes());
+            }
+            if !value::is_undefined(setter) {
+                data[slot_offset + 24..slot_offset + 32]
+                    .copy_from_slice(&setter.to_le_bytes());
+            }
+        } else {
+            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
+            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
+            data[slot_offset + 16..slot_offset + 24]
+                .copy_from_slice(&getter.to_le_bytes());
+            data[slot_offset + 24..slot_offset + 32]
+                .copy_from_slice(&setter.to_le_bytes());
+        }
+        return;
+    }
+    let (capacity, num_props) = {
+        let data = env.memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return;
+        }
+        let cap = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]) as usize;
+        let num = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]) as usize;
+        (cap, num)
+    };
+    if num_props >= capacity {
+        let Some(new_cap) = grown_object_capacity(capacity, 4) else {
+            return;
+        };
+        let _ = grow_object(caller, obj_ptr, obj_handle, new_cap);
+    }
+    let num_props = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]) as usize
+    };
+    let slot_offset = obj_ptr + 16 + num_props * 32;
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return;
+    };
+    let data = memory.data_mut(&mut *caller);
+    if slot_offset + 32 > data.len() {
+        return;
+    }
+    let g = if value::is_undefined(getter) { undef } else { getter };
+    let s = if value::is_undefined(setter) { undef } else { setter };
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&g.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&s.to_le_bytes());
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&((num_props + 1) as u32).to_le_bytes());
+}
+
 /// 读取对象/函数的所有属性名，用于 for...in 枚举
 pub(crate) fn enumerate_object_keys(
     caller: &mut Caller<'_, RuntimeState>,

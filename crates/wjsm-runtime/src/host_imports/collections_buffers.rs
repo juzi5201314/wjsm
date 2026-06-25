@@ -2366,9 +2366,49 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "date_utc", date_utc_fn)?;
 
-    // TODO: 当前私有字段实现仅通过 "#fieldName" 字符串作为属性键存储在对象的普通属性槽中，
-    // 不符合 ECMAScript 规范的 [[PrivateElements]] 语义。任何代码都可以通过 obj["#x"] 访问，
-    // 且没有基于类身份的访问控制。未来需要重构为基于类身份的私有槽机制。
+    // 私有成员以 "#name" 槽存储；访问器槽走 FLAG_IS_ACCESSOR，读/写时调用 getter/setter。
+    fn invoke_private_accessor_get(
+        caller: &mut Caller<'_, RuntimeState>,
+        getter: i64,
+        obj: i64,
+    ) -> i64 {
+        if value::is_undefined(getter) || value::is_null(getter) {
+            return make_type_error_exception(
+                caller,
+                "TypeError: Cannot read private member without a getter",
+            );
+        }
+        let rt = tokio::runtime::Handle::current();
+        tokio::task::block_in_place(|| {
+            rt.block_on(crate::call_wasm_callback_async(caller, getter, obj, &[]))
+        })
+        .unwrap_or_else(|_| value::encode_undefined())
+    }
+
+    fn invoke_private_accessor_set(
+        caller: &mut Caller<'_, RuntimeState>,
+        setter: i64,
+        obj: i64,
+        val: i64,
+    ) -> i64 {
+        if value::is_undefined(setter) || value::is_null(setter) {
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                Some("TypeError: Cannot write private member without a setter".to_string());
+            return value::encode_undefined();
+        }
+        let rt = tokio::runtime::Handle::current();
+        tokio::task::block_in_place(|| {
+            rt.block_on(crate::call_wasm_callback_async(
+                caller, setter, obj, &[val],
+            ))
+        })
+        .unwrap_or_else(|_| value::encode_undefined())
+    }
+
     let private_get_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
@@ -2384,16 +2424,31 @@ pub(crate) fn define_collections_buffers(
                     "TypeError: Cannot read private member from a non-object",
                 );
             };
-            // 品牌检查（PrivateElementFind）：实例上不存在该私有槽 → 同步抛出可捕获
-            // TypeError，而非延迟报错/返回 undefined。私有字段以 "#name" 受控属性键存储，
-            // 槽缺失即表示该对象不是声明此私有名的类的实例。
-            match read_object_property_by_name_id(&mut caller, ptr, key_name_id as u32) {
-                Some(val) => val,
-                None => make_type_error_exception(
+            let Some((slot_offset, flags, val)) =
+                find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32)
+            else {
+                return make_type_error_exception(
                     &mut caller,
                     "TypeError: Cannot read private member from an object whose class did not declare it",
-                ),
+                );
+            };
+            if (flags & constants::FLAG_IS_ACCESSOR) != 0 {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return value::encode_undefined();
+                };
+                let data = memory.data(&caller);
+                if slot_offset + 24 > data.len() {
+                    return value::encode_undefined();
+                }
+                let getter = i64::from_le_bytes(
+                    data[slot_offset + 16..slot_offset + 24].try_into().unwrap(),
+                );
+                return invoke_private_accessor_get(&mut caller, getter, obj);
             }
+            if value::is_callable(val) {
+                return val;
+            }
+            val
         },
     );
     linker.define(&mut store, "env", "private_get", private_get_fn)?;
@@ -2412,7 +2467,20 @@ pub(crate) fn define_collections_buffers(
                 return value::encode_undefined();
             };
             let found_slot = find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
-            if let Some((slot_offset, _flags, _old_val)) = found_slot {
+            if let Some((slot_offset, flags, _old_val)) = found_slot {
+                if (flags & constants::FLAG_IS_ACCESSOR) != 0 {
+                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                        return value::encode_undefined();
+                    };
+                    let data = memory.data(&caller);
+                    if slot_offset + 32 > data.len() {
+                        return value::encode_undefined();
+                    }
+                    let setter = i64::from_le_bytes(
+                        data[slot_offset + 24..slot_offset + 32].try_into().unwrap(),
+                    );
+                    return invoke_private_accessor_set(&mut caller, setter, obj, val);
+                }
                 let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                     return value::encode_undefined();
                 };
@@ -2426,6 +2494,43 @@ pub(crate) fn define_collections_buffers(
         },
     );
     linker.define(&mut store, "env", "private_set", private_set_fn)?;
+
+    let private_accessor_bind_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         obj: i64,
+         key_name_id: i32,
+         getter: i64,
+         setter: i64| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
+                    Some("TypeError: cannot define private accessor on non-object".to_string());
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
+            write_private_accessor_slot(
+                &mut caller,
+                ptr,
+                obj,
+                key_name_id as u32,
+                getter,
+                setter,
+            );
+            obj
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "private_accessor_bind",
+        private_accessor_bind_fn,
+    )?;
 
     let private_has_fn = Func::wrap(
         &mut store,

@@ -287,6 +287,12 @@ pub(crate) static SPECS_PART5: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "private_accessor_bind",
+        type_idx: 37,
+        key: Some(HostImportKey::Builtin(Builtin::PrivateAccessorBind)),
+        group: None,
+    },
+    HostImportSpec {
         name: "proxy_trap_get",
         type_idx: 8,
         key: Some(HostImportKey::Special(SpecialHostImport::ProxyTrapGet)),

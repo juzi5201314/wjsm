@@ -288,6 +288,35 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
+            Builtin::PrivateAccessorBind => {
+                let obj_arg = args
+                    .first()
+                    .context("PrivateAccessorBind expects 4 args (obj, key, get, set)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("PrivateAccessorBind expects 4 args (obj, key, get, set)")?;
+                let get_arg = args
+                    .get(2)
+                    .context("PrivateAccessorBind expects 4 args (obj, key, get, set)")?;
+                let set_arg = args
+                    .get(3)
+                    .context("PrivateAccessorBind expects 4 args (obj, key, get, set)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(get_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(set_arg.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .expect("builtin import must be registered");
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(Some(()))
+            }
             Builtin::ObjectKeys
             | Builtin::ObjectValues
             | Builtin::ObjectEntries

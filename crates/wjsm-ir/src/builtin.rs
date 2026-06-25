@@ -99,6 +99,8 @@ pub enum Builtin {
     PrivateGet,
     PrivateSet,
     PrivateHas,
+    /// 在对象上安装私有访问器槽（getter/setter 各可为 undefined）。
+    PrivateAccessorBind,
     ObjectProtoToString,
     ObjectProtoValueOf,
     // ── Object 静态方法 ──
@@ -592,6 +594,7 @@ impl Builtin {
             Self::PrivateGet => "private_get",
             Self::PrivateSet => "private_set",
             Self::PrivateHas => "private_has",
+            Self::PrivateAccessorBind => "private_accessor_bind",
             Self::ObjectProtoToString => "object_proto_to_string",
             Self::ObjectProtoValueOf => "object_proto_value_of",
             Self::ObjectKeys => "object.keys",

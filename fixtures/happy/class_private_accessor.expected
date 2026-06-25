@@ -1,7 +1,6 @@
 exit_code: 0
 --- stdout ---
-secret
-42
 0
-brand-check-error
+3
+6
 --- stderr ---

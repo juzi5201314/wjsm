@@ -166,5 +166,10 @@ pub fn build_shared_type_section() -> TypeSection {
     );
     // Type 36: () -> (i32) — gc_take_freed_handle
     types.ty().function(vec![], vec![ValType::I32]);
+    // Type 37: (i64, i32, i64, i64) -> (i64) — private_accessor_bind
+    types.ty().function(
+        vec![ValType::I64, ValType::I32, ValType::I64, ValType::I64],
+        vec![ValType::I64],
+    );
     types
 }

@@ -24,90 +24,8 @@ impl Lowerer {
                 _ => None,
             });
 
-        let mut private_method_ids: Vec<(String, bool, FunctionId)> = Vec::new();
-        for member in &class_decl.class.body {
-            if let swc_ast::ClassMember::PrivateMethod(pm) = member {
-                let field_name = format!("#{}", pm.key.name);
-                let is_static = pm.is_static;
-                let fn_name = if is_static {
-                    format!("{}.static_{}", class_name, pm.key.name)
-                } else {
-                    format!("{}.{}", class_name, pm.key.name)
-                };
-
-                self.push_function_context(&fn_name, BasicBlockId(0));
-                self.is_method = true;
-                self.super_allowed = true;
-                self.set_lexical_home_object_for_enclosing_method(
-                    Self::PENDING_CTOR_FUNCTION_ID,
-                    is_static,
-                );
-                let env_scope_id = self
-                    .scopes
-                    .declare("$env", VarKind::Let, true)
-                    .map_err(|msg| self.error(pm.span, msg))?;
-                let this_scope_id = self
-                    .scopes
-                    .declare("$this", VarKind::Let, true)
-                    .map_err(|msg| self.error(pm.span, msg))?;
-                let mut param_ir_names = vec![
-                    format!("${env_scope_id}.$env"),
-                    format!("${this_scope_id}.$this"),
-                ];
-                for param in &pm.function.params {
-                    if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
-                        let name = binding_ident.id.sym.to_string();
-                        let scope_id = self
-                            .scopes
-                            .declare(&name, VarKind::Let, true)
-                            .map_err(|msg| self.error(pm.span, msg))?;
-                        param_ir_names.push(format!("${scope_id}.{name}"));
-                    }
-                }
-                if let Some(body) = &pm.function.body {
-                    self.predeclare_block_stmts(&body.stmts)?;
-                }
-                let m_entry = BasicBlockId(0);
-                self.emit_hoisted_var_initializers(m_entry);
-                self.arguments_param_count = Self::count_regular_params(&pm.function.params);
-                let m_entry = self.emit_arguments_init(
-                    m_entry,
-                    Self::function_needs_arguments_object(&pm.function),
-                )?;
-                self.eval_caller_has_arguments = Self::detect_param_arguments(&pm.function.params)
-                    || self.scopes.lookup("arguments").is_ok();
-                let mut m_flow = StmtFlow::Open(m_entry);
-                if let Some(body) = &pm.function.body {
-                    for stmt in &body.stmts {
-                        if matches!(m_flow, StmtFlow::Terminated) {
-                            continue;
-                        }
-                        m_flow = self.lower_stmt(stmt, m_flow)?;
-                    }
-                }
-                if let StmtFlow::Open(b) = m_flow {
-                    self.current_function
-                        .set_terminator(b, Terminator::Return { value: None });
-                }
-                let m_old_fn = std::mem::replace(
-                    &mut self.current_function,
-                    FunctionBuilder::new("", BasicBlockId(0)),
-                );
-                let m_has_eval = m_old_fn.has_eval();
-                let m_blocks = m_old_fn.into_blocks();
-                let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
-                m_ir_function.set_has_eval(m_has_eval);
-                m_ir_function.set_params(param_ir_names);
-                let m_captured = self.captured_names_stack.last().unwrap().clone();
-                m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-                for b in m_blocks {
-                    m_ir_function.push_block(b);
-                }
-                let m_function_id = self.module.push_function(m_ir_function);
-                self.pop_function_context();
-                private_method_ids.push((field_name, is_static, m_function_id));
-            }
-        }
+        let private_members =
+            self.collect_class_private_members(&class_name, &class_decl.class.body)?;
 
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
@@ -199,7 +117,7 @@ impl Lowerer {
                 field_block,
                 this_scope_id,
                 &class_decl.class.body,
-                &private_method_ids,
+                &private_members,
             )?;
         }
 
@@ -264,7 +182,7 @@ impl Lowerer {
                         block,
                         this_scope_id,
                         &class_decl.class.body,
-                        &private_method_ids,
+                        &private_members,
                     )?);
                     deferred_instance_initializers_emitted = true;
                 }
@@ -297,15 +215,7 @@ impl Lowerer {
             function.home_object = Some(HomeObject::Prototype(ctor_function_id));
         }
         self.patch_pending_ctor_home_object_references(ctor_function_id);
-        for (_, is_static, func_id) in &private_method_ids {
-            if let Some(function) = self.module.function_mut(*func_id) {
-                function.home_object = Some(if *is_static {
-                    HomeObject::Constructor(ctor_function_id)
-                } else {
-                    HomeObject::Prototype(ctor_function_id)
-                });
-            }
-        }
+        self.patch_private_member_home_objects(ctor_function_id, &private_members);
 
         // Restore the outer function context.
         self.pop_function_context();
@@ -838,11 +748,7 @@ impl Lowerer {
             }
         }
 
-        for (field_name, is_static, func_id) in &private_method_ids {
-            if *is_static {
-                self.emit_private_method_bind(outer_block, ctor_dest, field_name, *func_id);
-            }
-        }
+        self.emit_static_private_member_binds(outer_block, ctor_dest, &private_members);
 
         // Set Foo.prototype = proto_obj.
         let proto_key_const = self

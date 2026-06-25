@@ -208,6 +208,15 @@ pub(super) fn class_member_kind(member: &swc_ast::ClassMember) -> &'static str {
     }
 }
 
+/// 类私有方法 / 访问器在 lowering 阶段的绑定描述。
+pub(crate) enum PrivateMemberKind {
+    Method(FunctionId),
+    Accessor {
+        getter: Option<FunctionId>,
+        setter: Option<FunctionId>,
+    },
+}
+
 impl Lowerer {
     /// 将类构造器 IR 函数物化为运行时可调用值：无捕获时为 FunctionRef，有捕获时为 CreateClosure + 共享 env。
     fn materialize_constructor_value(
@@ -251,7 +260,7 @@ impl Lowerer {
         mut block: BasicBlockId,
         this_scope_id: usize,
         members: &[swc_ast::ClassMember],
-        private_method_ids: &[(String, bool, FunctionId)],
+        private_members: &[(String, bool, PrivateMemberKind)],
     ) -> Result<BasicBlockId, LoweringError> {
         for member in members {
             match member {
@@ -291,7 +300,7 @@ impl Lowerer {
             }
         }
 
-        for (field_name, is_static, func_id) in private_method_ids {
+        for (field_name, is_static, kind) in private_members {
             if !is_static {
                 let this_val = self.alloc_value();
                 self.current_function.append_instruction(
@@ -301,12 +310,226 @@ impl Lowerer {
                         name: format!("${this_scope_id}.$this"),
                     },
                 );
-                self.emit_private_method_bind(block, this_val, field_name, *func_id);
+                match kind {
+                    PrivateMemberKind::Method(func_id) => {
+                        self.emit_private_method_bind(block, this_val, field_name, *func_id);
+                    }
+                    PrivateMemberKind::Accessor { getter, setter } => {
+                        self.emit_private_accessor_bind(
+                            block,
+                            this_val,
+                            field_name,
+                            *getter,
+                            *setter,
+                        );
+                    }
+                }
                 block = self.resolve_store_block(block);
             }
         }
 
         Ok(block)
+    }
+
+    /// 收集类体中的私有方法/访问器并生成对应 IR 函数。
+    fn collect_class_private_members(
+        &mut self,
+        class_name: &str,
+        body: &[swc_ast::ClassMember],
+    ) -> Result<Vec<(String, bool, PrivateMemberKind)>, LoweringError> {
+        use std::collections::HashMap;
+        let mut out: Vec<(String, bool, PrivateMemberKind)> = Vec::new();
+        let mut accessor_pending: HashMap<(String, bool), (Option<FunctionId>, Option<FunctionId>)> =
+            HashMap::new();
+
+        for member in body {
+            let swc_ast::ClassMember::PrivateMethod(pm) = member else {
+                continue;
+            };
+            let field_name = format!("#{}", pm.key.name);
+            let is_static = pm.is_static;
+            let accessor = matches!(
+                pm.kind,
+                swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter
+            );
+            let role = if matches!(pm.kind, swc_ast::MethodKind::Getter) {
+                "get"
+            } else if matches!(pm.kind, swc_ast::MethodKind::Setter) {
+                "set"
+            } else {
+                ""
+            };
+            let fn_name = if accessor {
+                if is_static {
+                    format!("{}.static_{}_{}", class_name, role, pm.key.name)
+                } else {
+                    format!("{}.{}_{}", class_name, role, pm.key.name)
+                }
+            } else if is_static {
+                format!("{}.static_{}", class_name, pm.key.name)
+            } else {
+                format!("{}.{}", class_name, pm.key.name)
+            };
+
+            self.push_function_context(&fn_name, BasicBlockId(0));
+            self.is_method = true;
+            self.super_allowed = true;
+            self.set_lexical_home_object_for_enclosing_method(
+                Self::PENDING_CTOR_FUNCTION_ID,
+                is_static,
+            );
+            let env_scope_id = self
+                .scopes
+                .declare("$env", VarKind::Let, true)
+                .map_err(|msg| self.error(pm.span, msg))?;
+            let this_scope_id = self
+                .scopes
+                .declare("$this", VarKind::Let, true)
+                .map_err(|msg| self.error(pm.span, msg))?;
+            let mut param_ir_names = vec![
+                format!("${env_scope_id}.$env"),
+                format!("${this_scope_id}.$this"),
+            ];
+            for param in &pm.function.params {
+                if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                    let name = binding_ident.id.sym.to_string();
+                    let scope_id = self
+                        .scopes
+                        .declare(&name, VarKind::Let, true)
+                        .map_err(|msg| self.error(pm.span, msg))?;
+                    param_ir_names.push(format!("${scope_id}.{name}"));
+                }
+            }
+            if let Some(body) = &pm.function.body {
+                self.predeclare_block_stmts(&body.stmts)?;
+            }
+            let m_entry = BasicBlockId(0);
+            self.emit_hoisted_var_initializers(m_entry);
+            self.arguments_param_count = Self::count_regular_params(&pm.function.params);
+            let m_entry = self.emit_arguments_init(
+                m_entry,
+                Self::function_needs_arguments_object(&pm.function),
+            )?;
+            self.eval_caller_has_arguments = Self::detect_param_arguments(&pm.function.params)
+                || self.scopes.lookup("arguments").is_ok();
+            let mut m_flow = StmtFlow::Open(m_entry);
+            if let Some(body) = &pm.function.body {
+                for stmt in &body.stmts {
+                    if matches!(m_flow, StmtFlow::Terminated) {
+                        continue;
+                    }
+                    m_flow = self.lower_stmt(stmt, m_flow)?;
+                }
+            }
+            if let StmtFlow::Open(b) = m_flow {
+                self.current_function
+                    .set_terminator(b, Terminator::Return { value: None });
+            }
+            let m_old_fn = std::mem::replace(
+                &mut self.current_function,
+                FunctionBuilder::new("", BasicBlockId(0)),
+            );
+            let m_has_eval = m_old_fn.has_eval();
+            let m_blocks = m_old_fn.into_blocks();
+            let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+            m_ir_function.set_has_eval(m_has_eval);
+            m_ir_function.set_params(param_ir_names);
+            let m_captured = self.captured_names_stack.last().unwrap().clone();
+            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+            for b in m_blocks {
+                m_ir_function.push_block(b);
+            }
+            let m_function_id = self.module.push_function(m_ir_function);
+            self.pop_function_context();
+
+            if accessor {
+                let key = (field_name.clone(), is_static);
+                let entry = accessor_pending
+                    .entry(key.clone())
+                    .or_insert((None, None));
+                if matches!(pm.kind, swc_ast::MethodKind::Getter) {
+                    entry.0 = Some(m_function_id);
+                } else {
+                    entry.1 = Some(m_function_id);
+                }
+                if entry.0.is_some() || entry.1.is_some() {
+                    let (g, s) = entry.clone();
+                    if let Some(pos) = out.iter().position(|(n, st, k)| {
+                        n == &key.0
+                            && *st == key.1
+                            && matches!(k, PrivateMemberKind::Accessor { .. })
+                    }) {
+                        out[pos].2 = PrivateMemberKind::Accessor {
+                            getter: g,
+                            setter: s,
+                        };
+                    } else {
+                        out.push((
+                            key.0,
+                            key.1,
+                            PrivateMemberKind::Accessor {
+                                getter: g,
+                                setter: s,
+                            },
+                        ));
+                    }
+                }
+            } else {
+                out.push((field_name, is_static, PrivateMemberKind::Method(m_function_id)));
+            }
+        }
+        Ok(out)
+    }
+
+    fn patch_private_member_home_objects(
+        &mut self,
+        ctor_function_id: FunctionId,
+        private_members: &[(String, bool, PrivateMemberKind)],
+    ) {
+        for (_, is_static, kind) in private_members {
+            let func_ids: Vec<FunctionId> = match kind {
+                PrivateMemberKind::Method(id) => vec![*id],
+                PrivateMemberKind::Accessor { getter, setter } => {
+                    getter.iter().chain(setter).copied().collect()
+                }
+            };
+            for func_id in func_ids {
+                if let Some(function) = self.module.function_mut(func_id) {
+                    function.home_object = Some(if *is_static {
+                        HomeObject::Constructor(ctor_function_id)
+                    } else {
+                        HomeObject::Prototype(ctor_function_id)
+                    });
+                }
+            }
+        }
+    }
+
+    fn emit_static_private_member_binds(
+        &mut self,
+        block: BasicBlockId,
+        ctor_dest: ValueId,
+        private_members: &[(String, bool, PrivateMemberKind)],
+    ) {
+        for (field_name, is_static, kind) in private_members {
+            if !*is_static {
+                continue;
+            }
+            match kind {
+                PrivateMemberKind::Method(func_id) => {
+                    self.emit_private_method_bind(block, ctor_dest, field_name, *func_id);
+                }
+                PrivateMemberKind::Accessor { getter, setter } => {
+                    self.emit_private_accessor_bind(
+                        block,
+                        ctor_dest,
+                        field_name,
+                        *getter,
+                        *setter,
+                    );
+                }
+            }
+        }
     }
 }
 

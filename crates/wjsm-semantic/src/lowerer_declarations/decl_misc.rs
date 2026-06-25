@@ -441,6 +441,75 @@ impl Lowerer {
         );
     }
 
+    /// 在实例/构造器上绑定私有访问器槽（getter/setter 各可选）。
+    pub(crate) fn emit_private_accessor_bind(
+        &mut self,
+        block: BasicBlockId,
+        target_val: ValueId,
+        field_name: &str,
+        getter_id: Option<FunctionId>,
+        setter_id: Option<FunctionId>,
+    ) {
+        let key_const = self
+            .module
+            .add_constant(Constant::String(field_name.to_string()));
+        let key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: key_dest,
+                constant: key_const,
+            },
+        );
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let getter_dest = self.alloc_value();
+        if let Some(gid) = getter_id {
+            let fn_ref = self.module.add_constant(Constant::FunctionRef(gid));
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: getter_dest,
+                    constant: fn_ref,
+                },
+            );
+        } else {
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: getter_dest,
+                    constant: undef_const,
+                },
+            );
+        }
+        let setter_dest = self.alloc_value();
+        if let Some(sid) = setter_id {
+            let fn_ref = self.module.add_constant(Constant::FunctionRef(sid));
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: setter_dest,
+                    constant: fn_ref,
+                },
+            );
+        } else {
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: setter_dest,
+                    constant: undef_const,
+                },
+            );
+        }
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::PrivateAccessorBind,
+                args: vec![target_val, key_dest, getter_dest, setter_dest],
+            },
+        );
+    }
+
     /// 发射隐式 `arguments` 对象的物化代码（`CollectRestArgs` + `CreateMappedArgumentsObject`）。
     ///
     /// `references_arguments`：调用方扫描函数 AST（形参 + 体，穿透嵌套箭头、止于嵌套普通函数）
