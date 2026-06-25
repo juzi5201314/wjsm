@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+frozen x: 1
+isFrozen: true
+sealed c: undefined
+isSealed: true
+isFrozen empty: false
+--- stderr ---

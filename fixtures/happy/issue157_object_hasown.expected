@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+own x: true
+own y: false
+own inherited: false
+own own: true
+--- stderr ---
