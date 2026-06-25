@@ -1,7 +1,9 @@
 use anyhow::Result;
 use wasmtime::{Caller, Linker};
+use wjsm_ir::wk_symbol;
 
 use crate::*;
+use crate::host_imports::get_method_by_name_id;
 
 
 /// 根据 UTF-8 首字节返回该码点的字节长度（字符串迭代器按码点步进）。
@@ -466,6 +468,119 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
         value::encode_undefined()
     }
 }
+
+/// ECMAScript OrdinaryHasInstance（§15.10.1.1），不含 `Symbol.hasInstance` 自定义路径。
+async fn ordinary_has_instance_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    value: i64,
+    constructor: i64,
+) -> i64 {
+    if !value::is_js_object(value) {
+        return value::encode_bool(false);
+    }
+
+    if !value::is_callable(constructor) {
+        *caller
+            .data()
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(
+            "TypeError: Right-hand side of instanceof is not callable".to_string(),
+        );
+        return value::encode_undefined();
+    }
+
+    let proto_prop = store_runtime_string(caller, "prototype".to_string());
+    let prototype_val = reflect_get_impl_with_receiver_async(
+        caller,
+        constructor,
+        proto_prop,
+        constructor,
+    )
+    .await;
+
+    if !value::is_js_object(prototype_val) && !value::is_null(prototype_val) {
+        *caller
+            .data()
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            Some("TypeError: Function has non-object prototype property".to_string());
+        return value::encode_undefined();
+    }
+
+    let prototype = prototype_val;
+    let proto_target = match resolve_handle(caller, prototype) {
+        Some(p) => p as u32,
+        None => return value::encode_bool(false),
+    };
+    let mut current_ptr = match resolve_handle(caller, value) {
+        Some(p) => p,
+        None => return value::encode_bool(false),
+    };
+    loop {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return value::encode_bool(false);
+        };
+        let data = memory.data(&*caller);
+        if current_ptr + 4 > data.len() {
+            return value::encode_bool(false);
+        }
+        let proto_handle = u32::from_le_bytes([
+            data[current_ptr],
+            data[current_ptr + 1],
+            data[current_ptr + 2],
+            data[current_ptr + 3],
+        ]);
+
+        if proto_handle == 0xFFFF_FFFF {
+            return value::encode_bool(false);
+        }
+        let Some(proto_ptr) = resolve_handle_idx(caller, proto_handle as usize) else {
+            return value::encode_bool(false);
+        };
+        if proto_ptr == proto_target as usize {
+            return value::encode_bool(true);
+        }
+        current_ptr = proto_ptr;
+    }
+}
+
+/// `instanceof` 操作符（§12.10.4）：优先 `Symbol.hasInstance`，否则 OrdinaryHasInstance。
+async fn op_instanceof_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    value: i64,
+    constructor: i64,
+) -> i64 {
+    if !value::is_callable(constructor) {
+        *caller
+            .data()
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(
+            "TypeError: Right-hand side of instanceof is not callable".to_string(),
+        );
+        return value::encode_undefined();
+    }
+
+    let has_instance_name_id = encode_symbol_name_id(wk_symbol::HAS_INSTANCE);
+    match get_method_by_name_id(caller, constructor, has_instance_name_id) {
+        Ok(Some(method)) => {
+            let result = match call_wasm_callback_async(caller, method, constructor, &[value]).await
+            {
+                Ok(r) => r,
+                Err(_) => return value::encode_undefined(),
+            };
+            if value::is_exception(result) {
+                return result;
+            }
+            value::encode_bool(nanbox_to_bool(result))
+        }
+        Ok(None) => ordinary_has_instance_async(caller, value, constructor).await,
+        Err(exc) => exc,
+    }
+}
+
 pub(crate) fn define_core(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -767,81 +882,7 @@ pub(crate) fn define_core(
         "env",
         "op_instanceof",
         |mut caller: Caller<'_, RuntimeState>, (value, constructor): (i64, i64)| {
-            Box::new(async move {
-                // 1. 原始类型直接返回 false
-                if !value::is_js_object(value) {
-                    return value::encode_bool(false);
-                }
-
-                // 2. 检查 constructor 是否是对象或函数或 Proxy
-                if !value::is_js_object(constructor) {
-                    *caller
-                        .data()
-                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
-                        "TypeError: Right-hand side of instanceof is not an object".to_string(),
-                    );
-                    return value::encode_undefined();
-                }
-
-                // 3. 获取 constructor 的 "prototype" 属性（含 proxy get trap，必须 async 重入）
-                let proto_prop = store_runtime_string(&caller, "prototype".to_string());
-                let prototype_val = reflect_get_impl_with_receiver_async(
-                    &mut caller,
-                    constructor,
-                    proto_prop,
-                    constructor,
-                )
-                .await;
-
-                // 4. 如果 prototype 不是对象/函数/Proxy/null，抛出 TypeError
-                if !value::is_js_object(prototype_val) && !value::is_null(prototype_val) {
-                    *caller
-                        .data()
-                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some("TypeError: Function has non-object prototype property".to_string());
-                    return value::encode_undefined();
-                }
-
-                let prototype = prototype_val;
-
-                // 5. 遍历 value 的原型链
-                let proto_target = match resolve_handle(&mut caller, prototype) {
-                    Some(p) => p as u32,
-                    None => return value::encode_bool(false),
-                };
-                let mut current_ptr = match resolve_handle(&mut caller, value) {
-                    Some(p) => p,
-                    None => return value::encode_bool(false),
-                };
-                loop {
-                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                        return value::encode_bool(false);
-                    };
-                    let data = memory.data(&caller);
-                    if current_ptr + 4 > data.len() {
-                        return value::encode_bool(false);
-                    }
-                    let proto_handle = u32::from_le_bytes([
-                        data[current_ptr],
-                        data[current_ptr + 1],
-                        data[current_ptr + 2],
-                        data[current_ptr + 3],
-                    ]);
-
-                    if proto_handle == 0xFFFF_FFFF {
-                        return value::encode_bool(false);
-                    }
-                    // 通过 handle 表解析 proto_handle → proto_ptr
-                    let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize)
-                    else {
-                        return value::encode_bool(false);
-                    };
-                    if proto_ptr == proto_target as usize {
-                        return value::encode_bool(true);
-                    }
-                    current_ptr = proto_ptr;
-                }
-            })
+            Box::new(async move { op_instanceof_async(&mut caller, value, constructor).await })
         },
     )?;
 
