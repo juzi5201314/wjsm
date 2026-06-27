@@ -1,7 +1,7 @@
 //! P1.2: embedded startup snapshot install；运行时不写客户机器磁盘 cache。
 use anyhow::Result;
 use std::sync::Mutex;
-use tokio::runtime::Runtime;
+use tokio::runtime::Builder;
 use wjsm_runtime::{
     build_embedded_startup_snapshot_bytes, compile_source, embedded_startup_snapshot,
     execute_with_writer, install_embedded_startup_snapshot,
@@ -11,7 +11,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn run(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
-    let rt = Runtime::new()?;
+    let rt = Builder::new_current_thread().enable_all().build()?;
     let mut buf = Vec::new();
     rt.block_on(execute_with_writer(&wasm, &mut buf))?;
     Ok(String::from_utf8(buf)?)

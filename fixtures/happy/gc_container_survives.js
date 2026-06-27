@@ -4,8 +4,10 @@
 const arr = [10, 20, 30];
 const obj = { a: 1, b: 2 };
 
-// 触发多轮阈值 GC：分配远超 GC 阈值的临时对象（不保留引用 → 可回收）。
-for (let i = 0; i < 200000; i++) {
+// 触发多轮阈值 GC：分配远超 GC 阈值（1000）的临时对象（不保留引用 → 可回收）。
+// 5000 次分配 ≈ 5 轮 GC，足以验证容器跨多轮 GC 存活；持续分配压力另见
+// wjsm-runtime 的 bench_gc_sustained_allocation。
+for (let i = 0; i < 5000; i++) {
   const tmp = { x: i, y: i + 1 };
 }
 

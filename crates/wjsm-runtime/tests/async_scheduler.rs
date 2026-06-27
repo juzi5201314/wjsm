@@ -1,11 +1,11 @@
 use anyhow::Result;
-use tokio::runtime::Runtime;
+use tokio::runtime::Builder;
 
 use wjsm_runtime::{compile_source, execute_with_writer};
 
 fn run_async(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
-    let rt = Runtime::new()?;
+    let rt = Builder::new_current_thread().enable_all().build()?;
     let out = rt.block_on(async { execute_with_writer(&wasm, Vec::new()).await })?;
     Ok(String::from_utf8(out)?)
 }
@@ -61,7 +61,7 @@ fn settled_fetch_promise_drains_before_async_execute_returns() -> Result<()> {
 #[test]
 fn async_main_exception_is_reported() -> Result<()> {
     let wasm = compile_source(r#"console.log("before"); throw new Error("top");"#)?;
-    let rt = Runtime::new()?;
+    let rt = Builder::new_current_thread().enable_all().build()?;
     let err = rt
         .block_on(async { execute_with_writer(&wasm, Vec::new()).await })
         .expect_err("top-level throw must reject async execution");

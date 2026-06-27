@@ -28,3 +28,7 @@ base64 = "0.22"
 memchr = "2"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "gc_stress"
+harness = false

@@ -7,7 +7,7 @@ use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tokio::runtime::Runtime;
+use tokio::runtime::Builder;
 use wjsm_runtime::{
     build_embedded_startup_snapshot_bytes, compile_source, execute_with_writer,
     install_embedded_startup_snapshot,
@@ -17,7 +17,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn run(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
-    let rt = Runtime::new()?;
+    let rt = Builder::new_current_thread().enable_all().build()?;
     let out = rt.block_on(async { execute_with_writer(&wasm, Vec::new()).await })?;
     Ok(String::from_utf8(out)?)
 }
