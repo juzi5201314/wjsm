@@ -30,7 +30,11 @@ impl Lowerer {
         key
     }
 
-    pub(crate) fn lower_eval_env_read(&mut self, name: &str, block: BasicBlockId) -> ValueId {
+    pub(crate) fn lower_eval_env_read(
+        &mut self,
+        name: &str,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
         let env = self.load_eval_scope_env(block);
         if self.eval_scope_record {
             let name_const = self.module.add_constant(Constant::String(name.to_string()));
@@ -51,7 +55,10 @@ impl Lowerer {
                     args: vec![env, name_val],
                 },
             );
-            dest
+            // EvalGetBinding 可能返回 TAG_EXCEPTION（TDZ 等），需检查并传播。
+            let cont = self.lower_value_exception_branch(block, dest)?;
+            self.eval_continue_block = Some(cont);
+            Ok(dest)
         } else {
             let key = self.append_eval_env_key_const(block, name);
             let dest = self.alloc_value();
@@ -63,7 +70,7 @@ impl Lowerer {
                     key,
                 },
             );
-            dest
+            Ok(dest)
         }
     }
 

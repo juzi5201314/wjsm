@@ -37,8 +37,8 @@ ownKeys: ["y","z"]
 apply trap: [5,6]
 apply call: 22
 construct trap: ["Alice"]
-constructed name: undefined
-constructed flag: undefined
+constructed name: Alice
+constructed flag: true
 instanceof proxyPerson: false
 instanceof Person: false
 --- stderr ---

@@ -330,6 +330,11 @@ impl Compiler {
 
                     self.emit(WasmInstruction::End);
                     self.if_depth -= 1;
+                    // 若 common 目标已被之前的 common_direct_jump 编译，不再重编译
+                    if self.branch_inline_compiled.contains(&common_idx) {
+                        return Ok(false);
+                    }
+                    self.branch_inline_compiled.insert(common_idx);
                     return self.compile_branch_body_with_context(
                         module,
                         blocks,
@@ -515,6 +520,26 @@ impl Compiler {
             (Some(left), Some(right)) if left == right => return left,
             (Some(target), None) | (None, Some(target)) => return target,
             _ => {}
+        }
+
+        let direct_uncompiled_backward_jump = |branch_idx: usize| -> Option<usize> {
+            let block = blocks.get(branch_idx)?;
+            let Terminator::Jump { target } = block.terminator() else {
+                return None;
+            };
+            let target_idx = target.0 as usize;
+            (target_idx < branch_idx
+                && !self.compiled_blocks.contains(&target_idx)
+                && self.loop_continue_depth(target_idx).is_none()
+                && self.loop_break_depth(target_idx).is_none())
+            .then_some(target_idx)
+        };
+
+        if let Some(target) = direct_uncompiled_backward_jump(true_idx) {
+            return target;
+        }
+        if let Some(target) = direct_uncompiled_backward_jump(false_idx) {
+            return target;
         }
 
         // 单分支 Jump 到 merge 时，优先用另一分支的 continuation（try/catch 汇合）

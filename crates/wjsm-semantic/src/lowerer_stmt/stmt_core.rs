@@ -213,8 +213,8 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
-
         let mut cond_entry = block;
+
         let cond = if self.expr_exception_fork_allowed() && self.expr_can_throw(&if_stmt.test) {
             self.lower_expr_then_continue(&if_stmt.test, &mut cond_entry)?
         } else {

@@ -81,7 +81,7 @@ impl Lowerer {
             Err(msg)
                 if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
             {
-                return Ok(self.lower_eval_env_read(&name, block));
+                return self.lower_eval_env_read(&name, block);
             }
             Err(msg) => return Err(self.error(ident.span, msg)),
         };

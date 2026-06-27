@@ -18,9 +18,12 @@ impl Lowerer {
 
         match self.lower_pending_finalizers(block)? {
             StmtFlow::Open(after_finally) => {
-                let completion = self.alloc_undefined_value(after_finally);
-                let after_close =
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?;
+                let after_close = if iterator_cleanups.is_empty() {
+                    after_finally
+                } else {
+                    let completion = self.alloc_undefined_value(after_finally);
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?
+                };
                 self.current_function
                     .set_terminator(after_close, Terminator::Jump { target });
             }
@@ -55,9 +58,12 @@ impl Lowerer {
 
         match self.lower_pending_finalizers(block)? {
             StmtFlow::Open(after_finally) => {
-                let completion = self.alloc_undefined_value(after_finally);
-                let after_close =
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?;
+                let after_close = if iterator_cleanups.is_empty() {
+                    after_finally
+                } else {
+                    let completion = self.alloc_undefined_value(after_finally);
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?
+                };
                 self.current_function
                     .set_terminator(after_close, Terminator::Jump { target });
             }
@@ -424,12 +430,15 @@ impl Lowerer {
         let return_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(return_block)? {
             StmtFlow::Open(after_finally) => {
-                let completion = match value {
-                    Some(v) => v,
-                    None => self.alloc_undefined_value(after_finally),
+                let after_close = if iterator_cleanups.is_empty() {
+                    after_finally
+                } else {
+                    let completion = match value {
+                        Some(v) => v,
+                        None => self.alloc_undefined_value(after_finally),
+                    };
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?
                 };
-                let after_close =
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?;
                 self.current_function
                     .set_terminator(after_close, Terminator::Return { value });
             }

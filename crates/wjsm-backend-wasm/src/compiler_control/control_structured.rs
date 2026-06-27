@@ -240,7 +240,17 @@ impl Compiler {
 
                         self.emit(WasmInstruction::End);
                         self.if_depth -= 1;
-                        idx = common_idx;
+                        // common_idx 可能已被 compile_branch_body 递归编译。
+                        // 若已编译，跳到下一个未编译块，避免重复编译。
+                        if self.compiled_blocks.contains(&common_idx) {
+                            let mut next = common_idx + 1;
+                            while next < blocks.len() && self.compiled_blocks.contains(&next) {
+                                next += 1;
+                            }
+                            idx = next;
+                        } else {
+                            idx = common_idx;
+                        }
                         continue;
                     }
 
@@ -259,10 +269,28 @@ impl Compiler {
                         self.compiled_blocks.insert(true_idx);
                         self.compile_branch_body(module, blocks, true_idx)?
                     };
-
+                    // true 分支未终结时，需要 br 跳出 if 到 merge 块
+                    if !true_terminates {
+                        self.emit(WasmInstruction::Br(0));
+                    }
                     self.emit(WasmInstruction::Else);
-                    let false_terminates = if false_is_merge {
-                        self.emit_phi_moves(blocks, idx, false_idx);
+                    // true 分支未终结时，检查其续编链是否到达 false 分支。
+                    // 若是，则 false 分支不在 Else 中编译——两分支在 if/else 之后汇合。
+                    let true_reaches_false = !true_terminates && {
+                        let mut cont = self.branch_continuation_target(blocks, true_idx);
+                        let mut visited = std::collections::HashSet::new();
+                        let mut found = false;
+                        while let Some(c) = cont {
+                            if c == false_idx { found = true; break; }
+                            if !visited.insert(c) { break; }
+                            cont = self.branch_continuation_target(blocks, c);
+                        }
+                        found
+                    };
+                    let false_terminates = if false_is_merge || true_reaches_false {
+                        if !false_is_merge {
+                            self.emit_phi_moves(blocks, idx, false_idx);
+                        }
                         false
                     } else {
                         self.compiled_blocks.insert(false_idx);
@@ -353,9 +381,35 @@ impl Compiler {
                                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                             }
                         }
-                        // 重新发射 merge 块的 return
-                        if let Terminator::Return { value } = merge_block.terminator() {
-                            self.emit_return(value);
+                        // 重新发射 merge 块的终止器
+                        match merge_block.terminator() {
+                            Terminator::Return { value } => {
+                                self.emit_return(value);
+                            }
+                            Terminator::Jump { target } => {
+                                // merge 块跳转到后续块：跟踪跳转链找到未编译的续块
+                                let mut jump_target = target.0 as usize;
+                                while self.compiled_blocks.contains(&jump_target)
+                                    && jump_target < blocks.len()
+                                {
+                                    match blocks[jump_target].terminator() {
+                                        Terminator::Jump { target: t } => {
+                                            jump_target = t.0 as usize;
+                                        }
+                                        Terminator::Return { .. }
+                                        | Terminator::Throw { .. }
+                                        | Terminator::Unreachable => break,
+                                        _ => break,
+                                    }
+                                }
+                                if jump_target < blocks.len()
+                                    && !self.compiled_blocks.contains(&jump_target)
+                                {
+                                    idx = jump_target;
+                                    continue;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }

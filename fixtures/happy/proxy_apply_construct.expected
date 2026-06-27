@@ -9,9 +9,9 @@ result: 14
 construct trap called
 args: ["Alice",30]
 newTarget === target: false
-name: undefined
-age: undefined
-constructed: undefined
+name: Alice
+age: 30
+constructed: true
 
 === Proxy without traps (forwarding) ===
 forward result: 30

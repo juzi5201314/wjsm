@@ -8,6 +8,17 @@ impl Lowerer {
     /// SharedArrayBuffer/DataView 原型方法）此前各自重复这段「lower obj 为 this →
     /// lower 每个实参 → 追加 CallBuiltin → 返回 dest」样板。抽成单一 helper 后，
     /// 拦截点只保留各自的「模式识别 + receiver guard」判定，发射逻辑集中一处。
+    /// Whether `expr` is an unshadowed direct `eval(...)` call (expression form).
+    fn is_direct_eval_call_expr(&self, expr: &swc_ast::Expr) -> bool {
+        let swc_ast::Expr::Call(call) = expr else {
+            return false;
+        };
+        matches!(
+            &call.callee,
+            swc_ast::Callee::Expr(callee)
+                if matches!(callee.as_ref(), swc_ast::Expr::Ident(ident) if ident.sym.as_ref() == "eval")
+        ) && self.scopes.lookup("eval").is_err()
+    }
     fn emit_proto_builtin_call(
         &mut self,
         builtin: Builtin,
@@ -487,6 +498,9 @@ impl Lowerer {
         let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
             let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+            if self.expr_exception_fork_allowed() && self.is_direct_eval_call_expr(&arg.expr) {
+                call_block = self.lower_value_exception_branch(call_block, arg_val)?;
+            }
             args.push(arg_val);
         }
 
@@ -526,6 +540,12 @@ impl Lowerer {
             );
             undef_val
         };
+        if let Some(first_arg) = call.args.first()
+            && self.is_direct_eval_call_expr(&first_arg.expr)
+            && self.expr_exception_fork_allowed()
+        {
+            eval_block = self.lower_value_exception_branch(eval_block, code_val)?;
+        }
 
         // 2. Get all lexically visible bindings (including TDZ)
         let all_bindings: Vec<_> = self
@@ -759,7 +779,10 @@ impl Lowerer {
         self.emit_throw_value(exc_block, thrown_val)?;
 
         // 10. Writeback: read post-eval values for visible bindings (incl. TDZ let/const after assign)
-        for (scope_id, name, _, _is_initialised) in &all_bindings {
+        for (scope_id, name, _, is_initialised) in &all_bindings {
+            if !*is_initialised {
+                continue;
+            }
             let binding = CapturedBinding::new(name.clone(), *scope_id);
 
             let name_const = self.module.add_constant(Constant::String(name.clone()));

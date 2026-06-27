@@ -24,16 +24,14 @@ module {
     c21 = string("dispose")
     c22 = functionref(@0)
     c23 = undefined
-    c24 = string("Symbol")
-    c25 = string("dispose")
-    c26 = number(6)
-    c27 = functionref(@1)
-    c28 = undefined
-    c29 = string("a")
-    c30 = string("using")
-    c31 = undefined
-    c32 = number(6)
-    c33 = string("after")
+    c24 = number(6)
+    c25 = functionref(@1)
+    c26 = undefined
+    c27 = string("a")
+    c28 = string("using")
+    c29 = undefined
+    c30 = number(6)
+    c31 = string("after")
 
   fn @anon_0 [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
@@ -56,13 +54,9 @@ module {
       %3 = const c22
       %4 = const c23
       %5 = call builtin.create_closure(%3, %4)
-      %6 = load var $0.$global
-      %7 = const c24
-      %8 = get_prop %6, %7
-      %9 = const c25
-      %11 = const c26
-      %10 = call builtin.symbol.well_known(%11)
-      set_prop %0, %10, %5
+      %6 = const c24
+      %7 = call builtin.symbol.well_known(%6)
+      set_prop %0, %7, %5
       return %0
 
   fn @$module_main [entry=bb0]:
@@ -109,20 +103,20 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c27
+      %21 = const c25
       store var $0.makeDisposable, %21
-      %22 = const c28
+      %22 = const c26
       %23 = load var $0.makeDisposable
-      %24 = const c29
+      %24 = const c27
       %25 = call %23, this=%22, args=[%24]
       store var $3.a, %25
-      %26 = const c30
+      %26 = const c28
       %27 = call builtin.console.log(%26)
       %28 = is_exception %27
       branch %28, bb2, bb1
     bb1:
       %30 = load var $3.a
-      %32 = const c31
+      %32 = const c29
       %31 = stricteq %30, %32
       branch %31, bb3, bb4
     bb2:
@@ -131,13 +125,13 @@ module {
     bb3:
       jump bb5
     bb4:
-      %33 = const c32
+      %33 = const c30
       %34 = call builtin.symbol.well_known(%33)
       %35 = get_prop %30, %34
       call %35, this=%30
       jump bb5
     bb5:
-      %36 = const c33
+      %36 = const c31
       %37 = call builtin.console.log(%36)
       %38 = is_exception %37
       branch %38, bb7, bb6

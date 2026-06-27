@@ -408,13 +408,13 @@ impl Compiler {
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // FuncCall/FuncBind: env_obj=func, this_val=args[1], shadow_args=args[2..]
         // 其他方法: this_val=args[0], args[1..] 走影子栈
-        let (env_obj_val, this_val_idx, shadow_args) =
+        let (env_obj_val, this_val_idx, shadow_args, needs_env_this) =
             if matches!(builtin, Builtin::FuncCall | Builtin::FuncBind) {
                 // args = [func, this_val, ...restArgs]
                 let func: ValueId = args.first().copied().unwrap_or(ValueId(0));
                 let this: Option<ValueId> = args.get(1).copied();
                 let shadow_slice: &[ValueId] = if args.len() > 2 { &args[2..] } else { &[] };
-                (Some(func), this, shadow_slice)
+                (Some(func), this, shadow_slice, true)
             } else if matches!(
                 builtin,
                 Builtin::ArrayIsArray
@@ -427,12 +427,19 @@ impl Compiler {
                     | Builtin::DateUTC
                     | Builtin::DateConstructor
             ) {
-                (None, None, args)
+                // 无 env_obj / this_val 的静态方法。
+                // MathMax/Min/Hypot/DateUTC 使用 Type 19 (i32, i32) -> i64，不推 env/this；
+                // 其余使用 Type 12 (i64, i64, i32, i32) -> i64。
+                let uses_type19 = matches!(
+                    builtin,
+                    Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot | Builtin::DateUTC
+                );
+                (None, None, args, !uses_type19)
             } else {
                 let this = args
                     .first()
                     .with_context(|| format!("{builtin} expects at least 1 argument (this_val)"))?;
-                (None, Some(*this), &args[1..])
+                (None, Some(*this), &args[1..], true)
             };
         // 保存 shadow_sp 基址
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -454,24 +461,26 @@ impl Compiler {
             self.emit(WasmInstruction::I32Add);
             self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
         }
-        // 推入 Type 12 调用参数: env_obj, this_val, args_base, args_count
-        // env_obj
-        if let Some(val) = env_obj_val {
-            self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-        } else {
-            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-        }
-        // this_val
-        if let Some(val) = this_val_idx {
-            self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-        } else {
-            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        // 推入调用参数：Type 12 需要 env_obj + this_val；Type 19 只需 args_base + args_count
+        if needs_env_this {
+            // env_obj
+            if let Some(val) = env_obj_val {
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+            } else {
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+            }
+            // this_val
+            if let Some(val) = this_val_idx {
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+            } else {
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+            }
         }
         // args_base
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         // args_count
         self.emit(WasmInstruction::I32Const(shadow_args.len() as i32));
-        // 调用 Type 12 宿主函数
+        // 调用宿主函数（Type 12 或 Type 19）
         self.emit(WasmInstruction::Call(import_idx));
         // 恢复 shadow_sp
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));

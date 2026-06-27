@@ -149,15 +149,26 @@ impl Compiler {
     /// 发射 is_array(boxed)：`(boxed >> 32) & TAG_MASK == TAG_ARRAY` → i32 bool。
     pub(super) fn emit_is_array(&mut self, obj_l: u32) {
         self.emit(WasmInstruction::LocalGet(obj_l));
+        self.emit(WasmInstruction::I64Const(value::BOX_BASE as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::BOX_BASE as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::LocalGet(obj_l));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
         self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_ARRAY as i64));
         self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I32And);
     }
-    /// 发射 `(boxed >> 32) & TAG_MASK == tag` → i32 bool（栈顶）。
+    /// 发射 boxed tag 等值判断：先确认值是 NaN-boxed，再比较 tag，避免 raw f64 误判。
     pub(super) fn emit_tag_eq(&mut self, val_l: u32, tag: u64) {
+        self.emit(WasmInstruction::LocalGet(val_l));
+        self.emit(WasmInstruction::I64Const(value::BOX_BASE as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::BOX_BASE as i64));
+        self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::LocalGet(val_l));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
@@ -165,6 +176,7 @@ impl Compiler {
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(tag as i64));
         self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I32And);
     }
     /// 发射 WASM 指令将任意 i64 NaN-boxed 值转换为 f64（以 i64 位表示）。
     /// 实现 ToNumber 抽象操作的内联快速路径：

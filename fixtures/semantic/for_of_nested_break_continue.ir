@@ -24,6 +24,7 @@ module {
     c21 = string("abc")
     c22 = number(1)
     c23 = number(1)
+    c24 = undefined
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -93,13 +94,15 @@ module {
       call builtin.iterator.next(%23)
       jump bb1
     bb4:
-      call builtin.iterator.close(%23)
-      jump bb5
+      %40 = const c24
+      %41 = call builtin.iterator.close(%23, %40)
+      %42 = is_exception %41
+      branch %42, bb13, bb12
     bb5:
-      %37 = load var $0.total
-      %38 = call builtin.console.log(%37)
-      %39 = is_exception %38
-      branch %39, bb11, bb10
+      %44 = load var $0.total
+      %45 = call builtin.console.log(%44)
+      %46 = is_exception %45
+      branch %46, bb15, bb14
     bb6:
       jump bb3
     bb7:
@@ -111,11 +114,22 @@ module {
       jump bb3
     bb9:
       %36 = call builtin.exception_value(%34)
-      call builtin.iterator.close(%23)
-      throw %36
+      %37 = call builtin.iterator.close(%23, %36)
+      %38 = is_exception %37
+      branch %38, bb11, bb10
     bb10:
-      return
+      throw %36
     bb11:
-      %40 = call builtin.exception_value(%38)
-      throw %40
+      %39 = call builtin.exception_value(%37)
+      throw %39
+    bb12:
+      jump bb5
+    bb13:
+      %43 = call builtin.exception_value(%41)
+      throw %43
+    bb14:
+      return
+    bb15:
+      %47 = call builtin.exception_value(%45)
+      throw %47
 }

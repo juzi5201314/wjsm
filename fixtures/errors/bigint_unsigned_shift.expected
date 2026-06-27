@@ -1,3 +1,7 @@
 exit_code: 0
 --- stdout ---
+5n>>>1n TypeError
+5n>>>1 TypeError
+5>>>1n TypeError
+5n&3 TypeError
 --- stderr ---

@@ -75,7 +75,7 @@ module {
       jump bb1
     bb1:
       %27 = load var $1.$state
-      switch %27 [case c31 -> bb2, case c32 -> bb7], default bb10, exit bb11
+      switch %27 [case c31 -> bb2, case c32 -> bb6], default bb9, exit bb10
     bb2:
       jump bb3
     bb3:
@@ -85,34 +85,32 @@ module {
       %18 = const c28
       %17 = call builtin.promise.resolve_static(%18, %16)
       suspend %17, state=1
-      jump bb9
+      jump bb8
     bb4:
-      unreachable
-    bb5:
       %25 = const c30
       %26 = load var $1.$promise
       promise_resolve %26, %25
       return
-    bb6:
+    bb5:
       %22 = load var $tmp.0
       store var $4.e, %22
       %23 = const c29
       %24 = load var $1.$promise
       promise_resolve %24, %23
       return
-    bb7:
+    bb6:
       %19 = load var $1.$resume_val
       %20 = load var $1.$is_rejected
-      branch %20, bb8, bb9
-    bb8:
+      branch %20, bb7, bb8
+    bb7:
       store var $tmp.0, %19
-      jump bb6
-    bb9:
-      %21 = load var $1.$resume_val
       jump bb5
-    bb10:
+    bb8:
+      %21 = load var $1.$resume_val
+      jump bb4
+    bb9:
       return
-    bb11:
+    bb10:
       unreachable
 
   fn @recover [params: $6.$env, $6.$this] [entry=bb0]:

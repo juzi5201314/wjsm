@@ -2,6 +2,6 @@ exit_code: 0
 --- stdout ---
 secret
 42
-0
+42
 brand-check-error
 --- stderr ---

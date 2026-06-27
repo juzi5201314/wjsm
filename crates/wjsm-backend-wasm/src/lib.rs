@@ -71,6 +71,10 @@ struct Compiler {
     phi_locals: HashMap<u32, u32>,
     /// Set of block indices already compiled (for dedup in structured compilation).
     compiled_blocks: std::collections::HashSet<usize>,
+    /// Blocks whose code was already emitted by common_direct_jump optimization
+    /// inside compile_branch_body_with_context. Prevents duplicate emission without
+    /// affecting compile_structured's main loop break behavior.
+    branch_inline_compiled: std::collections::HashSet<usize>,
     /// Next available WASM function index (starts after imports).
     _next_import_func: u32,
     /// Map builtin → WASM function index.

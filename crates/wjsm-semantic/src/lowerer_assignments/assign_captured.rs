@@ -8,8 +8,9 @@ impl Lowerer {
         name: &str,
     ) -> Result<ValueId, LoweringError> {
         if assign.op == swc_ast::AssignOp::Assign {
-            let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-            let block = self.append_eval_env_write(name, rhs, block)?;
+            let mut current_block = block;
+            let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
+            let block = self.append_eval_env_write(name, rhs, current_block)?;
             self.expr_merge_block = Some(block);
             return Ok(rhs);
         }
@@ -25,11 +26,12 @@ impl Lowerer {
 
         let bin_op = assign_op_to_binary(assign.op)
             .ok_or_else(|| self.error(assign.span, "unsupported compound assignment operator"))?;
-        let loaded = self.lower_eval_env_read(name, block);
-        let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+        let loaded = self.lower_eval_env_read(name, block)?;
+        let mut current_block = self.resolve_store_block(block);
+        let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            current_block,
             Instruction::Binary {
                 dest,
                 op: bin_op,
@@ -37,7 +39,7 @@ impl Lowerer {
                 rhs,
             },
         );
-        let block = self.append_eval_env_write(name, dest, block)?;
+        let block = self.append_eval_env_write(name, dest, current_block)?;
         self.expr_merge_block = Some(block);
         Ok(dest)
     }

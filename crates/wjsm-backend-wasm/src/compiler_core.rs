@@ -206,6 +206,7 @@ impl Compiler {
             next_var_local: 0,
             phi_locals: HashMap::new(),
             compiled_blocks: std::collections::HashSet::new(),
+            branch_inline_compiled: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
             _next_import_func: actual_import_count,

@@ -2,8 +2,8 @@ use super::*;
 
 impl Lowerer {
     /// 判断表达式在其自身求值时是否可能直接返回 TAG_EXCEPTION，从而需要异常检查分叉。
-    /// 仅涵盖“自身可抛”的种类（调用、成员读取、new、`in`/`instanceof`、标签模板）；其子
-    /// 表达式的异常由各自经 `lower_expr_then_continue` 的求值负责传播。
+    /// 涵盖调用、成员读取、算术/位运算（含 BigInt 与 Number 混合时的 TypeError、`>>>` 与 BigInt）等。
+    /// 子表达式的异常由各自经 `lower_expr_then_continue` 的求值负责传播。
     /// 刻意排除 Await/Yield（异步状态机自有续延处理）与 Assign（其值为右值；赋值语句右值
     /// 抛出的传播尚未覆盖，且 eval 右值自带异常分叉，额外分叉会破坏其块结构）。
     pub(crate) fn expr_can_throw(&self, expr: &swc_ast::Expr) -> bool {
@@ -21,7 +21,13 @@ impl Lowerer {
                 | swc_ast::BinaryOp::Mod
                 | swc_ast::BinaryOp::Exp
                 | swc_ast::BinaryOp::In
-                | swc_ast::BinaryOp::InstanceOf => true,
+                | swc_ast::BinaryOp::InstanceOf
+                | swc_ast::BinaryOp::BitOr
+                | swc_ast::BinaryOp::BitXor
+                | swc_ast::BinaryOp::BitAnd
+                | swc_ast::BinaryOp::LShift
+                | swc_ast::BinaryOp::RShift
+                | swc_ast::BinaryOp::ZeroFillRShift => true,
                 _ => {
                     self.expr_can_throw(bin.left.as_ref())
                         || self.expr_can_throw(bin.right.as_ref())
@@ -92,6 +98,9 @@ impl Lowerer {
                 };
                 self.current_function
                     .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
+                if current_block != block {
+                    self.expr_merge_block = Some(current_block);
+                }
                 Ok(dest)
             }
             // Mod / Exp → Binary（后端按 BigInt / Number 分派）
@@ -103,6 +112,9 @@ impl Lowerer {
                 let op = if bin.op == Mod { BinaryOp::Mod } else { BinaryOp::Exp };
                 self.current_function
                     .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
+                if current_block != block {
+                    self.expr_merge_block = Some(current_block);
+                }
                 Ok(dest)
             }
             // Bitwise operators — convert to i32, operate, NaN-box back
@@ -122,6 +134,9 @@ impl Lowerer {
                 };
                 self.current_function
                     .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
+                if current_block != block {
+                    self.expr_merge_block = Some(current_block);
+                }
                 Ok(dest)
             }
             // in 操作符：检查对象是否有属性
@@ -139,6 +154,9 @@ impl Lowerer {
                         args: vec![object, prop],
                     },
                 );
+                if current_block != block {
+                    self.expr_merge_block = Some(current_block);
+                }
                 Ok(dest)
             }
             // instanceof 操作符：检查原型链
@@ -156,6 +174,9 @@ impl Lowerer {
                         args: vec![value, constructor],
                     },
                 );
+                if current_block != block {
+                    self.expr_merge_block = Some(current_block);
+                }
                 Ok(dest)
             }
         }
@@ -297,6 +318,10 @@ impl Lowerer {
                 );
             }
             _ => unreachable!("lower_comparison called with non-comparison op"),
+        }
+
+        if current_block != block {
+            self.expr_merge_block = Some(current_block);
         }
 
         Ok(dest)
