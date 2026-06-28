@@ -1792,7 +1792,7 @@ pub(crate) fn define_array_object(
                 let mut current = new_handle;
                 let mut depth = 0u32;
                 const MAX_PROTO_DEPTH: u32 = 1000;
-                let obj_handle_raw = (obj as u64 & 0xFFFF_FFFF) as u32;
+                let obj_handle_raw = handle_index_of(&mut caller, obj) as u32;
                 while current != 0xFFFF_FFFF && current != 0 && depth < MAX_PROTO_DEPTH {
                     if current == obj_handle_raw {
                         set_runtime_error(

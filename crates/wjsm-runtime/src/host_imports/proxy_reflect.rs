@@ -659,8 +659,29 @@ pub(crate) async fn reflect_set_prototype_of_fn_impl(
         value::decode_array_handle(proto)
     } else if value::is_proxy(proto) {
         value::decode_proxy_handle(proto)
-    } else if value::is_function(proto) || value::is_closure(proto) {
-        value::decode_object_handle(proto)
+    } else if value::is_function(proto) {
+        let func_idx = value::decode_function_idx(proto);
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(|e| e.into_global())
+            .and_then(|g| g.get(&mut *caller).i32())
+            .unwrap_or(0) as u32;
+        base + func_idx
+    } else if value::is_closure(proto) {
+        let closure_idx = value::decode_closure_idx(proto) as usize;
+        let func_idx = caller
+            .data()
+            .closures
+            .lock()
+            .ok()
+            .and_then(|g| g.get(closure_idx).map(|e| e.func_idx))
+            .unwrap_or(0);
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(|e| e.into_global())
+            .and_then(|g| g.get(&mut *caller).i32())
+            .unwrap_or(0) as u32;
+        base + func_idx
     } else {
         0xFFFF_FFFF
     };
