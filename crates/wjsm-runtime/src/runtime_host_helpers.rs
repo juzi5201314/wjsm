@@ -31,13 +31,17 @@ fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str,
 
 /// 从 TAG_EXCEPTION 中提取 error_table 里的真实错误对象值。
 /// 用于需要 reject promise 或传播真实错误值的场景（如 async 迭代器异常、array spread）。
-pub(crate) fn exception_reason(caller: &mut Caller<'_, RuntimeState>, exception: i64) -> i64 {
+pub(crate) fn exception_reason_from_state(state: &RuntimeState, exception: i64) -> i64 {
     let idx = value::decode_handle(exception) as usize;
-    let errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+    let errors = state.error_table.lock().unwrap_or_else(|e| e.into_inner());
     errors
         .get(idx)
         .map(|entry| entry.value)
         .unwrap_or_else(value::encode_undefined)
+}
+
+pub(crate) fn exception_reason(caller: &mut Caller<'_, RuntimeState>, exception: i64) -> i64 {
+    exception_reason_from_state(caller.data(), exception)
 }
 
 pub(crate) fn read_shadow_arg_with_env<C: AsContext>(

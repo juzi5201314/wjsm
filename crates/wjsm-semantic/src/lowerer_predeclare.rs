@@ -480,7 +480,17 @@ impl Lowerer {
         &mut self,
         block: BasicBlockId,
     ) -> Result<StmtFlow, LoweringError> {
-        if self.active_finalizers.is_empty() {
+        self.lower_pending_finalizers_after(block, 0)
+    }
+
+    pub(crate) fn lower_pending_finalizers_after(
+        &mut self,
+        block: BasicBlockId,
+        keep_len: usize,
+    ) -> Result<StmtFlow, LoweringError> {
+        let saved = self.active_finalizers.clone();
+        let keep_len = keep_len.min(saved.len());
+        if saved.len() <= keep_len {
             return Ok(StmtFlow::Open(block));
         }
 
@@ -488,12 +498,13 @@ impl Lowerer {
         // 降低某个 finally 时，只把“更外层”的 finalizer 保留在 active 栈里，
         // 这样 finally 内部的 return/throw/break/continue 能继续展开剩余外层 finally，
         // 而不是因为当前批量展开把 active_finalizers 清空而跳过它们。
-        let saved = self.active_finalizers.clone();
-        let mut pending = saved.clone();
+        let mut pending = saved[keep_len..].to_vec();
         let mut flow = StmtFlow::Open(block);
 
         while let Some(finalizer) = pending.pop() {
-            self.active_finalizers = pending.clone();
+            let mut active = saved[..keep_len].to_vec();
+            active.extend(pending.iter().cloned());
+            self.active_finalizers = active;
             flow = self.lower_block_body(&finalizer, flow)?;
             if matches!(flow, StmtFlow::Terminated) {
                 break;

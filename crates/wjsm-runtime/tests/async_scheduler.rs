@@ -186,3 +186,101 @@ fn async_reentry_eval_direct_indirect_and_native() -> Result<()> {
     assert_eq!(output, "2,4\n");
     Ok(())
 }
+
+#[test]
+fn async_generator_return_resumes_suspended_yield_and_runs_finally() -> Result<()> {
+    let output = run_async_source(
+        r#"
+        async function* gen() {
+            try { yield 1; }
+            finally { console.log("cleanup"); }
+        }
+
+        const g = gen();
+        g.next()
+          .then(() => g.return())
+          .then(() => console.log("done"));
+        "#,
+    )?;
+    assert_eq!(output, "cleanup\ndone\n");
+    Ok(())
+}
+
+#[test]
+fn async_generator_throw_is_catchable_inside_generator() -> Result<()> {
+    let output = run_async_source(
+        r#"
+        async function* gen() {
+            try {
+                yield 1;
+            } catch (e) {
+                console.log("caught");
+            } finally {
+                console.log("finally");
+            }
+        }
+
+        const g = gen();
+        function inject() { g.throw("boom"); }
+        g.next().then(inject);
+        "#,
+    )?;
+    assert_eq!(output, "caught\nfinally\n");
+    Ok(())
+}
+
+#[test]
+fn promise_resolve_thenable_passes_reject_and_rejects_on_throw() -> Result<()> {
+    let output = run_async_source(
+        r#"
+        const thenable = {
+            marker: 7,
+            then(resolve, reject) {
+                console.log(this.marker);
+                console.log(typeof reject);
+                throw new Error("boom");
+            }
+        };
+
+        Promise.resolve(thenable).then(
+            () => console.log("fulfilled"),
+            (err) => console.log("rejected " + err.message)
+        );
+        "#,
+    )?;
+    assert_eq!(output, "7\nfunction\nrejected boom\n");
+    Ok(())
+}
+
+#[test]
+fn finally_only_inner_try_propagates_to_outer_catch_after_finally() -> Result<()> {
+    let output = run_async_source(
+        r#"
+        try {
+            try { throw 1; }
+            finally { console.log("inner"); }
+        } catch (e) {
+            console.log(e);
+        }
+        "#,
+    )?;
+    assert_eq!(output, "inner\n1\n");
+    Ok(())
+}
+
+#[test]
+fn catch_throw_runs_same_try_finally_before_outer_catch() -> Result<()> {
+    let output = run_async_source(
+        r#"
+        try {
+            try { throw 1; }
+            catch (e) { throw 2; }
+            finally { console.log("finally"); }
+        } catch (e2) {
+            console.log(e2);
+        }
+        "#,
+    )?;
+    assert_eq!(output, "finally\n2\n");
+    Ok(())
+}
