@@ -116,6 +116,9 @@ pub(crate) fn define_async_generator(
                 let Some(entry) = table.get_mut(handle) else {
                     return resume_promise;
                 };
+                if !matches!(entry.state, AsyncGeneratorState::Executing) {
+                    return resume_promise;
+                }
                 entry.state = AsyncGeneratorState::SuspendedYield;
                 entry.waiting_resume_promise = Some(resume_promise);
                 entry.active_request.take()
