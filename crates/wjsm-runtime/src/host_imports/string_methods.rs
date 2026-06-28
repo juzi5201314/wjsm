@@ -157,8 +157,8 @@ pub(crate) fn define_string_methods(
             write_array_elem(caller, arr_ptr, i, elem);
         }
         write_array_length(caller, arr_ptr, group_count);
-        // .index — 使用 m.start() 保持一致
-        let index_val = value::encode_f64(m.start() as f64);
+        // .index — 使用 UTF-16 码元索引（而非字节偏移）
+        let index_val = value::encode_f64(byte_offset_to_utf16_index(s, m.start()) as f64);
         let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "index", index_val);
         // .input
         let input_val = store_runtime_string(caller, s.to_string());
@@ -202,9 +202,9 @@ pub(crate) fn define_string_methods(
                             caller,
                             pair_ptr,
                             0,
-                            value::encode_f64(range.start as f64),
+                            value::encode_f64(byte_offset_to_utf16_index(s, range.start) as f64),
                         );
-                        write_array_elem(caller, pair_ptr, 1, value::encode_f64(range.end as f64));
+                        write_array_elem(caller, pair_ptr, 1, value::encode_f64(byte_offset_to_utf16_index(s, range.end) as f64));
                         write_array_length(caller, pair_ptr, 2);
                         pair
                     }
@@ -227,9 +227,9 @@ pub(crate) fn define_string_methods(
                                 caller,
                                 pair_ptr,
                                 0,
-                                value::encode_f64(r.start as f64),
+                                value::encode_f64(byte_offset_to_utf16_index(s, r.start) as f64),
                             );
-                            write_array_elem(caller, pair_ptr, 1, value::encode_f64(r.end as f64));
+                            write_array_elem(caller, pair_ptr, 1, value::encode_f64(byte_offset_to_utf16_index(s, r.end) as f64));
                             write_array_length(caller, pair_ptr, 2);
                             pair
                         }
