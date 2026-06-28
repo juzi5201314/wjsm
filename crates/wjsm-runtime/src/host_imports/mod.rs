@@ -91,6 +91,7 @@ pub(crate) use streams_writable::call_writable_controller_method_from_caller;
 pub(crate) use streams_writable::call_writable_stream_method_from_caller;
 pub(crate) use streams_writable::construct_writable_stream;
 pub(crate) use string_methods::define_string_methods;
+pub(crate) use string_methods::string_from_utf16_code_unit;
 pub(crate) use timers_arrays::define_timers_arrays;
 pub(crate) use typedarray_new_methods::define_typedarray_new_methods;
 pub(crate) use weakref_finalization::define_weakref_finalization;

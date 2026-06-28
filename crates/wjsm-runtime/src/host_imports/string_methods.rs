@@ -4,6 +4,25 @@ use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
+/// String value consisting of a single UTF-16 code unit (ECMAScript §22.1.3.1).
+pub(crate) fn string_from_utf16_code_unit(unit: u16) -> String {
+    if !(0xD800..=0xDFFF).contains(&unit) {
+        if let Some(ch) = char::from_u32(unit as u32) {
+            return ch.to_string();
+        }
+    }
+    let bytes = if unit < 0x800 {
+        vec![0xC0 | ((unit >> 6) as u8), 0x80 | ((unit & 0x3F) as u8)]
+    } else {
+        vec![
+            0xE0 | ((unit >> 12) as u8),
+            0x80 | (((unit >> 6) & 0x3F) as u8),
+            0x80 | ((unit & 0x3F) as u8),
+        ]
+    };
+    unsafe { String::from_utf8_unchecked(bytes) }
+}
+
 pub(crate) fn define_string_methods(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -38,26 +57,6 @@ pub(crate) fn define_string_methods(
 
     fn to_uint32_caller(caller: &mut Caller<'_, RuntimeState>, val: i64) -> u32 {
         to_uint32_number(value::decode_f64(to_number(caller, val)))
-    }
-
-
-    /// String value consisting of a single UTF-16 code unit (ECMAScript §22.1.3.1).
-    fn string_from_utf16_code_unit(unit: u16) -> String {
-        if !(0xD800..=0xDFFF).contains(&unit) {
-            if let Some(ch) = char::from_u32(unit as u32) {
-                return ch.to_string();
-            }
-        }
-        let bytes = if unit < 0x800 {
-            vec![0xC0 | ((unit >> 6) as u8), 0x80 | ((unit & 0x3F) as u8)]
-        } else {
-            vec![
-                0xE0 | ((unit >> 12) as u8),
-                0x80 | (((unit >> 6) & 0x3F) as u8),
-                0x80 | ((unit & 0x3F) as u8),
-            ]
-        };
-        unsafe { String::from_utf8_unchecked(bytes) }
     }
 
     fn js_utf16_units(s: &str) -> Vec<u16> {

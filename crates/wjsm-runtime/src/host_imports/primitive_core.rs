@@ -1166,8 +1166,11 @@ pub(crate) fn define_primitive_core(
                 let sep_str = get_string_value(&mut caller, sep);
                 // 空字符串分隔符：返回每个字符的数组
                 if sep_str.is_empty() {
-                    let chars: Vec<String> =
-                        s.chars().map(|c| c.to_string()).take(limit_val).collect();
+                    let chars: Vec<String> = s
+                        .encode_utf16()
+                        .map(|cu| string_from_utf16_code_unit(cu))
+                        .take(limit_val)
+                        .collect();
                     let arr = alloc_array(&mut caller, chars.len() as u32);
                     let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
                         return value::encode_null();
