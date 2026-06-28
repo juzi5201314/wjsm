@@ -18,14 +18,10 @@ impl MarkBitmap {
     /// 若当前容量足够，原地清零（不缩容，下标稳定 IMPL-10）。
     pub fn reset(&mut self, count: usize) {
         let words = count.div_ceil(64);
-        if self.bits.len() < words {
-            self.bits.resize(words, 0);
-        } else {
-            // 清零用到的前 words 个 word + 尾部也清零（防残留）
-            for w in &mut self.bits {
-                *w = 0;
-            }
-        }
+        // resize 确保 len == words（多则截断、少则补零），fill(0) 清零全部 word
+        // （含扩容前残留的旧标记位，修复 #105：旧路径 resize 只补零新 word，不清旧 word）
+        self.bits.resize(words, 0);
+        self.bits.fill(0);
     }
 
     /// 标记 handle h。若 h 超出当前容量，自动扩容。
@@ -113,5 +109,19 @@ mod tests {
         bm.mark(50);
         bm.reset(100);
         assert_eq!(bm.popcount(), 0);
+    }
+
+    #[test]
+    fn reset_after_growth_clears_old_bits() {
+        let mut bm = MarkBitmap::new();
+        bm.reset(100); // words = 2
+        bm.mark(1);
+        bm.mark(63);
+        assert_eq!(bm.popcount(), 2);
+        bm.reset(200); // words = 4 (grew) — old words must clear
+        assert_eq!(bm.popcount(), 0);
+        // 确认扩容后新容量可用
+        bm.mark(150);
+        assert_eq!(bm.popcount(), 1);
     }
 }

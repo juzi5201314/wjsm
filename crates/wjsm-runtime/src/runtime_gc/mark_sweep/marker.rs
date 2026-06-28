@@ -215,8 +215,49 @@ fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) 
         }
         return out;
     }
-    // 其他 handle tag（bigint/symbol/regexp/proxy/scope_record/iterator/enumerator/
-    // runtime_string/exception/bound）：经 host 侧表追踪（roots 注入）或不含 obj_table 引用。
+    if value::is_bound(val) {
+        let idx = value::decode_bound_idx(val) as usize;
+        let refs: Vec<i64> =
+            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_bound_refs(st, idx));
+        let mut out = Vec::new();
+        for r in refs {
+            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+        }
+        return out;
+    }
+    if value::is_proxy(val) {
+        let idx = value::decode_proxy_handle(val) as usize;
+        let refs: Vec<i64> =
+            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_proxy_refs(st, idx));
+        let mut out = Vec::new();
+        for r in refs {
+            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+        }
+        return out;
+    }
+    if value::is_iterator(val) {
+        let idx = value::decode_handle(val) as usize;
+        let refs: Vec<i64> = ctx
+            .with_state(|st| crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx));
+        let mut out = Vec::new();
+        for r in refs {
+            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+        }
+        return out;
+    }
+    if value::is_scope_record(val) {
+        let handle = value::decode_scope_record_handle(val);
+        let refs: Vec<i64> = ctx.with_state(|st| {
+            crate::runtime_gc::side_table_refs::collect_scope_record_refs(st, handle)
+        });
+        let mut out = Vec::new();
+        for r in refs {
+            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+        }
+        return out;
+    }
+    // 其余 tag（bigint/symbol/regexp/enumerator/runtime_string/exception）：
+    // 侧表不含 obj_table 引用，不需追踪。
     vec![]
 }
 

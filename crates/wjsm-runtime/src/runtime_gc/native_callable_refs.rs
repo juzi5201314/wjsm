@@ -41,8 +41,23 @@ pub(crate) fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: us
         NativeCallable::AsyncGeneratorMethod { generator, .. }
         | NativeCallable::AsyncGeneratorIdentity { generator } => vec![generator],
         NativeCallable::EvalFunction(function) => function.scope_env.into_iter().collect(),
-        // 其余变体不直接持 obj_table 引用（method dispatch 的 handle 是 side-table 索引，
-        // 由对应 side-table 的 fixed-point root 路径覆盖）。
+        NativeCallable::ArrayLikeIteratorNext { target, .. } => vec![target],
+        NativeCallable::AsyncFromSyncNext { handle }
+        | NativeCallable::AsyncFromSyncReturn { handle }
+        | NativeCallable::AsyncFromSyncThrow { handle } => st
+            .async_from_sync_iterators
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(handle as usize).map(|e| vec![e.sync_iterator, e.outer_iter])
+            })
+            .unwrap_or_default(),
+        NativeCallable::ProxyRevoker { proxy_handle } => {
+            vec![value::encode_proxy_handle(proxy_handle)]
+        }
+        // 其余变体（构造器、method dispatch with handle: u32、primitive method dispatchers）
+        // 不直接持 obj_table 引用：handle 是 side-table 索引，由对应 side-table 的
+        // fixed-point root 路径覆盖。新增 variant 需评估是否持有 JS 值。
         _ => vec![],
     }
 }

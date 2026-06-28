@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+42
+hello
+100
+--- stderr ---

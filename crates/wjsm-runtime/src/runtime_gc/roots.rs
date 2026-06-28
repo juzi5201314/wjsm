@@ -212,8 +212,48 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
             push_value_roots(ctx, r, visit);
         }
     }
-    // 其他 handle tag（bigint/symbol/regexp/proxy/scope_record/iterator/enumerator/
-    // runtime_string/exception/bound）：经对应 side-table fixed-point 路径或不持 obj_table 引用。
+    if value::is_bound(val) {
+        let idx = value::decode_bound_idx(val) as usize;
+        let refs = ctx.with_state(|st| {
+            crate::runtime_gc::side_table_refs::collect_bound_refs(st, idx)
+        });
+        for r in refs {
+            push_value_roots(ctx, r, visit);
+        }
+        return;
+    }
+    if value::is_proxy(val) {
+        let idx = value::decode_proxy_handle(val) as usize;
+        let refs = ctx.with_state(|st| {
+            crate::runtime_gc::side_table_refs::collect_proxy_refs(st, idx)
+        });
+        for r in refs {
+            push_value_roots(ctx, r, visit);
+        }
+        return;
+    }
+    if value::is_iterator(val) {
+        let idx = value::decode_handle(val) as usize;
+        let refs = ctx.with_state(|st| {
+            crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx)
+        });
+        for r in refs {
+            push_value_roots(ctx, r, visit);
+        }
+        return;
+    }
+    if value::is_scope_record(val) {
+        let handle = value::decode_scope_record_handle(val);
+        let refs = ctx.with_state(|st| {
+            crate::runtime_gc::side_table_refs::collect_scope_record_refs(st, handle)
+        });
+        for r in refs {
+            push_value_roots(ctx, r, visit);
+        }
+        return;
+    }
+    // 其余 tag（bigint/symbol/regexp/enumerator/runtime_string/exception）：
+    // 侧表不含 obj_table 引用，不需追踪。
 }
 
 /// 从 native_callable 表项提取其内部持有的对象引用。
@@ -372,6 +412,9 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             if let Some(v) = r.pending_byob_view {
                 out.push(v);
             }
+            if let Some(v) = r.closed_promise {
+                out.push(v);
+            }
         }
 
         // byob_request_table：view / promise
@@ -397,6 +440,11 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             out.extend(c.underlying_source);
             out.extend(c.pull_callback);
             out.extend(c.cancel_callback);
+            out.extend(c.strategy_size);
+            out.extend(c.abort_reason);
+            for chunk in c.chunk_queue.iter() {
+                out.push(*chunk);
+            }
         }
 
         // timers：callback（TimerEntry 非 Clone，在 guard 内直接取字段）
@@ -410,6 +458,87 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             &st.array_named_props,
             &mut out,
         );
+
+        // map_table: keys + values（全量扫描——Map 对象的 __map_handle__ 属性是数字，
+        // collect_child_raw_values 的 tag_needs_root 对数字返回 false，无法从 mark phase 追踪）
+        if let Ok(table) = st.map_table.lock() {
+            for entry in table.iter() {
+                out.extend(entry.keys.iter().copied());
+                out.extend(entry.values.iter().copied());
+            }
+        }
+        // set_table: values（同 map_table 理由）
+        if let Ok(table) = st.set_table.lock() {
+            for entry in table.iter() {
+                out.extend(entry.values.iter().copied());
+            }
+        }
+        // async_generator_table: continuation + active_request + queue + waiting_resume_promise
+        if let Ok(table) = st.async_generator_table.lock() {
+            for entry in table.iter() {
+                out.push(entry.continuation);
+                if let Some(v) = entry.waiting_resume_promise {
+                    out.push(v);
+                }
+                if let Some(req) = &entry.active_request {
+                    out.push(req.value);
+                    out.push(req.promise);
+                }
+                for req in entry.queue.iter() {
+                    out.push(req.value);
+                    out.push(req.promise);
+                }
+            }
+        }
+        // async_from_sync_iterators: sync_iterator + outer_iter
+        if let Ok(table) = st.async_from_sync_iterators.lock() {
+            for entry in table.iter() {
+                out.push(entry.sync_iterator);
+                out.push(entry.outer_iter);
+            }
+        }
+        // writable_stream_table: error + abort_signal
+        if let Ok(table) = st.writable_stream_table.lock() {
+            for entry in table.iter() {
+                if let Some(v) = entry.error {
+                    out.push(v);
+                }
+                if let Some(v) = entry.abort_signal {
+                    out.push(v);
+                }
+            }
+        }
+        // writer_table: closed_promise + ready_promise
+        if let Ok(table) = st.writer_table.lock() {
+            for entry in table.iter() {
+                if let Some(v) = entry.closed_promise {
+                    out.push(v);
+                }
+                if let Some(v) = entry.ready_promise {
+                    out.push(v);
+                }
+            }
+        }
+        // transform_stream_table: transform_callback + flush_callback + transformer_this + readable_obj + writable_obj
+        if let Ok(table) = st.transform_stream_table.lock() {
+            for entry in table.iter() {
+                if let Some(v) = entry.transform_callback {
+                    out.push(v);
+                }
+                if let Some(v) = entry.flush_callback {
+                    out.push(v);
+                }
+                if let Some(v) = entry.transformer_this {
+                    out.push(v);
+                }
+                if let Some(v) = entry.readable_obj {
+                    out.push(v);
+                }
+                if let Some(v) = entry.writable_obj {
+                    out.push(v);
+                }
+            }
+        }
     });
 
     out
