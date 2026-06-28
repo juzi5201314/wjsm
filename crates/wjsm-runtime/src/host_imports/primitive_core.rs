@@ -656,7 +656,19 @@ pub(crate) fn define_primitive_core(
                 if let Some(e) = table.get_mut(handle as usize) {
                     if let Some(end) = match_end {
                         // 找到匹配：更新 lastIndex 到匹配结束位置
-                        e.last_index = end as i64;
+                        let mut new_index = end as i64;
+                        // 空匹配推进：避免死循环 (§22.2.6.2.2 step 21)
+                        if end == start_pos && (start_pos as usize) < s.len() {
+                            // 推进一个 Unicode 字符（u标志按码点，否则按UTF-8字符）
+                            let tail = &s[start_pos as usize..];
+                            let advance = if let Some(ch) = tail.chars().next() {
+                                ch.len_utf8() as i64
+                            } else {
+                                1
+                            };
+                            new_index = start_pos as i64 + advance;
+                        }
+                        e.last_index = new_index;
                     } else {
                         // 无匹配或粘性失败：重置 lastIndex 为 0
                         e.last_index = 0;
@@ -843,7 +855,19 @@ pub(crate) fn define_primitive_core(
                     if is_global || is_sticky {
                         let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(e) = table.get_mut(handle as usize) {
-                            e.last_index = m.end() as i64;
+                            let end = m.end();
+                            let mut new_index = end as i64;
+                            // 空匹配推进：避免死循环 (§22.2.6.2.2 step 21)
+                            if end == start_pos && (start_pos as usize) < s.len() {
+                                let tail = &s[start_pos as usize..];
+                                let advance = if let Some(ch) = tail.chars().next() {
+                                    ch.len_utf8() as i64
+                                } else {
+                                    1
+                                };
+                                new_index = start_pos as i64 + advance;
+                            }
+                            e.last_index = new_index;
                         }
                     }
                     build_match_result(
