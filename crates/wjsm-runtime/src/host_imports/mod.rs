@@ -18,6 +18,7 @@ pub(crate) use proxy_reflect_async::define_proxy_reflect_async;
 pub(crate) use reentrant_async::define_array_object_async;
 pub(crate) use reentrant_async::define_misc_async;
 pub(crate) use reentrant_async::define_primitive_core_async;
+pub(crate) use reentrant_async::string_replace_default_async_body;
 pub(crate) use reentrant_async::define_proxy_traps_async;
 pub(crate) use reentrant_async::define_timers_arrays_async;
 pub(crate) use reentrant_async::define_typedarray_new_methods_async;
@@ -54,6 +55,7 @@ mod weakref_finalization;
 
 pub(crate) use array_object::define_array_object;
 pub(crate) use array_object::array_set_length_impl;
+pub(crate) use array_object::array_from_impl_async;
 pub(crate) use atomics::define_atomics;
 pub(crate) use collections_buffers::define_collections_buffers;
 
@@ -91,7 +93,6 @@ pub(crate) use streams_writable::call_writable_controller_method_from_caller;
 pub(crate) use streams_writable::call_writable_stream_method_from_caller;
 pub(crate) use streams_writable::construct_writable_stream;
 pub(crate) use string_methods::define_string_methods;
-pub(crate) use string_methods::string_from_utf16_code_unit;
 pub(crate) use timers_arrays::define_timers_arrays;
 pub(crate) use typedarray_new_methods::define_typedarray_new_methods;
 pub(crate) use weakref_finalization::define_weakref_finalization;

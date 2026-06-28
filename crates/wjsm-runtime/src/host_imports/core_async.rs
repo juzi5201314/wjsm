@@ -251,6 +251,11 @@ pub(crate) fn define_core_async(
                     *index += 1;
                     return value::encode_undefined();
                 }
+                IteratorState::RegExpStringIter { .. } => {
+                    drop(iters);
+                    regexp_string_iter_next(caller, handle_idx);
+                    return value::encode_undefined();
+                }
                 IteratorState::ObjectIter { iterator, next, .. } => (*iterator, *next),
                 IteratorState::Error => {
                     drop(iters);
@@ -410,6 +415,10 @@ pub(crate) fn define_core_async(
                 IteratorState::TypedArrayValueIter { index, length, .. }
                 | IteratorState::TypedArrayEntryIter { index, length, .. } => {
                     return value::encode_bool(*index >= *length);
+                }
+                IteratorState::RegExpStringIter { .. } => {
+                    drop(iters);
+                    return value::encode_bool(regexp_string_iter_ensure_current(caller, handle_idx));
                 }
                 IteratorState::ObjectIter {
                     iterator,

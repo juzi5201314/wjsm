@@ -81,6 +81,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::BigIntPrimitiveMethod => NativeCallable::BigIntPrimitiveMethod { method },
             Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method },
             Self::SymbolPrimitiveMethod => NativeCallable::SymbolPrimitiveMethod { method },
+            Self::RegExpPrimitiveMethod => NativeCallable::RegExpPrimitiveMethod { method },
             Self::SymbolProtoDescriptionGetter => NativeCallable::SymbolProtoDescriptionGetter,
             Self::SymbolProtoToPrimitive => NativeCallable::SymbolProtoToPrimitive,
             Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
@@ -159,6 +160,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::BigIntPrimitiveMethod { method: _ } => Self::BigIntPrimitiveMethod,
             NativeCallable::NumberPrimitiveMethod { method: _ } => Self::NumberPrimitiveMethod,
             NativeCallable::SymbolPrimitiveMethod { method: _ } => Self::SymbolPrimitiveMethod,
+            NativeCallable::RegExpPrimitiveMethod { method: _ } => Self::RegExpPrimitiveMethod,
             NativeCallable::SymbolProtoDescriptionGetter => Self::SymbolProtoDescriptionGetter,
             NativeCallable::SymbolProtoToPrimitive => Self::SymbolProtoToPrimitive,
             NativeCallable::TypedArrayConstructor(()) => Self::TypedArrayConstructor,
@@ -189,6 +191,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::ReadableStreamByobRequestMethod { .. }
             | NativeCallable::ReadableStreamAsyncIteratorNext { .. }
             | NativeCallable::ReadableStreamAsyncIteratorReturn { .. }
+            | NativeCallable::RegExpStringIteratorNext { .. }
+            | NativeCallable::RegExpStringIteratorSelf
             | NativeCallable::WritableStreamMethod { .. }
             | NativeCallable::WritableStreamDefaultWriterMethod { .. }
             | NativeCallable::WritableStreamDefaultControllerMethod { .. }

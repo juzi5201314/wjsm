@@ -53,6 +53,9 @@ pub(crate) fn get_by_name_id_sync(
     if value::is_array(obj) && is_symbol_name_id(name_id) {
         return array_named_get_sync(caller, obj, name_id);
     }
+    if value::is_regexp(obj) {
+        return crate::primitive_regexp_get_property_impl(caller, obj, name_id);
+    }
     if value::is_proxy(obj) {
         let rt = tokio::runtime::Handle::current();
         return tokio::task::block_in_place(|| {
@@ -154,6 +157,9 @@ fn get_by_name_id_on_proto_chain(
 fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_id: u32) -> i64 {
     if value::is_proxy(value_val) {
         return get_v_proxy_by_name_id(caller, value_val, name_id);
+    }
+    if value::is_regexp(value_val) {
+        return crate::primitive_regexp_get_property_impl(caller, value_val, name_id);
     }
 
     let Some(ptr) = resolve_handle(caller, value_val) else {

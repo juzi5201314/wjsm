@@ -251,6 +251,73 @@ impl Lowerer {
                 );
                 return Ok((dest, block));
             }
+            if ident.sym == "RegExp" && self.scopes.lookup(&ident.sym).is_err() {
+                let mut call_block = block;
+                let callee_val = self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
+
+                let this_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    call_block,
+                    Instruction::NewObject {
+                        dest: this_val,
+                        capacity: 0,
+                    },
+                );
+
+                let cap = new_expr.args.as_ref().map_or(0, |a| a.len());
+                let mut arg_vals = Vec::with_capacity(cap);
+                if let Some(args) = &new_expr.args {
+                    for arg in args {
+                        let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+                        arg_vals.push(arg_val);
+                    }
+                }
+
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    call_block,
+                    Instruction::ConstructCall {
+                        dest: Some(dest),
+                        callee: callee_val,
+                        this_val,
+                        args: arg_vals,
+                    },
+                );
+
+                if self.expr_exception_fork_allowed() {
+                    let is_exc = self.alloc_value();
+                    self.current_function.append_instruction(
+                        call_block,
+                        Instruction::IsException {
+                            dest: is_exc,
+                            value: dest,
+                        },
+                    );
+                    let continue_block = self.current_function.new_block();
+                    let exc_block = self.current_function.new_block();
+                    self.current_function.set_terminator(
+                        call_block,
+                        Terminator::Branch {
+                            condition: is_exc,
+                            true_block: exc_block,
+                            false_block: continue_block,
+                        },
+                    );
+                    let thrown_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        exc_block,
+                        Instruction::CallBuiltin {
+                            dest: Some(thrown_val),
+                            builtin: Builtin::ExceptionValue,
+                            args: vec![dest],
+                        },
+                    );
+                    self.emit_throw_value(exc_block, thrown_val)?;
+                    return Ok((dest, self.resolve_store_block(continue_block)));
+                }
+
+                return Ok((dest, call_block));
+            }
             // WeakRef / FinalizationRegistry constructors (can throw — need exception checking)
             if self.scopes.lookup(&ident.sym).is_err()
                 && let Some(builtin) = builtin_from_global_ident(&ident.sym)

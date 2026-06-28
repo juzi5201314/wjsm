@@ -1,4 +1,5 @@
 use super::*;
+use wjsm_ir::wk_symbol;
 fn build_groups_obj_from_named(
     caller: &mut Caller<'_, RuntimeState>,
     named: &[(String, Option<std::ops::Range<usize>>)],
@@ -163,13 +164,13 @@ async fn call_replace_func_async(
     replace_callback_result_to_string(caller, result)
 }
 
-pub(crate) async fn string_replace_async_body(
-    mut caller: Caller<'_, RuntimeState>,
+pub(crate) async fn string_replace_default_async_body(
+    caller: &mut Caller<'_, RuntimeState>,
     receiver: i64,
     search: i64,
     replace: i64,
 ) -> i64 {
-    let s = get_string_value(&mut caller, receiver);
+    let s = get_string_value(caller, receiver);
 
     // 检查 replace 是否为函数（支持函数替换）
     let is_func_replace = value::is_callable(replace);
@@ -179,7 +180,7 @@ pub(crate) async fn string_replace_async_body(
             let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
             match table.get(value::decode_regexp_handle(search) as usize) {
                 Some(e) => e.clone(),
-                None => return store_runtime_string(&caller, s),
+                None => return store_runtime_string(&*caller, s),
             }
         };
 
@@ -216,10 +217,10 @@ pub(crate) async fn string_replace_async_body(
                     let groups_obj = if mi.named.is_empty() {
                         value::encode_undefined()
                     } else {
-                        build_groups_obj_from_named(&mut caller, &mi.named, &s)
+                        build_groups_obj_from_named(caller, &mi.named, &s)
                     };
                     call_replace_func_async(
-                        &mut caller,
+                        caller,
                         replace,
                         &s,
                         mi.start,
@@ -229,7 +230,7 @@ pub(crate) async fn string_replace_async_body(
                     )
                     .await
                 } else {
-                    let replace_str = get_string_value(&mut caller, replace);
+                    let replace_str = get_string_value(caller, replace);
                     process_replacement_from_captures(
                         &replace_str,
                         &s,
@@ -243,7 +244,7 @@ pub(crate) async fn string_replace_async_body(
                 last_end = mi.end;
             }
             result.push_str(&s[last_end..]);
-            store_runtime_string(&caller, result)
+            store_runtime_string(&*caller, result)
         } else {
             // 单次替换
             match entry.compiled.find(&s) {
@@ -259,12 +260,12 @@ pub(crate) async fn string_replace_async_body(
                     let groups_obj = if named.is_empty() {
                         value::encode_undefined()
                     } else {
-                        build_groups_obj_from_named(&mut caller, &named, &s)
+                        build_groups_obj_from_named(caller, &named, &s)
                     };
                     // Match 不再使用 — 所有数据已提取
                     let replaced = if is_func_replace {
                         call_replace_func_async(
-                            &mut caller,
+                            caller,
                             replace,
                             &s,
                             match_start,
@@ -274,7 +275,7 @@ pub(crate) async fn string_replace_async_body(
                         )
                         .await
                     } else {
-                        let replace_str = get_string_value(&mut caller, replace);
+                        let replace_str = get_string_value(caller, replace);
                         process_replacement_from_captures(
                             &replace_str,
                             &s,
@@ -288,21 +289,21 @@ pub(crate) async fn string_replace_async_body(
                     result.push_str(&s[..match_start]);
                     result.push_str(&replaced);
                     result.push_str(&s[match_end..]);
-                    store_runtime_string(&caller, result)
+                    store_runtime_string(&*caller, result)
                 }
-                None => store_runtime_string(&caller, s),
+                None => store_runtime_string(&*caller, s),
             }
         }
     } else {
         // 字符串替换
-        let search_str = get_string_value(&mut caller, search);
+        let search_str = get_string_value(caller, search);
         if let Some(pos) = s.find(&search_str) {
             // 对于字符串搜索，函数替换的参数是：matched, offset, string
             let replaced = if is_func_replace {
                 // 构造 captures（只有完整匹配）
                 let captures = vec![Some(pos..pos + search_str.len())];
                 call_replace_func_async(
-                    &mut caller,
+                    caller,
                     replace,
                     &s,
                     pos,
@@ -312,17 +313,99 @@ pub(crate) async fn string_replace_async_body(
                 )
                 .await
             } else {
-                get_string_value(&mut caller, replace)
+                get_string_value(caller, replace)
             };
             let mut result = String::new();
             result.push_str(&s[..pos]);
             result.push_str(&replaced);
             result.push_str(&s[pos + search_str.len()..]);
-            store_runtime_string(&caller, result)
+            store_runtime_string(&*caller, result)
         } else {
-            store_runtime_string(&caller, s)
+            store_runtime_string(&*caller, s)
         }
     }
+}
+
+pub(crate) async fn string_replace_async_body(
+    mut caller: Caller<'_, RuntimeState>,
+    receiver: i64,
+    search: i64,
+    replace: i64,
+) -> i64 {
+    if let Some(result) = call_symbol_method_async(
+        &mut caller,
+        search,
+        wk_symbol::REPLACE,
+        search,
+        &[receiver, replace],
+    )
+    .await
+    {
+        return result;
+    }
+    string_replace_default_async_body(&mut caller, receiver, search, replace).await
+}
+
+pub(crate) async fn string_match_async_body(
+    mut caller: Caller<'_, RuntimeState>,
+    receiver: i64,
+    regexp: i64,
+) -> i64 {
+    if let Some(result) =
+        call_symbol_method_async(&mut caller, regexp, wk_symbol::MATCH, regexp, &[receiver]).await
+    {
+        return result;
+    }
+    regexp_string_match_default(&mut caller, receiver, regexp)
+}
+
+pub(crate) async fn string_search_async_body(
+    mut caller: Caller<'_, RuntimeState>,
+    receiver: i64,
+    regexp: i64,
+) -> i64 {
+    if let Some(result) =
+        call_symbol_method_async(&mut caller, regexp, wk_symbol::SEARCH, regexp, &[receiver]).await
+    {
+        return result;
+    }
+    regexp_string_search_default(&mut caller, receiver, regexp)
+}
+
+pub(crate) async fn string_split_async_body(
+    mut caller: Caller<'_, RuntimeState>,
+    receiver: i64,
+    sep: i64,
+    limit: i64,
+) -> i64 {
+    if let Some(result) =
+        call_symbol_method_async(&mut caller, sep, wk_symbol::SPLIT, sep, &[receiver, limit]).await
+    {
+        return result;
+    }
+    regexp_string_split_default(&mut caller, receiver, sep, limit)
+}
+
+pub(crate) async fn string_match_all_async_body(
+    mut caller: Caller<'_, RuntimeState>,
+    this_val: i64,
+    args_base: i32,
+    args_count: i32,
+) -> i64 {
+    if args_count < 1 {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: String.prototype.matchAll requires a regexp argument".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    let regexp = read_shadow_arg(&mut caller, args_base, 0);
+    if let Some(result) =
+        call_symbol_method_async(&mut caller, regexp, wk_symbol::MATCH_ALL, regexp, &[this_val]).await
+    {
+        return result;
+    }
+    regexp_match_all_default(&mut caller, this_val, regexp)
 }
 
 pub(crate) fn define_primitive_core_async(
@@ -336,6 +419,36 @@ pub(crate) fn define_primitive_core_async(
             Box::new(
                 async move { string_replace_async_body(caller, receiver, search, replace).await },
             )
+        },
+    )?;
+    linker.func_wrap_async(
+        "env",
+        "string_match",
+        |caller: Caller<'_, RuntimeState>, (receiver, regexp): (i64, i64)| {
+            Box::new(async move { string_match_async_body(caller, receiver, regexp).await })
+        },
+    )?;
+    linker.func_wrap_async(
+        "env",
+        "string_search",
+        |caller: Caller<'_, RuntimeState>, (receiver, regexp): (i64, i64)| {
+            Box::new(async move { string_search_async_body(caller, receiver, regexp).await })
+        },
+    )?;
+    linker.func_wrap_async(
+        "env",
+        "string_split",
+        |caller: Caller<'_, RuntimeState>, (receiver, sep, limit): (i64, i64, i64)| {
+            Box::new(async move { string_split_async_body(caller, receiver, sep, limit).await })
+        },
+    )?;
+    linker.func_wrap_async(
+        "env",
+        "string_match_all",
+        |caller: Caller<'_, RuntimeState>, (_env, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                string_match_all_async_body(caller, this_val, args_base, args_count).await
+            })
         },
     )?;
     Ok(())

@@ -209,204 +209,7 @@ pub(super) fn register_common_bridges(
         },
     );
     linker.define(&mut *store, "env", "native_callable_get_property", f)?;
-    // array.from
-    let f = Func::wrap(
-        &mut *store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         _this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            if args_count < 1 {
-                return value::encode_undefined();
-            }
-            let memory = caller
-                .get_export("memory")
-                .and_then(|e| e.into_memory())
-                .unwrap();
-            let mut buf = [0u8; 8];
-            let _ = memory.read(&mut caller, args_base as usize, &mut buf);
-            let source = i64::from_le_bytes(buf);
-            if value::is_iterator(source) {
-                let handle_idx = value::decode_handle(source) as usize;
-                enum PendingIteratorValue {
-                    Value(i64),
-                    TypedArrayValue { entry: TypedArrayEntry, index: u32 },
-                    TypedArrayEntry { entry: TypedArrayEntry, index: u32 },
-                }
-                let mut values = Vec::new();
-                loop {
-                    let pending = {
-                        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
-                        match iters.get_mut(handle_idx) {
-                            Some(IteratorState::MapKeyIter { map_handle, index }) => {
-                                let table =
-                                    caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
-                                let pending = if *map_handle < table.len() as u32 {
-                                    let entry = &table[*map_handle as usize];
-                                    let idx = *index as usize;
-                                    if idx < entry.keys.len() {
-                                        let value = entry.keys[idx];
-                                        *index += 1;
-                                        Some(PendingIteratorValue::Value(value))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                };
-                                drop(table);
-                                pending
-                            }
-                            Some(IteratorState::MapValueIter { map_handle, index }) => {
-                                let table =
-                                    caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
-                                let pending = if *map_handle < table.len() as u32 {
-                                    let entry = &table[*map_handle as usize];
-                                    let idx = *index as usize;
-                                    if idx < entry.values.len() {
-                                        let value = entry.values[idx];
-                                        *index += 1;
-                                        Some(PendingIteratorValue::Value(value))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                };
-                                drop(table);
-                                pending
-                            }
-                            Some(IteratorState::SetValueIter { set_handle, index }) => {
-                                let table =
-                                    caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
-                                let pending = if *set_handle < table.len() as u32 {
-                                    let entry = &table[*set_handle as usize];
-                                    let idx = *index as usize;
-                                    if idx < entry.values.len() {
-                                        let value = entry.values[idx];
-                                        *index += 1;
-                                        Some(PendingIteratorValue::Value(value))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                };
-                                drop(table);
-                                pending
-                            }
-                            Some(IteratorState::TypedArrayValueIter {
-                                entry,
-                                index,
-                                length,
-                            }) => {
-                                if *index < *length {
-                                    let entry = entry.clone();
-                                    let current = *index;
-                                    *index += 1;
-                                    Some(PendingIteratorValue::TypedArrayValue {
-                                        entry,
-                                        index: current,
-                                    })
-                                } else {
-                                    None
-                                }
-                            }
-                            Some(IteratorState::TypedArrayEntryIter {
-                                entry,
-                                index,
-                                length,
-                            }) => {
-                                if *index < *length {
-                                    let entry = entry.clone();
-                                    let current = *index;
-                                    *index += 1;
-                                    Some(PendingIteratorValue::TypedArrayEntry {
-                                        entry,
-                                        index: current,
-                                    })
-                                } else {
-                                    None
-                                }
-                            }
-                            Some(IteratorState::IndexValueIter { values, index }) => {
-                                if (*index as usize) < values.len() {
-                                    let val = values[*index as usize];
-                                    *index += 1;
-                                    Some(PendingIteratorValue::Value(val))
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => None,
-                        }
-                    };
-                    let Some(pending) = pending else {
-                        break;
-                    };
-                    match pending {
-                        PendingIteratorValue::Value(value) => values.push(value),
-                        PendingIteratorValue::TypedArrayValue { entry, index } => {
-                            values.push(
-                                typedarray_element_read_entry(&mut caller, &entry, index)
-                                    .unwrap_or_else(value::encode_undefined),
-                            );
-                        }
-                        PendingIteratorValue::TypedArrayEntry {
-                            entry: typedarray_entry,
-                            index,
-                        } => {
-                            let entry = alloc_array(&mut caller, 2);
-                            if let Some(entry_ptr) = resolve_array_ptr(&mut caller, entry) {
-                                let elem = typedarray_element_read_entry(
-                                    &mut caller,
-                                    &typedarray_entry,
-                                    index,
-                                )
-                                .unwrap_or_else(value::encode_undefined);
-                                write_array_elem(
-                                    &mut caller,
-                                    entry_ptr,
-                                    0,
-                                    value::encode_f64(index as f64),
-                                );
-                                write_array_elem(&mut caller, entry_ptr, 1, elem);
-                                write_array_length(&mut caller, entry_ptr, 2);
-                            }
-                            values.push(entry);
-                        }
-                    }
-                }
-                let arr = alloc_array(&mut caller, values.len() as u32);
-                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                    for (i, &val) in values.iter().enumerate() {
-                        write_array_elem(&mut caller, arr_ptr, i as u32, val);
-                    }
-                    write_array_length(&mut caller, arr_ptr, values.len() as u32);
-                }
-                return arr;
-            }
-            if let Some(entry) = typedarray_entry_from_value(&mut caller, source) {
-                let arr = alloc_array(&mut caller, entry.length);
-                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                    for i in 0..entry.length {
-                        let val = typedarray_element_read(&mut caller, source, i)
-                            .unwrap_or_else(value::encode_undefined);
-                        write_array_elem(&mut caller, arr_ptr, i, val);
-                    }
-                    write_array_length(&mut caller, arr_ptr, entry.length);
-                }
-                return arr;
-            }
-            if value::is_array(source) {
-                return source;
-            }
-            value::encode_undefined()
-        },
-    );
-    linker.define(&mut *store, "env", "array.from", f)?;
+    // array.from 已移至 register_complex_bridges（async，支持迭代协议 + mapFn reentry）
     // obj_get_by_index
     let f = Func::wrap(
         &mut *store,
@@ -864,6 +667,26 @@ pub(super) fn register_complex_bridges(
                     }
                 }
                 map_result
+            })
+        },
+    )?;
+    // array.from（async：可迭代对象需 @@iterator/next reentry，mapFn 需回调 reentry）
+    linker.func_wrap_async(
+        "env",
+        "array.from",
+        |mut caller: Caller<'_, RuntimeState>,
+         (_env, _this, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                if args_count < 1 {
+                    return value::encode_undefined();
+                }
+                let source = read_shadow_arg(&mut caller, args_base, 0);
+                let map_fn = if args_count >= 2 {
+                    read_shadow_arg(&mut caller, args_base, 1)
+                } else {
+                    value::encode_undefined()
+                };
+                crate::host_imports::array_from_impl_async(&mut caller, source, map_fn).await
             })
         },
     )?;

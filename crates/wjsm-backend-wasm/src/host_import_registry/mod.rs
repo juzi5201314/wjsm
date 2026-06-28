@@ -52,6 +52,8 @@ pub enum SpecialHostImport {
     PrimitiveBigIntGetMethod,
     PrimitiveNumberGetMethod,
     PrimitiveSymbolGetProperty,
+    PrimitiveRegExpGetProperty,
+    PrimitiveRegExpSetProperty,
     TypedArraySetByIndex,
     ArraySetLength,
     ArrayNamedGet,

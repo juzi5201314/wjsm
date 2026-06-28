@@ -461,6 +461,11 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     value::encode_undefined()
                 }
             }
+            IteratorState::RegExpStringIter { .. } => {
+                let idx = handle_idx;
+                drop(iters);
+                regexp_string_iter_value(caller, idx)
+            }
             IteratorState::ObjectIter { current_value, .. } => *current_value,
             IteratorState::Error => {
                 *caller

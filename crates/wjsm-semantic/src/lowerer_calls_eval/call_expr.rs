@@ -26,20 +26,28 @@ impl Lowerer {
         args: &[swc_ast::ExprOrSpread],
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        let this_val = self.lower_expr(obj, block)?;
+        // 实参求值可能引入控制流（闭包共享环境 phi、三元、new RegExp 异常分叉等），
+        // 必须用 lower_expr_then_continue 推进 call_block，否则 CallBuiltin 会发射在
+        // 过时的入口块上、先于实参指令执行——导致使用尚未定义的值（如 array.map(arr, closure)
+        // 在 closure 创建之前调用）。
+        let mut call_block = block;
+        let this_val = self.lower_expr_then_continue(obj, &mut call_block)?;
         let mut builtin_args = vec![this_val];
         for arg in args {
-            builtin_args.push(self.lower_expr(&arg.expr, block)?);
+            builtin_args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
         }
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            call_block,
             Instruction::CallBuiltin {
                 dest: Some(dest),
                 builtin,
                 args: builtin_args,
             },
         );
+        if call_block != block {
+            self.expr_merge_block = Some(call_block);
+        }
         Ok(dest)
     }
 
@@ -495,6 +503,7 @@ impl Lowerer {
         }
         // 性能优化：预分配容量避免循环中多次 reallocation
         let mut call_block = self.resolve_store_block(block);
+        let entry_block = call_block;
         let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
             let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
@@ -514,6 +523,13 @@ impl Lowerer {
                 args,
             },
         );
+        // 参数求值引入控制流（如实参为 `new RegExp(...)` 的异常分叉、三元、await 等）时，
+        // Call 已发射在推进后的延续块上。必须把该块经 expr_merge_block 上报，
+        // 否则外层语句（如变量声明的异常检查分叉）会在过时的入口块上继续，
+        // 覆盖延续块的终结器并使真正的 Call 落入不可达块。
+        if call_block != entry_block {
+            self.expr_merge_block = Some(call_block);
+        }
         Ok(dest)
     }
 

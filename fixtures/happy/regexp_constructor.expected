@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-0 2
-0 1
-1 2
-undefined
+foo g object
+ba(r) 
+x i
+object object
 --- stderr ---

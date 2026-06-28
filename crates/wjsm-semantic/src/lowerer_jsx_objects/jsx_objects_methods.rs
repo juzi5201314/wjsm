@@ -17,15 +17,22 @@ impl Lowerer {
             },
         );
 
+        // 属性值（方法闭包共享环境 phi、计算键的三元/new 异常分叉等）可能引入控制流，
+        // 推进 block。每个依赖该值的 SetProp/DefineProperty 必须发射在推进后的块上，
+        // 否则会先于值定义执行（如方法属性的闭包尚未创建就 SetProp）。
+        let original_block = block;
+        let mut block = block;
+
         for prop in &obj_expr.props {
             match prop {
                 swc_ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
                     swc_ast::Prop::KeyValue(kv) => {
-                        let val_dest = self.lower_expr(&kv.value, block)?;
-                        self.lower_object_prop(obj_dest, &kv.key, val_dest, block)?;
+                        let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
+                        self.lower_object_prop(obj_dest, &kv.key, val_dest, &mut block)?;
                     }
                     swc_ast::Prop::Shorthand(ident) => {
                         let val_dest = self.lower_ident(ident, block)?;
+                        block = self.resolve_store_block(block);
                         let key_str = ident.sym.to_string();
                         let key_const = self.module.add_constant(Constant::String(key_str));
                         let key_dest = self.alloc_value();
@@ -47,6 +54,7 @@ impl Lowerer {
                     }
                     swc_ast::Prop::Getter(getter) => {
                         let key_dest = self.lower_prop_name(&getter.key, block)?;
+                        block = self.resolve_store_block(block);
                         let body = getter
                             .body
                             .as_ref()
@@ -63,7 +71,9 @@ impl Lowerer {
                             home_object,
                             block,
                         )?;
+                        block = self.resolve_store_block(block);
                         let desc = self.build_descriptor("get", fn_value, true, true, block)?;
+                        block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
                             block,
                             Instruction::CallBuiltin {
@@ -75,6 +85,7 @@ impl Lowerer {
                     }
                     swc_ast::Prop::Setter(setter) => {
                         let key_dest = self.lower_prop_name(&setter.key, block)?;
+                        block = self.resolve_store_block(block);
                         let body = setter
                             .body
                             .as_ref()
@@ -91,7 +102,9 @@ impl Lowerer {
                             home_object,
                             block,
                         )?;
+                        block = self.resolve_store_block(block);
                         let desc = self.build_descriptor("set", fn_value, true, true, block)?;
+                        block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
                             block,
                             Instruction::CallBuiltin {
@@ -103,6 +116,7 @@ impl Lowerer {
                     }
                     swc_ast::Prop::Method(method) => {
                         let key_dest = self.lower_prop_name(&method.key, block)?;
+                        block = self.resolve_store_block(block);
                         let home_object = if method
                             .function
                             .body
@@ -119,6 +133,7 @@ impl Lowerer {
                             home_object,
                             block,
                         )?;
+                        block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
                             block,
                             Instruction::SetProp {
@@ -135,7 +150,7 @@ impl Lowerer {
                     }
                 },
                 swc_ast::PropOrSpread::Spread(spread) => {
-                    let source = self.lower_expr(&spread.expr, block)?;
+                    let source = self.lower_expr_then_continue(&spread.expr, &mut block)?;
                     self.current_function.append_instruction(
                         block,
                         Instruction::ObjectSpread {
@@ -147,6 +162,9 @@ impl Lowerer {
             }
         }
 
+        if block != original_block {
+            self.expr_merge_block = Some(block);
+        }
         Ok(obj_dest)
     }
 
@@ -194,7 +212,7 @@ impl Lowerer {
         obj_dest: ValueId,
         key: &swc_ast::PropName,
         val_dest: ValueId,
-        block: BasicBlockId,
+        block: &mut BasicBlockId,
     ) -> Result<(), LoweringError> {
         let is_proto_key = match key {
             swc_ast::PropName::Ident(ident) => ident.sym.as_ref() == "__proto__",
@@ -203,16 +221,17 @@ impl Lowerer {
         };
         if is_proto_key {
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::SetProto {
                     object: obj_dest,
                     value: val_dest,
                 },
             );
         } else {
-            let key_dest = self.lower_prop_name(key, block)?;
+            let key_dest = self.lower_prop_name(key, *block)?;
+            *block = self.resolve_store_block(*block);
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::SetProp {
                     object: obj_dest,
                     key: key_dest,

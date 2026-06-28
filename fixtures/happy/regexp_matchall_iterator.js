@@ -1,0 +1,12 @@
+var it = "a1b2c3".matchAll(/(\d)/g);
+console.log(Array.isArray(it), typeof it.next);
+console.log(it[Symbol.iterator]() === it);
+var first = it.next();
+console.log(first.done, first.value[0], first.value.index);
+var rest = [];
+for (var m of it) rest.push(m[0]);
+console.log(rest.join(","));
+var all = [..."x7y8".matchAll(/(\d)/g)].map(function(m){ return m[1]; });
+console.log(all.join(","));
+var mapped = Array.from("p9q0".matchAll(/(\d)/g), function(m){ return m.index; });
+console.log(mapped.join(","));

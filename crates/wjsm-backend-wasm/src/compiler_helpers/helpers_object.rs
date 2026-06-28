@@ -274,6 +274,19 @@ impl Compiler {
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
 
+            // TAG_REGEXP：RegExp.prototype 方法 / accessor-like data
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_REGEXP as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::PrimitiveRegExpGetProperty],
+            ));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
             // raw f64：Number.prototype 方法名 → NativeCallable
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -358,7 +371,8 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64ReinterpretF64);
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
-            // 数组 symbol 命名属性 → 宿主侧表
+            // 数组命名属性（symbol + 字符串）→ 宿主侧表。
+            // 找到（非 undefined）即返回；未找到落入原型链遍历解析 Array.prototype 方法。
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Load8U(MemArg {
@@ -369,17 +383,16 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Const(constants::NAME_ID_SYMBOL_FLAG as i32));
-            func.instruction(&WasmInstruction::I32And);
-            func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::I32Ne);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::Call(
                 self.special_host_import_indices[&SpecialHostImport::ArrayNamedGet],
             ));
+            func.instruction(&WasmInstruction::LocalTee(7));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(7));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
@@ -596,6 +609,18 @@ impl Compiler {
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_REGEXP as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::PrimitiveRegExpSetProperty],
+            ));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(value::TAG_FUNCTION as i32));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
@@ -663,7 +688,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
 
-            // 数组 symbol 命名属性 → 宿主侧表
+            // 数组命名属性（symbol + 字符串，length 已在上方处理）→ 宿主侧表。
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load8U(MemArg {
@@ -674,12 +699,6 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Const(constants::NAME_ID_SYMBOL_FLAG as i32));
-            func.instruction(&WasmInstruction::I32And);
-            func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::I32Ne);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::LocalGet(2));
@@ -687,7 +706,6 @@ impl Compiler {
                 self.special_host_import_indices[&SpecialHostImport::ArrayNamedSet],
             ));
             func.instruction(&WasmInstruction::Return);
-            func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
 
@@ -1186,6 +1204,13 @@ impl Compiler {
             func.instruction(&WasmInstruction::Call(
                 self.special_host_import_indices[&SpecialHostImport::ProxyTrapDelete],
             ));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_REGEXP as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(3));

@@ -482,6 +482,13 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::SymbolPrimitiveMethod { method } => {
             Some(invoke_symbol_primitive_method(caller, this_val, method))
         }
+        NativeCallable::RegExpPrimitiveMethod { method } => {
+            Some(invoke_regexp_primitive_method(caller, this_val, method, &args))
+        }
+        NativeCallable::RegExpStringIteratorNext { iter_handle } => {
+            Some(crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle))
+        }
+        NativeCallable::RegExpStringIteratorSelf => Some(this_val),
         NativeCallable::SymbolProtoDescriptionGetter => {
             Some(symbol_proto_description_getter_impl(caller, this_val))
         }
@@ -608,8 +615,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::FunctionConstructor
         | NativeCallable::BooleanConstructor
         | NativeCallable::NumberConstructor
-        | NativeCallable::BigIntConstructor
-        | NativeCallable::RegExpConstructor => Some(value::encode_undefined()),
+        | NativeCallable::BigIntConstructor => Some(value::encode_undefined()),
+        NativeCallable::RegExpConstructor => Some(regexp_constructor_impl(caller, this_val, &args)),
         NativeCallable::SymbolConstructor => Some({
             let desc = args
                 .first()
@@ -1089,6 +1096,13 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
             }
             Some(call_sync_iter_and_wrap_async(caller, sync_iter_handle, Some(arg), false).await)
         }
+        NativeCallable::RegExpPrimitiveMethod { method } => {
+            Some(invoke_regexp_primitive_method_async(caller, this_val, method, &args).await)
+        }
+        NativeCallable::RegExpStringIteratorNext { iter_handle } => {
+            Some(crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle))
+        }
+        NativeCallable::RegExpStringIteratorSelf => Some(this_val),
         NativeCallable::AgentStart
         | NativeCallable::AgentBroadcast
         | NativeCallable::AgentMonotonicNow => {
@@ -1409,6 +1423,17 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((false, entry))
                 } else {
                     Some((true, value::encode_undefined()))
+                }
+            }
+            Some(IteratorState::RegExpStringIter { .. }) => {
+                drop(iters);
+                let done = regexp_string_iter_ensure_current(caller, sync_handle_idx);
+                if done {
+                    Some((true, value::encode_undefined()))
+                } else {
+                    let val = regexp_string_iter_value(caller, sync_handle_idx);
+                    regexp_string_iter_next(caller, sync_handle_idx);
+                    Some((false, val))
                 }
             }
             Some(IteratorState::StringIter { byte_pos, data }) => {

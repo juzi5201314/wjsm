@@ -926,6 +926,12 @@ pub(crate) fn define_host_data_property_by_name_id_with_flags(
     val: i64,
     flags: i32,
 ) -> Option<()> {
+    // 数组实例：命名属性（含 .index/.input/.groups 等）存入宿主侧表，
+    // 与编译期 obj_set 的数组分支一致；直接写对象堆会把数组元素存储当属性槽而损坏。
+    if value::is_array(obj) {
+        crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
+        return Some(());
+    }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj_ptr =
         resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;

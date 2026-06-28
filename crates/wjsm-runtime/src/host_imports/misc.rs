@@ -19,7 +19,7 @@ pub(crate) fn define_misc(
 
     // ECMAScript [[Construct]] step 12 / Type(argument) is Object（wjsm: is_js_object）
     let is_js_object_fn = Func::wrap(&mut store, |val: i64| -> i64 {
-        value::encode_bool(value::is_js_object(val))
+        value::encode_bool(value::is_js_object(val) || value::is_regexp(val))
     });
     linker.define(&mut store, "env", "is_js_object", is_js_object_fn)?;
 

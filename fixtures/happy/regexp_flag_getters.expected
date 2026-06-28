@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+true true true true true true
+abc gimsuy
+true false
+false false 
+--- stderr ---

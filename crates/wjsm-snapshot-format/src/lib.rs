@@ -139,6 +139,7 @@ pub enum SnapshotNativeCallable {
     SymbolPrimitiveMethod = 60,
     SymbolProtoDescriptionGetter = 61,
     SymbolProtoToPrimitive = 62,
+    RegExpPrimitiveMethod = 63,
 }
 
 impl SnapshotNativeCallable {
@@ -207,6 +208,7 @@ impl SnapshotNativeCallable {
             60 => Some(Self::SymbolPrimitiveMethod),
             61 => Some(Self::SymbolProtoDescriptionGetter),
             62 => Some(Self::SymbolProtoToPrimitive),
+            63 => Some(Self::RegExpPrimitiveMethod),
             _ => None,
         }
     }

@@ -124,7 +124,9 @@ pub(crate) fn capture_startup_snapshot(
             );
             methods.push(match nc {
                 NativeCallable::NumberPrimitiveMethod { method }
-                | NativeCallable::BigIntPrimitiveMethod { method } => *method,
+                | NativeCallable::BigIntPrimitiveMethod { method }
+                | NativeCallable::SymbolPrimitiveMethod { method }
+                | NativeCallable::RegExpPrimitiveMethod { method } => *method,
                 _ => 0,
             });
         }

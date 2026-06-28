@@ -59,6 +59,8 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("array_set_length", 2),              // (i64, i64) -> i64
     ("array_named_get", 8),               // (i64, i32) -> i64
     ("array_named_set", 9),               // (i64, i32, i64) -> ()
+    ("primitive_regexp_get_property", 8), // (i64, i32) -> i64
+    ("primitive_regexp_set_property", 9), // (i64, i32, i64) -> ()
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
@@ -81,8 +83,10 @@ const HOST_TYPEDARRAY_SET_BY_INDEX: u32 = 15;
 const HOST_ARRAY_SET_LENGTH: u32 = 16;
 const HOST_ARRAY_NAMED_GET: u32 = 17;
 const HOST_ARRAY_NAMED_SET: u32 = 18;
+const HOST_PRIMITIVE_REGEXP_GET_PROPERTY: u32 = 19;
+const HOST_PRIMITIVE_REGEXP_SET_PROPERTY: u32 = 20;
 
-const NUM_HOST_IMPORTS: u32 = 19;
+const NUM_HOST_IMPORTS: u32 = 21;
 
 
 // ── Defined function indices ──────────────────────────────────────────
@@ -1111,6 +1115,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 19);
+        assert_eq!(HOST_IMPORTS.len(), 21);
     }
 }

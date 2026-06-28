@@ -4,5 +4,5 @@ exit_code: 0
 2026
 05
 22
-undefined
+{"year":"2026","month":"05","day":"22"}
 --- stderr ---

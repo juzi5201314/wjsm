@@ -114,6 +114,19 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
 
+    // TAG_REGEXP：RegExp.prototype 方法 / accessor-like data
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::I32Const(value::TAG_REGEXP as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(
+        HOST_PRIMITIVE_REGEXP_GET_PROPERTY,
+    ));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+
     // raw f64：Number.prototype 方法名 → NativeCallable
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -193,7 +206,8 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I64ReinterpretF64);
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
-    // 数组上的 symbol 等非索引命名属性 → 宿主侧表
+    // 数组上的命名属性（symbol + 字符串）→ 宿主侧表。
+    // 找到（非 undefined）即返回；未找到则落入原型链遍历以解析 Array.prototype 方法（如 .map）。
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
     func.instruction(&WasmInstruction::LocalGet(5));
     func.instruction(&WasmInstruction::I32Load8U(MemArg {
@@ -204,15 +218,14 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
     func.instruction(&WasmInstruction::I32Eq);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::I32Const(constants::NAME_ID_SYMBOL_FLAG as i32));
-    func.instruction(&WasmInstruction::I32And);
-    func.instruction(&WasmInstruction::I32Const(0));
-    func.instruction(&WasmInstruction::I32Ne);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::Call(HOST_ARRAY_NAMED_GET));
+    func.instruction(&WasmInstruction::LocalTee(7));
+    func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+    func.instruction(&WasmInstruction::I64Ne);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(7));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
@@ -422,6 +435,18 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::LocalGet(5));
+    func.instruction(&WasmInstruction::I32Const(value::TAG_REGEXP as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Call(
+        HOST_PRIMITIVE_REGEXP_SET_PROPERTY,
+    ));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::LocalGet(5));
     func.instruction(&WasmInstruction::I32Const(value::TAG_FUNCTION as i32));
     func.instruction(&WasmInstruction::I32Eq);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
@@ -485,7 +510,8 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::Call(HOST_ARRAY_SET_LENGTH));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
-    // 数组 symbol 命名属性 → 宿主侧表
+    // 数组命名属性（symbol + 字符串，length 已在上方处理）→ 宿主侧表。
+    // 数组元素通过 elem_get/elem_set 单独处理，故此处 name_id 必为非索引命名属性。
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
     func.instruction(&WasmInstruction::LocalGet(8));
     func.instruction(&WasmInstruction::I32Load8U(MemArg {
@@ -496,18 +522,11 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
     func.instruction(&WasmInstruction::I32Eq);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::I32Const(constants::NAME_ID_SYMBOL_FLAG as i32));
-    func.instruction(&WasmInstruction::I32And);
-    func.instruction(&WasmInstruction::I32Const(0));
-    func.instruction(&WasmInstruction::I32Ne);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::Call(HOST_ARRAY_NAMED_SET));
     func.instruction(&WasmInstruction::Return);
-    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
     // ── 搜索已有属性 ──
@@ -1013,6 +1032,13 @@ fn emit_obj_delete() -> Function {
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::Call(HOST_PROXY_TRAP_DELETE));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::I32Const(value::TAG_REGEXP as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::LocalGet(3));

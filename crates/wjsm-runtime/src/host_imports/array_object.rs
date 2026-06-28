@@ -959,6 +959,238 @@ pub(crate) async fn array_push_spread_impl_async(
     );
     value::encode_undefined()
 }
+/// ECMAScript §23.1.2.1 `Array.from(items, mapFn?)`：支持可迭代对象（@@iterator）、
+/// 类数组（length + 索引）、字符串、TypedArray；可选 mapFn 对每个元素调用 `mapFn(v, i)`。
+pub(crate) async fn array_from_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    source: i64,
+    map_fn: i64,
+) -> i64 {
+    let has_map_fn = value::is_callable(map_fn);
+    let values = match collect_array_from_values_async(caller, source).await {
+        Some(v) => v,
+        None => {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Array.from requires an array-like or iterable object".to_string(),
+            );
+            return value::encode_undefined();
+        }
+    };
+
+    let count = values.len() as u32;
+    let result = alloc_array(caller, count);
+    if resolve_array_ptr(caller, result).is_none() {
+        return value::encode_undefined();
+    }
+    for (i, raw) in values.into_iter().enumerate() {
+        let mapped = if has_map_fn {
+            let idx_val = value::encode_f64(i as f64);
+            let r = call_wasm_callback_async(caller, map_fn, value::encode_undefined(), &[raw, idx_val])
+                .await
+                .unwrap_or_else(|_| value::encode_undefined());
+            if value::is_exception(r) {
+                return r;
+            }
+            r
+        } else {
+            raw
+        };
+        // 回调可能触发 GC 搬移数组，重新解析指针后再写入。
+        let Some(arr_ptr) = resolve_array_ptr(caller, result) else {
+            return value::encode_undefined();
+        };
+        write_array_elem(caller, arr_ptr, i as u32, mapped);
+    }
+    let Some(arr_ptr) = resolve_array_ptr(caller, result) else {
+        return value::encode_undefined();
+    };
+    write_array_length(caller, arr_ptr, count);
+    result
+}
+
+/// 将 Array.from 的源收集为值序列。返回 None 表示既非可迭代也非类数组。
+async fn collect_array_from_values_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    source: i64,
+) -> Option<Vec<i64>> {
+    // 裸 TAG_ITERATOR（如 arr[Symbol.iterator]()）：按内部状态抽干非 reentrant 迭代器。
+    if value::is_iterator(source) {
+        return Some(drain_raw_iterator_values(caller, source));
+    }
+    // 数组快速路径
+    if value::is_array(source)
+        && let Some(ptr) = resolve_array_ptr(caller, source)
+    {
+        let len = read_array_length(caller, ptr).unwrap_or(0);
+        let mut out = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            out.push(read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined));
+        }
+        return Some(out);
+    }
+    // 字符串：按码点
+    if let Some(bytes) = read_value_string_bytes(caller, source) {
+        let mut out = Vec::new();
+        let mut byte_pos = 0usize;
+        while byte_pos < bytes.len() {
+            let ch_len = super::utf8_code_unit_len(bytes[byte_pos]);
+            let end = (byte_pos + ch_len).min(bytes.len());
+            let s = String::from_utf8_lossy(&bytes[byte_pos..end]).into_owned();
+            byte_pos += ch_len;
+            out.push(store_runtime_string(caller, s));
+        }
+        return Some(out);
+    }
+    // TypedArray
+    if let Some(entry) = typedarray_entry_from_value(caller, source) {
+        let mut out = Vec::with_capacity(entry.length as usize);
+        for i in 0..entry.length {
+            out.push(
+                typedarray_element_read(caller, source, i)
+                    .unwrap_or_else(value::encode_undefined),
+            );
+        }
+        return Some(out);
+    }
+    // 可迭代对象：通过 @@iterator + 迭代协议抽干
+    if let Some(ptr) = resolve_handle(caller, source)
+        && let Some(method) = read_iterator_method(caller, ptr)
+    {
+        let iterator = call_iterable_method_async(caller, method, source).await;
+        return collect_iterator_values_async(caller, iterator).await;
+    }
+    // 类数组：读取 length + 索引属性
+    if value::is_object(source) || value::is_function(source) {
+        if let Some(ptr) = resolve_handle(caller, source) {
+            let len_val = read_object_property_by_name(caller, ptr, "length")
+                .unwrap_or_else(value::encode_undefined);
+            let len = array_concat_to_length(caller, len_val).unwrap_or(0);
+            let mut out = Vec::with_capacity(len as usize);
+            for i in 0..len {
+                let key = i.to_string();
+                let cur = resolve_handle(caller, source)
+                    .and_then(|p| read_object_property_by_name(caller, p, &key))
+                    .unwrap_or_else(value::encode_undefined);
+                out.push(cur);
+            }
+            return Some(out);
+        }
+    }
+    None
+}
+/// 抽干裸 TAG_ITERATOR 的非 reentrant 内部状态为值序列（供 Array.from 处理
+/// `arr[Symbol.iterator]()` 等直接传入的迭代器）。reentrant 的 ObjectIter 不在此处理，
+/// 因为它需要异步回调 next()，应由 @@iterator 协议路径处理可迭代对象本身。
+fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i64) -> Vec<i64> {
+    let handle_idx = value::decode_handle(iterator) as usize;
+    let mut out = Vec::new();
+    loop {
+        // 判定 done 并推进 index；非支持状态则停止。
+        let done = {
+            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(iter) = iters.get_mut(handle_idx) else {
+                break;
+            };
+            match iter {
+                IteratorState::StringIter { byte_pos, data } => *byte_pos >= data.len(),
+                IteratorState::ArrayIter { index, length, .. } => *index >= *length,
+                IteratorState::IndexValueIter { index, values } => *index as usize >= values.len(),
+                IteratorState::MapKeyIter { index, map_handle }
+                | IteratorState::MapValueIter { index, map_handle }
+                | IteratorState::MapEntryIter { index, map_handle } => {
+                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                    *map_handle >= table.len() as u32
+                        || *index as usize >= table[*map_handle as usize].keys.len()
+                }
+                IteratorState::SetValueIter { index, set_handle } => {
+                    let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                    *set_handle >= table.len() as u32
+                        || *index as usize >= table[*set_handle as usize].values.len()
+                }
+                IteratorState::TypedArrayValueIter { index, length, .. }
+                | IteratorState::TypedArrayEntryIter { index, length, .. } => *index >= *length,
+                IteratorState::RegExpStringIter { .. } => {
+                    drop(iters);
+                    regexp_string_iter_ensure_current(caller, handle_idx)
+                }
+                // reentrant / 未知状态：停止抽干。
+                _ => true,
+            }
+        };
+        if done {
+            break;
+        }
+        let val = super::core::iterator_value_impl(caller, iterator);
+        out.push(val);
+        advance_raw_iterator(caller, handle_idx);
+    }
+    out
+}
+
+/// 推进裸迭代器的内部 index（与 drain_raw_iterator_values 配套）。
+fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) {
+    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(iter) = iters.get_mut(handle_idx) else {
+        return;
+    };
+    match iter {
+        IteratorState::StringIter { byte_pos, data } => {
+            if *byte_pos < data.len() {
+                *byte_pos += super::utf8_code_unit_len(data[*byte_pos]);
+            }
+        }
+        IteratorState::ArrayIter { index, .. }
+        | IteratorState::IndexValueIter { index, .. }
+        | IteratorState::MapKeyIter { index, .. }
+        | IteratorState::MapValueIter { index, .. }
+        | IteratorState::MapEntryIter { index, .. }
+        | IteratorState::SetValueIter { index, .. } => {
+            *index += 1;
+        }
+        IteratorState::TypedArrayValueIter { index, .. }
+        | IteratorState::TypedArrayEntryIter { index, .. } => {
+            *index += 1;
+        }
+        IteratorState::RegExpStringIter { .. } => {
+            drop(iters);
+            regexp_string_iter_next(caller, handle_idx);
+        }
+        _ => {}
+    }
+}
+
+/// 抽干一个迭代器（next/done/value 协议）为值序列。
+async fn collect_iterator_values_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    iterator: i64,
+) -> Option<Vec<i64>> {
+    let iter_ptr = resolve_handle(caller, iterator)?;
+    let next = read_object_property_by_name(caller, iter_ptr, "next")?;
+    if !value::is_callable(next) {
+        return None;
+    }
+    let mut out = Vec::new();
+    loop {
+        let result =
+            call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
+        if value::is_exception(result) {
+            return Some(out);
+        }
+        let Some(result_ptr) = resolve_handle(caller, result) else {
+            return Some(out);
+        };
+        let done = read_object_property_by_name(caller, result_ptr, "done")
+            .map(nanbox_to_bool)
+            .unwrap_or(true);
+        if done {
+            return Some(out);
+        }
+        let val = read_object_property_by_name(caller, result_ptr, "value")
+            .unwrap_or_else(value::encode_undefined);
+        out.push(val);
+    }
+}
 
 pub(crate) fn define_array_object(
     linker: &mut Linker<RuntimeState>,

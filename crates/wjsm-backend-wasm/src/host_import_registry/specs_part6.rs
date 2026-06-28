@@ -356,6 +356,22 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "primitive_regexp_get_property",
+        type_idx: 8,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::PrimitiveRegExpGetProperty,
+        )),
+        group: None,
+    },
+    HostImportSpec {
+        name: "primitive_regexp_set_property",
+        type_idx: 9,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::PrimitiveRegExpSetProperty,
+        )),
+        group: None,
+    },
+    HostImportSpec {
         name: "symbol_property_key",
         type_idx: 10,
         key: Some(HostImportKey::Special(SpecialHostImport::SymbolPropertyKey)),

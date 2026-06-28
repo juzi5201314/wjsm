@@ -22,7 +22,7 @@ pub const TABLE_IMPORT_NAME: &str = "__table";
 pub const MEMORY_IMPORT_NAME: &str = "memory";
 
 /// Support module ABI 版本；任何不兼容改动必须 +1。
-pub const SUPPORT_VERSION: u32 = 3;
+pub const SUPPORT_VERSION: u32 = 4;
 
 /// Support module 在共享 table 起始保留的 slot 数：
 /// 12 helper exports + 约 30 个 Array.prototype 方法 + 22 个 headroom = 64。

@@ -397,6 +397,10 @@ pub(crate) enum NativeCallable {
     SymbolPrimitiveMethod {
         method: u8,
     },
+    /// raw RegExp handle 上 RegExp.prototype/string-symbol 方法；method 定义在 runtime_regexp。
+    RegExpPrimitiveMethod {
+        method: u8,
+    },
     /// Symbol.prototype.description getter
     SymbolProtoDescriptionGetter,
     /// Symbol.prototype[Symbol.toPrimitive]
@@ -422,6 +426,12 @@ pub(crate) enum NativeCallable {
     },
     /// %AsyncIteratorPrototype%[Symbol.asyncIterator]() → return this
     AsyncIteratorProtoSymbolAsyncIterator,
+    /// RegExp String Iterator 的 next()：推进 RegExpStringIter 状态，返回 {value, done}。
+    RegExpStringIteratorNext {
+        iter_handle: u32,
+    },
+    /// RegExp String Iterator 的 [Symbol.iterator]() → return this。
+    RegExpStringIteratorSelf,
     /// Array.prototype.values() / arguments @@iterator。
     ArrayProtoValues,
     ArrayLikeIteratorNext {
@@ -873,6 +883,13 @@ pub(crate) enum IteratorState {
         entry: TypedArrayEntry,
         index: u32,
         length: u32,
+    },
+    RegExpStringIter {
+        entry: RegexEntry,
+        string: String,
+        next_index: usize,
+        current: Option<crate::runtime_regexp::RegExpStringMatchInfo>,
+        done: bool,
     },
     ObjectIter {
         iterator: i64,
