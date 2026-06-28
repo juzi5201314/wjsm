@@ -473,6 +473,16 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                 out.extend(entry.values.iter().copied());
             }
         }
+        // finalization_registry_table：callback 与 heldValue 为强引用；target/unregisterToken 保持弱语义。
+        if let Ok(table) = st.finalization_registry_table.lock() {
+            for entry in table.iter() {
+                out.push(entry.callback);
+                for registration in entry.registrations.iter() {
+                    out.push(registration.held_value);
+                }
+            }
+        }
+
         // async_generator_table: continuation + active_request + queue + waiting_resume_promise
         if let Ok(table) = st.async_generator_table.lock() {
             for entry in table.iter() {

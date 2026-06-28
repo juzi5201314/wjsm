@@ -52,7 +52,7 @@ pub(crate) struct WeakSetEntry {
 
 #[derive(Clone, Debug)]
 pub(crate) struct WeakRefEntry {
-    pub(crate) target_handle: u32,
+    pub(crate) target_handle: Option<u32>,
 }
 
 #[derive(Clone, Debug)]

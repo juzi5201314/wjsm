@@ -252,9 +252,16 @@ pub(crate) async fn drain_microtasks_async<
                 callback,
                 held_value,
             }) => {
-                ctx.state_mut()
-                    .pending_cleanup_callbacks.lock().unwrap_or_else(|e| e.into_inner())
-                    .push((callback, vec![held_value]));
+                if is_callable_with_env(ctx, env, callback) {
+                    let _ = call_host_function_with_args_async(
+                        ctx,
+                        env,
+                        callback,
+                        value::encode_undefined(),
+                        &[held_value],
+                    )
+                    .await;
+                }
             }
             Some(Microtask::ReadableStreamPull {
                 callback,

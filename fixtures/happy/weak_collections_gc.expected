@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+true
+after gc
+collected: weakmap-key
+collected: weakset-key
+--- stderr ---

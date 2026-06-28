@@ -38,9 +38,6 @@ pub(crate) fn weak_target_handle_index_of(
 
 /// sweep 将 obj_table 槽置 0 后，通过能否解析指针判断 handle 是否仍指向存活对象。
 pub(crate) fn obj_table_handle_live(caller: &mut Caller<'_, RuntimeState>, handle: u32) -> bool {
-    if handle == 0 {
-        return false;
-    }
     resolve_handle_idx(caller, handle as usize).is_some()
 }
 

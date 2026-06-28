@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+after gc
+cleaned: held-value
+--- stderr ---

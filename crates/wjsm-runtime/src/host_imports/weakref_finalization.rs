@@ -79,7 +79,7 @@ pub(crate) fn define_weakref_finalization(
                     .data()
                     .weakref_table.lock().unwrap_or_else(|e| e.into_inner());
                 let weakref_index = table.len() as u32;
-                table.push(WeakRefEntry { target_handle });
+                table.push(WeakRefEntry { target_handle: Some(target_handle) });
                 handle = weakref_index;
             }
             // Create the deref method NativeCallable

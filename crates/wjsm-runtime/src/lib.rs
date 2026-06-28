@@ -511,7 +511,6 @@ impl Clone for RuntimeState {
             weakset_table: self.weakset_table.clone(),
             weakref_table: self.weakref_table.clone(),
             finalization_registry_table: self.finalization_registry_table.clone(),
-            pending_cleanup_callbacks: self.pending_cleanup_callbacks.clone(),
             proxy_table: self.proxy_table.clone(),
             arraybuffer_table: self.arraybuffer_table.clone(),
             dataview_table: self.dataview_table.clone(),
@@ -633,9 +632,6 @@ struct RuntimeState {
     array_named_props: array_named_props::ArrayNamedPropsStore,
     /// FinalizationRegistry 侧表：存储 registry 对象、callback 和注册信息
     finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>>,
-    /// GC 后待调度的清理回调
-    #[allow(clippy::type_complexity)]
-    pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>>,
     /// Proxy 侧表：存储 Proxy 对象的 target、handler 和 revoked 状态
     proxy_table: Arc<Mutex<Vec<ProxyEntry>>>,
     /// ArrayBuffer 侧表：存储 ArrayBuffer 的底层数据
@@ -857,7 +853,6 @@ impl RuntimeState {
             weakset_table: Arc::new(Mutex::new(Vec::new())),
             weakref_table: Arc::new(Mutex::new(Vec::new())),
             finalization_registry_table: Arc::new(Mutex::new(Vec::new())),
-            pending_cleanup_callbacks: Arc::new(Mutex::new(Vec::new())),
             proxy_table: Arc::new(Mutex::new(Vec::new())),
             arraybuffer_table: Arc::new(Mutex::new(Vec::new())),
             dataview_table: Arc::new(Mutex::new(Vec::new())),

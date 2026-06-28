@@ -15,8 +15,8 @@ pub fn process_weak_refs_after_sweep(ctx: &mut GcContext, freed_handles: &[Handl
         {
             let mut table = st.weakref_table.lock().expect("weakref table mutex");
             for entry in table.iter_mut() {
-                if entry.target_handle != 0 && freed.contains(&entry.target_handle) {
-                    entry.target_handle = 0;
+                if entry.target_handle.is_some_and(|handle| freed.contains(&handle)) {
+                    entry.target_handle = None;
                 }
             }
         }

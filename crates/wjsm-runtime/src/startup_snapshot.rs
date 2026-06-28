@@ -323,16 +323,6 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
             bail!("capture: async_from_sync_iterators not empty");
         }
     }
-    {
-        let pcc = data
-            .pending_cleanup_callbacks.lock().unwrap_or_else(|e| e.into_inner());
-        if !pcc.is_empty() {
-            bail!(
-                "capture: pending_cleanup_callbacks not empty ({} entries)",
-                pcc.len()
-            );
-        }
-    }
     Ok(())
 }
 
