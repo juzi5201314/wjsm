@@ -53,10 +53,12 @@ pub(crate) fn define_promise_combinators(
             let mut rejected = None;
 
             for (index, elem) in elems.iter().copied().enumerate() {
+                if rejected.is_some() {
+                    break;
+                }
                 let mut fulfilled = None;
                 let mut rejected_elem = None;
                 let mut pending = false;
-                let mut known_promise = false;
 
                 if value::is_object(elem) {
                     let elem_handle = value::decode_object_handle(elem) as usize;
@@ -64,7 +66,6 @@ pub(crate) fn define_promise_combinators(
                         .data()
                         .promise_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
-                        known_promise = true;
                         entry.handled = true; // §27.2.4.1.1 — 标记所有已知 promise 为已处理
                         match entry.state.clone() {
                             PromiseState::Fulfilled(value) => fulfilled = Some(value),
@@ -108,7 +109,6 @@ pub(crate) fn define_promise_combinators(
                     if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
                         write_array_elem(&mut caller, result_ptr, index as u32, value);
                     }
-                    let _ = known_promise;
                 }
             }
 
