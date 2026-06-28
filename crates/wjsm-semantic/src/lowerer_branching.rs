@@ -789,6 +789,8 @@ impl Lowerer {
                         }
                         _ => {
                             let exc_var = self.try_contexts.last().unwrap().exception_var.clone();
+                            self.try_contexts.pop();
+                            try_ctx_popped = true;
                             let exc_val = self.alloc_value();
                             self.current_function.append_instruction(
                                 catch_entry,
@@ -797,6 +799,49 @@ impl Lowerer {
                                     name: exc_var,
                                 },
                             );
+                            // 检查 null/undefined 并抛出 TypeError
+                            let is_nullish = self.alloc_value();
+                            self.current_function.append_instruction(
+                                catch_entry,
+                                Instruction::Unary {
+                                    dest: is_nullish,
+                                    op: UnaryOp::IsNullish,
+                                    value: exc_val,
+                                },
+                            );
+                            let destructure_block = self.current_function.new_block();
+                            let throw_block = self.current_function.new_block();
+                            self.current_function.set_terminator(
+                                catch_entry,
+                                Terminator::Branch {
+                                    condition: is_nullish,
+                                    true_block: throw_block,
+                                    false_block: destructure_block,
+                                },
+                            );
+                            {
+                                let msg_const = self.module.add_constant(Constant::String(
+                                    "Cannot destructure null or undefined".to_string(),
+                                ));
+                                let msg_val = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    throw_block,
+                                    Instruction::Const {
+                                        dest: msg_val,
+                                        constant: msg_const,
+                                    },
+                                );
+                                let error_val = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    throw_block,
+                                    Instruction::CallBuiltin {
+                                        dest: Some(error_val),
+                                        builtin: Builtin::TypeErrorConstructor,
+                                        args: vec![msg_val],
+                                    },
+                                );
+                                self.emit_throw_value(throw_block, error_val)?;
+                            }
                             let mut names = Vec::new();
                             Self::extract_pat_bindings(std::slice::from_ref(param), &mut names);
                             for name in &names {
@@ -807,13 +852,15 @@ impl Lowerer {
                             self.lower_destructure_pattern(
                                 param,
                                 exc_val,
-                                catch_entry,
+                                destructure_block,
                                 VarKind::Let,
                             )?;
                         }
                     }
                 }
-                self.try_contexts.pop();
+                if !try_ctx_popped {
+                    self.try_contexts.pop();
+                }
                 try_ctx_popped = true;
 
                 let catch_body_flow =
@@ -833,7 +880,7 @@ impl Lowerer {
 
             self.finally_stack.pop();
         } else if let Some(catch) = &try_stmt.handler {
-            let catch_entry = catch_entry.expect("handler present");
+            let mut catch_entry = catch_entry.expect("handler present");
             // try/catch without finally
             self.scopes.push_scope(ScopeKind::Block);
             if let Some(param) = &catch.param {
@@ -863,7 +910,10 @@ impl Lowerer {
                         );
                     }
                     _ => {
+                        // 先取出 exc_var，再弹出 try_context
                         let exc_var = self.try_contexts.last().unwrap().exception_var.clone();
+                        self.try_contexts.pop();
+                        try_ctx_popped = true;
                         let exc_val = self.alloc_value();
                         self.current_function.append_instruction(
                             catch_entry,
@@ -872,6 +922,51 @@ impl Lowerer {
                                 name: exc_var,
                             },
                         );
+                        // 检查 exc_val 是否为 null/undefined；
+                        // 若是，抛出 TypeError（ECMAScript §8.5.5 / destructuring binding pattern）
+                        let is_nullish = self.alloc_value();
+                        self.current_function.append_instruction(
+                            catch_entry,
+                            Instruction::Unary {
+                                dest: is_nullish,
+                                op: UnaryOp::IsNullish,
+                                value: exc_val,
+                            },
+                        );
+                        let destructure_block = self.current_function.new_block();
+                        let throw_block = self.current_function.new_block();
+                        self.current_function.set_terminator(
+                            catch_entry,
+                            Terminator::Branch {
+                                condition: is_nullish,
+                                true_block: throw_block,
+                                false_block: destructure_block,
+                            },
+                        );
+                        // throw 分支：构造 TypeError 并抛出
+                        {
+                            let msg_const = self.module.add_constant(Constant::String(
+                                "Cannot destructure null or undefined".to_string(),
+                            ));
+                            let msg_val = self.alloc_value();
+                            self.current_function.append_instruction(
+                                throw_block,
+                                Instruction::Const {
+                                    dest: msg_val,
+                                    constant: msg_const,
+                                },
+                            );
+                            let error_val = self.alloc_value();
+                            self.current_function.append_instruction(
+                                throw_block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(error_val),
+                                    builtin: Builtin::TypeErrorConstructor,
+                                    args: vec![msg_val],
+                                },
+                            );
+                            self.emit_throw_value(throw_block, error_val)?;
+                        }
                         let mut names = Vec::new();
                         Self::extract_pat_bindings(std::slice::from_ref(param), &mut names);
                         for name in &names {
@@ -879,14 +974,23 @@ impl Lowerer {
                                 .declare(name, VarKind::Let, true)
                                 .map_err(|msg| self.error(param.span(), msg))?;
                         }
-                        self.lower_destructure_pattern(param, exc_val, catch_entry, VarKind::Let)?;
+                        let after_destruct = self
+                            .lower_destructure_pattern(
+                                param,
+                                exc_val,
+                                destructure_block,
+                                VarKind::Let,
+                            )?;
+                        catch_entry = after_destruct;
                     }
                 }
             }
 
             // 进入 catch body 前弹出 try_context，避免自循环
-            self.try_contexts.pop();
-            try_ctx_popped = true;
+            if !try_ctx_popped {
+                self.try_contexts.pop();
+                try_ctx_popped = true;
+            }
 
             let catch_flow = self.lower_block_body(&catch.body, StmtFlow::Open(catch_entry))?;
             let _ = self
