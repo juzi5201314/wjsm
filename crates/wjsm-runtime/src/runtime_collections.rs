@@ -16,10 +16,18 @@ pub(crate) fn map_set_create_iterator(
     kind: MapSetMethodKind,
 ) -> i64 {
     if !value::is_object(this_val) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Method Map/Set.prototype method called on incompatible receiver".to_string(),
+        );
         return value::encode_undefined();
     }
     let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
     let Some(op) = obj_ptr else {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Method Map/Set.prototype method called on incompatible receiver".to_string(),
+        );
         return value::encode_undefined();
     };
     let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
@@ -136,10 +144,18 @@ pub(crate) fn map_set_for_each_impl(
     }
     let this_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     if !value::is_object(this_val) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+        );
         return value::encode_undefined();
     }
     let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
     let Some(op) = obj_ptr else {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+        );
         return value::encode_undefined();
     };
     let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
@@ -192,7 +208,12 @@ pub(crate) fn map_set_for_each_impl(
                 return value::encode_undefined();
             }
         }
+        return value::encode_undefined();
     }
+    set_runtime_error(
+        caller.data(),
+        "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+    );
     value::encode_undefined()
 }
 
@@ -389,7 +410,12 @@ pub(crate) fn call_map_set_method_from_caller(
                     entry.keys.push(key);
                     entry.values.push(val);
                 }
+                return this_val;
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map.prototype.set called on incompatible receiver".to_string(),
+            );
             this_val
         }
         MapSetMethodKind::MapGet => {
@@ -408,7 +434,12 @@ pub(crate) fn call_map_set_method_from_caller(
                         }
                     }
                 }
+                return value::encode_undefined();
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map.prototype.get called on incompatible receiver".to_string(),
+            );
             value::encode_undefined()
         }
         MapSetMethodKind::SetAdd => {
@@ -428,7 +459,12 @@ pub(crate) fn call_map_set_method_from_caller(
                     }
                     entry.values.push(val);
                 }
+                return this_val;
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Set.prototype.add called on incompatible receiver".to_string(),
+            );
             this_val
         }
         MapSetMethodKind::Has => {
@@ -462,6 +498,10 @@ pub(crate) fn call_map_set_method_from_caller(
                 }
                 return value::encode_bool(false);
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.has called on incompatible receiver".to_string(),
+            );
             value::encode_bool(false)
         }
         MapSetMethodKind::Delete => {
@@ -498,6 +538,10 @@ pub(crate) fn call_map_set_method_from_caller(
                 }
                 return value::encode_bool(false);
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.delete called on incompatible receiver".to_string(),
+            );
             value::encode_bool(false)
         }
         MapSetMethodKind::Clear => {
@@ -518,6 +562,10 @@ pub(crate) fn call_map_set_method_from_caller(
                 }
                 return value::encode_undefined();
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.clear called on incompatible receiver".to_string(),
+            );
             value::encode_undefined()
         }
         MapSetMethodKind::Size => {
@@ -537,6 +585,10 @@ pub(crate) fn call_map_set_method_from_caller(
                 }
                 return value::encode_f64(0.0);
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.size called on incompatible receiver".to_string(),
+            );
             value::encode_f64(0.0)
         }
         MapSetMethodKind::ForEach => map_set_for_each_impl(caller, this_val, &args),

@@ -342,6 +342,10 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Method Map/Set.prototype.has called on incompatible receiver".to_string(),
+                );
                 return value::encode_bool(false);
             }
             let obj_ptr =
@@ -376,6 +380,10 @@ pub(crate) fn define_collections_buffers(
                     return value::encode_bool(false);
                 }
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.has called on incompatible receiver".to_string(),
+            );
             value::encode_bool(false)
         },
     );
@@ -385,6 +393,10 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Method Map/Set.prototype.delete called on incompatible receiver".to_string(),
+                );
                 return value::encode_bool(false);
             }
             let obj_ptr =
@@ -422,6 +434,10 @@ pub(crate) fn define_collections_buffers(
                     return value::encode_bool(false);
                 }
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.delete called on incompatible receiver".to_string(),
+            );
             value::encode_bool(false)
         },
     );
@@ -431,6 +447,10 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Method Map/Set.prototype.clear called on incompatible receiver".to_string(),
+                );
                 return value::encode_undefined();
             }
             let obj_ptr =
@@ -456,6 +476,10 @@ pub(crate) fn define_collections_buffers(
                     return value::encode_undefined();
                 }
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.clear called on incompatible receiver".to_string(),
+            );
             value::encode_undefined()
         },
     );
@@ -465,6 +489,10 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Method Map/Set.prototype.size called on incompatible receiver".to_string(),
+                );
                 return value::encode_f64(0.0);
             }
             let obj_ptr =
@@ -489,6 +517,10 @@ pub(crate) fn define_collections_buffers(
                     return value::encode_f64(0.0);
                 }
             }
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Method Map/Set.prototype.size called on incompatible receiver".to_string(),
+            );
             value::encode_f64(0.0)
         },
     );
@@ -505,25 +537,7 @@ pub(crate) fn define_collections_buffers(
     let map_set_keys_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let map_handle_u32 = if let Some(ptr) = resolve_handle(&mut caller, this_val) {
-                read_object_property_by_name(&mut caller, ptr, "__map_handle__")
-                    .map(|v| value::decode_f64(v) as u32)
-                    .unwrap_or(u32::MAX)
-            } else {
-                return value::encode_undefined();
-            };
-            let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
-            if (map_handle_u32 as usize) >= table.len() {
-                return value::encode_undefined();
-            }
-            drop(table);
-            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
-            let iter_handle = iters.len() as u32;
-            iters.push(IteratorState::MapKeyIter {
-                map_handle: map_handle_u32,
-                index: 0,
-            });
-            value::encode_handle(value::TAG_ITERATOR, iter_handle)
+            map_set_create_iterator(&mut caller, this_val, MapSetMethodKind::Keys)
         },
     );
     linker.define(&mut store, "env", "map_set_keys", map_set_keys_fn)?;
