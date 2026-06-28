@@ -95,13 +95,28 @@ pub(crate) async fn drain_microtasks_async<
             }) => {
                 let (resolve, reject) =
                     create_promise_resolving_functions(ctx.state_mut(), promise);
-                if call_host_function_async(ctx, env, then, resolve)
-                    .await
-                    .is_none()
-                {
-                    settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(reject));
+                let result = call_host_function_with_args_async(
+                    ctx,
+                    env,
+                    then,
+                    thenable,
+                    &[resolve, reject],
+                )
+                .await;
+                match result {
+                    Some(result) if value::is_exception(result) => {
+                        let reason = exception_reason_from_state(ctx.state_mut(), result);
+                        settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(reason));
+                    }
+                    Some(_) => {}
+                    None => {
+                        let err = runtime_error_value(
+                            ctx.state_mut(),
+                            "TypeError: PromiseResolveThenable then failed".to_string(),
+                        );
+                        settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(err));
+                    }
                 }
-                let _ = thenable;
             }
             Some(Microtask::MicrotaskCallback { callback }) => {
                 if is_callable_with_env(ctx, env, callback) {

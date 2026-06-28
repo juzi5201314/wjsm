@@ -185,10 +185,10 @@ pub(crate) fn pump_async_generator_from_caller(
                             })
                         }
                         AsyncGeneratorCompletionType::Return => {
-                            Some(AsyncGeneratorPumpAction::Fulfill {
-                                promise: request.promise,
+                            Some(AsyncGeneratorPumpAction::SettleResumePromise {
+                                promise: resume_promise,
                                 value: request.value,
-                                done: true,
+                                is_rejected: false,
                             })
                         }
                     }

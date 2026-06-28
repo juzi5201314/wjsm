@@ -196,24 +196,7 @@ impl Lowerer {
                 },
             );
 
-            let gen_for_throw = self.alloc_value();
-            self.current_function.append_instruction(
-                reject_block,
-                Instruction::LoadVar {
-                    dest: gen_for_throw,
-                    name: format!("${}.$generator", self.async_generator_scope_id),
-                },
-            );
-            self.current_function.append_instruction(
-                reject_block,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin: Builtin::AsyncGeneratorThrow,
-                    args: vec![gen_for_throw, resume_val],
-                },
-            );
-            self.current_function
-                .set_terminator(reject_block, Terminator::Return { value: None });
+            self.emit_throw_value(reject_block, resume_val)?;
 
             let result = self.alloc_value();
             self.current_function.append_instruction(

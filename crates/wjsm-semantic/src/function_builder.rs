@@ -166,6 +166,7 @@ pub(crate) struct TryContext {
     pub(crate) catch_entry: Option<BasicBlockId>,
     pub(crate) exception_var: String,
     pub(crate) label_depth: usize,
+    pub(crate) finalizer_index: Option<usize>,
 }
 
 /// The flow state after lowering a statement.

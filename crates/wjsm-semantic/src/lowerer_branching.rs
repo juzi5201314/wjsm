@@ -225,26 +225,11 @@ impl Lowerer {
         block: BasicBlockId,
         value: ValueId,
     ) -> Result<StmtFlow, LoweringError> {
-        if let Some(try_ctx) = self.try_contexts.last()
-            && let Some(catch_entry) = try_ctx.catch_entry
-        {
-            self.current_function.append_instruction(
-                block,
-                Instruction::StoreVar {
-                    name: try_ctx.exception_var.clone(),
-                    value,
-                },
-            );
-            self.current_function.set_terminator(
-                block,
-                Terminator::Jump {
-                    target: catch_entry,
-                },
-            );
+        let throw_block = self.resolve_store_block(block);
+        if self.emit_throw_to_nearest_catch(throw_block, value, false)? {
             return Ok(StmtFlow::Terminated);
         }
 
-        let throw_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
                 if self.is_async_generator_fn {
@@ -626,35 +611,73 @@ impl Lowerer {
             .set_terminator(block, Terminator::Return { value: None });
     }
 
+    fn nearest_catch_context(&self) -> Option<(usize, BasicBlockId, String, usize)> {
+        self.try_contexts
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, ctx)| {
+                ctx.catch_entry
+                    .map(|catch_entry| (index, catch_entry, ctx.exception_var.clone(), ctx.label_depth))
+            })
+    }
+
+    fn finalizer_keep_len_for_try_context(&self, target_index: usize) -> usize {
+        self.try_contexts[..=target_index]
+            .iter()
+            .filter_map(|ctx| ctx.finalizer_index.map(|index| index + 1))
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn emit_throw_to_nearest_catch(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+        close_iterators: bool,
+    ) -> Result<bool, LoweringError> {
+        let Some((target_index, catch_entry, exc_var, label_depth)) = self.nearest_catch_context()
+        else {
+            return Ok(false);
+        };
+        let keep_len = self.finalizer_keep_len_for_try_context(target_index);
+        match self.lower_pending_finalizers_after(block, keep_len)? {
+            StmtFlow::Open(after_finally) => {
+                self.current_function.append_instruction(
+                    after_finally,
+                    Instruction::StoreVar {
+                        name: exc_var,
+                        value,
+                    },
+                );
+                let target_block = if close_iterators {
+                    let iterator_cleanups = self.iterator_cleanups_from_depth(label_depth);
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value)?
+                } else {
+                    after_finally
+                };
+                self.current_function.set_terminator(
+                    target_block,
+                    Terminator::Jump {
+                        target: catch_entry,
+                    },
+                );
+            }
+            StmtFlow::Terminated => {}
+        }
+        Ok(true)
+    }
+
     pub(crate) fn emit_throw_value(
         &mut self,
         block: BasicBlockId,
         value: ValueId,
     ) -> Result<StmtFlow, LoweringError> {
-        if let Some(try_ctx) = self.try_contexts.last()
-            && let Some(catch_entry) = try_ctx.catch_entry
-        {
-            let exc_var = try_ctx.exception_var.clone();
-            let iterator_cleanups = self.iterator_cleanups_from_depth(try_ctx.label_depth);
-            self.current_function.append_instruction(
-                block,
-                Instruction::StoreVar {
-                    name: exc_var,
-                    value,
-                },
-            );
-            let after_close =
-                self.emit_iterator_closes(block, &iterator_cleanups, value)?;
-            self.current_function.set_terminator(
-                after_close,
-                Terminator::Jump {
-                    target: catch_entry,
-                },
-            );
+        let throw_block = self.resolve_store_block(block);
+        if self.emit_throw_to_nearest_catch(throw_block, value, true)? {
             return Ok(StmtFlow::Terminated);
         }
 
-        let throw_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
                 let iterator_cleanups = self.active_iterator_cleanups();
@@ -740,6 +763,7 @@ impl Lowerer {
             catch_entry,
             exception_var: exc_var,
             label_depth: self.label_stack.len(),
+            finalizer_index: try_stmt.finalizer.as_ref().map(|_| self.active_finalizers.len()),
         });
 
         if let Some(finally) = &try_stmt.finalizer {
