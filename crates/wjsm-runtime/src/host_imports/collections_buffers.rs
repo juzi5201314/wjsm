@@ -2,6 +2,7 @@ use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
+use crate::property_key::encode_symbol_name_id;
 use crate::*;
 
 pub(crate) fn define_collections_buffers(
@@ -95,7 +96,7 @@ pub(crate) fn define_collections_buffers(
             };
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 11)
+                alloc_host_object(&mut caller, &_wjsm_env, 12)
             };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(
@@ -120,6 +121,14 @@ pub(crate) fn define_collections_buffers(
             let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
+            // Map.prototype[Symbol.iterator] === Map.prototype.entries
+            let _ = define_host_data_property_by_name_id_with_flags(
+                &mut caller,
+                obj,
+                encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+                entries_fn,
+                constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+            );
             obj
         },
     );
@@ -272,7 +281,7 @@ pub(crate) fn define_collections_buffers(
             };
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 10)
+                alloc_host_object(&mut caller, &_wjsm_env, 12)
             };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(
@@ -296,6 +305,14 @@ pub(crate) fn define_collections_buffers(
             let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
+            // Set.prototype[Symbol.iterator] === Set.prototype.values
+            let _ = define_host_data_property_by_name_id_with_flags(
+                &mut caller,
+                obj,
+                encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+                values_fn,
+                constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+            );
             obj
         },
     );

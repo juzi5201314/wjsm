@@ -749,7 +749,7 @@ pub(super) fn register_complex_bridges(
                     });
                     handle
                 };
-                let map_result = alloc_object(&mut caller, 12);
+                let map_result = alloc_object(&mut caller, 13);
                 {
                     let state = caller.data();
                     let set_fn = create_map_set_method(state, MapSetMethodKind::MapSet);
@@ -780,6 +780,13 @@ pub(super) fn register_complex_bridges(
                     let _ = define_host_data_property(&mut caller, map_result, "values", values_fn);
                     let _ =
                         define_host_data_property(&mut caller, map_result, "entries", entries_fn);
+                    let _ = define_host_data_property_by_name_id_with_flags(
+                        &mut caller,
+                        map_result,
+                        encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+                        entries_fn,
+                        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+                    );
                 }
                 if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
                     let handle_val = value::encode_f64(map_handle as f64);
