@@ -144,6 +144,32 @@ pub(crate) fn alloc_aggregate_error(caller: &mut Caller<'_, RuntimeState>, error
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     alloc_heap_aggregate_error(caller, &env, errors)
 }
+// ── 辅助函数：检查字符串是否是规范整数索引（ECMAScript §10.1.12 OrdinaryOwnPropertyKeys）──
+// 返回 Some(数字值) 如果是规范的整数索引字符串（即 parse 回来再转回字符串保持一致），否则 None。
+fn canonical_integer_index(s: &str) -> Option<u32> {
+    if s.is_empty() || s.len() > 10 {
+        return None;
+    }
+    // 不能有前导零，除非是 "0" 本身
+    if s.len() > 1 && s.as_bytes()[0] == b'0' {
+        return None;
+    }
+    // 所有字符必须是数字
+    if !s.as_bytes().iter().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    // parse 并验证不超过 u32::MAX
+    if let Ok(idx) = s.parse::<u64>() {
+        if idx <= u32::MAX as u64 {
+            // 确保往返转换一致（排除非规范形式如 "+0", "-0" 等，这里 digits-only 已排除）
+            let back = idx.to_string();
+            if back == s {
+                return Some(idx as u32);
+            }
+        }
+    }
+    None
+}
 // ── 辅助函数：收集属性名/值 ──────────────────────────────────────────
 pub(crate) fn collect_own_property_names(
     caller: &mut Caller<'_, RuntimeState>,
@@ -211,11 +237,21 @@ pub(crate) fn collect_own_property_names(
     }
     let _ = data;
     let _ = mem;
-    let mut names = Vec::new();
+    let mut string_ids = Vec::new();
+    let mut int_index_names = Vec::new();
     for name_id in name_ids {
         let name_bytes = read_string_bytes(caller, name_id);
-        names.push(String::from_utf8_lossy(&name_bytes).to_string());
+        let name = String::from_utf8_lossy(&name_bytes).to_string();
+        if let Some(int_idx) = canonical_integer_index(&name) {
+            int_index_names.push((int_idx, name));
+        } else {
+            string_ids.push(name);
+        }
     }
+    // 按规范排序：整数索引键按数值升序，然后字符串键保持插入顺序
+    int_index_names.sort_by_key(|(idx, _)| *idx);
+    let mut names: Vec<String> = int_index_names.into_iter().map(|(_, name)| name).collect();
+    names.extend(string_ids);
     names
 }
 
@@ -352,18 +388,33 @@ pub(crate) fn collect_own_property_key_values(
     let _ = data;
     let _ = mem;
 
-    let mut keys = Vec::new();
+    let mut string_name_ids = Vec::new();
+    let mut sym_name_ids = Vec::new();
+    let mut int_index_entries = Vec::new();
     for name_id in name_ids {
         if let Some(symbol_key) = name_id_to_property_key_value(name_id) {
-            keys.push(symbol_key);
+            sym_name_ids.push(symbol_key);
         } else if !symbols_only {
             let name_bytes = read_string_bytes(caller, name_id);
-            keys.push(store_runtime_string(
-                caller,
-                String::from_utf8_lossy(&name_bytes).to_string(),
-            ));
+            let name = String::from_utf8_lossy(&name_bytes).to_string();
+            if let Some(int_idx) = canonical_integer_index(&name) {
+                int_index_entries.push((int_idx, name));
+            } else {
+                string_name_ids.push(name);
+            }
         }
     }
+
+    // 按规范排序：整数索引键按数值升序，然后字符串键保持插入顺序，最后 Symbol 键保持插入顺序
+    int_index_entries.sort_by_key(|(idx, _)| *idx);
+    let mut keys: Vec<i64> = int_index_entries
+        .into_iter()
+        .map(|(_, name)| store_runtime_string(caller, name))
+        .collect();
+    for name in string_name_ids {
+        keys.push(store_runtime_string(caller, name));
+    }
+    keys.extend(sym_name_ids);
     keys
 }
 
