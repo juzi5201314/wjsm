@@ -174,6 +174,7 @@ impl Compiler {
                 }
             }
             Terminator::Throw { value } => {
+                self.emit_eval_var_frame_exit();
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 let func_idx = self
                     .builtin_func_indices
