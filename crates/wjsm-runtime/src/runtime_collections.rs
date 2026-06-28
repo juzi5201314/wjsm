@@ -6,7 +6,7 @@
 use super::*;
 
 pub(crate) fn is_object_key(key: i64) -> bool {
-    value::is_object(key) || value::is_array(key) || value::is_function(key)
+    value::is_object(key) || value::is_array(key) || value::is_function(key) || value::is_symbol(key)
 }
 
 /// 为 Map/Set 创建 keys / values / entries 迭代器（与 NativeCallable 路径共用）。
