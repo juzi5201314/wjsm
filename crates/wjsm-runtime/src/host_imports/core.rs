@@ -1464,12 +1464,15 @@ pub(crate) async fn iterator_from_impl_async(
         {
             let return_method = read_object_property_by_name(caller, iter_ptr, "return")
                 .filter(|candidate| value::is_callable(*candidate));
+            let throw_method = read_object_property_by_name(caller, iter_ptr, "throw")
+                .filter(|candidate| value::is_callable(*candidate));
             let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
             let handle = iters.len() as u32;
             iters.push(IteratorState::ObjectIter {
                 iterator,
                 next,
                 return_method,
+                throw_method,
                 current_value: value::encode_undefined(),
                 has_current: false,
                 done: false,
@@ -1485,12 +1488,15 @@ pub(crate) async fn iterator_from_impl_async(
     {
         let return_method = read_object_property_by_name(caller, ptr, "return")
             .filter(|candidate| value::is_callable(*candidate));
+        let throw_method = read_object_property_by_name(caller, ptr, "throw")
+            .filter(|candidate| value::is_callable(*candidate));
         let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
         let handle = iters.len() as u32;
         iters.push(IteratorState::ObjectIter {
             iterator: val,
             next,
             return_method,
+            throw_method,
             current_value: value::encode_undefined(),
             has_current: false,
             done: false,

@@ -585,10 +585,16 @@ fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(
     if num_props == 0 {
         return;
     }
-    let last_slot_offset = obj_ptr + 16 + (num_props - 1) * 32;
     data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
-    if slot_offset != last_slot_offset {
-        data.copy_within(last_slot_offset..last_slot_offset + 32, slot_offset);
+    // Shift subsequent properties down to preserve insertion order
+    let prop_idx = (slot_offset - (obj_ptr + 16)) / 32;
+    for i in prop_idx..num_props - 1 {
+        let src = obj_ptr + 16 + (i + 1) * 32;
+        let dst = obj_ptr + 16 + i * 32;
+        if src + 32 > data.len() || dst + 32 > data.len() {
+            break;
+        }
+        data.copy_within(src..src + 32, dst);
     }
 }
 

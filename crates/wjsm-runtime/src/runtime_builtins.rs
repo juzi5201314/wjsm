@@ -1153,6 +1153,7 @@ pub(crate) fn create_async_from_sync_iterator(
         iterator: sync_iter_handle,
         next: next_callable,
         return_method: Some(return_callable),
+        throw_method: None,
         current_value: value::encode_undefined(),
         has_current: false,
         done: false,

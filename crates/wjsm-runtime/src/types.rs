@@ -878,6 +878,7 @@ pub(crate) enum IteratorState {
         iterator: i64,
         next: i64,
         return_method: Option<i64>,
+        throw_method: Option<i64>,
         current_value: i64,
         done: bool,
         has_current: bool,

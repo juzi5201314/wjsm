@@ -642,6 +642,8 @@ pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, ob
         store_runtime_string(caller, "[object Function]".to_string())
     } else if is_promise_value(caller.data(), obj) {
         store_runtime_string(caller, "[object Promise]".to_string())
+    } else if value::is_regexp(obj) {
+        store_runtime_string(caller, "[object RegExp]".to_string())
     } else if value::is_object(obj) {
         let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize);
         if let Some(op) = obj_ptr {

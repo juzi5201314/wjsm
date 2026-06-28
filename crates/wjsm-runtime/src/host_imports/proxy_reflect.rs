@@ -349,7 +349,7 @@ pub(crate) fn reflect_delete_property_impl(
     if (flags & constants::FLAG_CONFIGURABLE) == 0 {
         return value::encode_bool(false);
     }
-    // Perform swap-remove
+    // Perform shift-based removal to preserve property order
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         return value::encode_bool(false);
     };
@@ -366,13 +366,17 @@ pub(crate) fn reflect_delete_property_impl(
     if num_props == 0 {
         return value::encode_bool(true);
     }
-    let last_slot_offset = ptr + 16 + (num_props - 1) * 32;
-    // Decrement num_props
+    // Shift all subsequent properties down to preserve insertion order
     data[ptr + 12..ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
-    // If not deleting the last slot, copy last slot over deleted slot
-    if slot_offset != last_slot_offset {
+    let prop_idx = (slot_offset - (ptr + 16)) / 32;
+    for i in prop_idx..num_props - 1 {
+        let src = ptr + 16 + (i + 1) * 32;
+        let dst = ptr + 16 + i * 32;
+        if src + 32 > data.len() || dst + 32 > data.len() {
+            break;
+        }
         for j in 0..32 {
-            data[slot_offset + j] = data[last_slot_offset + j];
+            data[dst + j] = data[src + j];
         }
     }
     value::encode_bool(true)
