@@ -1,5 +1,6 @@
 use crate::array_named_props::array_named_get_sync;
 use crate::property_key::{is_symbol_name_id, name_id_to_property_key_value};
+use crate::runtime_host_helpers::is_callable_in_runtime;
 use crate::runtime_values::{find_property_slot_by_name_id, resolve_handle};
 use crate::{WasmEnv, constants, value};
 use wasmtime::{Caller, Extern};
@@ -21,7 +22,7 @@ pub(crate) fn get_method_by_name_id(
     }
 
     // 如果不可调用，抛出 TypeError
-    if !value::is_callable(func) {
+    if !is_callable_in_runtime(caller, func) {
         let msg_val = crate::runtime_render::store_runtime_string(
             caller,
             "method is not callable".to_string(),

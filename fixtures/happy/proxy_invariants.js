@@ -62,6 +62,22 @@ expectThrow(() => { let p = new Proxy({}, 42); }, "Proxy handler number throws")
                                : "FAIL: Proxy apply trap works");
 })();
 
+// ── GetMethod 读取 well-known symbol 必须通过 Proxy [[Get]] ──
+(function testGetMethodUsesProxyGetTrap() {
+    let target = function () {};
+    let proxy = new Proxy(target, {
+        get(t, prop, receiver) {
+            if (prop === Symbol.hasInstance) {
+                console.log("PASS: GetMethod proxy get trap called");
+                return function (value) { return true; };
+            }
+            return t[prop];
+        }
+    });
+    console.log({} instanceof proxy ? "PASS: proxy Symbol.hasInstance honoured"
+                                  : "FAIL: proxy Symbol.hasInstance honoured");
+})();
+
 // ── Proxy.revocable returns a usable proxy of type "object" ──
 (function testRevocableShape() {
     let { proxy, revoke } = Proxy.revocable({ a: 1 }, {});

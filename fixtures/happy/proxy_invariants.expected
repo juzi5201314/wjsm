@@ -13,6 +13,8 @@ PASS: construct trap returning number throws
 PASS: construct trap returning string throws
 PASS: construct trap object honoured
 PASS: Proxy apply trap works
+PASS: GetMethod proxy get trap called
+PASS: proxy Symbol.hasInstance honoured
 PASS: revocable proxy is object
 PASS: revocable proxy forwards get
 PASS: revoke is idempotent

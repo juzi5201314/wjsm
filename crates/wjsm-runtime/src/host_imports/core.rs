@@ -574,7 +574,7 @@ async fn ordinary_has_instance_async(
         return value::encode_bool(false);
     }
 
-    if !value::is_callable(constructor) {
+    if !is_callable_in_runtime(caller, constructor) {
         *caller
             .data()
             .runtime_error
@@ -673,12 +673,7 @@ async fn op_instanceof_async(
     value: i64,
     constructor: i64,
 ) -> i64 {
-    if !value::is_callable(constructor) {
-        // Proxy 包装的可调用对象：暂不支持 instanceof（避免 trap 递归），返回 false
-        // 而非设置 runtime error，使程序继续执行。
-        if value::is_proxy(constructor) {
-            return value::encode_bool(false);
-        }
+    if !is_callable_in_runtime(caller, constructor) {
         *caller
             .data()
             .runtime_error

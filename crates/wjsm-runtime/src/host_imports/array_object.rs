@@ -1958,26 +1958,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "has_own_property", has_own_property_fn)?;
-    // ── Import 85: obj_values(i64) -> i64 ─────────────────────────────────────
-    let obj_values_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
-            };
-            let values = collect_own_property_values(&mut caller, ptr, true);
-            let arr = alloc_array(&mut caller, values.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            for (i, val) in values.iter().enumerate() {
-                write_array_elem(&mut caller, arr_ptr, i as u32, *val);
-            }
-            write_array_length(&mut caller, arr_ptr, values.len() as u32);
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "obj_values", obj_values_fn)?;
     // ── Import 88: obj_create(i64, i64) -> i64 ────────────────────────────────
     let obj_create_fn = Func::wrap(
         &mut store,
@@ -2075,31 +2055,6 @@ pub(crate) fn define_array_object(
     );
     linker.define(&mut store, "env", "obj_set_proto_of", obj_set_proto_of_fn)?;
 
-    // ── Import: obj_get_own_prop_symbols(i64) -> i64 ────────────────────────
-    let obj_get_own_prop_symbols_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
-            };
-            let symbols = collect_own_property_key_values(&mut caller, ptr, true);
-            let arr = alloc_array(&mut caller, symbols.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            for (i, symbol) in symbols.iter().enumerate() {
-                write_array_elem(&mut caller, arr_ptr, i as u32, *symbol);
-            }
-            write_array_length(&mut caller, arr_ptr, symbols.len() as u32);
-            arr
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "obj_get_own_prop_symbols",
-        obj_get_own_prop_symbols_fn,
-    )?;
     // ── Import 92: obj_is(i64, i64) -> i64 ────────────────────────────────────
     let obj_is_fn = Func::wrap(
         &mut store,

@@ -1154,6 +1154,76 @@ pub(crate) async fn object_get_own_property_names_async(
     arr
 }
 
+/// Object.values：enumerable 字符串键 + Reflect.get 取值。
+pub(crate) async fn object_values_async(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
+    if !value::is_js_object(obj) {
+        return alloc_array(caller, 0);
+    }
+    let keys_arr = object_enumerable_own_keys_async(caller, obj).await;
+    if value::is_exception(keys_arr) {
+        return keys_arr;
+    }
+    let keys = match extract_array_like_elements(caller, keys_arr).await {
+        Ok(k) => k,
+        Err(_) => return alloc_array(caller, 0),
+    };
+    let arr = alloc_array(caller, keys.len() as u32);
+    for (i, key) in keys.iter().enumerate() {
+        let val = reflect_get_impl_with_receiver_async(caller, obj, *key, obj).await;
+        set_array_elem(caller, arr, i as i32, val);
+    }
+    if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+        write_array_length(caller, arr_ptr, keys.len() as u32);
+    }
+    arr
+}
+
+/// Object.getOwnPropertySymbols：proxy 走 ownKeys 陷阱，仅保留 Symbol 键。
+pub(crate) async fn object_get_own_property_symbols_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> i64 {
+    if !value::is_js_object(obj) {
+        return alloc_array(caller, 0);
+    }
+    if value::is_proxy(obj) {
+        let keys_arr = proxy_own_keys_trap_async(caller, obj).await;
+        if value::is_exception(keys_arr) {
+            return keys_arr;
+        }
+        if value::is_undefined(keys_arr) {
+            return alloc_array(caller, 0);
+        }
+        let keys = match extract_array_like_elements(caller, keys_arr).await {
+            Ok(k) => k,
+            Err(_) => return alloc_array(caller, 0),
+        };
+        let out: Vec<i64> = keys.into_iter().filter(|key| value::is_symbol(*key)).collect();
+        let len = out.len() as u32;
+        let arr = alloc_array(caller, len);
+        for (i, key) in out.into_iter().enumerate() {
+            set_array_elem(caller, arr, i as i32, key);
+        }
+        if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+            write_array_length(caller, arr_ptr, len);
+        }
+        return arr;
+    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return alloc_array(caller, 0);
+    };
+    let symbols = collect_own_property_key_values(caller, ptr, true);
+    let len = symbols.len() as u32;
+    let arr = alloc_array(caller, len);
+    for (i, symbol) in symbols.into_iter().enumerate() {
+        set_array_elem(caller, arr, i as i32, symbol);
+    }
+    if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+        write_array_length(caller, arr_ptr, len);
+    }
+    arr
+}
+
 /// Object.entries：enumerable 字符串键 + Reflect.get 取值。
 pub(crate) async fn object_entries_async(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
     if !value::is_js_object(obj) {
