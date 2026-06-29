@@ -30,7 +30,7 @@ is(true, true): true
 is(1, '1'): false
 
 === Object.getPrototypeOf ===
-proto is Object.prototype: false
+proto is Object.prototype: true
 arr proto is Array.prototype: true
 
 === Object.setPrototypeOf ===
