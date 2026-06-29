@@ -278,6 +278,13 @@ impl Function {
             let _ = writeln!(out, "      {}", block.terminator);
         }
     }
+
+    /// 输出单个函数的 IR 文本（不含 `module {` 包裹和常量块）。
+    pub fn dump_text(&self) -> String {
+        let mut s = String::new();
+        self.dump_into(&mut s);
+        s
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

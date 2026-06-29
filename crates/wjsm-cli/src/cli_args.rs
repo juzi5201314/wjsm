@@ -45,7 +45,7 @@ pub(crate) enum Target {
 }
 
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub(crate) enum DumpFormat {
     Text,
     Dot,
@@ -67,8 +67,8 @@ pub(crate) enum Stage {
 pub(crate) enum Commands {
     /// Build a JS/TS file to WebAssembly
     Build {
-        /// The input file to compile, or - for stdin
-        input: String,
+        /// The input file to compile, or - for stdin. Optional when -e is used.
+        input: Option<String>,
 
         /// The output .wasm file, or - for stdout
         #[arg(short, long, default_value = "out.wasm")]
@@ -81,6 +81,14 @@ pub(crate) enum Commands {
         /// The root directory for module resolution
         #[arg(long)]
         root: Option<String>,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
+
+        /// Evaluate inline code string instead of a file
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
     },
 
     /// Run a JS/TS file directly
@@ -107,12 +115,20 @@ pub(crate) enum Commands {
 
     /// Parse and check a JS/TS file for errors (no output)
     Check {
-        /// The input file to check, or - for stdin
-        input: String,
+        /// The input file to check, or - for stdin. Optional when -e is used.
+        input: Option<String>,
 
         /// The root directory for module resolution
         #[arg(long)]
         root: Option<String>,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
+
+        /// Evaluate inline code string instead of a file
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
     },
 
     /// Evaluate a JS expression and print the result
@@ -123,8 +139,8 @@ pub(crate) enum Commands {
 
     /// Dump IR for a JS/TS file
     DumpIr {
-        /// The input file, or - for stdin
-        input: String,
+        /// The input file, or - for stdin. Optional when -e is used.
+        input: Option<String>,
 
         /// Output format (text or dot for Graphviz)
         #[arg(long, default_value = "text")]
@@ -133,26 +149,62 @@ pub(crate) enum Commands {
         /// The root directory for module resolution
         #[arg(long)]
         root: Option<String>,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
+
+        /// Evaluate inline code string instead of a file
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
+
+        /// Dump only the function with this name
+        #[arg(long, value_name = "NAME")]
+        func: Option<String>,
     },
 
     /// Dump SWC AST as JSON for a JS/TS file
     DumpAst {
-        /// The input file, or - for stdin
-        input: String,
+        /// The input file, or - for stdin. Optional when -e is used.
+        input: Option<String>,
 
         /// The root directory for module resolution
         #[arg(long)]
         root: Option<String>,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
+
+        /// Evaluate inline code string instead of a file
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
     },
 
     /// Dump WAT (WebAssembly Text) for a compiled JS/TS file
     DumpWat {
-        /// The input file, or - for stdin
-        input: String,
+        /// The input file, or - for stdin. Optional when -e is used.
+        input: Option<String>,
 
         /// The root directory for module resolution
         #[arg(long)]
         root: Option<String>,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
+
+        /// Evaluate inline code string instead of a file
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
+
+        /// Dump only the function with this name
+        #[arg(long, value_name = "NAME")]
+        func: Option<String>,
+
+        /// Print function signatures only, no instruction bodies
+        #[arg(long)]
+        skeleton: bool,
     },
 
     /// Format a JS/TS file using SWC codegen
@@ -181,6 +233,14 @@ pub(crate) enum Commands {
     Disasm {
         /// The .wasm file to disassemble
         input: String,
+
+        /// Disassemble only the function with this name
+        #[arg(long, value_name = "NAME")]
+        func: Option<String>,
+
+        /// Print function signatures only, no instruction bodies
+        #[arg(long)]
+        skeleton: bool,
     },
 
     /// Create a new wjsm project

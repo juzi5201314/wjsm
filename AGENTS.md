@@ -29,21 +29,21 @@ Fixtures run via `wjsm_cli::run_file_in_process` in-process, comparing exit code
 
 ## Debugging
 
-There is **no** gdb-style single-step debugger for wjsm (no IR interpreter, no wasmtime breakpoint CLI, no debug name section in emitted WASM). Do **not** debug by inserting `console.log` or other temporary instrumentation in production code and deleting it afterward—that is fragile, pollutes diffs, and is disallowed unless every other path below is exhausted and you document why in the PR.
+There is **no** gdb-style single-step debugger for wjsm (no IR interpreter, no wasmtime breakpoint CLI). Do **not** debug by inserting `console.log` or other temporary instrumentation in production code and deleting it afterward—that is fragile, pollutes diffs, and is disallowed unless every other path below is exhausted and you document why in the PR.
 
-**Quick JS snippets (agents)**: For ad-hoc **execution**, use inline source—**never** `echo '…' > /tmp/foo.js && cargo run -- run /tmp/foo.js`. Only `run` and `eval` accept inline code today: `cargo run -- run -e '<statements>'` (statements; add `--script` when script parsing is required) or `cargo run -- eval '<expression>'` (single expression, wrapped as `console.log((expr))`). Both use the normal inline-source compile path (`compile_source_to_pipeline_result` / `lower_module_with_source` / `compile`) with no file-path module bundling; they do **not** use runtime `eval()` lowering (`lower_eval_module`) or backend eval mode (`compile_eval`). **`dump-ir` / `dump-wat` / `dump-ast` / `check` / `build` have no `-e`**—use a repo path (`fixtures/…`) or stdin: `printf '%s' '<source>' | cargo run -- dump-ir -`. `/tmp/*.wasm` and other build artifacts in `/tmp` are fine; do not put scratch `.js` in the project tree.
+**Quick JS snippets (agents)**: For ad-hoc **execution**, use inline source—**never** `echo '…' > /tmp/foo.js && cargo run -- run /tmp/foo.js`. All source-consuming commands (`run`, `eval`, `check`, `dump-ir`, `dump-ast`, `dump-wat`, `build`) accept `-e <SOURCE>` and `--script`—same inline-source compile path (`compile_source_to_pipeline_result` / `lower_module_with_source` / `compile`), not runtime `eval()` lowering (`lower_eval_module`) or backend eval mode (`compile_eval`). `run -e '<statements>'` for statements (add `--script` when script parsing is required); `eval '<expression>'` for a single expression (wrapped as `console.log((expr))`). stdin `-` still works for file/stdin input. `/tmp/*.wasm` and other build artifacts in `/tmp` are fine; do not put scratch `.js` in the project tree.
 
 **Default workflow** — pin the failing layer, then fix at the owner:
 1. **Reproduce narrowly**: `cargo nextest run -E 'test(happy__<name>)'` or `cargo nextest run -p wjsm-semantic -E 'test(<snapshot>)'`. Use `wjsm_cli::run_file_in_process` semantics (same as `cargo run -- run`).
-2. **Semantic (lowering)**: `cargo run -- dump-ir <file>` or `printf '%s' '<source>' | cargo run -- dump-ir -` (optional `--format dot` for CFG). Compare to `fixtures/semantic/<name>.ir` or run `cargo nextest run -p wjsm-semantic -- lowering_snapshots`. If IR is wrong, fix `lowerer_*.rs` and add/update `.ir` snapshot (`WJSM_UPDATE_SNAPSHOTS=1` only after reviewing diff).
-3. **Codegen (WASM)**: If IR matches the intended shape but behavior is wrong, `cargo run -- dump-wat <file>` (or stdin `-`) and/or `cargo run -- build <file> -o /tmp/x.wasm && cargo run -- disasm /tmp/x.wasm`. Trace basic-block order, loop headers, and host calls against IR (`bbN` in dump). Fix `compiler_*.rs` / `compiler_control.rs`.
+2. **Semantic (lowering)**: `cargo run -- dump-ir <file>` or `cargo run -- dump-ir -e '<source>'` (optional `--format dot` for CFG; `--func <NAME>` to dump one function). Compare to `fixtures/semantic/<name>.ir` or run `cargo nextest run -p wjsm-semantic -- lowering_snapshots`. If IR is wrong, fix `lowerer_*.rs` and add/update `.ir` snapshot (`WJSM_UPDATE_SNAPSHOTS=1` only after reviewing diff).
+3. **Codegen (WASM)**: If IR matches the intended shape but behavior is wrong, `cargo run -- dump-wat <file>` (or `-e '<source>'`) and/or `cargo run -- build <file> -o /tmp/x.wasm && cargo run -- disasm /tmp/x.wasm`. Use `--func <NAME>` to dump one function (correlates with `dump-ir --func <NAME>`) and `--skeleton` for a body-less overview when WAT is large. Trace basic-block order, loop headers, and host calls against IR (`bbN` in dump). Fix `compiler_*.rs` / `compiler_control.rs`.
 4. **Backend static analysis** (GC spill, liveness, value tags): use `wjsm-backend-wasm` helpers `infer_value_ty`, `compute_var_liveness` in crate tests—see `tests/var_slot_liveness_gc_long_loop.rs`, `tests/compiler_gc_analysis_spill.rs`. Prefer new targeted tests over runtime logging.
 5. **Runtime / host**: Read trap message (`Runtime error:` exit 2). Startup snapshot issues only: `WJSM_STARTUP_SNAPSHOT_DEBUG=1`. JS `debugger` lowers to `Builtin::Debugger` and is a **compile-time no-op**—not a breakpoint.
 6. **Stage isolation**: `cargo run -- build <file> --stage parse|lower|compile` and `cargo run -- check <file>` to stop before execute.
 
 **Evidence before fix**: state which layer failed (parse / lower / compile / runtime) with the exact command output or snapshot diff. **Tests**: lowering changes → semantic snapshots; observable behavior → `fixtures/happy` or `fixtures/errors` + `.expected` (`WJSM_UPDATE_FIXTURES=1` after review).
 
-**Not available today** (do not assume): wasmtime/lldb stepping, `WASM_BACKTRACE` integration in CLI, IR step interpreter, WASM custom name section for human-readable disasm.
+**Not available today** (do not assume): wasmtime/lldb stepping, `WASM_BACKTRACE` integration in CLI, IR step interpreter.
 
 
 ## Architecture
@@ -156,7 +156,7 @@ Exhaust each step before the next:
 ## Rules
 
 - **Temporary files** (`*.wasm`, `*.o`, caches, test data) go in `/tmp`, never in the project dir. If accidentally committed: `git rm --cached <file>` then commit.
-- **Ad-hoc JS execution**: Do **not** write scratch `.js` under `/tmp` (or elsewhere) just to `cargo run -- run <file>`. Use `cargo run -- run -e '…'` or `cargo run -- eval '…'` instead. IR/WAT/AST dumps from snippets use `dump-ir -` / `dump-wat -` on stdin, not `-e` (see **Debugging** → Quick JS snippets).
+- **Ad-hoc JS execution**: Do **not** write scratch `.js` under `/tmp` (or elsewhere) just to `cargo run -- run <file>`. Use `cargo run -- run -e '…'` or `cargo run -- eval '…'` instead. All source commands (`dump-ir`, `dump-wat`, `dump-ast`, `check`, `build`) also accept `-e '…'` (see **Debugging** → Quick JS snippets).
 - **Commit**: `feat:` / `fix:` / `docs:` / `refactor:` prefixes. Keep concise.
 - **Warnings**: if a build produces compiler warnings, fix them immediately before reporting the task as complete. Zero-warning builds are the baseline.
 

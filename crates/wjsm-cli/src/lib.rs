@@ -23,7 +23,7 @@ mod cli_args;
 mod ir_output;
 
 use cli_args::*;
-use ir_output::{print_ir, print_ir_dot, print_stats};
+use ir_output::{print_ir, print_ir_dot, print_ir_func, print_stats};
 
 // ============================================================================
 // Exit Codes
@@ -138,10 +138,12 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Commands::Build {
             ref input,
+            ref eval,
             ref output,
             stage,
             ref root,
-        } => cmd_build(&cli, input, output, stage, root.as_deref()),
+            script,
+        } => cmd_build(&cli, input, eval, output, stage, root.as_deref(), script),
 
         Commands::Run {
             ref input,
@@ -163,22 +165,47 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             }
         }
 
-        Commands::Check { ref input, ref root } => cmd_check(&cli, input, root.as_deref()),
+        Commands::Check {
+            ref input,
+            ref eval,
+            ref root,
+            script,
+        } => cmd_check(&cli, input, eval, root.as_deref(), script),
 
         Commands::Eval { ref code } => cmd_eval(&cli, code),
 
         Commands::DumpIr {
             ref input,
+            ref eval,
             format,
             ref root,
-        } => cmd_dump_ir(&cli, input, format, root.as_deref()),
+            script,
+            ref func,
+        } => cmd_dump_ir(&cli, input, eval, format, root.as_deref(), script, func.as_deref()),
 
-        Commands::DumpAst { ref input, ref root } => cmd_dump_ast(&cli, input, root.as_deref()),
+        Commands::DumpAst {
+            ref input,
+            ref eval,
+            ref root,
+            script,
+        } => cmd_dump_ast(&cli, input, eval, root.as_deref(), script),
 
         Commands::DumpWat {
             ref input,
+            ref eval,
             ref root,
-        } => cmd_dump_wat(&cli, input, root.as_deref()),
+            script,
+            ref func,
+            skeleton,
+        } => cmd_dump_wat(
+            &cli,
+            input,
+            eval,
+            root.as_deref(),
+            script,
+            func.as_deref(),
+            skeleton,
+        ),
 
         Commands::Fmt { ref input, write } => cmd_fmt(input, write),
 
@@ -186,7 +213,11 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
 
         Commands::Size { ref input } => cmd_size(input),
 
-        Commands::Disasm { ref input } => cmd_disasm(input),
+        Commands::Disasm {
+            ref input,
+            ref func,
+            skeleton,
+        } => cmd_disasm(input, func.as_deref(), skeleton),
 
         Commands::Init { ref path, force } => cmd_init(path, force),
         Commands::Version { extended } => cmd_version(extended),
@@ -224,10 +255,12 @@ fn resolve_auto_colors() -> bool {
 
 fn cmd_build(
     cli: &Cli,
-    input: &str,
+    input: &Option<String>,
+    eval: &Option<String>,
     output: &str,
     stage: Option<Stage>,
     root: Option<&str>,
+    script: bool,
 ) -> Result<ExitCode> {
     let stage = stage.unwrap_or(Stage::Compile);
 
@@ -237,20 +270,26 @@ fn cmd_build(
 
     match stage {
         Stage::Parse | Stage::Lower => {
-            let result = if input == "-" {
-                let mut source = String::new();
-                io::stdin().read_to_string(&mut source)?;
-                run_pipeline(
-                    &source,
-                    None,
-                    stage,
-                    cli.verbose,
-                    cli.time,
-                    cli.target,
-                    false,
-                )?
-            } else {
-                run_file_input_pipeline(input, root, stage, cli)?
+            let result = match resolve_input(input, eval)? {
+                InputSource::Inline(code) => run_pipeline(
+                    &code, None, stage, cli.verbose, cli.time, cli.target, script,
+                )?,
+                InputSource::File(path) => {
+                    if path == "-" {
+                        let (source, filename) = read_input_for_parse(&path)?;
+                        run_pipeline(
+                            &source,
+                            filename.as_deref(),
+                            stage,
+                            cli.verbose,
+                            cli.time,
+                            cli.target,
+                            script,
+                        )?
+                    } else {
+                        run_file_input_pipeline(&path, root, stage, cli, script)?
+                    }
+                }
             };
 
             if matches!(stage, Stage::Parse) {
@@ -274,12 +313,16 @@ fn cmd_build(
                 );
             }
 
-            let wasm = if input == "-" {
-                let mut source = String::new();
-                io::stdin().read_to_string(&mut source)?;
-                compile_source(&source, None, cli.target, false)?
-            } else {
-                compile_from_file_input(Path::new(input), root, cli.target, false)?
+            let wasm = match resolve_input(input, eval)? {
+                InputSource::Inline(code) => compile_source(&code, None, cli.target, script)?,
+                InputSource::File(path) => {
+                    if path == "-" {
+                        let (source, _) = read_input_for_parse(&path)?;
+                        compile_source(&source, None, cli.target, script)?
+                    } else {
+                        compile_from_file_input(Path::new(&path), root, cli.target, script)?
+                    }
+                }
             };
 
             if output == "-" {
@@ -300,18 +343,26 @@ fn cmd_build(
                 bail!("refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`");
             }
 
-            let result = if input == "-" {
-                let mut source = String::new();
-                io::stdin().read_to_string(&mut source)?;
-                compile_source_to_pipeline_result(&source, None, cli.target, false, cli.verbose >= 1)?
-            } else {
-                compile_file_input_to_pipeline_result(
-                    Path::new(input),
-                    root,
-                    cli.target,
-                    false,
-                    cli.verbose >= 1,
-                )?
+            let result = match resolve_input(input, eval)? {
+                InputSource::Inline(code) => compile_source_to_pipeline_result(
+                    &code, None, cli.target, script, cli.verbose >= 1,
+                )?,
+                InputSource::File(path) => {
+                    if path == "-" {
+                        let (source, _) = read_input_for_parse(&path)?;
+                        compile_source_to_pipeline_result(
+                            &source, None, cli.target, script, cli.verbose >= 1,
+                        )?
+                    } else {
+                        compile_file_input_to_pipeline_result(
+                            Path::new(&path),
+                            root,
+                            cli.target,
+                            script,
+                            cli.verbose >= 1,
+                        )?
+                    }
+                }
             };
 
             let wasm = result
@@ -443,20 +494,33 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
     Ok(last_exit)
 }
 
-fn cmd_check(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
-    let result = if input == "-" {
-        let (source, filename) = read_input_for_parse(input)?;
-        run_pipeline(
-            &source,
-            filename.as_deref(),
-            Stage::Lower,
-            cli.verbose,
-            cli.time,
-            cli.target,
-            false,
-        )?
-    } else {
-        run_file_input_pipeline(input, root, Stage::Lower, cli)?
+fn cmd_check(
+    cli: &Cli,
+    input: &Option<String>,
+    eval: &Option<String>,
+    root: Option<&str>,
+    script: bool,
+) -> Result<ExitCode> {
+    let result = match resolve_input(input, eval)? {
+        InputSource::Inline(code) => run_pipeline(
+            &code, None, Stage::Lower, cli.verbose, cli.time, cli.target, script,
+        )?,
+        InputSource::File(path) => {
+            if path == "-" {
+                let (source, filename) = read_input_for_parse(&path)?;
+                run_pipeline(
+                    &source,
+                    filename.as_deref(),
+                    Stage::Lower,
+                    cli.verbose,
+                    cli.time,
+                    cli.target,
+                    script,
+                )?
+            } else {
+                run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
+            }
+        }
     };
 
     if cli.verbose >= 1 {
@@ -477,49 +541,80 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
 
 fn cmd_dump_ir(
     cli: &Cli,
-    input: &str,
+    input: &Option<String>,
+    eval: &Option<String>,
     format: DumpFormat,
     root: Option<&str>,
+    script: bool,
+    func: Option<&str>,
 ) -> Result<ExitCode> {
-    let result = if input == "-" {
-        let (source, filename) = read_input_for_parse(input)?;
-        run_pipeline(
-            &source,
-            filename.as_deref(),
-            Stage::Lower,
-            cli.verbose,
-            cli.time,
-            cli.target,
-            false,
-        )?
-    } else {
-        run_file_input_pipeline(input, root, Stage::Lower, cli)?
+    if func.is_some() && format == DumpFormat::Dot {
+        bail!("--func cannot be used with --format dot");
+    }
+
+    let result = match resolve_input(input, eval)? {
+        InputSource::Inline(code) => run_pipeline(
+            &code, None, Stage::Lower, cli.verbose, cli.time, cli.target, script,
+        )?,
+        InputSource::File(path) => {
+            if path == "-" {
+                let (source, filename) = read_input_for_parse(&path)?;
+                run_pipeline(
+                    &source,
+                    filename.as_deref(),
+                    Stage::Lower,
+                    cli.verbose,
+                    cli.time,
+                    cli.target,
+                    script,
+                )?
+            } else {
+                run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
+            }
+        }
     };
 
     if let Some(program) = &result.program {
-        match format {
-            DumpFormat::Text => print_ir(program),
-            DumpFormat::Dot => print_ir_dot(program),
+        if let Some(name) = func {
+            print_ir_func(program, name)?;
+        } else {
+            match format {
+                DumpFormat::Text => print_ir(program),
+                DumpFormat::Dot => print_ir_dot(program),
+            }
         }
     }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_dump_ast(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
-    let result = if input == "-" {
-        let (source, filename) = read_input_for_parse(input)?;
-        run_pipeline(
-            &source,
-            filename.as_deref(),
-            Stage::Parse,
-            cli.verbose,
-            cli.time,
-            cli.target,
-            false,
-        )?
-    } else {
-        run_file_input_pipeline(input, root, Stage::Parse, cli)?
+fn cmd_dump_ast(
+    cli: &Cli,
+    input: &Option<String>,
+    eval: &Option<String>,
+    root: Option<&str>,
+    script: bool,
+) -> Result<ExitCode> {
+    let result = match resolve_input(input, eval)? {
+        InputSource::Inline(code) => run_pipeline(
+            &code, None, Stage::Parse, cli.verbose, cli.time, cli.target, script,
+        )?,
+        InputSource::File(path) => {
+            if path == "-" {
+                let (source, filename) = read_input_for_parse(&path)?;
+                run_pipeline(
+                    &source,
+                    filename.as_deref(),
+                    Stage::Parse,
+                    cli.verbose,
+                    cli.time,
+                    cli.target,
+                    script,
+                )?
+            } else {
+                run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
+            }
+        }
     };
 
     if let Some(ast) = &result.ast {
@@ -530,31 +625,113 @@ fn cmd_dump_ast(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> 
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_dump_wat(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
-    let result = if input == "-" {
-        let mut source = String::new();
-        io::stdin().read_to_string(&mut source)?;
-        run_pipeline(
-            &source,
-            None,
-            Stage::Compile,
-            cli.verbose,
-            cli.time,
-            cli.target,
-            false,
-        )?
-    } else {
-        let pipeline = compile_file_input_to_pipeline_result(
-            Path::new(input),
-            root,
-            cli.target,
-            false,
-            cli.verbose >= 1,
-        )?;
-        if cli.time {
-            pipeline.timings.print(cli.verbose);
+/// 用 wasmprinter Config 输出 WAT 字符串。`name_unnamed(true)` 始终启用，
+/// 使合成函数获得 `$fN` 名称；`skeleton` 为 true 时省略指令体。
+fn print_wat_to_string(wasm: &[u8], skeleton: bool) -> Result<String> {
+    use wasmprinter::{Config, PrintFmtWrite};
+    let mut cfg = Config::new();
+    cfg.name_unnamed(true);
+    if skeleton {
+        cfg.print_skeleton(true);
+    }
+    let mut dst = String::new();
+    cfg.print(wasm, &mut PrintFmtWrite(&mut dst))?;
+    Ok(dst)
+}
+
+/// 从完整 WAT 文本中提取单个函数定义块（按 `$name` 匹配）。
+/// 跟踪括号深度：从 `(func $name` 行开始，深度归零时结束。
+fn filter_wat_func(wat: &str, name: &str) -> Result<String> {
+    let target = format!("${name}");
+    let lines: Vec<&str> = wat.lines().collect();
+    let mut available: Vec<String> = Vec::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let rest = match trimmed.strip_prefix("(func ") {
+            Some(r) => r,
+            None => continue,
+        };
+        let token_end = rest
+            .find(|c: char| c.is_whitespace() || c == ')')
+            .unwrap_or(rest.len());
+        let token = &rest[..token_end];
+        if !token.starts_with('$') {
+            continue;
         }
-        pipeline
+        available.push(token.to_string());
+        if token != target {
+            continue;
+        }
+        // 找到目标函数，按括号深度截取完整块
+        let mut result = String::new();
+        let mut depth: i32 = 0;
+        for &l in &lines[i..] {
+            for ch in l.chars() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+            }
+            result.push_str(l);
+            result.push('\n');
+            if depth == 0 {
+                return Ok(result);
+            }
+        }
+    }
+
+    bail!(
+        "function '{name}' not found in WAT; available: {}",
+        available.join(", ")
+    );
+}
+
+fn cmd_dump_wat(
+    cli: &Cli,
+    input: &Option<String>,
+    eval: &Option<String>,
+    root: Option<&str>,
+    script: bool,
+    func: Option<&str>,
+    skeleton: bool,
+) -> Result<ExitCode> {
+    if func.is_some() && skeleton {
+        bail!("--skeleton and --func are mutually exclusive");
+    }
+
+    let result = match resolve_input(input, eval)? {
+        InputSource::Inline(code) => run_pipeline(
+            &code, None, Stage::Compile, cli.verbose, cli.time, cli.target, script,
+        )?,
+        InputSource::File(path) => {
+            if path == "-" {
+                let mut source = String::new();
+                io::stdin().read_to_string(&mut source)?;
+                run_pipeline(
+                    &source,
+                    None,
+                    Stage::Compile,
+                    cli.verbose,
+                    cli.time,
+                    cli.target,
+                    script,
+                )?
+            } else {
+                let pipeline = compile_file_input_to_pipeline_result(
+                    Path::new(&path),
+                    root,
+                    cli.target,
+                    script,
+                    cli.verbose >= 1,
+                )?;
+                if cli.time {
+                    pipeline.timings.print(cli.verbose);
+                }
+                pipeline
+            }
+        }
     };
 
     if cli.stats {
@@ -562,8 +739,12 @@ fn cmd_dump_wat(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> 
     }
 
     if let Some(wasm) = &result.wasm {
-        let wat = wasmprinter::print_bytes(wasm)?;
-        println!("{}", wat);
+        let wat = print_wat_to_string(wasm, skeleton)?;
+        if let Some(name) = func {
+            println!("{}", filter_wat_func(&wat, name)?);
+        } else {
+            println!("{}", wat);
+        }
     }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
@@ -659,12 +840,19 @@ fn cmd_size(input: &str) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_disasm(input: &str) -> Result<ExitCode> {
-    let bytes = fs::read(input)?;
+fn cmd_disasm(input: &str, func: Option<&str>, skeleton: bool) -> Result<ExitCode> {
+    if func.is_some() && skeleton {
+        bail!("--skeleton and --func are mutually exclusive");
+    }
 
-    // Use wasmprinter for detailed disassembly
-    let disasm = wasmprinter::print_bytes(&bytes)?;
-    println!("{}", disasm);
+    let bytes = fs::read(input)?;
+    let wat = print_wat_to_string(&bytes, skeleton)?;
+
+    if let Some(name) = func {
+        println!("{}", filter_wat_func(&wat, name)?);
+    } else {
+        println!("{}", wat);
+    }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
@@ -837,6 +1025,7 @@ fn run_file_input_pipeline(
     root: Option<&str>,
     stop_at: Stage,
     cli: &Cli,
+    script: bool,
 ) -> Result<PipelineResult> {
     let plan = build_compile_plan(Path::new(input), root)?;
     match plan {
@@ -880,7 +1069,7 @@ fn run_file_input_pipeline(
             cli.verbose,
             cli.time,
             cli.target,
-            false,
+            script,
         ),
     }
 }
@@ -922,6 +1111,21 @@ fn read_input_for_parse(input: &str) -> Result<(String, Option<String>)> {
         Some(input.to_string())
     };
     Ok((source, filename))
+}
+
+/// CLI 输入来源：内联代码或文件路径。
+enum InputSource {
+    Inline(String),
+    File(String),
+}
+
+/// 统一解析 `-e <code>` 与位置参数 `<file>`：`-e` 优先，二者皆无则报错。
+fn resolve_input(input: &Option<String>, eval: &Option<String>) -> Result<InputSource> {
+    match (eval, input) {
+        (Some(code), _) => Ok(InputSource::Inline(code.clone())),
+        (None, Some(path)) => Ok(InputSource::File(path.clone())),
+        (None, None) => bail!("Either an input file or -e <code> is required"),
+    }
 }
 
 // ============================================================================

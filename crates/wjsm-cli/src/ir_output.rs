@@ -1,4 +1,6 @@
+use anyhow::{Result, bail};
 use colored::Colorize;
+use std::fmt::Write;
 use std::sync::OnceLock;
 use wjsm_ir::Program;
 
@@ -16,6 +18,37 @@ pub(crate) fn print_ir(program: &Program) {
     } else {
         println!("{}", text);
     }
+}
+
+/// 输出单个函数的 IR 文本（含常量块，使 cN 引用可解析）。
+pub(crate) fn print_ir_func(program: &Program, name: &str) -> Result<()> {
+    let func = match program.functions().iter().find(|f| f.name() == name) {
+        Some(f) => f,
+        None => bail!("function '{name}' not found"),
+    };
+    let mut out = String::from("module {\n");
+    if program.constants().is_empty() {
+        out.push_str("  constants: []\n");
+    } else {
+        out.push_str("  constants:\n");
+        for (index, constant) in program.constants().iter().enumerate() {
+            let _ = writeln!(out, "    c{index} = {constant}");
+        }
+    }
+    out.push('\n');
+    out.push_str(&func.dump_text());
+    out.push_str("}\n");
+
+    if colored::control::SHOULD_COLORIZE.should_colorize() {
+        for line in out.lines() {
+            let colored_line = colorize_ir_line(line);
+            println!("{}", colored_line);
+        }
+    } else {
+        println!("{}", out);
+    }
+
+    Ok(())
 }
 
 /// DOT 标签字符串转义：反斜杠、双引号、换行。

@@ -369,6 +369,22 @@ impl Compiler {
             self.module.section(&self.data);
         }
 
+        // 发射 WASM name 自定义段（函数名），供 dump-wat/disasm 生成可读输出。
+        // 仅 Normal 模式：Eval 模式是运行时 eval()，无 CLI 调试路径会编译 Eval wasm。
+        // function_names[i] 对应 FunctionId(i)，function_id_to_wasm_idx 映射到真实 wasm 索引。
+        // 合成的 bootstrap/helper 函数不在 function_names 中，保持未命名。
+        if self.mode == CompileMode::Normal && !self.function_names.is_empty() {
+            let mut func_names = NameMap::new();
+            for (i, name) in self.function_names.iter().enumerate() {
+                if let Some(&idx) = self.function_id_to_wasm_idx.get(&(i as u32)) {
+                    func_names.append(idx, name);
+                }
+            }
+            let mut names = NameSection::new();
+            names.functions(&func_names);
+            self.module.section(&names);
+        }
+
         self.module.finish()
     }
 }
