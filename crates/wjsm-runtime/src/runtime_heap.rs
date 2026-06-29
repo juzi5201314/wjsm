@@ -533,6 +533,65 @@ pub(crate) fn native_callable_symbol_prototype(
     }
 }
 
+/// 在 bootstrap 后建立 %RegExpPrototype% 并挂到 RuntimeState（供 RegExp 构造函数 .prototype
+/// + instanceof 原型链遍历）。与 `ensure_promise_prototype_initialized` 同构：
+/// proto = Object.prototype，定义 constructor + [Symbol.toStringTag] = "RegExp"。
+/// RegExp 实例（TAG_REGEXP）的方法由 `primitive_regexp_get_property_impl` 分派，
+/// 不经过原型链查找，故此处不定义 exec/test 等方法。
+pub(crate) fn ensure_regexp_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().regexp_prototype) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let object_proto = value::encode_object_handle(object_proto_handle as u32);
+    let regexp_proto = alloc_host_object(ctx, env, 2);
+    set_object_proto_header(ctx, env, regexp_proto, object_proto);
+
+    let ctor = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::RegExpConstructor,
+    );
+    let _ = define_host_data_property_with_env(ctx, env, regexp_proto, "constructor", ctor);
+
+    let tag = store_runtime_string_in_state(ctx.as_context().data(), "RegExp".to_string());
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        regexp_proto,
+        encode_symbol_name_id(2),
+        tag,
+        constants::FLAG_CONFIGURABLE,
+    );
+
+    ctx.as_context_mut().data_mut().regexp_prototype = regexp_proto;
+}
+
+pub(crate) fn native_callable_regexp_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+) -> Option<i64> {
+    if !matches!(record, NativeCallable::RegExpConstructor) {
+        return None;
+    }
+    if !value::is_object(caller.data().regexp_prototype) {
+        if let Some(env) = WasmEnv::from_caller(caller) {
+            ensure_regexp_prototype_initialized(caller, &env);
+        }
+    }
+    let proto = caller.data().regexp_prototype;
+    if value::is_object(proto) {
+        Some(proto)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn native_callable_error_prototype(
     caller: &mut Caller<'_, RuntimeState>,
     record: &NativeCallable,

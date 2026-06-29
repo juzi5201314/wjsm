@@ -741,7 +741,8 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         return record
             .as_ref()
             .and_then(|record| {
-                crate::runtime_heap::native_callable_promise_prototype(caller, record)
+                crate::runtime_heap::native_callable_regexp_prototype(caller, record)
+                    .or_else(|| crate::runtime_heap::native_callable_promise_prototype(caller, record))
                     .or_else(|| native_callable_error_prototype(caller, record))
             })
             .unwrap_or_else(value::encode_undefined);

@@ -307,6 +307,7 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut store, &wasm_env);
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut store, &wasm_env);
     crate::runtime_heap::ensure_promise_prototype_initialized(&mut store, &wasm_env);
+    crate::runtime_heap::ensure_regexp_prototype_initialized(&mut store, &wasm_env);
     timings.bootstrap_cold = start.elapsed();
 
     // snapshot build = capture + encode；解码与恢复在新 instance 上重测一次。
@@ -504,8 +505,9 @@ impl Clone for RuntimeState {
             error_prototypes: self.error_prototypes,
             symbol_prototype: self.symbol_prototype,
             array_proto_values: AtomicI64::new(self.array_proto_values.load(Ordering::Relaxed)),
-            promise_prototype: self.promise_prototype,
             array_named_props: self.array_named_props.clone(),
+            promise_prototype: self.promise_prototype,
+            regexp_prototype: self.regexp_prototype,
             combinator_contexts: self.combinator_contexts.clone(),
             module_namespace_cache: self.module_namespace_cache.clone(),
             error_table: self.error_table.clone(),
@@ -616,6 +618,8 @@ struct RuntimeState {
     symbol_prototype: i64,
     /// %PromisePrototype% 对象
     promise_prototype: i64,
+    /// %RegExpPrototype% 对象（供 RegExp 构造函数 .prototype + instanceof 原型链遍历）
+    regexp_prototype: i64,
     /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
     /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
@@ -847,8 +851,9 @@ impl RuntimeState {
             async_generator_table: Arc::new(Mutex::new(Vec::new())),
             async_from_sync_iterators: Arc::new(Mutex::new(Vec::new())),
             async_iterator_prototype: value::encode_undefined(),
-            async_gen_prototype: value::encode_undefined(),
             promise_prototype: value::encode_undefined(),
+            regexp_prototype: value::encode_undefined(),
+            async_gen_prototype: value::encode_undefined(),
             error_prototypes: crate::runtime_heap::ErrorPrototypes::default(),
             symbol_prototype: value::encode_undefined(),
             combinator_contexts: Arc::new(Mutex::new(Vec::new())),

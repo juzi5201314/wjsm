@@ -512,7 +512,11 @@ async fn ordinary_has_instance_async(
     value: i64,
     constructor: i64,
 ) -> i64 {
-    if !value::is_js_object(value) {
+    // §15.10.1.1 step 1: If Type(O) is not Object, return false.
+    // TAG_REGEXP 是 RegExp 实例的 NaN-boxed 句柄（指向 regex_table），
+    // 不是 obj_table 对象，但其语义上是 Object（继承自 RegExp.prototype），
+    // 故对 instanceof 视作 Object。
+    if !value::is_js_object(value) && !value::is_regexp(value) {
         return value::encode_bool(false);
     }
 
@@ -547,15 +551,32 @@ async fn ordinary_has_instance_async(
     }
 
     let prototype = prototype_val;
-    let proto_target = match resolve_handle(caller, prototype) {
-        Some(p) => p as u32,
-        None => return value::encode_bool(false),
+    // proto_target 是构造器 .prototype 对象的 obj_table handle 索引。
+    // null 原型用 0xFFFF_FFFF 哨兵，永不匹配链上任何 handle。
+    let proto_target: u32 = if value::is_null(prototype) {
+        0xFFFF_FFFF
+    } else {
+        handle_index_of(caller, prototype) as u32
     };
-    let mut current_ptr = match resolve_handle(caller, value) {
-        Some(p) => p,
-        None => return value::encode_bool(false),
-    };
-    loop {
+    // 获取 value 的 [[Prototype]] handle 作为链遍历起点（§15.10.1.1 step 5a）。
+    // TAG_REGEXP 无 obj_table 条目，其 [[Prototype]] 是 RegExp.prototype 对象；
+    // 普通对象从 obj_table 条目偏移 0 读取 [[Prototype]] handle。
+    let mut current_proto: u32 = if value::is_regexp(value) {
+        if !value::is_object(caller.data().regexp_prototype) {
+            if let Some(env) = WasmEnv::from_caller(caller) {
+                crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
+            }
+        }
+        let regexp_proto = caller.data().regexp_prototype;
+        if !value::is_object(regexp_proto) {
+            return value::encode_bool(false);
+        }
+        handle_index_of(caller, regexp_proto) as u32
+    } else {
+        let current_ptr = match resolve_handle(caller, value) {
+            Some(p) => p,
+            None => return value::encode_bool(false),
+        };
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return value::encode_bool(false);
         };
@@ -563,23 +584,38 @@ async fn ordinary_has_instance_async(
         if current_ptr + 4 > data.len() {
             return value::encode_bool(false);
         }
-        let proto_handle = u32::from_le_bytes([
+        u32::from_le_bytes([
             data[current_ptr],
             data[current_ptr + 1],
             data[current_ptr + 2],
             data[current_ptr + 3],
-        ]);
-
-        if proto_handle == 0xFFFF_FFFF {
+        ])
+    };
+    // 遍历原型链（全程 handle 空间）：比较 current_proto 与 proto_target，
+    // 不匹配则解析 handle → 堆指针 → 读取其 [[Prototype]] handle 继续。
+    loop {
+        if current_proto == 0xFFFF_FFFF {
             return value::encode_bool(false);
         }
-        let Some(proto_ptr) = resolve_handle_idx(caller, proto_handle as usize) else {
-            return value::encode_bool(false);
-        };
-        if proto_ptr == proto_target as usize {
+        if current_proto == proto_target {
             return value::encode_bool(true);
         }
-        current_ptr = proto_ptr;
+        let Some(proto_ptr) = resolve_handle_idx(caller, current_proto as usize) else {
+            return value::encode_bool(false);
+        };
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return value::encode_bool(false);
+        };
+        let data = memory.data(&*caller);
+        if proto_ptr + 4 > data.len() {
+            return value::encode_bool(false);
+        }
+        current_proto = u32::from_le_bytes([
+            data[proto_ptr],
+            data[proto_ptr + 1],
+            data[proto_ptr + 2],
+            data[proto_ptr + 3],
+        ]);
     }
 }
 
