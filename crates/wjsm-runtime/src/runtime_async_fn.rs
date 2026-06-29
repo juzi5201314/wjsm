@@ -92,7 +92,7 @@ pub(crate) fn enqueue_async_resume_from_caller(
     continuation: i64,
     state: u32,
     resume_val: i64,
-    is_rejected: bool,
+    completion: u8,
 ) {
     let cont_handle = value::decode_object_handle(continuation) as usize;
     let fn_table_idx = {
@@ -106,7 +106,7 @@ pub(crate) fn enqueue_async_resume_from_caller(
             entry.captured_vars.push(value::encode_undefined());
         }
         entry.captured_vars[0] = value::encode_f64(state as f64);
-        entry.captured_vars[1] = value::encode_bool(is_rejected);
+        entry.captured_vars[1] = value::encode_f64(completion as f64);
         entry.fn_table_idx
     };
     caller
@@ -117,7 +117,7 @@ pub(crate) fn enqueue_async_resume_from_caller(
             continuation,
             state,
             resume_val,
-            is_rejected,
+            completion,
         });
 }
 
@@ -126,12 +126,16 @@ pub(crate) enum AsyncGeneratorPumpAction {
         continuation: i64,
         state: u32,
         value: i64,
-        is_rejected: bool,
+        completion: u8,
+    },
+    ResumeReturn {
+        continuation: i64,
+        value: i64,
     },
     SettleResumePromise {
         promise: i64,
         value: i64,
-        is_rejected: bool,
+        completion: u8,
     },
     Fulfill {
         promise: i64,
@@ -174,21 +178,21 @@ pub(crate) fn pump_async_generator_from_caller(
                             Some(AsyncGeneratorPumpAction::SettleResumePromise {
                                 promise: resume_promise,
                                 value: request.value,
-                                is_rejected: false,
+                                completion: 0,
                             })
                         }
                         AsyncGeneratorCompletionType::Throw => {
                             Some(AsyncGeneratorPumpAction::SettleResumePromise {
                                 promise: resume_promise,
                                 value: request.value,
-                                is_rejected: true,
+                                completion: 1,
                             })
                         }
                         AsyncGeneratorCompletionType::Return => {
-                            Some(AsyncGeneratorPumpAction::SettleResumePromise {
-                                promise: resume_promise,
+                            let _ = resume_promise;
+                            Some(AsyncGeneratorPumpAction::ResumeReturn {
+                                continuation: entry.continuation,
                                 value: request.value,
-                                is_rejected: false,
                             })
                         }
                     }
@@ -207,7 +211,7 @@ pub(crate) fn pump_async_generator_from_caller(
                                 continuation: entry.continuation,
                                 state: 0,
                                 value: request.value,
-                                is_rejected: false,
+                                completion: 0,
                             })
                         }
                         AsyncGeneratorCompletionType::Return => {
@@ -235,14 +239,39 @@ pub(crate) fn pump_async_generator_from_caller(
             continuation,
             state,
             value,
-            is_rejected,
-        }) => enqueue_async_resume_from_caller(caller, continuation, state, value, is_rejected),
+            completion,
+        }) => enqueue_async_resume_from_caller(caller, continuation, state, value, completion),
+        Some(AsyncGeneratorPumpAction::ResumeReturn { continuation, value }) => {
+            let (fn_table_idx, state) = {
+                let cont_handle = value::decode_object_handle(continuation) as usize;
+                let c_table = caller
+                    .data()
+                    .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
+                let entry = c_table.get(cont_handle);
+                let fn_table_idx = entry.map(|e| e.fn_table_idx).unwrap_or(0);
+                let state = entry
+                    .and_then(|e| e.captured_vars.get(0))
+                    .map(|v| value::decode_f64(*v) as u32)
+                    .unwrap_or(0);
+                (fn_table_idx, state)
+            };
+            caller
+                .data()
+                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner())
+                .push_back(Microtask::AsyncResume {
+                    fn_table_idx,
+                    continuation,
+                    state,
+                    resume_val: value,
+                    completion: 2,
+                });
+        }
         Some(AsyncGeneratorPumpAction::SettleResumePromise {
             promise,
             value,
-            is_rejected,
+            completion,
         }) => {
-            if is_rejected {
+            if completion == 1 {
                 settle_promise(caller.data(), promise, PromiseSettlement::Reject(value));
             } else {
                 resolve_promise_from_caller(caller, promise, value);
@@ -286,7 +315,7 @@ pub(crate) async fn resume_async_function_async<
     continuation: i64,
     state: u32,
     resume_val: i64,
-    is_rejected: bool,
+    completion: u8,
 ) {
     {
         let cont_handle = value::decode_object_handle(continuation) as usize;
@@ -298,7 +327,7 @@ pub(crate) async fn resume_async_function_async<
                 entry.captured_vars.push(value::encode_undefined());
             }
             entry.captured_vars[0] = value::encode_f64(state as f64);
-            entry.captured_vars[1] = value::encode_bool(is_rejected);
+            entry.captured_vars[1] = value::encode_f64(completion as f64);
         }
     }
     let func_ref = env.func_table.get(&mut *ctx, fn_table_idx as u64);

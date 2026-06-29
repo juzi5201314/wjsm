@@ -169,7 +169,7 @@ pub(crate) fn queue_promise_reactions(
                     continuation: reaction.target_promise,
                     state: resume_state,
                     resume_val: value,
-                    is_rejected,
+                    completion: if is_rejected { 1 } else { 0 },
                 });
             }
             PromiseReactionKind::Normal { handler } => {

@@ -4,4 +4,6 @@ exit_code: 0
 false
 early
 true
+undefined
+true
 --- stderr ---

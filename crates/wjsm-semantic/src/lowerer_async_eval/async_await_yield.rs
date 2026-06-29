@@ -6,7 +6,8 @@ impl Lowerer {
         await_expr: &swc_ast::AwaitExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        let value = self.lower_expr(&await_expr.arg, block)?;
+        let mut block = block;
+        let value = self.lower_expr_then_continue(&await_expr.arg, &mut block)?;
 
         let promised = self.alloc_value();
         {
@@ -77,10 +78,29 @@ impl Lowerer {
             },
         );
 
+        let one_const = self.module.add_constant(Constant::Number(1.0));
+        let one_val = self.alloc_value();
+        self.current_function.append_instruction(
+            resume_block,
+            Instruction::Const {
+                dest: one_val,
+                constant: one_const,
+            },
+        );
+        let is_reject = self.alloc_value();
+        self.current_function.append_instruction(
+            resume_block,
+            Instruction::Compare {
+                dest: is_reject,
+                op: CompareOp::StrictEq,
+                lhs: is_rejected,
+                rhs: one_val,
+            },
+        );
         self.current_function.set_terminator(
             resume_block,
             Terminator::Branch {
-                condition: is_rejected,
+                condition: is_reject,
                 true_block: reject_block,
                 false_block: continue_block,
             },
@@ -105,8 +125,9 @@ impl Lowerer {
         yield_expr: &swc_ast::YieldExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        let mut block = block;
         let value = if let Some(arg) = &yield_expr.arg {
-            self.lower_expr(arg, block)?
+            self.lower_expr_then_continue(arg, &mut block)?
         } else {
             let undef_const = self.module.add_constant(Constant::Undefined);
             let undef_val = self.alloc_value();
@@ -136,6 +157,7 @@ impl Lowerer {
             let resume_block = self.current_function.new_block();
             let reject_block = self.current_function.new_block();
             let continue_block = self.current_function.new_block();
+            let return_block = self.current_function.new_block();
 
             self.async_resume_blocks.push((next_state, resume_block));
             let visible_bindings = self.async_visible_binding_names();
@@ -178,25 +200,109 @@ impl Lowerer {
                     name: format!("${}.$resume_val", self.async_resume_val_scope_id),
                 },
             );
-            let is_rejected = self.alloc_value();
+            let completion = self.alloc_value();
             self.current_function.append_instruction(
                 resume_block,
                 Instruction::LoadVar {
-                    dest: is_rejected,
+                    dest: completion,
                     name: format!("${}.$is_rejected", self.async_is_rejected_scope_id),
                 },
             );
 
+            // 用嵌套 Branch 代替 Switch：completion == 1 → reject, == 2 → return, else → continue
+            let one_const = self.module.add_constant(Constant::Number(1.0));
+            let one_val = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::Const {
+                    dest: one_val,
+                    constant: one_const,
+                },
+            );
+            let is_throw = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::Compare {
+                    dest: is_throw,
+                    op: CompareOp::StrictEq,
+                    lhs: completion,
+                    rhs: one_val,
+                },
+            );
+            let check_return = self.current_function.new_block();
             self.current_function.set_terminator(
                 resume_block,
                 Terminator::Branch {
-                    condition: is_rejected,
+                    condition: is_throw,
                     true_block: reject_block,
+                    false_block: check_return,
+                },
+            );
+
+            // check_return: completion == 2 → return_block, else → continue_block
+            let two_const = self.module.add_constant(Constant::Number(2.0));
+            let two_val = self.alloc_value();
+            self.current_function.append_instruction(
+                check_return,
+                Instruction::Const {
+                    dest: two_val,
+                    constant: two_const,
+                },
+            );
+            let is_return = self.alloc_value();
+            self.current_function.append_instruction(
+                check_return,
+                Instruction::Compare {
+                    dest: is_return,
+                    op: CompareOp::StrictEq,
+                    lhs: completion,
+                    rhs: two_val,
+                },
+            );
+            self.current_function.set_terminator(
+                check_return,
+                Terminator::Branch {
+                    condition: is_return,
+                    true_block: return_block,
                     false_block: continue_block,
                 },
             );
 
             self.emit_throw_value(reject_block, resume_val)?;
+
+            match self.lower_pending_finalizers(return_block)? {
+                StmtFlow::Open(after_finally) => {
+                    let gen_val2 = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: gen_val2,
+                            name: format!("${}.$generator", self.async_generator_scope_id),
+                        },
+                    );
+                    let return_value = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: return_value,
+                            name: format!("${}.$resume_val", self.async_resume_val_scope_id),
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::CallBuiltin {
+                            dest: None,
+                            builtin: Builtin::AsyncGeneratorReturn,
+                            args: vec![gen_val2, return_value],
+                        },
+                    );
+                    self.current_function.set_terminator(
+                        after_finally,
+                        Terminator::Return { value: None },
+                    );
+                }
+                StmtFlow::Terminated => {}
+            }
 
             let result = self.alloc_value();
             self.current_function.append_instruction(

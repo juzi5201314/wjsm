@@ -45,7 +45,7 @@ pub(crate) fn define_async_fn(
                 continuation: value::encode_object_handle(cont_handle),
                 state: 0,
                 resume_val: value::encode_undefined(),
-                is_rejected: false,
+                completion: 0,
             });
 
             outer_promise
@@ -66,7 +66,7 @@ pub(crate) fn define_async_fn(
          continuation: i64,
          state: i64,
          resume_val: i64,
-         is_rejected: i64| {
+         completion_raw: i64| {
             let resolved_fn_idx = if value::is_function(fn_table_idx) {
                 value::decode_function_idx(fn_table_idx)
             } else if value::is_closure(fn_table_idx) {
@@ -77,7 +77,7 @@ pub(crate) fn define_async_fn(
                 nanbox_to_u32(fn_table_idx)
             };
             let state = nanbox_to_u32(state);
-            let is_rejected_bool = nanbox_to_bool(is_rejected);
+            let completion = nanbox_to_u32(completion_raw) as u8;
             {
                 let cont_handle = value::decode_object_handle(continuation) as usize;
                 let mut c_table = caller
@@ -88,7 +88,7 @@ pub(crate) fn define_async_fn(
                         entry.captured_vars.push(value::encode_undefined());
                     }
                     entry.captured_vars[0] = value::encode_f64(state as f64);
-                    entry.captured_vars[1] = value::encode_bool(is_rejected_bool);
+                    entry.captured_vars[1] = value::encode_f64(completion as f64);
                 }
             }
             let mut queue = caller
@@ -99,7 +99,7 @@ pub(crate) fn define_async_fn(
                 continuation,
                 state,
                 resume_val,
-                is_rejected: is_rejected_bool,
+                completion,
             });
         },
     );
@@ -126,7 +126,7 @@ pub(crate) fn define_async_fn(
                     entry.captured_vars.push(value::encode_undefined());
                 }
                 entry.captured_vars[0] = value::encode_f64(state as f64);
-                entry.captured_vars[1] = value::encode_bool(false);
+                entry.captured_vars[1] = value::encode_f64(0.0);
                 entry.fn_table_idx
             };
 

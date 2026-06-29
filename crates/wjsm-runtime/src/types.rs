@@ -1056,7 +1056,7 @@ pub(crate) enum Microtask {
         continuation: i64,
         state: u32,
         resume_val: i64,
-        is_rejected: bool,
+        completion: u8,
     },
     #[allow(dead_code)]
     CleanupFinalizationRegistry {

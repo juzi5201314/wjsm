@@ -250,7 +250,7 @@ pub(crate) async fn drain_microtasks_async<
                 continuation,
                 state,
                 resume_val,
-                is_rejected,
+                completion,
             }) => {
                 resume_async_function_async(
                     ctx,
@@ -259,7 +259,7 @@ pub(crate) async fn drain_microtasks_async<
                     continuation,
                     state,
                     resume_val,
-                    is_rejected,
+                    completion,
                 )
                 .await;
             }
