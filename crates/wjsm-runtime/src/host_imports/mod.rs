@@ -18,10 +18,10 @@ pub(crate) use proxy_reflect_async::define_proxy_reflect_async;
 pub(crate) use reentrant_async::define_array_object_async;
 pub(crate) use reentrant_async::define_misc_async;
 pub(crate) use reentrant_async::define_primitive_core_async;
-pub(crate) use reentrant_async::string_replace_default_async_body;
 pub(crate) use reentrant_async::define_proxy_traps_async;
 pub(crate) use reentrant_async::define_timers_arrays_async;
 pub(crate) use reentrant_async::define_typedarray_new_methods_async;
+pub(crate) use reentrant_async::string_replace_default_async_body;
 mod object_builtins;
 pub(crate) use object_builtins::define_object_builtins;
 mod object_builtins_async;
@@ -53,14 +53,17 @@ mod timers_arrays;
 mod typedarray_new_methods;
 mod weakref_finalization;
 
-pub(crate) use array_object::define_array_object;
-pub(crate) use array_object::array_set_length_impl;
 pub(crate) use array_object::array_from_impl_async;
+pub(crate) use array_object::array_set_length_impl;
+pub(crate) use array_object::define_array_object;
 pub(crate) use atomics::define_atomics;
 pub(crate) use collections_buffers::define_collections_buffers;
 
-pub(crate) use core::utf8_code_unit_len;
-pub(crate) use core::define_core;
+pub(crate) use core::{
+    define_core, iterator_from_impl_async, iterator_value_impl, string_iter_advance_byte_pos,
+    utf8_code_unit_len,
+};
+
 pub(crate) use fetch::define_fetch;
 pub(crate) use fetch_core::abort_controller_abort;
 pub(crate) use fetch_core::call_headers_method_from_caller;

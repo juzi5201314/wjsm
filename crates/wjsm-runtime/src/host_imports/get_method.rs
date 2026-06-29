@@ -27,7 +27,11 @@ pub(crate) fn get_method_by_name_id(
             "method is not callable".to_string(),
         );
         let error_obj = crate::runtime_heap::create_error_object(caller, "TypeError", msg_val);
-        let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut errors = caller
+            .data()
+            .error_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let idx = errors.len() as u32;
         errors.push(crate::ErrorEntry {
             name: "TypeError".to_string(),
@@ -51,8 +55,12 @@ pub(crate) fn get_by_name_id_sync(
         None => return value::encode_undefined(),
     };
     if value::is_array(obj) && is_symbol_name_id(name_id) {
-        return array_named_get_sync(caller, obj, name_id);
+        let own = array_named_get_sync(caller, obj, name_id);
+        if !value::is_undefined(own) {
+            return own;
+        }
     }
+
     if value::is_regexp(obj) {
         return crate::primitive_regexp_get_property_impl(caller, obj, name_id);
     }
@@ -96,18 +104,16 @@ fn invoke_getter_sync(caller: &mut Caller<'_, RuntimeState>, getter: i64, receiv
         return value::encode_undefined();
     }
     if value::is_native_callable(getter) {
-        return crate::call_native_callable_with_args_from_caller(
-            caller,
-            getter,
-            receiver,
-            vec![],
-        )
-        .unwrap_or_else(value::encode_undefined);
+        return crate::call_native_callable_with_args_from_caller(caller, getter, receiver, vec![])
+            .unwrap_or_else(value::encode_undefined);
     }
     let rt = tokio::runtime::Handle::current();
     tokio::task::block_in_place(|| {
         rt.block_on(crate::call_wasm_callback_async(
-            caller, getter, receiver, &[],
+            caller,
+            getter,
+            receiver,
+            &[],
         ))
     })
     .unwrap_or_else(|_| value::encode_undefined())
@@ -123,8 +129,7 @@ fn get_by_name_id_on_proto_chain(
     if !visited.insert(obj_ptr) {
         return None;
     }
-    if let Some((slot_offset, flags, val)) =
-        find_property_slot_by_name_id(caller, obj_ptr, name_id)
+    if let Some((slot_offset, flags, val)) = find_property_slot_by_name_id(caller, obj_ptr, name_id)
     {
         if (flags & constants::FLAG_IS_ACCESSOR) == 0 {
             return Some(val);

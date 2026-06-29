@@ -330,7 +330,11 @@ fn build_section_payloads(snapshot: &StartupSnapshotOwned) -> (Vec<u8>, Vec<u8>,
     let mut nc_payload = Vec::new();
     nc_payload.extend_from_slice(&(snapshot.native_callables.len() as u32).to_le_bytes());
     for (i, nc) in snapshot.native_callables.iter().enumerate() {
-        let method = snapshot.native_callable_methods.get(i).copied().unwrap_or(0);
+        let method = snapshot
+            .native_callable_methods
+            .get(i)
+            .copied()
+            .unwrap_or(0);
         let raw: u32 = (*nc as u32) | ((method as u32) << 8);
         nc_payload.extend_from_slice(&raw.to_le_bytes());
     }
@@ -611,7 +615,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=57 {
+    for d in 0u32..=63 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);

@@ -47,6 +47,13 @@ fn get_array_proto_values(caller: &mut Caller<'_, RuntimeState>) -> i64 {
         values = create_native_callable(caller.data(), NativeCallable::ArrayProtoValues);
         let _ = define_arguments_data_property(caller, array_proto_obj, "values", values);
     }
+    let _ = define_host_data_property_by_name_id_with_flags(
+        caller,
+        array_proto_obj,
+        encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+        values,
+        ARGUMENTS_DATA_FLAGS,
+    );
     caller
         .data()
         .array_proto_values
@@ -116,7 +123,9 @@ pub(crate) fn create_unmapped_arguments_object(
     let callee_getter = {
         let mut table = caller
             .data()
-            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(crate::NativeCallable::ArgumentsStrictCalleeGetter);
         value::encode_native_callable_idx(handle)

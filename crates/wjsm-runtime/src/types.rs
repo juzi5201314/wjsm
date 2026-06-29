@@ -448,6 +448,11 @@ pub(crate) enum NativeCallable {
         index: Arc<Mutex<u32>>,
         length: u32,
     },
+    /// 内部 TAG_ITERATOR 包装对象的 next()。
+    RawIteratorNext {
+        iterator: i64,
+    },
+
     /// AsyncFromSyncIterator.prototype.next()
     AsyncFromSyncNext {
         handle: u32,

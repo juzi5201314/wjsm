@@ -170,6 +170,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::AsyncGeneratorMethod { .. }
             | NativeCallable::AsyncGeneratorIdentity { .. }
             | NativeCallable::ArrayLikeIteratorNext { .. }
+            | NativeCallable::RawIteratorNext { .. }
             | NativeCallable::AsyncFromSyncNext { .. }
             | NativeCallable::AsyncFromSyncReturn { .. }
             | NativeCallable::AsyncFromSyncThrow { .. }

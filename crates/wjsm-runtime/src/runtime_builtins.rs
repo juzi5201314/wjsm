@@ -401,10 +401,150 @@ fn create_array_like_values_iterator(caller: &mut Caller<'_, RuntimeState>, targ
     );
     let obj = {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        alloc_host_object(caller, &env, 1)
+        alloc_host_object(caller, &env, 2)
+    };
+    let self_fn = create_native_callable(caller.data(), NativeCallable::RegExpStringIteratorSelf);
+    let _ = define_host_data_property_from_caller(caller, obj, "next", next);
+    let _ = define_host_data_property_by_name_id(
+        caller,
+        obj,
+        encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+        self_fn,
+    );
+    obj
+}
+
+pub(crate) fn create_raw_iterator_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    iterator: i64,
+) -> i64 {
+    let next = create_native_callable(caller.data(), NativeCallable::RawIteratorNext { iterator });
+    let self_fn = create_native_callable(caller.data(), NativeCallable::RegExpStringIteratorSelf);
+    let obj = {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &env, 2)
     };
     let _ = define_host_data_property_from_caller(caller, obj, "next", next);
+    let _ = define_host_data_property_by_name_id(
+        caller,
+        obj,
+        encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+        self_fn,
+    );
     obj
+}
+
+fn raw_iterator_next_result(caller: &mut Caller<'_, RuntimeState>, iterator: i64) -> i64 {
+    if !value::is_iterator(iterator) {
+        return alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
+    }
+    let handle_idx = value::decode_handle(iterator) as usize;
+    if raw_iterator_done(caller, handle_idx) {
+        return alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
+    }
+    let current = iterator_value_impl(caller, iterator);
+    advance_raw_iterator(caller, handle_idx);
+    alloc_iterator_result_from_caller(caller, current, false)
+}
+
+fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -> bool {
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(iter) = iters.get_mut(handle_idx) else {
+        return true;
+    };
+    match iter {
+        IteratorState::StringIter { byte_pos, data } => *byte_pos >= data.len(),
+        IteratorState::ArrayIter { index, length, .. } => *index >= *length,
+        IteratorState::MapKeyIter { index, map_handle }
+        | IteratorState::MapValueIter { index, map_handle }
+        | IteratorState::MapEntryIter { index, map_handle } => {
+            let table = caller
+                .data()
+                .map_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *map_handle >= table.len() as u32
+                || *index as usize >= table[*map_handle as usize].keys.len()
+        }
+        IteratorState::SetValueIter { index, set_handle }
+        | IteratorState::SetEntryIter { index, set_handle } => {
+            let table = caller
+                .data()
+                .set_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *set_handle >= table.len() as u32
+                || *index as usize >= table[*set_handle as usize].values.len()
+        }
+        IteratorState::HeadersKeyIter {
+            index,
+            headers_handle,
+        }
+        | IteratorState::HeadersValueIter {
+            index,
+            headers_handle,
+        }
+        | IteratorState::HeadersEntryIter {
+            index,
+            headers_handle,
+        } => {
+            let table = caller
+                .data()
+                .headers_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *headers_handle >= table.len() as u32
+                || *index as usize >= table[*headers_handle as usize].pairs.len()
+        }
+        IteratorState::IndexValueIter { index, values } => *index as usize >= values.len(),
+        IteratorState::TypedArrayValueIter { index, length, .. }
+        | IteratorState::TypedArrayEntryIter { index, length, .. } => *index >= *length,
+        IteratorState::RegExpStringIter { .. } => {
+            drop(iters);
+            regexp_string_iter_ensure_current(caller, handle_idx)
+        }
+        IteratorState::ObjectIter { done, .. } => *done,
+        IteratorState::Error => true,
+    }
+}
+
+fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) {
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(iter) = iters.get_mut(handle_idx) else {
+        return;
+    };
+    match iter {
+        IteratorState::StringIter { byte_pos, data } => {
+            string_iter_advance_byte_pos(data, byte_pos)
+        }
+        IteratorState::ArrayIter { index, .. }
+        | IteratorState::MapKeyIter { index, .. }
+        | IteratorState::MapValueIter { index, .. }
+        | IteratorState::MapEntryIter { index, .. }
+        | IteratorState::SetValueIter { index, .. }
+        | IteratorState::SetEntryIter { index, .. }
+        | IteratorState::HeadersKeyIter { index, .. }
+        | IteratorState::HeadersValueIter { index, .. }
+        | IteratorState::HeadersEntryIter { index, .. }
+        | IteratorState::IndexValueIter { index, .. }
+        | IteratorState::TypedArrayValueIter { index, .. }
+        | IteratorState::TypedArrayEntryIter { index, .. } => {
+            *index += 1;
+        }
+        IteratorState::RegExpStringIter { .. } => {
+            drop(iters);
+            regexp_string_iter_next(caller, handle_idx);
+        }
+        IteratorState::ObjectIter { .. } | IteratorState::Error => {}
+    }
 }
 
 fn advance_array_like_values_iterator(
@@ -473,6 +613,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         } => Some(advance_array_like_values_iterator(
             caller, target, index, length,
         )),
+        NativeCallable::RawIteratorNext { iterator } => {
+            Some(raw_iterator_next_result(caller, iterator))
+        }
         NativeCallable::BigIntPrimitiveMethod { method } => Some(invoke_bigint_primitive_method(
             caller, this_val, method, &args,
         )),
@@ -482,17 +625,19 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::SymbolPrimitiveMethod { method } => {
             Some(invoke_symbol_primitive_method(caller, this_val, method))
         }
-        NativeCallable::RegExpPrimitiveMethod { method } => {
-            Some(invoke_regexp_primitive_method(caller, this_val, method, &args))
-        }
-        NativeCallable::RegExpStringIteratorNext { iter_handle } => {
-            Some(crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle))
-        }
+        NativeCallable::RegExpPrimitiveMethod { method } => Some(invoke_regexp_primitive_method(
+            caller, this_val, method, &args,
+        )),
+        NativeCallable::RegExpStringIteratorNext { iter_handle } => Some(
+            crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle),
+        ),
         NativeCallable::RegExpStringIteratorSelf => Some(this_val),
         NativeCallable::SymbolProtoDescriptionGetter => {
             Some(symbol_proto_description_getter_impl(caller, this_val))
         }
-        NativeCallable::SymbolProtoToPrimitive => Some(symbol_proto_value_of_impl(caller, this_val)),
+        NativeCallable::SymbolProtoToPrimitive => {
+            Some(symbol_proto_value_of_impl(caller, this_val))
+        }
         NativeCallable::EvalIndirect | NativeCallable::EvalFunction(_) => {
             // sync 路径已退役（参见 docs/async-scheduler.md / async_reentry_audit）；
             // 唯一进入点是 sync eval 解释器内嵌套 eval，本身已改为错误返回。
@@ -1100,9 +1245,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         NativeCallable::RegExpPrimitiveMethod { method } => {
             Some(invoke_regexp_primitive_method_async(caller, this_val, method, &args).await)
         }
-        NativeCallable::RegExpStringIteratorNext { iter_handle } => {
-            Some(crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle))
-        }
+        NativeCallable::RegExpStringIteratorNext { iter_handle } => Some(
+            crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle),
+        ),
         NativeCallable::RegExpStringIteratorSelf => Some(this_val),
         NativeCallable::MapSetMethod {
             kind: MapSetMethodKind::ForEach,

@@ -98,8 +98,12 @@ pub(super) fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
     }
     // WJSM_OPT_LEVEL=none|speed_and_size 控制 Cranelift 优化等级
     match std::env::var("WJSM_OPT_LEVEL").as_deref() {
-        Ok("none") => { config.cranelift_opt_level(OptLevel::None); }
-        Ok("speed_and_size") => { config.cranelift_opt_level(OptLevel::SpeedAndSize); }
+        Ok("none") => {
+            config.cranelift_opt_level(OptLevel::None);
+        }
+        Ok("speed_and_size") => {
+            config.cranelift_opt_level(OptLevel::SpeedAndSize);
+        }
         _ => {}
     }
     if use_epoch_async_yield {
@@ -206,14 +210,40 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
     }
 }
 
+fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
+    let array_proto_handle = wasm_env
+        .array_proto_handle
+        .get(&mut *store)
+        .i32()
+        .unwrap_or(-1);
+    if array_proto_handle < 0 {
+        return;
+    }
+    let array_iterator = create_native_callable(store.data(), NativeCallable::ArrayProtoValues);
+    let array_proto = value::encode_object_handle(array_proto_handle as u32);
+    let _ = define_host_data_property_by_name_id_with_env(
+        store,
+        wasm_env,
+        array_proto,
+        encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+        array_iterator,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    );
+}
+
 pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
     if wasm_env.obj_table_count.get(&mut *store).i32().unwrap_or(0) == 0 {
         // handle 0 仍作为旧原型链 null 哨兵；host primordial 从 1 开始，避免 Object.getPrototypeOf 误判。
         let _ = alloc_host_object(store, wasm_env, 0);
     }
+    install_array_iterator_methods(store, wasm_env);
     let async_iterator_proto = alloc_host_object(store, wasm_env, 2);
     let async_iterator_symbol_async_iterator = {
-        let mut table = store.data().native_callables.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = store
+            .data()
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
         value::encode_native_callable_idx(handle)
@@ -260,7 +290,8 @@ pub(super) struct ExecuteInstanceBundle {
     pub(super) wasm_env: WasmEnv,
     pub(super) output: Arc<Mutex<Vec<u8>>>,
     pub(super) runtime_error: Arc<Mutex<Option<String>>>,
-    pub(super) host_completion_rx: tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
+    pub(super) host_completion_rx:
+        tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
 }
 
 pub(super) async fn instantiate_execute_bundle(
@@ -546,6 +577,7 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
             .await
             .map_err(|e| anyhow::anyhow!("bootstrap_once failed: {e:?}"))?;
     }
+    install_array_iterator_methods(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_promise_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
@@ -572,7 +604,10 @@ pub(super) async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) ->
     run_bootstrap_only(bundle).await
 }
 
-pub(super) async fn try_restore_snapshot(bundle: &mut ExecuteInstanceBundle, snap_bytes: &[u8]) -> bool {
+pub(super) async fn try_restore_snapshot(
+    bundle: &mut ExecuteInstanceBundle,
+    snap_bytes: &[u8],
+) -> bool {
     let view = match startup_snapshot_format::decode_snapshot(snap_bytes) {
         Ok(v) => v,
         Err(e) => {

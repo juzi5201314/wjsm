@@ -6,7 +6,170 @@
 use super::*;
 
 pub(crate) fn is_object_key(key: i64) -> bool {
-    value::is_object(key) || value::is_array(key) || value::is_function(key) || value::is_symbol(key)
+    value::is_object(key)
+        || value::is_array(key)
+        || value::is_function(key)
+        || value::is_symbol(key)
+}
+
+pub(crate) async fn fill_map_from_constructor_arg_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    arg: i64,
+) -> bool {
+    let Some(values) = collect_constructor_iterable_values_async(caller, arg).await else {
+        return false;
+    };
+    let mut pairs = Vec::with_capacity(values.len());
+    for entry_val in values {
+        let Some(pair) = map_entry_pair_from_value(caller, entry_val) else {
+            return false;
+        };
+        pairs.push(pair);
+    }
+    let mut table = caller
+        .data()
+        .map_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(map_entry) = table.get_mut(handle as usize) {
+        for (key, val) in pairs {
+            if let Some(pos) = map_entry
+                .keys
+                .iter()
+                .position(|existing| same_value_zero(caller, *existing, key))
+            {
+                map_entry.values[pos] = val;
+            } else {
+                map_entry.keys.push(key);
+                map_entry.values.push(val);
+            }
+        }
+    }
+    true
+}
+
+pub(crate) async fn fill_set_from_constructor_arg_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    arg: i64,
+) -> bool {
+    let Some(values) = collect_constructor_iterable_values_async(caller, arg).await else {
+        return false;
+    };
+    let mut table = caller
+        .data()
+        .set_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(set_entry) = table.get_mut(handle as usize) {
+        for val in values {
+            if !set_entry
+                .values
+                .iter()
+                .any(|existing| same_value_zero(caller, *existing, val))
+            {
+                set_entry.values.push(val);
+            }
+        }
+    }
+    true
+}
+
+async fn collect_constructor_iterable_values_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    source: i64,
+) -> Option<Vec<i64>> {
+    if value::is_undefined(source) || value::is_null(source) {
+        return Some(Vec::new());
+    }
+    if value::is_object(source) || value::is_array(source) || value::is_function(source) {
+        match get_method_by_name_id(
+            caller,
+            source,
+            encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+        ) {
+            Ok(Some(method)) => {
+                let iterator = call_iterable_method_async(caller, method, source).await;
+                return collect_iterator_object_values_async(caller, iterator).await;
+            }
+            Ok(None) => {}
+            Err(exception) => return Some(vec![exception]),
+        }
+    }
+    let iterator = iterator_from_impl_async(caller, source).await;
+    collect_iterator_object_values_async(caller, iterator).await
+}
+
+async fn collect_iterator_object_values_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    iterator: i64,
+) -> Option<Vec<i64>> {
+    let iterator = if value::is_iterator(iterator) {
+        create_raw_iterator_object(caller, iterator)
+    } else {
+        iterator
+    };
+    let iter_ptr = resolve_handle(caller, iterator)?;
+    let next = read_object_property_by_name(caller, iter_ptr, "next")?;
+    if !value::is_callable(next) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: iterator next is not callable".to_string(),
+        );
+        return None;
+    }
+    let mut out = Vec::new();
+    loop {
+        let result =
+            call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
+        if value::is_exception(result) {
+            return Some(vec![result]);
+        }
+        let Some(result_ptr) = resolve_handle(caller, result) else {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: iterator next must return an object".to_string(),
+            );
+            return None;
+        };
+        let done = read_object_property_by_name(caller, result_ptr, "done")
+            .map(nanbox_to_bool)
+            .unwrap_or(false);
+        if done {
+            break;
+        }
+        out.push(
+            read_object_property_by_name(caller, result_ptr, "value")
+                .unwrap_or_else(value::encode_undefined),
+        );
+    }
+    Some(out)
+}
+
+fn map_entry_pair_from_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    entry_val: i64,
+) -> Option<(i64, i64)> {
+    if !value::is_js_object(entry_val) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Iterator value is not an entry object".to_string(),
+        );
+        return None;
+    }
+    if value::is_array(entry_val) {
+        let entry_ptr = resolve_handle(caller, entry_val)?;
+        let key = read_array_elem(caller, entry_ptr, 0).unwrap_or_else(value::encode_undefined);
+        let val = read_array_elem(caller, entry_ptr, 1).unwrap_or_else(value::encode_undefined);
+        return Some((key, val));
+    }
+    let entry_ptr = resolve_handle(caller, entry_val)?;
+    let key = read_object_property_by_name(caller, entry_ptr, "0")
+        .unwrap_or_else(value::encode_undefined);
+    let val = read_object_property_by_name(caller, entry_ptr, "1")
+        .unwrap_or_else(value::encode_undefined);
+    Some((key, val))
 }
 
 /// 为 Map/Set 创建 keys / values / entries 迭代器（与 NativeCallable 路径共用）。
@@ -18,7 +181,8 @@ pub(crate) fn map_set_create_iterator(
     if !value::is_object(this_val) {
         set_runtime_error(
             caller.data(),
-            "TypeError: Method Map/Set.prototype method called on incompatible receiver".to_string(),
+            "TypeError: Method Map/Set.prototype method called on incompatible receiver"
+                .to_string(),
         );
         return value::encode_undefined();
     }
@@ -26,7 +190,8 @@ pub(crate) fn map_set_create_iterator(
     let Some(op) = obj_ptr else {
         set_runtime_error(
             caller.data(),
-            "TypeError: Method Map/Set.prototype method called on incompatible receiver".to_string(),
+            "TypeError: Method Map/Set.prototype method called on incompatible receiver"
+                .to_string(),
         );
         return value::encode_undefined();
     };
@@ -36,30 +201,50 @@ pub(crate) fn map_set_create_iterator(
         MapSetMethodKind::Keys => {
             if let Some(mh) = map_handle {
                 let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut iters = caller
+                        .data()
+                        .iterators
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapKeyIter {
                         map_handle: map_handle_u32,
                         index: 0,
                     });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    drop(iters);
+                    return create_raw_iterator_object(caller, iterator);
                 }
             }
             if let Some(sh) = set_handle {
                 let set_handle_u32 = value::decode_f64(sh) as u32;
-                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut iters = caller
+                        .data()
+                        .iterators
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
                         index: 0,
                     });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    drop(iters);
+                    return create_raw_iterator_object(caller, iterator);
                 }
             }
             value::encode_undefined()
@@ -67,30 +252,50 @@ pub(crate) fn map_set_create_iterator(
         MapSetMethodKind::Values => {
             if let Some(mh) = map_handle {
                 let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut iters = caller
+                        .data()
+                        .iterators
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapValueIter {
                         map_handle: map_handle_u32,
                         index: 0,
                     });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    drop(iters);
+                    return create_raw_iterator_object(caller, iterator);
                 }
             }
             if let Some(sh) = set_handle {
                 let set_handle_u32 = value::decode_f64(sh) as u32;
-                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut iters = caller
+                        .data()
+                        .iterators
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
                         index: 0,
                     });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    drop(iters);
+                    return create_raw_iterator_object(caller, iterator);
                 }
             }
             value::encode_undefined()
@@ -98,30 +303,50 @@ pub(crate) fn map_set_create_iterator(
         MapSetMethodKind::Entries => {
             if let Some(mh) = map_handle {
                 let map_handle_u32 = value::decode_f64(mh) as u32;
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut iters = caller
+                        .data()
+                        .iterators
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapEntryIter {
                         map_handle: map_handle_u32,
                         index: 0,
                     });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    drop(iters);
+                    return create_raw_iterator_object(caller, iterator);
                 }
             }
             if let Some(sh) = set_handle {
                 let set_handle_u32 = value::decode_f64(sh) as u32;
-                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
-                    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut iters = caller
+                        .data()
+                        .iterators
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetEntryIter {
                         set_handle: set_handle_u32,
                         index: 0,
                     });
-                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                    drop(iters);
+                    return create_raw_iterator_object(caller, iterator);
                 }
             }
             value::encode_undefined()
@@ -146,7 +371,8 @@ pub(crate) fn map_set_for_each_impl(
     if !value::is_object(this_val) {
         set_runtime_error(
             caller.data(),
-            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver"
+                .to_string(),
         );
         return value::encode_undefined();
     }
@@ -154,7 +380,8 @@ pub(crate) fn map_set_for_each_impl(
     let Some(op) = obj_ptr else {
         set_runtime_error(
             caller.data(),
-            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver"
+                .to_string(),
         );
         return value::encode_undefined();
     };
@@ -165,7 +392,11 @@ pub(crate) fn map_set_for_each_impl(
     if let Some(mh) = map_handle {
         let handle = value::decode_f64(mh) as usize;
         let pairs: Vec<(i64, i64)> = {
-            let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .map_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -180,7 +411,11 @@ pub(crate) fn map_set_for_each_impl(
         for (key, val) in pairs {
             if rt
                 .block_on(invoke_resolved_callback_async_option(
-                    caller, &env, cb, this_arg, &[val, key, this_val],
+                    caller,
+                    &env,
+                    cb,
+                    this_arg,
+                    &[val, key, this_val],
                 ))
                 .is_none()
             {
@@ -192,7 +427,11 @@ pub(crate) fn map_set_for_each_impl(
     if let Some(sh) = set_handle {
         let handle = value::decode_f64(sh) as usize;
         let values: Vec<i64> = {
-            let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .set_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -201,7 +440,11 @@ pub(crate) fn map_set_for_each_impl(
         for val in values {
             if rt
                 .block_on(invoke_resolved_callback_async_option(
-                    caller, &env, cb, this_arg, &[val, val, this_val],
+                    caller,
+                    &env,
+                    cb,
+                    this_arg,
+                    &[val, val, this_val],
                 ))
                 .is_none()
             {
@@ -233,7 +476,8 @@ pub(crate) async fn map_set_for_each_impl_async(
     if !value::is_object(this_val) {
         set_runtime_error(
             caller.data(),
-            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver"
+                .to_string(),
         );
         return value::encode_undefined();
     }
@@ -241,7 +485,8 @@ pub(crate) async fn map_set_for_each_impl_async(
     let Some(op) = obj_ptr else {
         set_runtime_error(
             caller.data(),
-            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver"
+                .to_string(),
         );
         return value::encode_undefined();
     };
@@ -251,7 +496,11 @@ pub(crate) async fn map_set_for_each_impl_async(
     if let Some(mh) = map_handle {
         let handle = value::decode_f64(mh) as usize;
         let pairs: Vec<(i64, i64)> = {
-            let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .map_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
@@ -264,9 +513,15 @@ pub(crate) async fn map_set_for_each_impl_async(
                 .collect()
         };
         for (key, val) in pairs {
-            if invoke_resolved_callback_async_option(caller, &env, cb, this_arg, &[val, key, this_val])
-                .await
-                .is_none()
+            if invoke_resolved_callback_async_option(
+                caller,
+                &env,
+                cb,
+                this_arg,
+                &[val, key, this_val],
+            )
+            .await
+            .is_none()
             {
                 return value::encode_undefined();
             }
@@ -276,16 +531,26 @@ pub(crate) async fn map_set_for_each_impl_async(
     if let Some(sh) = set_handle {
         let handle = value::decode_f64(sh) as usize;
         let values: Vec<i64> = {
-            let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .set_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle >= table.len() {
                 return value::encode_undefined();
             }
             table[handle].values.clone()
         };
         for val in values {
-            if invoke_resolved_callback_async_option(caller, &env, cb, this_arg, &[val, val, this_val])
-                .await
-                .is_none()
+            if invoke_resolved_callback_async_option(
+                caller,
+                &env,
+                cb,
+                this_arg,
+                &[val, val, this_val],
+            )
+            .await
+            .is_none()
             {
                 return value::encode_undefined();
             }
@@ -313,7 +578,11 @@ pub(crate) fn call_weakmap_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             if !is_object_key(key) {
-                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: Invalid value used as weak map key".to_string());
                 return this_val;
             }
@@ -322,7 +591,9 @@ pub(crate) fn call_weakmap_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .weakmap_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].map.insert(key_handle, val);
                 }
@@ -341,7 +612,9 @@ pub(crate) fn call_weakmap_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
+                .weakmap_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle < table.len()
                 && let Some(&val) = table[handle].map.get(&key_handle)
             {
@@ -361,7 +634,9 @@ pub(crate) fn call_weakmap_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
+                .weakmap_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.contains_key(&key_handle));
             }
@@ -379,7 +654,9 @@ pub(crate) fn call_weakmap_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let mut table = caller
                 .data()
-                .weakmap_table.lock().unwrap_or_else(|e| e.into_inner());
+                .weakmap_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
             }
@@ -401,7 +678,11 @@ pub(crate) fn call_weakset_method_from_caller(
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
             if !is_object_key(key) {
-                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: Invalid value used in weak set".to_string());
                 return this_val;
             }
@@ -410,7 +691,9 @@ pub(crate) fn call_weakset_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .weakset_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].set.insert(key_handle);
                 }
@@ -429,7 +712,9 @@ pub(crate) fn call_weakset_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let table = caller
                 .data()
-                .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
+                .weakset_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.contains(&key_handle));
             }
@@ -447,7 +732,9 @@ pub(crate) fn call_weakset_method_from_caller(
             let key_handle = value::decode_object_handle(key);
             let mut table = caller
                 .data()
-                .weakset_table.lock().unwrap_or_else(|e| e.into_inner());
+                .weakset_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.remove(&key_handle));
             }
@@ -480,7 +767,11 @@ pub(crate) fn call_map_set_method_from_caller(
             let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.keys.len() {
@@ -507,7 +798,11 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.keys.len() {
@@ -531,7 +826,11 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.values.len() {
@@ -556,7 +855,11 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.keys.len() {
@@ -569,7 +872,11 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.values.len() {
@@ -582,7 +889,8 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             set_runtime_error(
                 caller.data(),
-                "TypeError: Method Map/Set.prototype.has called on incompatible receiver".to_string(),
+                "TypeError: Method Map/Set.prototype.has called on incompatible receiver"
+                    .to_string(),
             );
             value::encode_bool(false)
         }
@@ -593,7 +901,11 @@ pub(crate) fn call_map_set_method_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.keys.len() {
@@ -608,7 +920,11 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.values.len() {
@@ -622,14 +938,19 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             set_runtime_error(
                 caller.data(),
-                "TypeError: Method Map/Set.prototype.delete called on incompatible receiver".to_string(),
+                "TypeError: Method Map/Set.prototype.delete called on incompatible receiver"
+                    .to_string(),
             );
             value::encode_bool(false)
         }
         MapSetMethodKind::Clear => {
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let mut table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].keys.clear();
                     table[handle].values.clear();
@@ -638,7 +959,11 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let mut table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].values.clear();
                 }
@@ -646,14 +971,19 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             set_runtime_error(
                 caller.data(),
-                "TypeError: Method Map/Set.prototype.clear called on incompatible receiver".to_string(),
+                "TypeError: Method Map/Set.prototype.clear called on incompatible receiver"
+                    .to_string(),
             );
             value::encode_undefined()
         }
         MapSetMethodKind::Size => {
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     return value::encode_f64(table[handle].keys.len() as f64);
                 }
@@ -661,7 +991,11 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
-                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     return value::encode_f64(table[handle].values.len() as f64);
                 }
@@ -669,7 +1003,8 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             set_runtime_error(
                 caller.data(),
-                "TypeError: Method Map/Set.prototype.size called on incompatible receiver".to_string(),
+                "TypeError: Method Map/Set.prototype.size called on incompatible receiver"
+                    .to_string(),
             );
             value::encode_f64(0.0)
         }
