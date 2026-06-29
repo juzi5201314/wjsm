@@ -80,47 +80,52 @@ module {
       set_proto %24, %25
       %26 = const c21
       %27 = construct_call %23, this=%24, args=[%26]
-      %28 = call builtin.is_js_object(%27)
+      %28 = is_exception %27
       branch %28, bb4, bb5
     bb2:
-      %40 = const c24
-      %41 = call builtin.console.log(%40)
-      %42 = is_exception %41
-      branch %42, bb14, bb13
+      %41 = const c24
+      %42 = call builtin.console.log(%41)
+      %43 = is_exception %42
+      branch %43, bb16, bb15
     bb3:
       return
     bb4:
-      jump bb6
+      jump bb8
     bb5:
-      jump bb6
+      %29 = call builtin.is_js_object(%27)
+      branch %29, bb6, bb7
     bb6:
-      %29 = phi [(bb4, %27), (bb5, %24)]
-      %30 = is_exception %29
-      branch %30, bb8, bb7
+      jump bb8
     bb7:
-      %36 = const c23
-      %37 = call builtin.console.log(%36)
-      %38 = is_exception %37
-      branch %38, bb12, bb11
+      jump bb8
     bb8:
-      %31 = call builtin.exception_value(%29)
-      %32 = const c22
-      %33 = call builtin.console.log(%32)
-      %34 = is_exception %33
-      branch %34, bb10, bb9
+      %30 = phi [(bb4, %27), (bb6, %27), (bb7, %24)]
+      %31 = is_exception %30
+      branch %31, bb10, bb9
     bb9:
-      throw %31
+      %37 = const c23
+      %38 = call builtin.console.log(%37)
+      %39 = is_exception %38
+      branch %39, bb14, bb13
     bb10:
-      %35 = call builtin.exception_value(%33)
-      throw %35
+      %32 = call builtin.exception_value(%30)
+      %33 = const c22
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb12, bb11
     bb11:
-      throw %29
+      throw %32
     bb12:
-      %39 = call builtin.exception_value(%37)
-      throw %39
+      %36 = call builtin.exception_value(%34)
+      throw %36
     bb13:
-      jump bb3
+      throw %30
     bb14:
-      %43 = call builtin.exception_value(%41)
-      throw %43
+      %40 = call builtin.exception_value(%38)
+      throw %40
+    bb15:
+      jump bb3
+    bb16:
+      %44 = call builtin.exception_value(%42)
+      throw %44
 }

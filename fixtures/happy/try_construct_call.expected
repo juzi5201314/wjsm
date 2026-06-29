@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+x=1
+caught=boom
+done
+--- stderr ---

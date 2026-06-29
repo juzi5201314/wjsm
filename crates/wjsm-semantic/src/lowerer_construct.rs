@@ -8,16 +8,17 @@ impl Lowerer {
         ctor_result: ValueId,
         this_val: ValueId,
     ) -> (ValueId, BasicBlockId) {
-        let is_obj = self.alloc_value();
+        let is_exception = self.alloc_value();
         self.current_function.append_instruction(
             block,
-            Instruction::CallBuiltin {
-                dest: Some(is_obj),
-                builtin: Builtin::IsJsObject,
-                args: vec![ctor_result],
+            Instruction::IsException {
+                dest: is_exception,
+                value: ctor_result,
             },
         );
 
+        let use_exception_block = self.current_function.new_block();
+        let check_object_block = self.current_function.new_block();
         let use_ctor_block = self.current_function.new_block();
         let use_this_block = self.current_function.new_block();
         let merge = self.current_function.new_block();
@@ -25,12 +26,33 @@ impl Lowerer {
         self.current_function.set_terminator(
             block,
             Terminator::Branch {
+                condition: is_exception,
+                true_block: use_exception_block,
+                false_block: check_object_block,
+            },
+        );
+
+        let is_obj = self.alloc_value();
+        self.current_function.append_instruction(
+            check_object_block,
+            Instruction::CallBuiltin {
+                dest: Some(is_obj),
+                builtin: Builtin::IsJsObject,
+                args: vec![ctor_result],
+            },
+        );
+
+        self.current_function.set_terminator(
+            check_object_block,
+            Terminator::Branch {
                 condition: is_obj,
                 true_block: use_ctor_block,
                 false_block: use_this_block,
             },
         );
 
+        self.current_function
+            .set_terminator(use_exception_block, Terminator::Jump { target: merge });
         self.current_function
             .set_terminator(use_ctor_block, Terminator::Jump { target: merge });
         self.current_function
@@ -42,6 +64,10 @@ impl Lowerer {
             Instruction::Phi {
                 dest: result,
                 sources: vec![
+                    PhiSource {
+                        predecessor: use_exception_block,
+                        value: ctor_result,
+                    },
                     PhiSource {
                         predecessor: use_ctor_block,
                         value: ctor_result,

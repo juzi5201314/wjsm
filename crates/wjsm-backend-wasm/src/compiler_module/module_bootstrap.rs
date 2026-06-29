@@ -3,7 +3,7 @@ use super::*;
 impl Compiler {
     fn emit_startup_phase_call(&mut self, func_idx: u32) {
         self.emit(WasmInstruction::Call(func_idx));
-        self.emit(WasmInstruction::LocalTee(self.string_concat_scratch_idx));
+        self.emit(WasmInstruction::LocalSet(self.string_concat_scratch_idx));
         self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);

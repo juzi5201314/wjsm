@@ -703,9 +703,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
             alloc_host_object(caller, &_wjsm_env, 4)
         }),
-        NativeCallable::PromiseConstructor => Some({
-            alloc_promise_from_caller(caller, PromiseEntry::pending())
-        }),
+        NativeCallable::PromiseConstructor => {
+            Some(alloc_promise_from_caller(caller, PromiseEntry::pending()))
+        }
         NativeCallable::ArrayBufferConstructorGlobal => Some({
             let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
             alloc_host_object(caller, &_wjsm_env, 4)

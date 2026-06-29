@@ -52,6 +52,39 @@ pub(super) fn count_predecessors(blocks: &[BasicBlock], target: usize) -> usize 
 }
 
 
+fn block_successors(block: &BasicBlock) -> impl Iterator<Item = usize> + '_ {
+    let mut targets = [None, None];
+    let mut extra: Option<Vec<usize>> = None;
+    match block.terminator() {
+        Terminator::Jump { target } => targets[0] = Some(target.0 as usize),
+        Terminator::Branch {
+            true_block,
+            false_block,
+            ..
+        } => {
+            targets[0] = Some(true_block.0 as usize);
+            targets[1] = Some(false_block.0 as usize);
+        }
+        Terminator::Switch {
+            cases,
+            default_block,
+            exit_block,
+            ..
+        } => {
+            let mut switch_targets = Vec::with_capacity(cases.len() + 2);
+            switch_targets.extend(cases.iter().map(|case| case.target.0 as usize));
+            switch_targets.push(default_block.0 as usize);
+            switch_targets.push(exit_block.0 as usize);
+            extra = Some(switch_targets);
+        }
+        Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}
+    }
+    targets
+        .into_iter()
+        .flatten()
+        .chain(extra.into_iter().flatten())
+}
+
 impl Compiler {
     pub(crate) fn compile_region_tree(
         &mut self,
@@ -60,9 +93,145 @@ impl Compiler {
         region_tree: &RegionTree,
     ) -> Result<()> {
         match &region_tree.root {
-            Region::Linear { start_idx } => self.compile_structured(module, function, *start_idx),
+            Region::Linear { start_idx } => {
+                if self.needs_cfg_dispatch(function) {
+                    self.compile_cfg_dispatch(module, function, *start_idx)
+                } else {
+                    self.compile_structured(module, function, *start_idx)
+                }
+            }
         }
     }
+
+    fn needs_cfg_dispatch(&self, function: &IrFunction) -> bool {
+        let blocks = function.blocks();
+        let loops = detect_loops(blocks);
+        blocks.iter().enumerate().any(|(idx, block)| {
+            block_successors(block).any(|target_idx| {
+                target_idx < idx
+                    && !loops
+                        .iter()
+                        .any(|loop_info| loop_info.header_idx == target_idx)
+            })
+        })
+    }
+
+    fn compile_cfg_dispatch(
+        &mut self,
+        module: &IrModule,
+        function: &IrFunction,
+        start_idx: usize,
+    ) -> Result<()> {
+        let blocks = function.blocks();
+        let pc = self.computed_idx_scratch_idx;
+        self.emit(WasmInstruction::I32Const(start_idx as i32));
+        self.emit(WasmInstruction::LocalSet(pc));
+        self.emit(WasmInstruction::Block(BlockType::Empty));
+        self.emit(WasmInstruction::Loop(BlockType::Empty));
+
+        for (idx, block) in blocks.iter().enumerate() {
+            self.emit(WasmInstruction::LocalGet(pc));
+            self.emit(WasmInstruction::I32Const(idx as i32));
+            self.emit(WasmInstruction::I32Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+
+            let mut suspended = false;
+            for (instr_idx, instruction) in block.instructions().iter().enumerate() {
+                self.set_emit_cursor(idx, instr_idx);
+                if self.compile_instruction(module, instruction)? {
+                    suspended = true;
+                    break;
+                }
+            }
+
+            if !suspended {
+                self.compile_dispatch_terminator(module, blocks, idx, pc)?;
+            }
+
+            self.emit(WasmInstruction::End);
+        }
+
+        self.emit(WasmInstruction::Unreachable);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+        self.emit_return(&None);
+        Ok(())
+    }
+
+    fn compile_dispatch_terminator(
+        &mut self,
+        module: &IrModule,
+        blocks: &[BasicBlock],
+        idx: usize,
+        pc: u32,
+    ) -> Result<()> {
+        match blocks[idx].terminator() {
+            Terminator::Return { value } => self.emit_return(value),
+            Terminator::Throw { value } => {
+                self.emit_eval_var_frame_exit();
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(&Builtin::CreateException)
+                    .copied()
+                    .expect("CreateException import must be registered");
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::Return);
+            }
+            Terminator::Unreachable => self.emit(WasmInstruction::Unreachable),
+            Terminator::Jump { target } => {
+                self.emit_dispatch_jump(blocks, idx, target.0 as usize, pc, 1);
+            }
+            Terminator::Branch {
+                condition,
+                true_block,
+                false_block,
+            } => {
+                self.emit_to_bool_i32(condition.0);
+                self.emit(WasmInstruction::If(BlockType::Empty));
+                self.emit_dispatch_jump(blocks, idx, true_block.0 as usize, pc, 2);
+                self.emit(WasmInstruction::Else);
+                self.emit_dispatch_jump(blocks, idx, false_block.0 as usize, pc, 2);
+                self.emit(WasmInstruction::End);
+            }
+            Terminator::Switch {
+                value,
+                cases,
+                default_block,
+                ..
+            } => {
+                for case in cases {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                    let const_val = self.encode_constant(
+                        &module.constants()[case.constant.0 as usize],
+                        module,
+                    )?;
+                    self.emit(WasmInstruction::I64Const(const_val));
+                    self.emit(WasmInstruction::I64Eq);
+                    self.emit(WasmInstruction::If(BlockType::Empty));
+                    self.emit_dispatch_jump(blocks, idx, case.target.0 as usize, pc, 2);
+                    self.emit(WasmInstruction::End);
+                }
+                self.emit_dispatch_jump(blocks, idx, default_block.0 as usize, pc, 1);
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_dispatch_jump(
+        &mut self,
+        blocks: &[BasicBlock],
+        from_idx: usize,
+        target_idx: usize,
+        pc: u32,
+        br_depth: u32,
+    ) {
+        self.emit_phi_moves(blocks, from_idx, target_idx);
+        self.emit(WasmInstruction::I32Const(target_idx as i32));
+        self.emit(WasmInstruction::LocalSet(pc));
+        self.emit(WasmInstruction::Br(br_depth));
+    }
+
     /// Phi lowering pass: for each Phi instruction, allocate a WASM local for its dest,
     /// and schedule moves from source values in predecessor blocks.
     pub(crate) fn lower_phi_to_locals(&mut self, function: &IrFunction) {
