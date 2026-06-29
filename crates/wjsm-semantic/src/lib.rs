@@ -16,17 +16,17 @@ const WK_SYMBOL_DISPOSE: u32 = wk_symbol::DISPOSE;
 const WK_SYMBOL_ASYNC_DISPOSE: u32 = wk_symbol::ASYNC_DISPOSE;
 
 // ── 提取到子模块的类型 ──────────────────────────────────────────────────
-mod wk_symbol_map;
-mod scope;
 mod function_builder;
-mod lowerer_types;
 mod lowerer_modules;
+mod lowerer_types;
 mod scan_await;
-pub(crate) use scope::*;
+mod scope;
+mod wk_symbol_map;
 pub(crate) use function_builder::*;
-pub(crate) use lowerer_types::*;
 pub use lowerer_modules::lower_modules;
+pub(crate) use lowerer_types::*;
 pub(crate) use scan_await::has_top_level_await;
+pub(crate) use scope::*;
 
 // ── Public API ──────────────────────────────────────────────────────────
 
@@ -163,6 +163,21 @@ use ast_kinds::*;
 use builtins::*;
 pub use eval_scan::eval_literal_binding_names;
 use eval_scan::*;
+/// 判断表达式是否为 Array 构造结果（数组字面量或 `new Array(...)`）。
+fn is_array_constructor_expr(expr: &swc_ast::Expr) -> bool {
+    match expr {
+        swc_ast::Expr::Array(_) => true,
+        swc_ast::Expr::New(new_expr) => {
+            if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+                ident.sym.as_ref() == "Array"
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 /// 判断表达式是否为 TypedArray 构造函数调用（`new Int8Array(...)` 等形式）。
 fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
     if let swc_ast::Expr::New(new_expr) = expr

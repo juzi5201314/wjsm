@@ -417,6 +417,32 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 drop(table);
                 val.unwrap_or(value::encode_undefined())
             }
+            IteratorState::SetEntryIter { set_handle, index } => {
+                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let val = if *set_handle < table.len() as u32 {
+                    let entry = &table[*set_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.values.len() {
+                        let item = entry.values[idx];
+                        drop(table);
+                        drop(iters);
+                        let arr = alloc_array(caller, 2);
+                        if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+                            write_array_elem(caller, arr_ptr, 0, item);
+                            write_array_elem(caller, arr_ptr, 1, item);
+                            write_array_length(caller, arr_ptr, 2);
+                        }
+                        arr
+                    } else {
+                        drop(table);
+                        value::encode_undefined()
+                    }
+                } else {
+                    drop(table);
+                    value::encode_undefined()
+                };
+                val
+            }
             IteratorState::IndexValueIter { values, index } => {
                 if (*index as usize) < values.len() {
                     values[*index as usize]

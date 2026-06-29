@@ -865,6 +865,11 @@ pub(crate) enum IteratorState {
         set_handle: u32,
         index: u32,
     },
+    /// Set [value, value] 对迭代：Set.prototype.entries 专用。
+    SetEntryIter {
+        set_handle: u32,
+        index: u32,
+    },
     /// Headers 迭代：按 pairs 顺序产出 name 或 value
     HeadersKeyIter {
         headers_handle: u32,

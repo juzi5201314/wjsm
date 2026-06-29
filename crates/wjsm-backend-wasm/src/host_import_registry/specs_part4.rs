@@ -340,7 +340,7 @@ pub(crate) static SPECS_PART4: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "map_set_for_each",
-        type_idx: 3,
+        type_idx: 12,
         key: Some(HostImportKey::Builtin(Builtin::MapSetForEach)),
         group: None,
     },

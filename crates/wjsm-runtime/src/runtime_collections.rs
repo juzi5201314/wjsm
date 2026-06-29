@@ -117,7 +117,7 @@ pub(crate) fn map_set_create_iterator(
                     drop(table);
                     let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
                     let iter_handle = iters.len() as u32;
-                    iters.push(IteratorState::SetValueIter {
+                    iters.push(IteratorState::SetEntryIter {
                         set_handle: set_handle_u32,
                         index: 0,
                     });
@@ -203,6 +203,88 @@ pub(crate) fn map_set_for_each_impl(
                 .block_on(invoke_resolved_callback_async_option(
                     caller, &env, cb, this_arg, &[val, val, this_val],
                 ))
+                .is_none()
+            {
+                return value::encode_undefined();
+            }
+        }
+        return value::encode_undefined();
+    }
+    set_runtime_error(
+        caller.data(),
+        "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+    );
+    value::encode_undefined()
+}
+
+/// Map/Set.prototype.forEach：异步宿主调用路径，避免在运行时内嵌套 block_on。
+pub(crate) async fn map_set_for_each_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args: &[i64],
+) -> i64 {
+    let Some(cb) = args.first().copied() else {
+        return value::encode_undefined();
+    };
+    if !value::is_callable(cb) {
+        return value::encode_undefined();
+    }
+    let this_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+    if !value::is_object(this_val) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let Some(op) = obj_ptr else {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver".to_string(),
+        );
+        return value::encode_undefined();
+    };
+    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    if let Some(mh) = map_handle {
+        let handle = value::decode_f64(mh) as usize;
+        let pairs: Vec<(i64, i64)> = {
+            let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &table[handle];
+            entry
+                .keys
+                .iter()
+                .zip(entry.values.iter())
+                .map(|(&k, &v)| (k, v))
+                .collect()
+        };
+        for (key, val) in pairs {
+            if invoke_resolved_callback_async_option(caller, &env, cb, this_arg, &[val, key, this_val])
+                .await
+                .is_none()
+            {
+                return value::encode_undefined();
+            }
+        }
+        return value::encode_undefined();
+    }
+    if let Some(sh) = set_handle {
+        let handle = value::decode_f64(sh) as usize;
+        let values: Vec<i64> = {
+            let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            table[handle].values.clone()
+        };
+        for val in values {
+            if invoke_resolved_callback_async_option(caller, &env, cb, this_arg, &[val, val, this_val])
+                .await
                 .is_none()
             {
                 return value::encode_undefined();

@@ -1103,7 +1103,8 @@ fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i6
                     *map_handle >= table.len() as u32
                         || *index as usize >= table[*map_handle as usize].keys.len()
                 }
-                IteratorState::SetValueIter { index, set_handle } => {
+                IteratorState::SetValueIter { index, set_handle }
+                | IteratorState::SetEntryIter { index, set_handle } => {
                     let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     *set_handle >= table.len() as u32
                         || *index as usize >= table[*set_handle as usize].values.len()
@@ -1145,7 +1146,8 @@ fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize
         | IteratorState::MapKeyIter { index, .. }
         | IteratorState::MapValueIter { index, .. }
         | IteratorState::MapEntryIter { index, .. }
-        | IteratorState::SetValueIter { index, .. } => {
+        | IteratorState::SetValueIter { index, .. }
+        | IteratorState::SetEntryIter { index, .. } => {
             *index += 1;
         }
         IteratorState::TypedArrayValueIter { index, .. }

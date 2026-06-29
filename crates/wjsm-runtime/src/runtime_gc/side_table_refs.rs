@@ -27,7 +27,7 @@ pub(crate) fn collect_proxy_refs(st: &mut crate::RuntimeState, idx: usize) -> Ve
 /// TAG_ITERATOR: iterators[idx] → 持有的 JS 值
 /// - ObjectIter: iterator, next, return_method, throw_method, current_value
 /// - IndexValueIter: values
-/// - MapKeyIter/MapValueIter/MapEntryIter/SetValueIter: 间接引用 map_table/set_table，
+/// - MapKeyIter/MapValueIter/MapEntryIter/SetValueIter/SetEntryIter: 间接引用 map_table/set_table，
 ///   由 collect_host_table_values 全量扫描覆盖
 /// - StringIter/ArrayIter/HeadersIter/TypedArrayIter/Error: 不持 JS handle
 pub(crate) fn collect_iterator_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec<i64> {

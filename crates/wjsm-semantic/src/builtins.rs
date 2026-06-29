@@ -304,8 +304,7 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
 }
 
 /// 将 Array.prototype 方法名映射到 Builtin 变体，用于语义层优化。
-/// 当 `a.filter(cb)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
-/// 仅包含使用 Type 12 影子栈调用约定的方法（Group 2）。
+/// 仅对静态已知 Array receiver 使用，避免劫持 Map/Set 等同名方法。
 pub(crate) fn builtin_from_array_proto_method(name: &str) -> Option<Builtin> {
     use Builtin::*;
     match name {

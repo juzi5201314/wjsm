@@ -101,7 +101,6 @@ impl Lowerer {
             static_namespace_import_sources: Vec::new(),
             static_namespace_filled: std::collections::HashSet::new(),
 
-
             is_async_fn: false,
             is_async_generator_fn: false,
             async_state_counter: 0,
@@ -132,6 +131,7 @@ impl Lowerer {
             eval_scope_record: false,
             eval_caller_has_arguments: false,
             active_using_vars: Vec::new(),
+            array_bindings: std::collections::HashSet::new(),
             typedarray_bindings: std::collections::HashSet::new(),
             sab_bindings: std::collections::HashSet::new(),
             dataview_bindings: std::collections::HashSet::new(),
@@ -965,6 +965,16 @@ impl Lowerer {
 }
 
 impl Lowerer {
+    /// 检查指定 Ident 是否为已知的 Array 绑定。
+    pub(crate) fn is_array_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+            self.array_bindings.contains(&(scope_id, name))
+        } else {
+            false
+        }
+    }
+
     /// 检查指定 Ident 是否为已知的 TypedArray 绑定。
     pub(crate) fn is_typedarray_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();

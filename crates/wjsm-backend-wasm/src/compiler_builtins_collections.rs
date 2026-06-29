@@ -394,7 +394,6 @@ impl Compiler {
             // ── Map single-arg builtins ──
             | Builtin::MapConstructor
             | Builtin::MapSetClear
-            | Builtin::MapSetForEach
             | Builtin::MapSetKeys
             | Builtin::MapSetValues
             | Builtin::MapSetEntries
@@ -435,8 +434,8 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
-            // Date.UTC：多参数经影子栈（与 MathHypot 相同 WASM 签名）
-            Builtin::DateUTC => {
+            // Date.UTC / MapSet.forEach：多参数经影子栈。
+            Builtin::DateUTC | Builtin::MapSetForEach => {
                 self.compile_proto_method_call(dest, builtin, args).map(Some)
             }
             // ── Map/Set multi-arg builtins ──

@@ -47,8 +47,7 @@ pub(crate) struct Lowerer {
     pub(crate) function_lexical_home_object_stack: Vec<Option<HomeObject>>,
     /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
     /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
-    pub(crate) shared_env_stack:
-        Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
+    pub(crate) shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
     // ── 模块系统相关 ────────────────────────────────────────────────────────
     /// 当前正在编译的模块 ID（用于多模块编译）
     pub(crate) current_module_id: Option<wjsm_ir::ModuleId>,
@@ -77,18 +76,14 @@ pub(crate) struct Lowerer {
     pub(crate) re_export_map:
         std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
     /// 静态 `import * as ns` 的命名空间对象 ValueId
-    pub(crate) static_namespace_import_objects:
-        std::collections::HashMap<String, wjsm_ir::ValueId>,
+    pub(crate) static_namespace_import_objects: std::collections::HashMap<String, wjsm_ir::ValueId>,
     /// 待填充属性的静态命名空间：(local_name, source_module_id)
-    pub(crate) static_namespace_import_sources:
-        Vec<(String, wjsm_ir::ModuleId)>,
+    pub(crate) static_namespace_import_sources: Vec<(String, wjsm_ir::ModuleId)>,
     /// 已按需填充的静态命名空间属性：(ns 对象, 导出名)
-    pub(crate) static_namespace_filled:
-        std::collections::HashSet<(wjsm_ir::ValueId, String)>,
+    pub(crate) static_namespace_filled: std::collections::HashSet<(wjsm_ir::ValueId, String)>,
 
     pub(crate) is_async_fn: bool,
     pub(crate) is_async_generator_fn: bool,
-
 
     pub(crate) async_state_counter: u32,
     pub(crate) captured_var_slots: std::collections::HashMap<String, u32>,
@@ -131,6 +126,9 @@ pub(crate) struct Lowerer {
     pub(crate) expr_merge_block: Option<BasicBlockId>,
     /// 当前作用域中活跃的 using 变量（用于作用域退出时自动 dispose）
     pub(crate) active_using_vars: Vec<ActiveUsingVar>,
+    /// 追踪当前作用域中已推断为 Array 的绑定（scope_id, name）。
+    /// Array.prototype 静态优化只在已知数组 receiver 上启用，避免劫持 Map/Set 等同名方法。
+    pub(crate) array_bindings: std::collections::HashSet<(usize, String)>,
     /// 追踪当前作用域中已推断为 TypedArray 的绑定（scope_id, name）。
     /// 用于在 lower_call_expr 中让 arr.at()/arr.indexOf() 等走 TypedArray dispatch，
     /// 而不是被 String.prototype dispatch 错误拦截。

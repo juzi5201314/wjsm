@@ -1104,6 +1104,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
             Some(crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle))
         }
         NativeCallable::RegExpStringIteratorSelf => Some(this_val),
+        NativeCallable::MapSetMethod {
+            kind: MapSetMethodKind::ForEach,
+        } => Some(map_set_for_each_impl_async(caller, this_val, &args).await),
         NativeCallable::AgentStart
         | NativeCallable::AgentBroadcast
         | NativeCallable::AgentMonotonicNow => {
@@ -1353,6 +1356,37 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
+            Some(IteratorState::MapEntryIter { map_handle, index }) => {
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if *map_handle < table.len() as u32 {
+                    let entry = &table[*map_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.keys.len() {
+                        let key = entry.keys[idx];
+                        let item = entry.values[idx];
+                        *index += 1;
+                        drop(table);
+                        drop(iters);
+                        let pair = alloc_array(caller, 2);
+                        if let Some(pair_ptr) = resolve_array_ptr(caller, pair) {
+                            write_array_elem(caller, pair_ptr, 0, key);
+                            write_array_elem(caller, pair_ptr, 1, item);
+                            write_array_length(caller, pair_ptr, 2);
+                        }
+                        Some((false, pair))
+                    } else {
+                        drop(table);
+                        Some((true, value::encode_undefined()))
+                    }
+                } else {
+                    drop(table);
+                    Some((true, value::encode_undefined()))
+                }
+            }
             Some(IteratorState::SetValueIter { set_handle, index }) => {
                 let table = caller
                     .data()
@@ -1367,6 +1401,36 @@ pub(crate) async fn advance_async_from_sync_async(
                         *index += 1;
                         drop(table);
                         Some((false, val))
+                    } else {
+                        drop(table);
+                        Some((true, value::encode_undefined()))
+                    }
+                } else {
+                    drop(table);
+                    Some((true, value::encode_undefined()))
+                }
+            }
+            Some(IteratorState::SetEntryIter { set_handle, index }) => {
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if *set_handle < table.len() as u32 {
+                    let entry = &table[*set_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.values.len() {
+                        let item = entry.values[idx];
+                        *index += 1;
+                        drop(table);
+                        drop(iters);
+                        let pair = alloc_array(caller, 2);
+                        if let Some(pair_ptr) = resolve_array_ptr(caller, pair) {
+                            write_array_elem(caller, pair_ptr, 0, item);
+                            write_array_elem(caller, pair_ptr, 1, item);
+                            write_array_length(caller, pair_ptr, 2);
+                        }
+                        Some((false, pair))
                     } else {
                         drop(table);
                         Some((true, value::encode_undefined()))

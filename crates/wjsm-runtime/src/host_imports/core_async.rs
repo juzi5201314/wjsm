@@ -228,7 +228,8 @@ pub(crate) fn define_core_async(
                     *index += 1;
                     return value::encode_undefined();
                 }
-                IteratorState::SetValueIter { index, .. } => {
+                IteratorState::SetValueIter { index, .. }
+                | IteratorState::SetEntryIter { index, .. } => {
                     *index += 1;
                     return value::encode_undefined();
                 }
@@ -377,7 +378,8 @@ pub(crate) fn define_core_async(
                     drop(table);
                     return value::encode_bool(done);
                 }
-                IteratorState::SetValueIter { index, set_handle } => {
+                IteratorState::SetValueIter { index, set_handle }
+                | IteratorState::SetEntryIter { index, set_handle } => {
                     let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
                     let done = if *set_handle < table.len() as u32 {
                         *index as usize >= table[*set_handle as usize].values.len()

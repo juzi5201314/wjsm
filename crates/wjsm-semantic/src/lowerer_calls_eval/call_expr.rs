@@ -4,7 +4,7 @@ impl Lowerer {
     /// 原型方法拦截的公共发射逻辑：把 `obj.method(args...)` 降为
     /// `CallBuiltin(builtin, [this, args...])`，其中 this = obj。
     ///
-    /// `lower_call_expr` 中 7+ 个拦截点（String/Array/Object/Number/Boolean/
+    /// `lower_call_expr` 中多个拦截点（String/Object/Number/Boolean/
     /// SharedArrayBuffer/DataView 原型方法）此前各自重复这段「lower obj 为 this →
     /// lower 每个实参 → 追加 CallBuiltin → 返回 dest」样板。抽成单一 helper 后，
     /// 拦截点只保留各自的「模式识别 + receiver guard」判定，发射逻辑集中一处。
@@ -183,7 +183,22 @@ impl Lowerer {
                             block,
                         );
                     }
-                    // String.prototype 方法调用优化（必须在 Array 之前，因为 at/slice/concat 等方法在 String 和 Array 上同名）
+                    // Array.prototype 方法调用优化（带 receiver guard）。
+                    // 仅静态已知 Array 绑定直连；Map/Set 的 forEach/entries 等必须走自身方法。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && let Some(array_builtin) =
+                            builtin_from_array_proto_method(&prop_ident.sym)
+                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                        && self.is_array_binding(receiver_ident)
+                    {
+                        return self.emit_proto_builtin_call(
+                            array_builtin,
+                            &member_expr.obj,
+                            &call.args,
+                            block,
+                        );
+                    }
+                    // String.prototype 方法调用优化。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(string_builtin) =
                             builtin_from_string_proto_method(&prop_ident.sym)
@@ -231,36 +246,7 @@ impl Lowerer {
                         return Ok(dest);
                     }
 
-                    // Array.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
-                    // 跳过运行时属性解析（原型链查找）。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
-                        if let Some(array_builtin) =
-                            builtin_from_array_proto_method(&prop_ident.sym)
-                        {
-                            // obj.method() → obj 是 this
-                            return self.emit_proto_builtin_call(
-                                array_builtin,
-                                &member_expr.obj,
-                                &call.args,
-                                block,
-                            );
-                        }
-
-                        // TypedArray.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
-                        // 跳过运行时属性解析。
-                        if let Some(ta_builtin) =
-                            builtin_from_typedarray_proto_method(&prop_ident.sym)
-                            && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
-                            && self.is_typedarray_binding(receiver_ident)
-                        {
-                            return self.emit_proto_builtin_call(
-                                ta_builtin,
-                                &member_expr.obj,
-                                &call.args,
-                                block,
-                            );
-                        }
-
                         // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
                         if let Some(func_builtin) =
                             builtin_from_function_proto_method(&prop_ident.sym)
@@ -496,8 +482,7 @@ impl Lowerer {
                         forward_args: false,
                     },
                 );
-                let (result, _) =
-                    self.select_construct_result(call_block, ctor_result, this_val);
+                let (result, _) = self.select_construct_result(call_block, ctor_result, this_val);
                 return Ok(result);
             }
         }
@@ -882,5 +867,4 @@ impl Lowerer {
 
         Ok((dest, merge_block))
     }
-
 }

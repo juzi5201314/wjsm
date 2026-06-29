@@ -543,13 +543,19 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "map_set_get_size", map_set_get_size_fn)?;
 
-    let map_set_for_each_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            map_set_for_each_impl(&mut caller, this_val, &[])
+    linker.func_wrap_async(
+        "env",
+        "map_set_for_each",
+        |mut caller: Caller<'_, RuntimeState>,
+         (_env, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                let args: Vec<i64> = (0..args_count.max(0))
+                    .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                    .collect();
+                map_set_for_each_impl_async(&mut caller, this_val, &args).await
+            })
         },
-    );
-    linker.define(&mut store, "env", "map_set_for_each", map_set_for_each_fn)?;
+    )?;
 
     let map_set_keys_fn = Func::wrap(
         &mut store,
