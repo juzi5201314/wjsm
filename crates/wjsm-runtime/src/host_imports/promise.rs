@@ -11,12 +11,7 @@ pub(crate) fn define_promise(
     let promise_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
-            let promise = alloc_object(&mut caller, 0);
-            let handle = value::decode_object_handle(promise) as usize;
-            let mut table = caller
-                .data()
-                .promise_table.lock().unwrap_or_else(|e| e.into_inner());
-            insert_promise_entry(&mut table, handle, PromiseEntry::pending());
+            let promise = alloc_promise(&mut caller, PromiseEntry::pending());
             promise
         },
     );
@@ -123,6 +118,16 @@ pub(crate) fn define_promise(
          -> i64 {
             let handle = raw_promise_handle(promise);
             let result_promise = alloc_object(&mut caller, 0);
+            {
+                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                if !value::is_object(caller.data().promise_prototype) {
+                    crate::runtime_heap::ensure_promise_prototype_initialized(&mut caller, &env);
+                }
+                let proto = caller.data().promise_prototype;
+                if value::is_object(proto) {
+                    crate::runtime_heap::set_object_proto_header(&mut caller, &env, result_promise, proto);
+                }
+            }
             let result_handle = value::decode_object_handle(result_promise) as usize;
             let mut queued = None;
             {
@@ -183,6 +188,16 @@ pub(crate) fn define_promise(
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_rejected: i64| -> i64 {
             let handle = raw_promise_handle(promise);
             let result_promise = alloc_object(&mut caller, 0);
+            {
+                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                if !value::is_object(caller.data().promise_prototype) {
+                    crate::runtime_heap::ensure_promise_prototype_initialized(&mut caller, &env);
+                }
+                let proto = caller.data().promise_prototype;
+                if value::is_object(proto) {
+                    crate::runtime_heap::set_object_proto_header(&mut caller, &env, result_promise, proto);
+                }
+            }
             let result_handle = value::decode_object_handle(result_promise) as usize;
             let mut queued = None;
             {
@@ -242,6 +257,16 @@ pub(crate) fn define_promise(
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_finally: i64| -> i64 {
             let handle = raw_promise_handle(promise);
             let result_promise = alloc_object(&mut caller, 0);
+            {
+                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                if !value::is_object(caller.data().promise_prototype) {
+                    crate::runtime_heap::ensure_promise_prototype_initialized(&mut caller, &env);
+                }
+                let proto = caller.data().promise_prototype;
+                if value::is_object(proto) {
+                    crate::runtime_heap::set_object_proto_header(&mut caller, &env, result_promise, proto);
+                }
+            }
             let result_handle = value::decode_object_handle(result_promise) as usize;
             let mut queued = None;
             {

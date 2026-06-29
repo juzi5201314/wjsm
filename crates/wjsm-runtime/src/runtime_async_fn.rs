@@ -16,6 +16,7 @@ fn fresh_continuation_entry(
         outer_promise,
         captured_vars,
         completed: false,
+        pending_return: None,
     }
 }
 
@@ -128,10 +129,6 @@ pub(crate) enum AsyncGeneratorPumpAction {
         value: i64,
         completion: u8,
     },
-    ResumeReturn {
-        continuation: i64,
-        value: i64,
-    },
     SettleResumePromise {
         promise: i64,
         value: i64,
@@ -189,10 +186,22 @@ pub(crate) fn pump_async_generator_from_caller(
                             })
                         }
                         AsyncGeneratorCompletionType::Return => {
-                            let _ = resume_promise;
-                            Some(AsyncGeneratorPumpAction::ResumeReturn {
-                                continuation: entry.continuation,
+                            // 不绕过 Suspend 反应机制：在 continuation 上设置 pending_return
+                            // 标记，正常 fulfill resume_promise 触发 Suspend 反应（此时
+                            // async_function_suspend 已更新 captured_vars[0] 为正确的 yield
+                            // 恢复状态）。resume_async_function_async 检查 pending_return
+                            // 并将 completion 覆盖为 2（return 语义）。
+                            let cont_handle = value::decode_object_handle(entry.continuation) as usize;
+                            let mut c_table = caller
+                                .data()
+                                .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(cont_entry) = c_table.get_mut(cont_handle) {
+                                cont_entry.pending_return = Some(request.value);
+                            }
+                            Some(AsyncGeneratorPumpAction::SettleResumePromise {
+                                promise: resume_promise,
                                 value: request.value,
+                                completion: 0,
                             })
                         }
                     }
@@ -241,31 +250,6 @@ pub(crate) fn pump_async_generator_from_caller(
             value,
             completion,
         }) => enqueue_async_resume_from_caller(caller, continuation, state, value, completion),
-        Some(AsyncGeneratorPumpAction::ResumeReturn { continuation, value }) => {
-            let (fn_table_idx, state) = {
-                let cont_handle = value::decode_object_handle(continuation) as usize;
-                let c_table = caller
-                    .data()
-                    .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
-                let entry = c_table.get(cont_handle);
-                let fn_table_idx = entry.map(|e| e.fn_table_idx).unwrap_or(0);
-                let state = entry
-                    .and_then(|e| e.captured_vars.get(0))
-                    .map(|v| value::decode_f64(*v) as u32)
-                    .unwrap_or(0);
-                (fn_table_idx, state)
-            };
-            caller
-                .data()
-                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner())
-                .push_back(Microtask::AsyncResume {
-                    fn_table_idx,
-                    continuation,
-                    state,
-                    resume_val: value,
-                    completion: 2,
-                });
-        }
         Some(AsyncGeneratorPumpAction::SettleResumePromise {
             promise,
             value,
@@ -330,6 +314,12 @@ pub(crate) async fn resume_async_function_async<
             }
             entry.captured_vars[0] = value::encode_f64(state as f64);
             entry.captured_vars[1] = value::encode_f64(completion as f64);
+            // 若 return(v) 在 yield 恢复前入队，pending_return 已由
+            // pump_async_generator_from_caller 设置。此时 state 已由 Suspend 反应
+            // 携带正确的 yield 恢复状态，只需将 completion 覆盖为 2（return 语义）。
+            if entry.pending_return.take().is_some() {
+                entry.captured_vars[1] = value::encode_f64(2.0);
+            }
         }
     }
     let func_ref = env.func_table.get(&mut *ctx, fn_table_idx as u64);

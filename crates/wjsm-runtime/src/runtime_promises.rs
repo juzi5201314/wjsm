@@ -111,11 +111,16 @@ pub(crate) fn alloc_promise_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     entry: PromiseEntry,
 ) -> i64 {
-    let promise = {
-        let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        alloc_host_object(caller, &_wjsm_env, 0)
-    };
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let promise = alloc_host_object(caller, &env, 0);
     if value::is_object(promise) {
+        if !value::is_object(caller.data().promise_prototype) {
+            crate::runtime_heap::ensure_promise_prototype_initialized(caller, &env);
+        }
+        let proto = caller.data().promise_prototype;
+        if value::is_object(proto) {
+            crate::runtime_heap::set_object_proto_header(caller, &env, promise, proto);
+        }
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
             .data()
@@ -345,6 +350,13 @@ pub(crate) fn alloc_promise_with_env<C: AsContextMut<Data = RuntimeState> + Runt
 ) -> i64 {
     let promise = alloc_object_with_env(ctx, env, 0);
     if value::is_object(promise) {
+        if !value::is_object(ctx.as_context().data().promise_prototype) {
+            crate::runtime_heap::ensure_promise_prototype_initialized(ctx, env);
+        }
+        let proto = ctx.as_context().data().promise_prototype;
+        if value::is_object(proto) {
+            crate::runtime_heap::set_object_proto_header(ctx, env, promise, proto);
+        }
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = ctx
             .state_mut()

@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+array: [0,1]
+closed
+custom: [0,1]
+for-in: ["a","b"]
+--- stderr ---

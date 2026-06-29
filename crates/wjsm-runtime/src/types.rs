@@ -1086,6 +1086,9 @@ pub(crate) struct ContinuationEntry {
     pub(crate) outer_promise: i64,
     pub(crate) captured_vars: Vec<i64>,
     pub(crate) completed: bool,
+    /// 异步生成器 return(v) 在 yield 恢复前入队时，通过此标记通知
+    /// resume_async_function_async 将 completion 覆盖为 2（return 语义）。
+    pub(crate) pending_return: Option<i64>,
 }
 
 pub(crate) struct AsyncGeneratorEntry {

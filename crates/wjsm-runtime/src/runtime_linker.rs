@@ -202,6 +202,13 @@ pub(super) fn register_common_bridges(
                     )
                     .unwrap_or_else(value::encode_undefined)
                 }
+                Some(NativeCallable::PromiseConstructor) => {
+                    crate::runtime_heap::native_callable_promise_prototype(
+                        &mut caller,
+                        &NativeCallable::PromiseConstructor,
+                    )
+                    .unwrap_or_else(value::encode_undefined)
+                }
                 Some(ref nc) => native_callable_error_prototype(&mut caller, nc)
                     .unwrap_or_else(value::encode_undefined),
                 None => value::encode_undefined(),

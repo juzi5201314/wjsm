@@ -24,7 +24,7 @@ impl Lowerer {
         };
         let target = self.label_stack[target_index].break_target;
         if let StmtFlow::Open(after) =
-            self.emit_unwind_for_abrupt(block, target_index as isize, None)?
+            self.emit_unwind_for_abrupt(block, target_index as isize, None, true)?
         {
             self.current_function
                 .set_terminator(after, Terminator::Jump { target });
@@ -55,7 +55,7 @@ impl Lowerer {
             .continue_target
             .expect("continue target checked above");
         if let StmtFlow::Open(after) =
-            self.emit_unwind_for_abrupt(block, target_index as isize, None)?
+            self.emit_unwind_for_abrupt(block, target_index as isize, None, false)?
         {
             self.current_function
                 .set_terminator(after, Terminator::Jump { target });
@@ -137,6 +137,8 @@ impl Lowerer {
     /// 按嵌套深度（内层优先）发射 abrupt completion 的清理序列，交错 finally 块与
     /// IteratorClose。`exit_below`：label_stack 索引 > exit_below 的迭代器、try 的
     /// label_depth > exit_below 的 finalizer 视为正在退出；return/throw 传 -1（全部退出）。
+    /// `include_target_iterator`：break 时传 true，将 exit_below 处的循环自身迭代器也
+    /// 纳入关闭序列（取代 lower_for_of/for_in 中的 close 中间块）。
     /// 位置 key：迭代器(索引 i) = 2i，finalizer(label_depth d) = 2d-1，二者奇偶不同不会冲突，
     /// 降序排列即得内层优先；同深度 finally 以 finalizer_index 降序（内层 try 先执行）。
     /// `completion`：IteratorClose 的完成值；`None` 时按 break/continue 语义在首个
@@ -146,10 +148,12 @@ impl Lowerer {
         block: BasicBlockId,
         exit_below: isize,
         completion: Option<ValueId>,
+        include_target_iterator: bool,
     ) -> Result<StmtFlow, LoweringError> {
         let mut items: Vec<(i64, i64, UnwindStep)> = Vec::new();
         for (i, ctx) in self.label_stack.iter().enumerate() {
-            if (i as isize) > exit_below
+            if ((i as isize) > exit_below
+                || (include_target_iterator && (i as isize) == exit_below))
                 && let Some(handle) = ctx.iterator_to_close
             {
                 items.push(((2 * i) as i64, -1, UnwindStep::IteratorClose(handle)));
@@ -395,7 +399,7 @@ impl Lowerer {
             };
             let return_block = self.resolve_store_block(block);
             if let StmtFlow::Open(after_close) =
-                self.emit_unwind_for_abrupt(return_block, -1, Some(value))?
+            self.emit_unwind_for_abrupt(return_block, -1, Some(value), false)?
             {
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
@@ -445,7 +449,7 @@ impl Lowerer {
 
         let return_block = self.resolve_store_block(block);
         if let StmtFlow::Open(after_close) =
-            self.emit_unwind_for_abrupt(return_block, -1, value)?
+            self.emit_unwind_for_abrupt(return_block, -1, value, false)?
         {
             self.current_function
                 .set_terminator(after_close, Terminator::Return { value });

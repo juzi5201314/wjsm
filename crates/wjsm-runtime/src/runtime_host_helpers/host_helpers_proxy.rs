@@ -740,7 +740,10 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         };
         return record
             .as_ref()
-            .and_then(|record| native_callable_error_prototype(caller, record))
+            .and_then(|record| {
+                crate::runtime_heap::native_callable_promise_prototype(caller, record)
+                    .or_else(|| native_callable_error_prototype(caller, record))
+            })
             .unwrap_or_else(value::encode_undefined);
     }
     let obj_ptr = match resolve_handle(caller, target) {
@@ -880,6 +883,13 @@ pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: Promis
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let promise = alloc_object_with_env(caller, &env, 0);
     if value::is_object(promise) {
+        if !value::is_object(caller.data().promise_prototype) {
+            crate::runtime_heap::ensure_promise_prototype_initialized(caller, &env);
+        }
+        let proto = caller.data().promise_prototype;
+        if value::is_object(proto) {
+            crate::runtime_heap::set_object_proto_header(caller, &env, promise, proto);
+        }
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
             .data()

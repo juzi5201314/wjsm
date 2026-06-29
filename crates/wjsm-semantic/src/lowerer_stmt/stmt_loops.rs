@@ -25,7 +25,6 @@ impl Lowerer {
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
         let next = self.current_function.new_block();
-        let close = self.current_function.new_block();
         let exit = self.current_function.new_block();
 
         self.current_function
@@ -63,7 +62,7 @@ impl Lowerer {
         self.label_stack.push(LabelContext {
             label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
-            break_target: close,
+            break_target: exit,
             continue_target: Some(next),
             iterator_to_close: Some(enum_handle),
         });
@@ -100,11 +99,6 @@ impl Lowerer {
 
         self.label_stack.pop();
 
-        let after_close =
-            self.emit_single_iterator_close_normal(close, enum_handle)?;
-        self.current_function
-            .set_terminator(after_close, Terminator::Jump { target: exit });
-
         Ok(StmtFlow::Open(exit))
     }
 
@@ -137,7 +131,6 @@ impl Lowerer {
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
         let next_block = self.current_function.new_block();
-        let close = self.current_function.new_block();
         let exit = self.current_function.new_block();
 
         self.current_function
@@ -173,11 +166,11 @@ impl Lowerer {
             },
         );
 
-        // Register label context: break → close (which then jumps to exit)
+        // Register label context: break → exit（IteratorClose 由 emit_unwind_for_abrupt 发射）
         self.label_stack.push(LabelContext {
             label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
-            break_target: close,
+            break_target: exit,
             continue_target: Some(next_block),
             iterator_to_close: Some(iter_handle),
         });
@@ -202,12 +195,6 @@ impl Lowerer {
 
         self.label_stack.pop();
 
-        // close block: iterator clean-up on break
-        let after_close =
-            self.emit_single_iterator_close_normal(close, iter_handle)?;
-        self.current_function
-            .set_terminator(after_close, Terminator::Jump { target: exit });
-
         // next: advance iterator
         self.current_function.append_instruction(
             next_block,
@@ -219,8 +206,6 @@ impl Lowerer {
         );
         self.current_function
             .set_terminator(next_block, Terminator::Jump { target: header });
-        // break/continue/return/throw 走 abrupt 路径；正常完成与 break→close→exit 均以 Open(exit) 结束，
-        // 使 exit 块得到 Return 而非 Unreachable（for-of break 关闭迭代器场景）。
         let _ = body_flow;
         Ok(StmtFlow::Open(exit))
     }

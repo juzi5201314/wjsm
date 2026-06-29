@@ -168,7 +168,7 @@ impl ErrorPrototypes {
     }
 }
 
-fn set_object_proto_header<C: AsContextMut<Data = RuntimeState>>(
+pub(crate) fn set_object_proto_header<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     obj: i64,
@@ -452,6 +452,65 @@ pub(crate) fn ensure_symbol_prototype_initialized<C: AsContextMut<Data = Runtime
     );
 
     ctx.as_context_mut().data_mut().symbol_prototype = symbol_proto;
+}
+
+/// 在 bootstrap 后建立 %PromisePrototype% 并挂到 RuntimeState（供 Promise 构造函数 .prototype）。
+/// 与 `ensure_symbol_prototype_initialized` 同构：proto = Object.prototype，
+/// 定义 constructor（PromiseConstructor）+ [Symbol.toStringTag] = "Promise"。
+/// `.then`/`.catch`/`.finally` 由编译器语法分派（builtin_from_promise_proto_method），
+/// 不经过原型链查找，故此处不定义。
+pub(crate) fn ensure_promise_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().promise_prototype) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let object_proto = value::encode_object_handle(object_proto_handle as u32);
+    let promise_proto = alloc_host_object(ctx, env, 2);
+    set_object_proto_header(ctx, env, promise_proto, object_proto);
+
+    let ctor = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::PromiseConstructor,
+    );
+    let _ = define_host_data_property_with_env(ctx, env, promise_proto, "constructor", ctor);
+
+    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Promise".to_string());
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        promise_proto,
+        encode_symbol_name_id(2),
+        tag,
+        constants::FLAG_CONFIGURABLE,
+    );
+
+    ctx.as_context_mut().data_mut().promise_prototype = promise_proto;
+}
+
+pub(crate) fn native_callable_promise_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+) -> Option<i64> {
+    if !matches!(record, NativeCallable::PromiseConstructor) {
+        return None;
+    }
+    if !value::is_object(caller.data().promise_prototype) {
+        if let Some(env) = WasmEnv::from_caller(caller) {
+            ensure_promise_prototype_initialized(caller, &env);
+        }
+    }
+    let proto = caller.data().promise_prototype;
+    if value::is_object(proto) {
+        Some(proto)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn native_callable_symbol_prototype(
