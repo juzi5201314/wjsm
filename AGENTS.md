@@ -26,6 +26,24 @@ WJSM_UPDATE_SNAPSHOTS=1 cargo nextest run -p wjsm-semantic  # update .ir snapsho
 
 Fixtures run via `wjsm_cli::run_file_in_process` in-process, comparing exit code + stdout + stderr against `.expected` files. `build.rs` generates one `#[test]` per fixture into `tests/gen/` (gitignored).
 
+## Debugging
+
+There is **no** gdb-style single-step debugger for wjsm (no IR interpreter, no wasmtime breakpoint CLI, no debug name section in emitted WASM). Do **not** debug by inserting `console.log` or other temporary instrumentation in production code and deleting it afterward—that is fragile, pollutes diffs, and is disallowed unless every other path below is exhausted and you document why in the PR.
+
+**Default workflow** — pin the failing layer, then fix at the owner:
+
+1. **Reproduce narrowly**: `cargo nextest run -E 'test(happy__<name>)'` or `cargo nextest run -p wjsm-semantic -E 'test(<snapshot>)'`. Use `wjsm_cli::run_file_in_process` semantics (same as `cargo run -- run`).
+2. **Semantic (lowering)**: `cargo run -- dump-ir <file>` (optional `--format dot` for CFG). Compare to `fixtures/semantic/<name>.ir` or run `cargo nextest run -p wjsm-semantic -- lowering_snapshots`. If IR is wrong, fix `lowerer_*.rs` and add/update `.ir` snapshot (`WJSM_UPDATE_SNAPSHOTS=1` only after reviewing diff).
+3. **Codegen (WASM)**: If IR matches the intended shape but behavior is wrong, `cargo run -- dump-wat <file>` and/or `cargo run -- build <file> -o /tmp/x.wasm && cargo run -- disasm /tmp/x.wasm`. Trace basic-block order, loop headers, and host calls against IR (`bbN` in dump). Fix `compiler_*.rs` / `compiler_control.rs`.
+4. **Backend static analysis** (GC spill, liveness, value tags): use `wjsm-backend-wasm` helpers `infer_value_ty`, `compute_var_liveness` in crate tests—see `tests/var_slot_liveness_gc_long_loop.rs`, `tests/compiler_gc_analysis_spill.rs`. Prefer new targeted tests over runtime logging.
+5. **Runtime / host**: Read trap message (`Runtime error:` exit 2). Startup snapshot issues only: `WJSM_STARTUP_SNAPSHOT_DEBUG=1`. JS `debugger` lowers to `Builtin::Debugger` and is a **compile-time no-op**—not a breakpoint.
+6. **Stage isolation**: `cargo run -- build <file> --stage parse|lower|compile` and `cargo run -- check <file>` to stop before execute.
+
+**Evidence before fix**: state which layer failed (parse / lower / compile / runtime) with the exact command output or snapshot diff. **Tests**: lowering changes → semantic snapshots; observable behavior → `fixtures/happy` or `fixtures/errors` + `.expected` (`WJSM_UPDATE_FIXTURES=1` after review).
+
+**Not available today** (do not assume): wasmtime/lldb stepping, `WASM_BACKTRACE` integration in CLI, IR step interpreter, WASM custom name section for human-readable disasm.
+
+
 ## Architecture
 
 Linear pipeline, each stage a `fn transform(input) -> Result<output>`:
