@@ -10,7 +10,8 @@ cargo run -- run test.ts                 # compile + execute
 cargo run -- build test.ts -o out.wasm   # compile to WASM
 cargo run -- build test.ts --stage lower # stop at parse/lower/compile/execute
 cargo run -- check test.ts               # check for errors, no execute
-cargo run -- eval "1 + 2"                # evaluate expression
+cargo run -- eval "1 + 2"                # expression → prints via console.log wrapper
+cargo run -- run -e 'console.log(1+2)'   # script/statements (same eval pipeline as file stdin)
 cargo run -- dump-ir test.ts             # IR dump (--format dot for graphviz)
 cargo run -- dump-wat test.ts            # WAT text output
 
@@ -30,8 +31,9 @@ Fixtures run via `wjsm_cli::run_file_in_process` in-process, comparing exit code
 
 There is **no** gdb-style single-step debugger for wjsm (no IR interpreter, no wasmtime breakpoint CLI, no debug name section in emitted WASM). Do **not** debug by inserting `console.log` or other temporary instrumentation in production code and deleting it afterward—that is fragile, pollutes diffs, and is disallowed unless every other path below is exhausted and you document why in the PR.
 
-**Default workflow** — pin the failing layer, then fix at the owner:
+**Quick JS snippets (agents)**: For ad-hoc reproduction or behavior checks, use inline source—**never** `echo '…' > /tmp/foo.js && cargo run -- run /tmp/foo.js`. Use `cargo run -- run -e '<statements>'` for scripts (`console.log`, `let`, multiple statements; add `--script` when `await` must be an identifier). Use `cargo run -- eval '<expression>'` for a single expression (CLI wraps it as `console.log((expr))`). Both paths use the eval compile pipeline (`lower_eval_module` / `compile_eval`), not multi-file bundling. Keep real paths for `fixtures/`, `dump-ir`/`dump-wat`/`check`/`build`, ESM/CJS `--root`, and anything that must land in the repo.
 
+**Default workflow** — pin the failing layer, then fix at the owner:
 1. **Reproduce narrowly**: `cargo nextest run -E 'test(happy__<name>)'` or `cargo nextest run -p wjsm-semantic -E 'test(<snapshot>)'`. Use `wjsm_cli::run_file_in_process` semantics (same as `cargo run -- run`).
 2. **Semantic (lowering)**: `cargo run -- dump-ir <file>` (optional `--format dot` for CFG). Compare to `fixtures/semantic/<name>.ir` or run `cargo nextest run -p wjsm-semantic -- lowering_snapshots`. If IR is wrong, fix `lowerer_*.rs` and add/update `.ir` snapshot (`WJSM_UPDATE_SNAPSHOTS=1` only after reviewing diff).
 3. **Codegen (WASM)**: If IR matches the intended shape but behavior is wrong, `cargo run -- dump-wat <file>` and/or `cargo run -- build <file> -o /tmp/x.wasm && cargo run -- disasm /tmp/x.wasm`. Trace basic-block order, loop headers, and host calls against IR (`bbN` in dump). Fix `compiler_*.rs` / `compiler_control.rs`.
@@ -154,6 +156,7 @@ Exhaust each step before the next:
 ## Rules
 
 - **Temporary files** (`*.wasm`, `*.o`, caches, test data) go in `/tmp`, never in the project dir. If accidentally committed: `git rm --cached <file>` then commit.
+- **Ad-hoc JS execution**: Do **not** write scratch `.js` under `/tmp` (or elsewhere) just to `cargo run -- run <file>`. Use `cargo run -- run -e '…'` or `cargo run -- eval '…'` instead (see **Debugging** → Quick JS snippets).
 - **Commit**: `feat:` / `fix:` / `docs:` / `refactor:` prefixes. Keep concise.
 - **Warnings**: if a build produces compiler warnings, fix them immediately before reporting the task as complete. Zero-warning builds are the baseline.
 
