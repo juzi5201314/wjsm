@@ -306,4 +306,3 @@ fn normalize_object_handles(text: &str) -> String {
     }
     result
 }
-

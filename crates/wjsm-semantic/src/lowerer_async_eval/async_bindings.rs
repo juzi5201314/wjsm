@@ -182,5 +182,4 @@ impl Lowerer {
         };
         block.instructions_mut().splice(0..0, restore_instrs);
     }
-
 }

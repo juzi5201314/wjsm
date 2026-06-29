@@ -1077,7 +1077,6 @@ impl Compiler {
             // heap_ptr += 16 + new_capacity * 32（扩容前 new_ptr 已写入 local 8）
             Self::emit_heap_bump_for_object_resize(&mut func, heap_global, 7, 16);
 
-
             // 拷贝旧数据到新内存：memory.copy(dst=new_ptr, src=old_ptr, len=16+num_props*32)
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::LocalGet(6));

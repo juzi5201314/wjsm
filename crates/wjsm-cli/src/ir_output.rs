@@ -103,7 +103,6 @@ where
     out
 }
 
-
 fn colorize_ir_line(line: &str) -> String {
     static VALUE_RE: OnceLock<regex::Regex> = OnceLock::new();
     static SCOPE_RE: OnceLock<regex::Regex> = OnceLock::new();

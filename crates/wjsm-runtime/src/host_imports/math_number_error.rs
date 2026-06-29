@@ -21,11 +21,7 @@ fn parse_int_digit_value(c: char, radix: u32) -> Option<u32> {
     } else {
         return None;
     };
-    if digit < radix {
-        Some(digit)
-    } else {
-        None
-    }
+    if digit < radix { Some(digit) } else { None }
 }
 
 fn parse_int_take_valid_prefix(s: &str, radix: u32) -> String {
@@ -137,7 +133,6 @@ fn number_proto_to_string_radix(x: f64, radix: i32) -> String {
     }
 }
 
-
 pub(crate) fn define_math_number_error(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -146,9 +141,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.abs())
         },
     );
@@ -157,9 +152,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.acos())
         },
     );
@@ -168,9 +163,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.acosh())
         },
     );
@@ -179,9 +174,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.asin())
         },
     );
@@ -190,9 +185,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.asinh())
         },
     );
@@ -201,9 +196,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.atan())
         },
     );
@@ -212,9 +207,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.atanh())
         },
     );
@@ -223,13 +218,13 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let y = match math_decode_f64_arg(&mut caller, a) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             let x = match math_decode_f64_arg(&mut caller, b) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(y.atan2(x))
         },
     );
@@ -238,9 +233,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.cbrt())
         },
     );
@@ -249,9 +244,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.ceil())
         },
     );
@@ -260,9 +255,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             let n = x as i32 as u32;
             value::encode_f64(if n == 0 {
                 32.0
@@ -276,9 +271,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.cos())
         },
     );
@@ -287,9 +282,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.cosh())
         },
     );
@@ -298,9 +293,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.exp())
         },
     );
@@ -309,9 +304,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.exp_m1())
         },
     );
@@ -320,9 +315,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.floor())
         },
     );
@@ -331,9 +326,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64((x as f32) as f64)
         },
     );
@@ -348,9 +343,9 @@ pub(crate) fn define_math_number_error(
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
                 let x = match math_decode_f64_arg(&mut caller, val) {
-                                    Ok(v) => v,
-                                    Err(e) => return e,
-                                };
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 if x.is_infinite() {
                     return value::encode_f64(f64::INFINITY);
                 }
@@ -364,13 +359,13 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let ai = match math_decode_f64_arg(&mut caller, a) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        } as i32;
+                Ok(v) => v,
+                Err(e) => return e,
+            } as i32;
             let bi = match math_decode_f64_arg(&mut caller, b) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        } as i32;
+                Ok(v) => v,
+                Err(e) => return e,
+            } as i32;
             let result = (ai as i64) * (bi as i64);
             value::encode_f64((result as i32) as f64)
         },
@@ -380,9 +375,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.ln())
         },
     );
@@ -391,9 +386,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.ln_1p())
         },
     );
@@ -402,9 +397,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.log10())
         },
     );
@@ -413,9 +408,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.log2())
         },
     );
@@ -430,9 +425,9 @@ pub(crate) fn define_math_number_error(
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
                 let x = match math_decode_f64_arg(&mut caller, val) {
-                                    Ok(v) => v,
-                                    Err(e) => return e,
-                                };
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 if x.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
@@ -454,9 +449,9 @@ pub(crate) fn define_math_number_error(
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
                 let x = match math_decode_f64_arg(&mut caller, val) {
-                                    Ok(v) => v,
-                                    Err(e) => return e,
-                                };
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 if x.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
@@ -472,13 +467,13 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let base = match math_decode_f64_arg(&mut caller, a) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             let exp = match math_decode_f64_arg(&mut caller, b) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(base.powf(exp))
         },
     );
@@ -492,9 +487,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             if x.is_nan() || x.is_infinite() {
                 return value::encode_f64(x);
             }
@@ -514,9 +509,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             if x.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
@@ -531,9 +526,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.sin())
         },
     );
@@ -542,9 +537,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.sinh())
         },
     );
@@ -553,9 +548,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.sqrt())
         },
     );
@@ -564,9 +559,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.tan())
         },
     );
@@ -575,9 +570,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.tanh())
         },
     );
@@ -586,9 +581,9 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = match math_decode_f64_arg(&mut caller, arg) {
-                            Ok(v) => v,
-                            Err(e) => return e,
-                        };
+                Ok(v) => v,
+                Err(e) => return e,
+            };
             value::encode_f64(x.trunc())
         },
     );
@@ -664,9 +659,9 @@ pub(crate) fn define_math_number_error(
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
                 let x = match math_decode_f64_arg(&mut caller, arg) {
-                                Ok(v) => v,
-                                Err(e) => return e,
-                            };
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 value::encode_bool(x.is_finite() && x == x.trunc())
             } else {
                 value::encode_bool(false)
@@ -679,9 +674,9 @@ pub(crate) fn define_math_number_error(
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
                 let x = match math_decode_f64_arg(&mut caller, arg) {
-                                Ok(v) => v,
-                                Err(e) => return e,
-                            };
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 let is_int = x.is_finite() && x == x.trunc();
                 value::encode_bool(is_int && x.abs() <= 9007199254740991.0)
             } else {
@@ -703,9 +698,9 @@ pub(crate) fn define_math_number_error(
                 String::from_utf8_lossy(&s).to_string()
             } else if value::is_f64(arg) {
                 let x = match math_decode_f64_arg(&mut caller, arg) {
-                                Ok(v) => v,
-                                Err(e) => return e,
-                            };
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 if x.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }

@@ -2,8 +2,8 @@ use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
-use crate::*;
 use crate::wasm_env::WasmEnv;
+use crate::*;
 
 /// §27.2.4.1-4：把非原生-promise 的 thenable 元素转为中间 promise（adopt 其状态），
 /// 返回该中间 promise 的 handle 值，使后续逻辑按 pending 原生 promise 统一处理。
@@ -85,7 +85,9 @@ pub(crate) fn define_promise_combinators(
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut table = caller
                         .data()
-                        .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .promise_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         entry.handled = true; // §27.2.4.1.1 — 标记所有已知 promise 为已处理
                         match entry.state.clone() {
@@ -180,15 +182,16 @@ pub(crate) fn define_promise_combinators(
             for index in 0..len {
                 let elem = read_array_elem(&mut caller, ptr, index)
                     .unwrap_or_else(value::encode_undefined);
-                let elem =
-                    thenable_to_intermediate_promise(&mut caller, elem).unwrap_or(elem);
+                let elem = thenable_to_intermediate_promise(&mut caller, elem).unwrap_or(elem);
                 if value::is_object(elem) {
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut immediate = None;
                     {
                         let mut table = caller
                             .data()
-                            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                            .promise_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                             entry.handled = true; // 标记所有已知 promise 为已处理
                             match entry.state.clone() {
@@ -269,7 +272,9 @@ pub(crate) fn define_promise_combinators(
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut table = caller
                         .data()
-                        .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .promise_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         entry.handled = true; // 标记所有已知 promise 为已处理
                         match entry.state.clone() {
@@ -396,7 +401,9 @@ pub(crate) fn define_promise_combinators(
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut table = caller
                         .data()
-                        .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .promise_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         known_promise = true;
                         entry.handled = true; // 标记所有已知 promise 为已处理

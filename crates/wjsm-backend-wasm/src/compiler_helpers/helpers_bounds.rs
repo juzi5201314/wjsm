@@ -41,7 +41,12 @@ impl Compiler {
         func.instruction(&WasmInstruction::End);
     }
 
-    pub(super) fn emit_property_name_id_match(&self, func: &mut Function, left_local: u32, right_local: u32) {
+    pub(super) fn emit_property_name_id_match(
+        &self,
+        func: &mut Function,
+        left_local: u32,
+        right_local: u32,
+    ) {
         func.instruction(&WasmInstruction::LocalGet(left_local));
         func.instruction(&WasmInstruction::LocalGet(right_local));
         func.instruction(&WasmInstruction::I32Eq);
@@ -140,5 +145,4 @@ impl Compiler {
         func.instruction(&WasmInstruction::Unreachable);
         func.instruction(&WasmInstruction::End);
     }
-
 }

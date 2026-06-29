@@ -14,7 +14,11 @@ pub(crate) fn define_get_builtin_global(
             &mut store,
             |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
                 let name = read_runtime_string(&mut caller, name_val);
-                let mut native_callables = caller.data().native_callables.lock().unwrap_or_else(|e| e.into_inner());
+                let mut native_callables = caller
+                    .data()
+                    .native_callables
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let idx = native_callables.len() as u32;
                 match name.as_str() {
                     "Array" => native_callables.push(NativeCallable::ArrayConstructor),

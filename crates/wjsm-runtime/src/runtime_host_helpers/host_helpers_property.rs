@@ -417,4 +417,3 @@ pub(crate) fn collect_own_property_key_values(
     keys.extend(sym_name_ids);
     keys
 }
-

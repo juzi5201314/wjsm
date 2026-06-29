@@ -15,25 +15,22 @@ pub fn process_weak_refs_after_sweep(ctx: &mut GcContext, freed_handles: &[Handl
         {
             let mut table = st.weakref_table.lock().expect("weakref table mutex");
             for entry in table.iter_mut() {
-                if entry.target_handle.is_some_and(|handle| freed.contains(&handle)) {
+                if entry
+                    .target_handle
+                    .is_some_and(|handle| freed.contains(&handle))
+                {
                     entry.target_handle = None;
                 }
             }
         }
         {
-            let mut table = st
-                .weakmap_table
-                .lock()
-                .expect("weakmap_table mutex");
+            let mut table = st.weakmap_table.lock().expect("weakmap_table mutex");
             for entry in table.iter_mut() {
                 entry.map.retain(|key, _| !freed.contains(key));
             }
         }
         {
-            let mut table = st
-                .weakset_table
-                .lock()
-                .expect("weakset_table mutex");
+            let mut table = st.weakset_table.lock().expect("weakset_table mutex");
             for entry in table.iter_mut() {
                 entry.set.retain(|key| !freed.contains(key));
             }
@@ -57,10 +54,7 @@ pub fn process_weak_refs_after_sweep(ctx: &mut GcContext, freed_handles: &[Handl
             }
         }
         if !cleanup_tasks.is_empty() {
-            let mut queue = st
-                .microtask_queue
-                .lock()
-                .expect("microtask queue mutex");
+            let mut queue = st.microtask_queue.lock().expect("microtask queue mutex");
             for (callback, held_value) in cleanup_tasks {
                 queue.push_back(Microtask::CleanupFinalizationRegistry {
                     callback,

@@ -4,8 +4,8 @@ pub mod types;
 pub mod value;
 
 pub use builtin::Builtin;
-pub use types::*;
 use std::fmt::{self, Write};
+pub use types::*;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Module {
@@ -773,7 +773,6 @@ pub struct ReExportBinding {
     /// 当前模块对外导出名；`export *` 时为 None（表示复制源模块全部导出）
     pub exported_name: Option<String>,
 }
-
 
 // ── Shadow Stack Constants ──────────────────────────────────────────────
 /// 影子栈大小（64KB = 8192 个 i64 槽位）。

@@ -1,8 +1,8 @@
 use super::*;
 
-mod fn_decls;
 mod async_fn_decls;
 mod async_gen_fn_decls;
+mod fn_decls;
 
 impl Lowerer {
     /// 构建 async/async-generator 函数的状态分发 switch

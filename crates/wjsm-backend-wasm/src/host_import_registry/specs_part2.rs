@@ -2,9 +2,9 @@
 //!
 //! 按位置拆分，条目顺序不可更改（WASM 函数索引依赖位置）。
 
-use super::{HostImportKey, HostImportSpec};
-use super::SpecialHostImport;
 use super::HostImportGroup;
+use super::SpecialHostImport;
+use super::{HostImportKey, HostImportSpec};
 use wjsm_ir::Builtin;
 
 /// 第 2 部分：`arr_proto_reduce_right` ~ `continuation_save_var`

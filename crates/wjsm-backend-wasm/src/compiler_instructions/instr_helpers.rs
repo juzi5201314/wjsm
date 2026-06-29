@@ -373,7 +373,6 @@ impl Compiler {
         Ok(())
     }
 
-
     /// 混合 BigInt/Number 二元运算：返回可捕获的 TypeError 异常值。
     fn emit_bigint_mixed_type_error_value(&mut self) -> anyhow::Result<()> {
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
@@ -470,8 +469,6 @@ impl Compiler {
         Ok(())
     }
 
-
-
     /// 发射命名属性读取：`obj_get(obj, symbol_property_key(key))`（结果 i64 留栈上）。
     pub(super) fn emit_named_get(&mut self, obj_l: u32, key_l: u32, sym_key: u32, obj_get: u32) {
         self.emit(WasmInstruction::LocalGet(obj_l));
@@ -528,7 +525,14 @@ impl Compiler {
     }
 
     /// 发射命名属性写入：`obj_set(obj, symbol_property_key(key), value)`。
-    pub(super) fn emit_named_set(&mut self, obj_l: u32, key_l: u32, val_l: u32, sym_key: u32, obj_set: u32) {
+    pub(super) fn emit_named_set(
+        &mut self,
+        obj_l: u32,
+        key_l: u32,
+        val_l: u32,
+        sym_key: u32,
+        obj_set: u32,
+    ) {
         self.emit(WasmInstruction::LocalGet(obj_l));
         self.emit(WasmInstruction::LocalGet(key_l));
         self.emit(WasmInstruction::Call(sym_key));
@@ -581,5 +585,4 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
     }
-
 }

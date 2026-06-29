@@ -113,14 +113,7 @@ impl ModuleResolver {
                 Some(n) => {
                     let pkg = format!("@{scope}/{n}");
                     let sub: String = parts.collect::<Vec<_>>().join("/");
-                    (
-                        pkg,
-                        if sub.is_empty() {
-                            None
-                        } else {
-                            Some(sub)
-                        },
-                    )
+                    (pkg, if sub.is_empty() { None } else { Some(sub) })
                 }
                 None => (format!("@{scope}"), None),
             }
@@ -286,7 +279,6 @@ impl ModuleResolver {
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
         Self::validate_typescript_module_syntax(&ast, &path)?;
-
 
         // 检测并转换 CommonJS 模块
         let is_cjs = crate::cjs_transform::is_commonjs_module(&ast);

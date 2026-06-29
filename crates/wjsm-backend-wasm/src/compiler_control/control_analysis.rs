@@ -43,14 +43,11 @@ pub(super) fn count_predecessors(blocks: &[BasicBlock], target: usize) -> usize 
                 true_block,
                 false_block,
                 ..
-            } => {
-                true_block.0 as usize == target || false_block.0 as usize == target
-            }
+            } => true_block.0 as usize == target || false_block.0 as usize == target,
             _ => false,
         })
         .count()
 }
-
 
 fn block_successors(block: &BasicBlock) -> impl Iterator<Item = usize> + '_ {
     let mut targets = [None, None];
@@ -202,10 +199,8 @@ impl Compiler {
             } => {
                 for case in cases {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                    let const_val = self.encode_constant(
-                        &module.constants()[case.constant.0 as usize],
-                        module,
-                    )?;
+                    let const_val = self
+                        .encode_constant(&module.constants()[case.constant.0 as usize], module)?;
                     self.emit(WasmInstruction::I64Const(const_val));
                     self.emit(WasmInstruction::I64Eq);
                     self.emit(WasmInstruction::If(BlockType::Empty));
@@ -321,5 +316,4 @@ impl Compiler {
     pub(crate) fn is_eval_memory_var(&self, name: &str) -> bool {
         self.current_function_has_eval && self.var_memory_offsets.contains_key(name)
     }
-
 }

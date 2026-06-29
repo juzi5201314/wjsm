@@ -338,7 +338,6 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
-
     }
 
     pub(crate) fn compile_get_proto_from_ctor(&mut self) {
@@ -405,7 +404,9 @@ impl Compiler {
         func.instruction(&WasmInstruction::LocalGet(1));
         func.instruction(&WasmInstruction::Return);
         func.instruction(&WasmInstruction::End);
-        func.instruction(&WasmInstruction::GlobalGet(self.object_proto_handle_global_idx));
+        func.instruction(&WasmInstruction::GlobalGet(
+            self.object_proto_handle_global_idx,
+        ));
         func.instruction(&WasmInstruction::I64ExtendI32U);
         let box_base = value::BOX_BASE as i64;
         let tag_object = (value::TAG_OBJECT << 32) as i64;

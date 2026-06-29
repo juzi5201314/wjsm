@@ -479,5 +479,4 @@ impl Lowerer {
                 | "$generator"
         ) || binding_name.starts_with("$tmp.")
     }
-
 }

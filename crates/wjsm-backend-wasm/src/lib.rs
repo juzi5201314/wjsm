@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
     ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    Instruction as WasmInstruction, MemArg, MemorySection, MemoryType, Module, NameMap, NameSection,
-    RefType, TableSection, TableType, TypeSection, ValType,
+    Instruction as WasmInstruction, MemArg, MemorySection, MemoryType, Module, NameMap,
+    NameSection, RefType, TableSection, TableType, TypeSection, ValType,
 };
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
@@ -662,7 +662,9 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
             this_val,
             args,
         } => args.iter().fold(
-            dest.map_or(callee.0.max(this_val.0), |d| d.0.max(callee.0).max(this_val.0)),
+            dest.map_or(callee.0.max(this_val.0), |d| {
+                d.0.max(callee.0).max(this_val.0)
+            }),
             |max, arg| max.max(arg.0),
         ),
         Instruction::NewObject { dest, capacity: _ } => dest.0,

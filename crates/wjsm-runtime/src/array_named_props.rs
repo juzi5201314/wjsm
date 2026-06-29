@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use wasmtime::{Caller, Func, Linker};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::property_key::is_symbol_name_id;
 use crate::{RuntimeState, value};
@@ -25,11 +25,7 @@ impl ArrayNamedPropsStore {
         Some(value::decode_handle(boxed))
     }
 
-    pub(crate) fn get(
-        caller: &Caller<'_, RuntimeState>,
-        boxed: i64,
-        name_id: u32,
-    ) -> i64 {
+    pub(crate) fn get(caller: &Caller<'_, RuntimeState>, boxed: i64, name_id: u32) -> i64 {
         let Some(handle) = Self::handle_of(caller, boxed) else {
             return value::encode_undefined();
         };

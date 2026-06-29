@@ -32,8 +32,7 @@ fn block_needs_home_object(block: &swc_ast::BlockStmt) -> bool {
     visitor.needs_home
 }
 
-
+mod jsx_arrays_members;
 mod jsx_elements;
 mod jsx_expressions;
 mod jsx_objects_methods;
-mod jsx_arrays_members;

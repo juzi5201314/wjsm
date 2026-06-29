@@ -41,10 +41,7 @@ impl Compiler {
         }
     }
 
-    pub(crate) fn encode_function_ref_id(
-        &self,
-        function_id: wjsm_ir::FunctionId,
-    ) -> Result<i64> {
+    pub(crate) fn encode_function_ref_id(&self, function_id: wjsm_ir::FunctionId) -> Result<i64> {
         let wasm_idx = *self
             .function_id_to_wasm_idx
             .get(&function_id.0)

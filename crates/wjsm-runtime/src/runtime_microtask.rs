@@ -1,7 +1,9 @@
 use super::*;
 pub(crate) fn clear_pending_unhandled_rejection(state: &RuntimeState, handle: usize) {
     state
-        .pending_unhandled_rejections.lock().unwrap_or_else(|e| e.into_inner())
+        .pending_unhandled_rejections
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&handle);
 }
 
@@ -31,7 +33,9 @@ pub(crate) async fn drain_microtasks_async<
         let task = {
             let mut queue = ctx
                 .state_mut()
-                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                .microtask_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             queue.pop_front()
         };
         match task {
@@ -216,15 +220,20 @@ pub(crate) async fn drain_microtasks_async<
                 {
                     let mut ctrl_table = ctx
                         .state_mut()
-                        .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .stream_controller_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get_mut(readable_controller_handle as usize) {
                         ctrl.close_requested = true;
                     }
                 }
 
                 let pending = {
-                    let mut reader_table =
-                        ctx.state_mut().reader_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut reader_table = ctx
+                        .state_mut()
+                        .reader_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let mut pending_promise: Option<i64> = None;
                     for reader in reader_table.iter_mut() {
                         if reader.stream_handle == readable_stream_handle
@@ -240,7 +249,9 @@ pub(crate) async fn drain_microtasks_async<
                 {
                     let mut stream_table = ctx
                         .state_mut()
-                        .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .readable_stream_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = stream_table.get_mut(readable_stream_handle as usize) {
                         entry.state = StreamState::Closed;
                     }
@@ -306,11 +317,15 @@ pub(crate) async fn drain_microtasks_async<
         let rejections = std::mem::take(
             &mut *ctx
                 .state_mut()
-                .pending_unhandled_rejections.lock().unwrap_or_else(|e| e.into_inner()),
+                .pending_unhandled_rejections
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
         );
         let table = ctx
             .state_mut()
-            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         rejections
             .iter()
             .filter_map(|&h| {

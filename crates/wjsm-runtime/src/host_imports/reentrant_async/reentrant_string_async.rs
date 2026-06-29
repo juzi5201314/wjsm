@@ -177,7 +177,11 @@ pub(crate) async fn string_replace_default_async_body(
 
     if value::is_regexp(search) {
         let entry = {
-            let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .regex_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             match table.get(value::decode_regexp_handle(search) as usize) {
                 Some(e) => e.clone(),
                 None => return store_runtime_string(&*caller, s),
@@ -400,8 +404,14 @@ pub(crate) async fn string_match_all_async_body(
         return value::encode_undefined();
     }
     let regexp = read_shadow_arg(&mut caller, args_base, 0);
-    if let Some(result) =
-        call_symbol_method_async(&mut caller, regexp, wk_symbol::MATCH_ALL, regexp, &[this_val]).await
+    if let Some(result) = call_symbol_method_async(
+        &mut caller,
+        regexp,
+        wk_symbol::MATCH_ALL,
+        regexp,
+        &[this_val],
+    )
+    .await
     {
         return result;
     }
@@ -445,7 +455,8 @@ pub(crate) fn define_primitive_core_async(
     linker.func_wrap_async(
         "env",
         "string_match_all",
-        |caller: Caller<'_, RuntimeState>, (_env, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+        |caller: Caller<'_, RuntimeState>,
+         (_env, this_val, args_base, args_count): (i64, i64, i32, i32)| {
             Box::new(async move {
                 string_match_all_async_body(caller, this_val, args_base, args_count).await
             })

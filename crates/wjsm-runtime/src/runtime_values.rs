@@ -91,8 +91,16 @@ pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64)
             if value::is_runtime_string_handle(a) && value::is_runtime_string_handle(b) {
                 let ha = value::decode_runtime_string_handle(a) as usize;
                 let hb = value::decode_runtime_string_handle(b) as usize;
-                let strings = caller.data().runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
-                strings.get(ha).zip(strings.get(hb)).map(|(x, y)| x == y).unwrap_or(false)
+                let strings = caller
+                    .data()
+                    .runtime_strings
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                strings
+                    .get(ha)
+                    .zip(strings.get(hb))
+                    .map(|(x, y)| x == y)
+                    .unwrap_or(false)
             } else {
                 // string_ptr 字面量：相同内容共享同一指针
                 a == b
@@ -732,8 +740,7 @@ pub(crate) fn write_private_accessor_slot(
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let undef = value::encode_undefined();
-    let accessor_flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_IS_ACCESSOR;
+    let accessor_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_IS_ACCESSOR;
     if let Some((slot_offset, flags, _)) =
         find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
     {
@@ -746,20 +753,16 @@ pub(crate) fn write_private_accessor_slot(
         }
         if (flags & constants::FLAG_IS_ACCESSOR) != 0 {
             if !value::is_undefined(getter) {
-                data[slot_offset + 16..slot_offset + 24]
-                    .copy_from_slice(&getter.to_le_bytes());
+                data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
             }
             if !value::is_undefined(setter) {
-                data[slot_offset + 24..slot_offset + 32]
-                    .copy_from_slice(&setter.to_le_bytes());
+                data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
             }
         } else {
             data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
             data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
-            data[slot_offset + 16..slot_offset + 24]
-                .copy_from_slice(&getter.to_le_bytes());
-            data[slot_offset + 24..slot_offset + 32]
-                .copy_from_slice(&setter.to_le_bytes());
+            data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
+            data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
         }
         return;
     }
@@ -811,8 +814,16 @@ pub(crate) fn write_private_accessor_slot(
     if slot_offset + 32 > data.len() {
         return;
     }
-    let g = if value::is_undefined(getter) { undef } else { getter };
-    let s = if value::is_undefined(setter) { undef } else { setter };
+    let g = if value::is_undefined(getter) {
+        undef
+    } else {
+        getter
+    };
+    let s = if value::is_undefined(setter) {
+        undef
+    } else {
+        setter
+    };
     data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
     data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
     data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
@@ -1046,11 +1057,7 @@ fn is_object_like(val: i64) -> bool {
     value::is_object(val) || value::is_callable(val) || value::is_function(val)
 }
 
-fn read_object_method(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-    name: &str,
-) -> Option<i64> {
+fn read_object_method(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str) -> Option<i64> {
     let ptr = resolve_handle(caller, obj)?;
     read_object_property_by_name(caller, ptr, name)
 }
@@ -1107,7 +1114,10 @@ fn ordinary_to_primitive(
             return result;
         }
     }
-    make_type_error_exception(caller, "TypeError: Cannot convert object to primitive value")
+    make_type_error_exception(
+        caller,
+        "TypeError: Cannot convert object to primitive value",
+    )
 }
 /// ToBoolean 抽象操作 (ECMAScript 7.1.2)
 pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> bool {
@@ -1126,7 +1136,9 @@ pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> boo
             let handle = value::decode_runtime_string_handle(val) as usize;
             let strings = caller
                 .data()
-                .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
+                .runtime_strings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             return !strings.get(handle).map(|s| s.is_empty()).unwrap_or(true);
         }
         let ptr = value::decode_string_ptr(val);
@@ -1140,7 +1152,9 @@ pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> boo
         let handle = value::decode_bigint_handle(val) as usize;
         let table = caller
             .data()
-            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+            .bigint_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         return table
             .get(handle)
             .map(|bi| *bi != num_bigint::BigInt::from(0))
@@ -1180,7 +1194,9 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
             let handle = value::decode_runtime_string_handle(val) as usize;
             let strings = caller
                 .data()
-                .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
+                .runtime_strings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             strings.get(handle).cloned().unwrap_or_default()
         } else {
             read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
@@ -1194,7 +1210,9 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     if value::is_bigint(val) {
         *caller
             .data()
-            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
             Some("TypeError: Cannot convert a BigInt value to a number".to_string());
         return f64::NAN.to_bits() as i64;
     }
@@ -1208,7 +1226,9 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     if value::is_symbol(val) {
         *caller
             .data()
-            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
             Some("TypeError: Cannot convert a Symbol value to a number".to_string());
         return f64::NAN.to_bits() as i64;
     }
@@ -1254,10 +1274,18 @@ pub(crate) fn number_less_than_bigint(
         if (num_f - (int_val as f64)).abs() < 1.0 {
             let num_bi = num_bigint::BigInt::from(int_val);
             if is_exact_int {
-                return if bigint_is_left { *bi < num_bi } else { num_bi < *bi };
+                return if bigint_is_left {
+                    *bi < num_bi
+                } else {
+                    num_bi < *bi
+                };
             } else {
                 // 带小数：bi 是整数，小数部分让比较略偏向一侧
-                return if bigint_is_left { *bi <= num_bi } else { num_bi <= *bi };
+                return if bigint_is_left {
+                    *bi <= num_bi
+                } else {
+                    num_bi <= *bi
+                };
             }
         }
     }
@@ -1442,7 +1470,9 @@ pub(crate) fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -
             let b_handle = value::decode_bigint_handle(b) as usize;
             let table = caller
                 .data()
-                .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                .bigint_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let eq = table
                 .get(a_handle)
                 .zip(table.get(b_handle))
@@ -1485,7 +1515,9 @@ pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) 
         let handle = value::decode_runtime_string_handle(val) as usize;
         let strings = caller
             .data()
-            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
+            .runtime_strings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         strings.get(handle).cloned().unwrap_or_default()
     } else {
         read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
@@ -1507,7 +1539,11 @@ pub(crate) async fn resolve_and_call_async(
     if value::is_bound(func) {
         let bound_idx = value::decode_bound_idx(func);
         let (target_func, bound_this, bound_args_ref) = {
-            let bound = caller.data().bound_objects.lock().unwrap_or_else(|e| e.into_inner());
+            let bound = caller
+                .data()
+                .bound_objects
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let record = &bound[bound_idx as usize];
             (
                 record.target_func,
@@ -1576,7 +1612,11 @@ pub(crate) async fn resolve_callable_and_call_async(
 ) -> i64 {
     let (func_idx, env_obj) = if value::is_closure(callee) {
         let idx = value::decode_closure_idx(callee);
-        let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
+        let closures = caller
+            .data()
+            .closures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = &closures[idx as usize];
         (entry.func_idx, entry.env_obj)
     } else if value::is_function(callee) {
@@ -1592,7 +1632,11 @@ pub(crate) async fn resolve_callable_and_call_async(
     } else if value::is_proxy(callee) {
         let handle = value::decode_proxy_handle(callee) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -1728,7 +1772,11 @@ pub(crate) fn func_bind_impl(
             .unwrap();
         bound_args.push(i64::from_le_bytes(buf));
     }
-    let mut bound = caller.data().bound_objects.lock().unwrap_or_else(|e| e.into_inner());
+    let mut bound = caller
+        .data()
+        .bound_objects
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = bound.len() as u32;
     bound.push(BoundRecord {
         target_func: func,

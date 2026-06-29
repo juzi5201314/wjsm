@@ -9,7 +9,6 @@ use wasm_encoder::{TypeSection, ValType};
 /// `build_shared_type_section` 中 Type 12：`(i64, i64, i32, i32) -> i64`，用于 call_indirect / native_call。
 pub const JS_FUNC_TYPE_INDEX: u32 = 12;
 
-
 /// 生成与 user wasm compiler_core.rs::new_with_data_base 完全一致的 type section。
 /// support module 和 user wasm 都调用此函数，确保 type index 一致。
 pub fn build_shared_type_section() -> TypeSection {

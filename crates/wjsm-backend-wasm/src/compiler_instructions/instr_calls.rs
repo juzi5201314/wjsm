@@ -504,7 +504,9 @@ impl Compiler {
 
         let saved_new_target = self.string_concat_scratch_idx;
         let date_name_ptr = self.ensure_string_ptr_const("Date");
-        self.emit(WasmInstruction::I64Const(value::encode_string_ptr(date_name_ptr)));
+        self.emit(WasmInstruction::I64Const(value::encode_string_ptr(
+            date_name_ptr,
+        )));
         self.emit(WasmInstruction::Call(
             self.builtin_func_indices[&Builtin::GetBuiltinGlobal],
         ));
@@ -669,7 +671,6 @@ impl Compiler {
         let call_func_idx_scratch = self.call_func_idx_scratch();
         let call_env_obj_scratch = self.call_env_obj_scratch();
 
-
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
@@ -769,5 +770,4 @@ impl Compiler {
         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
         Ok(())
     }
-
 }

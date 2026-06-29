@@ -82,9 +82,10 @@ fn instr_dest(ins: &Instruction) -> Option<ValueId> {
         | IsException { dest, .. }
         | EncodeException { dest, .. }
         | ExceptionToObject { dest, .. } => *dest,
-        Call { dest, .. } | CallBuiltin { dest, .. } | SuperCall { dest, .. } | ConstructCall { dest, .. } => {
-            (*dest)?
-        }
+        Call { dest, .. }
+        | CallBuiltin { dest, .. }
+        | SuperCall { dest, .. }
+        | ConstructCall { dest, .. } => (*dest)?,
         // 非 producing
         StoreVar { .. }
         | SetProp { .. }

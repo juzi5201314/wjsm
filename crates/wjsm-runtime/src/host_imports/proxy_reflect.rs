@@ -71,7 +71,6 @@ async fn invoke_property_setter(
     }
 }
 
-
 fn receiver_own_descriptor_from_trap_result(
     caller: &mut Caller<'_, RuntimeState>,
     desc_handle: i64,
@@ -82,15 +81,14 @@ fn receiver_own_descriptor_from_trap_result(
     parse_descriptor(caller, desc_handle).ok()
 }
 
-fn make_data_descriptor_object_for_define(
-    caller: &mut Caller<'_, RuntimeState>,
-    val: i64,
-) -> i64 {
+fn make_data_descriptor_object_for_define(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
     let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let desc = alloc_host_object(caller, &_wjsm_env, 4);
     let _ = define_host_data_property_from_caller(caller, desc, "value", val);
-    let _ = define_host_data_property_from_caller(caller, desc, "writable", value::encode_bool(true));
-    let _ = define_host_data_property_from_caller(caller, desc, "enumerable", value::encode_bool(true));
+    let _ =
+        define_host_data_property_from_caller(caller, desc, "writable", value::encode_bool(true));
+    let _ =
+        define_host_data_property_from_caller(caller, desc, "enumerable", value::encode_bool(true));
     let _ = define_host_data_property_from_caller(
         caller,
         desc,
@@ -280,24 +278,15 @@ pub(crate) async fn object_assign_impl_async(
         for name in names {
             let name_val = store_runtime_string(caller, name);
             let Ok(prop_name) = render_value(caller, name_val) else {
-                return make_type_error_exception(
-                    caller,
-                    "Cannot assign to read only property",
-                );
+                return make_type_error_exception(caller, "Cannot assign to read only property");
             };
             let prop_val = read_object_property_by_name(caller, source_ptr, &prop_name)
                 .unwrap_or_else(value::encode_undefined);
             let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
-                return make_type_error_exception(
-                    caller,
-                    "Cannot assign to read only property",
-                );
+                return make_type_error_exception(caller, "Cannot assign to read only property");
             };
             if !ordinary_set_by_name_id(caller, target, target, name_id, prop_val).await {
-                return make_type_error_exception(
-                    caller,
-                    "Cannot assign to read only property",
-                );
+                return make_type_error_exception(caller, "Cannot assign to read only property");
             }
         }
     }
@@ -535,6 +524,7 @@ pub(crate) async fn reflect_get_prototype_of_async(
         && !value::is_array(target)
         && !value::is_function(target)
         && !value::is_proxy(target)
+        && !value::is_regexp(target)
     {
         set_runtime_error(
             caller.data(),
@@ -552,7 +542,11 @@ pub(crate) async fn reflect_get_prototype_of_impl(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -596,6 +590,21 @@ pub(crate) async fn reflect_get_prototype_of_impl(
             }
             return Box::pin(reflect_get_prototype_of_impl(caller, entry.target)).await;
         }
+    }
+    // TAG_REGEXP 无 obj_table 条目，其 [[Prototype]] 是 RegExp.prototype 对象，
+    // 不能走 resolve_handle（会得到 null）；与 ordinary_has_instance_async 同构。
+    if value::is_regexp(target) {
+        if !value::is_object(caller.data().regexp_prototype) {
+            if let Some(env) = WasmEnv::from_caller(caller) {
+                crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
+            }
+        }
+        let proto = caller.data().regexp_prototype;
+        return if value::is_object(proto) {
+            proto
+        } else {
+            value::encode_null()
+        };
     }
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_null();
@@ -814,7 +823,11 @@ pub(crate) async fn proxy_own_keys_trap_async(
     }
     let handle = value::decode_proxy_handle(target) as usize;
     let entry = {
-        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+        let table = caller
+            .data()
+            .proxy_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         table.get(handle).cloned()
     };
     let Some(entry) = entry else {
@@ -849,8 +862,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
         return value::encode_undefined();
     };
     let target_keys_str = collect_own_property_names(caller, t_ptr, false);
-    let target_keys_sym: Vec<i64> =
-        collect_own_property_key_values(caller, t_ptr, true);
+    let target_keys_sym: Vec<i64> = collect_own_property_key_values(caller, t_ptr, true);
     let mut trap_keys_str = Vec::new();
     let mut trap_keys_sym = Vec::new();
     for &k in &keys {
@@ -870,7 +882,10 @@ pub(crate) async fn proxy_own_keys_trap_async(
         }
         if match_all {
             for &tk in &target_keys_sym {
-                if !trap_keys_sym.iter().any(|&s| same_value_zero(&caller, s, tk)) {
+                if !trap_keys_sym
+                    .iter()
+                    .any(|&s| same_value_zero(&caller, s, tk))
+                {
                     match_all = false;
                     break;
                 }
@@ -888,8 +903,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
     } else {
         for tk in &target_keys_str {
             if let Some(tk_c) = find_memory_c_string(caller, tk)
-                && let Some((_, flags, _)) =
-                    find_property_slot_by_name_id(caller, t_ptr, tk_c)
+                && let Some((_, flags, _)) = find_property_slot_by_name_id(caller, t_ptr, tk_c)
             {
                 let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
                 if !configurable && !trap_keys_str.contains(tk) {
@@ -910,7 +924,9 @@ pub(crate) async fn proxy_own_keys_trap_async(
             if let Some((_, flags, _)) = find_property_slot_by_name_id(caller, t_ptr, name_id) {
                 let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
                 if !configurable
-                    && !trap_keys_sym.iter().any(|&s| same_value_zero(&caller, s, sym_key))
+                    && !trap_keys_sym
+                        .iter()
+                        .any(|&s| same_value_zero(&caller, s, sym_key))
                 {
                     return make_type_error_exception(
                         caller,
@@ -949,7 +965,9 @@ async fn descriptor_enumerable_on_proxy_async(
         let handle = value::decode_proxy_handle(obj) as usize;
         let entry = caller
             .data()
-            .proxy_table.lock().unwrap_or_else(|e| e.into_inner())
+            .proxy_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get(handle)
             .cloned();
         if let Some(entry) = entry {
@@ -973,7 +991,11 @@ async fn reflect_get_own_property_descriptor_on_object_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -1159,7 +1181,11 @@ pub(crate) async fn object_entries_async(caller: &mut Caller<'_, RuntimeState>, 
 fn proxy_type_error(caller: &mut Caller<'_, RuntimeState>, msg: &'static str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
     let error_obj = create_error_object(caller, "TypeError", msg_val);
-    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(crate::ErrorEntry {
         name: "TypeError".to_string(),
@@ -1184,7 +1210,11 @@ pub(crate) fn define_proxy_reflect(
             }
             let handle;
             {
-                let mut table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .proxy_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 handle = table.len() as u32;
                 table.push(ProxyEntry {
                     target,
@@ -1207,7 +1237,11 @@ pub(crate) fn define_proxy_reflect(
                 return proxy_type_error(&mut caller, "TypeError: Proxy handler must be an object");
             }
             let handle = {
-                let mut table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .proxy_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(ProxyEntry {
                     target,
@@ -1218,7 +1252,11 @@ pub(crate) fn define_proxy_reflect(
             };
             let proxy_val = value::encode_proxy_handle(handle);
             let revoke_fn = {
-                let mut native_callables = caller.data().native_callables.lock().unwrap_or_else(|e| e.into_inner());
+                let mut native_callables = caller
+                    .data()
+                    .native_callables
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let idx = native_callables.len() as u32;
                 native_callables.push(NativeCallable::ProxyRevoker {
                     proxy_handle: handle,

@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use wasmtime::Caller;
 use wjsm_ir::wk_symbol;
 
-use crate::value;
 use crate::RuntimeState;
+use crate::value;
 
 const WELL_KNOWN_SYMBOL_STATIC_PROPS: &[(&str, u32)] = &[
     ("iterator", wk_symbol::ITERATOR),
@@ -31,8 +31,7 @@ const WELL_KNOWN_SYMBOL_STATIC_PROPS: &[(&str, u32)] = &[
 ];
 
 /// `native_callable` 表索引 → 静态属性名 → 值
-pub(crate) type SymbolConstructorStaticProps =
-    Arc<Mutex<HashMap<u32, HashMap<String, i64>>>>;
+pub(crate) type SymbolConstructorStaticProps = Arc<Mutex<HashMap<u32, HashMap<String, i64>>>>;
 
 pub(crate) fn new_symbol_constructor_static_props() -> SymbolConstructorStaticProps {
     Arc::new(Mutex::new(HashMap::new()))

@@ -296,10 +296,8 @@ impl Lowerer {
                             args: vec![gen_val2, return_value],
                         },
                     );
-                    self.current_function.set_terminator(
-                        after_finally,
-                        Terminator::Return { value: None },
-                    );
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Return { value: None });
                 }
                 StmtFlow::Terminated => {}
             }
@@ -359,7 +357,8 @@ impl Lowerer {
             }
             if ident.sym == "RegExp" && self.scopes.lookup(&ident.sym).is_err() {
                 let mut call_block = block;
-                let callee_val = self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
+                let callee_val =
+                    self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
 
                 let this_val = self.alloc_value();
                 self.current_function.append_instruction(
@@ -618,8 +617,7 @@ impl Lowerer {
             },
         );
 
-        let (result, end_block) =
-            self.select_construct_result(call_block, ctor_result, obj_val);
+        let (result, end_block) = self.select_construct_result(call_block, ctor_result, obj_val);
         if self.expr_exception_fork_allowed() {
             let is_exc = self.alloc_value();
             self.current_function.append_instruction(

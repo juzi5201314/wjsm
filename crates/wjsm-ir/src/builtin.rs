@@ -468,7 +468,8 @@ pub enum Builtin {
 impl fmt::Display for Builtin {
     // 按类别分派到辅助函数，每个辅助函数处理一组相关变体
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = self.fmt_console_iterator_str()
+        let s = self
+            .fmt_console_iterator_str()
             .or_else(|| self.fmt_host_api_str())
             .or_else(|| self.fmt_array_str())
             .or_else(|| self.fmt_func_object_str())

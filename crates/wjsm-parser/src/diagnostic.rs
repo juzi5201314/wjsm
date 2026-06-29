@@ -1,8 +1,8 @@
 //! rustc 风格的源码诊断格式化（行号、列号、源码片段、caret）。
 
+use swc_core::common::Spanned;
 use swc_core::common::sync::Lrc;
 use swc_core::common::{BytePos, FileName, SourceMap};
-use swc_core::common::Spanned;
 use swc_core::ecma::parser::error::Error as ParseError;
 
 /// 将字节偏移格式化为带行/列与源码片段的诊断文本。
@@ -33,7 +33,10 @@ pub fn format_byte_diagnostic(
         out.push_str(&gutter);
         out.push_str(line_text);
         out.push('\n');
-        out.push_str(&format!("{} | ", " ".repeat(gutter.len().saturating_sub(3))));
+        out.push_str(&format!(
+            "{} | ",
+            " ".repeat(gutter.len().saturating_sub(3))
+        ));
         let caret_col = loc.col.0.min(line_text.len());
         for _ in 0..caret_col {
             out.push(' ');

@@ -105,7 +105,8 @@ impl Compiler {
                 // func_ref_val 是 NaN-boxed 函数值 → 提取 table_idx (i32.wrap_i64)
                 // env_obj_val 是 NaN-boxed 环境对象 (i64)
                 // 调用 closure_create(table_idx, env_obj) → i64 (TAG_CLOSURE 编码)
-                let func_ref_val = args.first()
+                let func_ref_val = args
+                    .first()
                     .with_context(|| "CreateClosure expects func_ref arg")?;
                 let env_obj_val = args
                     .get(1)
@@ -114,7 +115,9 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(func_ref_val.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(env_obj_val.0)));
                 // 调用 closure_create
-                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureCreate]));
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::ClosureCreate],
+                ));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 } else {
@@ -219,9 +222,14 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::ScopeRecordCreate => {
-                let capacity = args.first().context("scope_record_create expects capacity")?;
+                let capacity = args
+                    .first()
+                    .context("scope_record_create expects capacity")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(capacity.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -232,17 +240,30 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::ScopeRecordAddBinding => {
-                let rec = args.first().context("scope_record_add_binding expects record")?;
-                let name = args.get(1).context("scope_record_add_binding expects name")?;
-                let val = args.get(2).context("scope_record_add_binding expects value")?;
-                let is_tdz = args.get(3).context("scope_record_add_binding expects is_tdz")?;
-                let is_const = args.get(4).context("scope_record_add_binding expects is_const")?;
+                let rec = args
+                    .first()
+                    .context("scope_record_add_binding expects record")?;
+                let name = args
+                    .get(1)
+                    .context("scope_record_add_binding expects name")?;
+                let val = args
+                    .get(2)
+                    .context("scope_record_add_binding expects value")?;
+                let is_tdz = args
+                    .get(3)
+                    .context("scope_record_add_binding expects is_tdz")?;
+                let is_const = args
+                    .get(4)
+                    .context("scope_record_add_binding expects is_const")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(is_tdz.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(is_const.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::Drop);
@@ -253,7 +274,10 @@ impl Compiler {
                 let name = args.get(1).context("eval_get_binding expects name")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -284,7 +308,10 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -299,7 +326,10 @@ impl Compiler {
                 let name = args.get(1).context("eval_has_binding expects name")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -312,7 +342,10 @@ impl Compiler {
             Builtin::EvalSuperBase => {
                 let rec = args.first().context("eval_super_base expects record")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -323,22 +356,32 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::ScopeRecordSetMeta => {
-                let rec = args.first().context("scope_record_set_meta expects record")?;
+                let rec = args
+                    .first()
+                    .context("scope_record_set_meta expects record")?;
                 let key = args.get(1).context("scope_record_set_meta expects key")?;
                 let val = args.get(2).context("scope_record_set_meta expects value")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::Drop);
                 Ok(Some(()))
             }
             Builtin::ScopeRecordDestroy => {
-                let rec = args.first().context("scope_record_destroy expects record")?;
+                let rec = args
+                    .first()
+                    .context("scope_record_destroy expects record")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 Ok(Some(()))
@@ -437,9 +480,7 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::AsyncIteratorFrom => {
-                let val = args
-                    .first()
-                    .context("AsyncIteratorFrom expects 1 arg")?;
+                let val = args.first().context("AsyncIteratorFrom expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));

@@ -77,7 +77,11 @@ fn pattern_from_arg(caller: &mut Caller<'_, RuntimeState>, pattern_arg: i64) -> 
     }
 }
 
-fn flags_from_arg(caller: &mut Caller<'_, RuntimeState>, pattern_arg: i64, flags_arg: i64) -> String {
+fn flags_from_arg(
+    caller: &mut Caller<'_, RuntimeState>,
+    pattern_arg: i64,
+    flags_arg: i64,
+) -> String {
     if value::is_undefined(flags_arg) {
         if let Some(entry) = regexp_entry(caller, pattern_arg) {
             entry.flags
@@ -161,9 +165,13 @@ pub(crate) fn regexp_constructor_impl(
     this_val: i64,
     args: &[i64],
 ) -> i64 {
-    let pattern_arg = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let pattern_arg = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let flags_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
-    let is_construct = value::is_object(this_val) || value::is_array(this_val) || value::is_proxy(this_val);
+    let is_construct =
+        value::is_object(this_val) || value::is_array(this_val) || value::is_proxy(this_val);
 
     if !is_construct && value::is_regexp(pattern_arg) && value::is_undefined(flags_arg) {
         return pattern_arg;
@@ -201,12 +209,8 @@ fn build_match_result_from_parts(
     let _ = define_host_data_property_from_caller(caller, arr, "input", input_val);
 
     if info.named.is_empty() {
-        let _ = define_host_data_property_from_caller(
-            caller,
-            arr,
-            "groups",
-            value::encode_undefined(),
-        );
+        let _ =
+            define_host_data_property_from_caller(caller, arr, "groups", value::encode_undefined());
     } else {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
         let groups = alloc_host_null_proto_object(caller, &env, info.named.len() as u32);
@@ -290,12 +294,20 @@ pub(crate) fn regexp_test_impl(
     let handle = value::decode_regexp_handle(regex_val);
     let s = get_string_value(caller, str_val);
     let (entry, is_global, is_sticky, start_pos) = {
-        let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+        let table = caller
+            .data()
+            .regex_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match table.get(handle as usize) {
             Some(e) => {
                 let is_global = e.flags.contains('g');
                 let is_sticky = e.flags.contains('y');
-                let start_pos = if is_global || is_sticky { e.last_index as usize } else { 0 };
+                let start_pos = if is_global || is_sticky {
+                    e.last_index as usize
+                } else {
+                    0
+                };
                 (e.clone(), is_global, is_sticky, start_pos)
             }
             None => return value::encode_bool(false),
@@ -314,7 +326,11 @@ pub(crate) fn regexp_test_impl(
     };
 
     if is_global || is_sticky {
-        let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = caller
+            .data()
+            .regex_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(e) = table.get_mut(handle as usize) {
             if let Some(end) = match_end {
                 let mut new_index = end as i64;
@@ -342,12 +358,20 @@ pub(crate) fn regexp_exec_impl(
     let handle = value::decode_regexp_handle(regex_val);
     let s = get_string_value(caller, str_val);
     let (entry, is_global, is_sticky, start_pos) = {
-        let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+        let table = caller
+            .data()
+            .regex_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match table.get(handle as usize) {
             Some(e) => {
                 let is_global = e.flags.contains('g');
                 let is_sticky = e.flags.contains('y');
-                let start_pos = if is_global || is_sticky { e.last_index as usize } else { 0 };
+                let start_pos = if is_global || is_sticky {
+                    e.last_index as usize
+                } else {
+                    0
+                };
                 (e.clone(), is_global, is_sticky, start_pos)
             }
             None => return value::encode_null(),
@@ -357,7 +381,11 @@ pub(crate) fn regexp_exec_impl(
     match entry.compiled.find_from(&s, start_pos).next() {
         Some(ref m) if is_sticky && m.start() != start_pos => {
             if is_global || is_sticky {
-                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .regex_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = table.get_mut(handle as usize) {
                     e.last_index = 0;
                 }
@@ -366,7 +394,11 @@ pub(crate) fn regexp_exec_impl(
         }
         Some(m) => {
             if is_global || is_sticky {
-                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .regex_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = table.get_mut(handle as usize) {
                     let end = m.end();
                     let mut new_index = end as i64;
@@ -381,7 +413,11 @@ pub(crate) fn regexp_exec_impl(
         }
         None => {
             if is_global || is_sticky {
-                let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .regex_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(e) = table.get_mut(handle as usize) {
                     e.last_index = 0;
                 }
@@ -419,7 +455,11 @@ pub(crate) fn regexp_string_match_default(
 
     let handle = value::decode_regexp_handle(regexp);
     let (entry, is_global) = {
-        let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = caller
+            .data()
+            .regex_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = match table.get_mut(handle as usize) {
             Some(e) => e,
             None => return value::encode_null(),
@@ -495,7 +535,11 @@ pub(crate) fn regexp_string_search_default(
 
     let handle = value::decode_regexp_handle(regexp);
     let (entry, prev_last_index) = {
-        let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = caller
+            .data()
+            .regex_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = match table.get_mut(handle as usize) {
             Some(e) => e,
             None => return value::encode_f64(-1.0),
@@ -511,7 +555,11 @@ pub(crate) fn regexp_string_search_default(
         None => value::encode_f64(-1.0),
     };
     {
-        let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = caller
+            .data()
+            .regex_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(e) = table.get_mut(handle as usize) {
             e.last_index = prev_last_index;
         }
@@ -662,7 +710,11 @@ pub(crate) fn regexp_match_all_default(
 
     let start_index = entry.last_index.max(0) as usize;
     let iter_handle = {
-        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+        let mut iters = caller
+            .data()
+            .iterators
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = iters.len() as u32;
         iters.push(IteratorState::RegExpStringIter {
             entry,
@@ -683,8 +735,7 @@ pub(crate) fn regexp_match_all_default(
         NativeCallable::RegExpStringIteratorNext { iter_handle },
     );
     let _ = define_host_data_property_from_caller(caller, iter_obj, "next", next_val);
-    let self_val =
-        create_native_callable(caller.data(), NativeCallable::RegExpStringIteratorSelf);
+    let self_val = create_native_callable(caller.data(), NativeCallable::RegExpStringIteratorSelf);
     let _ = define_host_data_property_by_name_id(
         caller,
         iter_obj,
@@ -720,14 +771,19 @@ pub(crate) fn regexp_string_iter_ensure_current(
     caller: &mut Caller<'_, RuntimeState>,
     handle_idx: usize,
 ) -> bool {
-    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let Some(IteratorState::RegExpStringIter {
         entry,
         string,
         next_index,
         current,
         done,
-    }) = iters.get_mut(handle_idx) else {
+    }) = iters.get_mut(handle_idx)
+    else {
         return true;
     };
     if *done {
@@ -753,13 +809,18 @@ pub(crate) fn regexp_string_iter_value(
     handle_idx: usize,
 ) -> i64 {
     let (entry_flags, string, current) = {
-        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+        let mut iters = caller
+            .data()
+            .iterators
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(IteratorState::RegExpStringIter {
             entry,
             string,
             current,
             ..
-        }) = iters.get_mut(handle_idx) else {
+        }) = iters.get_mut(handle_idx)
+        else {
             return value::encode_undefined();
         };
         let Some(info) = current.clone() else {
@@ -770,18 +831,20 @@ pub(crate) fn regexp_string_iter_value(
     build_match_result_from_parts(caller, &string, &entry_flags, &current)
 }
 
-pub(crate) fn regexp_string_iter_next(
-    caller: &mut Caller<'_, RuntimeState>,
-    handle_idx: usize,
-) {
-    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+pub(crate) fn regexp_string_iter_next(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) {
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let Some(IteratorState::RegExpStringIter {
         string,
         next_index,
         current,
         done,
         ..
-    }) = iters.get_mut(handle_idx) else {
+    }) = iters.get_mut(handle_idx)
+    else {
         return;
     };
     if let Some(info) = current.take() {
@@ -816,23 +879,33 @@ pub(crate) fn primitive_regexp_get_property_impl(
         return match symbol_idx {
             wk_symbol::MATCH => create_native_callable(
                 caller.data(),
-                NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_SYMBOL_MATCH },
+                NativeCallable::RegExpPrimitiveMethod {
+                    method: RE_METHOD_SYMBOL_MATCH,
+                },
             ),
             wk_symbol::REPLACE => create_native_callable(
                 caller.data(),
-                NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_SYMBOL_REPLACE },
+                NativeCallable::RegExpPrimitiveMethod {
+                    method: RE_METHOD_SYMBOL_REPLACE,
+                },
             ),
             wk_symbol::SEARCH => create_native_callable(
                 caller.data(),
-                NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_SYMBOL_SEARCH },
+                NativeCallable::RegExpPrimitiveMethod {
+                    method: RE_METHOD_SYMBOL_SEARCH,
+                },
             ),
             wk_symbol::SPLIT => create_native_callable(
                 caller.data(),
-                NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_SYMBOL_SPLIT },
+                NativeCallable::RegExpPrimitiveMethod {
+                    method: RE_METHOD_SYMBOL_SPLIT,
+                },
             ),
             wk_symbol::MATCH_ALL => create_native_callable(
                 caller.data(),
-                NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_SYMBOL_MATCH_ALL },
+                NativeCallable::RegExpPrimitiveMethod {
+                    method: RE_METHOD_SYMBOL_MATCH_ALL,
+                },
             ),
             wk_symbol::TO_STRING_TAG => store_runtime_string(caller, "RegExp".to_string()),
             _ => value::encode_undefined(),
@@ -846,20 +919,30 @@ pub(crate) fn primitive_regexp_get_property_impl(
     match read_string_bytes(caller, name_id).as_slice() {
         b"exec" => create_native_callable(
             caller.data(),
-            NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_EXEC },
+            NativeCallable::RegExpPrimitiveMethod {
+                method: RE_METHOD_EXEC,
+            },
         ),
         b"test" => create_native_callable(
             caller.data(),
-            NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_TEST },
+            NativeCallable::RegExpPrimitiveMethod {
+                method: RE_METHOD_TEST,
+            },
         ),
         b"toString" => create_native_callable(
             caller.data(),
-            NativeCallable::RegExpPrimitiveMethod { method: RE_METHOD_TO_STRING },
+            NativeCallable::RegExpPrimitiveMethod {
+                method: RE_METHOD_TO_STRING,
+            },
         ),
         b"lastIndex" => value::encode_f64(entry.last_index as f64),
         b"source" => store_runtime_string(
             caller,
-            if entry.pattern.is_empty() { "(?:)".to_string() } else { entry.pattern },
+            if entry.pattern.is_empty() {
+                "(?:)".to_string()
+            } else {
+                entry.pattern
+            },
         ),
         b"flags" => store_runtime_string(caller, sorted_flags(&entry.flags)),
         b"global" => value::encode_bool(entry.flags.contains('g')),
@@ -898,7 +981,11 @@ pub(crate) fn primitive_regexp_set_property_impl(
         n.trunc() as i64
     };
     let handle = value::decode_regexp_handle(boxed) as usize;
-    let mut table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut table = caller
+        .data()
+        .regex_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(handle) {
         entry.last_index = new_index;
     }
@@ -919,9 +1006,14 @@ pub(crate) async fn call_symbol_method_async(
     };
     if value::is_native_callable(method) {
         return Some(
-            call_native_callable_with_args_from_caller_async(caller, method, this_arg, args.to_vec())
-                .await
-                .unwrap_or_else(value::encode_undefined),
+            call_native_callable_with_args_from_caller_async(
+                caller,
+                method,
+                this_arg,
+                args.to_vec(),
+            )
+            .await
+            .unwrap_or_else(value::encode_undefined),
         );
     }
     if value::is_callable(method) {
@@ -944,42 +1036,62 @@ pub(crate) fn invoke_regexp_primitive_method(
         RE_METHOD_EXEC => regexp_exec_impl(
             caller,
             this_val,
-            args.first().copied().unwrap_or_else(value::encode_undefined),
+            args.first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined),
         ),
         RE_METHOD_TEST => regexp_test_impl(
             caller,
             this_val,
-            args.first().copied().unwrap_or_else(value::encode_undefined),
+            args.first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined),
         ),
         RE_METHOD_TO_STRING => {
             let Some(entry) = regexp_entry(caller, this_val) else {
                 set_regexp_error(
                     caller,
-                    "TypeError: RegExp.prototype.toString called on incompatible receiver".to_string(),
+                    "TypeError: RegExp.prototype.toString called on incompatible receiver"
+                        .to_string(),
                 );
                 return value::encode_undefined();
             };
-            store_runtime_string(caller, format!("/{}/{}", entry.pattern.replace('/', "\\/"), sorted_flags(&entry.flags)))
+            store_runtime_string(
+                caller,
+                format!(
+                    "/{}/{}",
+                    entry.pattern.replace('/', "\\/"),
+                    sorted_flags(&entry.flags)
+                ),
+            )
         }
         RE_METHOD_SYMBOL_MATCH => regexp_string_match_default(
             caller,
-            args.first().copied().unwrap_or_else(value::encode_undefined),
+            args.first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined),
             this_val,
         ),
         RE_METHOD_SYMBOL_SEARCH => regexp_string_search_default(
             caller,
-            args.first().copied().unwrap_or_else(value::encode_undefined),
+            args.first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined),
             this_val,
         ),
         RE_METHOD_SYMBOL_SPLIT => regexp_string_split_default(
             caller,
-            args.first().copied().unwrap_or_else(value::encode_undefined),
+            args.first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined),
             this_val,
             args.get(1).copied().unwrap_or_else(value::encode_undefined),
         ),
         RE_METHOD_SYMBOL_MATCH_ALL => regexp_match_all_default(
             caller,
-            args.first().copied().unwrap_or_else(value::encode_undefined),
+            args.first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined),
             this_val,
         ),
         RE_METHOD_SYMBOL_REPLACE => {
@@ -1005,7 +1117,9 @@ pub(crate) async fn invoke_regexp_primitive_method_async(
     if method == RE_METHOD_SYMBOL_REPLACE {
         return crate::string_replace_default_async_body(
             caller,
-            args.first().copied().unwrap_or_else(value::encode_undefined),
+            args.first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined),
             this_val,
             args.get(1).copied().unwrap_or_else(value::encode_undefined),
         )

@@ -4,6 +4,7 @@
 console.log(/x/ instanceof RegExp);            // true
 console.log(new RegExp("y") instanceof RegExp); // true
 console.log(/a/gi instanceof RegExp);          // true（带 flags 的字面量）
+console.log(/x/ instanceof Object);            // true（继承 RegExp.prototype -> Object.prototype）
 // 非 RegExp 值对 instanceof RegExp 必须返回 false。
 console.log(({}) instanceof RegExp);           // false
 console.log(([]) instanceof RegExp);           // false

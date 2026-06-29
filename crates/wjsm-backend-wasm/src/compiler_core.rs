@@ -135,7 +135,11 @@ impl Compiler {
             imports.import("wjsm_support", "elem_set", EntityType::Function(9));
             imports.import("wjsm_support", "string_eq", EntityType::Function(26));
             imports.import("wjsm_support", "to_int32", EntityType::Function(10));
-            imports.import("wjsm_support", "get_proto_from_ctor", EntityType::Function(3));
+            imports.import(
+                "wjsm_support",
+                "get_proto_from_ctor",
+                EntityType::Function(3),
+            );
         }
         let mut builtin_func_indices = HashMap::new();
         let mut special_host_import_indices = HashMap::new();

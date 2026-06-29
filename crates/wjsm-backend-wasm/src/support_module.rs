@@ -40,18 +40,18 @@ const TY_CALL_INDIRECT: u32 = crate::shared_types::JS_FUNC_TYPE_INDEX; // (i64, 
 // wasmtime Linker 已为所有 `env.*` host 函数注册实现。
 // 顺序决定 function import 索引（0..N-1），defined functions 从 N 开始。
 const HOST_IMPORTS: &[(&str, u32)] = &[
-    ("gc_maybe_collect", 1),             // () -> ()
-    ("gc_alloc_slow", 35),               // (i32, i32, i32) -> i32
-    ("gc_take_freed_handle", 36),        // () -> i32
-    ("closure_get_func", 14),            // (i32) -> i32
-    ("closure_get_env", 15),             // (i32) -> i64
-    ("native_call", 12),                 // (i64, i64, i32, i32) -> i64
-    ("proxy_trap_get", 8),               // (i64, i32) -> i64
-    ("proxy_trap_set", 9),               // (i64, i32, i64) -> ()
-    ("proxy_trap_delete", 8),            // (i64, i32) -> i64
-    ("native_callable_get_property", 8), // (i64, i32) -> i64
-    ("primitive_bigint_get_method", 8),  // (i64, i32) -> i64
-    ("primitive_number_get_method", 8),  // (i64, i32) -> i64
+    ("gc_maybe_collect", 1),              // () -> ()
+    ("gc_alloc_slow", 35),                // (i32, i32, i32) -> i32
+    ("gc_take_freed_handle", 36),         // () -> i32
+    ("closure_get_func", 14),             // (i32) -> i32
+    ("closure_get_env", 15),              // (i32) -> i64
+    ("native_call", 12),                  // (i64, i64, i32, i32) -> i64
+    ("proxy_trap_get", 8),                // (i64, i32) -> i64
+    ("proxy_trap_set", 9),                // (i64, i32, i64) -> ()
+    ("proxy_trap_delete", 8),             // (i64, i32) -> i64
+    ("native_callable_get_property", 8),  // (i64, i32) -> i64
+    ("primitive_bigint_get_method", 8),   // (i64, i32) -> i64
+    ("primitive_number_get_method", 8),   // (i64, i32) -> i64
     ("primitive_symbol_get_property", 8), // (i64, i32) -> i64
     ("symbol_property_key", 10),          // (i64) -> i32
     ("obj_get_by_index", 8),              // (i64, i32) -> i64
@@ -87,7 +87,6 @@ const HOST_PRIMITIVE_REGEXP_GET_PROPERTY: u32 = 19;
 const HOST_PRIMITIVE_REGEXP_SET_PROPERTY: u32 = 20;
 
 const NUM_HOST_IMPORTS: u32 = 21;
-
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -334,7 +333,9 @@ fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_STACK_END));
-    func.instruction(&WasmInstruction::I32Const(wjsm_ir::SHADOW_STACK_SIZE as i32));
+    func.instruction(&WasmInstruction::I32Const(
+        wjsm_ir::SHADOW_STACK_SIZE as i32,
+    ));
     func.instruction(&WasmInstruction::I32Sub);
     func.instruction(&WasmInstruction::I32GtU);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
@@ -763,7 +764,6 @@ fn emit_to_int32() -> Function {
     func
 }
 
-
 // ── arr_new (param $capacity i32) (result i32) — Type 7 ──
 // 移植自 compiler_array_helpers.rs::compile_array_helpers arr_new 段。
 // 数组内存布局: [proto(4), type(1), pad(3), length(4), capacity(4), elements(capacity*8)]
@@ -835,25 +835,45 @@ fn emit_arr_new() -> Function {
     // proto = array_proto_handle at offset 0
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::GlobalGet(G_ARRAY_PROTO_HANDLE));
-    func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
     // type byte HEAP_TYPE_ARRAY (0x01) at offset 4
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I32Const(1));
-    func.instruction(&WasmInstruction::I32Store8(MemArg { offset: 4, align: 0, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Store8(MemArg {
+        offset: 4,
+        align: 0,
+        memory_index: 0,
+    }));
     // Zero pad at offsets 5-7
     for off in [5u64, 6, 7] {
         func.instruction(&WasmInstruction::LocalGet(2));
         func.instruction(&WasmInstruction::I32Const(0));
-        func.instruction(&WasmInstruction::I32Store8(MemArg { offset: off, align: 0, memory_index: 0 }));
+        func.instruction(&WasmInstruction::I32Store8(MemArg {
+            offset: off,
+            align: 0,
+            memory_index: 0,
+        }));
     }
     // length = 0 at offset 8
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I32Const(0));
-    func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 8,
+        align: 2,
+        memory_index: 0,
+    }));
     // capacity = capacity (param 0) at offset 12
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::I32Store(MemArg { offset: 12, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 12,
+        align: 2,
+        memory_index: 0,
+    }));
 
     // ── obj_table[handle_idx] = ptr ──
     func.instruction(&WasmInstruction::LocalGet(3));
@@ -862,7 +882,11 @@ fn emit_arr_new() -> Function {
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalGet(2));
-    func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
 
     // 返回 handle_idx
     func.instruction(&WasmInstruction::LocalGet(3));
@@ -890,7 +914,11 @@ fn emit_elem_get() -> Function {
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
     func.instruction(&WasmInstruction::LocalTee(2));
     // ptr == 0 → return undefined
     func.instruction(&WasmInstruction::I32Eqz);
@@ -899,7 +927,11 @@ fn emit_elem_get() -> Function {
     func.instruction(&WasmInstruction::Else);
     // 读取 length (offset 8)
     func.instruction(&WasmInstruction::LocalGet(2));
-    func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Load(MemArg {
+        offset: 8,
+        align: 2,
+        memory_index: 0,
+    }));
     func.instruction(&WasmInstruction::LocalSet(3));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::LocalGet(3));
@@ -913,7 +945,11 @@ fn emit_elem_get() -> Function {
     func.instruction(&WasmInstruction::I32Const(8));
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
     func.instruction(&WasmInstruction::Else);
     func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
     func.instruction(&WasmInstruction::End);
@@ -948,7 +984,11 @@ fn emit_elem_set() -> Function {
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
     func.instruction(&WasmInstruction::LocalTee(3));
     // ptr == 0 → no-op
     func.instruction(&WasmInstruction::I32Eqz);
@@ -957,7 +997,11 @@ fn emit_elem_set() -> Function {
     func.instruction(&WasmInstruction::End);
     // 读取 length (offset 8)
     func.instruction(&WasmInstruction::LocalGet(3));
-    func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Load(MemArg {
+        offset: 8,
+        align: 2,
+        memory_index: 0,
+    }));
     func.instruction(&WasmInstruction::LocalSet(4));
     // 写入 elements[index] = value at ptr + 16 + index * 8
     func.instruction(&WasmInstruction::LocalGet(3));
@@ -968,7 +1012,11 @@ fn emit_elem_set() -> Function {
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalGet(2));
-    func.instruction(&WasmInstruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
     // 更新 length 如果 index >= length
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::LocalGet(4));
@@ -978,7 +1026,11 @@ fn emit_elem_set() -> Function {
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::I32Const(1));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 8,
+        align: 2,
+        memory_index: 0,
+    }));
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::Else);
     // 不是 TAG_ARRAY → TypedArray 数字索引由宿主处理
@@ -1012,7 +1064,9 @@ fn emit_get_proto_from_ctor() -> Function {
     // 调用 obj_get(ctor, "prototype") — "prototype" 的 name_id 在 support module
     // 是硬编码的 primordial 偏移 236（PRIMORDIAL_PROTOTYPE_OFFSET）
     func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::I32Const(constants::PRIMORDIAL_PROTOTYPE_OFFSET as i32));
+    func.instruction(&WasmInstruction::I32Const(
+        constants::PRIMORDIAL_PROTOTYPE_OFFSET as i32,
+    ));
     func.instruction(&WasmInstruction::Call(FN_OBJ_GET));
     func.instruction(&WasmInstruction::LocalSet(1));
     // 检查 TAG_OBJECT (0x8)

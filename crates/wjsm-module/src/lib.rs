@@ -234,28 +234,21 @@ fn expr_has_dynamic_import(expr: &ast::Expr) -> bool {
             ast::OptChainBase::Member(member) => expr_has_dynamic_import(&member.obj),
             ast::OptChainBase::Call(call) => {
                 expr_has_dynamic_import(&call.callee)
-                    || call
-                        .args
-                        .iter()
-                        .any(|a| expr_has_dynamic_import(&a.expr))
+                    || call.args.iter().any(|a| expr_has_dynamic_import(&a.expr))
             }
         },
-        ast::Expr::Class(class_expr) => class_expr
-            .class
-            .body
-            .iter()
-            .any(|member| match member {
-                ast::ClassMember::Method(method) => method
-                    .function
-                    .body
-                    .as_ref()
-                    .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
-                ast::ClassMember::Constructor(ctor) => ctor
-                    .body
-                    .as_ref()
-                    .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
-                _ => false,
-            }),
+        ast::Expr::Class(class_expr) => class_expr.class.body.iter().any(|member| match member {
+            ast::ClassMember::Method(method) => method
+                .function
+                .body
+                .as_ref()
+                .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
+            ast::ClassMember::Constructor(ctor) => ctor
+                .body
+                .as_ref()
+                .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
+            _ => false,
+        }),
         ast::Expr::Fn(fn_expr) => fn_expr
             .function
             .body

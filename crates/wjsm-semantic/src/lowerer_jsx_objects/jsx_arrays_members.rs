@@ -60,9 +60,8 @@ impl Lowerer {
         if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
             && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
             && obj_ident.sym == "Symbol"
-            && let Some(idx) = crate::wk_symbol_map::well_known_symbol_property_index(
-                &prop_ident.sym,
-            )
+            && let Some(idx) =
+                crate::wk_symbol_map::well_known_symbol_property_index(&prop_ident.sym)
         {
             let idx_const = self.module.add_constant(Constant::Number(idx as f64));
             let idx_val = self.alloc_value();
@@ -213,9 +212,9 @@ impl Lowerer {
                     && obj_ident.sym == "Symbol"
                 {
                     let prop_name = ident.sym.to_string();
-                    if let Some(idx) = crate::wk_symbol_map::well_known_symbol_property_index(
-                        &prop_name,
-                    ) {
+                    if let Some(idx) =
+                        crate::wk_symbol_map::well_known_symbol_property_index(&prop_name)
+                    {
                         let idx_const = self.module.add_constant(Constant::Number(idx as f64));
                         let idx_val = self.alloc_value();
                         self.current_function.append_instruction(

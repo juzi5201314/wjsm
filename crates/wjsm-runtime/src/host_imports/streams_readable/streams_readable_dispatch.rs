@@ -11,7 +11,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             // 从 readable_stream_table 读取 locked 返回 bool
             let table = caller
                 .data()
-                .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                .readable_stream_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let locked = table
                 .get(handle as usize)
                 .map(|e| e.locked)
@@ -33,7 +35,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let (locked, is_byte_stream, response_body) = {
                 let mut stream_table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
                 let locked = entry.locked;
                 let is_byte_stream = entry.is_byte_stream;
@@ -69,7 +73,11 @@ pub(crate) fn call_readable_stream_method_from_caller(
             // 创建 reader + closed_promise
             let closed_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
             let reader_handle = {
-                let mut table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .reader_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let rh = table.len() as u32;
                 table.push(ReaderEntry {
                     stream_handle: handle,
@@ -85,7 +93,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let stream_state = {
                 let table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.state.clone())
             };
             if matches!(stream_state, Some(StreamState::Closed)) {
@@ -154,7 +164,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let controller_handle = {
                 let mut stream_table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
                 entry.state = StreamState::Closed;
                 entry.controller_handle
@@ -164,7 +176,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             if let Some(ctrl_handle) = controller_handle {
                 let mut ctrl_table = caller
                     .data()
-                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .stream_controller_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
                     ctrl.chunk_queue.clear();
                     ctrl.close_requested = true;
@@ -181,7 +195,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let is_locked = {
                 let table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table
                     .get(handle as usize)
                     .map(|e| e.locked)
@@ -198,7 +214,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let (original_state, ctrl_handle, original_is_byte_stream) = {
                 let mut stream_table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
                 entry.disturbed = true;
                 entry.locked = true;
@@ -213,7 +231,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let (chunk_queue_clone, controller_hwm, controller_strategy_size) = {
                 let ctrl_table = caller
                     .data()
-                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .stream_controller_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let ctrl = ctrl_table.get(ctrl_handle? as usize)?;
                 (
                     ctrl.chunk_queue.clone(),
@@ -226,7 +246,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let controller1_handle = {
                 let mut table = caller
                     .data()
-                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .stream_controller_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let h = table.len() as u32;
                 table.push(StreamControllerEntry {
                     kind: ControllerKind::ReadableDefault,
@@ -252,7 +274,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let controller2_handle = {
                 let mut table = caller
                     .data()
-                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .stream_controller_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let h = table.len() as u32;
                 table.push(StreamControllerEntry {
                     kind: ControllerKind::ReadableDefault,
@@ -279,7 +303,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let stream1_handle = {
                 let mut table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let h = table.len() as u32;
                 table.push(ReadableStreamEntry {
                     state: StreamState::Readable,
@@ -298,7 +324,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let stream2_handle = {
                 let mut table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let h = table.len() as u32;
                 table.push(ReadableStreamEntry {
                     state: StreamState::Readable,
@@ -318,7 +346,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .stream_controller_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = table.get_mut(controller1_handle as usize) {
                     ctrl.stream_handle = stream1_handle;
                 }
@@ -350,7 +380,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let locked = {
                 let table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table
                     .get(handle as usize)
                     .map(|e| e.locked)
@@ -367,7 +399,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             {
                 let mut table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.locked = true;
                 }
@@ -376,7 +410,11 @@ pub(crate) fn call_readable_stream_method_from_caller(
             // 创建 closed_promise 和 ReaderEntry（与 GetReader 相同的模式）
             let closed_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
             let reader_handle = {
-                let mut table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut table = caller
+                    .data()
+                    .reader_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let rh = table.len() as u32;
                 table.push(ReaderEntry {
                     stream_handle: handle,
@@ -392,7 +430,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let stream_state = {
                 let table = caller
                     .data()
-                    .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .readable_stream_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.state.clone())
             };
             if matches!(stream_state, Some(StreamState::Closed)) {
@@ -459,7 +499,9 @@ pub(super) fn transform_parts_from_object(
     if let Some(handle) = transform_handle {
         let table = caller
             .data()
-            .transform_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .transform_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = table.get(handle)?;
         return Some((entry.readable_obj?, entry.writable_obj?));
     }
@@ -467,4 +509,3 @@ pub(super) fn transform_parts_from_object(
     let writable = read_object_property_by_name(caller, ptr, "writable")?;
     Some((readable, writable))
 }
-

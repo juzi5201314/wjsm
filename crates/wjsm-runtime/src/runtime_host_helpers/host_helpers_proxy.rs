@@ -12,9 +12,7 @@ pub(crate) fn define_property_on_normal_object(
                     .to_string(),
             );
         }
-        let val = desc
-            .value
-            .unwrap_or_else(value::encode_undefined);
+        let val = desc.value.unwrap_or_else(value::encode_undefined);
         return crate::array_named_props::define_data_property_on_array_named(
             caller, target, name_id, val,
         );
@@ -356,6 +354,23 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
             ))
             .await;
         }
+    }
+
+    // TAG_REGEXP 无 obj_table 条目，其 [[Prototype]] 是 RegExp.prototype 对象，
+    // 不能走 resolve_handle（会得到 null）；与 ordinary_has_instance_async 同构地
+    // 确保原型就绪后直接返回。
+    if value::is_regexp(target) {
+        if !value::is_object(caller.data().regexp_prototype) {
+            if let Some(env) = WasmEnv::from_caller(caller) {
+                crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
+            }
+        }
+        let proto = caller.data().regexp_prototype;
+        return if value::is_object(proto) {
+            proto
+        } else {
+            value::encode_null()
+        };
     }
 
     let Some(ptr) = resolve_handle(caller, target) else {
@@ -719,11 +734,11 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     };
 
     if value::is_native_callable(target) {
-        if let Some(val) = crate::symbol_well_known::native_callable_symbol_constructor_static_property(
-            caller,
-            target,
-            &prop_name,
-        ) {
+        if let Some(val) =
+            crate::symbol_well_known::native_callable_symbol_constructor_static_property(
+                caller, target, &prop_name,
+            )
+        {
             return val;
         }
         if prop_name != "prototype" {
@@ -740,11 +755,7 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         };
         return record
             .as_ref()
-            .and_then(|record| {
-                crate::runtime_heap::native_callable_regexp_prototype(caller, record)
-                    .or_else(|| crate::runtime_heap::native_callable_promise_prototype(caller, record))
-                    .or_else(|| native_callable_error_prototype(caller, record))
-            })
+            .and_then(|record| crate::runtime_heap::native_callable_prototype(caller, record))
             .unwrap_or_else(value::encode_undefined);
     }
     let obj_ptr = match resolve_handle(caller, target) {

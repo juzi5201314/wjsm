@@ -513,5 +513,4 @@ impl Compiler {
         self.current_func = None;
         self.shadow_sp_scratch_idx = previous_shadow_sp_scratch_idx;
     }
-
 }

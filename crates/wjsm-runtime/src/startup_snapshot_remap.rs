@@ -45,9 +45,8 @@ pub fn remap_array_proto_function_indices(
                 if slot_off + PROP_SLOT_SIZE as usize > heap_end {
                     break;
                 }
-                let flags = i32::from_le_bytes(
-                    data[slot_off + 4..slot_off + 8].try_into().expect("flags"),
-                );
+                let flags =
+                    i32::from_le_bytes(data[slot_off + 4..slot_off + 8].try_into().expect("flags"));
                 if flags & FLAG_IS_ACCESSOR != 0 {
                     continue;
                 }

@@ -2,8 +2,8 @@
 //!
 //! 按位置拆分，条目顺序不可更改（WASM 函数索引依赖位置）。
 
-use super::{HostImportKey, HostImportSpec};
 use super::HostImportGroup;
+use super::{HostImportKey, HostImportSpec};
 use wjsm_ir::Builtin;
 
 /// 第 4 部分：`math_cosh` ~ `weakset_constructor`

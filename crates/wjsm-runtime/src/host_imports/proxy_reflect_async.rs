@@ -35,7 +35,11 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                        let table = caller
+                            .data()
+                            .proxy_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -58,7 +62,14 @@ pub(crate) fn define_proxy_reflect_async(
                                 return value::encode_bool(nanbox_to_bool(result));
                             }
                         }
-                        return reflect_set_impl_with_receiver(&mut caller, entry.target, prop, val, receiver).await;
+                        return reflect_set_impl_with_receiver(
+                            &mut caller,
+                            entry.target,
+                            prop,
+                            val,
+                            receiver,
+                        )
+                        .await;
                     }
                     return value::encode_bool(false);
                 }
@@ -75,7 +86,11 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                        let table = caller
+                            .data()
+                            .proxy_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -115,7 +130,11 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                        let table = caller
+                            .data()
+                            .proxy_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -173,7 +192,11 @@ pub(crate) fn define_proxy_reflect_async(
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = {
-                        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                        let table = caller
+                            .data()
+                            .proxy_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         table.get(handle).cloned()
                     };
                     if let Some(entry) = entry {
@@ -274,6 +297,7 @@ pub(crate) fn define_proxy_reflect_async(
                     && !value::is_array(target)
                     && !value::is_function(target)
                     && !value::is_proxy(target)
+                    && !value::is_regexp(target)
                 {
                     set_runtime_error(
                         caller.data(),
@@ -456,7 +480,9 @@ pub(crate) fn define_proxy_reflect_async(
                     }
                     if caller
                         .data()
-                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
+                        .runtime_error
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
                         .is_some()
                     {
                         return value::encode_undefined();
@@ -464,7 +490,9 @@ pub(crate) fn define_proxy_reflect_async(
                     let handle = value::decode_proxy_handle(target) as usize;
                     let entry = caller
                         .data()
-                        .proxy_table.lock().unwrap_or_else(|e| e.into_inner())
+                        .proxy_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
                         .get(handle)
                         .cloned();
                     if let Some(entry) = entry {
@@ -485,7 +513,11 @@ pub(crate) fn define_proxy_reflect_async(
             Box::new(async move {
                 let handle = value::decode_proxy_handle(proxy) as usize;
                 let entry = {
-                    let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let table = caller
+                        .data()
+                        .proxy_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     table.get(handle).cloned()
                 };
                 if let Some(entry) = entry {
@@ -547,7 +579,11 @@ pub(crate) fn define_proxy_reflect_async(
             Box::new(async move {
                 let handle = value::decode_proxy_handle(proxy) as usize;
                 let entry = {
-                    let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let table = caller
+                        .data()
+                        .proxy_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     table.get(handle).cloned()
                 };
                 if let Some(entry) = entry {

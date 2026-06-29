@@ -181,7 +181,15 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref root,
             script,
             ref func,
-        } => cmd_dump_ir(&cli, input, eval, format, root.as_deref(), script, func.as_deref()),
+        } => cmd_dump_ir(
+            &cli,
+            input,
+            eval,
+            format,
+            root.as_deref(),
+            script,
+            func.as_deref(),
+        ),
 
         Commands::DumpAst {
             ref input,
@@ -265,14 +273,22 @@ fn cmd_build(
     let stage = stage.unwrap_or(Stage::Compile);
 
     if matches!(stage, Stage::Parse | Stage::Lower) && output != "out.wasm" {
-        bail!("`-o` / `--output` cannot be used with `--stage parse` or `--stage lower` (output goes to stdout)");
+        bail!(
+            "`-o` / `--output` cannot be used with `--stage parse` or `--stage lower` (output goes to stdout)"
+        );
     }
 
     match stage {
         Stage::Parse | Stage::Lower => {
             let result = match resolve_input(input, eval)? {
                 InputSource::Inline(code) => run_pipeline(
-                    &code, None, stage, cli.verbose, cli.time, cli.target, script,
+                    &code,
+                    None,
+                    stage,
+                    cli.verbose,
+                    cli.time,
+                    cli.target,
+                    script,
                 )?,
                 InputSource::File(path) => {
                     if path == "-" {
@@ -303,7 +319,9 @@ fn cmd_build(
         }
         Stage::Compile => {
             if output == "-" && io::stdout().is_terminal() {
-                bail!("refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`");
+                bail!(
+                    "refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`"
+                );
             }
 
             if output != "-" && output == "out.wasm" && Path::new(output).exists() {
@@ -340,18 +358,28 @@ fn cmd_build(
         }
         Stage::Execute => {
             if output == "-" && io::stdout().is_terminal() {
-                bail!("refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`");
+                bail!(
+                    "refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`"
+                );
             }
 
             let result = match resolve_input(input, eval)? {
                 InputSource::Inline(code) => compile_source_to_pipeline_result(
-                    &code, None, cli.target, script, cli.verbose >= 1,
+                    &code,
+                    None,
+                    cli.target,
+                    script,
+                    cli.verbose >= 1,
                 )?,
                 InputSource::File(path) => {
                     if path == "-" {
                         let (source, _) = read_input_for_parse(&path)?;
                         compile_source_to_pipeline_result(
-                            &source, None, cli.target, script, cli.verbose >= 1,
+                            &source,
+                            None,
+                            cli.target,
+                            script,
+                            cli.verbose >= 1,
                         )?
                     } else {
                         compile_file_input_to_pipeline_result(
@@ -393,14 +421,21 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<E
         io::stdin().read_to_string(&mut source)?;
         compile_source_to_pipeline_result(&source, None, cli.target, script, verbose_compile)?
     } else {
-        compile_file_input_to_pipeline_result(Path::new(input), root, cli.target, script, verbose_compile)?
+        compile_file_input_to_pipeline_result(
+            Path::new(input),
+            root,
+            cli.target,
+            script,
+            verbose_compile,
+        )?
     };
 
     run_compile_then_execute(cli, result)
 }
 
 fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
-    let result = compile_source_to_pipeline_result(code, None, cli.target, script, cli.verbose >= 1)?;
+    let result =
+        compile_source_to_pipeline_result(code, None, cli.target, script, cli.verbose >= 1)?;
     run_compile_then_execute(cli, result)
 }
 
@@ -503,7 +538,13 @@ fn cmd_check(
 ) -> Result<ExitCode> {
     let result = match resolve_input(input, eval)? {
         InputSource::Inline(code) => run_pipeline(
-            &code, None, Stage::Lower, cli.verbose, cli.time, cli.target, script,
+            &code,
+            None,
+            Stage::Lower,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            script,
         )?,
         InputSource::File(path) => {
             if path == "-" {
@@ -554,7 +595,13 @@ fn cmd_dump_ir(
 
     let result = match resolve_input(input, eval)? {
         InputSource::Inline(code) => run_pipeline(
-            &code, None, Stage::Lower, cli.verbose, cli.time, cli.target, script,
+            &code,
+            None,
+            Stage::Lower,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            script,
         )?,
         InputSource::File(path) => {
             if path == "-" {
@@ -597,7 +644,13 @@ fn cmd_dump_ast(
 ) -> Result<ExitCode> {
     let result = match resolve_input(input, eval)? {
         InputSource::Inline(code) => run_pipeline(
-            &code, None, Stage::Parse, cli.verbose, cli.time, cli.target, script,
+            &code,
+            None,
+            Stage::Parse,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            script,
         )?,
         InputSource::File(path) => {
             if path == "-" {
@@ -703,7 +756,13 @@ fn cmd_dump_wat(
 
     let result = match resolve_input(input, eval)? {
         InputSource::Inline(code) => run_pipeline(
-            &code, None, Stage::Compile, cli.verbose, cli.time, cli.target, script,
+            &code,
+            None,
+            Stage::Compile,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            script,
         )?,
         InputSource::File(path) => {
             if path == "-" {
@@ -891,10 +950,7 @@ console.log("Hello from {}!");
         "version": "0.1.0",
         "type": "module",
     });
-    fs::write(
-        &package_path,
-        serde_json::to_string_pretty(&package_json)?,
-    )?;
+    fs::write(&package_path, serde_json::to_string_pretty(&package_json)?)?;
 
     println!("Created project at {}", path);
     println!();
@@ -938,9 +994,13 @@ fn lower_parsed_module(
     module: swc_core::ecma::ast::Module,
     script: bool,
 ) -> Result<Program> {
-    let display_name = filename
-        .map(str::to_string)
-        .unwrap_or_else(|| if script { "input.js".into() } else { "input.ts".into() });
+    let display_name = filename.map(str::to_string).unwrap_or_else(|| {
+        if script {
+            "input.js".into()
+        } else {
+            "input.ts".into()
+        }
+    });
     semantic::lower_module_with_source(
         module,
         script,
@@ -1317,9 +1377,13 @@ fn compile_file_input_to_pipeline_result(
             }
             Ok(result)
         }
-        CompilePlan::SingleSource { source, filename } => {
-            compile_source_to_pipeline_result(&source, Some(filename.as_str()), target, script, verbose)
-        }
+        CompilePlan::SingleSource { source, filename } => compile_source_to_pipeline_result(
+            &source,
+            Some(filename.as_str()),
+            target,
+            script,
+            verbose,
+        ),
     }
 }
 fn compile_from_file_input(

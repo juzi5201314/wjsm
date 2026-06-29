@@ -20,12 +20,7 @@ fn parse_module_inner(
         source.to_string(),
     );
 
-    let lexer = Lexer::new(
-        syntax,
-        Default::default(),
-        StringInput::from(&*fm),
-        None,
-    );
+    let lexer = Lexer::new(syntax, Default::default(), StringInput::from(&*fm), None);
 
     let mut parser = Parser::new_from(lexer);
     if script {

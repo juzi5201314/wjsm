@@ -53,7 +53,9 @@ pub(crate) fn define_promise(
             let already_resolved = {
                 let mut table = caller
                     .data()
-                    .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .promise_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = promise_entry_mut(&mut table, handle) else {
                     return value::encode_undefined();
                 };
@@ -84,7 +86,9 @@ pub(crate) fn define_promise(
             let already_resolved = {
                 let mut table = caller
                     .data()
-                    .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .promise_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = promise_entry_mut(&mut table, handle) else {
                     return value::encode_undefined();
                 };
@@ -125,7 +129,12 @@ pub(crate) fn define_promise(
                 }
                 let proto = caller.data().promise_prototype;
                 if value::is_object(proto) {
-                    crate::runtime_heap::set_object_proto_header(&mut caller, &env, result_promise, proto);
+                    crate::runtime_heap::set_object_proto_header(
+                        &mut caller,
+                        &env,
+                        result_promise,
+                        proto,
+                    );
                 }
             }
             let result_handle = value::decode_object_handle(result_promise) as usize;
@@ -133,7 +142,9 @@ pub(crate) fn define_promise(
             {
                 let mut table = caller
                     .data()
-                    .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .promise_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 // §27.2.5.1 — 读取原 promise 的构造器作为 species
                 let species_constructor =
                     promise_entry(&table, handle).and_then(|entry| entry.constructor_handle);
@@ -169,7 +180,9 @@ pub(crate) fn define_promise(
             if let Some((reaction_type, handler, argument)) = queued {
                 let mut queue = caller
                     .data()
-                    .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                    .microtask_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 queue.push_back(Microtask::PromiseReaction {
                     promise: result_handle as i64,
                     reaction_type,
@@ -195,7 +208,12 @@ pub(crate) fn define_promise(
                 }
                 let proto = caller.data().promise_prototype;
                 if value::is_object(proto) {
-                    crate::runtime_heap::set_object_proto_header(&mut caller, &env, result_promise, proto);
+                    crate::runtime_heap::set_object_proto_header(
+                        &mut caller,
+                        &env,
+                        result_promise,
+                        proto,
+                    );
                 }
             }
             let result_handle = value::decode_object_handle(result_promise) as usize;
@@ -203,7 +221,9 @@ pub(crate) fn define_promise(
             {
                 let mut table = caller
                     .data()
-                    .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .promise_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 // §27.2.5.1 — species-aware: 读取原 promise 的构造器
                 let species_constructor =
                     promise_entry(&table, handle).and_then(|entry| entry.constructor_handle);
@@ -238,7 +258,9 @@ pub(crate) fn define_promise(
             if let Some((reaction_type, handler, argument)) = queued {
                 let mut queue = caller
                     .data()
-                    .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                    .microtask_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 queue.push_back(Microtask::PromiseReaction {
                     promise: result_handle as i64,
                     reaction_type,
@@ -264,7 +286,12 @@ pub(crate) fn define_promise(
                 }
                 let proto = caller.data().promise_prototype;
                 if value::is_object(proto) {
-                    crate::runtime_heap::set_object_proto_header(&mut caller, &env, result_promise, proto);
+                    crate::runtime_heap::set_object_proto_header(
+                        &mut caller,
+                        &env,
+                        result_promise,
+                        proto,
+                    );
                 }
             }
             let result_handle = value::decode_object_handle(result_promise) as usize;
@@ -272,7 +299,9 @@ pub(crate) fn define_promise(
             {
                 let mut table = caller
                     .data()
-                    .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .promise_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 // §27.2.5.1 — species-aware: 读取原 promise 的构造器
                 let species_constructor =
                     promise_entry(&table, handle).and_then(|entry| entry.constructor_handle);
@@ -307,7 +336,9 @@ pub(crate) fn define_promise(
             if let Some((reaction_type, handler, argument)) = queued {
                 let mut queue = caller
                     .data()
-                    .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                    .microtask_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 queue.push_back(Microtask::PromiseReaction {
                     promise: result_handle as i64,
                     reaction_type,
@@ -329,7 +360,9 @@ pub(crate) fn define_promise(
                 let handle = raw_promise_handle(val);
                 let table = caller
                     .data()
-                    .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .promise_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = promise_entry(&table, handle) {
                     let matches =
                         match (&entry.constructor_handle, value::is_undefined(constructor)) {

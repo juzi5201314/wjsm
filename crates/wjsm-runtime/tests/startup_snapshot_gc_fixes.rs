@@ -2,7 +2,7 @@
 
 use wjsm_ir::constants::{FLAG_WRITABLE, PROP_SLOT_SIZE, PROP_SLOT_VALUE_OFFSET};
 use wjsm_ir::value;
-use wjsm_ir::{HEAP_TYPE_OBJECT, HEAP_TYPE_ARRAY};
+use wjsm_ir::{HEAP_TYPE_ARRAY, HEAP_TYPE_OBJECT};
 use wjsm_runtime::startup_snapshot_remap::remap_array_proto_function_indices;
 
 #[test]
@@ -18,7 +18,8 @@ fn remap_touches_only_object_property_value_slots() -> anyhow::Result<()> {
     let slot_off = 16usize;
     heap[slot_off + 4..slot_off + 8].copy_from_slice(&(FLAG_WRITABLE).to_le_bytes());
     let func_val = value::encode_function_idx(snapshot_base + 1);
-    heap[slot_off + PROP_SLOT_VALUE_OFFSET as usize..slot_off + PROP_SLOT_VALUE_OFFSET as usize + 8]
+    heap[slot_off + PROP_SLOT_VALUE_OFFSET as usize
+        ..slot_off + PROP_SLOT_VALUE_OFFSET as usize + 8]
         .copy_from_slice(&func_val.to_le_bytes());
 
     // Metadata after object that looks like a function tag if scanned as i64 — must stay unchanged.
@@ -26,10 +27,16 @@ fn remap_touches_only_object_property_value_slots() -> anyhow::Result<()> {
     heap.extend_from_slice(&[0xFF; 8]);
     let junk_before = heap[junk_off..junk_off + 8].to_vec();
 
-    remap_array_proto_function_indices(&mut heap[..16 + PROP_SLOT_SIZE as usize], snapshot_base, table_len, current_base)?;
+    remap_array_proto_function_indices(
+        &mut heap[..16 + PROP_SLOT_SIZE as usize],
+        snapshot_base,
+        table_len,
+        current_base,
+    )?;
 
     let remapped = i64::from_le_bytes(
-        heap[slot_off + PROP_SLOT_VALUE_OFFSET as usize..slot_off + PROP_SLOT_VALUE_OFFSET as usize + 8]
+        heap[slot_off + PROP_SLOT_VALUE_OFFSET as usize
+            ..slot_off + PROP_SLOT_VALUE_OFFSET as usize + 8]
             .try_into()?,
     );
     assert_eq!(value::decode_function_idx(remapped), current_base + 1);

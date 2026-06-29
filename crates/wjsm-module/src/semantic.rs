@@ -153,7 +153,6 @@ pub fn analyze_module_links(graph: &ModuleGraph) -> Result<ModuleLinkResult> {
         .map(|(module_id, collected)| (module_id, collected.names))
         .collect();
 
-
     let mut re_export_map: HashMap<ModuleId, Vec<ReExportBinding>> = HashMap::new();
     for module_id in graph.all_module_ids() {
         let node = graph
@@ -189,7 +188,6 @@ pub fn analyze_module_links(graph: &ModuleGraph) -> Result<ModuleLinkResult> {
             re_export_map.insert(module_id, re_exports);
         }
     }
-
 
     Ok(ModuleLinkResult {
         import_map,
@@ -237,7 +235,6 @@ fn resolve_reexport_source_module(
             )
         })
 }
-
 
 /// 收集动态 import() 目标映射
 fn collect_dynamic_import_targets(graph: &ModuleGraph) -> HashMap<ModuleId, Vec<ModuleId>> {
@@ -505,11 +502,9 @@ mod tests {
             .expect("re should have re-exports");
         assert!(
             bindings.iter().any(|b| {
-                b.local_name.as_deref() == Some("value")
-                    && b.exported_name.as_deref() == Some("x")
+                b.local_name.as_deref() == Some("value") && b.exported_name.as_deref() == Some("x")
             }),
             "expected value as x re-export, got {bindings:?}"
         );
     }
-
 }

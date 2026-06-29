@@ -11,7 +11,10 @@ pub(crate) struct ScopeRecord {
 }
 
 /// 与 linker `create_exception` 宿主导入一致：将抛出值编码为 TAG_EXCEPTION。
-fn host_create_exception_from_eval(caller: &mut Caller<'_, RuntimeState>, thrown_value: i64) -> i64 {
+fn host_create_exception_from_eval(
+    caller: &mut Caller<'_, RuntimeState>,
+    thrown_value: i64,
+) -> i64 {
     let rendered = render_value(caller, thrown_value).unwrap_or_else(|_| "unknown".to_string());
     let mut errors = caller
         .data()
@@ -176,7 +179,9 @@ pub(crate) fn cached_eval_wasm(
     let key = hasher.finish();
 
     if let Some(bytes) = state
-        .eval_cache.lock().unwrap_or_else(|e| e.into_inner())
+        .eval_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .get(&key)
         .cloned()
     {
@@ -190,7 +195,9 @@ pub(crate) fn cached_eval_wasm(
     )?;
     let bytes = wjsm_backend_wasm::compile_eval_at_data_base(&program, data_base)?;
     state
-        .eval_cache.lock().unwrap_or_else(|e| e.into_inner())
+        .eval_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .insert(key, bytes.clone());
     Ok(bytes)
 }
@@ -485,9 +492,7 @@ pub(crate) async fn perform_eval_from_caller_async(
         }
     };
     let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-    if strict_eval_source
-        && let Some(env) = scope_env
-    {
+    if strict_eval_source && let Some(env) = scope_env {
         let handle = value::decode_scope_record_handle(env);
         if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
             rec.is_strict = true;
@@ -507,7 +512,11 @@ pub(crate) async fn perform_eval_from_caller_async(
                 let msg_val = store_runtime_string(caller, msg.clone());
                 let error_obj = create_error_object(caller, "TypeError", msg_val);
                 {
-                    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut errors = caller
+                        .data()
+                        .error_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let idx = errors.len() as u32;
                     errors.push(crate::ErrorEntry {
                         name: "TypeError".to_string(),
@@ -522,13 +531,22 @@ pub(crate) async fn perform_eval_from_caller_async(
 
     let output_len = caller
         .data()
-        .output.lock().unwrap_or_else(|e| e.into_inner())
+        .output
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .len();
     let previous_runtime_error = caller
         .data()
-        .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
+        .runtime_error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let previous_error_count = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner()).len();
+    let previous_error_count = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .len();
 
     match try_compiled_eval_from_caller_async(
         caller,
@@ -544,7 +562,11 @@ pub(crate) async fn perform_eval_from_caller_async(
                 return value;
             }
             let new_error_idx = {
-                let errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                let errors = caller
+                    .data()
+                    .error_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if errors.len() > previous_error_count {
                     Some((errors.len() - 1) as u32)
                 } else {
@@ -554,17 +576,22 @@ pub(crate) async fn perform_eval_from_caller_async(
             if let Some(idx) = new_error_idx {
                 caller
                     .data()
-                    .output.lock().unwrap_or_else(|e| e.into_inner())
+                    .output
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .truncate(output_len);
                 *caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    previous_runtime_error;
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = previous_runtime_error;
                 return value::encode_handle(value::TAG_EXCEPTION, idx);
             }
             let current_runtime_error = caller
                 .data()
-                .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
                 .clone();
             if value::is_undefined(value) && current_runtime_error != previous_runtime_error {
                 return value::encode_undefined();
@@ -573,7 +600,11 @@ pub(crate) async fn perform_eval_from_caller_async(
         }
         Err(_error) => {
             let thrown_exception = {
-                let errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                let errors = caller
+                    .data()
+                    .error_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if errors.len() > previous_error_count {
                     Some((errors.len() - 1) as u32)
                 } else {
@@ -584,21 +615,29 @@ pub(crate) async fn perform_eval_from_caller_async(
             if let Some(idx) = thrown_exception {
                 caller
                     .data()
-                    .output.lock().unwrap_or_else(|e| e.into_inner())
+                    .output
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .truncate(output_len);
                 *caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = previous_runtime_error;
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = previous_runtime_error;
                 return value::encode_handle(value::TAG_EXCEPTION, idx);
             }
 
             caller
                 .data()
-                .output.lock().unwrap_or_else(|e| e.into_inner())
+                .output
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
                 .truncate(output_len);
             *caller
                 .data()
-                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = previous_runtime_error;
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = previous_runtime_error;
             let mut eval_locals = HashMap::new();
             match eval_module_items(
                 caller,
@@ -620,7 +659,11 @@ fn eval_exception_from_message(caller: &mut Caller<'_, RuntimeState>, msg: Strin
         .unwrap_or(msg.as_str())
         .to_string();
     let value = store_runtime_string(caller, thrown.clone());
-    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(crate::ErrorEntry {
         name: "Error".to_string(),
@@ -979,9 +1022,7 @@ pub(crate) fn eval_stmt(
                     }
                 }
             }
-            if !matched
-                && let Some(stmts) = default_case
-            {
+            if !matched && let Some(stmts) = default_case {
                 for stmt in stmts {
                     if matches!(stmt, swc_ast::Stmt::Break(_)) {
                         return Ok(completion);
@@ -1655,7 +1696,9 @@ pub(crate) fn eval_function_from_decl(
 
 pub(crate) fn create_eval_function(state: &RuntimeState, function: EvalFunction) -> i64 {
     let mut table = state
-        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+        .native_callables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(NativeCallable::EvalFunction(function));
     value::encode_native_callable_idx(handle)
@@ -1841,7 +1884,9 @@ pub(crate) fn to_property_key(caller: &mut Caller<'_, RuntimeState>, val: i64) -
     if value::is_symbol(key) {
         *caller
             .data()
-            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
             Some("TypeError: Cannot convert a Symbol to a string".to_string());
         return String::new();
     }
@@ -1931,7 +1976,11 @@ pub(crate) fn eval_get_binding(
                     let msg_val = store_runtime_string(caller, msg.clone());
                     let error_obj = create_error_object(caller, "ReferenceError", msg_val);
                     {
-                        let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut errors = caller
+                            .data()
+                            .error_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         let idx = errors.len() as u32;
                         errors.push(crate::ErrorEntry {
                             name: "ReferenceError".to_string(),
@@ -1969,7 +2018,11 @@ pub(crate) fn eval_set_binding(
                     let msg_val = store_runtime_string(caller, msg.clone());
                     let error_obj = create_error_object(caller, "TypeError", msg_val);
                     {
-                        let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut errors = caller
+                            .data()
+                            .error_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         let idx = errors.len() as u32;
                         errors.push(crate::ErrorEntry {
                             name: "TypeError".to_string(),
@@ -1989,7 +2042,11 @@ pub(crate) fn eval_set_binding(
             let msg_val = store_runtime_string(caller, msg.clone());
             let error_obj = create_error_object(caller, "ReferenceError", msg_val);
             {
-                let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut errors = caller
+                    .data()
+                    .error_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let idx = errors.len() as u32;
                 errors.push(crate::ErrorEntry {
                     name: "ReferenceError".to_string(),

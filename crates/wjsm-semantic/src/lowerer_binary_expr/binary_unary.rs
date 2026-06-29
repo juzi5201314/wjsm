@@ -32,7 +32,7 @@ impl Lowerer {
                     self.expr_can_throw(bin.left.as_ref())
                         || self.expr_can_throw(bin.right.as_ref())
                 }
-            }
+            },
             swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
             swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
             swc_ast::Expr::TsNonNull(e) => self.expr_can_throw(&e.expr),
@@ -109,7 +109,11 @@ impl Lowerer {
                 let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
                 let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
-                let op = if bin.op == Mod { BinaryOp::Mod } else { BinaryOp::Exp };
+                let op = if bin.op == Mod {
+                    BinaryOp::Mod
+                } else {
+                    BinaryOp::Exp
+                };
                 self.current_function
                     .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
                 if current_block != block {

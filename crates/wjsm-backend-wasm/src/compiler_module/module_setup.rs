@@ -16,7 +16,11 @@ impl Compiler {
     ///
     /// spill_upper_bound = 本函数所有 safepoint 处 live handle local 数的最大值 × 8。
     /// 编译期静态计算；运行期只发一个比较。
-    pub(super) fn emit_safepoint_capacity_check(&mut self, _module: &IrModule, function: &IrFunction) {
+    pub(super) fn emit_safepoint_capacity_check(
+        &mut self,
+        _module: &IrModule,
+        function: &IrFunction,
+    ) {
         let spill_upper_bound = self.compute_max_spill_bytes(function);
         if spill_upper_bound == 0 {
             return;
@@ -183,5 +187,4 @@ impl Compiler {
         func.instruction(&WasmInstruction::LocalSet(env_obj_local));
         func.instruction(&WasmInstruction::End);
     }
-
 }

@@ -168,7 +168,11 @@ impl Lowerer {
             .collect();
         for (depth, fi) in fin_meta {
             let fin_block = self.active_finalizers[fi].block.clone();
-            items.push((2 * depth as i64 - 1, fi as i64, UnwindStep::Finalizer { fin_block, fi }));
+            items.push((
+                2 * depth as i64 - 1,
+                fi as i64,
+                UnwindStep::Finalizer { fin_block, fi },
+            ));
         }
         items.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
 
@@ -399,7 +403,7 @@ impl Lowerer {
             };
             let return_block = self.resolve_store_block(block);
             if let StmtFlow::Open(after_close) =
-            self.emit_unwind_for_abrupt(return_block, -1, Some(value), false)?
+                self.emit_unwind_for_abrupt(return_block, -1, Some(value), false)?
             {
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
@@ -642,8 +646,14 @@ impl Lowerer {
             .enumerate()
             .rev()
             .find_map(|(index, ctx)| {
-                ctx.catch_entry
-                    .map(|catch_entry| (index, catch_entry, ctx.exception_var.clone(), ctx.label_depth))
+                ctx.catch_entry.map(|catch_entry| {
+                    (
+                        index,
+                        catch_entry,
+                        ctx.exception_var.clone(),
+                        ctx.label_depth,
+                    )
+                })
             })
     }
 
@@ -706,11 +716,8 @@ impl Lowerer {
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
                 let iterator_cleanups = self.active_iterator_cleanups();
-                let after_close = self.emit_iterator_closes(
-                    after_finally,
-                    &iterator_cleanups,
-                    value,
-                )?;
+                let after_close =
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value)?;
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
                     self.current_function.append_instruction(
@@ -788,7 +795,10 @@ impl Lowerer {
             catch_entry,
             exception_var: exc_var,
             label_depth: self.label_stack.len(),
-            finalizer_index: try_stmt.finalizer.as_ref().map(|_| self.active_finalizers.len()),
+            finalizer_index: try_stmt
+                .finalizer
+                .as_ref()
+                .map(|_| self.active_finalizers.len()),
         });
 
         if let Some(finally) = &try_stmt.finalizer {
@@ -1026,13 +1036,12 @@ impl Lowerer {
                                 .declare(name, VarKind::Let, true)
                                 .map_err(|msg| self.error(param.span(), msg))?;
                         }
-                        let after_destruct = self
-                            .lower_destructure_pattern(
-                                param,
-                                exc_val,
-                                destructure_block,
-                                VarKind::Let,
-                            )?;
+                        let after_destruct = self.lower_destructure_pattern(
+                            param,
+                            exc_val,
+                            destructure_block,
+                            VarKind::Let,
+                        )?;
                         catch_entry = after_destruct;
                     }
                 }

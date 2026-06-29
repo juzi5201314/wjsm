@@ -178,5 +178,4 @@ impl Lowerer {
 
         self.append_eval_var_leak_if_needed(name, VarKind::Var, callee_val, block)
     }
-
 }

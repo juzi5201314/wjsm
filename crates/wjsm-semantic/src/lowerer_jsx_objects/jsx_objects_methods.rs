@@ -64,13 +64,8 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        let fn_value = self.lower_method_to_fn(
-                            &getter.key,
-                            body,
-                            None,
-                            home_object,
-                            block,
-                        )?;
+                        let fn_value =
+                            self.lower_method_to_fn(&getter.key, body, None, home_object, block)?;
                         block = self.resolve_store_block(block);
                         let desc = self.build_descriptor("get", fn_value, true, true, block)?;
                         block = self.resolve_store_block(block);
@@ -671,5 +666,4 @@ impl Lowerer {
 
         Ok(desc_dest)
     }
-
 }

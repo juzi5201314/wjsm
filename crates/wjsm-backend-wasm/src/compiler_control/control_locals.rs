@@ -51,5 +51,4 @@ impl Compiler {
             self.emit(WasmInstruction::LocalSet(local_idx));
         }
     }
-
 }

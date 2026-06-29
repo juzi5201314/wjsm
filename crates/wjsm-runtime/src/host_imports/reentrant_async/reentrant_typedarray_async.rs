@@ -1,5 +1,7 @@
 use super::*;
-use crate::host_imports::typedarray_new_methods::{sab_read, sab_write, ta_read, ta_resolve, ta_write};
+use crate::host_imports::typedarray_new_methods::{
+    sab_read, sab_write, ta_read, ta_resolve, ta_write,
+};
 async fn typedarray_sort_compare_async(
     caller: &mut Caller<'_, RuntimeState>,
     cmp: i64,

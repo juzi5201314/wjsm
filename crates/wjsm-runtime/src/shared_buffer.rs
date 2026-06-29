@@ -502,7 +502,10 @@ pub(crate) fn enter_waiter(
         deadline,
         promise,
     };
-    let mut lists = shared.waiter_lists.lock().unwrap_or_else(|e| e.into_inner());
+    let mut lists = shared
+        .waiter_lists
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let list = lists
         .entry((sab_handle, byte_offset))
         .or_insert_with(|| WaiterList {
@@ -519,7 +522,10 @@ pub(crate) fn notify_waiters_with_promises(
     byte_offset: u32,
     count: u32,
 ) -> (u32, Vec<i64>) {
-    let mut lists = shared.waiter_lists.lock().unwrap_or_else(|e| e.into_inner());
+    let mut lists = shared
+        .waiter_lists
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(list) = lists.get_mut(&(sab_handle, byte_offset)) {
         let mut woken = 0u32;
         let mut ps = Vec::new();
@@ -549,7 +555,10 @@ pub(crate) fn remove_waiter(
     byte_offset: u32,
     notified: &Arc<AtomicBool>,
 ) {
-    let mut lists = shared.waiter_lists.lock().unwrap_or_else(|e| e.into_inner());
+    let mut lists = shared
+        .waiter_lists
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(list) = lists.get_mut(&(sab_handle, byte_offset)) {
         list.waiters.retain(|w| !Arc::ptr_eq(&w.notified, notified));
     }

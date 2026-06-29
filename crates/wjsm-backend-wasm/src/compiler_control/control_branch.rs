@@ -564,7 +564,11 @@ impl Compiler {
         false_idx + 1
     }
 
-    pub(super) fn branch_continuation_target(&self, blocks: &[BasicBlock], start_idx: usize) -> Option<usize> {
+    pub(super) fn branch_continuation_target(
+        &self,
+        blocks: &[BasicBlock],
+        start_idx: usize,
+    ) -> Option<usize> {
         fn walk(
             blocks: &[BasicBlock],
             idx: usize,

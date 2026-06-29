@@ -35,7 +35,9 @@ pub(crate) fn call_fetch_body_reader_read(
     let decision = {
         let mut table = caller
             .data()
-            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .http_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match table.get_mut(http_handle as usize) {
             None => ReadDecision::Missing,
             Some(entry) if entry.eof && entry.pending_bytes.is_empty() => ReadDecision::Eof,
@@ -109,13 +111,19 @@ fn spawn_chunk_pull(
     {
         let mut table = caller
             .data()
-            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .http_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(http_handle as usize) {
             entry.pending_read_promise = Some(promise);
         }
     }
     {
-        let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut reader_table = caller
+            .data()
+            .reader_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
             reader.pending_read_promise = Some(promise);
             reader.pending_byob_view = byob_view;
@@ -151,7 +159,9 @@ fn spawn_chunk_pull(
                     // Put response back so the next read can pull another chunk.
                     let mut table = store
                         .data()
-                        .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .http_response_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(http_handle as usize)
                         && entry.response.is_none()
                         && !entry.eof
@@ -165,7 +175,9 @@ fn spawn_chunk_pull(
                     {
                         let mut table = store
                             .data()
-                            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+                            .http_response_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = table.get_mut(http_handle as usize) {
                             entry.response = None;
                             entry.pending_read_promise = None;
@@ -180,7 +192,9 @@ fn spawn_chunk_pull(
                     {
                         let mut table = store
                             .data()
-                            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+                            .http_response_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = table.get_mut(http_handle as usize) {
                             entry.response = None;
                             entry.pending_read_promise = None;
@@ -212,7 +226,9 @@ pub(crate) fn consume_fetch_body_to_bytes(
     let decision = {
         let mut table = caller
             .data()
-            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .http_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match table.get_mut(http_handle as usize) {
             Some(entry) => {
                 if entry.pending_read_promise.is_some() {
@@ -257,7 +273,9 @@ pub(crate) fn consume_fetch_body_to_bytes(
                 {
                     let mut table = store
                         .data()
-                        .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .http_response_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(http_handle as usize) {
                         entry.response = None;
                         entry.pending_read_promise = None;
@@ -299,7 +317,9 @@ pub(crate) fn consume_fetch_body_to_bytes(
                             let ab_handle = {
                                 let mut ab_table = store
                                     .data()
-                                    .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
+                                    .arraybuffer_table
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 let ab_handle = ab_table.len() as u32;
                                 ab_table.push(ArrayBufferEntry {
                                     data: bytes.to_vec(),
@@ -352,7 +372,11 @@ fn clear_reader_pending<C: wasmtime::AsContextMut<Data = RuntimeState>>(
     reader_handle: u32,
 ) {
     let store = ctx.as_context_mut();
-    let mut reader_table = store.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut reader_table = store
+        .data()
+        .reader_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
         reader.pending_read_promise = None;
         reader.pending_byob_view = None;
@@ -384,7 +408,9 @@ fn materialize_chunk_into_entry(
     {
         let mut table = store
             .data()
-            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .http_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(http_handle as usize) {
             entry.pending_read_promise = None;
             if let Some(overflow_bytes) = overflow {
@@ -418,7 +444,9 @@ fn write_u8_bytes_to_view_store(
     let entry = {
         let ta_table = store
             .data()
-            .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
+            .typedarray_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         ta_table.get(ta_handle).cloned()?
     };
     if entry.element_size != 1 {
@@ -428,7 +456,9 @@ fn write_u8_bytes_to_view_store(
     let start = entry.byte_offset as usize;
     let mut ab_table = store
         .data()
-        .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
+        .arraybuffer_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let buffer = ab_table.get_mut(entry.buffer_handle as usize)?;
     let end = start.checked_add(write_len)?;
     buffer
@@ -467,7 +497,9 @@ fn fulfill_read_from_buffer(
     {
         let mut table = caller
             .data()
-            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .http_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(http_handle as usize) {
             if written < front_chunk.len() {
                 // front_chunk 是 entry.pending_bytes.front() 的拷贝。pop 掉旧的，
@@ -482,7 +514,11 @@ fn fulfill_read_from_buffer(
         }
     }
     {
-        let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut reader_table = caller
+            .data()
+            .reader_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
             reader.pending_read_promise = None;
             reader.pending_byob_view = None;

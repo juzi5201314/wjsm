@@ -63,13 +63,7 @@ async fn arr_proto_sort_async_body(
             let cmp = read_shadow_arg(caller, args_base, 0);
             for i in 0..sort_list.len() {
                 for j in i + 1..sort_list.len() {
-                    if sort_compare_async(
-                        caller,
-                        cmp,
-                        sort_list[i].value,
-                        sort_list[j].value,
-                    )
-                    .await
+                    if sort_compare_async(caller, cmp, sort_list[i].value, sort_list[j].value).await
                         == std::cmp::Ordering::Greater
                     {
                         sort_list.swap(i, j);
@@ -168,7 +162,8 @@ pub(crate) fn define_array_object_async(
         "array_push_spread",
         |mut caller: Caller<'_, RuntimeState>, (arr, iterable): (i64, i64)| {
             Box::new(async move {
-                super::super::array_object::array_push_spread_impl_async(&mut caller, arr, iterable).await
+                super::super::array_object::array_push_spread_impl_async(&mut caller, arr, iterable)
+                    .await
             })
         },
     )?;
@@ -344,7 +339,9 @@ async fn arr_proto_reduce_async(
         if args_count < 2 {
             *caller
                 .data()
-                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
                 Some("TypeError: Reduce of empty array with no initial value".to_string());
             return value::encode_undefined();
         }
@@ -394,7 +391,9 @@ async fn arr_proto_reduce_right_async(
         if args_count < 2 {
             *caller
                 .data()
-                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
                 Some("TypeError: Reduce of empty array with no initial value".to_string());
             return value::encode_undefined();
         }
@@ -615,4 +614,3 @@ async fn arr_proto_flat_map_async(
     write_array_length(caller, new_ptr, elements.len() as u32);
     new_arr
 }
-

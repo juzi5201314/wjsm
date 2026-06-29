@@ -29,17 +29,17 @@ mod runtime_gc;
 mod runtime_heap;
 mod runtime_host_helpers;
 mod runtime_json;
-mod runtime_regexp;
+mod runtime_linker;
 mod runtime_microtask;
 mod runtime_promises;
-mod runtime_typedarray;
+mod runtime_regexp;
+mod runtime_startup;
 mod runtime_string_to_number;
+mod runtime_typedarray;
 mod runtime_value_adapter;
 mod shared_buffer;
 mod startup_snapshot;
 pub mod startup_snapshot_remap;
-mod runtime_linker;
-mod runtime_startup;
 
 /// Builtin JS 扩展：snapshot 期顺序拼接为 seed module。空 manifest 时该 mod 是
 /// no-op；任一 .js 文件变化都会经 ABI hash external input 触发 embedded snapshot 失效。
@@ -201,9 +201,8 @@ pub fn install_embedded_support_cwasm(cwasm_bytes: &'static [u8]) {
 /// 自动从 wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM 初始化。
 /// 返回 None 仅当 embedded feature 未启用（build-time artifact 为空）。
 pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
-    EMBEDDED_SUPPORT_CWASM.get_or_init(|| {
-        wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM.unwrap_or(&[])
-    });
+    EMBEDDED_SUPPORT_CWASM
+        .get_or_init(|| wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM.unwrap_or(&[]));
     let bytes = EMBEDDED_SUPPORT_CWASM.get().copied()?;
     if bytes.is_empty() { None } else { Some(bytes) }
 }
@@ -276,7 +275,9 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
 
     let start = std::time::Instant::now();
     // P2.2: bench 也必须为 import env memory/table/globals 设置 shared env + support module。
-    let needs_support = module.imports().any(|import| import.module() == "wjsm_support");
+    let needs_support = module
+        .imports()
+        .any(|import| import.module() == "wjsm_support");
     if needs_support {
         setup_shared_env_and_support(&mut linker, &mut store, &engine).await?;
     }
@@ -735,7 +736,9 @@ impl RuntimeState {
         redirect: RedirectMode,
     ) -> std::result::Result<reqwest::Client, reqwest::Error> {
         let mut clients = self
-            .fetch_http_clients.lock().unwrap_or_else(|e| e.into_inner());
+            .fetch_http_clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(client) = clients.get(&redirect) {
             return Ok(client.clone());
         }
@@ -842,7 +845,8 @@ impl RuntimeState {
                     global_key: None,
                 },
             ])),
-            symbol_constructor_static_props: symbol_well_known::new_symbol_constructor_static_props(),
+            symbol_constructor_static_props: symbol_well_known::new_symbol_constructor_static_props(
+            ),
             regex_table: Arc::new(Mutex::new(Vec::new())),
             promise_table: Arc::new(Mutex::new(Vec::new())),
             pending_unhandled_rejections: Arc::new(Mutex::new(HashSet::new())),
@@ -1117,8 +1121,8 @@ mod tests {
     #[test]
     #[ignore]
     fn bench_deserialize() -> Result<()> {
-        use criterion::Criterion;
         use super::*;
+        use criterion::Criterion;
         let wasm = compile_source("")?;
         let rt = Runtime::new()?;
         let mut c = Criterion::default().sample_size(50);
@@ -1127,11 +1131,12 @@ mod tests {
         let cache_dir = std::env::temp_dir().join("wjsm-bench-criterion");
         let _ = std::fs::remove_dir_all(&cache_dir);
         std::fs::create_dir_all(&cache_dir)?;
-        unsafe { std::env::set_var("WJSM_CACHE_DIR", &cache_dir); }
+        unsafe {
+            std::env::set_var("WJSM_CACHE_DIR", &cache_dir);
+        }
 
         let config = startup_engine_config(true);
-        let engine = Engine::new(&config)
-            .map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
+        let engine = Engine::new(&config).map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
 
         // ── 1. WASM 缓存 warm 命中 ──────────────────────────────────
         let _cold = compile_or_load_cached(&engine, &wasm)?;
@@ -1170,8 +1175,11 @@ mod tests {
         group.bench_function("Module::deserialize", |b| {
             b.iter(|| unsafe {
                 criterion::black_box(
-                    Module::deserialize(criterion::black_box(&engine), criterion::black_box(cwasm_bytes))
-                        .expect("support deserialize"),
+                    Module::deserialize(
+                        criterion::black_box(&engine),
+                        criterion::black_box(cwasm_bytes),
+                    )
+                    .expect("support deserialize"),
                 );
             })
         });
@@ -1205,22 +1213,30 @@ mod tests {
                         let _rx = prepare_async_host_completion(&mut store);
                         let mut linker = Linker::new(&engine);
                         register_startup_linker(&mut linker, &mut store).expect("register linker");
-                        let needs_support = module.imports().any(|imp| imp.module() == "wjsm_support");
+                        let needs_support =
+                            module.imports().any(|imp| imp.module() == "wjsm_support");
                         if needs_support {
                             setup_shared_env_and_support(&mut linker, &mut store, &engine)
                                 .await
                                 .expect("setup support");
                         }
-                        let instance = linker.instantiate_async(&mut store, &module)
+                        let instance = linker
+                            .instantiate_async(&mut store, &module)
                             .await
                             .expect("instantiate");
                         let env = extract_wasm_env(&instance, &mut store);
-                        if let Ok(f) = instance.get_typed_func::<(), i64>(&mut store, "__wjsm_init_globals") {
+                        if let Ok(f) =
+                            instance.get_typed_func::<(), i64>(&mut store, "__wjsm_init_globals")
+                        {
                             let _ = f.call_async(&mut store, ()).await;
                         }
                         let start = std::time::Instant::now();
-                        startup_snapshot::restore_startup_snapshot(&mut store, &env, snap_view.clone())
-                            .expect("restore");
+                        startup_snapshot::restore_startup_snapshot(
+                            &mut store,
+                            &env,
+                            snap_view.clone(),
+                        )
+                        .expect("restore");
                         total += start.elapsed();
                     });
                 }

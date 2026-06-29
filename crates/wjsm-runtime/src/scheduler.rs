@@ -119,7 +119,11 @@ pub(crate) async fn run_post_main_scheduler_async(
         timer_iterations += 1;
         if timer_iterations > MAX_TIMER_ITERATIONS {
             writeln!(
-                store.data().output.lock().unwrap_or_else(|e| e.into_inner()),
+                store
+                    .data()
+                    .output
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
                 "Internal error: timer event loop exceeded max iterations"
             )
             .ok();
@@ -138,7 +142,12 @@ pub(crate) async fn run_post_main_scheduler_async(
 
         // 提前检查退出（空 timers + counter==0）
         {
-            let timers_empty = store.data().timers.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
+            let timers_empty = store
+                .data()
+                .timers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty();
             let count = store
                 .data()
                 .async_op_counter
@@ -169,7 +178,9 @@ pub(crate) async fn run_post_main_scheduler_async(
                     let has_pending = {
                         let q = store
                             .data()
-                            .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                            .microtask_queue
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         !q.is_empty()
                     };
                     let count = store
@@ -210,10 +221,16 @@ pub(crate) async fn run_post_main_scheduler_async(
         let mut _entry_to_fire: Option<TimerEntry> = None;
 
         {
-            let mut timers = store.data().timers.lock().unwrap_or_else(|e| e.into_inner());
+            let mut timers = store
+                .data()
+                .timers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let mut cancelled = store
                 .data()
-                .cancelled_timers.lock().unwrap_or_else(|e| e.into_inner());
+                .cancelled_timers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
 
             // Remove cancelled timers
             timers.retain(|t| !cancelled.contains(&t.id));
@@ -254,7 +271,9 @@ pub(crate) async fn run_post_main_scheduler_async(
             if repeating {
                 store
                     .data()
-                    .timers.lock().unwrap_or_else(|e| e.into_inner())
+                    .timers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .push(TimerEntry {
                         id: entry_id,
                         deadline: TokioInstant::now() + interval,

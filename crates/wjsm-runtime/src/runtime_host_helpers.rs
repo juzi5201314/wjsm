@@ -19,7 +19,11 @@ pub(crate) fn make_range_error_exception(caller: &mut Caller<'_, RuntimeState>, 
 fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
     let error_obj = create_error_object(caller, error_name, msg_val);
-    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(crate::ErrorEntry {
         name: error_name.to_string(),
@@ -116,17 +120,16 @@ pub(crate) fn restore_shadow_sp<C: AsContextMut<Data = RuntimeState>>(
     let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 }
 
+mod host_helpers_alloc;
 /// 将 args 写入影子栈并推进 `__shadow_sp`。返回 `(shadow_sp_global, 原始 shadow_sp)`，
 /// 调用方在 dispatch 后须用原始值恢复 `__shadow_sp`。
-
 mod host_helpers_callback;
-mod host_helpers_alloc;
-mod host_helpers_property;
 mod host_helpers_descriptor;
+mod host_helpers_property;
 mod host_helpers_proxy;
 
-pub(crate) use host_helpers_callback::*;
 pub(crate) use host_helpers_alloc::*;
-pub(crate) use host_helpers_property::*;
+pub(crate) use host_helpers_callback::*;
 pub(crate) use host_helpers_descriptor::*;
+pub(crate) use host_helpers_property::*;
 pub(crate) use host_helpers_proxy::*;

@@ -298,7 +298,6 @@ pub(crate) fn define_object_builtins(
         object_get_own_property_descriptor_fn,
     )?;
 
-
     let object_has_own_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, prop: i64| -> i64 {
@@ -379,11 +378,7 @@ fn object_property_name_id_from_key(
     find_memory_c_string(caller, &prop_name)
 }
 
-fn write_slot_flags(
-    caller: &mut Caller<'_, RuntimeState>,
-    slot_offset: usize,
-    flags: i32,
-) -> bool {
+fn write_slot_flags(caller: &mut Caller<'_, RuntimeState>, slot_offset: usize, flags: i32) -> bool {
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         return false;
     };
@@ -395,7 +390,10 @@ fn write_slot_flags(
     true
 }
 
-fn collect_own_property_slots(caller: &mut Caller<'_, RuntimeState>, obj_ptr: usize) -> Vec<(usize, i32)> {
+fn collect_own_property_slots(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+) -> Vec<(usize, i32)> {
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return vec![];
     };
@@ -476,9 +474,11 @@ fn object_is_frozen_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> boo
     let Some(ptr) = resolve_handle(caller, obj) else {
         return false;
     };
-    collect_own_property_slots(caller, ptr).iter().all(|(_, flags)| {
-        (flags & constants::FLAG_IS_ACCESSOR) != 0 || (flags & constants::FLAG_WRITABLE) == 0
-    })
+    collect_own_property_slots(caller, ptr)
+        .iter()
+        .all(|(_, flags)| {
+            (flags & constants::FLAG_IS_ACCESSOR) != 0 || (flags & constants::FLAG_WRITABLE) == 0
+        })
 }
 
 // ── SameValue algorithm (ECMAScript 7.2.12) ───────────────────────────
@@ -518,7 +518,9 @@ fn same_value(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> bool {
         }
         let table = caller
             .data()
-            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+            .bigint_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         return table
             .get(a_handle)
             .zip(table.get(b_handle))

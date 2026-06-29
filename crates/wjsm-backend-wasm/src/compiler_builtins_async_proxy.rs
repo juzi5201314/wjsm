@@ -403,7 +403,9 @@ impl Compiler {
                 // jsx_create_element(tag: i64, props: i64, children: i64) -> i64
                 let a_tag = args.first().context("JsxCreateElement expects tag arg")?;
                 let a_props = args.get(1).context("JsxCreateElement expects props arg")?;
-                let a_children = args.get(2).context("JsxCreateElement expects children arg")?;
+                let a_children = args
+                    .get(2)
+                    .context("JsxCreateElement expects children arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a_tag.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a_props.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a_children.0)));
@@ -436,7 +438,10 @@ impl Compiler {
                 if let Some(arg) = second {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -445,13 +450,15 @@ impl Compiler {
                 Ok(Some(()))
             }
             // ── String prototype builtins (receiver + 1 arg) ──
-            Builtin::StringRepeat
-            | Builtin::StringAt => {
+            Builtin::StringRepeat | Builtin::StringAt => {
                 let receiver = args.first().context("String method expects receiver")?;
                 let first = args.get(1).context("String method expects argument")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(first.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {

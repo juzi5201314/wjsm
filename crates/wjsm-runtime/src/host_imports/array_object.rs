@@ -45,7 +45,10 @@ pub(crate) fn array_set_length_impl(
     let new_len = array_length_to_uint32(value::decode_f64(num));
 
     if !same_value_zero(caller, num, value::encode_f64(new_len as f64)) {
-        set_runtime_error(caller.data(), format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"));
+        set_runtime_error(
+            caller.data(),
+            format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"),
+        );
         return arr;
     }
 
@@ -58,7 +61,10 @@ pub(crate) fn array_set_length_impl(
         let mut ptr = ptr;
         if new_len > cap {
             let Some(needed) = array_grow_capacity_u32(cap, new_len) else {
-                set_runtime_error(caller.data(), format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"));
+                set_runtime_error(
+                    caller.data(),
+                    format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"),
+                );
                 return arr;
             };
             ptr = grow_array(caller, ptr, arr, needed).unwrap_or(ptr);
@@ -126,7 +132,10 @@ fn object_proto_handle_from_value(caller: &mut Caller<'_, RuntimeState>, proto: 
     }
 }
 
-fn object_read_current_proto_handle(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
+fn object_read_current_proto_handle(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> Option<u32> {
     let ptr = resolve_handle(caller, obj)?;
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return None;
@@ -162,7 +171,6 @@ fn object_write_proto_handle(
     true
 }
 
-
 fn object_define_property_or_throw(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -180,10 +188,7 @@ fn object_define_property_or_throw(
         id
     } else {
         let Ok(prop_name) = render_value(caller, prop) else {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Invalid property key".to_string(),
-            );
+            set_runtime_error(caller.data(), "TypeError: Invalid property key".to_string());
             return false;
         };
         match find_memory_c_string(caller, &prop_name)
@@ -216,9 +221,7 @@ fn define_property_on_normal_object_for_create(
                     .to_string(),
             );
         }
-        let val = desc
-            .value
-            .unwrap_or_else(value::encode_undefined);
+        let val = desc.value.unwrap_or_else(value::encode_undefined);
         return crate::array_named_props::define_data_property_on_array_named(
             caller, target, name_id, val,
         );
@@ -267,7 +270,7 @@ fn define_property_on_normal_object_for_create(
                 if !old_writable {
                     if desc.writable == Some(true) {
                         return Err(
-                            "TypeError: Cannot make non-writable property writable".to_string(),
+                            "TypeError: Cannot make non-writable property writable".to_string()
                         );
                     }
                     if let Some(new_val) = desc.value {
@@ -758,7 +761,6 @@ pub(crate) fn array_fill_range(
     arr
 }
 
-
 /// Array.prototype.flat 的宿主实现：按 depth 展平数组，返回新数组。
 pub(crate) fn array_flat_with_depth(
     caller: &mut Caller<'_, RuntimeState>,
@@ -773,11 +775,7 @@ pub(crate) fn array_flat_with_depth(
             0
         } else {
             let i = d.trunc() as i64;
-            if i <= 0 {
-                0
-            } else {
-                i as u32
-            }
+            if i <= 0 { 0 } else { i as u32 }
         }
     } else {
         1
@@ -816,7 +814,6 @@ pub(crate) fn array_flat_with_depth(
     new_arr
 }
 
-
 pub(crate) fn push_array_value(
     caller: &mut Caller<'_, RuntimeState>,
     arr: i64,
@@ -840,10 +837,7 @@ pub(crate) fn push_array_value(
 }
 
 /// 数组字面量 elision：length+1 并在新下标写入 hole。
-pub(crate) fn push_array_hole(
-    caller: &mut Caller<'_, RuntimeState>,
-    arr: i64,
-) -> Result<(), i64> {
+pub(crate) fn push_array_hole(caller: &mut Caller<'_, RuntimeState>, arr: i64) -> Result<(), i64> {
     let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;
     let len = read_array_length(caller, ptr).unwrap_or(0);
     if array_length_would_overflow(len, 1) {
@@ -986,9 +980,14 @@ pub(crate) async fn array_from_impl_async(
     for (i, raw) in values.into_iter().enumerate() {
         let mapped = if has_map_fn {
             let idx_val = value::encode_f64(i as f64);
-            let r = call_wasm_callback_async(caller, map_fn, value::encode_undefined(), &[raw, idx_val])
-                .await
-                .unwrap_or_else(|_| value::encode_undefined());
+            let r = call_wasm_callback_async(
+                caller,
+                map_fn,
+                value::encode_undefined(),
+                &[raw, idx_val],
+            )
+            .await
+            .unwrap_or_else(|_| value::encode_undefined());
             if value::is_exception(r) {
                 return r;
             }
@@ -1047,8 +1046,7 @@ async fn collect_array_from_values_async(
         let mut out = Vec::with_capacity(entry.length as usize);
         for i in 0..entry.length {
             out.push(
-                typedarray_element_read(caller, source, i)
-                    .unwrap_or_else(value::encode_undefined),
+                typedarray_element_read(caller, source, i).unwrap_or_else(value::encode_undefined),
             );
         }
         return Some(out);
@@ -1088,7 +1086,11 @@ fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i6
     loop {
         // 判定 done 并推进 index；非支持状态则停止。
         let done = {
-            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+            let mut iters = caller
+                .data()
+                .iterators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let Some(iter) = iters.get_mut(handle_idx) else {
                 break;
             };
@@ -1099,13 +1101,21 @@ fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i6
                 IteratorState::MapKeyIter { index, map_handle }
                 | IteratorState::MapValueIter { index, map_handle }
                 | IteratorState::MapEntryIter { index, map_handle } => {
-                    let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let table = caller
+                        .data()
+                        .map_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     *map_handle >= table.len() as u32
                         || *index as usize >= table[*map_handle as usize].keys.len()
                 }
                 IteratorState::SetValueIter { index, set_handle }
                 | IteratorState::SetEntryIter { index, set_handle } => {
-                    let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let table = caller
+                        .data()
+                        .set_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     *set_handle >= table.len() as u32
                         || *index as usize >= table[*set_handle as usize].values.len()
                 }
@@ -1131,7 +1141,11 @@ fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i6
 
 /// 推进裸迭代器的内部 index（与 drain_raw_iterator_values 配套）。
 fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) {
-    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let Some(iter) = iters.get_mut(handle_idx) else {
         return;
     };
@@ -1508,11 +1522,7 @@ pub(crate) fn define_array_object(
                     0
                 } else {
                     let i = d.trunc() as i64;
-                    if i <= 0 {
-                        0
-                    } else {
-                        i as u32
-                    }
+                    if i <= 0 { 0 } else { i as u32 }
                 }
             } else {
                 1
@@ -1874,14 +1884,18 @@ pub(crate) fn define_array_object(
         |caller: Caller<'_, RuntimeState>, shadow_sp: i32, args_bytes: i32, stack_end: i32| {
             let mut buffer = caller
                 .data()
-                .output.lock().unwrap_or_else(|e| e.into_inner());
+                .output
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             writeln!(
                 &mut *buffer,
                 "shadow stack overflow: sp=0x{shadow_sp:x} + {args_bytes} bytes > end=0x{stack_end:x}"
             ).ok();
             *caller
                 .data()
-                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(format!(
                 "shadow stack overflow: sp={shadow_sp} + {args_bytes} > end={stack_end}"
             ));
         },
@@ -1930,7 +1944,9 @@ pub(crate) fn define_array_object(
             if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
                 *caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: hasOwnProperty called on non-object".to_string());
                 return value::encode_undefined();
             }
@@ -1966,9 +1982,7 @@ pub(crate) fn define_array_object(
     let obj_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, proto: i64, properties: i64| -> i64 {
-            if !value::is_undefined(proto)
-                && !value::is_null(proto)
-                && !value::is_js_object(proto)
+            if !value::is_undefined(proto) && !value::is_null(proto) && !value::is_js_object(proto)
             {
                 return make_type_error_exception(
                     &mut caller,

@@ -319,12 +319,10 @@ impl CjsTransformer {
                 ast::ModuleItem::Stmt(s) => s,
                 ast::ModuleItem::ModuleDecl(decl) => match decl {
                     ast::ModuleDecl::ExportDecl(e) => ast::Stmt::Decl(e.decl),
-                    ast::ModuleDecl::ExportDefaultExpr(e) => {
-                        ast::Stmt::Expr(ast::ExprStmt {
-                            span: DUMMY_SP,
-                            expr: e.expr,
-                        })
-                    }
+                    ast::ModuleDecl::ExportDefaultExpr(e) => ast::Stmt::Expr(ast::ExprStmt {
+                        span: DUMMY_SP,
+                        expr: e.expr,
+                    }),
                     _other => ast::Stmt::Empty(ast::EmptyStmt { span: DUMMY_SP }),
                 },
             })
@@ -694,9 +692,7 @@ impl CjsTransformer {
             ));
         }
         let new_callee = match &call.callee {
-            ast::Callee::Expr(callee) => {
-                ast::Callee::Expr(Box::new(self.transform_expr(callee)))
-            }
+            ast::Callee::Expr(callee) => ast::Callee::Expr(Box::new(self.transform_expr(callee))),
             other => other.clone(),
         };
         let new_args = call
@@ -720,13 +716,13 @@ impl CjsTransformer {
     fn transform_assign_expr(&mut self, assign: &ast::AssignExpr) -> ast::Expr {
         let new_left = match &assign.left {
             ast::AssignTarget::Simple(simple) => match simple {
-                ast::SimpleAssignTarget::Member(m) => ast::AssignTarget::Simple(
-                    ast::SimpleAssignTarget::Member(ast::MemberExpr {
+                ast::SimpleAssignTarget::Member(m) => {
+                    ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(ast::MemberExpr {
                         span: m.span,
                         obj: Box::new(self.transform_expr(&m.obj)),
                         prop: m.prop.clone(),
-                    }),
-                ),
+                    }))
+                }
                 other => ast::AssignTarget::Simple(other.clone()),
             },
             ast::AssignTarget::Pat(pat) => ast::AssignTarget::Pat(pat.clone()),
@@ -759,12 +755,10 @@ impl CjsTransformer {
                         other => other.clone(),
                     }))
                 }
-                ast::PropOrSpread::Spread(s) => {
-                    ast::PropOrSpread::Spread(ast::SpreadElement {
-                        dot3_token: s.dot3_token,
-                        expr: Box::new(self.transform_expr(&s.expr)),
-                    })
-                }
+                ast::PropOrSpread::Spread(s) => ast::PropOrSpread::Spread(ast::SpreadElement {
+                    dot3_token: s.dot3_token,
+                    expr: Box::new(self.transform_expr(&s.expr)),
+                }),
             })
             .collect();
         ast::Expr::Object(ast::ObjectLit {

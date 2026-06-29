@@ -77,7 +77,12 @@ impl Compiler {
                         self.emit(WasmInstruction::I64Eq);
                         self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
                         // 结果是 undefined → 走 BigInt 检查
-                        self.emit_bigint_or_f64_binary(lhs_l, rhs_l, Builtin::BigIntAdd, WasmInstruction::F64Add)?;
+                        self.emit_bigint_or_f64_binary(
+                            lhs_l,
+                            rhs_l,
+                            Builtin::BigIntAdd,
+                            WasmInstruction::F64Add,
+                        )?;
                         self.emit(WasmInstruction::Else);
                         // 结果是字符串 → 直接使用
                         self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
@@ -107,7 +112,12 @@ impl Compiler {
                             BinaryOp::BitXor => (Builtin::BigIntBitXor, WasmInstruction::I32Xor),
                             _ => unreachable!(),
                         };
-                        self.emit_bigint_or_i32_bitwise_binary(lhs_l, rhs_l, bigint_builtin, i32_op)?;
+                        self.emit_bigint_or_i32_bitwise_binary(
+                            lhs_l,
+                            rhs_l,
+                            bigint_builtin,
+                            i32_op,
+                        )?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     // 移位：BigInt 禁止 `>>>`；Number 掩码右操作数
@@ -125,7 +135,12 @@ impl Compiler {
                             BinaryOp::Exp => (Builtin::BigIntPow, Builtin::F64Exp),
                             _ => unreachable!(),
                         };
-                        self.emit_bigint_or_f64_host_binary(lhs_l, rhs_l, bigint_builtin, f64_builtin)?;
+                        self.emit_bigint_or_f64_host_binary(
+                            lhs_l,
+                            rhs_l,
+                            bigint_builtin,
+                            f64_builtin,
+                        )?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                 }
@@ -805,5 +820,4 @@ impl Compiler {
             }
         }
     }
-
 }

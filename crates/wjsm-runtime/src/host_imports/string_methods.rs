@@ -80,8 +80,7 @@ pub(crate) fn define_string_methods(
                 }
             }
             if i + 1 < b.len() && (b[i] & 0xE0) == 0xC0 {
-                let unit =
-                    (((b[i] as u32 & 0x1F) << 6) | (b[i + 1] as u32 & 0x3F)) as u16;
+                let unit = (((b[i] as u32 & 0x1F) << 6) | (b[i + 1] as u32 & 0x3F)) as u16;
                 if (0xD800..=0xDFFF).contains(&unit) {
                     units.push(unit);
                     i += 2;
@@ -429,7 +428,9 @@ pub(crate) fn define_string_methods(
             if c < 0.0 || c.is_infinite() {
                 *caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
                     Some("RangeError: Invalid count value".to_string());
                 return value::encode_undefined();
             }
@@ -444,7 +445,11 @@ pub(crate) fn define_string_methods(
             if value::is_regexp(search) {
                 let handle = value::decode_regexp_handle(search);
                 let is_global = {
-                    let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let table = caller
+                        .data()
+                        .regex_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     match table.get(handle as usize) {
                         Some(e) => e.flags.contains('g'),
                         None => false,
@@ -620,7 +625,11 @@ pub(crate) fn define_string_methods(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+            let mut iters = caller
+                .data()
+                .iterators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let handle = iters.len() as u32;
             iters.push(IteratorState::StringIter {
                 data: s.into_bytes(),
@@ -663,10 +672,7 @@ pub(crate) fn define_string_methods(
                 let arg = read_shadow_arg(&mut caller, args_base, i);
                 let code = to_uint32_caller(&mut caller, arg);
                 if !is_valid_code_point(code) {
-                    return make_range_error_exception(
-                        &mut caller,
-                        "Invalid code point",
-                    );
+                    return make_range_error_exception(&mut caller, "Invalid code point");
                 }
                 if let Some(c) = char::from_u32(code) {
                     result.push(c);

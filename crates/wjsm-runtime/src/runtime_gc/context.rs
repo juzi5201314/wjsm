@@ -45,9 +45,7 @@ pub(crate) fn gc_heap_layout(heap_type: u8) -> GcHeapLayout {
                 "GC: unhandled heap_type 0x{tag:02x}; extend gc_heap_layout / mark / sweep"
             );
             #[cfg(not(debug_assertions))]
-            eprintln!(
-                "wjsm GC warning: unhandled heap_type 0x{tag:02x}, assuming OBJECT layout"
-            );
+            eprintln!("wjsm GC warning: unhandled heap_type 0x{tag:02x}, assuming OBJECT layout");
             GcHeapLayout::ObjectLike
         }
     }

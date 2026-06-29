@@ -1,5 +1,5 @@
-use wjsm_ir::{BasicBlock, BasicBlockId, Function, Instruction, Terminator, ValueId};
 use swc_core::ecma::ast as swc_ast;
+use wjsm_ir::{BasicBlock, BasicBlockId, Function, Instruction, Terminator, ValueId};
 
 // ── CFG Builder ─────────────────────────────────────────────────────────
 

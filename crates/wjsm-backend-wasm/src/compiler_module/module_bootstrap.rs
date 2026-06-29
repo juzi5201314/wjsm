@@ -31,31 +31,10 @@ impl Compiler {
         self.emit(WasmInstruction::End);
         // P2.2: globals 初始化已移到 __wjsm_init_globals 函数中，
         // 由 runtime 在 initialize_host_post_bootstrap 之前调用。
-        // ── 初始化 Array.prototype ──
-        self.emit(WasmInstruction::I32Const(64));
-        self.emit(WasmInstruction::Call(self.obj_new_func_idx));
-        self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
-        self.emit(WasmInstruction::GlobalSet(
-            self.array_proto_handle_global_idx,
-        ));
-        for (offset, (_, spec)) in array_proto_method_specs().enumerate() {
-            let name = array_proto_property_name(spec.name).expect("array prototype import name");
-            let name_id = self.intern_data_string(&name);
-            let table_idx = self.arr_proto_table_base + offset as u32;
-            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-            self.emit(WasmInstruction::I64ExtendI32U);
-            let box_base = value::BOX_BASE as i64;
-            let tag_object = (value::TAG_OBJECT << 32) as i64;
-            self.emit(WasmInstruction::I64Const(box_base | tag_object));
-            self.emit(WasmInstruction::I64Or);
-            self.emit(WasmInstruction::I32Const(name_id as i32));
-            self.emit(WasmInstruction::I64Const(value::encode_function_idx(
-                table_idx,
-            )));
-            self.emit(WasmInstruction::Call(self.obj_set_func_idx));
-        }
-
         // ── 初始化 Object.prototype ──
+        // 必须先于 Array.prototype：obj_new 会把新对象的 [[Prototype]] header 写成
+        // 当前 G_OBJECT_PROTO_HANDLE。若 Array.prototype 先分配，则其原型链断在 null，
+        // 导致 [] instanceof Object 为 false、getPrototypeOf(Array.prototype) 为 null。
         self.emit(WasmInstruction::GlobalGet(
             self.object_proto_handle_global_idx,
         ));
@@ -78,6 +57,32 @@ impl Compiler {
         ));
         self.emit(WasmInstruction::Drop);
         self.emit(WasmInstruction::End);
+
+        // ── 初始化 Array.prototype ──
+        // 此时 Object.prototype 已就绪，obj_new 写入的 [[Prototype]] header 即为
+        // Object.prototype，建立 Array.prototype → Object.prototype 原型链。
+        self.emit(WasmInstruction::I32Const(64));
+        self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+        self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(
+            self.array_proto_handle_global_idx,
+        ));
+        for (offset, (_, spec)) in array_proto_method_specs().enumerate() {
+            let name = array_proto_property_name(spec.name).expect("array prototype import name");
+            let name_id = self.intern_data_string(&name);
+            let table_idx = self.arr_proto_table_base + offset as u32;
+            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            let box_base = value::BOX_BASE as i64;
+            let tag_object = (value::TAG_OBJECT << 32) as i64;
+            self.emit(WasmInstruction::I64Const(box_base | tag_object));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::I32Const(name_id as i32));
+            self.emit(WasmInstruction::I64Const(value::encode_function_idx(
+                table_idx,
+            )));
+            self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+        }
 
         self.emit(WasmInstruction::GlobalGet(self.obj_table_count_global_idx));
         self.emit(WasmInstruction::GlobalSet(

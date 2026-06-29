@@ -25,7 +25,6 @@ pub struct Cli {
     /// Target backend (wasm or jit)
     #[arg(long, default_value = "wasm", global = true)]
     pub(crate) target: Target,
-
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -43,7 +42,6 @@ pub(crate) enum Target {
     Wasm,
     Jit,
 }
-
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub(crate) enum DumpFormat {

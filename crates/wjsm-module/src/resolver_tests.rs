@@ -75,7 +75,6 @@ fn resolve_path_resolves_parent_directory() {
     assert!(result.is_ok());
 }
 
-
 #[test]
 fn resolve_path_directory_index() {
     let root = create_temp_project("dir_index");
@@ -618,4 +617,3 @@ fn resolve_rejects_ts_export_assignment() {
         err
     );
 }
-

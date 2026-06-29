@@ -34,7 +34,11 @@ pub(crate) async fn native_call_from_caller_async(
     if value::is_proxy(callable) {
         let handle = value::decode_proxy_handle(callable) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -244,7 +248,11 @@ pub(crate) fn define_timers_arrays_async(
         let msg = "TypeError: timer callback must be callable";
         let msg_val = store_runtime_string(caller, msg.to_string());
         let error_obj = create_error_object(caller, "TypeError", msg_val);
-        let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut errors = caller
+            .data()
+            .error_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let idx = errors.len() as u32;
         errors.push(crate::ErrorEntry {
             name: "TypeError".to_string(),
@@ -265,13 +273,19 @@ pub(crate) fn define_timers_arrays_async(
                 let id = {
                     let mut next_id = caller
                         .data()
-                        .next_timer_id.lock().unwrap_or_else(|e| e.into_inner());
+                        .next_timer_id
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let id = *next_id;
                     *next_id += 1;
                     id
                 };
                 let deadline = Instant::now() + Duration::from_millis(delay_ms);
-                let mut timers = caller.data().timers.lock().unwrap_or_else(|e| e.into_inner());
+                let mut timers = caller
+                    .data()
+                    .timers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 timers.push(TimerEntry {
                     id,
                     deadline,
@@ -293,7 +307,9 @@ pub(crate) fn define_timers_arrays_async(
                     let id = value::decode_f64(timer_id) as u32;
                     caller
                         .data()
-                        .cancelled_timers.lock().unwrap_or_else(|e| e.into_inner())
+                        .cancelled_timers
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
                         .insert(id);
                 }
             })
@@ -312,13 +328,19 @@ pub(crate) fn define_timers_arrays_async(
                 let id = {
                     let mut next_id = caller
                         .data()
-                        .next_timer_id.lock().unwrap_or_else(|e| e.into_inner());
+                        .next_timer_id
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let id = *next_id;
                     *next_id += 1;
                     id
                 };
                 let deadline = Instant::now() + Duration::from_millis(delay_ms);
-                let mut timers = caller.data().timers.lock().unwrap_or_else(|e| e.into_inner());
+                let mut timers = caller
+                    .data()
+                    .timers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 timers.push(TimerEntry {
                     id,
                     deadline,
@@ -340,7 +362,9 @@ pub(crate) fn define_timers_arrays_async(
                     let id = value::decode_f64(timer_id) as u32;
                     caller
                         .data()
-                        .cancelled_timers.lock().unwrap_or_else(|e| e.into_inner())
+                        .cancelled_timers
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
                         .insert(id);
                 }
             })
@@ -367,13 +391,12 @@ pub(crate) fn define_timers_arrays_async(
     Ok(())
 }
 
-
 mod reentrant_array_async;
 mod reentrant_proxy_async;
-mod reentrant_typedarray_async;
 mod reentrant_string_async;
+mod reentrant_typedarray_async;
 
 pub(crate) use reentrant_array_async::*;
 pub(crate) use reentrant_proxy_async::*;
-pub(crate) use reentrant_typedarray_async::*;
 pub(crate) use reentrant_string_async::*;
+pub(crate) use reentrant_typedarray_async::*;

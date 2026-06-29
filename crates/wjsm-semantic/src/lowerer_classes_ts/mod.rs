@@ -226,9 +226,7 @@ impl Lowerer {
         captured: &[CapturedBinding],
         span: Span,
     ) -> Result<ValueId, LoweringError> {
-        let func_ref_const = self
-            .module
-            .add_constant(Constant::FunctionRef(function_id));
+        let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
         let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -316,11 +314,7 @@ impl Lowerer {
                     }
                     PrivateMemberKind::Accessor { getter, setter } => {
                         self.emit_private_accessor_bind(
-                            block,
-                            this_val,
-                            field_name,
-                            *getter,
-                            *setter,
+                            block, this_val, field_name, *getter, *setter,
                         );
                     }
                 }
@@ -339,8 +333,10 @@ impl Lowerer {
     ) -> Result<Vec<(String, bool, PrivateMemberKind)>, LoweringError> {
         use std::collections::HashMap;
         let mut out: Vec<(String, bool, PrivateMemberKind)> = Vec::new();
-        let mut accessor_pending: HashMap<(String, bool), (Option<FunctionId>, Option<FunctionId>)> =
-            HashMap::new();
+        let mut accessor_pending: HashMap<
+            (String, bool),
+            (Option<FunctionId>, Option<FunctionId>),
+        > = HashMap::new();
 
         for member in body {
             let swc_ast::ClassMember::PrivateMethod(pm) = member else {
@@ -444,9 +440,7 @@ impl Lowerer {
 
             if accessor {
                 let key = (field_name.clone(), is_static);
-                let entry = accessor_pending
-                    .entry(key.clone())
-                    .or_insert((None, None));
+                let entry = accessor_pending.entry(key.clone()).or_insert((None, None));
                 if matches!(pm.kind, swc_ast::MethodKind::Getter) {
                     entry.0 = Some(m_function_id);
                 } else {
@@ -475,7 +469,11 @@ impl Lowerer {
                     }
                 }
             } else {
-                out.push((field_name, is_static, PrivateMemberKind::Method(m_function_id)));
+                out.push((
+                    field_name,
+                    is_static,
+                    PrivateMemberKind::Method(m_function_id),
+                ));
             }
         }
         Ok(out)
@@ -520,13 +518,7 @@ impl Lowerer {
                     self.emit_private_method_bind(block, ctor_dest, field_name, *func_id);
                 }
                 PrivateMemberKind::Accessor { getter, setter } => {
-                    self.emit_private_accessor_bind(
-                        block,
-                        ctor_dest,
-                        field_name,
-                        *getter,
-                        *setter,
-                    );
+                    self.emit_private_accessor_bind(block, ctor_dest, field_name, *getter, *setter);
                 }
             }
         }

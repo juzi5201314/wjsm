@@ -177,9 +177,8 @@ fn compute_liveness(
     live_in
 }
 
-
-mod async_env;
-mod async_main;
-mod async_bindings;
 mod async_await_yield;
+mod async_bindings;
+mod async_env;
 mod async_import_promise;
+mod async_main;

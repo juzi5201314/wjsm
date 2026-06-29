@@ -22,7 +22,6 @@ use crate::runtime_gc::context::GcHeapLayout;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 use wjsm_ir::value;
 
-
 /// 标记 roots 并 drain worklist。
 pub fn mark_roots_and_drain(
     collector: &mut MarkSweepCollector,
@@ -237,8 +236,8 @@ fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) 
     }
     if value::is_iterator(val) {
         let idx = value::decode_handle(val) as usize;
-        let refs: Vec<i64> = ctx
-            .with_state(|st| crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx));
+        let refs: Vec<i64> =
+            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx));
         let mut out = Vec::new();
         for r in refs {
             out.extend(resolve_value_handles(ctx, r, obj_table_count));

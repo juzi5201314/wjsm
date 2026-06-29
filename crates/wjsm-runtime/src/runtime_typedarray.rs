@@ -140,7 +140,9 @@ pub(crate) fn typedarray_to_number(
     let number_raw = to_number(caller, value_raw);
     if caller
         .data()
-        .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
+        .runtime_error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .is_some()
     {
         return None;
@@ -354,7 +356,9 @@ pub(crate) fn typedarray_construct(
         let handle = {
             let mut table = caller
                 .data()
-                .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
+                .arraybuffer_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let handle = table.len() as u32;
             table.push(ArrayBufferEntry {
                 data: vec![0; byte_len],
@@ -377,7 +381,9 @@ pub(crate) fn typedarray_construct(
         let handle = {
             let mut table = caller
                 .data()
-                .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
+                .arraybuffer_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let handle = table.len() as u32;
             table.push(ArrayBufferEntry {
                 data: vec![0; byte_len],
@@ -456,7 +462,9 @@ pub(crate) fn typedarray_construct(
         let handle = {
             let mut table = caller
                 .data()
-                .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
+                .arraybuffer_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let handle = table.len() as u32;
             table.push(ArrayBufferEntry {
                 data: vec![0; byte_len],
@@ -469,7 +477,9 @@ pub(crate) fn typedarray_construct(
     let handle = {
         let mut table = caller
             .data()
-            .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
+            .typedarray_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(TypedArrayEntry {
             buffer_handle: buf_handle,
@@ -514,7 +524,9 @@ pub(crate) fn typedarray_construct(
             if !typedarray_element_write(caller, obj, i as u32, value)
                 && caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .is_some()
             {
                 return value::encode_undefined();

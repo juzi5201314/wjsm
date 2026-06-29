@@ -215,7 +215,9 @@ pub(crate) async fn construct_transform_stream(
     let readable_controller_handle = {
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(StreamControllerEntry {
             kind: ControllerKind::ReadableDefault,
@@ -242,7 +244,9 @@ pub(crate) async fn construct_transform_stream(
     let readable_stream_handle = {
         let mut table = caller
             .data()
-            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .readable_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(ReadableStreamEntry {
             state: StreamState::Readable,
@@ -262,7 +266,9 @@ pub(crate) async fn construct_transform_stream(
     {
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(readable_controller_handle as usize) {
             ctrl.stream_handle = readable_stream_handle;
             ctrl.started = true;
@@ -273,7 +279,9 @@ pub(crate) async fn construct_transform_stream(
     let writable_controller_handle = {
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(StreamControllerEntry {
             kind: ControllerKind::Writable,
@@ -302,7 +310,9 @@ pub(crate) async fn construct_transform_stream(
     let writable_stream_handle = {
         let mut table = caller
             .data()
-            .writable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .writable_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(WritableStreamEntry {
             state: WritableStreamState::Writable,
@@ -318,7 +328,9 @@ pub(crate) async fn construct_transform_stream(
     {
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(writable_controller_handle as usize) {
             ctrl.stream_handle = writable_stream_handle;
             ctrl.started = true;
@@ -334,7 +346,9 @@ pub(crate) async fn construct_transform_stream(
     let ts_handle = {
         let mut table = caller
             .data()
-            .transform_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .transform_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(TransformStreamEntry {
             readable_stream_handle: Some(readable_stream_handle),
@@ -374,13 +388,17 @@ pub(crate) fn call_transform_stream_method_from_caller(
         TransformStreamMethodKind::GetReadable => {
             let table = caller
                 .data()
-                .transform_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                .transform_stream_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.readable_obj)
         }
         TransformStreamMethodKind::GetWritable => {
             let table = caller
                 .data()
-                .transform_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+                .transform_stream_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.writable_obj)
         }
     }
@@ -398,7 +416,9 @@ pub(crate) fn call_transform_from_writable(
     let (transform_fn, readable_ctrl_handle, transformer_this) = {
         let table = caller
             .data()
-            .transform_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .transform_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = match table
             .iter()
             .find(|e| e.writable_stream_handle == Some(writable_stream_handle))
@@ -431,7 +451,9 @@ pub(crate) fn call_transform_from_writable(
             let this_val = transformer_this.unwrap_or_else(value::encode_undefined);
             let mut queue = caller
                 .data()
-                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                .microtask_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             queue.push_back(Microtask::TransformStreamTransform {
                 callback: tf,
                 this_val,
@@ -445,7 +467,9 @@ pub(crate) fn call_transform_from_writable(
             let stream_handle = {
                 let ctrl_table = caller
                     .data()
-                    .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .stream_controller_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 ctrl_table
                     .get(ctrl_handle as usize)
                     .map(|c| c.stream_handle)
@@ -453,7 +477,11 @@ pub(crate) fn call_transform_from_writable(
 
             if let Some(sh) = stream_handle {
                 let pending = {
-                    let mut reader_table = caller.data().reader_table.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut reader_table = caller
+                        .data()
+                        .reader_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let mut pending_promise: Option<i64> = None;
                     for reader in reader_table.iter_mut() {
                         if reader.stream_handle == sh
@@ -474,7 +502,9 @@ pub(crate) fn call_transform_from_writable(
                     // 无等待 → 推入 chunk_queue
                     let mut ctrl_table = caller
                         .data()
-                        .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .stream_controller_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize)
                         && !ctrl.close_requested
                     {
@@ -509,7 +539,9 @@ pub(crate) fn call_flush_from_writable_close(
     let (flush_fn, readable_ctrl_handle, readable_stream_handle, transformer_this) = {
         let table = caller
             .data()
-            .transform_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .transform_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = match table
             .iter()
             .find(|e| e.writable_stream_handle == Some(writable_stream_handle))
@@ -533,7 +565,9 @@ pub(crate) fn call_flush_from_writable_close(
             let this_val = transformer_this.unwrap_or_else(value::encode_undefined);
             let mut queue = caller
                 .data()
-                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                .microtask_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             queue.push_back(Microtask::TransformStreamFlush {
                 callback: flush_fn,
                 this_val,

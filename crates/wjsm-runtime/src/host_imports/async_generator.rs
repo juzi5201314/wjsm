@@ -22,9 +22,8 @@ pub(crate) fn define_async_generator(
                     .and_then(|e| e.into_memory())
                     .expect("memory");
                 let data = memory.data_mut(&mut caller);
-                data[ptr..ptr + 4].copy_from_slice(
-                    &value::decode_object_handle(async_gen_proto).to_le_bytes(),
-                );
+                data[ptr..ptr + 4]
+                    .copy_from_slice(&value::decode_object_handle(async_gen_proto).to_le_bytes());
             }
             if !value::is_object(generator) {
                 return value::encode_undefined();
@@ -59,7 +58,9 @@ pub(crate) fn define_async_generator(
             let handle = value::decode_object_handle(generator) as usize;
             let mut table = caller
                 .data()
-                .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
+                .async_generator_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if table.len() <= handle {
                 table.resize_with(handle + 1, || AsyncGeneratorEntry {
                     state: AsyncGeneratorState::Completed,
@@ -95,7 +96,9 @@ pub(crate) fn define_async_generator(
             {
                 let table = caller
                     .data()
-                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .async_generator_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get(handle)
                     && matches!(entry.state, AsyncGeneratorState::Completed)
                 {
@@ -112,7 +115,9 @@ pub(crate) fn define_async_generator(
             let request_to_fulfill = {
                 let mut table = caller
                     .data()
-                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .async_generator_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = table.get_mut(handle) else {
                     return resume_promise;
                 };
@@ -146,7 +151,9 @@ pub(crate) fn define_async_generator(
             let action = {
                 let mut table = caller
                     .data()
-                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .async_generator_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = table.get_mut(handle) else {
                     return value::encode_undefined();
                 };
@@ -194,7 +201,9 @@ pub(crate) fn define_async_generator(
             let action = {
                 let mut table = caller
                     .data()
-                    .async_generator_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .async_generator_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = table.get_mut(handle) else {
                     return value::encode_undefined();
                 };

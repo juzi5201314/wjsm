@@ -367,10 +367,7 @@ pub(crate) fn primitive_symbol_get_property_impl(
     ensure_symbol_prototype_initialized(caller, &env);
 
     if name_id == encode_symbol_name_id(5) {
-        return create_native_callable(
-            caller.data(),
-            NativeCallable::SymbolProtoToPrimitive,
-        );
+        return create_native_callable(caller.data(), NativeCallable::SymbolProtoToPrimitive);
     }
     if name_id == encode_symbol_name_id(2) {
         return store_runtime_string_in_state(caller.data(), "Symbol".to_string());
@@ -407,14 +404,14 @@ pub(crate) fn ensure_symbol_prototype_initialized<C: AsContextMut<Data = Runtime
     let symbol_proto = alloc_host_object(ctx, env, 6);
     set_object_proto_header(ctx, env, symbol_proto, object_proto);
 
-    let to_string =
-        create_native_callable(ctx.as_context().data(), NativeCallable::SymbolPrimitiveMethod {
-            method: 0,
-        });
-    let value_of =
-        create_native_callable(ctx.as_context().data(), NativeCallable::SymbolPrimitiveMethod {
-            method: 1,
-        });
+    let to_string = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::SymbolPrimitiveMethod { method: 0 },
+    );
+    let value_of = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::SymbolPrimitiveMethod { method: 1 },
+    );
     let description_getter = create_native_callable(
         ctx.as_context().data(),
         NativeCallable::SymbolProtoDescriptionGetter,
@@ -474,10 +471,7 @@ pub(crate) fn ensure_promise_prototype_initialized<C: AsContextMut<Data = Runtim
     let promise_proto = alloc_host_object(ctx, env, 2);
     set_object_proto_header(ctx, env, promise_proto, object_proto);
 
-    let ctor = create_native_callable(
-        ctx.as_context().data(),
-        NativeCallable::PromiseConstructor,
-    );
+    let ctor = create_native_callable(ctx.as_context().data(), NativeCallable::PromiseConstructor);
     let _ = define_host_data_property_with_env(ctx, env, promise_proto, "constructor", ctor);
 
     let tag = store_runtime_string_in_state(ctx.as_context().data(), "Promise".to_string());
@@ -553,10 +547,7 @@ pub(crate) fn ensure_regexp_prototype_initialized<C: AsContextMut<Data = Runtime
     let regexp_proto = alloc_host_object(ctx, env, 2);
     set_object_proto_header(ctx, env, regexp_proto, object_proto);
 
-    let ctor = create_native_callable(
-        ctx.as_context().data(),
-        NativeCallable::RegExpConstructor,
-    );
+    let ctor = create_native_callable(ctx.as_context().data(), NativeCallable::RegExpConstructor);
     let _ = define_host_data_property_with_env(ctx, env, regexp_proto, "constructor", ctor);
 
     let tag = store_runtime_string_in_state(ctx.as_context().data(), "RegExp".to_string());
@@ -622,6 +613,37 @@ pub(crate) fn native_callable_error_prototype(
         Some(proto)
     } else {
         None
+    }
+}
+
+/// 统一解析 native callable 构造器的 `.prototype` 值。
+/// 供直接属性读取（native_callable_get_property）与 instanceof / Reflect.get
+/// 反射路径（reflect_get_impl_with_receiver_async）共用，消除两条路径对
+/// Object/Array/Symbol/Promise/RegExp/Error 原型分派不一致的缺陷。
+/// 返回 `None` 表示该 record 不是已知构造器或原型尚未就绪。
+pub(crate) fn native_callable_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+) -> Option<i64> {
+    match record {
+        NativeCallable::ObjectConstructor => {
+            let env = WasmEnv::from_caller(caller)?;
+            let handle = env
+                .object_proto_handle
+                .get(&mut *caller)
+                .i32()
+                .unwrap_or(-1);
+            (handle >= 0).then(|| value::encode_object_handle(handle as u32))
+        }
+        NativeCallable::ArrayConstructor => {
+            let env = WasmEnv::from_caller(caller)?;
+            let handle = env.array_proto_handle.get(&mut *caller).i32().unwrap_or(-1);
+            (handle >= 0).then(|| value::encode_object_handle(handle as u32))
+        }
+        NativeCallable::SymbolConstructor => native_callable_symbol_prototype(caller, record),
+        NativeCallable::PromiseConstructor => native_callable_promise_prototype(caller, record),
+        NativeCallable::RegExpConstructor => native_callable_regexp_prototype(caller, record),
+        _ => native_callable_error_prototype(caller, record),
     }
 }
 

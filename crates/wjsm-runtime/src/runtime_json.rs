@@ -601,7 +601,11 @@ fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(
 fn make_exception(caller: &mut Caller<'_, RuntimeState>, name: &str, message: String) -> i64 {
     let message_val = store_runtime_string(caller, message.clone());
     let error_obj = create_error_object(caller, name, message_val);
-    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(ErrorEntry {
         name: name.to_string(),
@@ -611,7 +615,10 @@ fn make_exception(caller: &mut Caller<'_, RuntimeState>, name: &str, message: St
     value::encode_exception(idx)
 }
 
-pub(crate) fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Result<String, i64> {
+pub(crate) fn json_parse_to_string(
+    caller: &mut Caller<'_, RuntimeState>,
+    value: i64,
+) -> Result<String, i64> {
     if value::is_string(value) {
         return Ok(read_runtime_string(caller, value));
     }
@@ -626,7 +633,9 @@ pub(crate) fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value:
         let handle = value::decode_bigint_handle(value) as usize;
         let table = caller
             .data()
-            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+            .bigint_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         return Ok(table
             .get(handle)
             .map(|bigint| bigint.to_string())
@@ -664,7 +673,9 @@ async fn json_parse_to_string_async(
         let handle = value::decode_bigint_handle(value) as usize;
         let table = caller
             .data()
-            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+            .bigint_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         return Ok(table
             .get(handle)
             .map(|bigint| bigint.to_string())
@@ -756,8 +767,8 @@ async fn apply_reviver_async(
                 None => return value::encode_undefined(),
             };
             for i in 0..len {
-                let elem_val = read_array_elem(caller, ptr, i)
-                    .unwrap_or_else(value::encode_undefined);
+                let elem_val =
+                    read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
                 let new_val = Box::pin(apply_reviver_async(
                     caller,
                     reviver,

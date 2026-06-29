@@ -5,11 +5,15 @@ pub(crate) fn push_native_callable(
 ) -> u32 {
     let mut table = caller
         .data()
-        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+        .native_callables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // Prefer free slot if available
     if let Some(free) = caller
         .data()
-        .native_callable_free_slots.lock().unwrap_or_else(|e| e.into_inner())
+        .native_callable_free_slots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .pop()
     {
         table[free as usize] = callable;
@@ -142,7 +146,11 @@ pub(crate) fn call_headers_method_from_caller(
                 let val_js = store_runtime_string(caller, val);
                 if rt
                     .block_on(invoke_resolved_callback_async_option(
-                        caller, &env, cb, this_arg, &[val_js, name_js, this_val],
+                        caller,
+                        &env,
+                        cb,
+                        this_arg,
+                        &[val_js, name_js, this_val],
                     ))
                     .is_none()
                 {
@@ -175,7 +183,9 @@ pub(crate) fn call_response_method_from_caller(
     ) = {
         let mut table = caller
             .data()
-            .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .fetch_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = table.get_mut(handle as usize)?;
         let is_consuming = matches!(
             kind,
@@ -205,9 +215,7 @@ pub(crate) fn call_response_method_from_caller(
         return Some(p);
     }
     // HTTP Response — 异步 body 消费
-    if is_consuming
-        && let Some(http_handle) = http_response_handle
-    {
+    if is_consuming && let Some(http_handle) = http_response_handle {
         let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
         if super::super::streams_fetch_body::consume_fetch_body_to_bytes(
             caller,
@@ -380,7 +388,9 @@ pub(crate) fn resolve_fetch_request_params(
             let copied = {
                 let table = caller
                     .data()
-                    .fetch_request_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .fetch_request_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table.get(request_handle as usize).map(|entry| {
                     (
                         entry.method.clone(),
@@ -392,8 +402,7 @@ pub(crate) fn resolve_fetch_request_params(
                     )
                 })
             };
-            let Some((method, url, headers_handle, body, redirect, signal_handle)) = copied
-            else {
+            let Some((method, url, headers_handle, body, redirect, signal_handle)) = copied else {
                 return Err(type_error_exception(caller, "invalid Request object"));
             };
             (
@@ -474,8 +483,7 @@ pub(crate) fn resolve_fetch_request_params(
         }
         if let Some(init_signal) = object_property(caller, init, "signal")
             && !value::is_undefined(init_signal)
-            && let Some(handle) =
-                number_property(caller, init_signal, "__abort_signal_handle__")
+            && let Some(handle) = number_property(caller, init_signal, "__abort_signal_handle__")
         {
             signal_handle = Some(handle as u32);
         }
@@ -491,7 +499,6 @@ pub(crate) fn resolve_fetch_request_params(
     Ok((method, url, headers, body, redirect, signal_handle))
 }
 
-
 pub(crate) fn construct_request(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
@@ -505,10 +512,7 @@ pub(crate) fn construct_request(
         return Some(type_error_exception(caller, "Request input is required"));
     }
 
-    let init = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let init = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let (method, url, headers, body, redirect, signal_handle) =
         match resolve_fetch_request_params(caller, input, init) {
             Ok(v) => v,
@@ -705,7 +709,9 @@ pub(crate) fn create_arraybuffer_with_bytes(
     let ab = alloc_host_object(caller, &env, 1);
     let mut ab_table = caller
         .data()
-        .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
+        .arraybuffer_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let ab_handle = ab_table.len() as u32;
     ab_table.push(ArrayBufferEntry {
         data: bytes.to_vec(),
@@ -737,7 +743,11 @@ pub(crate) fn alloc_type_error_from_caller(
 
 fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
     let error_obj = alloc_type_error_from_caller(caller, message);
-    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(ErrorEntry {
         name: "TypeError".to_string(),
@@ -848,7 +858,9 @@ fn append_header_pair(
     }
     let mut table = caller
         .data()
-        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
+        .headers_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(handle as usize) {
         entry.pairs.push((name.to_ascii_lowercase(), value_raw));
     }
@@ -870,7 +882,9 @@ fn set_header_pair(
     let lower = name.to_ascii_lowercase();
     let mut table = caller
         .data()
-        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
+        .headers_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(handle as usize) {
         entry.pairs.retain(|(key, _)| key != &lower);
         entry.pairs.push((lower, value_raw));
@@ -882,7 +896,9 @@ fn clone_headers_handle(caller: &mut Caller<'_, RuntimeState>, source: u32) -> u
     let pairs = {
         let table = caller
             .data()
-            .headers_table.lock().unwrap_or_else(|e| e.into_inner());
+            .headers_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         table
             .get(source as usize)
             .map(|entry| entry.pairs.clone())
@@ -890,7 +906,9 @@ fn clone_headers_handle(caller: &mut Caller<'_, RuntimeState>, source: u32) -> u
     };
     let mut table = caller
         .data()
-        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
+        .headers_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(HeadersEntry {
         pairs,
@@ -903,7 +921,9 @@ fn copy_headers_into(caller: &mut Caller<'_, RuntimeState>, target: u32, source:
     let pairs = {
         let table = caller
             .data()
-            .headers_table.lock().unwrap_or_else(|e| e.into_inner());
+            .headers_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         table
             .get(source as usize)
             .map(|entry| entry.pairs.clone())
@@ -911,7 +931,9 @@ fn copy_headers_into(caller: &mut Caller<'_, RuntimeState>, target: u32, source:
     };
     let mut table = caller
         .data()
-        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
+        .headers_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(target as usize) {
         entry.pairs.extend(pairs);
     }
@@ -1006,9 +1028,7 @@ fn url_has_credentials(url: &str) -> bool {
         return false;
     };
     let rest = &url[scheme_end + 3..];
-    let authority_end = rest
-        .find(['/', '?', '#'])
-        .unwrap_or(rest.len());
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     rest[..authority_end].contains('@')
 }
 
@@ -1078,7 +1098,9 @@ pub(crate) fn extract_string_from_value(caller: &mut Caller<'_, RuntimeState>, v
         let handle = value::decode_runtime_string_handle(val) as usize;
         caller
             .data()
-            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner())
+            .runtime_strings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get(handle)
             .cloned()
             .unwrap_or_default()
@@ -1112,7 +1134,9 @@ pub(crate) fn construct_abort_controller(
     let signal_handle = {
         let mut table = caller
             .data()
-            .abort_signal_table.lock().unwrap_or_else(|e| e.into_inner());
+            .abort_signal_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(AbortSignalEntry {
             aborted: false,
@@ -1151,7 +1175,9 @@ pub(crate) fn abort_controller_abort(
 ) -> Option<i64> {
     let mut table = caller
         .data()
-        .abort_signal_table.lock().unwrap_or_else(|e| e.into_inner());
+        .abort_signal_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(signal_handle as usize) {
         entry.aborted = true;
         entry.reason = args.first().copied();

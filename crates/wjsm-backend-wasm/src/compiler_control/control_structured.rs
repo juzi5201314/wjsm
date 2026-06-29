@@ -180,9 +180,7 @@ impl Compiler {
                                     Terminator::Jump {
                                         target: false_target,
                                     },
-                                ) if true_target == false_target => {
-                                    Some(true_target.0 as usize)
-                                }
+                                ) if true_target == false_target => Some(true_target.0 as usize),
                                 _ => None,
                             }
                         }
@@ -281,8 +279,13 @@ impl Compiler {
                         let mut visited = std::collections::HashSet::new();
                         let mut found = false;
                         while let Some(c) = cont {
-                            if c == false_idx { found = true; break; }
-                            if !visited.insert(c) { break; }
+                            if c == false_idx {
+                                found = true;
+                                break;
+                            }
+                            if !visited.insert(c) {
+                                break;
+                            }
                             cont = self.branch_continuation_target(blocks, c);
                         }
                         found
@@ -318,7 +321,6 @@ impl Compiler {
                             false
                         }
                     };
-
 
                     if both_jump_same && !true_terminates && !false_terminates {
                         // 两分支都以Jump到common target结束，但compile_branch_body返回false

@@ -77,8 +77,8 @@ pub(crate) fn collect_scope_record_refs(st: &mut crate::RuntimeState, handle: u3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{BoundRecord, ProxyEntry};
     use crate::runtime_eval::ScopeRecord;
+    use crate::types::{BoundRecord, ProxyEntry};
     use std::sync::{Arc, Mutex};
     use wjsm_ir::value;
 
@@ -130,7 +130,10 @@ mod tests {
             has_current: true,
         }]));
         let refs = collect_iterator_refs(&mut st, 0);
-        assert_eq!(refs, vec![iterator, next, current_value, return_method, throw_method]);
+        assert_eq!(
+            refs,
+            vec![iterator, next, current_value, return_method, throw_method]
+        );
     }
 
     #[test]

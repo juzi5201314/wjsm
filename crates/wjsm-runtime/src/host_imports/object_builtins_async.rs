@@ -18,7 +18,7 @@ pub(crate) fn define_object_builtins_async(
         "obj_get_proto_of",
         |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
             Box::new(async move {
-                if !value::is_js_object(obj) {
+                if !value::is_js_object(obj) && !value::is_regexp(obj) {
                     return value::encode_null();
                 }
                 proxy_or_target_get_prototype_of_impl_async(&mut caller, obj).await
@@ -54,7 +54,9 @@ pub(crate) fn define_object_builtins_async(
                 let result = proxy_or_target_prevent_extensions_impl_async(&mut caller, obj).await;
                 let has_error = caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner())
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .is_some();
                 if !result && value::is_proxy(obj) && !has_error {
                     set_runtime_error(

@@ -22,10 +22,7 @@ pub fn lower_modules(
         wjsm_ir::ModuleId,
         Vec<(String, wjsm_ir::ModuleId)>,
     >,
-    re_export_map: &std::collections::HashMap<
-        wjsm_ir::ModuleId,
-        Vec<wjsm_ir::ReExportBinding>,
-    >,
+    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
 ) -> Result<Program, LoweringError> {
     // 如果只有一个模块且没有 import，使用单模块编译路径
     if modules.len() == 1 && import_map.is_empty() {
@@ -76,10 +73,7 @@ fn setup_multi_module_lowerer(
         wjsm_ir::ModuleId,
         Vec<(String, wjsm_ir::ModuleId)>,
     >,
-    re_export_map: &std::collections::HashMap<
-        wjsm_ir::ModuleId,
-        Vec<wjsm_ir::ReExportBinding>,
-    >,
+    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
 ) -> Result<Lowerer, LoweringError> {
     let mut lowerer = Lowerer::new();
     lowerer.import_bindings = import_map.clone();
@@ -213,10 +207,7 @@ fn resolve_export_ir(
     if let Some(bindings) = lowerer.re_export_map.get(&module_id) {
         for binding in bindings {
             if let Some(local) = binding.local_name.as_ref() {
-                let exported = binding
-                    .exported_name
-                    .as_deref()
-                    .unwrap_or(local.as_str());
+                let exported = binding.exported_name.as_deref().unwrap_or(local.as_str());
                 if exported == export_name {
                     return resolve_export_ir(lowerer, binding.source_module, local);
                 }
@@ -228,8 +219,6 @@ fn resolve_export_ir(
     }
     None
 }
-
-
 
 /// 处理 import 声明：绑定别名、默认导入与命名空间导入。
 fn process_import_aliases(
@@ -314,7 +303,6 @@ fn process_import_aliases(
     }
     Ok(flow)
 }
-
 
 /// 初始化入口块（支持 TLA）
 fn init_entry_block(
@@ -475,10 +463,7 @@ fn lower_module_decl(
     match decl {
         // export const/let/var/function/class → 将内层声明作为普通语句处理
         swc_ast::ModuleDecl::ExportDecl(export_decl) => {
-            let flow = lowerer.lower_stmt(
-                &swc_ast::Stmt::Decl(export_decl.decl.clone()),
-                flow,
-            )?;
+            let flow = lowerer.lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
             // 将导出名注册到 export_map
             let current_mid = lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
             let names = decl_exported_names(&export_decl.decl);
@@ -631,32 +616,21 @@ fn lower_export_default_decl(
 }
 
 /// 处理 `export { x }` / `export { x as y }`
-fn lower_export_named(
-    lowerer: &mut Lowerer,
-    named_export: &swc_ast::NamedExport,
-) {
+fn lower_export_named(lowerer: &mut Lowerer, named_export: &swc_ast::NamedExport) {
     let current_mid = lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
     if named_export.src.is_none() {
         // 本地导出：export { x } / export { x as y }
         for spec in &named_export.specifiers {
             if let swc_ast::ExportSpecifier::Named(named) = spec {
                 let local_name = match &named.orig {
-                    swc_ast::ModuleExportName::Ident(ident) => {
-                        ident.sym.to_string()
-                    }
-                    swc_ast::ModuleExportName::Str(s) => {
-                        s.value.to_string_lossy().into_owned()
-                    }
+                    swc_ast::ModuleExportName::Ident(ident) => ident.sym.to_string(),
+                    swc_ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
                 };
                 let exported_name = named.exported.as_ref().map_or_else(
                     || local_name.clone(),
                     |e| match e {
-                        swc_ast::ModuleExportName::Ident(ident) => {
-                            ident.sym.to_string()
-                        }
-                        swc_ast::ModuleExportName::Str(s) => {
-                            s.value.to_string_lossy().into_owned()
-                        }
+                        swc_ast::ModuleExportName::Ident(ident) => ident.sym.to_string(),
+                        swc_ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
                     },
                 );
                 if let Ok((scope_id, _)) = lowerer.scopes.lookup(&local_name) {
@@ -683,15 +657,15 @@ impl Lowerer {
         if self.static_namespace_filled.contains(&fill_key) {
             return;
         }
-        let target_module_id = self
-            .static_namespace_import_sources
-            .iter()
-            .find_map(|(local, mid)| {
-                self.static_namespace_import_objects
-                    .get(local)
-                    .filter(|&&v| v == ns_obj)
-                    .map(|_| *mid)
-            });
+        let target_module_id =
+            self.static_namespace_import_sources
+                .iter()
+                .find_map(|(local, mid)| {
+                    self.static_namespace_import_objects
+                        .get(local)
+                        .filter(|&&v| v == ns_obj)
+                        .map(|_| *mid)
+                });
         let Some(target_module_id) = target_module_id else {
             return;
         };
@@ -734,10 +708,7 @@ impl Lowerer {
 /// 根据规范，命名空间属性必须是 live binding：ns.x 应反映导出变量的最新值。
 /// 完整修复需要 IR 层支持 getter 或在 StoreVar 时同步更新命名空间属性。
 /// 这属于较大特性，需要 IR 层变更后才能实现。
-fn fill_namespace_properties(
-    lowerer: &mut Lowerer,
-    flow: StmtFlow,
-) -> Result<(), LoweringError> {
+fn fill_namespace_properties(lowerer: &mut Lowerer, flow: StmtFlow) -> Result<(), LoweringError> {
     let StmtFlow::Open(ns_block) = flow else {
         return Ok(());
     };
@@ -839,9 +810,7 @@ fn fill_namespace_properties(
                     continue;
                 }
 
-                if let Some(ir_name) =
-                    resolve_export_ir(lowerer, target_module_id, export_name)
-                {
+                if let Some(ir_name) = resolve_export_ir(lowerer, target_module_id, export_name) {
                     let value_val = lowerer.alloc_value();
                     lowerer.current_function.append_instruction(
                         ns_block,

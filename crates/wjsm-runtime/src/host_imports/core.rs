@@ -2,9 +2,8 @@ use anyhow::Result;
 use wasmtime::{Caller, Linker};
 use wjsm_ir::wk_symbol;
 
-use crate::*;
 use crate::host_imports::get_method_by_name_id;
-
+use crate::*;
 
 /// 根据 UTF-8 首字节返回该码点的字节长度（字符串迭代器按码点步进）。
 pub(crate) fn utf8_code_unit_len(lead: u8) -> usize {
@@ -49,16 +48,10 @@ pub(crate) fn define_property_impl(
     desc_handle: i64,
 ) -> i64 {
     if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
-        return make_type_error_exception(
-            caller,
-            "Object.defineProperty called on non-object",
-        );
+        return make_type_error_exception(caller, "Object.defineProperty called on non-object");
     }
     if value::is_proxy(obj) {
-        return make_type_error_exception(
-            caller,
-            "Object.defineProperty called on non-object",
-        );
+        return make_type_error_exception(caller, "Object.defineProperty called on non-object");
     }
     let desc = match parse_descriptor(caller, desc_handle) {
         Ok(d) => d,
@@ -114,7 +107,9 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
     if !value::is_object(object) && !value::is_function(object) && !value::is_array(object) {
         *caller
             .data()
-            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
             Some("TypeError: cannot use 'in' operator on non-object".to_string());
         return value::encode_bool(false);
     }
@@ -126,7 +121,9 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
             let handle = value::decode_runtime_string_handle(prop) as usize;
             let strings = caller
                 .data()
-                .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
+                .runtime_strings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             strings.get(handle).cloned().unwrap_or_default()
         } else {
             let ptr = value::decode_string_ptr(prop);
@@ -252,7 +249,11 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
 /// 被同步 `iterator_value` 与 `core_async::iterator_step_value_async` 共用
 pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle: i64) -> i64 {
     let handle_idx = value::decode_handle(handle) as usize;
-    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(iter) = iters.get_mut(handle_idx) {
         match iter {
             IteratorState::StringIter { data, byte_pos } => {
@@ -276,7 +277,11 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 }
             }
             IteratorState::MapKeyIter { map_handle, index } => {
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
                     let idx = *index as usize;
@@ -292,7 +297,11 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 val.unwrap_or(value::encode_undefined())
             }
             IteratorState::MapValueIter { map_handle, index } => {
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
                     let idx = *index as usize;
@@ -308,7 +317,11 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 val.unwrap_or(value::encode_undefined())
             }
             IteratorState::MapEntryIter { map_handle, index } => {
-                let table = caller.data().map_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
                     let idx = *index as usize;
@@ -334,8 +347,15 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 };
                 val
             }
-            IteratorState::HeadersKeyIter { headers_handle, index } => {
-                let table = caller.data().headers_table.lock().unwrap_or_else(|e| e.into_inner());
+            IteratorState::HeadersKeyIter {
+                headers_handle,
+                index,
+            } => {
+                let table = caller
+                    .data()
+                    .headers_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
@@ -354,8 +374,15 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 };
                 val
             }
-            IteratorState::HeadersValueIter { headers_handle, index } => {
-                let table = caller.data().headers_table.lock().unwrap_or_else(|e| e.into_inner());
+            IteratorState::HeadersValueIter {
+                headers_handle,
+                index,
+            } => {
+                let table = caller
+                    .data()
+                    .headers_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
@@ -374,8 +401,15 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 };
                 val
             }
-            IteratorState::HeadersEntryIter { headers_handle, index } => {
-                let table = caller.data().headers_table.lock().unwrap_or_else(|e| e.into_inner());
+            IteratorState::HeadersEntryIter {
+                headers_handle,
+                index,
+            } => {
+                let table = caller
+                    .data()
+                    .headers_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
@@ -386,8 +420,18 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                         drop(iters);
                         let arr = alloc_array(caller, 2);
                         if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
-                            write_array_elem(caller, arr_ptr, 0, store_runtime_string(caller, name));
-                            write_array_elem(caller, arr_ptr, 1, store_runtime_string(caller, value));
+                            write_array_elem(
+                                caller,
+                                arr_ptr,
+                                0,
+                                store_runtime_string(caller, name),
+                            );
+                            write_array_elem(
+                                caller,
+                                arr_ptr,
+                                1,
+                                store_runtime_string(caller, value),
+                            );
                             write_array_length(caller, arr_ptr, 2);
                         }
                         arr
@@ -402,7 +446,11 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 val
             }
             IteratorState::SetValueIter { set_handle, index } => {
-                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
                     let idx = *index as usize;
@@ -418,7 +466,11 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 val.unwrap_or(value::encode_undefined())
             }
             IteratorState::SetEntryIter { set_handle, index } => {
-                let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let val = if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
                     let idx = *index as usize;
@@ -496,7 +548,9 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
             IteratorState::Error => {
                 *caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: value is not iterable".to_string());
                 value::encode_undefined()
             }
@@ -525,20 +579,14 @@ async fn ordinary_has_instance_async(
             .data()
             .runtime_error
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(
-            "TypeError: Right-hand side of instanceof is not callable".to_string(),
-        );
+            .unwrap_or_else(|e| e.into_inner()) =
+            Some("TypeError: Right-hand side of instanceof is not callable".to_string());
         return value::encode_undefined();
     }
 
     let proto_prop = store_runtime_string(caller, "prototype".to_string());
-    let prototype_val = reflect_get_impl_with_receiver_async(
-        caller,
-        constructor,
-        proto_prop,
-        constructor,
-    )
-    .await;
+    let prototype_val =
+        reflect_get_impl_with_receiver_async(caller, constructor, proto_prop, constructor).await;
 
     if !value::is_js_object(prototype_val) && !value::is_null(prototype_val) {
         *caller
@@ -635,9 +683,8 @@ async fn op_instanceof_async(
             .data()
             .runtime_error
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(
-            "TypeError: Right-hand side of instanceof is not callable".to_string(),
-        );
+            .unwrap_or_else(|e| e.into_inner()) =
+            Some("TypeError: Right-hand side of instanceof is not callable".to_string());
         return value::encode_undefined();
     }
 
@@ -738,7 +785,11 @@ pub(crate) fn define_core(
         |mut caller: Caller<'_, RuntimeState>, val: i64| {
             // 将异常值存入 error_table，以便 eval 调用方能通过 ExceptionValue 恢复原始值
             {
-                let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+                let mut errors = caller
+                    .data()
+                    .error_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 errors.push(ErrorEntry {
                     name: String::new(),
                     message: String::new(),
@@ -748,11 +799,16 @@ pub(crate) fn define_core(
             let rendered = render_value(&mut caller, val).unwrap_or_else(|_| "unknown".to_string());
             let mut buffer = caller
                 .data()
-                .output.lock().unwrap_or_else(|e| e.into_inner());
+                .output
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             writeln!(&mut *buffer, "Uncaught exception: {rendered}").ok();
             *caller
                 .data()
-                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Uncaught exception: {rendered}"));
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                Some(format!("Uncaught exception: {rendered}"));
         },
     );
     linker.define(&mut store, "env", "throw", f)?;
@@ -772,7 +828,11 @@ pub(crate) fn define_core(
             if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
                 // 字符串枚举：遍历字节索引
                 let len = string_data.len();
-                let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+                let mut enums = caller
+                    .data()
+                    .enumerators
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = enums.len() as u32;
                 enums.push(EnumeratorState::StringEnum {
                     length: len,
@@ -782,13 +842,21 @@ pub(crate) fn define_core(
             } else if value::is_object(val) || value::is_function(val) {
                 // 对象/函数属性枚举
                 let keys = enumerate_object_keys(&mut caller, val);
-                let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+                let mut enums = caller
+                    .data()
+                    .enumerators
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = enums.len() as u32;
                 enums.push(EnumeratorState::ObjectEnum { keys, index: 0 });
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
             } else if value::is_f64(val) {
                 // 数字：无枚举属性（JS 语义：for..in on number = no iteration）
-                let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+                let mut enums = caller
+                    .data()
+                    .enumerators
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = enums.len() as u32;
                 enums.push(EnumeratorState::StringEnum {
                     length: 0,
@@ -797,7 +865,11 @@ pub(crate) fn define_core(
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
             } else if value::is_bool(val) {
                 // 布尔值：无枚举属性（JS 语义：for..in on boolean = no iteration）
-                let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+                let mut enums = caller
+                    .data()
+                    .enumerators
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = enums.len() as u32;
                 enums.push(EnumeratorState::StringEnum {
                     length: 0,
@@ -805,7 +877,11 @@ pub(crate) fn define_core(
                 });
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
             } else {
-                let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+                let mut enums = caller
+                    .data()
+                    .enumerators
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = enums.len() as u32;
                 enums.push(EnumeratorState::Error);
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
@@ -819,7 +895,11 @@ pub(crate) fn define_core(
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+            let mut enums = caller
+                .data()
+                .enumerators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(enm) = enums.get_mut(handle_idx) {
                 match enm {
                     EnumeratorState::StringEnum { length, index } => {
@@ -845,7 +925,11 @@ pub(crate) fn define_core(
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+            let mut enums = caller
+                .data()
+                .enumerators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(enm) = enums.get_mut(handle_idx) {
                 match enm {
                     EnumeratorState::StringEnum { index, .. } => {
@@ -861,7 +945,9 @@ pub(crate) fn define_core(
                     EnumeratorState::Error => {
                         *caller
                             .data()
-                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            .runtime_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) =
                             Some("TypeError: value is not enumerable".to_string());
                         return value::encode_undefined();
                     }
@@ -877,7 +963,11 @@ pub(crate) fn define_core(
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut enums = caller.data().enumerators.lock().unwrap_or_else(|e| e.into_inner());
+            let mut enums = caller
+                .data()
+                .enumerators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let done = if let Some(enm) = enums.get_mut(handle_idx) {
                 match enm {
                     EnumeratorState::StringEnum { length, index } => *index >= *length,
@@ -885,7 +975,9 @@ pub(crate) fn define_core(
                     EnumeratorState::Error => {
                         *caller
                             .data()
-                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            .runtime_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) =
                             Some("TypeError: value is not enumerable".to_string());
                         true
                     }
@@ -914,7 +1006,11 @@ pub(crate) fn define_core(
                 value::encode_typeof_function()
             } else if value::is_proxy(val) {
                 // Proxy: walk the chain to find ultimate non-proxy target
-                let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+                let table = caller
+                    .data()
+                    .proxy_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let mut current_handle = value::decode_proxy_handle(val) as usize;
                 let target_callable = loop {
                     match table.get(current_handle) {
@@ -1015,7 +1111,9 @@ pub(crate) fn define_core(
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller
                     .data()
-                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(
                     "TypeError: Object.getOwnPropertyDescriptor called on non-object".to_string(),
                 );
                 return value::encode_undefined();
@@ -1177,7 +1275,9 @@ pub(crate) fn define_core(
                     if let Some(bi_y) = num_traits::cast::FromPrimitive::from_f64(b_f64) {
                         let table = caller
                             .data()
-                            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                            .bigint_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         return value::encode_bool(
                             table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false),
                         );
@@ -1197,7 +1297,9 @@ pub(crate) fn define_core(
                     if let Some(bi_x) = num_traits::cast::FromPrimitive::from_f64(a_f64) {
                         let table = caller
                             .data()
-                            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                            .bigint_table
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         return value::encode_bool(
                             table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false),
                         );
@@ -1214,7 +1316,9 @@ pub(crate) fn define_core(
                             let a_handle = value::decode_bigint_handle(x) as usize;
                             let table = caller
                                 .data()
-                                .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                                .bigint_table
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
                             return value::encode_bool(
                                 table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false),
                             );
@@ -1231,7 +1335,9 @@ pub(crate) fn define_core(
                             let b_handle = value::decode_bigint_handle(y) as usize;
                             let table = caller
                                 .data()
-                                .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                                .bigint_table
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
                             return value::encode_bool(
                                 table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false),
                             );
@@ -1425,7 +1531,10 @@ pub(crate) fn define_core(
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
         let (should_collect, gc_arc) = {
             let state = caller.data();
-            let mut counter = state.alloc_counter.lock().unwrap_or_else(|e| e.into_inner());
+            let mut counter = state
+                .alloc_counter
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *counter += 1;
             (*counter >= state.gc_threshold, state.gc_algorithm.clone())
         };
@@ -1454,7 +1563,9 @@ pub(crate) fn define_core(
     let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>| -> i32 {
         let mut list = caller
             .data()
-            .handle_free_list.lock().unwrap_or_else(|e| e.into_inner());
+            .handle_free_list
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         list.pop().map(|h| h as i32).unwrap_or(-1)
     });
     linker.define(&mut store, "env", "gc_take_freed_handle", f)?;
@@ -1474,7 +1585,11 @@ pub(crate) async fn iterator_from_impl_async(
         return val;
     }
     if let Some(string_data) = read_value_string_bytes(caller, val) {
-        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+        let mut iters = caller
+            .data()
+            .iterators
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = iters.len() as u32;
         iters.push(IteratorState::StringIter {
             data: string_data,
@@ -1487,7 +1602,11 @@ pub(crate) async fn iterator_from_impl_async(
         && let Some(ptr) = resolve_handle(caller, val)
     {
         let length = read_array_length(caller, ptr).unwrap_or(0);
-        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+        let mut iters = caller
+            .data()
+            .iterators
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = iters.len() as u32;
         iters.push(IteratorState::ArrayIter {
             ptr,
@@ -1503,10 +1622,18 @@ pub(crate) async fn iterator_from_impl_async(
         && let Some(sh) = read_object_property_by_name(caller, ptr, "__set_handle__")
     {
         let set_handle_u32 = value::decode_f64(sh) as u32;
-        let table = caller.data().set_table.lock().unwrap_or_else(|e| e.into_inner());
+        let table = caller
+            .data()
+            .set_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if (set_handle_u32 as usize) < table.len() {
             drop(table);
-            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+            let mut iters = caller
+                .data()
+                .iterators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let handle = iters.len() as u32;
             iters.push(IteratorState::SetValueIter {
                 set_handle: set_handle_u32,
@@ -1533,7 +1660,11 @@ pub(crate) async fn iterator_from_impl_async(
                 .filter(|candidate| value::is_callable(*candidate));
             let throw_method = read_object_property_by_name(caller, iter_ptr, "throw")
                 .filter(|candidate| value::is_callable(*candidate));
-            let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+            let mut iters = caller
+                .data()
+                .iterators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let handle = iters.len() as u32;
             iters.push(IteratorState::ObjectIter {
                 iterator,
@@ -1557,7 +1688,11 @@ pub(crate) async fn iterator_from_impl_async(
             .filter(|candidate| value::is_callable(*candidate));
         let throw_method = read_object_property_by_name(caller, ptr, "throw")
             .filter(|candidate| value::is_callable(*candidate));
-        let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+        let mut iters = caller
+            .data()
+            .iterators
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = iters.len() as u32;
         iters.push(IteratorState::ObjectIter {
             iterator: val,
@@ -1571,7 +1706,11 @@ pub(crate) async fn iterator_from_impl_async(
         return value::encode_handle(value::TAG_ITERATOR, handle);
     }
 
-    let mut iters = caller.data().iterators.lock().unwrap_or_else(|e| e.into_inner());
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = iters.len() as u32;
     iters.push(IteratorState::Error);
     value::encode_handle(value::TAG_ITERATOR, handle)

@@ -29,7 +29,9 @@ pub(crate) fn define_misc(
         |caller: Caller<'_, RuntimeState>, callback: i64| {
             let mut queue = caller
                 .data()
-                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+                .microtask_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             queue.push_back(Microtask::MicrotaskCallback { callback });
         },
     );
@@ -43,7 +45,9 @@ pub(crate) fn define_misc(
             let mid = module_id as u32;
             let mut cache = caller
                 .data()
-                .module_namespace_cache.lock().unwrap_or_else(|e| e.into_inner());
+                .module_namespace_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             cache.insert(mid, namespace_obj);
         },
     );
@@ -82,7 +86,9 @@ pub(crate) fn define_misc(
             let namespace_obj = {
                 let cache = caller
                     .data()
-                    .module_namespace_cache.lock().unwrap_or_else(|e| e.into_inner());
+                    .module_namespace_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 cache.get(&mid).copied()
             };
 

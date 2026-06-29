@@ -44,11 +44,20 @@ pub(crate) fn string_to_f64(trimmed: &str) -> f64 {
         return f64::NEG_INFINITY;
     }
 
-    let (radix, digits): (u32, &str) = if let Some(rest) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+    let (radix, digits): (u32, &str) = if let Some(rest) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
         (16, rest)
-    } else if let Some(rest) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
+    } else if let Some(rest) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
         (8, rest)
-    } else if let Some(rest) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
+    } else if let Some(rest) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
         (2, rest)
     } else {
         let s = trimmed.strip_prefix('+').unwrap_or(trimmed);

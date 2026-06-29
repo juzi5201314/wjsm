@@ -33,15 +33,22 @@ pub(crate) fn is_promise_value(state: &RuntimeState, val: i64) -> bool {
         return false;
     }
     let handle = value::decode_object_handle(val) as usize;
-    let table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
+    let table = state
+        .promise_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     promise_entry(&table, handle).is_some()
 }
 
 pub(crate) fn create_native_callable(state: &RuntimeState, callable: NativeCallable) -> i64 {
     let mut table = state
-        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+        .native_callables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut free_slots = state
-        .native_callable_free_slots.lock().unwrap_or_else(|e| e.into_inner());
+        .native_callable_free_slots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = if let Some(slot) = free_slots.pop() {
         table[slot as usize] = callable;
         slot
@@ -60,7 +67,9 @@ pub(crate) fn recycle_native_callable(state: &RuntimeState, callable: i64) {
     }
     let idx = value::decode_native_callable_idx(callable) as usize;
     let record = state
-        .native_callables.lock().unwrap_or_else(|e| e.into_inner())
+        .native_callables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .get(idx)
         .cloned();
     if matches!(
@@ -70,7 +79,9 @@ pub(crate) fn recycle_native_callable(state: &RuntimeState, callable: i64) {
         return;
     }
     state
-        .native_callable_free_slots.lock().unwrap_or_else(|e| e.into_inner())
+        .native_callable_free_slots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .push(idx as u32);
 }
 
@@ -124,7 +135,9 @@ pub(crate) fn alloc_promise_from_caller(
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
             .data()
-            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         insert_promise_entry(&mut table, handle, entry);
     }
     promise
@@ -150,7 +163,10 @@ pub(crate) fn new_promise_capability_from_caller(
 
 pub(crate) fn is_promise_settled(state: &RuntimeState, promise: i64) -> bool {
     let handle = raw_promise_handle(promise);
-    let table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
+    let table = state
+        .promise_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     promise_entry(&table, handle)
         .map(|entry| !matches!(entry.state, PromiseState::Pending))
         .unwrap_or(true)
@@ -162,7 +178,10 @@ pub(crate) fn queue_promise_reactions(
     value: i64,
     is_rejected: bool,
 ) {
-    let mut queue = state.microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+    let mut queue = state
+        .microtask_queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     for reaction in reactions {
         match reaction.kind {
             PromiseReactionKind::AsyncResume {
@@ -192,7 +211,10 @@ pub(crate) fn queue_promise_reactions(
 pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: PromiseSettlement) {
     let handle = raw_promise_handle(promise);
     let (reactions, value, is_rejected) = {
-        let mut table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = state
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(entry) = promise_entry_mut(&mut table, handle) else {
             return;
         };
@@ -208,7 +230,9 @@ pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: Pro
             PromiseSettlement::Reject(reason) => {
                 if !entry.handled {
                     state
-                        .pending_unhandled_rejections.lock().unwrap_or_else(|e| e.into_inner())
+                        .pending_unhandled_rejections
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
                         .insert(handle);
                 }
                 let reactions = std::mem::take(&mut entry.reject_reactions);
@@ -225,7 +249,10 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
     let source_handle = raw_promise_handle(source);
     let mut queued = None;
     {
-        let mut table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = state
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(source_entry) = promise_entry_mut(&mut table, source_handle) else {
             return;
         };
@@ -253,7 +280,10 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
         }
     }
     if let Some((reaction_type, argument)) = queued {
-        let mut queue = state.microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = state
+            .microtask_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         queue.push_back(Microtask::PromiseReaction {
             promise: target_handle as i64,
             reaction_type,
@@ -293,7 +323,9 @@ pub(crate) fn resolve_promise<C: AsContextMut<Data = RuntimeState> + RuntimeStat
     {
         let mut queue = ctx
             .state_mut()
-            .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
+            .microtask_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         queue.push_back(Microtask::PromiseResolveThenable {
             promise,
             thenable: resolution,
@@ -360,7 +392,9 @@ pub(crate) fn alloc_promise_with_env<C: AsContextMut<Data = RuntimeState> + Runt
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = ctx
             .state_mut()
-            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         insert_promise_entry(&mut table, handle, entry);
     }
     promise
@@ -369,9 +403,7 @@ pub(crate) fn alloc_promise_with_env<C: AsContextMut<Data = RuntimeState> + Runt
 /// §27.2.5.4.1/2 ThenFinally/CatchFinally：处理 onFinally 的返回值 `result`。
 /// 非 thenable → 直接按原始结算值结算 target；thenable → 创建中间 promise adopt
 /// 其状态，并挂上 `PromiseFinallyAwait` 反应，待其 settle 后再结算 target。
-pub(crate) fn settle_finally_reaction<
-    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
->(
+pub(crate) fn settle_finally_reaction<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
     ctx: &mut C,
     env: &WasmEnv,
     target_promise: i64,
@@ -383,7 +415,11 @@ pub(crate) fn settle_finally_reaction<
     // onFinally 自身抛异常 → result promise 以抛出值 reject（abrupt completion 覆盖原结果）。
     if value::is_exception(result) {
         let reason = exception_reason_from_state(ctx.state_mut(), result);
-        settle_promise(ctx.state_mut(), target_promise, PromiseSettlement::Reject(reason));
+        settle_promise(
+            ctx.state_mut(),
+            target_promise,
+            PromiseSettlement::Reject(reason),
+        );
         return;
     }
     if !is_thenable_value(ctx, env, result) {
@@ -408,15 +444,21 @@ pub(crate) fn settle_finally_reaction<
         let inner_handle = raw_promise_handle(inner);
         let mut table = ctx
             .state_mut()
-            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = promise_entry_mut(&mut table, inner_handle) {
             entry.handled = true;
-            entry
-                .fulfill_reactions
-                .push(PromiseReaction::new(handler, target_promise, ReactionType::Fulfill));
-            entry
-                .reject_reactions
-                .push(PromiseReaction::new(handler, target_promise, ReactionType::Reject));
+            entry.fulfill_reactions.push(PromiseReaction::new(
+                handler,
+                target_promise,
+                ReactionType::Fulfill,
+            ));
+            entry.reject_reactions.push(PromiseReaction::new(
+                handler,
+                target_promise,
+                ReactionType::Reject,
+            ));
         }
     }
     resolve_promise(ctx, env, inner, result);
@@ -438,7 +480,9 @@ pub(crate) fn handle_finally_await_reaction<
         } else {
             let idx = value::decode_native_callable_idx(handler) as usize;
             ctx.state_mut()
-                .native_callables.lock().unwrap_or_else(|e| e.into_inner())
+                .native_callables
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
                 .get(idx)
                 .and_then(|nc| match nc {
                     NativeCallable::PromiseFinallyAwait {
@@ -483,14 +527,20 @@ pub(crate) fn passive_reaction_settlement(
 }
 
 pub(crate) fn runtime_error_value(state: &RuntimeState, message: String) -> i64 {
-    let mut table = state.runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
+    let mut table = state
+        .runtime_strings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(message);
     value::encode_runtime_string_handle(handle)
 }
 
 pub(crate) fn set_runtime_error(state: &RuntimeState, message: String) {
-    let mut error_lock = state.runtime_error.lock().unwrap_or_else(|e| e.into_inner());
+    let mut error_lock = state
+        .runtime_error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if error_lock.is_none() {
         *error_lock = Some(message);
     }
@@ -531,7 +581,9 @@ mod lifecycle_tests {
         let idx2 = value::decode_native_callable_idx(resolve);
         assert_eq!(idx1, idx2);
         let record = state
-            .native_callables.lock().unwrap_or_else(|e| e.into_inner())
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get(idx1 as usize)
             .cloned();
         assert!(matches!(

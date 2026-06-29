@@ -4,7 +4,6 @@ use crate::host_import_registry::{
     array_proto_table_len, host_import_specs,
 };
 
-
-mod module_setup;
-mod module_compile;
 mod module_bootstrap;
+mod module_compile;
+mod module_setup;

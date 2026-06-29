@@ -7,7 +7,9 @@ use wasmtime::Caller;
 pub(crate) fn create_empty_headers(caller: &mut Caller<'_, RuntimeState>) -> u32 {
     let mut table = caller
         .data()
-        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
+        .headers_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let h = table.len() as u32;
     table.push(HeadersEntry {
         pairs: Vec::new(),
@@ -30,7 +32,9 @@ pub(crate) fn create_response_object(
 ) -> i64 {
     let mut table = caller
         .data()
-        .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
+        .fetch_response_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(FetchResponseEntry {
         status,
@@ -77,7 +81,9 @@ pub(crate) fn create_response_object(
     let body_bytes_opt = {
         let table = caller
             .data()
-            .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .fetch_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         table
             .get(handle as usize)
             .filter(|entry| !entry.body.is_empty())
@@ -131,7 +137,9 @@ pub(crate) fn create_response_object_with_http_handle(
 ) -> i64 {
     let mut table = caller
         .data()
-        .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
+        .fetch_response_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(FetchResponseEntry {
         status,
@@ -174,7 +182,9 @@ pub(crate) fn create_response_object_with_http_handle(
     let stream_handle = {
         let mut stream_table = caller
             .data()
-            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .readable_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let sh = stream_table.len() as u32;
         stream_table.push(ReadableStreamEntry {
             state: StreamState::Readable,
@@ -216,7 +226,9 @@ pub(crate) fn create_request_object(
 ) -> i64 {
     let mut table = caller
         .data()
-        .fetch_request_table.lock().unwrap_or_else(|e| e.into_inner());
+        .fetch_request_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(FetchRequestEntry {
         method: method.clone(),
@@ -327,7 +339,6 @@ fn attach_request_methods(caller: &mut Caller<'_, RuntimeState>, obj: i64, handl
     let val = value::encode_native_callable_idx(idx);
     let _ = define_host_data_property_from_caller(caller, obj, "clone", val);
 }
-
 
 mod fetch_core_impl;
 pub(crate) use fetch_core_impl::*;

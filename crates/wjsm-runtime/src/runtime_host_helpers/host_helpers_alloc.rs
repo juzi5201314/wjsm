@@ -16,11 +16,10 @@ fn is_native_array_constructor(caller: &mut Caller<'_, RuntimeState>, constructo
     let idx = value::decode_native_callable_idx(constructor) as usize;
     let table = caller
         .data()
-        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
-    matches!(
-        table.get(idx),
-        Some(NativeCallable::ArrayConstructor)
-    )
+        .native_callables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    matches!(table.get(idx), Some(NativeCallable::ArrayConstructor))
 }
 
 /// ES2024 `SpeciesConstructor(O, %Array%)` for Array exotic objects.
@@ -125,14 +124,8 @@ pub(crate) async fn array_species_create_async(
         .data()
         .new_target
         .swap(constructor, Ordering::Relaxed);
-    let result = resolve_and_call_async(
-        caller,
-        constructor,
-        value::encode_undefined(),
-        shadow_sp,
-        1,
-    )
-    .await;
+    let result =
+        resolve_and_call_async(caller, constructor, value::encode_undefined(), shadow_sp, 1).await;
     caller
         .data()
         .new_target

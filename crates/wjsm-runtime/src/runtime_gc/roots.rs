@@ -73,9 +73,9 @@
 //! - **陈旧 handle**：指向已回收的对象，GC 会将其标记为 dead，不会访问
 //!
 //! 这允许编译器采用保守策略（宁可多 spill，也不漏 spill）。
-use wjsm_ir::{value, SHADOW_STACK_SIZE};
-use crate::runtime_gc::api::{Handle, RootProvider};
 use crate::runtime_gc::GcContext;
+use crate::runtime_gc::api::{Handle, RootProvider};
+use wjsm_ir::{SHADOW_STACK_SIZE, value};
 
 /// 运行时 root 提供者：扫描 shadow stack + host 侧表（fixed-point 友好）。
 pub struct RuntimeRoots;
@@ -166,7 +166,11 @@ impl RootProvider for RuntimeRoots {
         // NativeCallable，其 .prototype 在 get 时动态合成、不在堆上留引用，故必须显式 root，
         // 否则 GC 在内存压力下回收原型对象 → instanceof / .prototype 读到 garbage。
         let (regexp_proto, promise_proto, symbol_proto) = ctx.with_state(|st| {
-            (st.regexp_prototype, st.promise_prototype, st.symbol_prototype)
+            (
+                st.regexp_prototype,
+                st.promise_prototype,
+                st.symbol_prototype,
+            )
         });
         push_value_roots(ctx, regexp_proto, visit);
         push_value_roots(ctx, promise_proto, visit);
@@ -224,9 +228,8 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
     }
     if value::is_bound(val) {
         let idx = value::decode_bound_idx(val) as usize;
-        let refs = ctx.with_state(|st| {
-            crate::runtime_gc::side_table_refs::collect_bound_refs(st, idx)
-        });
+        let refs =
+            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_bound_refs(st, idx));
         for r in refs {
             push_value_roots(ctx, r, visit);
         }
@@ -234,9 +237,8 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
     }
     if value::is_proxy(val) {
         let idx = value::decode_proxy_handle(val) as usize;
-        let refs = ctx.with_state(|st| {
-            crate::runtime_gc::side_table_refs::collect_proxy_refs(st, idx)
-        });
+        let refs =
+            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_proxy_refs(st, idx));
         for r in refs {
             push_value_roots(ctx, r, visit);
         }
@@ -244,9 +246,8 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
     }
     if value::is_iterator(val) {
         let idx = value::decode_handle(val) as usize;
-        let refs = ctx.with_state(|st| {
-            crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx)
-        });
+        let refs =
+            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx));
         for r in refs {
             push_value_roots(ctx, r, visit);
         }

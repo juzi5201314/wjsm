@@ -9,7 +9,11 @@ use std::collections::VecDeque;
 /// 创建 TypeError 异常值（NaN-boxed TAG_EXCEPTION）
 fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
     let error_obj = alloc_type_error_from_caller(caller, message);
-    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(ErrorEntry {
         name: "TypeError".to_string(),
@@ -28,7 +32,9 @@ pub(crate) fn mark_response_body_used_from_caller(
     if let Some(handle) = response_handle {
         let mut table = caller
             .data()
-            .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
+            .fetch_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(handle as usize) {
             entry.body_used = true;
         }
@@ -121,7 +127,9 @@ pub(crate) fn truncate_byob_view_with_env<C: wasmtime::AsContextMut<Data = Runti
         let store = ctx.as_context_mut();
         let mut ta_table = store
             .data()
-            .typedarray_table.lock().unwrap_or_else(|e| e.into_inner());
+            .typedarray_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let h = ta_table.len() as u32;
         ta_table.push(TypedArrayEntry {
             buffer_handle: entry.buffer_handle,
@@ -202,7 +210,9 @@ fn fulfill_byob_read(
         let rest = create_uint8array_with_env(caller, &env, &bytes[written..]);
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.chunk_queue.push_front(rest);
         }
@@ -393,7 +403,9 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
     let controller_handle = {
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(StreamControllerEntry {
             kind: ControllerKind::ReadableDefault,
@@ -422,7 +434,9 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
         let uint8array_obj = create_uint8array_with_env(caller, &env, bytes);
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.chunk_queue.push_back(uint8array_obj);
         }
@@ -432,7 +446,9 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
     let stream_handle = {
         let mut table = caller
             .data()
-            .readable_stream_table.lock().unwrap_or_else(|e| e.into_inner());
+            .readable_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(ReadableStreamEntry {
             state: StreamState::Closed, // 已关闭
@@ -452,7 +468,9 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
     {
         let mut table = caller
             .data()
-            .stream_controller_table.lock().unwrap_or_else(|e| e.into_inner());
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
             ctrl.stream_handle = stream_handle;
             ctrl.started = true;
@@ -464,7 +482,6 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
 }
 
 /// ReadableStream 构造函数 — 由 NativeCallable::ReadableStreamConstructor 调度
-
 mod streams_readable_ctrl;
 mod streams_readable_dispatch;
 mod streams_readable_pipe;

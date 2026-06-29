@@ -31,7 +31,10 @@ impl Compiler {
                 } else {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -43,9 +46,9 @@ impl Compiler {
             Builtin::StringConcatVa
             | Builtin::StringFromCharCode
             | Builtin::StringFromCodePoint
-            | Builtin::StringMatchAll => {
-                self.compile_proto_method_call(dest, builtin, args).map(Some)
-            }
+            | Builtin::StringMatchAll => self
+                .compile_proto_method_call(dest, builtin, args)
+                .map(Some),
             // ── Proxy / Reflect builtins ──────────────────────────────────────────
             Builtin::ProxyCreate
             | Builtin::ProxyRevocable

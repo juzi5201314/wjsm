@@ -59,11 +59,7 @@ impl Lowerer {
         })
     }
 
-    fn emit_super_prop_get(
-        &mut self,
-        block: BasicBlockId,
-        access: &SuperPropAccess,
-    ) -> ValueId {
+    fn emit_super_prop_get(&mut self, block: BasicBlockId, access: &SuperPropAccess) -> ValueId {
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -102,8 +98,7 @@ impl Lowerer {
         let access = self.lower_super_prop_access(super_prop, current_block)?;
 
         if assign.op == swc_ast::AssignOp::Assign {
-            let rhs =
-                self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
+            let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
             self.emit_super_prop_set(current_block, &access, rhs);
             self.expr_merge_block = Some(current_block);
             return Ok(rhs);
@@ -118,13 +113,11 @@ impl Lowerer {
             return self.lower_logical_assign_super(assign, current_block, access);
         }
 
-        let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
-            self.error(assign.span, "unsupported compound assignment operator")
-        })?;
+        let bin_op = assign_op_to_binary(assign.op)
+            .ok_or_else(|| self.error(assign.span, "unsupported compound assignment operator"))?;
 
         let loaded = self.emit_super_prop_get(current_block, &access);
-        let rhs =
-            self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
+        let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             current_block,

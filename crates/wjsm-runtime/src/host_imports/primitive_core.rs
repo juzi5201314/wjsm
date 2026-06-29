@@ -17,7 +17,9 @@ pub(crate) fn define_primitive_core(
             if let Ok(bigint) = trimmed.parse::<num_bigint::BigInt>() {
                 let mut table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(bigint);
                 value::encode_bigint_handle(handle)
@@ -45,7 +47,9 @@ pub(crate) fn define_primitive_core(
         let (a_val, b_val) = {
             let table = caller
                 .data()
-                .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                .bigint_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             (table.get(a_handle).cloned(), table.get(b_handle).cloned())
         };
         match (a_val, b_val) {
@@ -53,7 +57,9 @@ pub(crate) fn define_primitive_core(
                 let result = op(&av, &bv);
                 let mut table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(result);
                 value::encode_bigint_handle(handle)
@@ -91,7 +97,9 @@ pub(crate) fn define_primitive_core(
             let (av, bv) = {
                 let table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
@@ -99,14 +107,18 @@ pub(crate) fn define_primitive_core(
                     if y == 0u32.into() {
                         *caller
                             .data()
-                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            .runtime_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) =
                             Some("RangeError: BigInt division by zero".to_string());
                         return value::encode_undefined();
                     }
                     let result = x / y;
                     let mut table = caller
                         .data()
-                        .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .bigint_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -124,7 +136,9 @@ pub(crate) fn define_primitive_core(
             let (av, bv) = {
                 let table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
@@ -132,14 +146,18 @@ pub(crate) fn define_primitive_core(
                     if y == 0u32.into() {
                         *caller
                             .data()
-                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            .runtime_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) =
                             Some("RangeError: BigInt division by zero".to_string());
                         return value::encode_undefined();
                     }
                     let result = x % y;
                     let mut table = caller
                         .data()
-                        .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .bigint_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -157,7 +175,9 @@ pub(crate) fn define_primitive_core(
             let (av, bv) = {
                 let table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
@@ -166,7 +186,9 @@ pub(crate) fn define_primitive_core(
                     if y.sign() == num_bigint::Sign::Minus {
                         *caller
                             .data()
-                            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                            .runtime_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) =
                             Some("RangeError: BigInt exponent must be non-negative".to_string());
                         return value::encode_undefined();
                     }
@@ -175,7 +197,9 @@ pub(crate) fn define_primitive_core(
                         None => {
                             *caller
                                 .data()
-                                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                                .runtime_error
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) =
                                 Some("RangeError: BigInt exponent too large".to_string());
                             return value::encode_undefined();
                         }
@@ -183,7 +207,9 @@ pub(crate) fn define_primitive_core(
                     let result = x.pow(exp);
                     let mut table = caller
                         .data()
-                        .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                        .bigint_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -200,14 +226,18 @@ pub(crate) fn define_primitive_core(
             let a_val = {
                 let table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table.get(a_handle).cloned()
             };
             if let Some(av) = a_val {
                 let result = -av;
                 let mut table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(result);
                 value::encode_bigint_handle(handle)
@@ -216,7 +246,10 @@ pub(crate) fn define_primitive_core(
             }
         },
     );
-    fn bigint_push_result(caller: &mut Caller<'_, RuntimeState>, result: num_bigint::BigInt) -> i64 {
+    fn bigint_push_result(
+        caller: &mut Caller<'_, RuntimeState>,
+        result: num_bigint::BigInt,
+    ) -> i64 {
         let mut table = caller
             .data()
             .bigint_table
@@ -349,7 +382,9 @@ pub(crate) fn define_primitive_core(
             let eq = {
                 let table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 table
                     .get(a_handle)
                     .zip(table.get(b_handle))
@@ -368,7 +403,9 @@ pub(crate) fn define_primitive_core(
             let cmp = {
                 let table = caller
                     .data()
-                    .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 match (table.get(a_handle), table.get(b_handle)) {
                     (Some(x), Some(y)) => {
                         use std::cmp::Ordering;
@@ -404,7 +441,9 @@ pub(crate) fn define_primitive_core(
             };
             let mut table = caller
                 .data()
-                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
+                .symbol_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let handle = table.len() as u32;
             table.push(SymbolEntry {
                 description,
@@ -427,7 +466,9 @@ pub(crate) fn define_primitive_core(
             };
             let mut table = caller
                 .data()
-                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
+                .symbol_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             // 查找是否已有同 key 的 symbol
             for (idx, entry) in table.iter().enumerate() {
                 if entry.global_key.as_deref() == Some(&key_str) {
@@ -450,15 +491,14 @@ pub(crate) fn define_primitive_core(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, sym: i64| -> i64 {
             if !value::is_symbol(sym) {
-                return make_type_error_exception(
-                    &mut caller,
-                    "TypeError: sym is not a Symbol",
-                );
+                return make_type_error_exception(&mut caller, "TypeError: sym is not a Symbol");
             }
             let handle = value::decode_symbol_handle(sym) as usize;
             let table = caller
                 .data()
-                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
+                .symbol_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let key_to_return = table.get(handle).and_then(|entry| entry.global_key.clone());
             drop(table);
             if let Some(key) = key_to_return {
@@ -479,7 +519,9 @@ pub(crate) fn define_primitive_core(
             }
             let table = caller
                 .data()
-                .symbol_table.lock().unwrap_or_else(|e| e.into_inner());
+                .symbol_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let id_usize = id as usize;
             if id_usize < table.len() {
                 value::encode_symbol_handle(id as u32)

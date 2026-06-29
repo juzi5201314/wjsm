@@ -18,7 +18,9 @@ pub(crate) fn value_to_number_wasm(
     }
     if value::is_string(arg) {
         let s = get_string_value(caller, arg);
-        return Ok(crate::runtime_string_to_number::js_string_content_to_f64(&s));
+        return Ok(crate::runtime_string_to_number::js_string_content_to_f64(
+            &s,
+        ));
     }
     if value::is_symbol(arg) {
         return Err(make_type_error_exception(
@@ -56,7 +58,11 @@ pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val:
     if value::is_proxy(val) {
         let handle = value::decode_proxy_handle(val) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry
@@ -75,7 +81,11 @@ pub(crate) fn is_constructor_in_runtime(caller: &mut Caller<'_, RuntimeState>, v
     if value::is_proxy(val) {
         let handle = value::decode_proxy_handle(val) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry
@@ -94,7 +104,11 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -134,7 +148,11 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -322,7 +340,11 @@ pub(crate) fn complete_property_descriptor(mut desc: PropertyDescriptor) -> Prop
     desc
 }
 
-pub(crate) fn descriptor_value_same(caller: &mut Caller<'_, RuntimeState>, left: i64, right: i64) -> bool {
+pub(crate) fn descriptor_value_same(
+    caller: &mut Caller<'_, RuntimeState>,
+    left: i64,
+    right: i64,
+) -> bool {
     !value::is_falsy(strict_eq(caller, left, right))
 }
 

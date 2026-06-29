@@ -11,7 +11,9 @@ pub(crate) fn define_weakref_finalization(
     // ── Method factory functions ──
     fn create_weakref_deref_method(state: &RuntimeState) -> i64 {
         let mut table = state
-            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(NativeCallable::WeakRefDerefMethod);
         value::encode_native_callable_idx(handle)
@@ -19,7 +21,9 @@ pub(crate) fn define_weakref_finalization(
 
     fn create_fr_register_method(state: &RuntimeState) -> i64 {
         let mut table = state
-            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(NativeCallable::FinalizationRegistryRegisterMethod);
         value::encode_native_callable_idx(handle)
@@ -27,7 +31,9 @@ pub(crate) fn define_weakref_finalization(
 
     fn create_fr_unregister_method(state: &RuntimeState) -> i64 {
         let mut table = state
-            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(NativeCallable::FinalizationRegistryUnregisterMethod);
         value::encode_native_callable_idx(handle)
@@ -77,9 +83,13 @@ pub(crate) fn define_weakref_finalization(
             {
                 let mut table = caller
                     .data()
-                    .weakref_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .weakref_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let weakref_index = table.len() as u32;
-                table.push(WeakRefEntry { target_handle: Some(target_handle) });
+                table.push(WeakRefEntry {
+                    target_handle: Some(target_handle),
+                });
                 handle = weakref_index;
             }
             // Create the deref method NativeCallable
@@ -134,7 +144,11 @@ pub(crate) fn define_weakref_finalization(
          args_count: i32|
          -> i64 {
             if args_count < 1 {
-                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(
                     "TypeError: FinalizationRegistry constructor requires a callback argument"
                         .to_string(),
                 );
@@ -143,7 +157,11 @@ pub(crate) fn define_weakref_finalization(
             let callback = read_shadow_arg(&mut caller, args_base, 0);
             // Validate callable
             if !is_callable_in_runtime(&mut caller, callback) {
-                *caller.data().runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: FinalizationRegistry: callback must be callable".to_string());
                 return value::encode_undefined();
             }
@@ -158,7 +176,9 @@ pub(crate) fn define_weakref_finalization(
             {
                 let mut table = caller
                     .data()
-                    .finalization_registry_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .finalization_registry_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let registry_index = table.len() as u32;
                 table.push(FinalizationRegistryEntry {
                     object_handle,
@@ -251,7 +271,9 @@ pub(crate) fn define_weakref_finalization(
             {
                 let mut table = caller
                     .data()
-                    .finalization_registry_table.lock().unwrap_or_else(|e| e.into_inner());
+                    .finalization_registry_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if handle < table.len() {
                     table[handle].registrations.push(FinalizationRegistration {
                         target_handle,

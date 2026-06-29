@@ -139,8 +139,8 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime_gc::mark_sweep::MarkSweepCollector;
     use super::merge_adjacent_free_intervals;
+    use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 
     /// P4-blocker #1：验证 resize-abandoned 区域经 sweeper 步骤 5 路径进入 free list。
     /// grow_array/grow_object 重写 obj_table 槽后旧 ptr 不可达；这里单独验证
@@ -163,9 +163,7 @@ mod tests {
         let merged = merge_adjacent_free_intervals(vec![(1000, 144), (1144, 80)]);
         assert_eq!(merged, vec![(1000, 224)]);
         let mut collector = MarkSweepCollector::new();
-        collector
-            .free_list
-            .rebuild_from_coalesced_regions(&merged);
+        collector.free_list.rebuild_from_coalesced_regions(&merged);
         assert_eq!(collector.free_list.alloc(224), Some(1000));
         assert_eq!(collector.free_list.total_free_regions(), 0);
     }

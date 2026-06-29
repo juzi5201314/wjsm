@@ -465,8 +465,7 @@ impl Lowerer {
                 name: iter_ir_name,
             },
         );
-        let after_close =
-            self.emit_single_iterator_close_normal(close, iter_for_close)?;
+        let after_close = self.emit_single_iterator_close_normal(close, iter_for_close)?;
         self.current_function
             .set_terminator(after_close, Terminator::Jump { target: exit });
 
@@ -502,10 +501,7 @@ impl Lowerer {
                 swc_ast::Pat::Object(_) | swc_ast::Pat::Array(_) | swc_ast::Pat::Assign(_) => {
                     self.lower_destructure_pattern(pat, value, block, VarKind::Let)
                 }
-                _ => Err(self.error(
-                    pat.span(),
-                    "unsupported pattern in for...in/for...of",
-                )),
+                _ => Err(self.error(pat.span(), "unsupported pattern in for...in/for...of")),
             },
             swc_ast::ForHead::VarDecl(var_decl) => {
                 let kind = match var_decl.kind {
