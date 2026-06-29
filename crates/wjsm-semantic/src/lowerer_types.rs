@@ -1,5 +1,4 @@
 use super::*;
-use swc_core::ecma::ast as swc_ast;
 
 pub(crate) struct Lowerer {
     pub(crate) module: Module,
@@ -14,7 +13,7 @@ pub(crate) struct Lowerer {
     pub(crate) try_contexts: Vec<TryContext>,
     pub(crate) next_temp: u32,
     pub(crate) pending_loop_label: Option<String>,
-    pub(crate) active_finalizers: Vec<swc_ast::BlockStmt>,
+    pub(crate) active_finalizers: Vec<PendingFinalizer>,
     /// 匿名类 / 匿名函数计数器
     pub(crate) anon_counter: u32,
     // ── Function context stack ────────────────────────────────────────────
@@ -26,7 +25,7 @@ pub(crate) struct Lowerer {
     pub(crate) function_try_contexts_stack: Vec<Vec<TryContext>>,
     pub(crate) function_finally_stack_stack: Vec<Vec<FinallyContext>>,
     pub(crate) function_label_stack_stack: Vec<Vec<LabelContext>>,
-    pub(crate) function_active_finalizers_stack: Vec<Vec<swc_ast::BlockStmt>>,
+    pub(crate) function_active_finalizers_stack: Vec<Vec<PendingFinalizer>>,
     pub(crate) function_pending_loop_label_stack: Vec<Option<String>>,
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。

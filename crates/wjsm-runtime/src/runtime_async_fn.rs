@@ -274,7 +274,9 @@ pub(crate) fn pump_async_generator_from_caller(
             if completion == 1 {
                 settle_promise(caller.data(), promise, PromiseSettlement::Reject(value));
             } else {
-                resolve_promise_from_caller(caller, promise, value);
+                // §27.6.3.5 AsyncGeneratorResume：next(value) 传入的 value 直接作为 yield
+                // 表达式结果，不能 adopt thenable，否则 generator 会误 await 该 promise。
+                settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(value));
             }
         }
         Some(AsyncGeneratorPumpAction::Fulfill {

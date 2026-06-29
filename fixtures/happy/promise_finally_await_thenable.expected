@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+a-rejected boom
+b-resolved 2
+c-rejected late
+--- stderr ---

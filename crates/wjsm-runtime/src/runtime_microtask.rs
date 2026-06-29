@@ -44,6 +44,9 @@ pub(crate) async fn drain_microtasks_async<
                 if handle_combinator_reaction(ctx, env, handler, argument) {
                     continue;
                 }
+                if handle_finally_await_reaction(ctx, handler, argument, reaction_type) {
+                    continue;
+                }
                 if is_callable_with_env(ctx, env, handler) {
                     let call_arg = match reaction_type {
                         ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
@@ -54,20 +57,28 @@ pub(crate) async fn drain_microtasks_async<
                     match call_host_function_async(ctx, env, handler, call_arg).await {
                         Some(result) => match reaction_type {
                             ReactionType::Fulfill | ReactionType::Reject => {
-                                resolve_promise(ctx, env, promise, result);
+                                // onFulfilled/onRejected 抛异常时（§27.2.1.3.2 step），
+                                // result promise 应以抛出的值 reject，而非 fulfill 异常值。
+                                if value::is_exception(result) {
+                                    let reason =
+                                        exception_reason_from_state(ctx.state_mut(), result);
+                                    settle_promise(
+                                        ctx.state_mut(),
+                                        promise,
+                                        PromiseSettlement::Reject(reason),
+                                    );
+                                } else {
+                                    resolve_promise(ctx, env, promise, result);
+                                }
                             }
-                            ReactionType::FinallyFulfill => {
-                                settle_promise(
-                                    ctx.state_mut(),
+                            ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
+                                settle_finally_reaction(
+                                    ctx,
+                                    env,
                                     promise,
-                                    PromiseSettlement::Fulfill(argument),
-                                );
-                            }
-                            ReactionType::FinallyReject => {
-                                settle_promise(
-                                    ctx.state_mut(),
-                                    promise,
-                                    PromiseSettlement::Reject(argument),
+                                    argument,
+                                    result,
+                                    reaction_type,
                                 );
                             }
                         },

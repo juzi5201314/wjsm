@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+throw-drain [["F",7,false],["R","Error: body-boom"],["F",null,true]]
+return-drain [["a",false],["b",false],[99,true]]
+--- stderr ---

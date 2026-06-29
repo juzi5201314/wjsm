@@ -1,4 +1,5 @@
 use wjsm_ir::{BasicBlock, BasicBlockId, Function, Instruction, Terminator, ValueId};
+use swc_core::ecma::ast as swc_ast;
 
 // ── CFG Builder ─────────────────────────────────────────────────────────
 
@@ -167,6 +168,15 @@ pub(crate) struct TryContext {
     pub(crate) exception_var: String,
     pub(crate) label_depth: usize,
     pub(crate) finalizer_index: Option<usize>,
+}
+
+/// 当前在作用域内、尚未运行的 try-finally 的 finally 块。
+/// `label_depth` 为进入该 try 时的 label_stack 长度，用于 abrupt completion
+/// 展开时按嵌套深度与 for-of 迭代器关闭交错排序。
+#[derive(Debug, Clone)]
+pub(crate) struct PendingFinalizer {
+    pub(crate) block: swc_ast::BlockStmt,
+    pub(crate) label_depth: usize,
 }
 
 /// The flow state after lowering a statement.

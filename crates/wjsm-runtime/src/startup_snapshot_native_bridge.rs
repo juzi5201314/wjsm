@@ -181,6 +181,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::FinalizationRegistryRegisterMethod
             | NativeCallable::FinalizationRegistryUnregisterMethod
             | NativeCallable::ProxyRevoker { .. }
+            | NativeCallable::PromiseFinallyAwait { .. }
             | NativeCallable::HeadersMethod { .. }
             | NativeCallable::ResponseMethod { .. }
             | NativeCallable::RequestMethod { .. }

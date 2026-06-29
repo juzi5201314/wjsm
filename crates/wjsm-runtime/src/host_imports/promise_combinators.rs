@@ -3,6 +3,26 @@ use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
+use crate::wasm_env::WasmEnv;
+
+/// §27.2.4.1-4：把非原生-promise 的 thenable 元素转为中间 promise（adopt 其状态），
+/// 返回该中间 promise 的 handle 值，使后续逻辑按 pending 原生 promise 统一处理。
+/// 原生 promise 与普通（非 thenable）值返回 None，调用方按既有路径处理。
+fn thenable_to_intermediate_promise(
+    caller: &mut Caller<'_, RuntimeState>,
+    elem: i64,
+) -> Option<i64> {
+    if is_promise_value(caller.data(), elem) {
+        return None;
+    }
+    let env = WasmEnv::from_caller(caller)?;
+    if !is_thenable_value(caller, &env, elem) {
+        return None;
+    }
+    let inter = alloc_promise(caller, PromiseEntry::pending());
+    resolve_promise_from_caller(caller, inter, elem);
+    Some(inter)
+}
 
 pub(crate) fn define_promise_combinators(
     linker: &mut Linker<RuntimeState>,
@@ -56,6 +76,7 @@ pub(crate) fn define_promise_combinators(
                 if rejected.is_some() {
                     break;
                 }
+                let elem = thenable_to_intermediate_promise(&mut caller, elem).unwrap_or(elem);
                 let mut fulfilled = None;
                 let mut rejected_elem = None;
                 let mut pending = false;
@@ -159,6 +180,8 @@ pub(crate) fn define_promise_combinators(
             for index in 0..len {
                 let elem = read_array_elem(&mut caller, ptr, index)
                     .unwrap_or_else(value::encode_undefined);
+                let elem =
+                    thenable_to_intermediate_promise(&mut caller, elem).unwrap_or(elem);
                 if value::is_object(elem) {
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut immediate = None;
@@ -238,6 +261,7 @@ pub(crate) fn define_promise_combinators(
             let mut remaining = 0usize;
 
             for (index, elem) in elems.iter().copied().enumerate() {
+                let elem = thenable_to_intermediate_promise(&mut caller, elem).unwrap_or(elem);
                 let mut outcome = Some(("fulfilled", "value", elem));
                 let mut pending = false;
 
@@ -363,6 +387,7 @@ pub(crate) fn define_promise_combinators(
             let mut fulfilled = None;
 
             for (index, elem) in elems.iter().copied().enumerate() {
+                let elem = thenable_to_intermediate_promise(&mut caller, elem).unwrap_or(elem);
                 let mut rejected_reason = None;
                 let mut pending = false;
                 let mut known_promise = false;

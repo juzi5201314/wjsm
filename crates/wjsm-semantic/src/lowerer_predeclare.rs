@@ -505,7 +505,7 @@ impl Lowerer {
             let mut active = saved[..keep_len].to_vec();
             active.extend(pending.iter().cloned());
             self.active_finalizers = active;
-            flow = self.lower_block_body(&finalizer, flow)?;
+            flow = self.lower_block_body(&finalizer.block, flow)?;
             if matches!(flow, StmtFlow::Terminated) {
                 break;
             }

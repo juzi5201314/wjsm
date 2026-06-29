@@ -1,5 +1,14 @@
 use super::*;
 
+/// abrupt completion 清理序列中的单步：关闭 for-of 迭代器，或运行 try-finally 的 finally 块。
+enum UnwindStep {
+    IteratorClose(ValueId),
+    Finalizer {
+        fin_block: swc_ast::BlockStmt,
+        fi: usize,
+    },
+}
+
 impl Lowerer {
     pub(crate) fn lower_break(
         &mut self,
@@ -14,20 +23,11 @@ impl Lowerer {
             self.find_nearest_break_context_index(break_stmt.span())?
         };
         let target = self.label_stack[target_index].break_target;
-        let iterator_cleanups = self.iterator_cleanups_crossing(target_index);
-
-        match self.lower_pending_finalizers(block)? {
-            StmtFlow::Open(after_finally) => {
-                let after_close = if iterator_cleanups.is_empty() {
-                    after_finally
-                } else {
-                    let completion = self.alloc_undefined_value(after_finally);
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?
-                };
-                self.current_function
-                    .set_terminator(after_close, Terminator::Jump { target });
-            }
-            StmtFlow::Terminated => {}
+        if let StmtFlow::Open(after) =
+            self.emit_unwind_for_abrupt(block, target_index as isize, None)?
+        {
+            self.current_function
+                .set_terminator(after, Terminator::Jump { target });
         }
         Ok(StmtFlow::Terminated)
     }
@@ -54,20 +54,11 @@ impl Lowerer {
         let target = self.label_stack[target_index]
             .continue_target
             .expect("continue target checked above");
-        let iterator_cleanups = self.iterator_cleanups_crossing(target_index);
-
-        match self.lower_pending_finalizers(block)? {
-            StmtFlow::Open(after_finally) => {
-                let after_close = if iterator_cleanups.is_empty() {
-                    after_finally
-                } else {
-                    let completion = self.alloc_undefined_value(after_finally);
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?
-                };
-                self.current_function
-                    .set_terminator(after_close, Terminator::Jump { target });
-            }
-            StmtFlow::Terminated => {}
+        if let StmtFlow::Open(after) =
+            self.emit_unwind_for_abrupt(block, target_index as isize, None)?
+        {
+            self.current_function
+                .set_terminator(after, Terminator::Jump { target });
         }
         Ok(StmtFlow::Terminated)
     }
@@ -128,17 +119,6 @@ impl Lowerer {
         )))
     }
 
-    pub(crate) fn iterator_cleanups_crossing(&self, target_index: usize) -> Vec<ValueId> {
-        let mut iterators = self
-            .label_stack
-            .iter()
-            .skip(target_index + 1)
-            .filter_map(|ctx| ctx.iterator_to_close)
-            .collect::<Vec<_>>();
-        iterators.reverse();
-        iterators
-    }
-
     pub(crate) fn iterator_cleanups_from_depth(&self, depth: usize) -> Vec<ValueId> {
         let mut iterators = self
             .label_stack
@@ -152,6 +132,74 @@ impl Lowerer {
 
     pub(crate) fn active_iterator_cleanups(&self) -> Vec<ValueId> {
         self.iterator_cleanups_from_depth(0)
+    }
+
+    /// 按嵌套深度（内层优先）发射 abrupt completion 的清理序列，交错 finally 块与
+    /// IteratorClose。`exit_below`：label_stack 索引 > exit_below 的迭代器、try 的
+    /// label_depth > exit_below 的 finalizer 视为正在退出；return/throw 传 -1（全部退出）。
+    /// 位置 key：迭代器(索引 i) = 2i，finalizer(label_depth d) = 2d-1，二者奇偶不同不会冲突，
+    /// 降序排列即得内层优先；同深度 finally 以 finalizer_index 降序（内层 try 先执行）。
+    /// `completion`：IteratorClose 的完成值；`None` 时按 break/continue 语义在首个
+    /// IteratorClose 处惰性分配 undefined（无迭代器关闭则不产生多余指令）。
+    fn emit_unwind_for_abrupt(
+        &mut self,
+        block: BasicBlockId,
+        exit_below: isize,
+        completion: Option<ValueId>,
+    ) -> Result<StmtFlow, LoweringError> {
+        let mut items: Vec<(i64, i64, UnwindStep)> = Vec::new();
+        for (i, ctx) in self.label_stack.iter().enumerate() {
+            if (i as isize) > exit_below
+                && let Some(handle) = ctx.iterator_to_close
+            {
+                items.push(((2 * i) as i64, -1, UnwindStep::IteratorClose(handle)));
+            }
+        }
+        let fin_meta: Vec<(usize, usize)> = self
+            .active_finalizers
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| (f.label_depth as isize) > exit_below)
+            .map(|(fi, f)| (f.label_depth, fi))
+            .collect();
+        for (depth, fi) in fin_meta {
+            let fin_block = self.active_finalizers[fi].block.clone();
+            items.push((2 * depth as i64 - 1, fi as i64, UnwindStep::Finalizer { fin_block, fi }));
+        }
+        items.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+
+        let saved = self.active_finalizers.clone();
+        let mut current = block;
+        let mut completion = completion;
+        for (_, _, step) in items {
+            match step {
+                UnwindStep::IteratorClose(handle) => {
+                    let comp = match completion {
+                        Some(v) => v,
+                        None => {
+                            let v = self.alloc_undefined_value(current);
+                            completion = Some(v);
+                            v
+                        }
+                    };
+                    current =
+                        self.emit_iterator_closes(current, std::slice::from_ref(&handle), comp)?;
+                }
+                UnwindStep::Finalizer { fin_block, fi } => {
+                    // finally 内部的 abrupt completion 只继续展开更外层 finalizer。
+                    self.active_finalizers = saved[..fi].to_vec();
+                    match self.lower_block_body(&fin_block, StmtFlow::Open(current))? {
+                        StmtFlow::Open(after) => current = after,
+                        StmtFlow::Terminated => {
+                            self.active_finalizers = saved;
+                            return Ok(StmtFlow::Terminated);
+                        }
+                    }
+                }
+            }
+        }
+        self.active_finalizers = saved;
+        Ok(StmtFlow::Open(current))
     }
 
     pub(crate) fn alloc_undefined_value(&mut self, block: BasicBlockId) -> ValueId {
@@ -338,70 +386,53 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
-        let iterator_cleanups = self.active_iterator_cleanups();
 
         if self.is_async_fn {
             let value = if let Some(arg) = &return_stmt.arg {
                 self.lower_expr(arg, block)?
             } else {
-                let undef_const = self.module.add_constant(Constant::Undefined);
-                let undef_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: undef_val,
-                        constant: undef_const,
-                    },
-                );
-                undef_val
+                self.alloc_undefined_value(block)
             };
-
             let return_block = self.resolve_store_block(block);
-            match self.lower_pending_finalizers(return_block)? {
-                StmtFlow::Open(after_finally) => {
-                    let after_close = self.emit_iterator_closes(
-                        after_finally,
-                        &iterator_cleanups,
-                        value,
-                    )?;
-                    if self.is_async_generator_fn {
-                        let gen_val = self.alloc_value();
-                        self.current_function.append_instruction(
-                            after_close,
-                            Instruction::LoadVar {
-                                dest: gen_val,
-                                name: format!("${}.$generator", self.async_generator_scope_id),
-                            },
-                        );
-                        self.current_function.append_instruction(
-                            after_close,
-                            Instruction::CallBuiltin {
-                                dest: None,
-                                builtin: Builtin::AsyncGeneratorReturn,
-                                args: vec![gen_val, value],
-                            },
-                        );
-                    } else {
-                        let promise_val = self.alloc_value();
-                        self.current_function.append_instruction(
-                            after_close,
-                            Instruction::LoadVar {
-                                dest: promise_val,
-                                name: format!("${}.$promise", self.async_promise_scope_id),
-                            },
-                        );
-                        self.current_function.append_instruction(
-                            after_close,
-                            Instruction::PromiseResolve {
-                                promise: promise_val,
-                                value,
-                            },
-                        );
-                    }
-                    self.current_function
-                        .set_terminator(after_close, Terminator::Return { value: None });
+            if let StmtFlow::Open(after_close) =
+                self.emit_unwind_for_abrupt(return_block, -1, Some(value))?
+            {
+                if self.is_async_generator_fn {
+                    let gen_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_close,
+                        Instruction::LoadVar {
+                            dest: gen_val,
+                            name: format!("${}.$generator", self.async_generator_scope_id),
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        after_close,
+                        Instruction::CallBuiltin {
+                            dest: None,
+                            builtin: Builtin::AsyncGeneratorReturn,
+                            args: vec![gen_val, value],
+                        },
+                    );
+                } else {
+                    let promise_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_close,
+                        Instruction::LoadVar {
+                            dest: promise_val,
+                            name: format!("${}.$promise", self.async_promise_scope_id),
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        after_close,
+                        Instruction::PromiseResolve {
+                            promise: promise_val,
+                            value,
+                        },
+                    );
                 }
-                StmtFlow::Terminated => {}
+                self.current_function
+                    .set_terminator(after_close, Terminator::Return { value: None });
             }
             return Ok(StmtFlow::Terminated);
         }
@@ -413,21 +444,11 @@ impl Lowerer {
         };
 
         let return_block = self.resolve_store_block(block);
-        match self.lower_pending_finalizers(return_block)? {
-            StmtFlow::Open(after_finally) => {
-                let after_close = if iterator_cleanups.is_empty() {
-                    after_finally
-                } else {
-                    let completion = match value {
-                        Some(v) => v,
-                        None => self.alloc_undefined_value(after_finally),
-                    };
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, completion)?
-                };
-                self.current_function
-                    .set_terminator(after_close, Terminator::Return { value });
-            }
-            StmtFlow::Terminated => {}
+        if let StmtFlow::Open(after_close) =
+            self.emit_unwind_for_abrupt(return_block, -1, value)?
+        {
+            self.current_function
+                .set_terminator(after_close, Terminator::Return { value });
         }
         Ok(StmtFlow::Terminated)
     }
@@ -767,7 +788,10 @@ impl Lowerer {
         });
 
         if let Some(finally) = &try_stmt.finalizer {
-            self.active_finalizers.push(finally.clone());
+            self.active_finalizers.push(PendingFinalizer {
+                block: finally.clone(),
+                label_depth: self.label_stack.len(),
+            });
         }
 
         // Lower try body

@@ -173,23 +173,7 @@ pub(crate) fn define_async_generator(
                         let result = alloc_iterator_result_from_caller(&mut caller, value, true);
                         resolve_promise_from_caller(&mut caller, request.promise, result);
                     }
-                    for request in queued {
-                        match request.completion_type {
-                            AsyncGeneratorCompletionType::Throw => settle_promise(
-                                caller.data(),
-                                request.promise,
-                                PromiseSettlement::Reject(request.value),
-                            ),
-                            _ => {
-                                let result = alloc_iterator_result_from_caller(
-                                    &mut caller,
-                                    value::encode_undefined(),
-                                    true,
-                                );
-                                resolve_promise_from_caller(&mut caller, request.promise, result);
-                            }
-                        }
-                    }
+                    drain_async_generator_queue(&mut caller, queued);
                 }
             }
             value::encode_undefined()
@@ -205,7 +189,7 @@ pub(crate) fn define_async_generator(
     // ── Import 140: async_generator_throw(i64, i64) -> i64 ──────────────────
     let async_generator_throw_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
             let handle = value::decode_object_handle(generator) as usize;
             let action = {
                 let mut table = caller
@@ -240,13 +224,7 @@ pub(crate) fn define_async_generator(
                             PromiseSettlement::Reject(value),
                         );
                     }
-                    for request in queued {
-                        settle_promise(
-                            caller.data(),
-                            request.promise,
-                            PromiseSettlement::Reject(value),
-                        );
-                    }
+                    drain_async_generator_queue(&mut caller, queued);
                 }
             }
             value::encode_undefined()
@@ -260,4 +238,34 @@ pub(crate) fn define_async_generator(
     )?;
 
     Ok(())
+}
+
+/// 按 spec §27.6.3.8 AsyncGeneratorDrainQueue 处理已完成 generator 的剩余排队请求。
+/// 分支依据是各请求自身的 completion_type，而非 generator 如何完成：
+/// - Throw → reject 请求自身的 value（不是触发完成的 thrown value）
+/// - Return → fulfill `{value: request.value, done: true}`（保留用户传给 gen.return(v) 的值，
+///   与 active-request 路径直接 fulfill 行为一致）
+/// - Next → fulfill `{value: undefined, done: true}`
+fn drain_async_generator_queue(
+    caller: &mut Caller<'_, RuntimeState>,
+    queued: VecDeque<AsyncGeneratorRequest>,
+) {
+    for request in queued {
+        match request.completion_type {
+            AsyncGeneratorCompletionType::Throw => settle_promise(
+                caller.data(),
+                request.promise,
+                PromiseSettlement::Reject(request.value),
+            ),
+            AsyncGeneratorCompletionType::Return => {
+                let result = alloc_iterator_result_from_caller(caller, request.value, true);
+                resolve_promise_from_caller(caller, request.promise, result);
+            }
+            AsyncGeneratorCompletionType::Next => {
+                let result =
+                    alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
+                resolve_promise_from_caller(caller, request.promise, result);
+            }
+        }
+    }
 }

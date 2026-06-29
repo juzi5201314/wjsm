@@ -417,6 +417,15 @@ pub(crate) enum NativeCallable {
         index: usize,
         kind: PromiseCombinatorReactionKind,
     },
+    /// §27.2.5.4 Promise.prototype.finally：当 onFinally 返回 thenable 时挂在中间
+    /// promise 上的 await 反应。inner promise settle 后按 finally 语义 settle target_promise：
+    /// inner fulfill 时用 original_value（finally_is_reject 决定 fulfill/reject），
+    /// inner reject 时用 inner 的 reason reject。
+    PromiseFinallyAwait {
+        target_promise: i64,
+        original_value: i64,
+        finally_is_reject: bool,
+    },
     AsyncGeneratorMethod {
         generator: i64,
         kind: AsyncGeneratorCompletionType,

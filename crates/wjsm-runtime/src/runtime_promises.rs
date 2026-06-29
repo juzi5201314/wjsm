@@ -314,6 +314,150 @@ pub(crate) fn resolve_promise_from_caller(
     resolve_promise(caller, &env, promise, resolution);
 }
 
+/// 判断 value 是否为 thenable（native promise，或带可调用 `then` 的对象/函数）。
+/// 与 `resolve_promise` 的 thenable 探测逻辑保持一致。
+pub(crate) fn is_thenable_value<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    value: i64,
+) -> bool {
+    if is_promise_value(ctx.state_mut(), value) {
+        return true;
+    }
+    if !(value::is_object(value) || value::is_function(value) || value::is_callable(value)) {
+        return false;
+    }
+    let Some(ptr) = resolve_handle_idx_with_env(ctx, env, (value as u64 & 0xFFFF_FFFF) as usize)
+    else {
+        return false;
+    };
+    match read_object_property_by_name_with_env(ctx, env, ptr, "then") {
+        Some(then) => value::is_callable(then),
+        None => false,
+    }
+}
+
+/// 从泛型 ctx 分配一个 promise（`alloc_promise` 的 ctx+env 版本）。
+pub(crate) fn alloc_promise_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    entry: PromiseEntry,
+) -> i64 {
+    let promise = alloc_object_with_env(ctx, env, 0);
+    if value::is_object(promise) {
+        let handle = value::decode_object_handle(promise) as usize;
+        let mut table = ctx
+            .state_mut()
+            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+        insert_promise_entry(&mut table, handle, entry);
+    }
+    promise
+}
+
+/// §27.2.5.4.1/2 ThenFinally/CatchFinally：处理 onFinally 的返回值 `result`。
+/// 非 thenable → 直接按原始结算值结算 target；thenable → 创建中间 promise adopt
+/// 其状态，并挂上 `PromiseFinallyAwait` 反应，待其 settle 后再结算 target。
+pub(crate) fn settle_finally_reaction<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    target_promise: i64,
+    original_value: i64,
+    result: i64,
+    reaction_type: ReactionType,
+) {
+    let finally_is_reject = matches!(reaction_type, ReactionType::FinallyReject);
+    // onFinally 自身抛异常 → result promise 以抛出值 reject（abrupt completion 覆盖原结果）。
+    if value::is_exception(result) {
+        let reason = exception_reason_from_state(ctx.state_mut(), result);
+        settle_promise(ctx.state_mut(), target_promise, PromiseSettlement::Reject(reason));
+        return;
+    }
+    if !is_thenable_value(ctx, env, result) {
+        let settlement = if finally_is_reject {
+            PromiseSettlement::Reject(original_value)
+        } else {
+            PromiseSettlement::Fulfill(original_value)
+        };
+        settle_promise(ctx.state_mut(), target_promise, settlement);
+        return;
+    }
+    let inner = alloc_promise_with_env(ctx, env, PromiseEntry::pending());
+    let handler = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::PromiseFinallyAwait {
+            target_promise,
+            original_value,
+            finally_is_reject,
+        },
+    );
+    {
+        let inner_handle = raw_promise_handle(inner);
+        let mut table = ctx
+            .state_mut()
+            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = promise_entry_mut(&mut table, inner_handle) {
+            entry.handled = true;
+            entry
+                .fulfill_reactions
+                .push(PromiseReaction::new(handler, target_promise, ReactionType::Fulfill));
+            entry
+                .reject_reactions
+                .push(PromiseReaction::new(handler, target_promise, ReactionType::Reject));
+        }
+    }
+    resolve_promise(ctx, env, inner, result);
+}
+
+/// 拦截 `PromiseFinallyAwait` 反应（在 drain loop 中先于通用 callable 派发）。
+/// 返回 true 表示已处理。
+pub(crate) fn handle_finally_await_reaction<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    handler: i64,
+    argument: i64,
+    reaction_type: ReactionType,
+) -> bool {
+    let record = {
+        if !value::is_native_callable(handler) {
+            None
+        } else {
+            let idx = value::decode_native_callable_idx(handler) as usize;
+            ctx.state_mut()
+                .native_callables.lock().unwrap_or_else(|e| e.into_inner())
+                .get(idx)
+                .and_then(|nc| match nc {
+                    NativeCallable::PromiseFinallyAwait {
+                        target_promise,
+                        original_value,
+                        finally_is_reject,
+                    } => Some((*target_promise, *original_value, *finally_is_reject)),
+                    _ => None,
+                })
+        }
+    };
+    let Some((target_promise, original_value, finally_is_reject)) = record else {
+        return false;
+    };
+    recycle_native_callable(ctx.state_mut(), handler);
+    let settlement = match reaction_type {
+        // inner promise fulfilled → 按 finally 语义用原始值结算 target
+        ReactionType::Fulfill | ReactionType::FinallyFulfill => {
+            if finally_is_reject {
+                PromiseSettlement::Reject(original_value)
+            } else {
+                PromiseSettlement::Fulfill(original_value)
+            }
+        }
+        // inner promise rejected → 用 inner 的 reason reject target
+        ReactionType::Reject | ReactionType::FinallyReject => PromiseSettlement::Reject(argument),
+    };
+    settle_promise(ctx.state_mut(), target_promise, settlement);
+    true
+}
+
 pub(crate) fn passive_reaction_settlement(
     reaction_type: ReactionType,
     argument: i64,

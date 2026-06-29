@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+all 42 7 100
+race first
+allSettled rejected bad
+any ok
+--- stderr ---

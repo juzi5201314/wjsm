@@ -524,6 +524,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(value::encode_undefined())
         }
         NativeCallable::PromiseCombinatorReaction { .. } => Some(value::encode_undefined()),
+        // 正常情况下被 drain loop 拦截，不会作为函数被调用；保险起见返回 undefined。
+        NativeCallable::PromiseFinallyAwait { .. } => Some(value::encode_undefined()),
         NativeCallable::AsyncGeneratorIdentity { generator } => Some(generator),
         NativeCallable::AsyncGeneratorMethod { generator, kind } => {
             let result_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
