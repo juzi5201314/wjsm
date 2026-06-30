@@ -330,6 +330,13 @@ pub(crate) fn reflect_delete_property_impl(
     let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
         return value::encode_bool(true);
     };
+    // 数组元素删除：将对应 slot 置 hole
+    if value::is_array(target) {
+        if let Ok(index) = prop_name.parse::<u32>() {
+            crate::runtime_values::write_array_hole(caller, ptr, index);
+            return value::encode_bool(true);
+        }
+    }
     let Some((slot_offset, flags, _val)) = find_property_slot_by_name_id(caller, ptr, name_id)
     else {
         return value::encode_bool(true);

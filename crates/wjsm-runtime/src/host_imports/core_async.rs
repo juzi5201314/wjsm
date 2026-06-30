@@ -571,6 +571,19 @@ pub(crate) fn define_core_async(
                 .await;
 
         if value::is_exception(result) {
+            // ES §7.4.6 step 5: 原 completion 为 throw 时优先返回原 throw
+            if value::is_exception(completion) && value::is_exception(result) {
+                if let Some(IteratorState::ObjectIter { done, .. }) = caller
+                    .data()
+                    .iterators
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_mut(handle_idx)
+                {
+                    *done = true;
+                }
+                return completion;
+            }
             if let Some(IteratorState::ObjectIter { done, .. }) = caller
                 .data()
                 .iterators

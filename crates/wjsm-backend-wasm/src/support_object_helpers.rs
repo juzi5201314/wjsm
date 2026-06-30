@@ -1256,8 +1256,8 @@ fn emit_obj_delete() -> Function {
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
 
-    // 未找到 - 返回 false
-    func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
+    // 未找到 → 返回 true（delete 不存在属性视为成功）
+    func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
     func.instruction(&WasmInstruction::End);
     func
 }

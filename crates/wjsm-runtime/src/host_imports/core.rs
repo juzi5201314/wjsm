@@ -1675,32 +1675,6 @@ pub(crate) async fn iterator_from_impl_async(
         }
     }
 
-    if (value::is_object(val) || value::is_function(val))
-        && let Some(ptr) = resolve_handle(caller, val)
-        && let Some(next) = read_object_property_by_name(caller, ptr, "next")
-        && value::is_callable(next)
-    {
-        let return_method = read_object_property_by_name(caller, ptr, "return")
-            .filter(|candidate| value::is_callable(*candidate));
-        let throw_method = read_object_property_by_name(caller, ptr, "throw")
-            .filter(|candidate| value::is_callable(*candidate));
-        let mut iters = caller
-            .data()
-            .iterators
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = iters.len() as u32;
-        iters.push(IteratorState::ObjectIter {
-            iterator: val,
-            next,
-            return_method,
-            throw_method,
-            current_value: value::encode_undefined(),
-            has_current: false,
-            done: false,
-        });
-        return value::encode_handle(value::TAG_ITERATOR, handle);
-    }
 
     let mut iters = caller
         .data()

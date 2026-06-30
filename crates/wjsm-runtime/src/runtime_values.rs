@@ -1386,11 +1386,17 @@ pub(crate) fn to_object(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
             let ch_val = store_runtime_string(caller, ch.to_string());
             let _ = define_host_data_property_from_caller(caller, obj, &idx_str, ch_val);
         }
-        let _ = define_host_data_property_from_caller(
+        let len_val = value::encode_f64(len as f64);
+        let len_name_id = {
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            crate::find_memory_c_string_with_env(caller, &env, "length").unwrap_or(0)
+        };
+        let _ = crate::define_host_data_property_by_name_id_with_flags(
             caller,
             obj,
-            "length",
-            value::encode_f64(len as f64),
+            crate::property_key::encode_string_name_id(len_name_id),
+            len_val,
+            wjsm_ir::constants::FLAG_CONFIGURABLE | wjsm_ir::constants::FLAG_WRITABLE,
         );
         return obj;
     }

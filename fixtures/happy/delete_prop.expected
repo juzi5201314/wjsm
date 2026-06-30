@@ -3,5 +3,5 @@ exit_code: 0
 1
 true
 undefined
-false
+true
 --- stderr ---

@@ -1046,8 +1046,8 @@ pub(crate) fn define_math_number_error(
     // ── Boolean builtins ────────────────────────────────────────────────────
     let boolean_constructor_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            value::encode_bool(value::is_truthy(arg))
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            value::encode_bool(crate::runtime_values::to_boolean(&mut caller, arg))
         },
     );
     linker.define(

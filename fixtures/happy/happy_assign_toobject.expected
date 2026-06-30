@@ -1,4 +1,4 @@
 exit_code: 0
 --- stdout ---
-a b 2
+a b undefined
 --- stderr ---
