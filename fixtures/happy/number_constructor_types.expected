@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+1
+0
+-42
+123456789012345680000000000000
+TypeError: TypeError
+TypeError: TypeError
+5
+42
+99
+7
+--- stderr ---

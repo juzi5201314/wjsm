@@ -1029,6 +1029,10 @@ pub(crate) fn format_number_to_fixed_js(x: f64, digits: i32) -> String {
     if x.is_infinite() {
         return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
     }
+    // ECMA-262 §21.1.3.3 step 8: x ≥ 10^21 → ToString(x)
+    if x.abs() >= 1e21 {
+        return format_number_js(x);
+    }
     let x = normalize_negative_zero(x);
     format!("{:.1$}", x, digits as usize)
 }

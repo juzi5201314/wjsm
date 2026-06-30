@@ -1,0 +1,20 @@
+exit_code: 0
+--- stdout ---
+1e+21
+-1e+21
+1.5e+21
+RangeError: RangeError
+RangeError: RangeError
+1e+2
+1.2300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e+2
+RangeError: RangeError
+RangeError: RangeError
+123.00000000000000000000000000000000000000000000000
+1e+2
+123.46
+Infinity
+-Infinity
+NaN
+Infinity
+Infinity
+--- stderr ---

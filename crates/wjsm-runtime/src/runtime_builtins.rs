@@ -348,6 +348,15 @@ fn invoke_number_primitive_method(
             } else {
                 None
             };
+            // ECMA-262 §21.1.3.7 step 5: f < 0 或 f > 100 → RangeError
+            if let Some(f) = digits
+                && !(0..=100).contains(&f)
+            {
+                return make_range_error_exception(
+                    caller,
+                    "toExponential() argument must be between 0 and 100",
+                );
+            }
             store_runtime_string(caller, format_number_to_exponential_js(x, digits))
         }
         4 => {
@@ -360,11 +369,11 @@ fn invoke_number_primitive_method(
                 Some(-1)
             };
             if let Some(precision) = precision
-                && !(1..=21).contains(&precision)
+                && !(1..=100).contains(&precision)
             {
                 return make_range_error_exception(
                     caller,
-                    "toPrecision() argument must be between 1 and 21",
+                    "toPrecision() argument must be between 1 and 100",
                 );
             }
             store_runtime_string(caller, format_number_to_precision_js(x, precision))

@@ -592,21 +592,69 @@ pub(crate) fn define_math_number_error(
     let number_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            // ECMA-262 §21.1.1.1 Number(value)
             if value::is_f64(arg) {
-                arg
-            } else if value::is_undefined(arg) || value::is_null(arg) {
-                value::encode_f64(0.0)
-            } else if value::is_bool(arg) {
-                value::encode_f64(if value::decode_bool(arg) { 1.0 } else { 0.0 })
-            } else if value::is_string(arg) {
+                return arg;
+            }
+            if value::is_undefined(arg) {
+                return value::encode_f64(f64::NAN);
+            }
+            if value::is_null(arg) {
+                return value::encode_f64(0.0);
+            }
+            if value::is_bool(arg) {
+                return value::encode_f64(if value::decode_bool(arg) { 1.0 } else { 0.0 });
+            }
+            if value::is_string(arg) {
                 let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
                 let s_str = String::from_utf8_lossy(&s).to_string();
-                value::encode_f64(crate::runtime_string_to_number::js_string_content_to_f64(
-                    &s_str,
-                ))
-            } else {
-                value::encode_f64(0.0)
+                return value::encode_f64(
+                    crate::runtime_string_to_number::js_string_content_to_f64(&s_str),
+                );
             }
+            // BigInt → Number 转换（§21.1.1.1 step 1b: Number(BigInt) 不抛异常，转为 f64）
+            if value::is_bigint(arg) {
+                let handle = value::decode_bigint_handle(arg) as usize;
+                let bigint_table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if let Some(bi) = bigint_table.get(handle) {
+                    return value::encode_f64(bi.to_f64().unwrap_or(f64::NAN));
+                }
+                return value::encode_f64(f64::NAN);
+            }
+            // Symbol → 抛 TypeError（§7.1.4 ToNumber: Symbol 抛 TypeError）
+            if value::is_symbol(arg) {
+                return make_type_error_exception(
+                    &mut caller,
+                    "Cannot convert a Symbol value to a number",
+                );
+            }
+            // 对象/可调用值 → ToPrimitive(hint: Number) → Number（递归）
+            if value::is_object(arg) || value::is_callable(arg) {
+                let prim = to_primitive_with_hint(&mut caller, arg, ToPrimitiveHint::Number);
+                if value::is_exception(prim) {
+                    return prim;
+                }
+                // ToPrimitive 结果可能仍是 BigInt（valueOf 返回 BigInt）→ 需再次转 Number
+                if value::is_bigint(prim) {
+                    let handle = value::decode_bigint_handle(prim) as usize;
+                    let bigint_table = caller
+                        .data()
+                        .bigint_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if let Some(bi) = bigint_table.get(handle) {
+                        return value::encode_f64(bi.to_f64().unwrap_or(f64::NAN));
+                    }
+                    return value::encode_f64(f64::NAN);
+                }
+                return to_number(&mut caller, prim);
+            }
+            // 其他类型（regexp, iterator, enumerator 等）→ NaN
+            value::encode_f64(f64::NAN)
         },
     );
     linker.define(
@@ -932,7 +980,7 @@ pub(crate) fn define_math_number_error(
     )?;
     let number_proto_to_exponential_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
@@ -944,6 +992,15 @@ pub(crate) fn define_math_number_error(
             } else {
                 None
             };
+            // ECMA-262 §21.1.3.7 step 5: f < 0 或 f > 100 → RangeError
+            if let Some(f) = digits
+                && !(0..=100).contains(&f)
+            {
+                return make_range_error_exception(
+                    &mut caller,
+                    "toExponential() argument must be between 0 and 100",
+                );
+            }
             let s = format_number_to_exponential_js(x, digits);
             store_runtime_string(&caller, s)
         },
@@ -969,11 +1026,11 @@ pub(crate) fn define_math_number_error(
                 Some(-1)
             };
             if let Some(precision) = precision
-                && !(1..=21).contains(&precision)
+                && !(1..=100).contains(&precision)
             {
                 return make_range_error_exception(
                     &mut caller,
-                    "toPrecision() argument must be between 1 and 21",
+                    "toPrecision() argument must be between 1 and 100",
                 );
             }
             let s = format_number_to_precision_js(x, precision);
