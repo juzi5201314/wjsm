@@ -93,7 +93,7 @@ impl RootProvider for RuntimeRoots {
             return;
         }
         // 先快照所有 raw 值（with_memory 借用周期短），再解析（解析可能 with_state）。
-        let vals: Vec<i64> = ctx.with_memory(|_caller, data| {
+        let vals: Vec<i64> = ctx.with_memory(|data| {
             let mut out = Vec::new();
             let mut addr = stack_base;
             while addr + 8 <= sp.min(data.len()) {

@@ -1198,7 +1198,10 @@ pub(crate) async fn object_get_own_property_symbols_async(
             Ok(k) => k,
             Err(_) => return alloc_array(caller, 0),
         };
-        let out: Vec<i64> = keys.into_iter().filter(|key| value::is_symbol(*key)).collect();
+        let out: Vec<i64> = keys
+            .into_iter()
+            .filter(|key| value::is_symbol(*key))
+            .collect();
         let len = out.len() as u32;
         let arr = alloc_array(caller, len);
         for (i, key) in out.into_iter().enumerate() {

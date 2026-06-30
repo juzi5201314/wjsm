@@ -565,16 +565,20 @@ impl Lowerer {
         let new_obj_capacity = match new_expr.callee.as_ref() {
             swc_ast::Expr::Ident(ident) if self.scopes.lookup(&ident.sym).is_err() => {
                 match builtin_from_global_ident(&ident.sym) {
-                    Some(b) if matches!(
-                        b,
-                        Builtin::ErrorConstructor
-                            | Builtin::TypeErrorConstructor
-                            | Builtin::RangeErrorConstructor
-                            | Builtin::SyntaxErrorConstructor
-                            | Builtin::ReferenceErrorConstructor
-                            | Builtin::URIErrorConstructor
-                            | Builtin::EvalErrorConstructor
-                    ) => 6,
+                    Some(b)
+                        if matches!(
+                            b,
+                            Builtin::ErrorConstructor
+                                | Builtin::TypeErrorConstructor
+                                | Builtin::RangeErrorConstructor
+                                | Builtin::SyntaxErrorConstructor
+                                | Builtin::ReferenceErrorConstructor
+                                | Builtin::URIErrorConstructor
+                                | Builtin::EvalErrorConstructor
+                        ) =>
+                    {
+                        6
+                    }
                     _ => 4,
                 }
             }

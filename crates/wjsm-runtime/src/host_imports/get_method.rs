@@ -27,7 +27,12 @@ pub(crate) fn get_method_by_name_id(
             caller,
             "method is not callable".to_string(),
         );
-        let error_obj = crate::runtime_heap::create_error_object(caller, "TypeError", msg_val, value::encode_undefined());
+        let error_obj = crate::runtime_heap::create_error_object(
+            caller,
+            "TypeError",
+            msg_val,
+            value::encode_undefined(),
+        );
         let mut errors = caller
             .data()
             .error_table

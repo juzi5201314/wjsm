@@ -477,7 +477,7 @@ impl Clone for RuntimeState {
             runtime_error: self.runtime_error.clone(),
             gc_mark_bits: self.gc_mark_bits.clone(),
             alloc_counter: self.alloc_counter.clone(),
-            gc_threshold: self.gc_threshold,
+            gc_threshold: self.gc_threshold.clone(),
             timers: self.timers.clone(),
             cancelled_timers: self.cancelled_timers.clone(),
             next_timer_id: self.next_timer_id.clone(),
@@ -555,8 +555,8 @@ struct RuntimeState {
     gc_mark_bits: Arc<Mutex<Vec<u64>>>,
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
     alloc_counter: Arc<Mutex<u64>>,
-    /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。
-    gc_threshold: u64,
+    /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。自适应——每次 GC 后根据存活对象数调整。
+    gc_threshold: Arc<Mutex<u64>>,
     /// 定时器列表
     timers: Arc<Mutex<Vec<TimerEntry>>>,
     /// 已取消的定时器 ID 集合
@@ -700,6 +700,28 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
+    const GC_MIN_THRESHOLD: u64 = 1000;
+    const GC_GROWTH_FACTOR: u64 = 2;
+
+    pub(crate) fn bump_alloc_counter_should_collect(&self) -> bool {
+        let threshold = *self.gc_threshold.lock().unwrap_or_else(|e| e.into_inner());
+        let mut counter = self.alloc_counter.lock().unwrap_or_else(|e| e.into_inner());
+        *counter += 1;
+        *counter >= threshold
+    }
+
+    pub(crate) fn reset_alloc_counter_after_gc(&self) {
+        let mut counter = self.alloc_counter.lock().unwrap_or_else(|e| e.into_inner());
+        *counter = 0;
+    }
+
+    pub(crate) fn update_gc_threshold_after_collection(&self, live_objects: usize) {
+        let live_threshold = (live_objects as u64).saturating_mul(Self::GC_GROWTH_FACTOR);
+        let next_threshold = live_threshold.max(Self::GC_MIN_THRESHOLD);
+        let mut threshold = self.gc_threshold.lock().unwrap_or_else(|e| e.into_inner());
+        *threshold = next_threshold;
+    }
+
     fn new_with_shared(shared_state: Option<Arc<SharedRuntimeState>>) -> Self {
         let mut state = Self::new();
         state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
@@ -757,7 +779,6 @@ impl RuntimeState {
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
 
     pub(crate) fn new() -> Self {
-        const GC_THRESHOLD: u64 = 1000;
         RuntimeState {
             output: Arc::new(Mutex::new(Vec::new())),
             iterators: Arc::new(Mutex::new(Vec::new())),
@@ -766,7 +787,7 @@ impl RuntimeState {
             runtime_error: Arc::new(Mutex::new(None)),
             gc_mark_bits: Arc::new(Mutex::new(Vec::new())),
             alloc_counter: Arc::new(Mutex::new(0)),
-            gc_threshold: GC_THRESHOLD,
+            gc_threshold: Arc::new(Mutex::new(Self::GC_MIN_THRESHOLD)),
             timers: Arc::new(Mutex::new(Vec::new())),
             cancelled_timers: Arc::new(Mutex::new(HashSet::new())),
             next_timer_id: Arc::new(Mutex::new(1)),
@@ -1307,5 +1328,42 @@ mod tests {
         drop(_guard);
         assert_eq!(counter.count(), 0);
         Ok(())
+    }
+
+    #[test]
+    fn gc_threshold_adapts_and_counter_resets() {
+        let state = super::RuntimeState::new();
+
+        state.update_gc_threshold_after_collection(100);
+        assert_eq!(
+            *state.gc_threshold.lock().unwrap_or_else(|e| e.into_inner()),
+            super::RuntimeState::GC_MIN_THRESHOLD
+        );
+
+        state.update_gc_threshold_after_collection(100_000);
+        assert_eq!(
+            *state.gc_threshold.lock().unwrap_or_else(|e| e.into_inner()),
+            200_000
+        );
+
+        state.update_gc_threshold_after_collection(10);
+        assert_eq!(
+            *state.gc_threshold.lock().unwrap_or_else(|e| e.into_inner()),
+            super::RuntimeState::GC_MIN_THRESHOLD
+        );
+
+        for _ in 0..super::RuntimeState::GC_MIN_THRESHOLD - 1 {
+            assert!(!state.bump_alloc_counter_should_collect());
+        }
+        assert!(state.bump_alloc_counter_should_collect());
+
+        state.reset_alloc_counter_after_gc();
+        assert_eq!(
+            *state
+                .alloc_counter
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            0
+        );
     }
 }

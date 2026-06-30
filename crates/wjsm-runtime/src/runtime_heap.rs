@@ -46,20 +46,15 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     capacity: u32,
     proto: u32,
 ) -> i64 {
+    let size = 16u32.saturating_add(capacity.saturating_mul(32));
+    try_gc_for_host_alloc(ctx, env, size as usize);
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let _obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let _obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let size = 16u32.saturating_add(capacity.saturating_mul(32));
     let new_heap_ptr = heap_ptr.saturating_add(size);
 
-    // P4：host 端对象分配的 OOM 处理。空间不足时先 GC（可能回收死对象腾空间），
-    // 仍不足则 memory.grow。GC 经 gc_algorithm（与 $obj_new 一致），但 host 路径是泛型
-    // C: AsContextMut（Caller 或 Store），GcContext 需 &mut Caller，故仅在 Caller 路径触发 GC。
-    // Store 路径（async streams_fetch_body）跳过 GC，仅 grow（罕见 async 路径，grow 足够）。
+    // 空间不足时已在分配前按阈值尝试 GC；仍不足则 memory.grow。
     if new_heap_ptr as usize > env.memory.data(&*ctx).len() {
-        // 尝试 GC（Caller 路径）
-        try_gc_for_host_alloc(ctx, env, size as usize);
-        // 仍不足则 grow
         let cur_len = env.memory.data(&*ctx).len();
         let hp = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
         if hp + size as usize > cur_len {
@@ -96,19 +91,32 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     value::encode_object_handle(obj_table_count)
 }
 
-/// host 端 OOM 时的 GC 触发（仅 Caller 路径）。Store 路径 no-op（经 grow 兜底）。
-/// 通过 AsContextMut 访问 gc_algorithm；GcContext 需 &mut Caller，此处用 Caller 特化。
-fn try_gc_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(
+/// host 端对象分配前的主动 GC 触发。
+pub(crate) fn try_gc_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     _size: usize,
 ) {
-    // 经 store 访问 gc_algorithm。AsContextMut → store.data() 拿 RuntimeState（只读 clone Arc）。
-    // 但 GcContext 需 &mut Caller，泛型 C 无法直接构造。
-    // 退而求其次：此处不做 collect（避免 GcContext 借用模型冲突），依赖 gc_maybe_collect
-    // 在 WASM $obj_new 路径已做过 proactive collect。host 路径 OOM 主要靠 grow。
-    // 注：若 host 路径频繁 OOM 且 grow 受限，后续可泛型化 GcContext 解决。
-    let _ = (ctx, env);
+    let (should_collect, gc_arc) = {
+        let state = ctx.as_context().data();
+        (
+            state.bump_alloc_counter_should_collect(),
+            state.gc_algorithm.clone(),
+        )
+    };
+    if !should_collect {
+        return;
+    }
+
+    let stats = {
+        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
+        let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+        gc.collect_with_provider(&mut gc_ctx, &mut roots as _)
+    };
+    let state = ctx.as_context().data();
+    state.update_gc_threshold_after_collection(stats.marked);
+    state.reset_alloc_counter_after_gc();
 }
 
 pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
@@ -738,14 +746,24 @@ fn define_error_properties_with_env<C: AsContextMut<Data = RuntimeState>>(
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "name"))
         .unwrap();
     let _ = define_host_data_property_by_name_id_with_env(
-        ctx, env, obj, encode_string_name_id(name_name_id), name_val, non_enum_flags,
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(name_name_id),
+        name_val,
+        non_enum_flags,
     );
     // message: { writable, non-enumerable, configurable }
     let msg_name_id = find_memory_c_string_with_env(ctx, env, "message")
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "message"))
         .unwrap();
     let _ = define_host_data_property_by_name_id_with_env(
-        ctx, env, obj, encode_string_name_id(msg_name_id), message_val, non_enum_flags,
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(msg_name_id),
+        message_val,
+        non_enum_flags,
     );
     // C2: 隐藏品牌标记，用于 render_value 区分真实 Error vs 普通对象 {name:"TypeError"}。
     let brand_val = value::encode_bool(true);
@@ -1010,13 +1028,23 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "name"))
         .unwrap();
     let _ = define_host_data_property_by_name_id_with_env(
-        ctx, env, obj, encode_string_name_id(name_name_id), name, non_enum_flags,
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(name_name_id),
+        name,
+        non_enum_flags,
     );
     let msg_name_id = find_memory_c_string_with_env(ctx, env, "message")
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "message"))
         .unwrap();
     let _ = define_host_data_property_by_name_id_with_env(
-        ctx, env, obj, encode_string_name_id(msg_name_id), message, non_enum_flags,
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(msg_name_id),
+        message,
+        non_enum_flags,
     );
     let _ = define_host_data_property_with_env(ctx, env, obj, "errors", errors);
     // __error_brand__ 隐藏标记
@@ -1025,7 +1053,12 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "__error_brand__"))
         .unwrap();
     let _ = define_host_data_property_by_name_id_with_env(
-        ctx, env, obj, encode_string_name_id(brand_name_id), brand_val, 0,
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(brand_name_id),
+        brand_val,
+        0,
     );
     // stack 属性
     let stack = capture_stack_trace(ctx, "AggregateError", "All promises were rejected");
@@ -1034,12 +1067,19 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "stack"))
         .unwrap();
     let _ = define_host_data_property_by_name_id_with_env(
-        ctx, env, obj, encode_string_name_id(stack_name_id), stack_val, non_enum_flags,
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(stack_name_id),
+        stack_val,
+        non_enum_flags,
     );
     // 设置原型为 error_prototypes（如有）
     if let Some(proto) = {
         let state = ctx.as_context().data();
-        state.error_prototypes.proto_for_error_name("AggregateError")
+        state
+            .error_prototypes
+            .proto_for_error_name("AggregateError")
     } {
         set_object_proto_header(ctx, env, obj, proto);
     }

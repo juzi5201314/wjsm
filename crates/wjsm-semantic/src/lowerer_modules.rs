@@ -703,7 +703,8 @@ impl Lowerer {
             },
         );
         let mut current_block = block;
-        let env_val = self.ensure_shared_env(current_block, std::slice::from_ref(&binding), DUMMY_SP)?;
+        let env_val =
+            self.ensure_shared_env(current_block, std::slice::from_ref(&binding), DUMMY_SP)?;
         current_block = self.resolve_store_block(current_block);
         let getter_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -862,11 +863,7 @@ fn install_live_namespace_getters_for_source(
 }
 
 /// 为命名空间对象设置 `Symbol.toStringTag = "Module"`（ECMAScript §10.4.6.2）。
-fn set_namespace_string_tag(
-    lowerer: &mut Lowerer,
-    ns_obj: wjsm_ir::ValueId,
-    block: BasicBlockId,
-) {
+fn set_namespace_string_tag(lowerer: &mut Lowerer, ns_obj: wjsm_ir::ValueId, block: BasicBlockId) {
     let tag_key = lowerer
         .module
         .add_constant(Constant::String("Symbol.toStringTag".to_string()));

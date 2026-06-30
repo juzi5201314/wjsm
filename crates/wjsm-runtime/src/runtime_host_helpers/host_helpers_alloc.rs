@@ -142,10 +142,10 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
+    let size = 16u32.saturating_add(capacity.saturating_mul(8));
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let size = 16u32.saturating_add(capacity.saturating_mul(8));
     let new_heap_ptr = heap_ptr.saturating_add(size);
     let proto = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
     ensure_linear_memory_bytes(ctx, env, new_heap_ptr as usize);
@@ -207,10 +207,10 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
+    let size = 16u32.saturating_add(capacity.saturating_mul(32));
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let size = 16u32.saturating_add(capacity.saturating_mul(32));
     let new_heap_ptr = heap_ptr.saturating_add(size);
     let d = env.memory.data_mut(&mut *ctx);
     let ptr = heap_ptr as usize;
@@ -269,8 +269,8 @@ pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>
     env: &WasmEnv,
     name: &str,
 ) -> Option<u32> {
-    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
     let bytes = name.as_bytes();
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
     let end = heap_ptr.checked_add(bytes.len() + 1)?;
     let aligned_end = (end + 7) & !7;
     {

@@ -825,10 +825,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 .first()
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
-            let options = args
-                .get(1)
-                .copied()
-                .unwrap_or_else(value::encode_undefined);
+            let options = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             Some(create_error_object_with_receiver(
                 caller, error_name, msg, options, this_val,
             ))
@@ -947,13 +944,11 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
         NativeCallable::GcCollect => {
             // P4：gc() global 重接到 GC 框架（不再调旧 trigger_gc，P5 删除）。
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return Some(value::encode_undefined());
-            };
+            let env = crate::wasm_env::WasmEnv::from_caller(&mut *caller).expect("WasmEnv");
             let gc_arc = caller.data().gc_algorithm.clone();
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
             let mut ctx =
-                crate::runtime_gc::GcContext::new(&mut *caller, memory, gc.algorithm_name());
+                crate::runtime_gc::GcContext::new(&mut *caller, &env, gc.algorithm_name());
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
             gc.collect_with_provider(&mut ctx, &mut roots as _);
             Some(value::encode_undefined())

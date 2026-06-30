@@ -44,9 +44,8 @@ pub fn mark_roots_and_drain(
     while let Some(h) = worklist.pop() {
         // 收集本对象的子引用 raw values（proto + props/elements）。
         // 每次只读一个对象的子，借用周期短（单对象），无 grow。
-        let raw_vals: Vec<i64> = ctx.with_memory(|_caller, data| {
-            collect_child_raw_values(data, h, obj_table_ptr, obj_table_count)
-        });
+        let raw_vals: Vec<i64> = ctx
+            .with_memory(|data| collect_child_raw_values(data, h, obj_table_ptr, obj_table_count));
         // 把每个 raw value 解析为 handle（含 closure/native_callable 经 host 表解析）。
         for val in raw_vals {
             for child in resolve_value_handles(ctx, val, obj_table_count) {

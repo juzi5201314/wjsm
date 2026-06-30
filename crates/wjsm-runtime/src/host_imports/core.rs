@@ -1470,7 +1470,7 @@ pub(crate) fn define_core(
          heap_type: i32,
          capacity: i32|
          -> wasmtime::Result<i32> {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
                 return Err(wasmtime::Trap::AllocationTooLarge.into());
             };
             let size = size.max(0) as usize;
@@ -1483,23 +1483,27 @@ pub(crate) fn define_core(
             {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
                 let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
                 if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
                     return Ok(ptr as i32);
                 }
             }
             // 2. collect 后重试
-            {
+            let stats = {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
                 let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                gc.collect_with_provider(&mut ctx, &mut roots as _);
-            }
+                gc.collect_with_provider(&mut ctx, &mut roots as _)
+            };
+            caller
+                .data()
+                .update_gc_threshold_after_collection(stats.marked);
+            caller.data().reset_alloc_counter_after_gc();
             {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
                 let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
                 if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
                     return Ok(ptr as i32);
                 }
@@ -1508,7 +1512,7 @@ pub(crate) fn define_core(
             {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
                 let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
                 if ctx.grow(1).is_ok()
                     && let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity)
                 {
@@ -1526,30 +1530,27 @@ pub(crate) fn define_core(
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
         let (should_collect, gc_arc) = {
             let state = caller.data();
-            let mut counter = state
-                .alloc_counter
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            *counter += 1;
-            (*counter >= state.gc_threshold, state.gc_algorithm.clone())
+            (
+                state.bump_alloc_counter_should_collect(),
+                state.gc_algorithm.clone(),
+            )
         };
         if !should_collect {
             return;
         }
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
         };
-        {
+        let stats = {
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx =
-                crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-            gc.collect_with_provider(&mut ctx, &mut roots as _);
-        }
-        // 重置 alloc_counter（下一轮阈值窗口）。
-        if let Ok(mut c) = caller.data().alloc_counter.lock() {
-            *c = 0;
-        }
+            gc.collect_with_provider(&mut ctx, &mut roots as _)
+        };
+        caller
+            .data()
+            .update_gc_threshold_after_collection(stats.marked);
+        caller.data().reset_alloc_counter_after_gc();
     });
     linker.define(&mut store, "env", "gc_maybe_collect", f)?;
 

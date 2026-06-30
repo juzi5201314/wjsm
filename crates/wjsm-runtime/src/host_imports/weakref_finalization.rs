@@ -53,7 +53,12 @@ pub(crate) fn define_weakref_finalization(
                     &caller,
                     "TypeError: WeakRef constructor requires a target argument".to_string(),
                 );
-                let error_obj = create_error_object(&mut caller, "TypeError", msg_val, value::encode_undefined());
+                let error_obj = create_error_object(
+                    &mut caller,
+                    "TypeError",
+                    msg_val,
+                    value::encode_undefined(),
+                );
                 return value::encode_exception(value::decode_object_handle(error_obj));
             }
             let target = read_shadow_arg(&mut caller, args_base, 0);
@@ -63,7 +68,12 @@ pub(crate) fn define_weakref_finalization(
                     &caller,
                     "TypeError: WeakRef: target must be an object".to_string(),
                 );
-                let error_obj = create_error_object(&mut caller, "TypeError", msg_val, value::encode_undefined());
+                let error_obj = create_error_object(
+                    &mut caller,
+                    "TypeError",
+                    msg_val,
+                    value::encode_undefined(),
+                );
                 return value::encode_exception(value::decode_object_handle(error_obj));
             }
             // 记录目标在 obj_table 中的 handle 索引（非堆指针）
@@ -74,7 +84,12 @@ pub(crate) fn define_weakref_finalization(
                         &caller,
                         "TypeError: WeakRef: cannot resolve target handle".to_string(),
                     );
-                    let error_obj = create_error_object(&mut caller, "TypeError", msg_val, value::encode_undefined());
+                    let error_obj = create_error_object(
+                        &mut caller,
+                        "TypeError",
+                        msg_val,
+                        value::encode_undefined(),
+                    );
                     return value::encode_exception(value::decode_object_handle(error_obj));
                 }
             };

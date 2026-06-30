@@ -49,7 +49,7 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
     let count = ctx.obj_table_count();
 
     // 1. 收集所有块信息（含已死）
-    let blocks: Vec<BlockInfo> = ctx.with_memory(|_caller, data| {
+    let blocks: Vec<BlockInfo> = ctx.with_memory(|data| {
         let mut out = Vec::new();
         for h in 0..(count as u32) {
             let addr = obj_table_ptr + h as usize * 4;

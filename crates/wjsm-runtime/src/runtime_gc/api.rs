@@ -14,7 +14,8 @@
 //!   grow 经 `ctx.grow()`（#9，grow 借用安全）。
 #![allow(dead_code)]
 use crate::RuntimeState;
-use wasmtime::{Caller, Memory};
+use crate::wasm_env::WasmEnv;
+use wasmtime::{AsContextMut, StoreContextMut};
 
 // ── 基础别名 ──
 /// 对象 handle（obj_table 下标）。NaN-boxed 值的低 32 位。
@@ -141,52 +142,52 @@ pub trait GcAlgorithm: Allocator + Marker + Sweeper {
 // 仍不够空间，需 memory.grow()。Wasmtime 下 `memory.grow(&mut store, _)` 与
 // `memory.data_mut(&store)` 都可变借用 store —— 持有 slice 时无法 grow，强行 unsafe 是 UB
 // （grow 会 remap 后端 buffer，slice 悬垂）。
-// 故 GcContext 持 `&mut Caller`，每阶段重新 data()/data_mut()。
-pub struct GcContext<'a, 'b> {
-    pub caller: &'a mut Caller<'b, RuntimeState>,
-    /// wasmtime Memory 句柄（轻量，不含借用）。
-    pub memory: Memory,
+// 故 GcContext 持 `StoreContextMut`（由 Caller 或 Store 经 as_context_mut 产生），
+// 每阶段重新 data()/data_mut()。WasmEnv 提供 Global 句柄，避免 get_export（Caller 专有）。
+pub struct GcContext<'a> {
+    /// wasmtime store 上下文（由 Caller 或 Store 经 as_context_mut 产生）。
+    pub store: StoreContextMut<'a, RuntimeState>,
+    /// WASM 导出句柄集（Global/Memory/Table，Copy），供 read_i32_global 替代。
+    pub env: &'a WasmEnv,
     /// 仅用于日志。
     pub gc_algorithm_name: &'static str,
     pub stats: GcStats,
 }
 
-impl<'a, 'b> GcContext<'a, 'b> {
-    pub fn new(
-        caller: &'a mut Caller<'b, RuntimeState>,
-        memory: Memory,
+impl<'a> GcContext<'a> {
+    pub fn new<C: AsContextMut<Data = RuntimeState>>(
+        ctx: &'a mut C,
+        env: &'a WasmEnv,
         algorithm_name: &'static str,
     ) -> Self {
         Self {
-            caller,
-            memory,
+            store: ctx.as_context_mut(),
+            env,
             gc_algorithm_name: algorithm_name,
             stats: GcStats::default(),
         }
     }
 
-    /// 读 memory。借用 caller，离开作用域后可再 grow / data_mut。
-    pub fn with_memory<R>(&mut self, f: impl FnOnce(&Caller<'_, RuntimeState>, &[u8]) -> R) -> R {
-        let data = self.memory.data(&*self.caller);
-        f(&*self.caller, data)
+    /// 读 memory。借用 store，离开作用域后可再 grow / data_mut。
+    pub fn with_memory<R>(&mut self, f: impl FnOnce(&[u8]) -> R) -> R {
+        let data = self.env.memory.data(&self.store);
+        f(data)
     }
 
     /// 写 memory。单独可变借用。
-    /// 注：不能同时传 &mut Caller 和 &mut [u8]（双重借用 caller）。
-    /// 改为只传 data slice，caller 经 self 后续访问。
     pub fn with_memory_mut<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
-        let data = self.memory.data_mut(&mut *self.caller);
+        let data = self.env.memory.data_mut(&mut self.store);
         f(data)
     }
 
     /// 扩页。必须在外层调用，不持 slice。失败返回 Err。
     pub fn grow(&mut self, pages: u64) -> Result<u64, ()> {
-        self.memory.grow(&mut *self.caller, pages).map_err(|_| ())
+        self.env.memory.grow(&mut self.store, pages).map_err(|_| ())
     }
 
-    /// 读/写 RuntimeState（caller.data_mut）。
+    /// 读/写 RuntimeState（store.data_mut）。
     pub fn with_state<R>(&mut self, f: impl FnOnce(&mut RuntimeState) -> R) -> R {
-        f(self.caller.data_mut())
+        f(self.store.data_mut())
     }
 }
 

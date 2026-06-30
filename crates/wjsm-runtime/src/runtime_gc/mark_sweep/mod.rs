@@ -52,7 +52,7 @@ impl Allocator for MarkSweepCollector {
         }
         // 2. 试 bump（heap_ptr 推进）
         let heap_ptr = ctx.heap_ptr();
-        let mem_end = ctx.memory.data_size(&*ctx.caller);
+        let mem_end = ctx.env.memory.data_size(&ctx.store);
         if heap_ptr + size <= mem_end {
             ctx.set_heap_ptr(heap_ptr + size);
             return Some(heap_ptr);

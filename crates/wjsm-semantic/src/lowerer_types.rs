@@ -59,8 +59,7 @@ pub(crate) struct Lowerer {
     /// 导入别名映射：(导入方模块 ID, local_name) → source_ir_name
     /// 用于 `import { x as y }` 和 `import x from './dep'` 等场景。
     /// 按导入方模块 ID 隔离，避免不同模块的同名 local 互相覆盖（#44）。
-    pub(crate) import_aliases:
-        std::collections::HashMap<(wjsm_ir::ModuleId, String), String>,
+    pub(crate) import_aliases: std::collections::HashMap<(wjsm_ir::ModuleId, String), String>,
     /// 每个模块的顶层块作用域 ID（predeclare 阶段分配，lower 阶段重新进入）。
     /// 使各模块顶层 let/const 处于独立作用域，避免跨模块同名冲突（#43）。
     pub(crate) module_scopes: std::collections::HashMap<wjsm_ir::ModuleId, usize>,
@@ -84,8 +83,7 @@ pub(crate) struct Lowerer {
     pub(crate) static_namespace_import_objects:
         std::collections::HashMap<(wjsm_ir::ModuleId, String), wjsm_ir::ValueId>,
     /// 静态命名空间导入来源：(导入方模块 ID, local_name, 来源模块 ID)
-    pub(crate) static_namespace_import_sources:
-        Vec<(wjsm_ir::ModuleId, String, wjsm_ir::ModuleId)>,
+    pub(crate) static_namespace_import_sources: Vec<(wjsm_ir::ModuleId, String, wjsm_ir::ModuleId)>,
 
     pub(crate) is_async_fn: bool,
     pub(crate) is_async_generator_fn: bool,

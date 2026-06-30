@@ -247,7 +247,8 @@ pub(crate) fn define_timers_arrays_async(
     fn timer_callback_type_error(caller: &mut Caller<'_, RuntimeState>) -> i64 {
         let msg = "TypeError: timer callback must be callable";
         let msg_val = store_runtime_string(caller, msg.to_string());
-        let error_obj = create_error_object(caller, "TypeError", msg_val, value::encode_undefined());
+        let error_obj =
+            create_error_object(caller, "TypeError", msg_val, value::encode_undefined());
         let mut errors = caller
             .data()
             .error_table

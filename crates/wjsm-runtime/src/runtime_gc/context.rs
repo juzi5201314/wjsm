@@ -1,29 +1,16 @@
 //! GcContext 桥接辅助 + HeapObjectQuery 运行时实现（spec §6/T3.3）。
 //!
-//! GcContext 本体定义在 api.rs（持 Caller + Memory，不持 slice，#9）。
+//! GcContext 本体定义在 api.rs（持 StoreContextMut + WasmEnv，不持 slice，#9）。
 //! 本文件提供：
 //! - `HeapMeta`：从 memory 现场读对象 header 的辅助（object_size/object_ptr/heap_type）。
 //! - `obj_table` global 读取辅助。
 use crate::runtime_gc::api::{GcContext, Handle};
-use wasmtime::{Caller, Val};
+use wasmtime::Val;
 
 /// 对象 header 常量（与 runtime_heap.rs / runtime_values.rs 一致）。
 pub const HEADER_SIZE: usize = 16;
 pub const OBJECT_ELEM_SIZE: usize = 32; // 属性槽 [name_id(4) flags(4) value(8) getter(8) setter(8)]
 pub const ARRAY_ELEM_SIZE: usize = 8; // NaN-boxed element
-
-/// 读取一个 wasmtime global（i32）。
-/// 注：Global::get 需要 AsContextMut（&mut Caller），因 wasmtime 的 store 借用模型。
-pub fn read_i32_global(caller: &mut Caller<'_, crate::RuntimeState>, name: &str) -> Option<i32> {
-    let g = caller.get_export(name)?;
-    if let wasmtime::Extern::Global(global) = g {
-        // Global::get 接收 impl AsContextMut，返回 Val（非 Result）。
-        if let Val::I32(v) = global.get(caller) {
-            return Some(v);
-        }
-    }
-    None
-}
 
 /// GC 已知的堆对象布局分类（issue #119：禁止把未知 tag 静默当成 OBJECT 而不告警）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,95 +75,111 @@ pub fn heap_type_from_memory(data: &[u8], ptr: usize) -> Option<u8> {
 }
 
 /// GcContext 上的堆元信息查询辅助。算法经 ctx.with_memory 调用这些方法。
-impl<'a, 'b> GcContext<'a, 'b> {
-    /// 读 obj_table_count global（__obj_table_count）。
+impl<'a> GcContext<'a> {
+    /// 读 obj_table_count global。
     pub fn obj_table_count(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__obj_table_count")
+        self.env
+            .obj_table_count
+            .get(&mut self.store)
+            .i32()
             .unwrap_or(0)
             .max(0) as usize
     }
 
-    /// 读 obj_table base ptr global（__obj_table_ptr）。
+    /// 读 obj_table base ptr global。
     pub fn obj_table_ptr(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__obj_table_ptr")
+        self.env
+            .obj_table_ptr
+            .get(&mut self.store)
+            .i32()
             .unwrap_or(0)
             .max(0) as usize
     }
 
-    /// 读 heap_ptr global（__heap_ptr，下一个 bump 分配位置）。
+    /// 读 heap_ptr global（下一个 bump 分配位置）。
     pub fn heap_ptr(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__heap_ptr")
+        self.env
+            .heap_ptr
+            .get(&mut self.store)
+            .i32()
             .unwrap_or(0)
             .max(0) as usize
     }
 
     /// 设置 heap_ptr global。
     pub fn set_heap_ptr(&mut self, val: usize) {
-        if let Some(Extern::Global(g)) = self.caller.get_export("__heap_ptr") {
-            let _ = g.set(&mut *self.caller, Val::I32(val as i32));
-        }
+        let _ = self.env.heap_ptr.set(&mut self.store, Val::I32(val as i32));
     }
 
     /// 设置 obj_table_count global。
     #[allow(dead_code)]
     pub fn set_obj_table_count(&mut self, val: usize) {
-        if let Some(Extern::Global(g)) = self.caller.get_export("__obj_table_count") {
-            let _ = g.set(&mut *self.caller, Val::I32(val as i32));
-        }
+        let _ = self
+            .env
+            .obj_table_count
+            .set(&mut self.store, Val::I32(val as i32));
     }
 
-    /// 读 shadow_sp global（__shadow_sp）。
+    /// 读 shadow_sp global。
     pub fn shadow_sp(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__shadow_sp")
+        self.env
+            .shadow_sp
+            .get(&mut self.store)
+            .i32()
             .unwrap_or(0)
             .max(0) as usize
     }
 
-    /// 读 shadow_stack_end global（__shadow_stack_end）。
+    /// 读 shadow_stack_end global。
     pub fn shadow_stack_end(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__shadow_stack_end")
+        self.env
+            .shadow_stack_end
+            .and_then(|g| g.get(&mut self.store).i32())
             .unwrap_or(0)
             .max(0) as usize
     }
 
-    /// 读 num_ir_functions global（__num_ir_functions）。
+    /// 读 num_ir_functions global。
     pub fn num_ir_functions(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__num_ir_functions")
+        self.env
+            .num_ir_functions
+            .and_then(|g| g.get(&mut self.store).i32())
             .unwrap_or(0)
             .max(0) as usize
     }
 
-    /// 读 object_heap_start global（__object_heap_start，堆基址）。
+    /// 读 object_heap_start global（堆基址）。
     #[allow(dead_code)]
     pub fn object_heap_start(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__object_heap_start")
+        self.env
+            .object_heap_start
+            .and_then(|g| g.get(&mut self.store).i32())
             .unwrap_or(0)
             .max(0) as usize
     }
 
-    /// 读 function_props_base global（__function_props_base，函数属性对象起始 handle）。
-    /// startup snapshot 拆分后 primordial 原型占据更低 handle，函数属性对象从此基址起算。
+    /// 读 function_props_base global（函数属性对象起始 handle）。
     pub fn function_props_base(&mut self) -> usize {
-        read_i32_global(&mut *self.caller, "__function_props_base")
+        self.env
+            .function_props_base
+            .and_then(|g| g.get(&mut self.store).i32())
             .unwrap_or(0)
             .max(0) as usize
     }
 
-    /// 读 array_proto_handle global（__array_proto_handle，Array.prototype 对象 handle）。
-    /// 返回 None 表未初始化（-1）或不可读。
+    /// 读 array_proto_handle global。返回 None 表未初始化（-1）或不可读。
     pub fn array_proto_handle(&mut self) -> Option<Handle> {
-        let h = read_i32_global(&mut *self.caller, "__array_proto_handle")?;
+        let h = self.env.array_proto_handle.get(&mut self.store).i32()?;
         if h < 0 { None } else { Some(h as Handle) }
     }
 
-    /// 读 object_proto_handle global（__object_proto_handle，Object.prototype 对象 handle）。
+    /// 读 object_proto_handle global。
     pub fn object_proto_handle(&mut self) -> Option<Handle> {
-        let h = read_i32_global(&mut *self.caller, "__object_proto_handle")?;
+        let h = self.env.object_proto_handle.get(&mut self.store).i32()?;
         if h < 0 { None } else { Some(h as Handle) }
     }
 
     /// 读 obj_table[h] → ptr。返回 None 表示越界或空槽（ptr==0）。
-    /// 注：需先读 obj_table_ptr（&mut self），再 with_memory 读 data（不可同时 &mut caller）。
     #[allow(dead_code)]
     pub fn obj_table_slot(&mut self, data: &[u8], h: Handle) -> Option<usize> {
         let base = self.obj_table_ptr();
@@ -202,5 +205,3 @@ impl<'a, 'b> GcContext<'a, 'b> {
         });
     }
 }
-
-use wasmtime::Extern;
