@@ -87,15 +87,21 @@ module {
       %5 = const c31
       %6 = add %4, %5
       set_prop %0, %1, %6
-      %7 = load var $2.v
-      %8 = call builtin.console.log(%7)
-      %9 = is_exception %8
-      branch %9, bb2, bb1
+      %7 = is_exception %6
+      branch %7, bb2, bb1
     bb1:
-      return
+      %9 = load var $2.v
+      %10 = call builtin.console.log(%9)
+      %11 = is_exception %10
+      branch %11, bb4, bb3
     bb2:
-      %10 = call builtin.exception_value(%8)
-      throw %10
+      %8 = call builtin.exception_value(%6)
+      throw %8
+    bb3:
+      return
+    bb4:
+      %12 = call builtin.exception_value(%10)
+      throw %12
 
   fn @arrow_2 [captures: $0.calls] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:

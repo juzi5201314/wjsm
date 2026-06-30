@@ -388,6 +388,9 @@ impl Lowerer {
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
 
+        // 在 dispatch block 开头初始化 $shared_env = undefined（见 async_main.rs 同名注释）。
+        self.initialize_shared_env_slot_at(dispatch_block);
+
         self.current_function.set_terminator(
             after_inits,
             Terminator::Jump {

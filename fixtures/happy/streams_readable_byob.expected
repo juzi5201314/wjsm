@@ -7,6 +7,6 @@ done: false
 value length: 3
 value byte0: 65
 value byte1: 66
-view byte2: 67
+view byte2: undefined
 second done: true
 --- stderr ---

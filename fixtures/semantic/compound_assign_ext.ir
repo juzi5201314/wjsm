@@ -87,112 +87,160 @@ module {
       %23 = const c21
       %24 = mod %22, %23
       store var $0.x, %24
-      %25 = load var $0.x
-      %26 = call builtin.console.log(%25)
-      %27 = is_exception %26
-      branch %27, bb2, bb1
+      %25 = is_exception %24
+      branch %25, bb2, bb1
     bb1:
-      %29 = const c22
-      store var $0.y, %29
-      %30 = load var $0.y
-      %31 = const c23
-      %32 = exp %30, %31
-      store var $0.y, %32
-      %33 = load var $0.y
-      %34 = call builtin.console.log(%33)
-      %35 = is_exception %34
-      branch %35, bb4, bb3
+      %27 = load var $0.x
+      %28 = call builtin.console.log(%27)
+      %29 = is_exception %28
+      branch %29, bb4, bb3
     bb2:
-      %28 = call builtin.exception_value(%26)
-      throw %28
+      %26 = call builtin.exception_value(%24)
+      throw %26
     bb3:
-      %37 = const c24
-      store var $0.z, %37
-      %38 = load var $0.z
-      %39 = const c25
-      %40 = shr %38, %39
-      store var $0.z, %40
-      %41 = load var $0.z
-      %42 = call builtin.console.log(%41)
-      %43 = is_exception %42
-      branch %43, bb6, bb5
+      %31 = const c22
+      store var $0.y, %31
+      %32 = load var $0.y
+      %33 = const c23
+      %34 = exp %32, %33
+      store var $0.y, %34
+      %35 = is_exception %34
+      branch %35, bb6, bb5
     bb4:
+      %30 = call builtin.exception_value(%28)
+      throw %30
+    bb5:
+      %37 = load var $0.y
+      %38 = call builtin.console.log(%37)
+      %39 = is_exception %38
+      branch %39, bb8, bb7
+    bb6:
       %36 = call builtin.exception_value(%34)
       throw %36
-    bb5:
-      %45 = const c26
-      store var $0.w, %45
-      %46 = load var $0.w
-      %47 = const c27
-      %48 = shl %46, %47
-      store var $0.w, %48
-      %49 = load var $0.w
-      %50 = call builtin.console.log(%49)
-      %51 = is_exception %50
-      branch %51, bb8, bb7
-    bb6:
-      %44 = call builtin.exception_value(%42)
-      throw %44
     bb7:
-      %53 = const c28
-      %54 = neg %53
-      store var $0.u, %54
-      %55 = load var $0.u
-      %56 = const c29
-      %57 = ushr %55, %56
-      store var $0.u, %57
-      %58 = load var $0.u
-      %59 = call builtin.console.log(%58)
-      %60 = is_exception %59
-      branch %60, bb10, bb9
+      %41 = const c24
+      store var $0.z, %41
+      %42 = load var $0.z
+      %43 = const c25
+      %44 = shr %42, %43
+      store var $0.z, %44
+      %45 = is_exception %44
+      branch %45, bb10, bb9
     bb8:
-      %52 = call builtin.exception_value(%50)
-      throw %52
+      %40 = call builtin.exception_value(%38)
+      throw %40
     bb9:
-      %62 = const c30
-      store var $0.v, %62
-      %63 = load var $0.v
-      %64 = const c31
-      %65 = bitor %63, %64
-      store var $0.v, %65
-      %66 = load var $0.v
-      %67 = call builtin.console.log(%66)
-      %68 = is_exception %67
-      branch %68, bb12, bb11
+      %47 = load var $0.z
+      %48 = call builtin.console.log(%47)
+      %49 = is_exception %48
+      branch %49, bb12, bb11
     bb10:
-      %61 = call builtin.exception_value(%59)
-      throw %61
+      %46 = call builtin.exception_value(%44)
+      throw %46
     bb11:
-      %70 = const c32
-      store var $0.a, %70
-      %71 = load var $0.a
-      %72 = const c33
-      %73 = bitand %71, %72
-      store var $0.a, %73
-      %74 = load var $0.a
-      %75 = call builtin.console.log(%74)
-      %76 = is_exception %75
-      branch %76, bb14, bb13
+      %51 = const c26
+      store var $0.w, %51
+      %52 = load var $0.w
+      %53 = const c27
+      %54 = shl %52, %53
+      store var $0.w, %54
+      %55 = is_exception %54
+      branch %55, bb14, bb13
     bb12:
-      %69 = call builtin.exception_value(%67)
-      throw %69
+      %50 = call builtin.exception_value(%48)
+      throw %50
     bb13:
-      %78 = const c34
-      store var $0.b, %78
-      %79 = load var $0.b
-      %80 = const c35
-      %81 = bitxor %79, %80
-      store var $0.b, %81
-      %82 = load var $0.b
-      %83 = call builtin.console.log(%82)
-      %84 = is_exception %83
-      branch %84, bb16, bb15
+      %57 = load var $0.w
+      %58 = call builtin.console.log(%57)
+      %59 = is_exception %58
+      branch %59, bb16, bb15
     bb14:
+      %56 = call builtin.exception_value(%54)
+      throw %56
+    bb15:
+      %61 = const c28
+      %62 = neg %61
+      store var $0.u, %62
+      %63 = load var $0.u
+      %64 = const c29
+      %65 = ushr %63, %64
+      store var $0.u, %65
+      %66 = is_exception %65
+      branch %66, bb18, bb17
+    bb16:
+      %60 = call builtin.exception_value(%58)
+      throw %60
+    bb17:
+      %68 = load var $0.u
+      %69 = call builtin.console.log(%68)
+      %70 = is_exception %69
+      branch %70, bb20, bb19
+    bb18:
+      %67 = call builtin.exception_value(%65)
+      throw %67
+    bb19:
+      %72 = const c30
+      store var $0.v, %72
+      %73 = load var $0.v
+      %74 = const c31
+      %75 = bitor %73, %74
+      store var $0.v, %75
+      %76 = is_exception %75
+      branch %76, bb22, bb21
+    bb20:
+      %71 = call builtin.exception_value(%69)
+      throw %71
+    bb21:
+      %78 = load var $0.v
+      %79 = call builtin.console.log(%78)
+      %80 = is_exception %79
+      branch %80, bb24, bb23
+    bb22:
       %77 = call builtin.exception_value(%75)
       throw %77
-    bb15:
+    bb23:
+      %82 = const c32
+      store var $0.a, %82
+      %83 = load var $0.a
+      %84 = const c33
+      %85 = bitand %83, %84
+      store var $0.a, %85
+      %86 = is_exception %85
+      branch %86, bb26, bb25
+    bb24:
+      %81 = call builtin.exception_value(%79)
+      throw %81
+    bb25:
+      %88 = load var $0.a
+      %89 = call builtin.console.log(%88)
+      %90 = is_exception %89
+      branch %90, bb28, bb27
+    bb26:
+      %87 = call builtin.exception_value(%85)
+      throw %87
+    bb27:
+      %92 = const c34
+      store var $0.b, %92
+      %93 = load var $0.b
+      %94 = const c35
+      %95 = bitxor %93, %94
+      store var $0.b, %95
+      %96 = is_exception %95
+      branch %96, bb30, bb29
+    bb28:
+      %91 = call builtin.exception_value(%89)
+      throw %91
+    bb29:
+      %98 = load var $0.b
+      %99 = call builtin.console.log(%98)
+      %100 = is_exception %99
+      branch %100, bb32, bb31
+    bb30:
+      %97 = call builtin.exception_value(%95)
+      throw %97
+    bb31:
       return
-    bb16:
-      %85 = call builtin.exception_value(%83)
-      throw %85
+    bb32:
+      %101 = call builtin.exception_value(%99)
+      throw %101
 }

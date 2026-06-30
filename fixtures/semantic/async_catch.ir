@@ -27,29 +27,30 @@ module {
     c24 = number(0)
     c25 = functionref(@0)
     c26 = undefined
-    c27 = string("boom")
-    c28 = undefined
-    c29 = number(1)
-    c30 = string("caught")
-    c31 = undefined
-    c32 = number(0)
-    c33 = number(1)
-    c34 = number(0)
-    c35 = undefined
-    c36 = string("$0.recover")
-    c37 = string("callee")
-    c38 = functionref(@0)
-    c39 = number(4)
-    c40 = number(2)
-    c41 = number(3)
-    c42 = undefined
-    c43 = number(0)
-    c44 = undefined
-    c45 = bool(false)
-    c46 = functionref(@1)
-    c47 = undefined
-    c48 = functionref(@2)
-    c49 = undefined
+    c27 = undefined
+    c28 = string("boom")
+    c29 = undefined
+    c30 = number(1)
+    c31 = string("caught")
+    c32 = undefined
+    c33 = number(0)
+    c34 = number(1)
+    c35 = number(0)
+    c36 = undefined
+    c37 = string("$0.recover")
+    c38 = string("callee")
+    c39 = functionref(@0)
+    c40 = number(4)
+    c41 = number(2)
+    c42 = number(3)
+    c43 = undefined
+    c44 = number(0)
+    c45 = undefined
+    c46 = bool(false)
+    c47 = functionref(@1)
+    c48 = undefined
+    c49 = functionref(@2)
+    c50 = undefined
 
   fn @recover$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -75,41 +76,43 @@ module {
       store var $1.arguments, %12
       jump bb1
     bb1:
-      %29 = load var $1.$state
-      switch %29 [case c32 -> bb2, case c33 -> bb6], default bb9, exit bb10
+      %14 = const c26
+      store var $1.$shared_env, %14
+      %30 = load var $1.$state
+      switch %30 [case c33 -> bb2, case c34 -> bb6], default bb9, exit bb10
     bb2:
       jump bb3
     bb3:
-      %14 = const c26
       %15 = const c27
-      %16 = call builtin.promise.reject_static(%14, %15)
-      %18 = const c28
-      %17 = call builtin.promise.resolve_static(%18, %16)
-      suspend %17, state=1
+      %16 = const c28
+      %17 = call builtin.promise.reject_static(%15, %16)
+      %19 = const c29
+      %18 = call builtin.promise.resolve_static(%19, %17)
+      suspend %18, state=1
       jump bb8
     bb4:
-      %27 = const c31
-      %28 = load var $1.$promise
-      promise_resolve %28, %27
+      %28 = const c32
+      %29 = load var $1.$promise
+      promise_resolve %29, %28
       return
     bb5:
-      %24 = load var $tmp.0
-      store var $4.e, %24
-      %25 = const c30
-      %26 = load var $1.$promise
-      promise_resolve %26, %25
+      %25 = load var $tmp.0
+      store var $4.e, %25
+      %26 = const c31
+      %27 = load var $1.$promise
+      promise_resolve %27, %26
       return
     bb6:
-      %19 = load var $1.$resume_val
-      %20 = load var $1.$is_rejected
-      %21 = const c29
-      %22 = stricteq %20, %21
-      branch %22, bb7, bb8
+      %20 = load var $1.$resume_val
+      %21 = load var $1.$is_rejected
+      %22 = const c30
+      %23 = stricteq %21, %22
+      branch %23, bb7, bb8
     bb7:
-      store var $tmp.0, %19
+      store var $tmp.0, %20
       jump bb5
     bb8:
-      %23 = load var $1.$resume_val
+      %24 = load var $1.$resume_val
       jump bb4
     bb9:
       return
@@ -119,27 +122,27 @@ module {
   fn @recover [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c34
-      %3 = const c35
+      %1 = const c35
+      %3 = const c36
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $6.arguments, %2
       %4 = load var $env
-      %5 = const c36
+      %5 = const c37
       %6 = get_prop %4, %5
-      %7 = const c37
+      %7 = const c38
       set_prop %2, %7, %6
       %8 = new_promise
-      %9 = const c38
-      %10 = const c39
+      %9 = const c39
+      %10 = const c40
       %11 = call builtin.continuation.create(%9, %8, %10)
-      %12 = const c40
+      %12 = const c41
       call builtin.continuation.save_var(%11, %12, %8)
-      %13 = const c41
-      %14 = const c42
+      %13 = const c42
+      %14 = const c43
       call builtin.continuation.save_var(%11, %13, %14)
-      %15 = const c43
-      %16 = const c44
-      %17 = const c45
+      %15 = const c44
+      %16 = const c45
+      %17 = const c46
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
@@ -193,13 +196,13 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c46
+      %21 = const c47
       store var $0.recover, %21
-      %22 = const c47
+      %22 = const c48
       %23 = load var $0.recover
       %24 = call %23, this=%22
-      %25 = const c48
-      %26 = const c49
+      %25 = const c49
+      %26 = const c50
       %27 = call builtin.promise.then(%24, %25, %26)
       %28 = is_exception %27
       branch %28, bb2, bb1

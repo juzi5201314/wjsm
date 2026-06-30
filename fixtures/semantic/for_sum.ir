@@ -85,21 +85,27 @@ module {
       %28 = load var $0.i
       %29 = add %27, %28
       store var $0.sum, %29
-      jump bb3
+      %30 = is_exception %29
+      branch %30, bb6, bb5
     bb3:
-      %30 = load var $0.i
-      %31 = const c23
-      %32 = add %30, %31
-      store var $0.i, %32
+      %32 = load var $0.i
+      %33 = const c23
+      %34 = add %32, %33
+      store var $0.i, %34
       jump bb1
     bb4:
-      %33 = load var $0.sum
-      %34 = call builtin.console.log(%33)
-      %35 = is_exception %34
-      branch %35, bb6, bb5
+      %35 = load var $0.sum
+      %36 = call builtin.console.log(%35)
+      %37 = is_exception %36
+      branch %37, bb8, bb7
     bb5:
-      return
+      jump bb3
     bb6:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      %31 = call builtin.exception_value(%29)
+      throw %31
+    bb7:
+      return
+    bb8:
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }

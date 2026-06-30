@@ -77,10 +77,10 @@ module {
       %24 = is_exception %23
       branch %24, bb5, bb4
     bb2:
-      %29 = load var $0.x
-      %30 = const c22
-      %31 = call builtin.abstract_compare(%29, %30)
-      branch %31, bb1, bb3
+      %31 = load var $0.x
+      %32 = const c22
+      %33 = call builtin.abstract_compare(%31, %32)
+      branch %33, bb1, bb3
     bb3:
       return
     bb4:
@@ -88,8 +88,14 @@ module {
       %27 = const c21
       %28 = add %26, %27
       store var $0.x, %28
-      jump bb2
+      %29 = is_exception %28
+      branch %29, bb7, bb6
     bb5:
       %25 = call builtin.exception_value(%23)
       throw %25
+    bb6:
+      jump bb2
+    bb7:
+      %30 = call builtin.exception_value(%28)
+      throw %30
 }

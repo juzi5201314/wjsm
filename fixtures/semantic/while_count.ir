@@ -90,8 +90,14 @@ module {
       %31 = const c23
       %32 = add %30, %31
       store var $0.i, %32
-      jump bb1
+      %33 = is_exception %32
+      branch %33, bb7, bb6
     bb5:
       %29 = call builtin.exception_value(%27)
       throw %29
+    bb6:
+      jump bb1
+    bb7:
+      %34 = call builtin.exception_value(%32)
+      throw %34
 }

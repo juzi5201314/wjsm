@@ -55,6 +55,25 @@ impl Lowerer {
         !self.is_shared_binding(&binding)
     }
 
+    fn async_live_shared_env_binding(
+        &self,
+        visible_bindings: &[String],
+        successors: &[BasicBlockId],
+        live_in: &[std::collections::HashSet<String>],
+    ) -> Option<String> {
+        self.shared_env_stack.last()?.as_ref()?;
+        let has_live_shared_binding = visible_bindings.iter().any(|name| {
+            let Some(binding) = Self::captured_binding_from_ir_name(name) else {
+                return false;
+            };
+            self.is_shared_binding(&binding)
+                && successors
+                    .iter()
+                    .any(|successor| live_in[successor.0 as usize].contains(name))
+        });
+        has_live_shared_binding.then(|| self.shared_env_ir_name())
+    }
+
     pub(crate) fn async_binding_slot(&mut self, ir_name: &str) -> u32 {
         if let Some(slot) = self.captured_var_slots.get(ir_name) {
             return *slot;
@@ -82,7 +101,7 @@ impl Lowerer {
 
         for suspend in &pending {
             let suspend_successors = &successors[suspend.suspend_block.0 as usize];
-            let live_bindings: Vec<String> = suspend
+            let mut live_bindings: Vec<String> = suspend
                 .visible_bindings
                 .iter()
                 .filter(|name| self.async_continuation_should_save_binding(name))
@@ -93,6 +112,14 @@ impl Lowerer {
                 })
                 .cloned()
                 .collect();
+
+            if let Some(shared_env) = self.async_live_shared_env_binding(
+                &suspend.visible_bindings,
+                suspend_successors,
+                &live_in,
+            ) {
+                live_bindings.push(shared_env);
+            }
 
             self.insert_save_before_suspend(suspend.suspend_block, &live_bindings);
             self.insert_restore_at_start(suspend.resume_block, &live_bindings);

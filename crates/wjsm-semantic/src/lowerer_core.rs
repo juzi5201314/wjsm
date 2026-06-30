@@ -404,24 +404,38 @@ impl Lowerer {
         format!("${}.$shared_env", self.current_function_scope_id())
     }
 
+    /// 在函数 entry block (bb0) 将 `$shared_env` 初始化为 undefined。
+    /// 非 async 函数的闭包捕获 fallback 依赖此 init（WASM local 未 init 为 0，非 undefined）。
+    /// async 函数不在 bb0 init —— 其 `$shared_env` 由 continuation slot save/restore 跨 suspend 维持，
+    /// bb0 init 会在每次 resume 时覆盖 restore 的值（A14）。
     pub(crate) fn initialize_shared_env_slot(&mut self) {
+        if self.is_async_fn || self.is_async_generator_fn {
+            return;
+        }
+        self.initialize_shared_env_slot_at(BasicBlockId(0));
+    }
+
+    /// 在指定 block 将 `$shared_env` 初始化为 undefined（不检查 async 状态）。
+    /// 供 async 函数在 dispatch block 开头调用。
+    pub(crate) fn initialize_shared_env_slot_at(&mut self, block: BasicBlockId) {
         let undef_const = self.module.add_constant(Constant::Undefined);
         let undef_val = self.alloc_value();
         self.current_function.append_instruction(
-            BasicBlockId(0),
+            block,
             Instruction::Const {
                 dest: undef_val,
                 constant: undef_const,
             },
         );
         self.current_function.append_instruction(
-            BasicBlockId(0),
+            block,
             Instruction::StoreVar {
                 name: self.shared_env_ir_name(),
                 value: undef_val,
             },
         );
     }
+
 
     pub(crate) fn append_env_key_const(
         &mut self,

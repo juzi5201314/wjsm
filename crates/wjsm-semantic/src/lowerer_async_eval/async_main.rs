@@ -222,6 +222,13 @@ impl Lowerer {
         self.async_dispatch_block = Some(dispatch_block);
         self.async_main_body_entry = Some(body_entry);
 
+        // 在 dispatch block 开头将 $shared_env 初始化为 undefined。
+        // async 函数不能像普通函数那样在 bb0 init（bb0 是 continuation load，每次 resume 重新执行，
+        // 会覆盖 resume block 的 continuation restore）。dispatch block 只在首次执行和 resume 时到达：
+        // 首次执行 → init undefined → body 中 ensure_shared_env 覆盖为 env object；
+        // resume → init undefined → resume block 的 continuation restore 覆盖为 saved 值（若有）。
+        self.initialize_shared_env_slot_at(dispatch_block);
+
         self.current_function.set_terminator(
             entry,
             Terminator::Jump {

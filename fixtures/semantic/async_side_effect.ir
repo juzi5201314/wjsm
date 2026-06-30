@@ -28,37 +28,38 @@ module {
     c25 = number(0)
     c26 = functionref(@0)
     c27 = undefined
-    c28 = string("$0.undefined")
-    c29 = undefined
-    c30 = number(1)
-    c31 = string("$0.x")
+    c28 = undefined
+    c29 = string("$0.undefined")
+    c30 = undefined
+    c31 = number(1)
     c32 = string("$0.x")
-    c33 = number(1)
-    c34 = undefined
-    c35 = number(0)
-    c36 = number(1)
-    c37 = number(0)
-    c38 = undefined
-    c39 = string("$0.inc")
-    c40 = string("callee")
-    c41 = functionref(@0)
-    c42 = number(4)
-    c43 = number(2)
-    c44 = number(3)
-    c45 = number(0)
-    c46 = undefined
-    c47 = bool(false)
-    c48 = functionref(@1)
-    c49 = undefined
-    c50 = string("$0.undefined")
-    c51 = string("$0.x")
-    c52 = undefined
-    c53 = string("$0.x")
-    c54 = functionref(@2)
-    c55 = undefined
-    c56 = string("$0.undefined")
-    c57 = string("$0.x")
-    c58 = undefined
+    c33 = string("$0.x")
+    c34 = number(1)
+    c35 = undefined
+    c36 = number(0)
+    c37 = number(1)
+    c38 = number(0)
+    c39 = undefined
+    c40 = string("$0.inc")
+    c41 = string("callee")
+    c42 = functionref(@0)
+    c43 = number(4)
+    c44 = number(2)
+    c45 = number(3)
+    c46 = number(0)
+    c47 = undefined
+    c48 = bool(false)
+    c49 = functionref(@1)
+    c50 = undefined
+    c51 = string("$0.undefined")
+    c52 = string("$0.x")
+    c53 = undefined
+    c54 = string("$0.x")
+    c55 = functionref(@2)
+    c56 = undefined
+    c57 = string("$0.undefined")
+    c58 = string("$0.x")
+    c59 = undefined
 
   fn @inc$async [captures: $0.undefined, $0.x] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -84,41 +85,43 @@ module {
       store var $1.arguments, %12
       jump bb1
     bb1:
-      %36 = load var $1.$state
-      switch %36 [case c35 -> bb2, case c36 -> bb3], default bb6, exit bb7
-    bb2:
       %14 = const c27
-      %15 = load var $1.$closure_env
-      %16 = const c28
-      %17 = get_prop %15, %16
-      %18 = call builtin.promise.resolve_static(%14, %17)
-      %20 = const c29
-      %19 = call builtin.promise.resolve_static(%20, %18)
-      suspend %19, state=1
+      store var $1.$shared_env, %14
+      %37 = load var $1.$state
+      switch %37 [case c36 -> bb2, case c37 -> bb3], default bb6, exit bb7
+    bb2:
+      %15 = const c28
+      %16 = load var $1.$closure_env
+      %17 = const c29
+      %18 = get_prop %16, %17
+      %19 = call builtin.promise.resolve_static(%15, %18)
+      %21 = const c30
+      %20 = call builtin.promise.resolve_static(%21, %19)
+      suspend %20, state=1
       jump bb5
     bb3:
-      %21 = load var $1.$resume_val
-      %22 = load var $1.$is_rejected
-      %23 = const c30
-      %24 = stricteq %22, %23
-      branch %24, bb4, bb5
+      %22 = load var $1.$resume_val
+      %23 = load var $1.$is_rejected
+      %24 = const c31
+      %25 = stricteq %23, %24
+      branch %25, bb4, bb5
     bb4:
-      %25 = load var $1.$promise
-      promise_reject %25, %21
+      %26 = load var $1.$promise
+      promise_reject %26, %22
       return
     bb5:
-      %26 = load var $1.$resume_val
-      %27 = load var $1.$closure_env
-      %28 = const c31
-      %29 = load var $1.$closure_env
-      %30 = const c32
-      %31 = get_prop %29, %30
-      %32 = const c33
-      %33 = add %31, %32
-      set_prop %27, %28, %33
-      %34 = const c34
-      %35 = load var $1.$promise
-      promise_resolve %35, %34
+      %27 = load var $1.$resume_val
+      %28 = load var $1.$closure_env
+      %29 = const c32
+      %30 = load var $1.$closure_env
+      %31 = const c33
+      %32 = get_prop %30, %31
+      %33 = const c34
+      %34 = add %32, %33
+      set_prop %28, %29, %34
+      %35 = const c35
+      %36 = load var $1.$promise
+      promise_resolve %36, %35
       return
     bb6:
       return
@@ -128,35 +131,35 @@ module {
   fn @inc [captures: $0.undefined, $0.x] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c37
-      %3 = const c38
+      %1 = const c38
+      %3 = const c39
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
       %4 = load var $env
-      %5 = const c39
+      %5 = const c40
       %6 = get_prop %4, %5
-      %7 = const c40
+      %7 = const c41
       set_prop %2, %7, %6
       %8 = new_promise
-      %9 = const c41
+      %9 = const c42
       %10 = load var $2.$env
       %11 = call builtin.create_closure(%9, %10)
-      %12 = const c42
+      %12 = const c43
       %13 = call builtin.continuation.create(%11, %8, %12)
-      %14 = const c43
+      %14 = const c44
       call builtin.continuation.save_var(%13, %14, %8)
-      %15 = const c44
+      %15 = const c45
       call builtin.continuation.save_var(%13, %15, %10)
-      %16 = const c45
-      %17 = const c46
-      %18 = const c47
+      %16 = const c46
+      %17 = const c47
+      %18 = const c48
       call builtin.async_function.resume(%11, %13, %16, %17, %18)
       return %8
 
   fn @arrow_2 [captures: $0.x] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c53
+      %1 = const c54
       %2 = get_prop %0, %1
       %3 = call builtin.console.log(%2)
       return %3
@@ -207,35 +210,35 @@ module {
       store var $this, %20
       %21 = const c20
       store var $0.x, %21
-      %22 = const c48
-      %23 = const c49
+      %22 = const c49
+      %23 = const c50
       store var $0.$shared_env, %23
       %24 = new_object(capacity=2)
       store var $0.$shared_env, %24
       %25 = load var $0.undefined
-      %26 = const c50
+      %26 = const c51
       set_prop %24, %26, %25
       %27 = load var $0.x
-      %28 = const c51
+      %28 = const c52
       set_prop %24, %28, %27
       %29 = call builtin.create_closure(%22, %24)
       store var $0.inc, %29
-      %30 = const c52
+      %30 = const c53
       %31 = load var $0.inc
       %32 = call %31, this=%30
-      %33 = const c54
+      %33 = const c55
       %34 = load var $0.$shared_env
-      %35 = const c55
+      %35 = const c56
       %36 = stricteq %34, %35
       branch %36, bb1, bb2
     bb1:
       %37 = new_object(capacity=2)
       store var $0.$shared_env, %37
       %38 = load var $0.undefined
-      %39 = const c56
+      %39 = const c57
       set_prop %37, %39, %38
       %40 = load var $0.x
-      %41 = const c57
+      %41 = const c58
       set_prop %37, %41, %40
       jump bb3
     bb2:
@@ -244,7 +247,7 @@ module {
       %42 = phi [(bb1, %37), (bb2, %34)]
       store var $0.$shared_env, %42
       %43 = call builtin.create_closure(%33, %42)
-      %44 = const c58
+      %44 = const c59
       %45 = call builtin.promise.then(%32, %43, %44)
       %46 = is_exception %45
       branch %46, bb5, bb4

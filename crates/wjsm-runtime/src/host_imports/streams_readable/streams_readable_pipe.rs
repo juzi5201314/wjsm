@@ -604,53 +604,10 @@ pub(crate) fn call_byob_request_method_from_caller(
                 ));
             }
 
-            // 构造结果 view：同 buffer，length = bytes_written
+            // 构造转移后的结果 view：result.value.byteLength === bytesWritten，原 view detached。
             let result_view = {
-                let Some(entry) = typedarray_entry_from_object(caller, view) else {
-                    return Some(type_error_exception(caller, "invalid BYOB view"));
-                };
-                let new_ta = {
-                    let mut ta_table = caller
-                        .data()
-                        .typedarray_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    let h = ta_table.len() as u32;
-                    ta_table.push(TypedArrayEntry {
-                        buffer_handle: entry.buffer_handle,
-                        byte_offset: entry.byte_offset,
-                        length: bytes_written as u32,
-                        element_size: entry.element_size,
-                        element_kind: entry.element_kind,
-                        is_shared: entry.is_shared,
-                    });
-                    h
-                };
-                // 构造 typed-array JS 对象（与 create_uint8array_with_env 类似）
                 let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-                let obj = alloc_host_object(caller, &env, 4);
-                let _ = define_host_data_property_from_caller(
-                    caller,
-                    obj,
-                    "__typedarray_handle__",
-                    value::encode_f64(new_ta as f64),
-                );
-                let _ = define_host_data_property_from_caller(
-                    caller,
-                    obj,
-                    "__arraybuffer_handle__",
-                    value::encode_f64(entry.buffer_handle as f64),
-                );
-                let len_val = value::encode_f64(bytes_written as f64);
-                let _ = define_host_data_property_from_caller(caller, obj, "length", len_val);
-                let _ = define_host_data_property_from_caller(caller, obj, "byteLength", len_val);
-                let _ = define_host_data_property_from_caller(
-                    caller,
-                    obj,
-                    "byteOffset",
-                    value::encode_f64(entry.byte_offset as f64),
-                );
-                obj
+                transfer_byob_view_with_env(caller, &env, view, bytes_written).unwrap_or(view)
             };
 
             // 标记 responded + 清理 controller 上的 active_byob_request

@@ -12,7 +12,7 @@ use wasmtime::Caller;
 use super::fetch_core::alloc_type_error_from_caller;
 use super::streams_readable::{
     build_reader_result, build_reader_result_with_env, create_uint8array_with_env,
-    truncate_byob_view_with_env, write_u8_bytes_to_view,
+    transfer_byob_view_with_env, write_u8_bytes_to_view,
 };
 
 pub(crate) fn call_fetch_body_reader_read(
@@ -393,9 +393,9 @@ fn materialize_chunk_into_entry(
 ) -> PromiseSettlement {
     let (value, written) = if let Some(view) = byob_view {
         let written = write_u8_bytes_to_view_store(store, env, view, &chunk).unwrap_or(0);
-        // 规范语义：result.value.byteLength === bytesWritten
-        let truncated = truncate_byob_view_with_env(store, env, view, written).unwrap_or(view);
-        (truncated, written)
+        // BYOB read 会 transfer 传入 view；返回的是写入范围的新 view。
+        let transferred = transfer_byob_view_with_env(store, env, view, written).unwrap_or(view);
+        (transferred, written)
     } else {
         let arr = create_uint8array_with_env(store, env, &chunk);
         (arr, chunk.len())
@@ -478,10 +478,10 @@ fn fulfill_read_from_buffer(
 ) -> i64 {
     let (value, written) = if let Some(view) = byob_view {
         let written = write_u8_bytes_to_view(caller, view, front_chunk).unwrap_or(0);
-        // 规范语义：result.value.byteLength === bytesWritten
+        // BYOB read 会 transfer 传入 view；返回的是写入范围的新 view。
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        let truncated = truncate_byob_view_with_env(caller, &env, view, written).unwrap_or(view);
-        (truncated, written)
+        let transferred = transfer_byob_view_with_env(caller, &env, view, written).unwrap_or(view);
+        (transferred, written)
     } else {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
         let arr = create_uint8array_with_env(caller, &env, front_chunk);

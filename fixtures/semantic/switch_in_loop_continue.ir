@@ -85,24 +85,30 @@ module {
       %27 = const c23
       %28 = add %26, %27
       store var $0.i, %28
-      %29 = load var $0.i
-      switch %29 [case c24 -> bb5, case c25 -> bb6], default bb7, exit bb4
+      %29 = is_exception %28
+      branch %29, bb5, bb4
     bb3:
       return
     bb4:
-      %30 = load var $0.i
-      %31 = call builtin.console.log(%30)
-      %32 = is_exception %31
-      branch %32, bb9, bb8
+      %31 = load var $0.i
+      switch %31 [case c24 -> bb7, case c25 -> bb8], default bb9, exit bb6
     bb5:
-      jump bb1
+      %30 = call builtin.exception_value(%28)
+      throw %30
     bb6:
-      jump bb1
+      %32 = load var $0.i
+      %33 = call builtin.console.log(%32)
+      %34 = is_exception %33
+      branch %34, bb11, bb10
     bb7:
-      jump bb4
+      jump bb1
     bb8:
       jump bb1
     bb9:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      jump bb6
+    bb10:
+      jump bb1
+    bb11:
+      %35 = call builtin.exception_value(%33)
+      throw %35
 }

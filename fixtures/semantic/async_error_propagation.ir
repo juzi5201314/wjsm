@@ -26,22 +26,23 @@ module {
     c23 = number(3)
     c24 = number(0)
     c25 = functionref(@0)
-    c26 = string("error")
-    c27 = number(0)
-    c28 = undefined
-    c29 = string("$0.boom")
-    c30 = string("callee")
-    c31 = functionref(@0)
-    c32 = number(4)
-    c33 = number(2)
-    c34 = number(3)
-    c35 = undefined
-    c36 = number(0)
-    c37 = undefined
-    c38 = bool(false)
-    c39 = functionref(@1)
-    c40 = undefined
-    c41 = functionref(@2)
+    c26 = undefined
+    c27 = string("error")
+    c28 = number(0)
+    c29 = undefined
+    c30 = string("$0.boom")
+    c31 = string("callee")
+    c32 = functionref(@0)
+    c33 = number(4)
+    c34 = number(2)
+    c35 = number(3)
+    c36 = undefined
+    c37 = number(0)
+    c38 = undefined
+    c39 = bool(false)
+    c40 = functionref(@1)
+    c41 = undefined
+    c42 = functionref(@2)
 
   fn @boom$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -67,37 +68,39 @@ module {
       store var $1.arguments, %12
       jump bb1
     bb1:
+      %14 = const c26
+      store var $1.$shared_env, %14
       jump bb2
     bb2:
-      %14 = const c26
-      %15 = load var $1.$promise
-      promise_reject %15, %14
+      %15 = const c27
+      %16 = load var $1.$promise
+      promise_reject %16, %15
       return
 
   fn @boom [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c27
-      %3 = const c28
+      %1 = const c28
+      %3 = const c29
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
       %4 = load var $env
-      %5 = const c29
+      %5 = const c30
       %6 = get_prop %4, %5
-      %7 = const c30
+      %7 = const c31
       set_prop %2, %7, %6
       %8 = new_promise
-      %9 = const c31
-      %10 = const c32
+      %9 = const c32
+      %10 = const c33
       %11 = call builtin.continuation.create(%9, %8, %10)
-      %12 = const c33
+      %12 = const c34
       call builtin.continuation.save_var(%11, %12, %8)
-      %13 = const c34
-      %14 = const c35
+      %13 = const c35
+      %14 = const c36
       call builtin.continuation.save_var(%11, %13, %14)
-      %15 = const c36
-      %16 = const c37
-      %17 = const c38
+      %15 = const c37
+      %16 = const c38
+      %17 = const c39
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
@@ -151,12 +154,12 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c39
+      %21 = const c40
       store var $0.boom, %21
-      %22 = const c40
+      %22 = const c41
       %23 = load var $0.boom
       %24 = call %23, this=%22
-      %25 = const c41
+      %25 = const c42
       %26 = call builtin.promise.catch(%24, %25)
       %27 = is_exception %26
       branch %27, bb2, bb1

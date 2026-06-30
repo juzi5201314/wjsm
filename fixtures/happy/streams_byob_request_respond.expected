@@ -6,5 +6,5 @@ done false
 value length 2
 bytes 65 66
 second done true
-pulls 0
+pulls 1
 --- stderr ---

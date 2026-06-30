@@ -85,29 +85,35 @@ module {
       %27 = const c23
       %28 = add %26, %27
       store var $0.i, %28
-      %29 = load var $0.i
-      %30 = const c24
-      %31 = call builtin.abstract_eq(%29, %30)
-      branch %31, bb4, bb5
+      %29 = is_exception %28
+      branch %29, bb5, bb4
     bb3:
       return
     bb4:
-      jump bb1
+      %31 = load var $0.i
+      %32 = const c24
+      %33 = call builtin.abstract_eq(%31, %32)
+      branch %33, bb6, bb7
     bb5:
-      %32 = load var $0.i
-      %33 = const c25
-      %34 = call builtin.abstract_eq(%32, %33)
-      branch %34, bb6, bb7
+      %30 = call builtin.exception_value(%28)
+      throw %30
     bb6:
-      jump bb3
-    bb7:
-      %35 = load var $0.i
-      %36 = call builtin.console.log(%35)
-      %37 = is_exception %36
-      branch %37, bb9, bb8
-    bb8:
       jump bb1
+    bb7:
+      %34 = load var $0.i
+      %35 = const c25
+      %36 = call builtin.abstract_eq(%34, %35)
+      branch %36, bb8, bb9
+    bb8:
+      jump bb3
     bb9:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %37 = load var $0.i
+      %38 = call builtin.console.log(%37)
+      %39 = is_exception %38
+      branch %39, bb11, bb10
+    bb10:
+      jump bb1
+    bb11:
+      %40 = call builtin.exception_value(%38)
+      throw %40
 }

@@ -113,34 +113,96 @@ pub(crate) fn write_u8_bytes_to_view(
     Some(write_len)
 }
 
-/// 构造一个与原 view 共享同一 ArrayBuffer 但长度截断为 `bytes_written` 的新
-/// typed-array 视图。用于 BYOB reader.read() 返回值的 `value`，确保
-/// result.value.byteLength === bytesWritten（WHATWG Streams 规范要求）。
-pub(crate) fn truncate_byob_view_with_env<C: wasmtime::AsContextMut<Data = RuntimeState>>(
+/// 将 BYOB read 的目标 view 转移为返回值 view，并使调用方传入的 view 失效。
+///
+/// WHATWG byte stream 的 BYOB read 会 transfer 传入 view 的 ArrayBuffer：返回值
+/// 是写入字节范围的新 view，原 view 变为 detached（长度和字节长度为 0）。
+pub(crate) fn transfer_byob_view_with_env<C: wasmtime::AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     view: i64,
     bytes_written: usize,
 ) -> Option<i64> {
     let entry = typedarray_entry_from_value_with_env(ctx, env, view)?;
+    let elem_size = entry.element_size as usize;
+    if elem_size == 0 || !bytes_written.is_multiple_of(elem_size) {
+        return None;
+    }
+
+    let copied_bytes = {
+        let start = entry.byte_offset as usize;
+        let end = start.checked_add(bytes_written)?;
+        let store = ctx.as_context_mut();
+        if entry.is_shared {
+            let shared = store.data().shared_state.as_ref()?.clone();
+            let sab_table = shared.sab_table.lock().ok()?;
+            let buffer = sab_table.get(entry.buffer_handle as usize)?;
+            let data = buffer.data.read().ok()?;
+            data.get(start..end)?.to_vec()
+        } else {
+            let ab_table = store.data().arraybuffer_table.lock().ok()?;
+            let buffer = ab_table.get(entry.buffer_handle as usize)?;
+            buffer.data.get(start..end)?.to_vec()
+        }
+    };
+
+    let new_buffer_handle = {
+        let store = ctx.as_context_mut();
+        let mut ab_table = store.data().arraybuffer_table.lock().ok()?;
+        let handle = ab_table.len() as u32;
+        ab_table.push(ArrayBufferEntry { data: copied_bytes });
+        if !entry.is_shared
+            && let Some(buffer) = ab_table.get_mut(entry.buffer_handle as usize)
+        {
+            buffer.data.clear();
+        }
+        handle
+    };
+
     let new_ta = {
         let store = ctx.as_context_mut();
-        let mut ta_table = store
-            .data()
-            .typedarray_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let h = ta_table.len() as u32;
+        let mut ta_table = store.data().typedarray_table.lock().ok()?;
+        let handle = ta_table.len() as u32;
         ta_table.push(TypedArrayEntry {
-            buffer_handle: entry.buffer_handle,
-            byte_offset: entry.byte_offset,
-            length: bytes_written as u32,
+            buffer_handle: new_buffer_handle,
+            byte_offset: 0,
+            length: (bytes_written / elem_size) as u32,
             element_size: entry.element_size,
             element_kind: entry.element_kind,
-            is_shared: entry.is_shared,
+            is_shared: false,
         });
-        h
+        if !entry.is_shared {
+            for typedarray in ta_table.iter_mut() {
+                if !typedarray.is_shared && typedarray.buffer_handle == entry.buffer_handle {
+                    typedarray.byte_offset = 0;
+                    typedarray.length = 0;
+                }
+            }
+        }
+        handle
     };
+
+    if !entry.is_shared {
+        let zero = value::encode_f64(0.0);
+        let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+            ctx, env, view, "length", zero,
+        );
+        let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+            ctx,
+            env,
+            view,
+            "byteLength",
+            zero,
+        );
+        let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+            ctx,
+            env,
+            view,
+            "byteOffset",
+            zero,
+        );
+    }
+
     let obj = crate::runtime_heap::alloc_host_object(ctx, env, 4);
     let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
         ctx,
@@ -154,9 +216,10 @@ pub(crate) fn truncate_byob_view_with_env<C: wasmtime::AsContextMut<Data = Runti
         env,
         obj,
         "__arraybuffer_handle__",
-        value::encode_f64(entry.buffer_handle as f64),
+        value::encode_f64(new_buffer_handle as f64),
     );
-    let len_val = value::encode_f64(bytes_written as f64);
+    let len_val = value::encode_f64((bytes_written / elem_size) as f64);
+    let byte_len_val = value::encode_f64(bytes_written as f64);
     let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
         ctx, env, obj, "length", len_val,
     );
@@ -165,14 +228,14 @@ pub(crate) fn truncate_byob_view_with_env<C: wasmtime::AsContextMut<Data = Runti
         env,
         obj,
         "byteLength",
-        len_val,
+        byte_len_val,
     );
     let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
         ctx,
         env,
         obj,
         "byteOffset",
-        value::encode_f64(entry.byte_offset as f64),
+        value::encode_f64(0.0),
     );
     Some(obj)
 }
@@ -217,10 +280,10 @@ fn fulfill_byob_read(
             ctrl.chunk_queue.push_front(rest);
         }
     }
-    // 构造截断视图：result.value.byteLength === bytesWritten（规范语义）
+    // 构造转移后的结果 view：result.value.byteLength === bytesWritten，原 view detached。
     let result_view = {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        truncate_byob_view_with_env(caller, &env, view, written).unwrap_or(view)
+        transfer_byob_view_with_env(caller, &env, view, written).unwrap_or(view)
     };
     let result = build_reader_result(caller, false, Some(result_view));
     settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));

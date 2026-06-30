@@ -26,22 +26,23 @@ module {
     c23 = number(3)
     c24 = number(4)
     c25 = number(5)
-    c26 = functionref(@0)
-    c27 = number(6)
-    c28 = number(2)
-    c29 = number(3)
-    c30 = undefined
-    c31 = number(4)
-    c32 = number(5)
-    c33 = number(0)
-    c34 = undefined
-    c35 = bool(false)
-    c36 = functionref(@1)
-    c37 = undefined
-    c38 = number(10)
-    c39 = number(20)
-    c40 = functionref(@2)
-    c41 = undefined
+    c26 = undefined
+    c27 = functionref(@0)
+    c28 = number(6)
+    c29 = number(2)
+    c30 = number(3)
+    c31 = undefined
+    c32 = number(4)
+    c33 = number(5)
+    c34 = number(0)
+    c35 = undefined
+    c36 = bool(false)
+    c37 = functionref(@1)
+    c38 = undefined
+    c39 = number(10)
+    c40 = number(20)
+    c41 = functionref(@2)
+    c42 = undefined
 
   fn @arrow_0$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -68,35 +69,37 @@ module {
       store var $1.b, %13
       jump bb1
     bb1:
+      %14 = const c26
+      store var $1.$shared_env, %14
       jump bb2
     bb2:
-      %14 = load var $1.a
-      %15 = load var $1.b
-      %16 = add %14, %15
-      %17 = load var $1.$promise
-      promise_resolve %17, %16
+      %15 = load var $1.a
+      %16 = load var $1.b
+      %17 = add %15, %16
+      %18 = load var $1.$promise
+      promise_resolve %18, %17
       return
 
   fn @arrow_0 [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
     bb0:
       %0 = new_promise
-      %1 = const c26
-      %2 = const c27
+      %1 = const c27
+      %2 = const c28
       %3 = call builtin.continuation.create(%1, %0, %2)
-      %4 = const c28
+      %4 = const c29
       call builtin.continuation.save_var(%3, %4, %0)
-      %5 = const c29
-      %6 = const c30
+      %5 = const c30
+      %6 = const c31
       call builtin.continuation.save_var(%3, %5, %6)
       %7 = load var $2.a
-      %8 = const c31
+      %8 = const c32
       call builtin.continuation.save_var(%3, %8, %7)
       %9 = load var $2.b
-      %10 = const c32
+      %10 = const c33
       call builtin.continuation.save_var(%3, %10, %9)
-      %11 = const c33
-      %12 = const c34
-      %13 = const c35
+      %11 = const c34
+      %12 = const c35
+      %13 = const c36
       call builtin.async_function.resume(%1, %3, %11, %12, %13)
       return %0
 
@@ -150,15 +153,15 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c36
+      %21 = const c37
       store var $0.add, %21
-      %22 = const c37
+      %22 = const c38
       %23 = load var $0.add
-      %24 = const c38
-      %25 = const c39
+      %24 = const c39
+      %25 = const c40
       %26 = call %23, this=%22, args=[%24, %25]
-      %27 = const c40
-      %28 = const c41
+      %27 = const c41
+      %28 = const c42
       %29 = call builtin.promise.then(%26, %27, %28)
       %30 = is_exception %29
       branch %30, bb2, bb1
