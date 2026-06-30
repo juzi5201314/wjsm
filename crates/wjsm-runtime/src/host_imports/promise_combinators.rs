@@ -186,6 +186,7 @@ pub(crate) fn define_promise_combinators(
                 if value::is_object(elem) {
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut immediate = None;
+                    let mut not_native_promise = false;
                     {
                         let mut table = caller
                             .data()
@@ -215,8 +216,15 @@ pub(crate) fn define_promise_combinators(
                                 }
                             }
                         } else {
-                            immediate = Some(PromiseSettlement::Fulfill(elem));
+                            // #166: 对象但非原生 promise — 走 Promise.resolve(C, x) 语义，
+                            // 由 resolve_promise 统一处理 thenable adopt / 普通对象 fulfill，
+                            // 不再把原始对象当作立即值。
+                            not_native_promise = true;
                         }
+                    }
+                    if not_native_promise {
+                        resolve_promise_from_caller(&mut caller, result_promise, elem);
+                        return result_promise;
                     }
                     if let Some(settlement) = immediate {
                         settle_promise(caller.data(), result_promise, settlement);

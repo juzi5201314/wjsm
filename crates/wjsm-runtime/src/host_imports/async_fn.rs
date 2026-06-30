@@ -196,6 +196,23 @@ pub(crate) fn define_async_fn(
                         queue_promise_reactions(caller.data(), reactions, reason, true);
                     }
                 }
+            } else {
+                // #165: 防御 — await lowering 总会经 PromiseResolveStatic 把操作数转为原生
+                // promise；若因任何不变量破坏使 awaited_promise 不是原生 promise，把值当作
+                // 已 fulfill 立即恢复 continuation，避免 async 函数静默挂起。
+                drop(p_table);
+                let mut queue = caller
+                    .data()
+                    .microtask_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                queue.push_back(Microtask::AsyncResume {
+                    fn_table_idx: cont_fn_idx,
+                    continuation,
+                    state: state as u32,
+                    resume_val: awaited_promise,
+                    completion: 0,
+                });
             }
         },
     );

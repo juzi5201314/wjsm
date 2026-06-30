@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+plain-object: {"a":1}
+value-beats-thenable: 42
+thenable-fulfill: thenable-wins
+thenable-reject: thenable-rej
+--- stderr ---
