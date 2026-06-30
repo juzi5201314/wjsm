@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Once;
 
 const UPDATE_SNAPSHOTS_ENV: &str = "WJSM_UPDATE_FIXTURES";
+const VERIFY_ORACLE_ENV: &str = "WJSM_VERIFY_ORACLE";
 
 /// 进程级一次性初始化测试环境：固定时区为 UTC，设置 wasm 编译缓存目录。
 /// 旧子进程模型靠 `Command::env("TZ","UTC")` 保证 Date fixture 稳定；
@@ -117,6 +118,9 @@ impl FixtureRunner {
         }
 
         if self.update_snapshots {
+            if oracle_enabled() {
+                verify_oracle(&fixture.input_path, exit_code, &stdout, &stderr)?;
+            }
             fs::write(&fixture.expected_path, &actual).with_context(|| {
                 format!(
                     "Failed to update snapshot file {}",
@@ -160,6 +164,182 @@ fn snapshot_updates_enabled() -> bool {
         env::var(UPDATE_SNAPSHOTS_ENV).as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     )
+}
+
+/// 检查是否启用 oracle 验证。
+/// UPDATE_FIXTURES=1 时默认启用（除非显式设 VERIFY_ORACLE=0）；
+/// 单独设 VERIFY_ORACLE=1 也可启用。
+fn oracle_enabled() -> bool {
+    let updating = snapshot_updates_enabled();
+    match env::var(VERIFY_ORACLE_ENV).as_deref() {
+        Ok("0") | Ok("false") | Ok("FALSE") => false,
+        Ok("1") | Ok("true") | Ok("TRUE") => true,
+        Ok(_) => updating,
+        Err(_) => updating,
+    }
+}
+
+/// 使用 Node.js 作为 oracle 验证 wjsm 输出。
+/// 如果 wjsm 输出与 Node.js 不一致，拒绝自动更新 .expected。
+/// 返回 Ok 表示通过（可以安全更新），Err 表示被拒绝。
+fn verify_oracle(
+    fixture_path: &PathBuf,
+    wjsm_exit: i32,
+    wjsm_stdout: &[u8],
+    wjsm_stderr: &[u8],
+) -> Result<()> {
+    // 检查 Node.js 是否可用
+    let node_check = std::process::Command::new("node")
+        .arg("--version")
+        .output();
+    if node_check.is_err() {
+        // Node.js 未安装，打印警告但不阻止更新
+        eprintln!(
+            "wjsm: oracle warning: node is not installed, skipping oracle verification for {}",
+            fixture_path.display()
+        );
+        return Ok(());
+    }
+
+    let node_output = std::process::Command::new("node")
+        .arg("--no-warnings")
+        .arg(fixture_path)
+        .env("TZ", "UTC")
+        .output()
+        .with_context(|| {
+            format!(
+                "oracle: failed to run node on {}",
+                fixture_path.display()
+            )
+        })?;
+
+    let node_exit = node_output.status.code().unwrap_or(-1);
+    let node_stdout = String::from_utf8_lossy(&node_output.stdout)
+        .replace("\r\n", "\n");
+    let node_stderr = String::from_utf8_lossy(&node_output.stderr)
+        .replace("\r\n", "\n");
+
+    // 归一化 wjsm 输出用于对比：
+    // - 去除对象句柄数字（[object Type:NNN] → [object Type]）
+    // - 去除 WASM 地址和回溯
+    let wjsm_stdout_raw = String::from_utf8_lossy(wjsm_stdout).replace("\r\n", "\n");
+    let wjsm_stderr_raw = String::from_utf8_lossy(wjsm_stderr).replace("\r\n", "\n");
+
+    let wjsm_stdout_cmp = normalize_for_oracle(&wjsm_stdout_raw);
+    let wjsm_stderr_cmp = normalize_for_oracle(&wjsm_stderr_raw);
+    let node_stdout_cmp = node_stdout.trim().to_string();
+    let node_stderr_cmp = node_stderr.trim().to_string();
+
+    let mut errors: Vec<String> = Vec::new();
+
+    if wjsm_exit != node_exit {
+        errors.push(format!(
+            "exit code: wjsm={}, node={}",
+            wjsm_exit, node_exit
+        ));
+    }
+
+    if wjsm_stdout_cmp.trim() != node_stdout_cmp {
+        errors.push(format!(
+            "stdout:\n--- wjsm ---\n{}\n--- node ---\n{}",
+            wjsm_stdout_cmp.trim(),
+            node_stdout_cmp
+        ));
+    }
+
+    if wjsm_stderr_cmp.trim() != node_stderr_cmp {
+        errors.push(format!(
+            "stderr:\n--- wjsm ---\n{}\n--- node ---\n{}",
+            wjsm_stderr_cmp.trim(),
+            node_stderr_cmp
+        ));
+    }
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "oracle verification failed for {}:\n{}\n\n\
+         wjsm 输出与 Node.js 不一致，UPDATE_FIXTURES 已拒绝自动更新。\n\
+         如果这是预期内的 wjsm 专有行为，请手动编辑 .expected 文件。\n\
+         要跳过 oracle 验证：WJSM_VERIFY_ORACLE=0",
+        fixture_path.file_name().unwrap_or_default().to_string_lossy(),
+        errors.join("\n")
+    );
+}
+
+/// 为 oracle 对比做归一化：去除 wjsm 特有的渲染差异。
+fn normalize_for_oracle(text: &str) -> String {
+    // 去除对象句柄数字：[object Type:123] → [object Type]
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if i + 8 <= len && bytes[i] == b'[' && &bytes[i + 1..i + 8] == b"object " {
+            if let Some(close) = bytes[i..].iter().position(|&b| b == b']') {
+                let close_abs = i + close;
+                let inner = &text[i + 1..close_abs];
+                if let Some(colon) = inner.rfind(':') {
+                    let suffix = &inner[colon + 1..];
+                    if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                        result.push('[');
+                        result.push_str(&inner[..colon]);
+                        result.push(']');
+                        i = close_abs + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+
+    // 去除 WASM 地址 0xNNNN
+    let mut out = String::with_capacity(result.len());
+    let mut chars = result.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '0' && chars.peek() == Some(&'x') {
+            chars.next();
+            let mut had_hex = false;
+            while let Some(&h) = chars.peek() {
+                if h.is_ascii_hexdigit() {
+                    had_hex = true;
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if had_hex {
+                out.push_str("<addr>");
+            } else {
+                out.push('0');
+                out.push('x');
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    result = out;
+
+    // 去除 WASM 回溯行（含 "wasm backtrace"、"wasm function" 的行）
+    let lines: Vec<&str> = result.lines().collect();
+    let filtered: Vec<&str> = lines
+        .into_iter()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.contains("wasm backtrace")
+                && !trimmed.contains("wasm function ")
+                && !trimmed.contains("wasm trap:")
+                && trimmed != "<addr>"
+        })
+        .collect();
+    result = filtered.join("\n");
+
+    result
 }
 
 fn normalize_output(bytes: &[u8]) -> String {
