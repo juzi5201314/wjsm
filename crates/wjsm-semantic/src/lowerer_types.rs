@@ -56,9 +56,14 @@ pub(crate) struct Lowerer {
         std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
     /// 导出映射：.0 = 模块 ID, .1 = 导出名 → 变量名
     pub(crate) export_map: std::collections::HashMap<(wjsm_ir::ModuleId, String), String>,
-    /// 导入别名映射：local_name → source_ir_name
-    /// 用于 `import { x as y }` 和 `import x from './dep'` 等场景
-    pub(crate) import_aliases: std::collections::HashMap<String, String>,
+    /// 导入别名映射：(导入方模块 ID, local_name) → source_ir_name
+    /// 用于 `import { x as y }` 和 `import x from './dep'` 等场景。
+    /// 按导入方模块 ID 隔离，避免不同模块的同名 local 互相覆盖（#44）。
+    pub(crate) import_aliases:
+        std::collections::HashMap<(wjsm_ir::ModuleId, String), String>,
+    /// 每个模块的顶层块作用域 ID（predeclare 阶段分配，lower 阶段重新进入）。
+    /// 使各模块顶层 let/const 处于独立作用域，避免跨模块同名冲突（#43）。
+    pub(crate) module_scopes: std::collections::HashMap<wjsm_ir::ModuleId, usize>,
     /// 动态 import() 目标映射：module_id → 被动态 import 的目标模块 ID 列表
     pub(crate) dynamic_import_targets:
         std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
@@ -75,12 +80,12 @@ pub(crate) struct Lowerer {
     /// 重导出声明（来自 analyze_module_links）
     pub(crate) re_export_map:
         std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
-    /// 静态 `import * as ns` 的命名空间对象 ValueId
-    pub(crate) static_namespace_import_objects: std::collections::HashMap<String, wjsm_ir::ValueId>,
-    /// 待填充属性的静态命名空间：(local_name, source_module_id)
-    pub(crate) static_namespace_import_sources: Vec<(String, wjsm_ir::ModuleId)>,
-    /// 已按需填充的静态命名空间属性：(ns 对象, 导出名)
-    pub(crate) static_namespace_filled: std::collections::HashSet<(wjsm_ir::ValueId, String)>,
+    /// 静态 `import * as ns` 的命名空间对象 ValueId：(导入方模块 ID, local_name) → ValueId
+    pub(crate) static_namespace_import_objects:
+        std::collections::HashMap<(wjsm_ir::ModuleId, String), wjsm_ir::ValueId>,
+    /// 静态命名空间导入来源：(导入方模块 ID, local_name, 来源模块 ID)
+    pub(crate) static_namespace_import_sources:
+        Vec<(wjsm_ir::ModuleId, String, wjsm_ir::ModuleId)>,
 
     pub(crate) is_async_fn: bool,
     pub(crate) is_async_generator_fn: bool,

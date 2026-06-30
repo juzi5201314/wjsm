@@ -75,6 +75,13 @@ impl ScopeTree {
         self.current
     }
 
+    /// 重新进入一个已存在的作用域（用于多模块降级在 predeclare 与 lower 阶段间
+    /// 重新激活某模块的顶层作用域，避免 push_scope 重复分配新作用域）。
+    pub(crate) fn enter_scope(&mut self, id: usize) {
+        debug_assert!(id < self.arenas.len(), "enter_scope: scope id 越界");
+        self.current = id;
+    }
+
     /// 返回指定 scope 所属的最近函数 scope。
     pub(crate) fn function_scope_for_scope(&self, mut scope_id: usize) -> usize {
         loop {

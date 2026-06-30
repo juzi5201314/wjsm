@@ -20,12 +20,31 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let name = ident.sym.to_string();
+        let module_id = self.current_module_id;
 
-        if let Some(ns_obj) = self.static_namespace_import_objects.get(&name).copied() {
+        // 命名空间局部（`import * as ns`）按 (导入方模块, local) 查找，避免跨模块同名覆盖（#44）。
+        if let Some(mid) = module_id
+            && let Some(ns_obj) = self
+                .static_namespace_import_objects
+                .get(&(mid, name.clone()))
+                .copied()
+        {
             return Ok(ns_obj);
         }
 
-        if let Some(alias_ir_name) = self.import_aliases.get(&name).cloned() {
+        // 命名导入别名按 (导入方模块, local) 查找。读取时复用 lower_ident 对捕获/共享 env
+        // 的同一套判定：仅当绑定逃逸出当前函数或已进入共享 env 时才走 env 取值路径，
+        // 否则直接 LoadVar。这样既保证被改写导出对导入方可见（live binding，#45），
+        // 又不会在共享 env 从未创建时误读未初始化槽。
+        if let Some(mid) = module_id
+            && let Some(alias_ir_name) = self.import_aliases.get(&(mid, name.clone())).cloned()
+        {
+            let binding = crate::lowerer_modules::parse_ir_name_to_binding(&alias_ir_name);
+            if !self.binding_belongs_to_current_function(&binding)
+                || self.is_shared_binding(&binding)
+            {
+                return self.load_captured_binding(block, &binding);
+            }
             let dest = self.alloc_value();
             self.current_function.append_instruction(
                 block,

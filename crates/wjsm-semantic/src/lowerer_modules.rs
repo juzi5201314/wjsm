@@ -57,7 +57,6 @@ pub fn lower_modules(
     let _flow = process_import_aliases(&mut lowerer, &modules, StmtFlow::Open(entry))?;
 
     let flow = lower_module_bodies(&mut lowerer, &modules)?;
-    fill_namespace_properties(&mut lowerer, flow)?;
 
     finalize_multi_module(&mut lowerer, flow, has_tla)?;
 
@@ -108,6 +107,14 @@ fn predeclare_module_exports(
 ) -> Result<(), LoweringError> {
     for (module_id, module_ast) in modules {
         lowerer.current_module_id = Some(*module_id);
+        // 为每个模块的顶层声明创建独立的块级作用域（#43）：
+        // 避免两个模块同名的顶层 let/const 落入同一根作用域导致 "cannot redeclare"。
+        // 使用 Block 而非 Function 作用域——模块体最终全部降级进同一个 $module_main 函数，
+        // 若用 Function 作用域会让 binding_owner_function_scope ≠ current_function_scope_id，
+        // 破坏捕获/共享 env 的路由判断（live binding 依赖该机制）。
+        lowerer.scopes.push_scope(ScopeKind::Block);
+        let module_scope = lowerer.scopes.current_scope_id();
+        lowerer.module_scopes.insert(*module_id, module_scope);
         lowerer.predeclare_stmts(&module_ast.body)?;
         for item in &module_ast.body {
             match item {
@@ -136,7 +143,9 @@ fn predeclare_module_exports(
                 swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportDecl(export_decl)) => {
                     let names = decl_exported_names(&export_decl.decl);
                     for name in names {
-                        if let Ok((scope_id, _)) = lowerer.scopes.lookup(&name) {
+                        // 用 resolve_scope_id 而非 lookup：const 在预声明阶段处于 TDZ（未初始化），
+                        // lookup 会失败；此处只需作用域 id 以登记 export_map（#44）。
+                        if let Ok(scope_id) = lowerer.scopes.resolve_scope_id(&name) {
                             let ir_name = format!("${scope_id}.{name}");
                             lowerer.export_map.insert((*module_id, name), ir_name);
                         }
@@ -150,6 +159,8 @@ fn predeclare_module_exports(
                 _ => {}
             }
         }
+        // 退回根作用域，准备处理下一个模块。
+        lowerer.scopes.pop_scope();
     }
     Ok(())
 }
@@ -227,6 +238,12 @@ fn process_import_aliases(
     mut flow: StmtFlow,
 ) -> Result<StmtFlow, LoweringError> {
     for (module_id, _module_ast) in modules {
+        // 进入导入方模块自己的作用域（#43/#44）：命名空间 local 与别名都属于该模块，
+        // 不能落入根作用域，否则跨模块同名 import 会互相覆盖。
+        let Some(&module_scope) = lowerer.module_scopes.get(module_id) else {
+            continue;
+        };
+        lowerer.scopes.enter_scope(module_scope);
         let bindings: Vec<_> = lowerer
             .import_bindings
             .get(module_id)
@@ -267,10 +284,12 @@ fn process_import_aliases(
                     );
                     lowerer
                         .static_namespace_import_objects
-                        .insert(local_name.clone(), ns_obj);
-                    lowerer
-                        .static_namespace_import_sources
-                        .push((local_name.clone(), binding.source_module));
+                        .insert((*module_id, local_name.clone()), ns_obj);
+                    lowerer.static_namespace_import_sources.push((
+                        *module_id,
+                        local_name.clone(),
+                        binding.source_module,
+                    ));
                     flow = StmtFlow::Open(block);
                     continue;
                 }
@@ -280,7 +299,7 @@ fn process_import_aliases(
                     {
                         lowerer
                             .import_aliases
-                            .insert(local_name.clone(), source_ir_name);
+                            .insert((*module_id, local_name.clone()), source_ir_name);
                     }
                     continue;
                 }
@@ -289,17 +308,11 @@ fn process_import_aliases(
                 {
                     lowerer
                         .import_aliases
-                        .insert(local_name.clone(), source_ir_name);
-                } else if local_name != imported_name
-                    && let Ok(scope_id) = lowerer.scopes.resolve_scope_id(imported_name)
-                {
-                    let source_ir_name = format!("${scope_id}.{imported_name}");
-                    lowerer
-                        .import_aliases
-                        .insert(local_name.clone(), source_ir_name);
+                        .insert((*module_id, local_name.clone()), source_ir_name);
                 }
             }
         }
+        lowerer.scopes.pop_scope();
     }
     Ok(flow)
 }
@@ -436,6 +449,11 @@ fn lower_module_bodies(
     let mut flow = StmtFlow::Open(entry_block);
     for (module_id, module_ast) in modules {
         lowerer.current_module_id = Some(*module_id);
+        // 进入该模块的顶层作用域（#43）：模块体中的标识符解析必须命中模块自己的作用域，
+        // 而非根作用域，否则同名顶层变量会跨模块互相解析错位。
+        if let Some(&module_scope) = lowerer.module_scopes.get(module_id) {
+            lowerer.scopes.enter_scope(module_scope);
+        }
         for item in &module_ast.body {
             // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
             if matches!(flow, StmtFlow::Terminated) {
@@ -450,6 +468,10 @@ fn lower_module_bodies(
                 }
             }
         }
+        // 模块体执行完毕后，为以本模块为来源的命名空间对象安装 live binding getter（#45）。
+        // 拓扑序保证来源模块先于导入方降级，此时本模块的导出绑定与捕获闭包均已就绪。
+        flow = install_live_namespace_getters_for_source(lowerer, *module_id, flow)?;
+        lowerer.scopes.pop_scope();
     }
     Ok(flow)
 }
@@ -633,7 +655,9 @@ fn lower_export_named(lowerer: &mut Lowerer, named_export: &swc_ast::NamedExport
                         swc_ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
                     },
                 );
-                if let Ok((scope_id, _)) = lowerer.scopes.lookup(&local_name) {
+                // resolve_scope_id 而非 lookup：预声明阶段 local 可能处于 TDZ（const），
+                // 此处只需作用域 id 登记 export_map（#44）。
+                if let Ok(scope_id) = lowerer.scopes.resolve_scope_id(&local_name) {
                     let ir_name = format!("${scope_id}.{local_name}");
                     lowerer
                         .export_map
@@ -646,234 +670,233 @@ fn lower_export_named(lowerer: &mut Lowerer, named_export: &swc_ast::NamedExport
 }
 
 impl Lowerer {
-    /// 在模块体执行过程中按需填充静态 `import * as ns` 的导出属性（避免在全部模块体之后才 SetProp）。
-    pub(crate) fn ensure_static_namespace_prop(
+    /// 为命名空间对象 `ns_obj` 的导出 `export_name` 安装一个 live binding getter（#45）。
+    ///
+    /// getter 是一个捕获来源模块导出绑定的闭包：每次读取 `ns.export_name` 时通过
+    /// 闭包 env 读取该绑定的最新值，从而满足 ECMAScript §10.4.6 模块命名空间对象的
+    /// live binding 语义（导出变量被改写后 `ns.x` 反映新值）。
+    ///
+    /// 必须在来源模块体降级完成后调用：此时导出绑定与其捕获闭包（若存在）均已物化，
+    /// `ensure_shared_env` 不会重复快照。
+    fn install_namespace_getter(
         &mut self,
         ns_obj: wjsm_ir::ValueId,
         export_name: &str,
-        block: wjsm_ir::BasicBlockId,
-    ) {
-        let fill_key = (ns_obj, export_name.to_string());
-        if self.static_namespace_filled.contains(&fill_key) {
-            return;
+        source_ir_name: &str,
+        block: BasicBlockId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        // 将 `${scope_id}.{name}` 形式的 IR 变量名解析回 CapturedBinding，
+        // 以便 getter 通过既有的捕获/共享 env 机制读取 live 值。
+        let binding = parse_ir_name_to_binding(source_ir_name);
+        let getter_fn_id = self.build_namespace_getter_fn(&binding)?;
+
+        // 在外层（$module_main）发射 getter 闭包：捕获来源绑定。
+        let func_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(getter_fn_id));
+        let func_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: func_ref_const,
+            },
+        );
+        let mut current_block = block;
+        let env_val = self.ensure_shared_env(current_block, std::slice::from_ref(&binding), DUMMY_SP)?;
+        current_block = self.resolve_store_block(current_block);
+        let getter_val = self.alloc_value();
+        self.current_function.append_instruction(
+            current_block,
+            Instruction::CallBuiltin {
+                dest: Some(getter_val),
+                builtin: Builtin::CreateClosure,
+                args: vec![func_ref_val, env_val],
+            },
+        );
+
+        // 构建访问器 descriptor { get: closure, enumerable: true, configurable: false }
+        // 并通过 DefineProperty 安装到命名空间对象上。
+        let desc = self.build_descriptor("get", getter_val, true, false, current_block)?;
+        let key_const = self
+            .module
+            .add_constant(Constant::String(export_name.to_string()));
+        let key_val = self.alloc_value();
+        self.current_function.append_instruction(
+            current_block,
+            Instruction::Const {
+                dest: key_val,
+                constant: key_const,
+            },
+        );
+        self.current_function.append_instruction(
+            current_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::DefineProperty,
+                args: vec![ns_obj, key_val, desc],
+            },
+        );
+        Ok(current_block)
+    }
+
+    /// 构建命名空间 live binding getter 的 IR 函数：函数体读取捕获绑定并返回其值。
+    /// 返回 FunctionId（getter 通过 CreateClosure 绑定来源 env）。
+    fn build_namespace_getter_fn(
+        &mut self,
+        binding: &CapturedBinding,
+    ) -> Result<wjsm_ir::FunctionId, LoweringError> {
+        let fn_name = format!("$ns_getter.{}", binding.env_key());
+        self.push_function_context(&fn_name, BasicBlockId(0));
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
+        let this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
+        let param_ir_names = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
+
+        // 函数体：通过 env 读取来源绑定（getter 不属于绑定所有者函数，
+        // load_captured_binding 走 record_capture + GetProp 路径），然后返回。
+        let entry = BasicBlockId(0);
+        let value_val = self.load_captured_binding(entry, binding)?;
+        let ret_block = self.resolve_store_block(entry);
+        self.current_function.set_terminator(
+            ret_block,
+            Terminator::Return {
+                value: Some(value_val),
+            },
+        );
+
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let blocks = old_fn.into_blocks();
+        let mut ir_function = Function::new(&fn_name, BasicBlockId(0));
+        ir_function.set_params(param_ir_names);
+        let captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        for b in blocks {
+            ir_function.push_block(b);
         }
-        let target_module_id =
-            self.static_namespace_import_sources
-                .iter()
-                .find_map(|(local, mid)| {
-                    self.static_namespace_import_objects
-                        .get(local)
-                        .filter(|&&v| v == ns_obj)
-                        .map(|_| *mid)
-                });
-        let Some(target_module_id) = target_module_id else {
-            return;
-        };
-        if let Some(ir_name) = resolve_export_ir(self, target_module_id, export_name) {
-            let value_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::LoadVar {
-                    dest: value_val,
-                    name: ir_name,
-                },
-            );
-            let key_const = self
-                .module
-                .add_constant(Constant::String(export_name.to_string()));
-            let key_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::Const {
-                    dest: key_val,
-                    constant: key_const,
-                },
-            );
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: ns_obj,
-                    key: key_val,
-                    value: value_val,
-                },
-            );
-        }
-        self.static_namespace_filled.insert(fill_key);
+        let fn_id = self.module.push_function(ir_function);
+        self.pop_function_context();
+        Ok(fn_id)
     }
 }
 
-/// 为动态 import 的命名空间对象填充属性
+/// 将 `${scope_id}.{name}` 形式的 IR 变量名解析回 `CapturedBinding`。
+/// 顶层导出绑定恒为该形式（见 export_map 写入处）。
+pub(crate) fn parse_ir_name_to_binding(ir_name: &str) -> CapturedBinding {
+    if let Some(rest) = ir_name.strip_prefix('$')
+        && let Some((scope_str, name)) = rest.split_once('.')
+        && let Ok(scope_id) = scope_str.parse::<usize>()
+    {
+        return CapturedBinding::new(name.to_string(), scope_id);
+    }
+    // 理论不可达：导出绑定恒为 `${scope_id}.{name}`。
+    CapturedBinding::new(ir_name.to_string(), 0)
+}
+
+/// 为某来源模块 `source_module_id` 关联的所有命名空间对象安装 live binding getter（#45）。
 ///
-/// TODO: 当前实现为一次性快照语义（SetProp 后不再更新），不符合 ES Module live binding 规范。
-/// 根据规范，命名空间属性必须是 live binding：ns.x 应反映导出变量的最新值。
-/// 完整修复需要 IR 层支持 getter 或在 StoreVar 时同步更新命名空间属性。
-/// 这属于较大特性，需要 IR 层变更后才能实现。
-fn fill_namespace_properties(lowerer: &mut Lowerer, flow: StmtFlow) -> Result<(), LoweringError> {
-    let StmtFlow::Open(ns_block) = flow else {
-        return Ok(());
+/// 在该模块体降级完成后调用（拓扑序保证来源先于导入方）。覆盖两类命名空间对象：
+/// - 静态 `import * as ns`：以本模块为来源的全部 `ns` 局部对象；
+/// - 动态 `import()`：以本模块为目标的命名空间对象。
+///
+/// 每个导出名安装一个 getter 访问器，getter 读取来源模块的导出绑定（经由捕获/共享 env
+/// 机制返回最新值），从而满足 ECMAScript §10.4.6 命名空间对象的 live binding 语义。
+fn install_live_namespace_getters_for_source(
+    lowerer: &mut Lowerer,
+    source_module_id: wjsm_ir::ModuleId,
+    flow: StmtFlow,
+) -> Result<StmtFlow, LoweringError> {
+    let StmtFlow::Open(mut block) = flow else {
+        return Ok(flow);
     };
-    let mut namespace_modules: Vec<_> = lowerer
+
+    // 收集本模块作为来源的全部命名空间对象（静态 import * as + 动态 import()）。
+    let mut targets: Vec<wjsm_ir::ValueId> = Vec::new();
+    for (importer_mid, local, src_mid) in &lowerer.static_namespace_import_sources {
+        if *src_mid == source_module_id
+            && let Some(&ns_obj) = lowerer
+                .static_namespace_import_objects
+                .get(&(*importer_mid, local.clone()))
+        {
+            targets.push(ns_obj);
+        }
+    }
+    if let Some(&ns_obj) = lowerer
         .dynamic_import_namespace_objects
-        .keys()
-        .copied()
-        .collect();
-    namespace_modules.sort_by_key(|id| id.0);
-    for target_module_id in namespace_modules {
-        let ns_obj = lowerer.dynamic_import_namespace_objects[&target_module_id];
-        let export_names_set = lowerer.module_export_names.get(&target_module_id).cloned();
-
-        // 为每个导出设置属性
-        if let Some(names) = export_names_set {
-            let mut sorted_names: Vec<_> = names.iter().collect();
-            sorted_names.sort();
-            for export_name in sorted_names {
-                if let Some(ir_name) = lowerer
-                    .export_map
-                    .get(&(target_module_id, export_name.clone()))
-                    .cloned()
-                {
-                    let value_val = lowerer.alloc_value();
-                    lowerer.current_function.append_instruction(
-                        ns_block,
-                        Instruction::LoadVar {
-                            dest: value_val,
-                            name: ir_name,
-                        },
-                    );
-                    let key_const = lowerer
-                        .module
-                        .add_constant(Constant::String(export_name.clone()));
-                    let key_val = lowerer.alloc_value();
-                    lowerer.current_function.append_instruction(
-                        ns_block,
-                        Instruction::Const {
-                            dest: key_val,
-                            constant: key_const,
-                        },
-                    );
-                    lowerer.current_function.append_instruction(
-                        ns_block,
-                        Instruction::SetProp {
-                            object: ns_obj,
-                            key: key_val,
-                            value: value_val,
-                        },
-                    );
-                }
-            }
-        }
-
-        // 设置 Symbol.toStringTag = "Module"
-        let tag_key = lowerer
-            .module
-            .add_constant(Constant::String("Symbol.toStringTag".to_string()));
-        let tag_key_val = lowerer.alloc_value();
-        lowerer.current_function.append_instruction(
-            ns_block,
-            Instruction::Const {
-                dest: tag_key_val,
-                constant: tag_key,
-            },
-        );
-        let tag_value = lowerer
-            .module
-            .add_constant(Constant::String("Module".to_string()));
-        let tag_value_val = lowerer.alloc_value();
-        lowerer.current_function.append_instruction(
-            ns_block,
-            Instruction::Const {
-                dest: tag_value_val,
-                constant: tag_value,
-            },
-        );
-        lowerer.current_function.append_instruction(
-            ns_block,
-            Instruction::SetProp {
-                object: ns_obj,
-                key: tag_key_val,
-                value: tag_value_val,
-            },
-        );
+        .get(&source_module_id)
+    {
+        targets.push(ns_obj);
     }
-    let static_sources = lowerer.static_namespace_import_sources.clone();
-    for (local_name, target_module_id) in static_sources {
-        let ns_obj = lowerer.static_namespace_import_objects[&local_name];
-        let export_names_set = lowerer.module_export_names.get(&target_module_id).cloned();
-        if let Some(names) = export_names_set {
-            let mut sorted_names: Vec<_> = names.iter().collect();
-            sorted_names.sort();
-            for export_name in sorted_names {
-                if lowerer
-                    .static_namespace_filled
-                    .contains(&(ns_obj, export_name.clone()))
-                {
-                    continue;
-                }
-
-                if let Some(ir_name) = resolve_export_ir(lowerer, target_module_id, export_name) {
-                    let value_val = lowerer.alloc_value();
-                    lowerer.current_function.append_instruction(
-                        ns_block,
-                        Instruction::LoadVar {
-                            dest: value_val,
-                            name: ir_name,
-                        },
-                    );
-                    let key_const = lowerer
-                        .module
-                        .add_constant(Constant::String(export_name.clone()));
-                    let key_val = lowerer.alloc_value();
-                    lowerer.current_function.append_instruction(
-                        ns_block,
-                        Instruction::Const {
-                            dest: key_val,
-                            constant: key_const,
-                        },
-                    );
-                    lowerer.current_function.append_instruction(
-                        ns_block,
-                        Instruction::SetProp {
-                            object: ns_obj,
-                            key: key_val,
-                            value: value_val,
-                        },
-                    );
-                }
-            }
-        }
-        let tag_key = lowerer
-            .module
-            .add_constant(Constant::String("Symbol.toStringTag".to_string()));
-        let tag_key_val = lowerer.alloc_value();
-        lowerer.current_function.append_instruction(
-            ns_block,
-            Instruction::Const {
-                dest: tag_key_val,
-                constant: tag_key,
-            },
-        );
-        let tag_value = lowerer
-            .module
-            .add_constant(Constant::String("Module".to_string()));
-        let tag_value_val = lowerer.alloc_value();
-        lowerer.current_function.append_instruction(
-            ns_block,
-            Instruction::Const {
-                dest: tag_value_val,
-                constant: tag_value,
-            },
-        );
-        lowerer.current_function.append_instruction(
-            ns_block,
-            Instruction::SetProp {
-                object: ns_obj,
-                key: tag_key_val,
-                value: tag_value_val,
-            },
-        );
+    if targets.is_empty() {
+        return Ok(StmtFlow::Open(block));
     }
 
-    Ok(())
+    // 解析本模块全部导出名 → 来源 IR 变量名（按名排序，保证确定性输出）。
+    let mut exports: Vec<(String, String)> = Vec::new();
+    if let Some(names) = lowerer.module_export_names.get(&source_module_id).cloned() {
+        for export_name in &names {
+            if let Some(ir_name) = resolve_export_ir(lowerer, source_module_id, export_name) {
+                exports.push((export_name.clone(), ir_name));
+            }
+        }
+    }
+
+    for ns_obj in targets {
+        for (export_name, source_ir_name) in &exports {
+            block = lowerer.install_namespace_getter(ns_obj, export_name, source_ir_name, block)?;
+        }
+        set_namespace_string_tag(lowerer, ns_obj, block);
+    }
+    Ok(StmtFlow::Open(block))
+}
+
+/// 为命名空间对象设置 `Symbol.toStringTag = "Module"`（ECMAScript §10.4.6.2）。
+fn set_namespace_string_tag(
+    lowerer: &mut Lowerer,
+    ns_obj: wjsm_ir::ValueId,
+    block: BasicBlockId,
+) {
+    let tag_key = lowerer
+        .module
+        .add_constant(Constant::String("Symbol.toStringTag".to_string()));
+    let tag_key_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::Const {
+            dest: tag_key_val,
+            constant: tag_key,
+        },
+    );
+    let tag_value = lowerer
+        .module
+        .add_constant(Constant::String("Module".to_string()));
+    let tag_value_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::Const {
+            dest: tag_value_val,
+            constant: tag_value,
+        },
+    );
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::SetProp {
+            object: ns_obj,
+            key: tag_key_val,
+            value: tag_value_val,
+        },
+    );
 }
 
 /// 完成 main 函数构建（处理 TLA 或普通返回）
