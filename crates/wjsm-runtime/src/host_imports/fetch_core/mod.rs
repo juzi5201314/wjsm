@@ -46,6 +46,7 @@ pub(crate) fn create_response_object(
         redirected,
         body_used: false,
         http_response_handle: None,
+        stream_handle: None,
     });
     drop(table);
 
@@ -89,11 +90,23 @@ pub(crate) fn create_response_object(
             .filter(|entry| !entry.body.is_empty())
             .map(|entry| entry.body.clone())
     };
-    let body_val = if let Some(ref bytes) = body_bytes_opt {
-        create_closed_readable_stream_from_bytes(caller, bytes, Some(handle), Some(obj))
+    let (body_val, stream_handle) = if let Some(ref bytes) = body_bytes_opt {
+        let (obj, sh) =
+            create_closed_readable_stream_from_bytes(caller, bytes, Some(handle), Some(obj));
+        (obj, Some(sh))
     } else {
-        value::encode_null()
+        (value::encode_null(), None)
     };
+    if let Some(sh) = stream_handle {
+        let mut table = caller
+            .data()
+            .fetch_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = table.get_mut(handle as usize) {
+            entry.stream_handle = Some(sh);
+        }
+    }
     let _ = define_host_data_property_from_caller(caller, obj, "body", body_val);
     let _ =
         define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
@@ -151,6 +164,7 @@ pub(crate) fn create_response_object_with_http_handle(
         redirected,
         body_used: false,
         http_response_handle: Some(http_handle),
+        stream_handle: None,
     });
     drop(table);
 
@@ -199,6 +213,16 @@ pub(crate) fn create_response_object_with_http_handle(
         });
         sh
     };
+    {
+        let mut table = caller
+            .data()
+            .fetch_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = table.get_mut(handle as usize) {
+            entry.stream_handle = Some(stream_handle);
+        }
+    }
     let stream_obj =
         super::streams_readable::create_readable_stream_js_object(caller, stream_handle);
     let _ = define_host_data_property_from_caller(caller, obj, "body", stream_obj);

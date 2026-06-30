@@ -168,6 +168,8 @@ pub(crate) struct FetchResponseEntry {
     pub(crate) redirected: bool,
     pub(crate) body_used: bool,
     pub(crate) http_response_handle: Option<u32>,
+    /// body ReadableStream 在 readable_stream_table 中的 handle（用于 locked 检查）
+    pub(crate) stream_handle: Option<u32>,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct FetchRequestEntry {

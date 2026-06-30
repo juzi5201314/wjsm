@@ -1,8 +1,8 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
 main-start
 main-end
 before-throw
 Uncaught exception: Error: timer-callback-error
+after-error-timer
 --- stderr ---
-Runtime error: Uncaught exception: Error: timer-callback-error

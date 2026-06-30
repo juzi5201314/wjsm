@@ -264,7 +264,8 @@ pub(crate) async fn run_post_main_scheduler_async(
             )
             .await;
 
-            // 未捕获异常传播：timer 回调抛出的异常应导致进程退出（B4/B5）
+            // 未捕获异常：timer 回调抛出的异常打印到 stdout 但不中断事件循环。
+            // 浏览器语义：setTimeout 回调中的 throw 不阻止后续 timer/microtask 执行。
             if let Some(val) = result {
                 if value::is_exception(val) {
                     let idx = value::decode_handle(val) as usize;
@@ -291,12 +292,6 @@ pub(crate) async fn run_post_main_scheduler_async(
                         "{msg}"
                     )
                     .ok();
-                    *store
-                        .data()
-                        .runtime_error
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner()) = Some(msg);
-                    break;
                 }
             }
             // Drain microtasks after timer callback（严格 per-callback，不 batch）

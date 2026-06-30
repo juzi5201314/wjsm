@@ -180,6 +180,7 @@ pub(crate) fn call_response_method_from_caller(
         was_body_used,
         is_consuming,
         http_response_handle,
+        stream_handle,
     ) = {
         let mut table = caller
             .data()
@@ -206,6 +207,7 @@ pub(crate) fn call_response_method_from_caller(
             was_body_used,
             is_consuming,
             entry.http_response_handle,
+            entry.stream_handle,
         )
     };
     if is_consuming && was_body_used {
@@ -213,6 +215,23 @@ pub(crate) fn call_response_method_from_caller(
         let err = alloc_type_error_from_caller(caller, "body stream already read");
         settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(err));
         return Some(p);
+    }
+    // WHATWG Fetch §1.3：body 的 ReadableStream 已 locked（getReader 已调用）时，
+    // text()/json()/arrayBuffer() 必须 reject with TypeError。
+    if is_consuming && let Some(sh) = stream_handle {
+        let locked = caller
+            .data()
+            .readable_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(sh as usize)
+            .is_some_and(|e| e.locked);
+        if locked {
+            let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let err = alloc_type_error_from_caller(caller, "body stream is locked");
+            settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(err));
+            return Some(p);
+        }
     }
     // HTTP Response — 异步 body 消费
     if is_consuming && let Some(http_handle) = http_response_handle {

@@ -461,7 +461,7 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
     bytes: &[u8],
     response_body_handle: Option<u32>,
     response_body_object: Option<i64>,
-) -> i64 {
+) -> (i64, u32) {
     // 1. 创建 StreamControllerEntry (ControllerKind::ReadableDefault)
     let controller_handle = {
         let mut table = caller
@@ -543,7 +543,8 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
     }
 
     // 5. 构造 ReadableStream JS 对象
-    create_readable_stream_js_object(caller, stream_handle)
+    let js_obj = create_readable_stream_js_object(caller, stream_handle);
+    (js_obj, stream_handle)
 }
 
 /// ReadableStream 构造函数 — 由 NativeCallable::ReadableStreamConstructor 调度
