@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+true
+inner
+string cause
+42
+undefined
+undefined
+true
+true
+--- stderr ---

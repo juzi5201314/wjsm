@@ -670,12 +670,59 @@ fn error_message_from_arg(caller: &mut Caller<'_, RuntimeState>, arg: i64) -> St
     }
 }
 
+/// 捕获当前 WASM 调用栈，格式化为 V8 风格的 stack 字符串。
+/// 使用 wasmtime WasmBacktrace::force_capture 获取帧信息（后端 NameSection 提供函数名）。
+fn capture_stack_trace<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    error_name: &str,
+    message: &str,
+) -> String {
+    let mut stack = if message.is_empty() {
+        error_name.to_string()
+    } else {
+        format!("{}: {}", error_name, message)
+    };
+    let backtrace = wasmtime::WasmBacktrace::force_capture(ctx.as_context());
+    let mut has_frames = false;
+    for frame in backtrace.frames() {
+        let func_name = frame.func_name().unwrap_or("<anonymous>");
+        stack.push_str(&format!("\n    at {}", func_name));
+        has_frames = true;
+    }
+    if !has_frames {
+        stack.push_str("\n    at <anonymous>");
+    }
+    stack
+}
+
+/// 从 options 参数中提取 cause 值（ECMAScript §20.5.1.1 step 7）。
+/// `options` 必须是对象；若 options.cause 存在且非 undefined，返回 Some(cause)。
+fn extract_cause_from_options(
+    caller: &mut Caller<'_, RuntimeState>,
+    env: &WasmEnv,
+    options: i64,
+) -> Option<i64> {
+    if !value::is_js_object(options) {
+        return None;
+    }
+    let name_id = find_memory_c_string_with_env(caller, env, "cause")
+        .or_else(|| alloc_heap_c_string_with_env(caller, env, "cause"))?;
+    let cause = get_by_name_id_sync(caller, options, name_id);
+    if value::is_undefined(cause) {
+        None
+    } else {
+        Some(cause)
+    }
+}
+
 fn define_error_properties_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     obj: i64,
     error_name: &str,
     message: String,
+    cause: Option<i64>,
+    stack: String,
 ) {
     let name_val = {
         let state = ctx.as_context().data();
@@ -685,33 +732,79 @@ fn define_error_properties_with_env<C: AsContextMut<Data = RuntimeState>>(
         let state = ctx.as_context().data();
         store_runtime_string_in_state(state, message)
     };
-    let _ = define_host_data_property_with_env(ctx, env, obj, "name", name_val);
-    let _ = define_host_data_property_with_env(ctx, env, obj, "message", message_val);
+    let non_enum_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;
+    // name: { writable, non-enumerable, configurable }
+    let name_name_id = find_memory_c_string_with_env(ctx, env, "name")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "name"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx, env, obj, encode_string_name_id(name_name_id), name_val, non_enum_flags,
+    );
+    // message: { writable, non-enumerable, configurable }
+    let msg_name_id = find_memory_c_string_with_env(ctx, env, "message")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "message"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx, env, obj, encode_string_name_id(msg_name_id), message_val, non_enum_flags,
+    );
     // C2: 隐藏品牌标记，用于 render_value 区分真实 Error vs 普通对象 {name:"TypeError"}。
     let brand_val = value::encode_bool(true);
-    let name_id = find_memory_c_string_with_env(ctx, env, "__error_brand__")
+    let brand_name_id = find_memory_c_string_with_env(ctx, env, "__error_brand__")
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "__error_brand__"))
         .unwrap();
     let _ = define_host_data_property_by_name_id_with_env(
         ctx,
         env,
         obj,
-        encode_string_name_id(name_id),
+        encode_string_name_id(brand_name_id),
         brand_val,
         0,
     );
+    // cause (ES2022): { writable, non-enumerable, configurable } — 仅当存在时定义
+    if let Some(cause_val) = cause {
+        let cause_name_id = find_memory_c_string_with_env(ctx, env, "cause")
+            .or_else(|| alloc_heap_c_string_with_env(ctx, env, "cause"))
+            .unwrap();
+        let _ = define_host_data_property_by_name_id_with_env(
+            ctx,
+            env,
+            obj,
+            encode_string_name_id(cause_name_id),
+            cause_val,
+            non_enum_flags,
+        );
+    }
+    // stack: { writable, non-enumerable, configurable } — V8 约定
+    let stack_val = {
+        let state = ctx.as_context().data();
+        store_runtime_string_in_state(state, stack)
+    };
+    let stack_name_id = find_memory_c_string_with_env(ctx, env, "stack")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "stack"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(stack_name_id),
+        stack_val,
+        non_enum_flags,
+    );
 }
 
-/// 共享的错误对象创建逻辑：分配 host 对象，设置 name/message 属性和 __error_brand__ 隐藏标记。
+/// 共享的错误对象创建逻辑：分配 host 对象，设置 name/message/cause/stack 属性和 __error_brand__ 隐藏标记。
 /// `create_error_object`（Caller 路径）和 `alloc_type_error_with_env`（泛型 C 路径）均委托此函数。
 pub(crate) fn alloc_error_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     error_name: &str,
     message: String,
+    cause: Option<i64>,
 ) -> i64 {
-    let obj = alloc_host_object(ctx, env, 3);
-    define_error_properties_with_env(ctx, env, obj, error_name, message);
+    // 容量：name + message + __error_brand__ + cause + stack = 5，预留 1 槽以支持后续扩展
+    let obj = alloc_host_object(ctx, env, 6);
+    let stack = capture_stack_trace(ctx, error_name, &message);
+    define_error_properties_with_env(ctx, env, obj, error_name, message, cause, stack);
     if let Some(proto) = {
         let state = ctx.as_context().data();
         state.error_prototypes.proto_for_error_name(error_name)
@@ -738,29 +831,34 @@ pub(crate) fn create_error_object(
     caller: &mut Caller<'_, RuntimeState>,
     error_name: &str,
     arg: i64,
+    options: i64,
 ) -> i64 {
     let message = error_message_from_arg(caller, arg);
     record_error_entry(caller, error_name, message.clone());
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     ensure_error_prototypes_initialized(caller, &env);
-    alloc_error_object_with_env(caller, &env, error_name, message)
+    let cause = extract_cause_from_options(caller, &env, options);
+    alloc_error_object_with_env(caller, &env, error_name, message, cause)
 }
 
 pub(crate) fn create_error_object_with_receiver(
     caller: &mut Caller<'_, RuntimeState>,
     error_name: &str,
     arg: i64,
+    options: i64,
     receiver: i64,
 ) -> i64 {
     let message = error_message_from_arg(caller, arg);
     record_error_entry(caller, error_name, message.clone());
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     ensure_error_prototypes_initialized(caller, &env);
+    let cause = extract_cause_from_options(caller, &env, options);
     if value::is_js_object(receiver) {
-        define_error_properties_with_env(caller, &env, receiver, error_name, message);
+        let stack = capture_stack_trace(caller, error_name, &message);
+        define_error_properties_with_env(caller, &env, receiver, error_name, message, cause, stack);
         receiver
     } else {
-        alloc_error_object_with_env(caller, &env, error_name, message)
+        alloc_error_object_with_env(caller, &env, error_name, message, cause)
     }
 }
 
@@ -769,7 +867,7 @@ pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     message: String,
 ) -> i64 {
-    alloc_error_object_with_env(ctx, env, "TypeError", message)
+    alloc_error_object_with_env(ctx, env, "TypeError", message, None)
 }
 pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
     if value::is_undefined(obj) {
@@ -897,7 +995,8 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     errors: i64,
 ) -> i64 {
-    let obj = alloc_host_object(ctx, env, 3);
+    // 容量：name + message + errors + __error_brand__ + stack = 5
+    let obj = alloc_host_object(ctx, env, 5);
     let name = store_runtime_string_in_state(
         ctx.as_context_mut().data_mut(),
         "AggregateError".to_string(),
@@ -906,8 +1005,43 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
         ctx.as_context_mut().data_mut(),
         "All promises were rejected".to_string(),
     );
-    let _ = define_host_data_property_with_env(ctx, env, obj, "name", name);
-    let _ = define_host_data_property_with_env(ctx, env, obj, "message", message);
+    let non_enum_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;
+    let name_name_id = find_memory_c_string_with_env(ctx, env, "name")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "name"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx, env, obj, encode_string_name_id(name_name_id), name, non_enum_flags,
+    );
+    let msg_name_id = find_memory_c_string_with_env(ctx, env, "message")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "message"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx, env, obj, encode_string_name_id(msg_name_id), message, non_enum_flags,
+    );
     let _ = define_host_data_property_with_env(ctx, env, obj, "errors", errors);
+    // __error_brand__ 隐藏标记
+    let brand_val = value::encode_bool(true);
+    let brand_name_id = find_memory_c_string_with_env(ctx, env, "__error_brand__")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "__error_brand__"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx, env, obj, encode_string_name_id(brand_name_id), brand_val, 0,
+    );
+    // stack 属性
+    let stack = capture_stack_trace(ctx, "AggregateError", "All promises were rejected");
+    let stack_val = store_runtime_string_in_state(ctx.as_context().data(), stack);
+    let stack_name_id = find_memory_c_string_with_env(ctx, env, "stack")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "stack"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx, env, obj, encode_string_name_id(stack_name_id), stack_val, non_enum_flags,
+    );
+    // 设置原型为 error_prototypes（如有）
+    if let Some(proto) = {
+        let state = ctx.as_context().data();
+        state.error_prototypes.proto_for_error_name("AggregateError")
+    } {
+        set_object_proto_header(ctx, env, obj, proto);
+    }
     obj
 }

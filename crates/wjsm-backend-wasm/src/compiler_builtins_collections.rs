@@ -378,18 +378,40 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
-            // ── Boolean builtins ──
-            Builtin::BooleanConstructor
-            | Builtin::BooleanProtoToString
-            | Builtin::BooleanProtoValueOf
-            // ── Error builtins ──
-            | Builtin::ErrorConstructor
+            // ── Error constructors: Type 2 (i64, i64) -> i64 — 接受 (message, options) ──
+            // options 用于 ES2022 Error.cause；缺失时补 undefined。
+            Builtin::ErrorConstructor
             | Builtin::TypeErrorConstructor
             | Builtin::RangeErrorConstructor
             | Builtin::SyntaxErrorConstructor
             | Builtin::ReferenceErrorConstructor
             | Builtin::URIErrorConstructor
-            | Builtin::EvalErrorConstructor
+            | Builtin::EvalErrorConstructor => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                // 第二参数 options（缺失时补 undefined）
+                if args.len() >= 2 {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(args[1].0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(Some(()))
+            }
+            // ── Boolean + remaining single-arg builtins ──
+            Builtin::BooleanConstructor
+            | Builtin::BooleanProtoToString
+            | Builtin::BooleanProtoValueOf
             | Builtin::ErrorProtoToString
             // ── Map single-arg builtins ──
             | Builtin::MapConstructor

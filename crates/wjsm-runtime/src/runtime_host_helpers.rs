@@ -18,7 +18,7 @@ pub(crate) fn make_range_error_exception(caller: &mut Caller<'_, RuntimeState>, 
 
 fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
-    let error_obj = create_error_object(caller, error_name, msg_val);
+    let error_obj = create_error_object(caller, error_name, msg_val, value::encode_undefined());
     let mut errors = caller
         .data()
         .error_table

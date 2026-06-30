@@ -1250,7 +1250,7 @@ pub(crate) async fn object_entries_async(caller: &mut Caller<'_, RuntimeState>, 
 
 fn proxy_type_error(caller: &mut Caller<'_, RuntimeState>, msg: &'static str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
-    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let error_obj = create_error_object(caller, "TypeError", msg_val, value::encode_undefined());
     let mut errors = caller
         .data()
         .error_table

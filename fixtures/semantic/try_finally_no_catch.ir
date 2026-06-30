@@ -75,7 +75,7 @@ module {
       %21 = load var $0.$global
       %22 = const c20
       %23 = get_prop %21, %22
-      %24 = new_object(capacity=4)
+      %24 = new_object(capacity=6)
       %25 = call builtin.get_prototype_from_constructor(%23)
       set_proto %24, %25
       %26 = const c21

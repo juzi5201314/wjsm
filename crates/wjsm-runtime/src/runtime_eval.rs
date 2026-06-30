@@ -510,7 +510,7 @@ pub(crate) async fn perform_eval_from_caller_async(
             if matches!(name, "NaN" | "Infinity" | "undefined") {
                 let msg = format!("Cannot define function '{}' in eval", fn_decl.ident.sym);
                 let msg_val = store_runtime_string(caller, msg.clone());
-                let error_obj = create_error_object(caller, "TypeError", msg_val);
+                let error_obj = create_error_object(caller, "TypeError", msg_val, value::encode_undefined());
                 {
                     let mut errors = caller
                         .data()
@@ -1974,7 +1974,7 @@ pub(crate) fn eval_get_binding(
                 if !init {
                     let msg = format!("Cannot access '{}' before initialization", name_str);
                     let msg_val = store_runtime_string(caller, msg.clone());
-                    let error_obj = create_error_object(caller, "ReferenceError", msg_val);
+                    let error_obj = create_error_object(caller, "ReferenceError", msg_val, value::encode_undefined());
                     {
                         let mut errors = caller
                             .data()
@@ -2016,7 +2016,7 @@ pub(crate) fn eval_set_binding(
                 if *is_const && *init {
                     let msg = format!("assignment to constant `{}`", name_str);
                     let msg_val = store_runtime_string(caller, msg.clone());
-                    let error_obj = create_error_object(caller, "TypeError", msg_val);
+                    let error_obj = create_error_object(caller, "TypeError", msg_val, value::encode_undefined());
                     {
                         let mut errors = caller
                             .data()
@@ -2040,7 +2040,7 @@ pub(crate) fn eval_set_binding(
         if rec.is_strict {
             let msg = format!("assignment to undeclared variable `{}`", name_str);
             let msg_val = store_runtime_string(caller, msg.clone());
-            let error_obj = create_error_object(caller, "ReferenceError", msg_val);
+            let error_obj = create_error_object(caller, "ReferenceError", msg_val, value::encode_undefined());
             {
                 let mut errors = caller
                     .data()

@@ -816,8 +816,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 .first()
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
+            let options = args
+                .get(1)
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             Some(create_error_object_with_receiver(
-                caller, error_name, msg, this_val,
+                caller, error_name, msg, options, this_val,
             ))
         }
         NativeCallable::MapConstructor => Some({

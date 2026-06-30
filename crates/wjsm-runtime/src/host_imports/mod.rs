@@ -29,7 +29,7 @@ pub(crate) use object_builtins_async::define_object_builtins_async;
 mod core_async;
 mod get_method;
 pub(crate) use core_async::define_core_async;
-pub(crate) use get_method::get_method_by_name_id;
+pub(crate) use get_method::{get_by_name_id_sync, get_method_by_name_id};
 
 // 原 include! 裸块文件 → 模块声明
 mod array_object;

@@ -561,13 +561,31 @@ impl Lowerer {
         let mut call_block = block;
         let callee_val = self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
 
-        // Create new object.
+        // Create new object. Error 构造器需要更大容量以容纳 name/message/__error_brand__/cause/stack。
+        let new_obj_capacity = match new_expr.callee.as_ref() {
+            swc_ast::Expr::Ident(ident) if self.scopes.lookup(&ident.sym).is_err() => {
+                match builtin_from_global_ident(&ident.sym) {
+                    Some(b) if matches!(
+                        b,
+                        Builtin::ErrorConstructor
+                            | Builtin::TypeErrorConstructor
+                            | Builtin::RangeErrorConstructor
+                            | Builtin::SyntaxErrorConstructor
+                            | Builtin::ReferenceErrorConstructor
+                            | Builtin::URIErrorConstructor
+                            | Builtin::EvalErrorConstructor
+                    ) => 6,
+                    _ => 4,
+                }
+            }
+            _ => 4,
+        };
         let obj_val = self.alloc_value();
         self.current_function.append_instruction(
             call_block,
             Instruction::NewObject {
                 dest: obj_val,
-                capacity: 4,
+                capacity: new_obj_capacity,
             },
         );
 

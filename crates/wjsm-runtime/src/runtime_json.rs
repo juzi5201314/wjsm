@@ -600,7 +600,7 @@ fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(
 
 fn make_exception(caller: &mut Caller<'_, RuntimeState>, name: &str, message: String) -> i64 {
     let message_val = store_runtime_string(caller, message.clone());
-    let error_obj = create_error_object(caller, name, message_val);
+    let error_obj = create_error_object(caller, name, message_val, value::encode_undefined());
     let mut errors = caller
         .data()
         .error_table

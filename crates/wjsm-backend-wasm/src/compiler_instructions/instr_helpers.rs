@@ -376,6 +376,7 @@ impl Compiler {
     /// 混合 BigInt/Number 二元运算：返回可捕获的 TypeError 异常值。
     fn emit_bigint_mixed_type_error_value(&mut self) -> anyhow::Result<()> {
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         let type_err_idx = self
             .builtin_func_indices
             .get(&Builtin::TypeErrorConstructor)

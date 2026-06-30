@@ -27,7 +27,7 @@ pub(crate) fn get_method_by_name_id(
             caller,
             "method is not callable".to_string(),
         );
-        let error_obj = crate::runtime_heap::create_error_object(caller, "TypeError", msg_val);
+        let error_obj = crate::runtime_heap::create_error_object(caller, "TypeError", msg_val, value::encode_undefined());
         let mut errors = caller
             .data()
             .error_table
@@ -45,16 +45,14 @@ pub(crate) fn get_method_by_name_id(
     Ok(Some(func))
 }
 
-/// ECMAScript `Get(O, P)`（well-known symbol name_id），供 `IsConcatSpreadable` 等 builtin 路径使用。
+/// ECMAScript `Get(O, P)`（支持 string 和 symbol name_id），供 `IsConcatSpreadable`、
+/// Error.cause 提取等 builtin 路径使用。Proxy 路径需要 property key value，
+/// string key 经 name_id_to_property_key_value 返回 None → 回退到 %Error.prototype% 等普通对象的原型链查找。
 pub(crate) fn get_by_name_id_sync(
     caller: &mut Caller<'_, RuntimeState>,
     obj: i64,
     name_id: u32,
 ) -> i64 {
-    let prop = match name_id_to_property_key_value(name_id) {
-        Some(v) => v,
-        None => return value::encode_undefined(),
-    };
     if value::is_array(obj) && is_symbol_name_id(name_id) {
         let own = array_named_get_sync(caller, obj, name_id);
         if !value::is_undefined(own) {
@@ -66,6 +64,9 @@ pub(crate) fn get_by_name_id_sync(
         return crate::primitive_regexp_get_property_impl(caller, obj, name_id);
     }
     if value::is_proxy(obj) {
+        let Some(prop) = name_id_to_property_key_value(name_id) else {
+            return value::encode_undefined();
+        };
         let rt = tokio::runtime::Handle::current();
         return tokio::task::block_in_place(|| {
             rt.block_on(

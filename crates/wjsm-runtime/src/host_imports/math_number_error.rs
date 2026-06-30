@@ -1040,17 +1040,18 @@ pub(crate) fn define_math_number_error(
         boolean_proto_value_of_fn,
     )?;
     // ── Error builtins ────────────────────────────────────────────────────
+    // 所有 Error 构造器接受 (message, options) 两个参数；options 用于 ES2022 cause。
     let error_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            create_error_object(&mut caller, "Error", arg)
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
+            create_error_object(&mut caller, "Error", arg, options)
         },
     );
     linker.define(&mut store, "env", "error_constructor", error_constructor_fn)?;
     let type_error_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            create_error_object(&mut caller, "TypeError", arg)
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
+            create_error_object(&mut caller, "TypeError", arg, options)
         },
     );
     linker.define(
@@ -1061,8 +1062,8 @@ pub(crate) fn define_math_number_error(
     )?;
     let range_error_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            create_error_object(&mut caller, "RangeError", arg)
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
+            create_error_object(&mut caller, "RangeError", arg, options)
         },
     );
     linker.define(
@@ -1073,8 +1074,8 @@ pub(crate) fn define_math_number_error(
     )?;
     let syntax_error_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            create_error_object(&mut caller, "SyntaxError", arg)
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
+            create_error_object(&mut caller, "SyntaxError", arg, options)
         },
     );
     linker.define(
@@ -1085,8 +1086,8 @@ pub(crate) fn define_math_number_error(
     )?;
     let reference_error_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            create_error_object(&mut caller, "ReferenceError", arg)
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
+            create_error_object(&mut caller, "ReferenceError", arg, options)
         },
     );
     linker.define(
@@ -1097,8 +1098,8 @@ pub(crate) fn define_math_number_error(
     )?;
     let uri_error_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            create_error_object(&mut caller, "URIError", arg)
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
+            create_error_object(&mut caller, "URIError", arg, options)
         },
     );
     linker.define(
@@ -1109,8 +1110,8 @@ pub(crate) fn define_math_number_error(
     )?;
     let eval_error_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            create_error_object(&mut caller, "EvalError", arg)
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
+            create_error_object(&mut caller, "EvalError", arg, options)
         },
     );
     linker.define(
