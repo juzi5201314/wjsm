@@ -273,135 +273,127 @@ fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec
     crate::runtime_gc::native_callable_refs::collect_native_callable_refs(st, idx)
 }
 
-/// 快照所有 host 侧表持有的 raw 引用值（移植自 trace_runtime_side_table_roots_fixed_point）。
+/// 收集 host 侧表持有的 raw 引用值（移植自 trace_runtime_side_table_roots_fixed_point）。
+/// 这里只复制 raw i64 引用值；侧表本体在锁内按引用迭代，避免 fixed-point 每轮深克隆。
 /// 返回 raw i64 列表，由调用方经 push_value_roots 解析为 handle。
 /// 注：promise_table 的 reactions 只对 marked promise 有意义（fixed-point 二轮起生效），
-/// 但此处全量快照简化——push_value_roots 的越界/空检查兜底。
 fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
     use crate::{Microtask, PromiseReactionKind, PromiseState};
     let mut out = Vec::new();
 
     ctx.with_state(|st| {
         // microtask_queue
-        let microtasks = st
-            .microtask_queue
-            .lock()
-            .ok()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        for task in microtasks {
-            match task {
-                Microtask::PromiseReaction {
-                    promise,
-                    handler,
-                    argument,
-                    ..
-                } => {
-                    out.extend([promise, handler, argument]);
-                }
-                Microtask::PromiseResolveThenable {
-                    promise,
-                    thenable,
-                    then,
-                } => {
-                    out.extend([promise, thenable, then]);
-                }
-                Microtask::MicrotaskCallback { callback } => out.push(callback),
-                Microtask::TransformStreamTransform {
-                    callback,
-                    this_val,
-                    chunk,
-                    controller,
-                    write_promise,
-                } => {
-                    out.extend([callback, this_val, chunk, controller, write_promise]);
-                }
-                Microtask::TransformStreamFlush {
-                    callback,
-                    this_val,
-                    controller,
-                    close_promise,
-                    ..
-                } => {
-                    out.extend(callback);
-                    out.extend([this_val, controller, close_promise]);
-                }
-                Microtask::AsyncResume {
-                    continuation,
-                    resume_val,
-                    ..
-                } => {
-                    out.extend([continuation, resume_val]);
-                    // continuation 若是 object handle → 解析 continuation_table.captured_vars
-                    if value::is_object(continuation) {
-                        let cont_idx = value::decode_object_handle(continuation) as usize;
-                        if let Some(entry) = st
-                            .continuation_table
-                            .lock()
-                            .ok()
-                            .and_then(|g| g.get(cont_idx).cloned())
-                        {
-                            out.push(entry.outer_promise);
-                            out.extend(entry.captured_vars);
-                        }
+        if let Ok(microtasks) = st.microtask_queue.lock() {
+            for task in microtasks.iter() {
+                match task {
+                    Microtask::PromiseReaction {
+                        promise,
+                        handler,
+                        argument,
+                        ..
+                    } => {
+                        out.extend([*promise, *handler, *argument]);
                     }
-                }
-                Microtask::CleanupFinalizationRegistry {
-                    callback,
-                    held_value,
-                } => {
-                    out.extend([callback, held_value]);
-                }
-                Microtask::ReadableStreamPull {
-                    callback,
-                    this_val,
-                    controller,
-                } => {
-                    out.extend([callback, this_val, controller]);
-                }
-            }
-        }
-
-        // promise_table：state value + reactions（handler/target_promise）。
-        let promises = st
-            .promise_table
-            .lock()
-            .ok()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        for entry in promises.iter() {
-            if !entry.is_promise {
-                continue;
-            }
-            match &entry.state {
-                PromiseState::Fulfilled(v) | PromiseState::Rejected(v) => out.push(*v),
-                PromiseState::Pending => {}
-            }
-            for reaction in entry
-                .fulfill_reactions
-                .iter()
-                .chain(entry.reject_reactions.iter())
-            {
-                match &reaction.kind {
-                    PromiseReactionKind::Normal { handler } => {
-                        out.push(reaction.target_promise);
-                        out.push(*handler);
+                    Microtask::PromiseResolveThenable {
+                        promise,
+                        thenable,
+                        then,
+                    } => {
+                        out.extend([*promise, *thenable, *then]);
                     }
-                    PromiseReactionKind::AsyncResume { .. } => {
-                        // target_promise 是 continuation object handle → fixed-point 下轮经
-                        // AsyncResume 路径覆盖 captured_vars。这里先 push target。
-                        out.push(reaction.target_promise);
-                        if value::is_object(reaction.target_promise) {
-                            let cont_idx =
-                                value::decode_object_handle(reaction.target_promise) as usize;
-                            if let Some(ce) = st
+                    Microtask::MicrotaskCallback { callback } => out.push(*callback),
+                    Microtask::TransformStreamTransform {
+                        callback,
+                        this_val,
+                        chunk,
+                        controller,
+                        write_promise,
+                    } => {
+                        out.extend([*callback, *this_val, *chunk, *controller, *write_promise]);
+                    }
+                    Microtask::TransformStreamFlush {
+                        callback,
+                        this_val,
+                        controller,
+                        close_promise,
+                        ..
+                    } => {
+                        out.extend(*callback);
+                        out.extend([*this_val, *controller, *close_promise]);
+                    }
+                    Microtask::AsyncResume {
+                        continuation,
+                        resume_val,
+                        ..
+                    } => {
+                        out.extend([*continuation, *resume_val]);
+                        // continuation 若是 object handle → 解析 continuation_table.captured_vars
+                        if value::is_object(*continuation) {
+                            let cont_idx = value::decode_object_handle(*continuation) as usize;
+                            if let Some(entry) = st
                                 .continuation_table
                                 .lock()
                                 .ok()
                                 .and_then(|g| g.get(cont_idx).cloned())
                             {
-                                out.push(ce.outer_promise);
-                                out.extend(ce.captured_vars);
+                                out.push(entry.outer_promise);
+                                out.extend(entry.captured_vars);
+                            }
+                        }
+                    }
+                    Microtask::CleanupFinalizationRegistry {
+                        callback,
+                        held_value,
+                    } => {
+                        out.extend([*callback, *held_value]);
+                    }
+                    Microtask::ReadableStreamPull {
+                        callback,
+                        this_val,
+                        controller,
+                    } => {
+                        out.extend([*callback, *this_val, *controller]);
+                    }
+                }
+            }
+        }
+
+        // promise_table：state value + reactions（handler/target_promise）。
+        if let Ok(promises) = st.promise_table.lock() {
+            for entry in promises.iter() {
+                if !entry.is_promise {
+                    continue;
+                }
+                match &entry.state {
+                    PromiseState::Fulfilled(v) | PromiseState::Rejected(v) => out.push(*v),
+                    PromiseState::Pending => {}
+                }
+                for reaction in entry
+                    .fulfill_reactions
+                    .iter()
+                    .chain(entry.reject_reactions.iter())
+                {
+                    match &reaction.kind {
+                        PromiseReactionKind::Normal { handler } => {
+                            out.push(reaction.target_promise);
+                            out.push(*handler);
+                        }
+                        PromiseReactionKind::AsyncResume { .. } => {
+                            // target_promise 是 continuation object handle → fixed-point 下轮经
+                            // AsyncResume 路径覆盖 captured_vars。这里先 push target。
+                            out.push(reaction.target_promise);
+                            if value::is_object(reaction.target_promise) {
+                                let cont_idx =
+                                    value::decode_object_handle(reaction.target_promise) as usize;
+                                if let Some(ce) = st
+                                    .continuation_table
+                                    .lock()
+                                    .ok()
+                                    .and_then(|g| g.get(cont_idx).cloned())
+                                {
+                                    out.push(ce.outer_promise);
+                                    out.extend(ce.captured_vars);
+                                }
                             }
                         }
                     }
@@ -410,51 +402,39 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
         }
 
         // reader_table：pending_read_promise / pending_byob_view
-        let readers = st
-            .reader_table
-            .lock()
-            .ok()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        for r in readers.iter() {
-            if let Some(v) = r.pending_read_promise {
-                out.push(v);
-            }
-            if let Some(v) = r.pending_byob_view {
-                out.push(v);
-            }
-            if let Some(v) = r.closed_promise {
-                out.push(v);
+        if let Ok(readers) = st.reader_table.lock() {
+            for r in readers.iter() {
+                if let Some(v) = r.pending_read_promise {
+                    out.push(v);
+                }
+                if let Some(v) = r.pending_byob_view {
+                    out.push(v);
+                }
+                if let Some(v) = r.closed_promise {
+                    out.push(v);
+                }
             }
         }
 
         // byob_request_table：view / promise
-        let byobs = st
-            .byob_request_table
-            .lock()
-            .ok()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        for e in byobs.iter() {
-            out.push(e.view);
-            out.push(e.promise);
+        if let Ok(byobs) = st.byob_request_table.lock() {
+            for e in byobs.iter() {
+                out.push(e.view);
+                out.push(e.promise);
+            }
         }
 
         // stream_controller_table：underlying_source / pull / cancel
-        let ctrls = st
-            .stream_controller_table
-            .lock()
-            .ok()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        for c in ctrls.iter() {
-            out.extend(c.underlying_source);
-            out.extend(c.pull_callback);
-            out.extend(c.cancel_callback);
-            out.extend(c.strategy_size);
-            out.extend(c.abort_reason);
-            for chunk in c.chunk_queue.iter() {
-                out.push(*chunk);
+        if let Ok(ctrls) = st.stream_controller_table.lock() {
+            for c in ctrls.iter() {
+                out.extend(c.underlying_source);
+                out.extend(c.pull_callback);
+                out.extend(c.cancel_callback);
+                out.extend(c.strategy_size);
+                out.extend(c.abort_reason);
+                for chunk in c.chunk_queue.iter() {
+                    out.push(*chunk);
+                }
             }
         }
 
