@@ -254,6 +254,54 @@ fn build_match_result_from_parts(
             write_array_elem(caller, indices_ptr, i as u32, elem);
         }
         write_array_length(caller, indices_ptr, group_count);
+        // 构建 indices.groups（与上方 arr.groups 对应，但值为 [start, end] 数组）
+        if info.named.is_empty() {
+            let _ = define_host_data_property_from_caller(
+                caller,
+                indices_arr,
+                "groups",
+                value::encode_undefined(),
+            );
+        } else {
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            let indices_groups =
+                alloc_host_null_proto_object(caller, &env, info.named.len() as u32);
+            for (name, range) in &info.named {
+                let val = match range {
+                    Some(r) => {
+                        let pair = alloc_array(caller, 2);
+                        let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
+                        write_array_elem(
+                            caller,
+                            pair_ptr,
+                            0,
+                            value::encode_f64(
+                                byte_offset_to_utf16_index(s, r.start) as f64,
+                            ),
+                        );
+                        write_array_elem(
+                            caller,
+                            pair_ptr,
+                            1,
+                            value::encode_f64(
+                                byte_offset_to_utf16_index(s, r.end) as f64,
+                            ),
+                        );
+                        write_array_length(caller, pair_ptr, 2);
+                        pair
+                    }
+                    None => value::encode_undefined(),
+                };
+                let _ =
+                    define_host_data_property_from_caller(caller, indices_groups, name, val);
+            }
+            let _ = define_host_data_property_from_caller(
+                caller,
+                indices_arr,
+                "groups",
+                indices_groups,
+            );
+        }
         let _ = define_host_data_property_from_caller(caller, arr, "indices", indices_arr);
     }
 

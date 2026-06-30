@@ -67,63 +67,101 @@ pub(crate) fn define_async_fn(
     )?;
 
     // ── Import 132: async_function_resume(i64, i64, i64, i64, i64) -> () ───
-    let async_function_resume_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>,
-         fn_table_idx: i64,
-         continuation: i64,
-         state: i64,
-         resume_val: i64,
-         completion_raw: i64| {
-            let resolved_fn_idx = if value::is_function(fn_table_idx) {
-                value::decode_function_idx(fn_table_idx)
-            } else if value::is_closure(fn_table_idx) {
-                let idx = value::decode_closure_idx(fn_table_idx);
-                let closures = caller
-                    .data()
-                    .closures
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
-            } else {
-                nanbox_to_u32(fn_table_idx)
-            };
-            let state = nanbox_to_u32(state);
-            let completion = nanbox_to_u32(completion_raw) as u8;
-            {
-                let cont_handle = value::decode_object_handle(continuation) as usize;
-                let mut c_table = caller
-                    .data()
-                    .continuation_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(entry) = c_table.get_mut(cont_handle) {
-                    while entry.captured_vars.len() < 2 {
-                        entry.captured_vars.push(value::encode_undefined());
-                    }
-                    entry.captured_vars[0] = value::encode_f64(state as f64);
-                    entry.captured_vars[1] = value::encode_f64(completion as f64);
-                }
-            }
-            let mut queue = caller
-                .data()
-                .microtask_queue
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            queue.push_back(Microtask::AsyncResume {
-                fn_table_idx: resolved_fn_idx,
-                continuation,
-                state,
-                resume_val,
-                completion,
-            });
-        },
-    );
-    linker.define(
-        &mut store,
+    linker.func_wrap_async(
         "env",
         "async_function_resume",
-        async_function_resume_fn,
+        |mut caller: Caller<'_, RuntimeState>,
+         (fn_table_idx, continuation, state, resume_val, completion_raw): (i64, i64, i64, i64, i64)| {
+            Box::new(async move {
+                let resolved_fn_idx = if value::is_function(fn_table_idx) {
+                    value::decode_function_idx(fn_table_idx)
+                } else if value::is_closure(fn_table_idx) {
+                    let idx = value::decode_closure_idx(fn_table_idx);
+                    let closures = caller
+                        .data()
+                        .closures
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
+                } else {
+                    nanbox_to_u32(fn_table_idx)
+                };
+                let state = nanbox_to_u32(state);
+                let completion = nanbox_to_u32(completion_raw) as u8;
+                {
+                    let cont_handle = value::decode_object_handle(continuation) as usize;
+                    let mut c_table = caller
+                        .data()
+                        .continuation_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if let Some(entry) = c_table.get_mut(cont_handle) {
+                        while entry.captured_vars.len() < 2 {
+                            entry.captured_vars.push(value::encode_undefined());
+                        }
+                        entry.captured_vars[0] = value::encode_f64(state as f64);
+                        entry.captured_vars[1] = value::encode_f64(completion as f64);
+                    }
+                }
+                // §27.7.5.2 AsyncFunctionStart: 初始调用(state=0)时同步执行函数体，
+                // 直到第一个 await 才挂起；后续恢复仍走微任务队列。
+                if state == 0 {
+                    let env = WasmEnv::from_caller(&mut caller)
+                        .expect("WasmEnv in async_function_resume");
+                    let func_ref = env.func_table.get(&mut caller, resolved_fn_idx as u64);
+                    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+                    if let Some(func) = func {
+                        let mut results = [Val::I64(0)];
+                        let _ = func
+                            .call_async(
+                                &mut caller,
+                                &[
+                                    Val::I64(continuation),
+                                    Val::I64(resume_val),
+                                    Val::I32(0),
+                                    Val::I32(0),
+                                ],
+                                &mut results,
+                            )
+                            .await;
+                        let cont_handle = value::decode_object_handle(continuation) as usize;
+                        let outer_promise = {
+                            let c_table = caller
+                                .data()
+                                .continuation_table
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            c_table.get(cont_handle).map(|e| e.outer_promise)
+                        };
+                        if let Some(outer_promise) = outer_promise {
+                            if is_promise_settled(caller.data(), outer_promise) {
+                                let mut c_table = caller
+                                    .data()
+                                    .continuation_table
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
+                                if let Some(entry) = c_table.get_mut(cont_handle) {
+                                    entry.completed = true;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
+                let mut queue = caller
+                    .data()
+                    .microtask_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                queue.push_back(Microtask::AsyncResume {
+                    fn_table_idx: resolved_fn_idx,
+                    continuation,
+                    state,
+                    resume_val,
+                    completion,
+                });
+            })
+        },
     )?;
 
     // ── Import 133: async_function_suspend(i64, i64, i64) -> () ─────────────

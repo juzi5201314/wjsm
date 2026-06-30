@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-main-after-async-call
 async-start
+main-after-async-call
 after-await
 async-end
 timeout-in-async

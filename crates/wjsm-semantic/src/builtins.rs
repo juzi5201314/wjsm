@@ -27,6 +27,7 @@ pub(crate) const BUILTIN_GLOBALS: &[&str] = &[
     "Promise",
     "ArrayBuffer",
     "SharedArrayBuffer",
+    "console",
     "DataView",
     "Int8Array",
     "Uint8Array",

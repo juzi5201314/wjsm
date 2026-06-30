@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-main-after-async-invoke
 async-before-await
+main-after-async-invoke
 [info] async-after-await
 [debug] async-debug
 --- stderr ---

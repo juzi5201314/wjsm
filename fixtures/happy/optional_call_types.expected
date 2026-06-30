@@ -1,8 +1,7 @@
-exit_code: 1
+exit_code: 0
 --- stdout ---
+native_optional
+regular_ok
+false false
+closure_ok
 --- stderr ---
-Error: error: unsupported expression kind `optional-chain`
- --> happy/optional_call_types.js:3:1
-3 | console.log?.("native_optional");
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-

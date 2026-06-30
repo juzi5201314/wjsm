@@ -15,6 +15,7 @@ impl Lowerer {
             swc_ast::Expr::Cond(cond) => self.lower_cond(cond, block),
             swc_ast::Expr::Seq(seq) => self.lower_seq(seq, block),
             swc_ast::Expr::Paren(paren) => self.lower_expr(&paren.expr, block),
+            swc_ast::Expr::OptChain(oc) => self.lower_optchain(oc, block),
             swc_ast::Expr::Call(call) => self.lower_call_expr(call, block),
             swc_ast::Expr::Fn(fn_expr) => self.lower_fn_expr(fn_expr, block),
             swc_ast::Expr::Arrow(arrow) => self.lower_arrow_expr(arrow, block),
@@ -360,6 +361,28 @@ impl Lowerer {
                 );
                 let callee_val = self.lower_expr(expr, block)?;
                 Ok((callee_val, this_val))
+            }
+        }
+    }
+
+    fn lower_optchain(
+        &mut self,
+        oc: &swc_ast::OptChainExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        match oc.base.as_ref() {
+            swc_ast::OptChainBase::Member(member) => {
+                self.lower_member_expr(member, block)
+            }
+            swc_ast::OptChainBase::Call(ocall) => {
+                let call_expr = swc_ast::CallExpr {
+                    span: ocall.span,
+                    ctxt: ocall.ctxt,
+                    callee: swc_ast::Callee::Expr(ocall.callee.clone()),
+                    args: ocall.args.to_vec(),
+                    type_args: ocall.type_args.clone(),
+                };
+                self.lower_call_expr(&call_expr, block)
             }
         }
     }
