@@ -153,19 +153,16 @@ pub(crate) fn define_object_builtins(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, proto: i64| -> i64 {
             if !value::is_js_object(obj) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Object.setPrototypeOf called on non-object".to_string(),
+                return make_type_error_exception(
+                    &mut caller,
+                    "TypeError: Object.setPrototypeOf called on non-object",
                 );
-                return obj;
             }
             if !value::is_js_object(proto) && !value::is_null(proto) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Object.setPrototypeOf prototype must be an object or null"
-                        .to_string(),
+                return make_type_error_exception(
+                    &mut caller,
+                    "TypeError: Object.setPrototypeOf prototype must be an object or null",
                 );
-                return obj;
             }
             // Check extensibility
             if !is_extensible_impl(&mut caller, obj) {
@@ -184,21 +181,70 @@ pub(crate) fn define_object_builtins(
                 let current_handle =
                     u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
                 if current_handle != new_handle {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Object.setPrototypeOf: object is not extensible".to_string(),
+                    return make_type_error_exception(
+                        &mut caller,
+                        "TypeError: Object.setPrototypeOf: object is not extensible",
                     );
                 }
                 return obj;
             }
-            // Set prototype
+            // Set prototype — 先做循环检测（§20.1.2.21 step 5-7）
+            let proto_handle = proto_handle_from_value(&mut caller, proto);
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return obj;
             };
-            let proto_handle = proto_handle_from_value(&mut caller, proto);
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                 return obj;
             };
+            // 读取当前 proto handle，若与 new 相同则直接返回
+            {
+                let data = memory.data(&caller);
+                if ptr + 4 <= data.len() {
+                    let current = u32::from_le_bytes([
+                        data[ptr],
+                        data[ptr + 1],
+                        data[ptr + 2],
+                        data[ptr + 3],
+                    ]);
+                    if current == proto_handle {
+                        return obj;
+                    }
+                }
+            }
+            // 循环检测：从 proto 开始遍历原型链，若遇到 obj 自身则抛 TypeError
+            if !value::is_null(proto) && value::is_js_object(proto) {
+                let mut current = proto_handle;
+                let mut depth = 0u32;
+                const MAX_PROTO_DEPTH: u32 = 1000;
+                let obj_handle_raw = handle_index_of(&mut caller, obj) as u32;
+                while current != 0xFFFF_FFFF && current != 0 && depth < MAX_PROTO_DEPTH {
+                    if current == obj_handle_raw {
+                        return make_type_error_exception(
+                            &mut caller,
+                            "Cyclic __proto__ value",
+                        );
+                    }
+                    if current & 0x8000_0000 != 0 {
+                        break; // proxy handle: 不走 obj_table，跳过
+                    }
+                    let Some(current_ptr) =
+                        resolve_handle_idx(&mut caller, current as usize)
+                    else {
+                        break;
+                    };
+                    let data = memory.data(&caller);
+                    if current_ptr + 4 > data.len() {
+                        break;
+                    }
+                    current = u32::from_le_bytes([
+                        data[current_ptr],
+                        data[current_ptr + 1],
+                        data[current_ptr + 2],
+                        data[current_ptr + 3],
+                    ]);
+                    depth += 1;
+                }
+            }
             let data = memory.data_mut(&mut caller);
             if ptr + 4 <= data.len() {
                 data[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
@@ -543,7 +589,7 @@ fn proto_handle_from_value(caller: &mut Caller<'_, RuntimeState>, proto: i64) ->
     } else if value::is_array(proto) {
         value::decode_array_handle(proto)
     } else if value::is_proxy(proto) {
-        value::decode_proxy_handle(proto)
+        value::decode_proxy_handle(proto) | 0x8000_0000
     } else if value::is_function(proto) {
         let func_idx = value::decode_function_idx(proto);
         let base = caller

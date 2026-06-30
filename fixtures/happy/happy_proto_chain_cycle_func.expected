@@ -1,4 +1,5 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
-false
+Uncaught exception: TypeError: Cyclic __proto__ value
 --- stderr ---
+Runtime error: Uncaught exception: TypeError: Cyclic __proto__ value

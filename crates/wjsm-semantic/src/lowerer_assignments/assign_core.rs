@@ -144,9 +144,32 @@ impl Lowerer {
             let obj_val = self.lower_expr_then_continue(&member_expr.obj, &mut current_block)?;
             let key = match &member_expr.prop {
                 swc_ast::MemberProp::Ident(ident) => {
+                    let name = ident.sym.to_string();
+                    // __proto__ 赋值是 Object.setPrototypeOf 的语法糖（spec:
+                    // __proto__ 是 Object.prototype 上的 accessor，setter 调用
+                    // setPrototypeOf）。直接发射 CallBuiltin(ObjectSetPrototypeOf)
+                    // 而非 SetProp，确保原型真正被设置（含循环检测、可扩展性检查）。
+                    if name == "__proto__" && assign.op == swc_ast::AssignOp::Assign {
+                        let value_val = self.lower_expr_then_continue(
+                            assign.right.as_ref(),
+                            &mut current_block,
+                        )?;
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            current_block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::ObjectSetPrototypeOf,
+                                args: vec![obj_val, value_val],
+                            },
+                        );
+                        let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                        self.expr_merge_block = Some(continue_block);
+                        return Ok(value_val);
+                    }
                     let key_const = self
                         .module
-                        .add_constant(Constant::String(ident.sym.to_string()));
+                        .add_constant(Constant::String(name));
                     let key_dest = self.alloc_value();
                     self.current_function.append_instruction(
                         current_block,

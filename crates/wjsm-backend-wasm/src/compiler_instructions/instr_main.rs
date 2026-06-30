@@ -530,6 +530,19 @@ impl Compiler {
                 self.emit(WasmInstruction::Else);
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I32WrapI64);
+                // proxy handle 需要 OR 0x8000_0000 标记，供原型链遍历识别
+                // Select 指令要求栈顶为 condition，下方依次为 if_false、if_true
+                self.emit(WasmInstruction::I32Const(0x8000_0000u32 as i32)); // if_true
+                self.emit(WasmInstruction::I32Const(0)); // if_false
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
+                self.emit(WasmInstruction::I64Eq); // condition on top
+                self.emit(WasmInstruction::Select);
+                self.emit(WasmInstruction::I32Or);
                 self.emit(WasmInstruction::End);
                 // 存储：obj[0] = value_handle_idx
                 self.emit(WasmInstruction::I32Store(MemArg {

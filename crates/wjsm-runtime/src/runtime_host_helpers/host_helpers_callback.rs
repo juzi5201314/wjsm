@@ -83,6 +83,12 @@ pub(crate) fn resolve_callback_target_with_env<
         if entry.revoked {
             return Err(anyhow::anyhow!("proxy has been revoked"));
         }
+        // Spec §10.5.10 [[Call]] step 3: IsCallable(target) 为 false 时整个 Proxy 不可调用，
+        // 无论 handler 是否定义了 apply trap。Promise.then 的 IsCallable 检查因此返回 false，
+        // 使用 identity/thrower 而非 apply trap。
+        if !is_callable_with_env(ctx, env, entry.target) {
+            return Err(anyhow::anyhow!("Proxy target must be callable"));
+        }
         if let Some(handler_ptr) = resolve_handle_val_with_env(ctx, env, entry.handler) {
             let trap = read_object_property_by_name_with_env(ctx, env, handler_ptr, "apply")
                 .unwrap_or(value::encode_undefined());

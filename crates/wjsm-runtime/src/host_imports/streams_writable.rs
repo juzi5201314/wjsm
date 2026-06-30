@@ -323,6 +323,8 @@ pub(crate) async fn construct_writable_stream(
             underlying_source: None,
             pull_callback: None,
             cancel_callback: None,
+            write_callback: None,
+            sink_close_callback: None,
             active_byob_request: None,
         });
         handle
@@ -375,6 +377,35 @@ pub(crate) async fn construct_writable_stream(
         }
     }
 
+    // 6.5 保存 underlyingSink 与 write/close/abort 回调
+    if value::is_object(sink) {
+        if let Some(ptr) = resolve_handle(caller, sink) {
+            let write_fn = read_object_property_by_name(caller, ptr, "write")
+                .unwrap_or_else(value::encode_undefined);
+            let close_fn = read_object_property_by_name(caller, ptr, "close")
+                .unwrap_or_else(value::encode_undefined);
+            let abort_fn = read_object_property_by_name(caller, ptr, "abort")
+                .unwrap_or_else(value::encode_undefined);
+            let mut table = caller
+                .data()
+                .stream_controller_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(ctrl) = table.get_mut(controller_handle as usize) {
+                ctrl.underlying_source = Some(sink);
+                if value::is_callable(write_fn) {
+                    ctrl.write_callback = Some(write_fn);
+                }
+                if value::is_callable(close_fn) {
+                    ctrl.sink_close_callback = Some(close_fn);
+                }
+                if value::is_callable(abort_fn) {
+                    ctrl.cancel_callback = Some(abort_fn);
+                }
+            }
+        }
+    }
+
     // 7. 标记 controller.started = true
     {
         let mut table = caller
@@ -391,6 +422,136 @@ pub(crate) async fn construct_writable_stream(
     let obj = create_writable_stream_js_object(caller, stream_handle);
 
     Some(obj)
+}
+
+/// 普通 WritableStream：排队调用 underlyingSink.write(chunk, controller)。
+fn call_sink_write_from_writable(
+    caller: &mut Caller<'_, RuntimeState>,
+    writable_stream_handle: u32,
+    chunk: i64,
+    write_promise: i64,
+) {
+    let (write_fn, ctrl_handle, sink_this) = {
+        let ws_table = caller
+            .data()
+            .writable_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ctrl_handle = match ws_table.get(writable_stream_handle as usize) {
+            Some(e) => e.controller_handle,
+            None => {
+                settle_promise(
+                    caller.data(),
+                    write_promise,
+                    PromiseSettlement::Fulfill(value::encode_undefined()),
+                );
+                return;
+            }
+        };
+        let Some(ch) = ctrl_handle else {
+            settle_promise(
+                caller.data(),
+                write_promise,
+                PromiseSettlement::Fulfill(value::encode_undefined()),
+            );
+            return;
+        };
+        let ctrl_table = caller
+            .data()
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ctrl = match ctrl_table.get(ch as usize) {
+            Some(c) => c,
+            None => {
+                settle_promise(
+                    caller.data(),
+                    write_promise,
+                    PromiseSettlement::Fulfill(value::encode_undefined()),
+                );
+                return;
+            }
+        };
+        (
+            ctrl.write_callback,
+            ch,
+            ctrl.underlying_source,
+        )
+    };
+
+    let controller_obj = create_writable_controller_object(caller, ctrl_handle);
+    if let Some(callback) = write_fn {
+        let this_val = sink_this.unwrap_or_else(value::encode_undefined);
+        let mut queue = caller
+            .data()
+            .microtask_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        queue.push_back(Microtask::WritableStreamSinkWrite {
+            callback,
+            this_val,
+            chunk,
+            controller: controller_obj,
+            write_promise,
+        });
+    } else {
+        settle_promise(
+            caller.data(),
+            write_promise,
+            PromiseSettlement::Fulfill(value::encode_undefined()),
+        );
+    }
+}
+
+/// 普通 WritableStream 关闭：排队 underlyingSink.close(controller)；返回是否延后 resolve close_promise。
+fn call_sink_close_from_writable_close(
+    caller: &mut Caller<'_, RuntimeState>,
+    writable_stream_handle: u32,
+    close_promise: i64,
+) -> bool {
+    let (close_fn, ctrl_handle, sink_this) = {
+        let ws_table = caller
+            .data()
+            .writable_stream_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ctrl_handle = match ws_table.get(writable_stream_handle as usize) {
+            Some(e) => e.controller_handle,
+            None => return false,
+        };
+        let Some(ch) = ctrl_handle else {
+            return false;
+        };
+        let ctrl_table = caller
+            .data()
+            .stream_controller_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ctrl = match ctrl_table.get(ch as usize) {
+            Some(c) => c,
+            None => return false,
+        };
+        (
+            ctrl.sink_close_callback,
+            ch,
+            ctrl.underlying_source,
+        )
+    };
+
+    let controller_obj = create_writable_controller_object(caller, ctrl_handle);
+    let this_val = sink_this.unwrap_or_else(value::encode_undefined);
+    let mut queue = caller
+        .data()
+        .microtask_queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    queue.push_back(Microtask::WritableStreamSinkClose {
+        callback: close_fn,
+        this_val,
+        controller: controller_obj,
+        close_promise,
+    });
+    true
 }
 
 // ── WritableStream 方法分发 ─────────────────────────────────────────────────
@@ -639,11 +800,14 @@ pub(crate) fn call_writable_stream_method_from_caller(
 
             let close_deferred = call_flush_from_writable_close(caller, handle, promise);
             if !close_deferred {
-                settle_promise(
-                    caller.data(),
-                    promise,
-                    PromiseSettlement::Fulfill(value::encode_undefined()),
-                );
+                let sink_deferred = call_sink_close_from_writable_close(caller, handle, promise);
+                if !sink_deferred {
+                    settle_promise(
+                        caller.data(),
+                        promise,
+                        PromiseSettlement::Fulfill(value::encode_undefined()),
+                    );
+                }
             }
             Some(promise)
         }
@@ -731,12 +895,8 @@ pub(crate) fn call_default_writer_method_from_caller(
                         // TransformStream 路径：调用 transform(chunk, controller)
                         call_transform_from_writable(caller, stream_handle, chunk, promise);
                     } else {
-                        // 普通路径：直接 resolve write promise
-                        settle_promise(
-                            caller.data(),
-                            promise,
-                            PromiseSettlement::Fulfill(value::encode_undefined()),
-                        );
+                        // 普通 WritableStream：调用 underlyingSink.write
+                        call_sink_write_from_writable(caller, stream_handle, chunk, promise);
                     }
                 }
                 None => {
@@ -747,7 +907,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             Some(promise)
         }
         WritableStreamDefaultWriterMethodKind::Close => {
-            // writer.close() — 释放锁并关闭流
+            // writer.close() — 关闭流（不释放锁；须 writer.releaseLock()）
             let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
 
             let stream_handle = {
@@ -812,16 +972,9 @@ pub(crate) fn call_default_writer_method_from_caller(
                     }
                     // TransformStream 路径：flush + readable close 在已排队 transform 之后执行。
                     close_deferred = call_flush_from_writable_close(caller, sh, promise);
-                }
-                // 释放锁
-                {
-                    let mut table = caller
-                        .data()
-                        .writable_stream_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if let Some(entry) = table.get_mut(sh as usize) {
-                        entry.locked = false;
+                    if !close_deferred {
+                        close_deferred =
+                            call_sink_close_from_writable_close(caller, sh, promise);
                     }
                 }
 
@@ -860,7 +1013,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             Some(promise)
         }
         WritableStreamDefaultWriterMethodKind::Abort => {
-            // writer.abort(reason) — 释放锁并中止流
+            // writer.abort(reason) — 中止流（不释放锁；须 writer.releaseLock()）
             let reason = args
                 .first()
                 .copied()
@@ -891,17 +1044,6 @@ pub(crate) fn call_default_writer_method_from_caller(
                 }
                 mark_writable_stream_signal_aborted(caller, sh, reason);
 
-                // 释放锁
-                {
-                    let mut table = caller
-                        .data()
-                        .writable_stream_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if let Some(entry) = table.get_mut(sh as usize) {
-                        entry.locked = false;
-                    }
-                }
 
                 // reject writer closed 和 ready promise
                 {

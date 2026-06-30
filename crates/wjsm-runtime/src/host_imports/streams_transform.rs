@@ -235,6 +235,8 @@ pub(crate) async fn construct_transform_stream(
             underlying_source: None,
             pull_callback: None,
             cancel_callback: None,
+            write_callback: None,
+            sink_close_callback: None,
             active_byob_request: None,
         });
         handle
@@ -299,6 +301,8 @@ pub(crate) async fn construct_transform_stream(
             underlying_source: None,
             pull_callback: None,
             cancel_callback: None,
+            write_callback: None,
+            sink_close_callback: None,
             active_byob_request: None,
         });
         handle

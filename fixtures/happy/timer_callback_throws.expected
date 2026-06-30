@@ -1,6 +1,7 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
 main
 timer-1-start
-timer-2
+Uncaught exception: Error: error in timer-1
 --- stderr ---
+Runtime error: Uncaught exception: Error: error in timer-1

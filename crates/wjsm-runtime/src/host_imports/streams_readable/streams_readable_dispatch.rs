@@ -32,7 +32,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 .unwrap_or(false);
 
             // 检查 locked；BYOB reader 只能用于 byte stream。
-            let (locked, is_byte_stream, response_body) = {
+            let (locked, is_byte_stream) = {
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
@@ -41,16 +41,11 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let entry = stream_table.get_mut(handle as usize)?;
                 let locked = entry.locked;
                 let is_byte_stream = entry.is_byte_stream;
-                let response_body = (entry.response_body_handle, entry.response_body_object);
                 if !locked && (!wants_byob || is_byte_stream) {
                     entry.locked = true;
-                    entry.disturbed = true;
                 }
-                (locked, is_byte_stream, response_body)
+                (locked, is_byte_stream)
             };
-            if !locked && (!wants_byob || is_byte_stream) {
-                mark_response_body_used_from_caller(caller, response_body.0, response_body.1);
-            }
             if locked {
                 return Some(type_error_exception(
                     caller,
@@ -266,6 +261,8 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     underlying_source: None,
                     pull_callback: None,
                     cancel_callback: None,
+                    write_callback: None,
+                    sink_close_callback: None,
                     active_byob_request: None,
                 });
                 h
@@ -294,6 +291,8 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     underlying_source: None,
                     pull_callback: None,
                     cancel_callback: None,
+                    write_callback: None,
+                    sink_close_callback: None,
                     active_byob_request: None,
                 });
                 h

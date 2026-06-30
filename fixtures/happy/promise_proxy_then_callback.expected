@@ -1,4 +1,4 @@
 exit_code: 0
 --- stdout ---
-applied=true v=42
+applied=false v=41
 --- stderr ---

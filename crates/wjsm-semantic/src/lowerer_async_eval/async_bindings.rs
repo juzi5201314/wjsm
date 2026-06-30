@@ -39,6 +39,22 @@ impl Lowerer {
         bindings
     }
 
+    /// 将 async continuation 的 IR 绑定名还原为 CapturedBinding。
+    fn captured_binding_from_ir_name(ir_name: &str) -> Option<CapturedBinding> {
+        let (scope, name) = ir_name.split_once('.')?;
+        let scope_id = scope.strip_prefix('$')?.parse().ok()?;
+        Some(CapturedBinding::new(name, scope_id))
+    }
+
+    /// 共享 env 中的可变捕获在 suspend 期间可能被微任务（如 ReadableStream pull）更新；
+    /// 不得用 continuation 快照覆盖，resume 后应从 $shared_env 或局部槽读取最新值。
+    fn async_continuation_should_save_binding(&self, ir_name: &str) -> bool {
+        let Some(binding) = Self::captured_binding_from_ir_name(ir_name) else {
+            return true;
+        };
+        !self.is_shared_binding(&binding)
+    }
+
     pub(crate) fn async_binding_slot(&mut self, ir_name: &str) -> u32 {
         if let Some(slot) = self.captured_var_slots.get(ir_name) {
             return *slot;
@@ -69,6 +85,7 @@ impl Lowerer {
             let live_bindings: Vec<String> = suspend
                 .visible_bindings
                 .iter()
+                .filter(|name| self.async_continuation_should_save_binding(name))
                 .filter(|name| {
                     suspend_successors
                         .iter()

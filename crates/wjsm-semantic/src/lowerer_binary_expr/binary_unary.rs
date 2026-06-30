@@ -4,11 +4,12 @@ impl Lowerer {
     /// 判断表达式在其自身求值时是否可能直接返回 TAG_EXCEPTION，从而需要异常检查分叉。
     /// 涵盖调用、成员读取、算术/位运算（含 BigInt 与 Number 混合时的 TypeError、`>>>` 与 BigInt）等。
     /// 子表达式的异常由各自经 `lower_expr_then_continue` 的求值负责传播。
-    /// 刻意排除 Await/Yield（异步状态机自有续延处理）与 Assign（其值为右值；赋值语句右值
-    /// 抛出的传播尚未覆盖，且 eval 右值自带异常分叉，额外分叉会破坏其块结构）。
+    /// 刻意排除 Await/Yield（异步状态机自有续延处理）。
+    /// Assign 包含：setter 调用（如 __proto__ 赋值）可能抛 TypeError。
     pub(crate) fn expr_can_throw(&self, expr: &swc_ast::Expr) -> bool {
         match expr {
-            swc_ast::Expr::Call(_)
+            swc_ast::Expr::Assign(_) // setter / __proto__ 赋值可能抛 TypeError
+            | swc_ast::Expr::Call(_)
             | swc_ast::Expr::New(_)
             | swc_ast::Expr::Member(_)
             | swc_ast::Expr::OptChain(_)

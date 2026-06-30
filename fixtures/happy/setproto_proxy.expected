@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-ir_proto_label: undefined
+ir_proto_label: proto
 builtin_ret_is_target: true
-builtin_proto_label: undefined
+builtin_proto_label: proto
 --- stderr ---

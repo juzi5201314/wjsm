@@ -106,20 +106,25 @@ pub(crate) fn call_default_reader_method_from_caller(
                 None
             };
 
-            // 2. 获取 controller handle 和 stream 状态
-            let (controller_handle, http_response_handle, stream_state) = {
-                let stream_table = caller
+            // 2. 获取 controller handle、stream 状态和 response_body 信息
+            let (controller_handle, http_response_handle, stream_state, response_body) = {
+                let mut stream_table = caller
                     .data()
                     .readable_stream_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let entry = stream_table.get(stream_handle as usize)?;
+                let entry = stream_table.get_mut(stream_handle as usize)?;
+                // read() 触发 disturbed → bodyUsed = true（WHATWG Fetch §6.4.4）
+                entry.disturbed = true;
                 (
                     entry.controller_handle,
                     entry.http_response_handle,
                     entry.state.clone(),
+                    (entry.response_body_handle, entry.response_body_object),
                 )
             };
+            // 标记 Response.bodyUsed = true（流被实际读取）
+            mark_response_body_used_from_caller(caller, response_body.0, response_body.1);
 
             // 3. 自定义流路径：检查 controller chunk_queue
             if let Some(ctrl_handle) = controller_handle {

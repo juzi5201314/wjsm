@@ -103,7 +103,8 @@ fn object_proto_handle_from_value(caller: &mut Caller<'_, RuntimeState>, proto: 
     } else if value::is_array(proto) {
         value::decode_array_handle(proto)
     } else if value::is_proxy(proto) {
-        value::decode_proxy_handle(proto)
+        // 高位标记：proto 链遍历时据此识别 proxy handle 并走 [[Get]] trap
+        value::decode_proxy_handle(proto) | 0x8000_0000
     } else if value::is_function(proto) {
         let func_idx = value::decode_function_idx(proto);
         let base = caller
@@ -1994,16 +1995,14 @@ pub(crate) fn define_array_object(
     let obj_set_proto_of_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, proto: i64| -> i64 {
-            if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
+            if !value::is_js_object(obj) {
                 return obj;
             }
             if !value::is_js_object(proto) && !value::is_null(proto) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Object.setPrototypeOf prototype must be an object or null"
-                        .to_string(),
+                return make_type_error_exception(
+                    &mut caller,
+                    "Object.setPrototypeOf prototype must be an object or null",
                 );
-                return obj;
             }
             let new_handle = object_proto_handle_from_value(&mut caller, proto);
             let current_handle = object_read_current_proto_handle(&mut caller, obj);
@@ -2023,11 +2022,13 @@ pub(crate) fn define_array_object(
                 let obj_handle_raw = handle_index_of(&mut caller, obj) as u32;
                 while current != 0xFFFF_FFFF && current != 0 && depth < MAX_PROTO_DEPTH {
                     if current == obj_handle_raw {
-                        set_runtime_error(
-                            caller.data(),
-                            "TypeError: Cyclic __proto__ value".to_string(),
+                        return make_type_error_exception(
+                            &mut caller,
+                            "Cyclic __proto__ value",
                         );
-                        return obj;
+                    }
+                    if current & 0x8000_0000 != 0 {
+                        break; // proxy handle: 不走 obj_table，跳过
                     }
                     let Some(current_ptr) = resolve_handle_idx(&mut caller, current as usize)
                     else {

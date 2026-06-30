@@ -341,6 +341,10 @@ pub(crate) struct StreamControllerEntry {
     pub(crate) underlying_source: Option<i64>,
     /// underlyingSource.pull 回调（JS callable）
     pub(crate) pull_callback: Option<i64>,
+    /// underlyingSink.write 回调（Writable controller）
+    pub(crate) write_callback: Option<i64>,
+    /// underlyingSink.close 回调（Writable controller）
+    pub(crate) sink_close_callback: Option<i64>,
     /// underlyingSource.cancel 回调（JS callable）
     pub(crate) cancel_callback: Option<i64>,
     /// 当前活动的 BYOB request handle（指向 byob_request_table）
@@ -1086,6 +1090,19 @@ pub(crate) enum Microtask {
         callback: i64,
         this_val: i64,
         controller: i64,
+    },
+    WritableStreamSinkWrite {
+        callback: i64,
+        this_val: i64,
+        chunk: i64,
+        controller: i64,
+        write_promise: i64,
+    },
+    WritableStreamSinkClose {
+        callback: Option<i64>,
+        this_val: i64,
+        controller: i64,
+        close_promise: i64,
     },
 }
 

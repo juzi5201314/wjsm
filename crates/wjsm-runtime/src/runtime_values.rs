@@ -22,6 +22,23 @@ pub(crate) fn handle_index_of(caller: &mut Caller<'_, RuntimeState>, val: i64) -
             .max(0) as usize;
         return handle_idx.saturating_add(base);
     }
+    if value::is_closure(val) {
+        let func_idx = caller
+            .data()
+            .closures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(handle_idx)
+            .map(|e| e.func_idx as usize)
+            .unwrap_or(0);
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(Extern::into_global)
+            .and_then(|global| global.get(&mut *caller).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        return func_idx.saturating_add(base);
+    }
     handle_idx
 }
 

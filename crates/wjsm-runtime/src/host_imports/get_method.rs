@@ -157,7 +157,24 @@ fn get_by_name_id_on_proto_chain(
             data[obj_ptr + 3],
         ])
     };
-    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+    if proto_handle & 0x8000_0000 != 0 {
+        // Proxy handle：高位标记表示这是 proxy_table 索引。
+        // 重构 proxy 值并走 [[Get]] trap（经 reflect_get 实现）。
+        let proxy_idx = (proto_handle & 0x7FFF_FFFF) as usize;
+        let proxy_val = value::encode_proxy_handle(proxy_idx as u32);
+        let prop = crate::property_key::name_id_to_property_key_value(name_id);
+        if let Some(prop) = prop {
+            let rt = tokio::runtime::Handle::current();
+            return Some(
+                tokio::task::block_in_place(|| {
+                    rt.block_on(
+                        crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
+                            caller, proxy_val, prop, receiver,
+                        ),
+                    )
+                }),
+            );
+        }
         return None;
     }
     let proto_ptr =

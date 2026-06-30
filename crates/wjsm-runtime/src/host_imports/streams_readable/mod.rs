@@ -423,6 +423,8 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
             underlying_source: None,
             pull_callback: None,
             cancel_callback: None,
+            write_callback: None,
+            sink_close_callback: None,
             active_byob_request: None,
         });
         handle

@@ -2,7 +2,10 @@ exit_code: 0
 --- stdout ---
 false
 true
+w:hello
 written
+w:world
 written2
+c
 writer-closed
 --- stderr ---

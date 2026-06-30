@@ -678,7 +678,7 @@ pub(crate) async fn reflect_set_prototype_of_fn_impl(
     } else if value::is_array(proto) {
         value::decode_array_handle(proto)
     } else if value::is_proxy(proto) {
-        value::decode_proxy_handle(proto)
+        value::decode_proxy_handle(proto) | 0x8000_0000
     } else if value::is_function(proto) {
         let func_idx = value::decode_function_idx(proto);
         let base = caller

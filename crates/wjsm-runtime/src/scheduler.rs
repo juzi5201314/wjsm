@@ -255,7 +255,7 @@ pub(crate) async fn run_post_main_scheduler_async(
             let entry_id = entry.id;
 
             // 定时器回调按宿主 API 语义以 this=undefined、零参数调用。
-            call_host_function_with_args_async(
+            let result = call_host_function_with_args_async(
                 store,
                 env,
                 callback,
@@ -264,6 +264,41 @@ pub(crate) async fn run_post_main_scheduler_async(
             )
             .await;
 
+            // 未捕获异常传播：timer 回调抛出的异常应导致进程退出（B4/B5）
+            if let Some(val) = result {
+                if value::is_exception(val) {
+                    let idx = value::decode_handle(val) as usize;
+                    let msg = store
+                        .data()
+                        .error_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(idx)
+                        .map(|e| {
+                            if e.name.is_empty() {
+                                format!("Uncaught exception: {}", e.message)
+                            } else {
+                                format!("Uncaught exception: {}: {}", e.name, e.message)
+                            }
+                        })
+                        .unwrap_or_else(|| "Uncaught exception: unknown error".to_string());
+                    writeln!(
+                        store
+                            .data()
+                            .output
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()),
+                        "{msg}"
+                    )
+                    .ok();
+                    *store
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(msg);
+                    break;
+                }
+            }
             // Drain microtasks after timer callback（严格 per-callback，不 batch）
             drain_microtasks_async(store, env).await;
 

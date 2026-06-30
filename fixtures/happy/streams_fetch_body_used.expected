@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
 bodyUsed before: false
-bodyUsed after getReader: true
+bodyUsed after getReader: false
 first done: false
 first length: 5
 first byte: 72

@@ -354,6 +354,32 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                     } => {
                         out.extend([*callback, *this_val, *controller]);
                     }
+                    Microtask::WritableStreamSinkWrite {
+                        callback,
+                        this_val,
+                        chunk,
+                        controller,
+                        write_promise,
+                    } => {
+                        out.extend([
+                            *callback,
+                            *this_val,
+                            *chunk,
+                            *controller,
+                            *write_promise,
+                        ]);
+                    }
+                    Microtask::WritableStreamSinkClose {
+                        callback,
+                        this_val,
+                        controller,
+                        close_promise,
+                    } => {
+                        if let Some(cb) = callback {
+                            out.push(*cb);
+                        }
+                        out.extend([*this_val, *controller, *close_promise]);
+                    }
                 }
             }
         }

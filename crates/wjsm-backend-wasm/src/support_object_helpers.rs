@@ -380,6 +380,23 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I32Or);
     func.instruction(&WasmInstruction::BrIf(1));
     // 通过 handle 表解析 proto_handle → proto_ptr
+    // 检查 proto_handle 高位是否为 proxy 标记
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::I32Const(i32::MIN));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::I32Const(i32::MAX));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    func.instruction(&WasmInstruction::I64Const(
+        (value::BOX_BASE | (value::TAG_PROXY << 32)) as i64,
+    ));
+    func.instruction(&WasmInstruction::I64Or);
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_PROXY_TRAP_GET));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::LocalGet(3));
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::I32Mul);

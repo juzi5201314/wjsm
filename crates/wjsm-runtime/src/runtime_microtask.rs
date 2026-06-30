@@ -309,6 +309,81 @@ pub(crate) async fn drain_microtasks_async<
                     call_host_function_with_args_async(ctx, env, callback, this_val, &[controller])
                         .await;
             }
+            Some(Microtask::WritableStreamSinkWrite {
+                callback,
+                this_val,
+                chunk,
+                controller,
+                write_promise,
+            }) => {
+                let result = call_host_function_with_args_async(
+                    ctx,
+                    env,
+                    callback,
+                    this_val,
+                    &[chunk, controller],
+                )
+                .await;
+                match result {
+                    Some(result) if is_promise_value(ctx.state_mut(), result) => {
+                        resolve_promise(ctx, env, write_promise, result);
+                    }
+                    Some(_) => {
+                        settle_promise(
+                            ctx.state_mut(),
+                            write_promise,
+                            PromiseSettlement::Fulfill(value::encode_undefined()),
+                        );
+                    }
+                    None => {
+                        let err = runtime_error_value(
+                            ctx.state_mut(),
+                            "TypeError: WritableStream sink write callback failed".to_string(),
+                        );
+                        settle_promise(
+                            ctx.state_mut(),
+                            write_promise,
+                            PromiseSettlement::Reject(err),
+                        );
+                    }
+                }
+            }
+            Some(Microtask::WritableStreamSinkClose {
+                callback,
+                this_val,
+                controller,
+                close_promise,
+            }) => {
+                let close_ok = match callback {
+                    Some(callback) => call_host_function_with_args_async(
+                        ctx,
+                        env,
+                        callback,
+                        this_val,
+                        &[controller],
+                    )
+                    .await
+                    .is_some(),
+                    None => true,
+                };
+                if !close_ok {
+                    let err = runtime_error_value(
+                        ctx.state_mut(),
+                        "TypeError: WritableStream sink close callback failed".to_string(),
+                    );
+                    settle_promise(
+                        ctx.state_mut(),
+                        close_promise,
+                        PromiseSettlement::Reject(err),
+                    );
+                } else {
+                    settle_promise(
+                        ctx.state_mut(),
+                        close_promise,
+                        PromiseSettlement::Fulfill(value::encode_undefined()),
+                    );
+                }
+            }
             None => break,
         }
     }
