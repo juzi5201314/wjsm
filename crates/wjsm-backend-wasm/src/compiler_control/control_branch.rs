@@ -336,6 +336,7 @@ impl Compiler {
                         return Ok(false);
                     }
                     self.branch_inline_compiled.insert(common_idx);
+                    self.compiled_blocks.insert(common_idx);
                     return self.compile_branch_body_with_context(
                         module,
                         blocks,
