@@ -463,6 +463,16 @@ impl Lowerer {
 
     // ── switch ──────────────────────────────────────────────────────────────
 
+    /// 降低 switch 语句。
+    ///
+    /// 按 ECMAScript §14.12.2：每个 case test 是任意表达式，判别式与每个 case test
+    /// 用 StrictEq (`===`) 比较，按源码顺序从左到右求值。第一个匹配的 case body
+    /// 被执行；若无匹配则跳转到 default；若无 default 则跳到 exit。
+    ///
+    /// 实现方式：构建测试块链 — 每个 non-default case 对应一个测试块，块内降低
+    /// case test 表达式，与判别式做 StrictEq 比较，匹配则跳到 case body，否则
+    /// 跳到下一个测试块。最后一个测试块的不匹配分支跳到 default（或 exit）。
+    /// case body 的 fall-through 语义保持不变（跳到下一个 case body）。
     pub(crate) fn lower_switch(
         &mut self,
         switch_stmt: &swc_ast::SwitchStmt,
@@ -470,66 +480,113 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
-        let discr = self.lower_expr(&switch_stmt.discriminant, block)?;
+        // ── 降低判别式表达式 ──────────────────────────────────────────────
+        let mut discr_block = block;
+        let can_throw = self.expr_exception_fork_allowed()
+            && self.expr_can_throw(&switch_stmt.discriminant);
+        let discr = if can_throw {
+            self.lower_expr_then_continue(&switch_stmt.discriminant, &mut discr_block)?
+        } else {
+            self.lower_expr(&switch_stmt.discriminant, discr_block)?
+        };
+        // 判别式异常检查（函数调用等可能返回 TAG_EXCEPTION）
+        let discr_entry = if can_throw {
+            self.lower_value_exception_branch(discr_block, discr)?
+        } else {
+            self.resolve_store_block(discr_block)
+        };
 
         let exit = self.current_function.new_block();
-        // 性能优化：预分配容量避免循环中多次 reallocation
         let case_count = switch_stmt.cases.len();
-        let mut cases: Vec<SwitchCaseTarget> = Vec::with_capacity(case_count);
         let mut case_blocks: Vec<BasicBlockId> = Vec::with_capacity(case_count);
         let mut default_pos: Option<usize> = None;
 
-        // Generate a case block for each case
+        // 为每个 case（含 default）创建 body block，保持源码顺序
         for case in &switch_stmt.cases {
             if case.test.is_none() {
-                // default case — 记录其在 cases 中的位置
                 default_pos = Some(case_blocks.len());
             }
-
             let case_block = self.current_function.new_block();
             case_blocks.push(case_block);
-
-            if let Some(test) = &case.test {
-                // Compare discriminant with case value
-                let _cond_val = self.lower_binary_op_with_const(test, discr, block)?;
-                cases.push(SwitchCaseTarget {
-                    constant: self.extract_constant_from_expr(test)?,
-                    target: case_block,
-                });
-            }
         }
 
-        // 设置 switch terminator：default 指向 case_blocks[default_pos]，无 default 则分配合成块 jump 到 exit
+        // default 目标：有 default → default body block，无 default → exit
         let default_target = if let Some(p) = default_pos {
             case_blocks[p]
         } else {
-            let synthetic_default = self.current_function.new_block();
-            self.current_function
-                .set_terminator(synthetic_default, Terminator::Jump { target: exit });
-            synthetic_default
+            exit
         };
 
-        self.current_function.set_terminator(
-            block,
-            Terminator::Switch {
-                value: discr,
-                cases,
-                default_block: default_target,
-                exit_block: exit,
-            },
-        );
+        // ── 构建测试块链 ──────────────────────────────────────────────────
+        // 为每个 non-default case 预分配测试块
+        let test_blocks: Vec<BasicBlockId> = switch_stmt
+            .cases
+            .iter()
+            .filter(|c| c.test.is_some())
+            .map(|_| self.current_function.new_block())
+            .collect();
 
-        // Invariant: default_block and exit_block must always be distinct BasicBlockIds.
-        // Explicit default → points to case_blocks[default_pos] (allocated before exit).
-        // No default → points to synthetic block (allocated before exit, sole terminator Jump { target: exit }).
-        // This assertion catches any future regressions where these blocks are aliased.
-        debug_assert_ne!(
-            default_target, exit,
-            "Switch default_block and exit_block must be distinct (default={:?}, exit={:?})",
-            default_target, exit
-        );
+        let mut test_idx = 0;
+        for (i, case) in switch_stmt.cases.iter().enumerate() {
+            let Some(test) = &case.test else {
+                continue;
+            };
 
-        // Lower case bodies
+            let test_block = test_blocks[test_idx];
+            // 不匹配时跳到下一个测试块，或 default（无更多测试时）
+            let next_target = if test_idx + 1 < test_blocks.len() {
+                test_blocks[test_idx + 1]
+            } else {
+                default_target
+            };
+
+            // 降低 case test 表达式（任意表达式）
+            let mut current_block = test_block;
+            let test_can_throw =
+                self.expr_exception_fork_allowed() && self.expr_can_throw(test);
+            let test_val = if test_can_throw {
+                self.lower_expr_then_continue(test, &mut current_block)?
+            } else {
+                self.lower_expr(test, current_block)?
+            };
+            // case test 异常检查
+            let compare_block = if test_can_throw {
+                self.lower_value_exception_branch(current_block, test_val)?
+            } else {
+                self.resolve_store_block(current_block)
+            };
+
+            // StrictEq 比较：discr === test_val
+            let cmp_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                compare_block,
+                Instruction::Compare {
+                    dest: cmp_dest,
+                    op: CompareOp::StrictEq,
+                    lhs: discr,
+                    rhs: test_val,
+                },
+            );
+
+            // 匹配 → case body，不匹配 → 下一个测试块或 default
+            self.current_function.set_terminator(
+                compare_block,
+                Terminator::Branch {
+                    condition: cmp_dest,
+                    true_block: case_blocks[i],
+                    false_block: next_target,
+                },
+            );
+
+            test_idx += 1;
+        }
+
+        // 入口块跳到第一个测试块（或 default/exit，若无测试块）
+        let entry_target = test_blocks.first().copied().unwrap_or(default_target);
+        self.current_function
+            .set_terminator(discr_entry, Terminator::Jump { target: entry_target });
+
+        // ── 降低 case body（含 fall-through 和 break）────────────────────
         self.label_stack.push(LabelContext {
             label: None,
             kind: LabelKind::Switch,
@@ -550,7 +607,7 @@ impl Lowerer {
                 case_flow = self.lower_stmt(stmt, case_flow)?;
             }
 
-            // Fall-through: if not terminated, jump to next case or exit
+            // Fall-through: if not terminated, jump to next case body or exit
             let next_target = if i + 1 < case_blocks.len() {
                 case_blocks[i + 1]
             } else {
@@ -561,61 +618,8 @@ impl Lowerer {
                 .ensure_jump_or_terminated(case_flow, next_target);
         }
 
-        // NOTE: default case body 已在上面的 case 循环中一并降低，
-        // fallthrough 也由循环中的 ensure_jump_or_terminated 处理，无需单独处理。
-
         self.label_stack.pop();
-
         Ok(StmtFlow::Open(exit))
-    }
-
-    /// Lower a binary comparison with a constant for switch case matching.
-    pub(crate) fn lower_binary_op_with_const(
-        &mut self,
-        _test: &swc_ast::Expr,
-        discr: ValueId,
-        _block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
-        // For switch cases, the comparison is implicit StrictEq between discr and case value.
-        // This will be handled by the Switch terminator at compile time.
-        // We just return the discriminant value for now; the backend handles the comparison.
-        Ok(discr)
-    }
-
-    pub(crate) fn extract_constant_from_expr(
-        &mut self,
-        expr: &swc_ast::Expr,
-    ) -> Result<ConstantId, LoweringError> {
-        match expr {
-            swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) => {
-                Ok(self.module.add_constant(Constant::Number(num.value)))
-            }
-            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => Ok(self
-                .module
-                .add_constant(Constant::String(s.value.to_string_lossy().into_owned()))),
-            swc_ast::Expr::Lit(swc_ast::Lit::Bool(b)) => {
-                Ok(self.module.add_constant(Constant::Bool(b.value)))
-            }
-            swc_ast::Expr::Lit(swc_ast::Lit::Null(_)) => {
-                Ok(self.module.add_constant(Constant::Null))
-            }
-            swc_ast::Expr::Unary(unary) => match unary.op {
-                swc_ast::UnaryOp::Minus => {
-                    let swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) = unary.arg.as_ref() else {
-                        return Err(self.error(expr.span(), "switch case must be a literal"));
-                    };
-                    Ok(self.module.add_constant(Constant::Number(-num.value)))
-                }
-                swc_ast::UnaryOp::Plus => {
-                    let swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) = unary.arg.as_ref() else {
-                        return Err(self.error(expr.span(), "switch case must be a literal"));
-                    };
-                    Ok(self.module.add_constant(Constant::Number(num.value)))
-                }
-                _ => Err(self.error(expr.span(), "switch case must be a literal")),
-            },
-            _ => Err(self.error(expr.span(), "switch case must be a literal")),
-        }
     }
 
     // ── throw ───────────────────────────────────────────────────────────────

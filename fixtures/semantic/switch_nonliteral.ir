@@ -1,0 +1,284 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = undefined
+    c2 = number(NaN)
+    c3 = number(inf)
+    c4 = number(2.718281828459045)
+    c5 = number(2.302585092994046)
+    c6 = number(0.6931471805599453)
+    c7 = number(0.4342944819032518)
+    c8 = number(1.4426950408889634)
+    c9 = number(3.141592653589793)
+    c10 = number(0.7071067811865476)
+    c11 = number(1.4142135623730951)
+    c12 = number(0.0000000000000002220446049250313)
+    c13 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c14 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c15 = number(9007199254740991)
+    c16 = number(-9007199254740991)
+    c17 = number(NaN)
+    c18 = number(-inf)
+    c19 = number(inf)
+    c20 = undefined
+    c21 = number(2)
+    c22 = functionref(@0)
+    c23 = number(3)
+    c24 = number(2)
+    c25 = undefined
+    c26 = number(1)
+    c27 = string("function call match")
+    c28 = string("one")
+    c29 = string("default")
+    c30 = undefined
+    c31 = string("const match")
+    c32 = string("function call match 2")
+    c33 = string("no match")
+    c34 = string("hello")
+    c35 = string("hello")
+    c36 = string("world")
+    c37 = string("string match")
+    c38 = string("world")
+    c39 = string("no string match")
+    c40 = number(1)
+    c41 = number(1)
+    c42 = string("computed match")
+    c43 = string("default computed")
+
+  fn @getValue [params: $1.$env, $1.$this] [entry=bb0]:
+    bb0:
+      %0 = const c21
+      return %0
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.SOME_CONST, %0
+      store var $0.x, %0
+      store var $0.s, %0
+      %1 = const c1
+      store var $0.undefined, %1
+      %2 = const c2
+      store var $0.NaN, %2
+      %3 = const c3
+      store var $0.Infinity, %3
+      %4 = const c4
+      store var $0.Math.E, %4
+      %5 = const c5
+      store var $0.Math.LN10, %5
+      %6 = const c6
+      store var $0.Math.LN2, %6
+      %7 = const c7
+      store var $0.Math.LOG10E, %7
+      %8 = const c8
+      store var $0.Math.LOG2E, %8
+      %9 = const c9
+      store var $0.Math.PI, %9
+      %10 = const c10
+      store var $0.Math.SQRT1_2, %10
+      %11 = const c11
+      store var $0.Math.SQRT2, %11
+      %12 = const c12
+      store var $0.Number.EPSILON, %12
+      %13 = const c13
+      store var $0.Number.MAX_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MIN_VALUE, %14
+      %15 = const c15
+      store var $0.Number.MAX_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.MIN_SAFE_INTEGER, %16
+      %17 = const c17
+      store var $0.Number.NaN, %17
+      %18 = const c18
+      store var $0.Number.NEGATIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.Number.POSITIVE_INFINITY, %19
+      %20 = call builtin.create_global_object()
+      store var $0.$global, %20
+      %21 = const c20
+      store var $this, %21
+      %22 = const c22
+      store var $0.getValue, %22
+      %23 = const c23
+      store var $0.SOME_CONST, %23
+      %24 = const c24
+      store var $0.x, %24
+      %25 = load var $0.x
+      jump bb5
+    bb1:
+      %46 = load var $0.x
+      jump bb19
+    bb2:
+      %34 = const c27
+      %35 = call builtin.console.log(%34)
+      %36 = is_exception %35
+      branch %36, bb10, bb9
+    bb3:
+      %38 = const c28
+      %39 = call builtin.console.log(%38)
+      %40 = is_exception %39
+      branch %40, bb12, bb11
+    bb4:
+      %42 = const c29
+      %43 = call builtin.console.log(%42)
+      %44 = is_exception %43
+      branch %44, bb14, bb13
+    bb5:
+      %26 = const c25
+      %27 = load var $0.getValue
+      %28 = call %27, this=%26
+      %29 = is_exception %28
+      branch %29, bb8, bb7
+    bb6:
+      %32 = const c26
+      %33 = stricteq %25, %32
+      branch %33, bb3, bb4
+    bb7:
+      %31 = stricteq %25, %28
+      branch %31, bb2, bb6
+    bb8:
+      %30 = call builtin.exception_value(%28)
+      throw %30
+    bb9:
+      jump bb1
+    bb10:
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb11:
+      jump bb1
+    bb12:
+      %41 = call builtin.exception_value(%39)
+      throw %41
+    bb13:
+      jump bb1
+    bb14:
+      %45 = call builtin.exception_value(%43)
+      throw %45
+    bb15:
+      %67 = const c34
+      store var $0.s, %67
+      %68 = load var $0.s
+      jump bb33
+    bb16:
+      %55 = const c31
+      %56 = call builtin.console.log(%55)
+      %57 = is_exception %56
+      branch %57, bb24, bb23
+    bb17:
+      %59 = const c32
+      %60 = call builtin.console.log(%59)
+      %61 = is_exception %60
+      branch %61, bb26, bb25
+    bb18:
+      %63 = const c33
+      %64 = call builtin.console.log(%63)
+      %65 = is_exception %64
+      branch %65, bb28, bb27
+    bb19:
+      %47 = load var $0.SOME_CONST
+      %48 = stricteq %46, %47
+      branch %48, bb16, bb20
+    bb20:
+      %49 = const c30
+      %50 = load var $0.getValue
+      %51 = call %50, this=%49
+      %52 = is_exception %51
+      branch %52, bb22, bb21
+    bb21:
+      %54 = stricteq %46, %51
+      branch %54, bb17, bb18
+    bb22:
+      %53 = call builtin.exception_value(%51)
+      throw %53
+    bb23:
+      jump bb15
+    bb24:
+      %58 = call builtin.exception_value(%56)
+      throw %58
+    bb25:
+      jump bb15
+    bb26:
+      %62 = call builtin.exception_value(%60)
+      throw %62
+    bb27:
+      jump bb15
+    bb28:
+      %66 = call builtin.exception_value(%64)
+      throw %66
+    bb29:
+      %85 = load var $0.x
+      jump bb44
+    bb30:
+      %73 = const c37
+      %74 = call builtin.console.log(%73)
+      %75 = is_exception %74
+      branch %75, bb36, bb35
+    bb31:
+      %77 = const c38
+      %78 = call builtin.console.log(%77)
+      %79 = is_exception %78
+      branch %79, bb38, bb37
+    bb32:
+      %81 = const c39
+      %82 = call builtin.console.log(%81)
+      %83 = is_exception %82
+      branch %83, bb40, bb39
+    bb33:
+      %69 = const c35
+      %70 = stricteq %68, %69
+      branch %70, bb30, bb34
+    bb34:
+      %71 = const c36
+      %72 = stricteq %68, %71
+      branch %72, bb31, bb32
+    bb35:
+      jump bb29
+    bb36:
+      %76 = call builtin.exception_value(%74)
+      throw %76
+    bb37:
+      jump bb29
+    bb38:
+      %80 = call builtin.exception_value(%78)
+      throw %80
+    bb39:
+      jump bb29
+    bb40:
+      %84 = call builtin.exception_value(%82)
+      throw %84
+    bb41:
+      return
+    bb42:
+      %92 = const c42
+      %93 = call builtin.console.log(%92)
+      %94 = is_exception %93
+      branch %94, bb48, bb47
+    bb43:
+      %96 = const c43
+      %97 = call builtin.console.log(%96)
+      %98 = is_exception %97
+      branch %98, bb50, bb49
+    bb44:
+      %86 = const c40
+      %87 = const c41
+      %88 = add %86, %87
+      %89 = is_exception %88
+      branch %89, bb46, bb45
+    bb45:
+      %91 = stricteq %85, %88
+      branch %91, bb42, bb43
+    bb46:
+      %90 = call builtin.exception_value(%88)
+      throw %90
+    bb47:
+      jump bb41
+    bb48:
+      %95 = call builtin.exception_value(%93)
+      throw %95
+    bb49:
+      jump bb41
+    bb50:
+      %99 = call builtin.exception_value(%97)
+      throw %99
+}

@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+function call match
+function call match 2
+string match
+computed match
+--- stderr ---

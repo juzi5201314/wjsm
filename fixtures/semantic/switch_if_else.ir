@@ -74,44 +74,48 @@ module {
       %21 = const c20
       store var $0.x, %21
       %22 = load var $0.x
-      switch %22 [case c21 -> bb2], default bb3, exit bb1
+      jump bb4
     bb1:
       return
     bb2:
-      %23 = load var $0.x
-      %24 = const c22
-      %25 = call builtin.strict_eq(%23, %24)
-      branch %25, bb4, bb5
+      %25 = load var $0.x
+      %26 = const c22
+      %27 = call builtin.strict_eq(%25, %26)
+      branch %27, bb5, bb6
     bb3:
-      %34 = const c25
-      %35 = call builtin.console.log(%34)
-      %36 = is_exception %35
-      branch %36, bb12, bb11
+      %36 = const c25
+      %37 = call builtin.console.log(%36)
+      %38 = is_exception %37
+      branch %38, bb13, bb12
     bb4:
-      %26 = const c23
-      %27 = call builtin.console.log(%26)
-      %28 = is_exception %27
-      branch %28, bb7, bb6
+      %23 = const c21
+      %24 = stricteq %22, %23
+      branch %24, bb2, bb3
     bb5:
-      %30 = const c24
-      %31 = call builtin.console.log(%30)
-      %32 = is_exception %31
-      branch %32, bb9, bb8
+      %28 = const c23
+      %29 = call builtin.console.log(%28)
+      %30 = is_exception %29
+      branch %30, bb8, bb7
     bb6:
-      jump bb10
+      %32 = const c24
+      %33 = call builtin.console.log(%32)
+      %34 = is_exception %33
+      branch %34, bb10, bb9
     bb7:
-      %29 = call builtin.exception_value(%27)
-      throw %29
+      jump bb11
     bb8:
-      jump bb10
+      %31 = call builtin.exception_value(%29)
+      throw %31
     bb9:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      jump bb11
     bb10:
-      jump bb1
+      %35 = call builtin.exception_value(%33)
+      throw %35
     bb11:
       jump bb1
     bb12:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      jump bb1
+    bb13:
+      %39 = call builtin.exception_value(%37)
+      throw %39
 }

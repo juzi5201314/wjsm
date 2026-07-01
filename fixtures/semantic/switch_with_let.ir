@@ -72,29 +72,33 @@ module {
       %21 = const c20
       store var $0.x, %21
       %22 = load var $0.x
-      switch %22 [case c21 -> bb2], default bb3, exit bb1
+      jump bb4
     bb1:
       return
     bb2:
-      %23 = const c22
-      store var $1.msg, %23
-      %24 = load var $1.msg
-      %25 = call builtin.console.log(%24)
-      %26 = is_exception %25
-      branch %26, bb5, bb4
+      %25 = const c22
+      store var $1.msg, %25
+      %26 = load var $1.msg
+      %27 = call builtin.console.log(%26)
+      %28 = is_exception %27
+      branch %28, bb6, bb5
     bb3:
-      %28 = const c23
-      %29 = call builtin.console.log(%28)
-      %30 = is_exception %29
-      branch %30, bb7, bb6
+      %30 = const c23
+      %31 = call builtin.console.log(%30)
+      %32 = is_exception %31
+      branch %32, bb8, bb7
     bb4:
-      jump bb1
+      %23 = const c21
+      %24 = stricteq %22, %23
+      branch %24, bb2, bb3
     bb5:
-      %27 = call builtin.exception_value(%25)
-      throw %27
-    bb6:
       jump bb1
+    bb6:
+      %29 = call builtin.exception_value(%27)
+      throw %29
     bb7:
-      %31 = call builtin.exception_value(%29)
-      throw %31
+      jump bb1
+    bb8:
+      %33 = call builtin.exception_value(%31)
+      throw %33
 }

@@ -220,6 +220,11 @@ fn switch_with_let_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn switch_nonliteral_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_nonliteral");
+}
+
+#[test]
 fn try_catch_fixture_matches_ir_snapshot() {
     assert_snapshot("try_catch");
 }
