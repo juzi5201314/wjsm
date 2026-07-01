@@ -298,9 +298,20 @@ impl Compiler {
         let handle_table_entries = std::cmp::max(8192, num_functions * 4);
         let handle_table_size = handle_table_entries * 4;
         let shadow_stack_base = heap_start + handle_table_size;
-        let object_heap_start = shadow_stack_base + SHADOW_STACK_SIZE;
         let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
+        let object_heap_start = shadow_stack_end + SHADOW_STACK_HEAP_GUARD_SIZE;
         if self.mode == CompileMode::Normal {
+            let guard_start = shadow_stack_end;
+            let guard_end = object_heap_start;
+            let needed_len = guard_end as usize;
+            if self.string_data.len() < needed_len {
+                self.string_data.resize(needed_len, 0);
+            }
+            let pattern = SHADOW_STACK_HEAP_GUARD_CANARY;
+            for i in 0..SHADOW_STACK_HEAP_GUARD_SIZE as usize {
+                self.string_data[guard_start as usize + i] = pattern[i % pattern.len()];
+            }
+            self.data_offset = self.data_offset.max(object_heap_start);
             self.normal_init_values = Some(NormalGlobalsInit {
                 heap_ptr: object_heap_start as i32,
                 obj_table_ptr: heap_start as i32,

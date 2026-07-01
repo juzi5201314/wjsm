@@ -2,6 +2,19 @@ use super::*;
 use crate::wasm_env::WasmEnv;
 use std::sync::atomic::Ordering;
 
+/// 将诊断行写入 RuntimeState.diagnostics（供 in-process fixture 捕获）。
+pub(crate) fn append_runtime_diagnostic<C: RuntimeStateAccess>(ctx: &mut C, line: &str) {
+    let mut buf = ctx
+        .state_mut()
+        .diagnostics
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    buf.extend_from_slice(line.as_bytes());
+    if !line.ends_with('\n') {
+        buf.push(b'\n');
+    }
+}
+
 /// 构造一个 TAG_EXCEPTION 值（携带 TypeError 对象），供属性/调用等返回路径
 /// 直接返回给被编译代码，从而经语义层插入的 IsException 分叉被 try/catch 捕获。
 /// 这与延迟、不可捕获的 `set_runtime_error` 不同：后者只在程序结束时作为顶层

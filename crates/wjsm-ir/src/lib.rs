@@ -778,6 +778,11 @@ pub struct ReExportBinding {
 /// 影子栈大小（64KB = 8192 个 i64 槽位）。
 /// runtime 和 backend-wasm 共享此值，编译期保证一致性。
 pub const SHADOW_STACK_SIZE: u32 = 65536;
+/// 影子栈与对象堆之间的隔离带大小（字节）。
+pub const SHADOW_STACK_HEAP_GUARD_SIZE: u32 = 64;
+
+/// 隔离带 canary 图案（按字节重复填充整个 guard 区）。
+pub const SHADOW_STACK_HEAP_GUARD_CANARY: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
 // ── Well-Known Symbol 索引 ─────────────────────────────────────────────
 /// Well-known symbol 索引常量，semantic 和 runtime 共享。

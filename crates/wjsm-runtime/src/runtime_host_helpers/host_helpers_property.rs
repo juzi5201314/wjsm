@@ -170,7 +170,7 @@ fn canonical_integer_index(s: &str) -> Option<u32> {
     }
     None
 }
-// ── 辅助函数：收集属性名/值 ──────────────────────────────────────────
+
 pub(crate) fn collect_own_property_names(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
@@ -252,6 +252,28 @@ pub(crate) fn collect_own_property_names(
     int_index_names.sort_by_key(|(idx, _)| *idx);
     let mut names: Vec<String> = int_index_names.into_iter().map(|(_, name)| name).collect();
     names.extend(string_ids);
+    names
+}
+
+/// 从 boxed 对象/数组收集 own 字符串属性名（数组含侧表命名属性）。
+pub(crate) fn collect_own_property_names_from_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    enumerable_only: bool,
+) -> Vec<String> {
+    let Some(ptr) = resolve_handle(caller, val) else {
+        return Vec::new();
+    };
+    let mut names = collect_own_property_names(caller, ptr, enumerable_only);
+    if value::is_array(val) {
+        names.extend(
+            crate::array_named_props::ArrayNamedPropsStore::collect_string_property_names(
+                caller,
+                val,
+                enumerable_only,
+            ),
+        );
+    }
     names
 }
 
@@ -345,9 +367,6 @@ pub(crate) fn collect_own_property_key_values(
         return vec![];
     }
     if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
-        if symbols_only {
-            return vec![];
-        }
         let len = u32::from_le_bytes([
             data[obj_ptr + 8],
             data[obj_ptr + 9],
@@ -356,6 +375,11 @@ pub(crate) fn collect_own_property_key_values(
         ]);
         let _ = data;
         let _ = mem;
+        if symbols_only {
+            return crate::array_named_props::ArrayNamedPropsStore::collect_property_key_values_by_ptr(
+                caller, obj_ptr, true,
+            );
+        }
         let mut keys = Vec::new();
         for i in 0..len {
             if array_elem_present(caller, obj_ptr, i) {
@@ -363,6 +387,11 @@ pub(crate) fn collect_own_property_key_values(
             }
         }
         keys.push(store_runtime_string(caller, "length".to_string()));
+        keys.extend(
+            crate::array_named_props::ArrayNamedPropsStore::collect_property_key_values_by_ptr(
+                caller, obj_ptr, false,
+            ),
+        );
         return keys;
     }
 

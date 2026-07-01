@@ -121,22 +121,11 @@ pub(crate) fn define_promise(
          on_rejected: i64|
          -> i64 {
             let handle = raw_promise_handle(promise);
+            // §27.2.5.4 — SpeciesConstructor(promise, %Promise%)（须在锁表前完成，避免借用冲突）
+            let species_constructor =
+                promise_result_species_constructor_handle(&mut caller, promise);
             let result_promise = alloc_object(&mut caller, 0);
-            {
-                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                if !value::is_object(caller.data().promise_prototype) {
-                    crate::runtime_heap::ensure_promise_prototype_initialized(&mut caller, &env);
-                }
-                let proto = caller.data().promise_prototype;
-                if value::is_object(proto) {
-                    crate::runtime_heap::set_object_proto_header(
-                        &mut caller,
-                        &env,
-                        result_promise,
-                        proto,
-                    );
-                }
-            }
+            set_promise_proto_from_constructor(&mut caller, result_promise, species_constructor);
             let result_handle = value::decode_object_handle(result_promise) as usize;
             let mut queued = None;
             {
@@ -145,9 +134,6 @@ pub(crate) fn define_promise(
                     .promise_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                // §27.2.5.1 — 读取原 promise 的构造器作为 species
-                let species_constructor =
-                    promise_entry(&table, handle).and_then(|entry| entry.constructor_handle);
                 let mut result_entry = PromiseEntry::pending();
                 result_entry.constructor_handle = species_constructor;
                 insert_promise_entry(&mut table, result_handle, result_entry);
@@ -200,22 +186,10 @@ pub(crate) fn define_promise(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_rejected: i64| -> i64 {
             let handle = raw_promise_handle(promise);
+            let species_constructor =
+                promise_result_species_constructor_handle(&mut caller, promise);
             let result_promise = alloc_object(&mut caller, 0);
-            {
-                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                if !value::is_object(caller.data().promise_prototype) {
-                    crate::runtime_heap::ensure_promise_prototype_initialized(&mut caller, &env);
-                }
-                let proto = caller.data().promise_prototype;
-                if value::is_object(proto) {
-                    crate::runtime_heap::set_object_proto_header(
-                        &mut caller,
-                        &env,
-                        result_promise,
-                        proto,
-                    );
-                }
-            }
+            set_promise_proto_from_constructor(&mut caller, result_promise, species_constructor);
             let result_handle = value::decode_object_handle(result_promise) as usize;
             let mut queued = None;
             {
@@ -224,9 +198,6 @@ pub(crate) fn define_promise(
                     .promise_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                // §27.2.5.1 — species-aware: 读取原 promise 的构造器
-                let species_constructor =
-                    promise_entry(&table, handle).and_then(|entry| entry.constructor_handle);
                 let mut result_entry = PromiseEntry::pending();
                 result_entry.constructor_handle = species_constructor;
                 insert_promise_entry(&mut table, result_handle, result_entry);
@@ -278,22 +249,10 @@ pub(crate) fn define_promise(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_finally: i64| -> i64 {
             let handle = raw_promise_handle(promise);
+            let species_constructor =
+                promise_result_species_constructor_handle(&mut caller, promise);
             let result_promise = alloc_object(&mut caller, 0);
-            {
-                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                if !value::is_object(caller.data().promise_prototype) {
-                    crate::runtime_heap::ensure_promise_prototype_initialized(&mut caller, &env);
-                }
-                let proto = caller.data().promise_prototype;
-                if value::is_object(proto) {
-                    crate::runtime_heap::set_object_proto_header(
-                        &mut caller,
-                        &env,
-                        result_promise,
-                        proto,
-                    );
-                }
-            }
+            set_promise_proto_from_constructor(&mut caller, result_promise, species_constructor);
             let result_handle = value::decode_object_handle(result_promise) as usize;
             let mut queued = None;
             {
@@ -302,9 +261,6 @@ pub(crate) fn define_promise(
                     .promise_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                // §27.2.5.1 — species-aware: 读取原 promise 的构造器
-                let species_constructor =
-                    promise_entry(&table, handle).and_then(|entry| entry.constructor_handle);
                 let mut result_entry = PromiseEntry::pending();
                 result_entry.constructor_handle = species_constructor;
                 insert_promise_entry(&mut table, result_handle, result_entry);
@@ -406,7 +362,15 @@ pub(crate) fn define_promise(
             if !value::is_undefined(constructor) && !value::is_null(constructor) {
                 entry.constructor_handle = Some(constructor);
             }
-            alloc_promise_from_caller(&mut caller, entry)
+            let promise = alloc_promise_from_caller(&mut caller, entry);
+            let handle = raw_promise_handle(promise);
+            caller
+                .data()
+                .pending_unhandled_rejections
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push_back(handle);
+            promise
         },
     );
     linker.define(

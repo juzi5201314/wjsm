@@ -26,6 +26,7 @@ wjsm-semantic = { path = "../wjsm-semantic" }
 reqwest = { workspace = true }
 base64 = "0.22"
 memchr = "2"
+icu_normalizer = { version = "2.2", features = ["compiled_data"] }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 

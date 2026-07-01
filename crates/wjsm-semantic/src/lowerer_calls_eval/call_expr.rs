@@ -98,9 +98,10 @@ impl Lowerer {
                                 | Builtin::PromiseWithResolvers
                         ) {
                             let undef_const = self.module.add_constant(Constant::Undefined);
+                            let mut call_block = block;
                             let constructor_val = self.alloc_value();
                             self.current_function.append_instruction(
-                                block,
+                                call_block,
                                 Instruction::Const {
                                     dest: constructor_val,
                                     constant: undef_const,
@@ -108,13 +109,15 @@ impl Lowerer {
                             );
                             let mut args = vec![constructor_val];
                             for arg in &call.args {
-                                args.push(self.lower_expr(&arg.expr, block)?);
+                                args.push(
+                                    self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
+                                );
                             }
-                            // 无参数时补 undefined
+                            // 无参数时补 undefined。
                             if args.len() == 1 {
                                 let undef_val = self.alloc_value();
                                 self.current_function.append_instruction(
-                                    block,
+                                    call_block,
                                     Instruction::Const {
                                         dest: undef_val,
                                         constant: undef_const,
@@ -124,13 +127,16 @@ impl Lowerer {
                             }
                             let dest = self.alloc_value();
                             self.current_function.append_instruction(
-                                block,
+                                call_block,
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin,
                                     args,
                                 },
                             );
+                            if call_block != block {
+                                self.expr_merge_block = Some(call_block);
+                            }
                             return Ok(dest);
                         }
                         return self.lower_host_builtin_call_expr(call, block, builtin);

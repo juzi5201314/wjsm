@@ -274,7 +274,7 @@ pub(crate) async fn object_assign_impl_async(
         let Some(source_ptr) = resolve_handle(caller, source_val) else {
             continue;
         };
-        let names = collect_own_property_names(caller, source_ptr, true);
+        let names = collect_own_property_names_from_value(caller, source_val, true);
         for name in names {
             let name_val = store_runtime_string(caller, name);
             let Ok(prop_name) = render_value(caller, name_val) else {
@@ -714,6 +714,39 @@ pub(crate) async fn reflect_set_prototype_of_fn_impl(
     value::encode_bool(true)
 }
 
+fn alloc_data_property_descriptor(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_val: i64,
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+) -> i64 {
+    let desc = {
+        let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &_wjsm_env, 4)
+    };
+    let _ = define_host_data_property_from_caller(caller, desc, "value", value_val);
+    let _ = define_host_data_property_from_caller(
+        caller,
+        desc,
+        "writable",
+        value::encode_bool(writable),
+    );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        desc,
+        "enumerable",
+        value::encode_bool(enumerable),
+    );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        desc,
+        "configurable",
+        value::encode_bool(configurable),
+    );
+    desc
+}
+
 pub(crate) fn reflect_get_own_property_descriptor_impl(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -734,6 +767,33 @@ pub(crate) fn reflect_get_own_property_descriptor_impl(
         };
         name_id
     };
+    if value::is_array(target) {
+        if !crate::property_key::is_symbol_name_id(name_id) {
+            let name_bytes = crate::runtime_render::read_string_bytes(caller, name_id);
+            if name_bytes == b"length" {
+                let len = read_array_length(caller, ptr).unwrap_or(0);
+                return alloc_data_property_descriptor(
+                    caller,
+                    value::encode_f64(len as f64),
+                    true,
+                    false,
+                    false,
+                );
+            }
+        }
+        if let Some(slot) =
+            crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, target, name_id)
+        {
+            return alloc_data_property_descriptor(
+                caller,
+                slot.value,
+                (slot.flags & constants::FLAG_WRITABLE) != 0,
+                (slot.flags & constants::FLAG_ENUMERABLE) != 0,
+                (slot.flags & constants::FLAG_CONFIGURABLE) != 0,
+            );
+        }
+    }
+
     let Some((slot_offset, flags, val)) = find_property_slot_by_name_id(caller, ptr, name_id)
     else {
         return value::encode_undefined();
@@ -1093,10 +1153,7 @@ pub(crate) async fn object_enumerable_own_keys_async(
         }
         return arr;
     }
-    let Some(ptr) = resolve_handle(caller, obj) else {
-        return alloc_array(caller, 0);
-    };
-    let names = collect_own_property_names(caller, ptr, true);
+    let names = collect_own_property_names_from_value(caller, obj, true);
     let len = names.len() as u32;
     let arr = alloc_array(caller, len);
     for (i, name) in names.into_iter().enumerate() {
@@ -1145,10 +1202,7 @@ pub(crate) async fn object_get_own_property_names_async(
         }
         return arr;
     }
-    let Some(ptr) = resolve_handle(caller, obj) else {
-        return alloc_array(caller, 0);
-    };
-    let names = collect_own_property_names(caller, ptr, false);
+    let names = collect_own_property_names_from_value(caller, obj, false);
     let len = names.len() as u32;
     let arr = alloc_array(caller, len);
     for (i, name) in names.into_iter().enumerate() {

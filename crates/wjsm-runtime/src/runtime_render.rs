@@ -1,5 +1,96 @@
 use super::*;
 
+fn read_string_bytes_with_env<C: AsContext>(ctx: &C, env: &WasmEnv, ptr: u32) -> Vec<u8> {
+    let data = env.memory.data(ctx);
+    let start = ptr as usize;
+    if start >= data.len() {
+        return Vec::new();
+    }
+    let end = data[start..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(data.len(), |offset| start + offset);
+    data[start..end].to_vec()
+}
+
+fn read_string_with_env<C: AsContext>(ctx: &C, env: &WasmEnv, ptr: u32) -> Result<String> {
+    Ok(std::str::from_utf8(&read_string_bytes_with_env(ctx, env, ptr))?.to_owned())
+}
+
+/// 与 `render_value` 相同的人类可读规则，供 drain 后 Store 上下文报告 unhandled rejection。
+pub(crate) fn render_unhandled_rejection_reason_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    val: i64,
+) -> String {
+    if value::is_exception(val) {
+        let reason = exception_reason_from_state(ctx.state_mut(), val);
+        return render_unhandled_rejection_reason_with_env(ctx, env, reason);
+    }
+    if value::is_string(val) {
+        if value::is_runtime_string_handle(val) {
+            let handle = value::decode_runtime_string_handle(val) as usize;
+            let strings = ctx
+                .state_mut()
+                .runtime_strings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            return strings.get(handle).cloned().unwrap_or_default();
+        }
+        return read_string_with_env(ctx, env, value::decode_string_ptr(val)).unwrap_or_default();
+    }
+    if value::is_object(val) || value::is_array(val) {
+        if let Some(op) = resolve_handle_with_env(ctx, env, val) {
+            if let Some(brand_val) =
+                read_object_property_by_name_with_env(ctx, env, op, "__error_brand__")
+                && value::is_bool(brand_val)
+                && value::decode_bool(brand_val)
+            {
+                let name = read_object_property_by_name_with_env(ctx, env, op, "name")
+                    .map(|name_val| render_unhandled_rejection_reason_with_env(ctx, env, name_val))
+                    .unwrap_or_default();
+                let message = read_object_property_by_name_with_env(ctx, env, op, "message")
+                    .map(|message_val| {
+                        render_unhandled_rejection_reason_with_env(ctx, env, message_val)
+                    })
+                    .unwrap_or_default();
+                if message.is_empty() {
+                    return name;
+                }
+                return format!("{name}: {message}");
+            }
+        }
+        return "[object Object]".to_string();
+    }
+    if value::is_undefined(val) {
+        return "undefined".to_string();
+    }
+    if value::is_null(val) {
+        return "null".to_string();
+    }
+    if value::is_bool(val) {
+        return if value::decode_bool(val) {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        };
+    }
+    if value::is_f64(val) {
+        let n = value::decode_f64(val);
+        if n.is_infinite() {
+            return if n.is_sign_positive() {
+                "Infinity".to_string()
+            } else {
+                "-Infinity".to_string()
+            };
+        }
+        return n.to_string();
+    }
+    format!("0x{:016x}", val as u64)
+}
+
 pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<String> {
     if value::is_string(val) {
         if value::is_runtime_string_handle(val) {

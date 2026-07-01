@@ -834,8 +834,8 @@ pub(crate) fn define_core(
                     index: 0,
                 });
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
-            } else if value::is_object(val) || value::is_function(val) {
-                // 对象/函数属性枚举
+            } else if value::is_object(val) || value::is_function(val) || value::is_array(val) {
+                // 对象/函数/数组属性枚举
                 let keys = enumerate_object_keys(&mut caller, val);
                 let mut enums = caller
                     .data()

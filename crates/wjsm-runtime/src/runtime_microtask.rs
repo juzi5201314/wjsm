@@ -4,7 +4,7 @@ pub(crate) fn clear_pending_unhandled_rejection(state: &RuntimeState, handle: us
         .pending_unhandled_rejections
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&handle);
+        .retain(|pending| *pending != handle);
 }
 
 /// Phase 3 must-convert 之 drain_microtasks + call_host_function 路径（按 2026-05-31-async-scheduler-implementation-plan.md + 原始 Phase 3 audit must-convert list 顶部遗留条目 + docs/superpowers/specs/2026-05-26-async-audit-refactor-design.md + 26-async-audit-refactor.md）：
@@ -403,8 +403,8 @@ pub(crate) async fn drain_microtasks_async<
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         rejections
-            .iter()
-            .filter_map(|&h| {
+            .into_iter()
+            .filter_map(|h| {
                 let entry = table.get(h).filter(|e| e.is_promise)?;
                 if entry.handled {
                     return None;
@@ -417,16 +417,9 @@ pub(crate) async fn drain_microtasks_async<
             .collect()
     };
     for reason in unhandled {
-        let msg = if value::is_string(reason) {
-            String::from("<string>")
-        } else if value::is_f64(reason) {
-            format!("{}", value::decode_f64(reason))
-        } else if value::is_object(reason) {
-            String::from("Object")
-        } else {
-            format!("0x{:016x}", reason as u64)
-        };
-        eprintln!("UnhandledPromiseRejectionWarning: {msg}");
+        let msg = render_unhandled_rejection_reason_with_env(ctx, env, reason);
+        let line = format!("UnhandledPromiseRejectionWarning: {msg}");
+        append_runtime_diagnostic(ctx, &line);
     }
 }
 

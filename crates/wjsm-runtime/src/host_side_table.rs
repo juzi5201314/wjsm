@@ -113,7 +113,11 @@ impl<T> HostSideTable<T> {
 
     /// 按 side-entry reachability 回收不可达 slot。调用方负责先完成表间传播。
     pub fn reclaim_unreachable(&self, reachable: &HashSet<u32>) {
-        let pinned = self.pinned.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let pinned = self
+            .pinned
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut reclaimed = Vec::new();
         for (idx, entry) in inner.entries.iter_mut().enumerate() {
@@ -138,7 +142,6 @@ impl<T> HostSideTable<T> {
                 .retain(|side_handle| !reclaimed.contains(side_handle));
         }
     }
-
 
     /// 活跃条目数（不含 tombstone）。
     pub fn active_count(&self) -> usize {

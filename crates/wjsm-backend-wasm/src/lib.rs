@@ -22,7 +22,7 @@ pub mod support_module;
 pub use support_module::emit_support_module;
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
-use wjsm_ir::SHADOW_STACK_SIZE;
+use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_CANARY, SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_SIZE};
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
 
 // ── Public API ──────────────────────────────────────────────────────────

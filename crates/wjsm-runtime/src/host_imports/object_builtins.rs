@@ -78,10 +78,10 @@ pub(crate) fn define_object_builtins(
                 if !value::is_js_object(source) {
                     source = to_object(&mut caller, source);
                 }
-                let Some(source_ptr) = resolve_handle(&mut caller, source) else {
+                if resolve_handle(&mut caller, source).is_none() {
                     continue;
-                };
-                let names = collect_own_property_names(&mut caller, source_ptr, true);
+                }
+                let names = collect_own_property_names_from_value(&mut caller, source, true);
                 for name in &names {
                     // Read property value from source
                     let name_val = store_runtime_string(&caller, name.clone());
@@ -405,6 +405,34 @@ pub(crate) fn define_object_builtins(
         },
     );
     linker.define(&mut store, "env", "object.is_sealed", object_is_sealed_fn)?;
+
+    let object_define_properties_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, props: i64| -> i64 {
+            if value::is_null(target) || value::is_undefined(target) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot convert undefined or null to object".to_string(),
+                );
+                return value::encode_undefined();
+            }
+            let boxed = if value::is_js_object(target) {
+                target
+            } else {
+                to_object(&mut caller, target)
+            };
+            if !super::array_object::object_create_apply_properties(&mut caller, boxed, props) {
+                return value::encode_undefined();
+            }
+            boxed
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "object.define_properties",
+        object_define_properties_fn,
+    )?;
 
     Ok(())
 }

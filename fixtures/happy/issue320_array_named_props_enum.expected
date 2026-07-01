@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+read: x
+keys: 0,1,foo,bar
+forin: 0,1,foo,bar
+json: [1,2]
+--- stderr ---

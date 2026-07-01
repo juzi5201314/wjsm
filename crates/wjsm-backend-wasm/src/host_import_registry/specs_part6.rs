@@ -540,4 +540,30 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         key: Some(HostImportKey::Builtin(Builtin::ObjectIsSealed)),
         group: None,
     },
+    HostImportSpec {
+        name: "string_normalize",
+        type_idx: 16,
+        key: Some(HostImportKey::Builtin(Builtin::StringNormalize)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.from_entries",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectFromEntries)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.get_own_property_descriptors",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(
+            Builtin::ObjectGetOwnPropertyDescriptors,
+        )),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.define_properties",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectDefineProperties)),
+        group: None,
+    },
 ];

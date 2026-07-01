@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+fromEntries a: 1
+fromEntries b: 2
+gopd x value: 10
+gopd x enumerable: true
+gopd keys: x,y
+defineProperties foo: 42
+defineProperties bar: 99
+defineProperties keys: foo
+--- stderr ---

@@ -42,6 +42,27 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
+            Builtin::StringNormalize => {
+                let receiver = args.first().context("String method expects receiver")?;
+                let form = args.get(1).copied();
+                self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
+                if let Some(arg) = form {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(Some(()))
+            }
             // ── String varargs builtins (shadow stack) ──
             Builtin::StringConcatVa
             | Builtin::StringFromCharCode

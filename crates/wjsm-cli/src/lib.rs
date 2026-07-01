@@ -1474,7 +1474,7 @@ pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
 
     let mut stdout: Vec<u8> = Vec::new();
     match rt.block_on(runtime::execute_with_writer(&wasm, &mut stdout)) {
-        Ok(_) => (EXIT_SUCCESS as i32, stdout, Vec::new()),
+        Ok((_, diagnostics)) => (EXIT_SUCCESS as i32, stdout, diagnostics),
         Err(e) => (
             EXIT_RUNTIME_ERROR as i32,
             stdout,

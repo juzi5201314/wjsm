@@ -56,6 +56,8 @@ mod weakref_finalization;
 pub(crate) use array_object::array_from_impl_async;
 pub(crate) use array_object::array_set_length_impl;
 pub(crate) use array_object::define_array_object;
+pub(crate) use array_object::object_from_entries_impl_async;
+pub(crate) use array_object::object_get_own_property_descriptors_impl;
 pub(crate) use atomics::define_atomics;
 pub(crate) use collections_buffers::define_collections_buffers;
 

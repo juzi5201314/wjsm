@@ -143,6 +143,109 @@ pub(crate) fn alloc_promise_from_caller(
     promise
 }
 
+/// 内建 %Promise% 构造器（`NativeCallable::PromiseConstructor`）。
+fn default_promise_constructor(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+    create_native_callable(caller.data(), NativeCallable::PromiseConstructor)
+}
+
+fn is_native_promise_constructor(caller: &mut Caller<'_, RuntimeState>, constructor: i64) -> bool {
+    if !value::is_native_callable(constructor) {
+        return false;
+    }
+    let idx = value::decode_native_callable_idx(constructor) as usize;
+    let table = caller
+        .data()
+        .native_callables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    matches!(table.get(idx), Some(NativeCallable::PromiseConstructor))
+}
+
+/// ES2024 `SpeciesConstructor(O, %Promise%)`：读取 `O.constructor[Symbol.species]`。
+pub(crate) fn promise_species_constructor(
+    caller: &mut Caller<'_, RuntimeState>,
+    exemplar: i64,
+) -> i64 {
+    let default_ctor = default_promise_constructor(caller);
+    if !value::is_js_object(exemplar) {
+        return default_ctor;
+    }
+    let Some(exemplar_ptr) = resolve_handle(caller, exemplar) else {
+        return default_ctor;
+    };
+    let mut constructor = read_object_property_by_name(caller, exemplar_ptr, "constructor")
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_undefined(constructor) && is_promise_value(caller.data(), exemplar) {
+        let handle = raw_promise_handle(exemplar);
+        let table = caller
+            .data()
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        constructor = table
+            .get(handle)
+            .and_then(|entry| entry.constructor_handle)
+            .unwrap_or_else(value::encode_undefined);
+    }
+    if is_native_promise_constructor(caller, constructor) {
+        return default_ctor;
+    }
+    if value::is_js_object(constructor) {
+        let species = get_by_name_id_sync(
+            caller,
+            constructor,
+            encode_symbol_name_id(wjsm_ir::wk_symbol::SPECIES),
+        );
+        if value::is_null(species) {
+            constructor = value::encode_undefined();
+        } else if !value::is_undefined(species) {
+            constructor = species;
+        }
+    }
+    if value::is_undefined(constructor) {
+        default_ctor
+    } else {
+        constructor
+    }
+}
+
+/// `.then()` / `.catch()` / `.finally()` 结果 promise 的 `constructor_handle`（`None` = 内建 Promise）。
+pub(crate) fn promise_result_species_constructor_handle(
+    caller: &mut Caller<'_, RuntimeState>,
+    exemplar: i64,
+) -> Option<i64> {
+    let species = promise_species_constructor(caller, exemplar);
+    if is_native_promise_constructor(caller, species) {
+        None
+    } else {
+        Some(species)
+    }
+}
+
+pub(crate) fn set_promise_proto_from_constructor(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    constructor: Option<i64>,
+) {
+    let proto_from_constructor = constructor.and_then(|ctor| {
+        if is_native_promise_constructor(caller, ctor) {
+            return None;
+        }
+        let ctor_ptr = resolve_handle(caller, ctor)?;
+        let proto = read_object_property_by_name(caller, ctor_ptr, "prototype")
+            .unwrap_or_else(value::encode_undefined);
+        value::is_js_object(proto).then_some(proto)
+    });
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    if !value::is_object(caller.data().promise_prototype) {
+        crate::runtime_heap::ensure_promise_prototype_initialized(caller, &env);
+    }
+    let proto = proto_from_constructor.unwrap_or(caller.data().promise_prototype);
+    if value::is_js_object(proto) {
+        crate::runtime_heap::set_object_proto_header(caller, &env, promise, proto);
+    }
+}
+
 // ── §27.2.1.3 NewPromiseCapability(C) ─────────────────────────────────
 /// 创建 PromiseCapability = { [[Promise]], [[Resolve]], [[Reject]] }。
 /// 当 constructor 为 undefined/null 时使用内建 Promise 快速路径；
@@ -151,12 +254,12 @@ pub(crate) fn new_promise_capability_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     constructor: i64,
 ) -> (i64, i64, i64) {
+    let constructor_handle =
+        (!value::is_undefined(constructor) && !value::is_null(constructor)).then_some(constructor);
     let mut entry = PromiseEntry::pending();
-    // 如果构造器不是 undefined/null，记录到 entry 中用于后续 species 查找
-    if !value::is_undefined(constructor) && !value::is_null(constructor) {
-        entry.constructor_handle = Some(constructor);
-    }
+    entry.constructor_handle = constructor_handle;
     let promise = alloc_promise_from_caller(caller, entry);
+    set_promise_proto_from_constructor(caller, promise, constructor_handle);
     let (resolve, reject) = create_promise_resolving_functions(caller.data(), promise);
     (promise, resolve, reject)
 }
@@ -233,7 +336,7 @@ pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: Pro
                         .pending_unhandled_rejections
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .insert(handle);
+                        .push_back(handle);
                 }
                 let reactions = std::mem::take(&mut entry.reject_reactions);
                 entry.state = PromiseState::Rejected(reason);

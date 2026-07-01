@@ -12,9 +12,8 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 fn run(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
     let rt = Builder::new_current_thread().enable_all().build()?;
-    let mut buf = Vec::new();
-    rt.block_on(execute_with_writer(&wasm, &mut buf))?;
-    Ok(String::from_utf8(buf)?)
+    let (out, _) = rt.block_on(execute_with_writer(&wasm, Vec::new()))?;
+    Ok(String::from_utf8(out)?)
 }
 
 #[test]

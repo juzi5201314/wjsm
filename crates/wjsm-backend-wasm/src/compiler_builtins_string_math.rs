@@ -320,9 +320,11 @@ impl Compiler {
             Builtin::ObjectKeys
             | Builtin::ObjectValues
             | Builtin::ObjectEntries
+            | Builtin::ObjectFromEntries
             | Builtin::ObjectGetPrototypeOf
             | Builtin::ObjectGetOwnPropertyNames
             | Builtin::ObjectGetOwnPropertySymbols
+            | Builtin::ObjectGetOwnPropertyDescriptors
             | Builtin::ObjectFreeze
             | Builtin::ObjectSeal
             | Builtin::ObjectIsFrozen
@@ -348,6 +350,7 @@ impl Compiler {
             | Builtin::ObjectSetPrototypeOf
             | Builtin::ObjectIs
             | Builtin::ObjectGroupBy
+            | Builtin::ObjectDefineProperties
             | Builtin::MapGroupBy => {
                 let name = builtin.to_string();
                 let a = args.first().context(format!("{name} expects 2 args"))?;

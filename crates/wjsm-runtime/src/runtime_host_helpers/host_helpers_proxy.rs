@@ -12,9 +12,8 @@ pub(crate) fn define_property_on_normal_object(
                     .to_string(),
             );
         }
-        let val = desc.value.unwrap_or_else(value::encode_undefined);
         return crate::array_named_props::define_data_property_on_array_named(
-            caller, target, name_id, val,
+            caller, target, name_id, desc,
         );
     }
 

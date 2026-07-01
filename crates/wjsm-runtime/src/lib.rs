@@ -107,10 +107,13 @@ use types::*;
 
 pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
     let stdout = io::stdout();
-    let _ = execute_with_writer(wasm_bytes, stdout.lock()).await?;
+    let (_, diagnostics) = execute_with_writer(wasm_bytes, stdout.lock()).await?;
+    if !diagnostics.is_empty() {
+        let _ = io::stderr().write_all(&diagnostics);
+    }
     Ok(())
 }
-pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
+pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<(W, Vec<u8>)> {
     execute_with_writer_shared(wasm_bytes, writer, None).await
 }
 
@@ -208,19 +211,18 @@ pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
     let bytes = EMBEDDED_SUPPORT_CWASM.get().copied()?;
     if bytes.is_empty() { None } else { Some(bytes) }
 }
-
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     wasm_bytes: &[u8],
     writer: W,
     shared_state: Arc<SharedRuntimeState>,
-) -> Result<W> {
+) -> Result<(W, Vec<u8>)> {
     execute_with_writer_shared_inner(wasm_bytes, writer, Some(shared_state), false).await
 }
 pub(crate) async fn execute_with_writer_shared<W: Write>(
     wasm_bytes: &[u8],
     writer: W,
     shared_state: Option<Arc<SharedRuntimeState>>,
-) -> Result<W> {
+) -> Result<(W, Vec<u8>)> {
     execute_with_writer_shared_inner(wasm_bytes, writer, shared_state, true).await
 }
 
@@ -404,6 +406,7 @@ async fn execute_for_startup_bench(
         bundle.wasm_env,
         bundle.output,
         bundle.runtime_error,
+        bundle.diagnostics,
         Vec::new(),
         &mut bundle.host_completion_rx,
     )
@@ -417,7 +420,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
     writer: W,
     shared_state: Option<Arc<SharedRuntimeState>>,
     use_epoch_async_yield: bool,
-) -> Result<W> {
+) -> Result<(W, Vec<u8>)> {
     let config = startup_engine_config(use_epoch_async_yield);
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
@@ -439,8 +442,6 @@ async fn execute_with_writer_shared_inner<W: Write>(
 
     let mut snapshot_restored = false;
     if let Some(bytes) = snapshot_bytes {
-        // 快照 restore 前必须先运行 init_globals + host_post_bootstrap，
-        // 设置 __arr_proto_table_len 等 imported globals 使 restore 校验通过。
         let _ = run_init_globals_only(&mut bundle).await;
         snapshot_restored = try_restore_snapshot(&mut bundle, bytes).await;
         if !snapshot_restored {
@@ -464,6 +465,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
         bundle.wasm_env,
         bundle.output,
         bundle.runtime_error,
+        bundle.diagnostics,
         writer,
         &mut bundle.host_completion_rx,
     )
@@ -476,6 +478,7 @@ impl Clone for RuntimeState {
             iterators: self.iterators.clone(),
             enumerators: self.enumerators.clone(),
             runtime_strings: self.runtime_strings.clone(),
+            diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             gc_mark_bits: self.gc_mark_bits.clone(),
             alloc_counter: self.alloc_counter.clone(),
@@ -552,6 +555,8 @@ struct RuntimeState {
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
     runtime_strings: Arc<Mutex<Vec<String>>>,
+    /// 进程内可捕获的诊断输出（如 unhandled rejection 警告）；真实 CLI 由 execute 刷到 stderr。
+    diagnostics: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
     /// GC 标记位图：每个 handle 对应 1 bit，用于标记-清除 GC。
     gc_mark_bits: Arc<Mutex<Vec<u64>>>,
@@ -602,7 +607,7 @@ struct RuntimeState {
     /// Promise 侧表：object handle → Promise 内部槽；非 Promise object handle 使用空占位。
     promise_table: Arc<Mutex<Vec<PromiseEntry>>>,
     /// 已 reject 且尚未 handled 的 promise 索引，用于 drain 时避免全表扫描。
-    pending_unhandled_rejections: Arc<Mutex<HashSet<usize>>>,
+    pending_unhandled_rejections: Arc<Mutex<VecDeque<usize>>>,
     /// 微任务队列
     microtask_queue: Arc<Mutex<VecDeque<Microtask>>>,
     /// Continuation 侧表：存储异步函数续延
@@ -786,6 +791,7 @@ impl RuntimeState {
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
             runtime_strings: Arc::new(Mutex::new(Vec::new())),
+            diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
             gc_mark_bits: Arc::new(Mutex::new(Vec::new())),
             alloc_counter: Arc::new(Mutex::new(0)),
@@ -872,7 +878,7 @@ impl RuntimeState {
             ),
             regex_table: Arc::new(Mutex::new(Vec::new())),
             promise_table: Arc::new(Mutex::new(Vec::new())),
-            pending_unhandled_rejections: Arc::new(Mutex::new(HashSet::new())),
+            pending_unhandled_rejections: Arc::new(Mutex::new(VecDeque::new())),
             microtask_queue: Arc::new(Mutex::new(VecDeque::new())),
             continuation_table: Arc::new(Mutex::new(Vec::new())),
             async_generator_table: Arc::new(Mutex::new(Vec::new())),
@@ -942,7 +948,8 @@ mod tests {
     fn execute_with_writer_prints_string_fixture() -> Result<()> {
         let rt = Runtime::new()?;
         let wasm_bytes = compile_source(r#"console.log("Hello, Async Runtime!");"#)?;
-        let output = rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
+        let (output, _) =
+            rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
         assert_eq!(String::from_utf8(output)?, "Hello, Async Runtime!\n");
         Ok(())
     }

@@ -371,9 +371,7 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         match oc.base.as_ref() {
-            swc_ast::OptChainBase::Member(member) => {
-                self.lower_member_expr(member, block)
-            }
+            swc_ast::OptChainBase::Member(member) => self.lower_member_expr(member, block),
             swc_ast::OptChainBase::Call(ocall) => {
                 let call_expr = swc_ast::CallExpr {
                     span: ocall.span,

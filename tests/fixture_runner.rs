@@ -189,9 +189,7 @@ fn verify_oracle(
     wjsm_stderr: &[u8],
 ) -> Result<()> {
     // 检查 Node.js 是否可用
-    let node_check = std::process::Command::new("node")
-        .arg("--version")
-        .output();
+    let node_check = std::process::Command::new("node").arg("--version").output();
     if node_check.is_err() {
         // Node.js 未安装，打印警告但不阻止更新
         eprintln!(
@@ -206,18 +204,11 @@ fn verify_oracle(
         .arg(fixture_path)
         .env("TZ", "UTC")
         .output()
-        .with_context(|| {
-            format!(
-                "oracle: failed to run node on {}",
-                fixture_path.display()
-            )
-        })?;
+        .with_context(|| format!("oracle: failed to run node on {}", fixture_path.display()))?;
 
     let node_exit = node_output.status.code().unwrap_or(-1);
-    let node_stdout = String::from_utf8_lossy(&node_output.stdout)
-        .replace("\r\n", "\n");
-    let node_stderr = String::from_utf8_lossy(&node_output.stderr)
-        .replace("\r\n", "\n");
+    let node_stdout = String::from_utf8_lossy(&node_output.stdout).replace("\r\n", "\n");
+    let node_stderr = String::from_utf8_lossy(&node_output.stderr).replace("\r\n", "\n");
 
     // 归一化 wjsm 输出用于对比：
     // - 去除对象句柄数字（[object Type:NNN] → [object Type]）
@@ -233,10 +224,7 @@ fn verify_oracle(
     let mut errors: Vec<String> = Vec::new();
 
     if wjsm_exit != node_exit {
-        errors.push(format!(
-            "exit code: wjsm={}, node={}",
-            wjsm_exit, node_exit
-        ));
+        errors.push(format!("exit code: wjsm={}, node={}", wjsm_exit, node_exit));
     }
 
     if wjsm_stdout_cmp.trim() != node_stdout_cmp {
@@ -264,7 +252,10 @@ fn verify_oracle(
          wjsm 输出与 Node.js 不一致，UPDATE_FIXTURES 已拒绝自动更新。\n\
          如果这是预期内的 wjsm 专有行为，请手动编辑 .expected 文件。\n\
          要跳过 oracle 验证：WJSM_VERIFY_ORACLE=0",
-        fixture_path.file_name().unwrap_or_default().to_string_lossy(),
+        fixture_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
         errors.join("\n")
     );
 }

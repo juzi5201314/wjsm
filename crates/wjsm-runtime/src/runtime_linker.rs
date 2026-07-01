@@ -704,5 +704,22 @@ pub(super) fn register_complex_bridges(
             })
         },
     )?;
+    linker.func_wrap_async(
+        "env",
+        "object.from_entries",
+        |mut caller: Caller<'_, RuntimeState>, (iterable,): (i64,)| {
+            Box::new(async move {
+                crate::host_imports::object_from_entries_impl_async(&mut caller, iterable).await
+            })
+        },
+    )?;
+    linker.func_wrap(
+        "env",
+        "object.get_own_property_descriptors",
+        |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
+            crate::host_imports::object_get_own_property_descriptors_impl(&mut caller, target)
+        },
+    )?;
+
     Ok(())
 }

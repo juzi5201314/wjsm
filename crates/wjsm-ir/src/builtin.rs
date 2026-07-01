@@ -122,6 +122,9 @@ pub enum Builtin {
     ObjectIsSealed,
     ObjectIsExtensible,
     ObjectPreventExtensions,
+    ObjectFromEntries,
+    ObjectGetOwnPropertyDescriptors,
+    ObjectDefineProperties,
     // ── Map.groupBy ──
     MapGroupBy,
     // ── BigInt operations ──────────────────────────────────────────────
@@ -225,6 +228,7 @@ pub enum Builtin {
     StringReplaceAll,
     StringSlice,
     StringStartsWith,
+    StringNormalize,
     StringSubstring,
     StringToLowerCase,
     StringToUpperCase,
@@ -622,6 +626,9 @@ impl Builtin {
             Self::ObjectIsSealed => "object.is_sealed",
             Self::ObjectIsExtensible => "object.is_extensible",
             Self::ObjectPreventExtensions => "object.prevent_extensions",
+            Self::ObjectFromEntries => "object.from_entries",
+            Self::ObjectGetOwnPropertyDescriptors => "object.get_own_property_descriptors",
+            Self::ObjectDefineProperties => "object.define_properties",
             Self::MapGroupBy => "map.group_by",
             _ => return None,
         })
@@ -735,6 +742,7 @@ impl Builtin {
             Self::StringReplaceAll => "string.replace_all",
             Self::StringSlice => "string.slice",
             Self::StringStartsWith => "string.starts_with",
+            Self::StringNormalize => "string.normalize",
             Self::StringSubstring => "string.substring",
             Self::StringToLowerCase => "string.to_lower_case",
             Self::StringToUpperCase => "string.to_upper_case",

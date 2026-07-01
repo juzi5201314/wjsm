@@ -76,13 +76,21 @@ pub fn cleanup_stream_tables_after_sweep(ctx: &mut GcContext, freed_handles: &[H
         use std::collections::HashSet;
 
         // 1. 收集每张表的直接 root（活 wrapper 或 pin）
-        let readable_roots = st.readable_stream_table.direct_roots_after_pruning(&freed_set);
+        let readable_roots = st
+            .readable_stream_table
+            .direct_roots_after_pruning(&freed_set);
         let reader_roots = st.reader_table.direct_roots_after_pruning(&freed_set);
-        let controller_roots = st.stream_controller_table.direct_roots_after_pruning(&freed_set);
+        let controller_roots = st
+            .stream_controller_table
+            .direct_roots_after_pruning(&freed_set);
         let byob_roots = st.byob_request_table.direct_roots_after_pruning(&freed_set);
-        let writable_roots = st.writable_stream_table.direct_roots_after_pruning(&freed_set);
+        let writable_roots = st
+            .writable_stream_table
+            .direct_roots_after_pruning(&freed_set);
         let writer_roots = st.writer_table.direct_roots_after_pruning(&freed_set);
-        let transform_roots = st.transform_stream_table.direct_roots_after_pruning(&freed_set);
+        let transform_roots = st
+            .transform_stream_table
+            .direct_roots_after_pruning(&freed_set);
 
         // 2. 传播可达性：stream ↔ controller ↔ byob, reader → stream, writer → writable, transform → readable+writable
         let mut reachable = HashSet::new();
@@ -205,4 +213,3 @@ pub fn cleanup_stream_tables_after_sweep(ctx: &mut GcContext, freed_handles: &[H
         st.transform_stream_table.reclaim_unreachable(&visited);
     });
 }
-

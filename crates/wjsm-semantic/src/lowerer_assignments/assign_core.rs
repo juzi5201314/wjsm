@@ -150,10 +150,8 @@ impl Lowerer {
                     // setPrototypeOf）。直接发射 CallBuiltin(ObjectSetPrototypeOf)
                     // 而非 SetProp，确保原型真正被设置（含循环检测、可扩展性检查）。
                     if name == "__proto__" && assign.op == swc_ast::AssignOp::Assign {
-                        let value_val = self.lower_expr_then_continue(
-                            assign.right.as_ref(),
-                            &mut current_block,
-                        )?;
+                        let value_val = self
+                            .lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
                             current_block,
@@ -163,13 +161,12 @@ impl Lowerer {
                                 args: vec![obj_val, value_val],
                             },
                         );
-                        let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                        let continue_block =
+                            self.lower_value_exception_branch(current_block, dest)?;
                         self.expr_merge_block = Some(continue_block);
                         return Ok(value_val);
                     }
-                    let key_const = self
-                        .module
-                        .add_constant(Constant::String(name));
+                    let key_const = self.module.add_constant(Constant::String(name));
                     let key_dest = self.alloc_value();
                     self.current_function.append_instruction(
                         current_block,

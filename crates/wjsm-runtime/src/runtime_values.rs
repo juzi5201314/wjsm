@@ -42,7 +42,46 @@ pub(crate) fn handle_index_of(caller: &mut Caller<'_, RuntimeState>, val: i64) -
     handle_idx
 }
 
-/// WeakRef / FinalizationRegistry：从目标 JS 对象值提取 obj_table handle 索引（不是堆指针）。
+/// `handle_index_of` 的 WasmEnv 版本，供 Store/Caller 共用（如 unhandled rejection 渲染）。
+pub(crate) fn handle_index_of_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    val: i64,
+) -> usize {
+    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    let base = env
+        .function_props_base
+        .and_then(|g| g.get(&mut *ctx).i32())
+        .unwrap_or(0)
+        .max(0) as usize;
+    if value::is_function(val) {
+        return handle_idx.saturating_add(base);
+    }
+    if value::is_closure(val) {
+        let func_idx = ctx
+            .state_mut()
+            .closures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(handle_idx)
+            .map(|e| e.func_idx as usize)
+            .unwrap_or(0);
+        return func_idx.saturating_add(base);
+    }
+    handle_idx
+}
+
+pub(crate) fn resolve_handle_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    val: i64,
+) -> Option<usize> {
+    let handle_idx = handle_index_of_with_env(ctx, env, val);
+    resolve_handle_idx_with_env(ctx, env, handle_idx)
+}
+
 pub(crate) fn weak_target_handle_index_of(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -854,6 +893,10 @@ pub(crate) fn enumerate_object_keys(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
 ) -> Vec<String> {
+    if value::is_array(val) {
+        return collect_own_property_names_from_value(caller, val, true);
+    }
+
     // 解析对象指针：通过 handle 表统一解析
     let ptr: usize = match resolve_handle(caller, val) {
         Some(p) => p,

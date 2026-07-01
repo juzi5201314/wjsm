@@ -222,9 +222,8 @@ fn define_property_on_normal_object_for_create(
                     .to_string(),
             );
         }
-        let val = desc.value.unwrap_or_else(value::encode_undefined);
         return crate::array_named_props::define_data_property_on_array_named(
-            caller, target, name_id, val,
+            caller, target, name_id, desc,
         );
     }
 
@@ -357,7 +356,7 @@ fn define_property_on_normal_object_for_create(
     }
 }
 
-fn object_create_apply_properties(
+pub(crate) fn object_create_apply_properties(
     caller: &mut Caller<'_, RuntimeState>,
     obj: i64,
     properties: i64,
@@ -1207,6 +1206,136 @@ async fn collect_iterator_values_async(
             .unwrap_or_else(value::encode_undefined);
         out.push(val);
     }
+}
+
+/// `Object.fromEntries(iterable)`：从 [key, value] 可迭代序列创建普通对象。
+pub(crate) async fn object_from_entries_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    iterable: i64,
+) -> i64 {
+    if value::is_null(iterable) || value::is_undefined(iterable) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Cannot convert undefined or null to object".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let result = alloc_host_object(caller, &env, 0);
+
+    let mut entries: Vec<(i64, i64)> = Vec::new();
+    if value::is_array(iterable)
+        && let Some(arr_ptr) = resolve_array_ptr(caller, iterable)
+    {
+        let len = read_array_length(caller, arr_ptr).unwrap_or(0);
+        for i in 0..len {
+            let pair = read_array_elem(caller, arr_ptr, i).unwrap_or_else(value::encode_undefined);
+            if !value::is_array(pair) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Iterator value is not an entry object".to_string(),
+                );
+                return value::encode_undefined();
+            }
+            let Some(pair_ptr) = resolve_array_ptr(caller, pair) else {
+                continue;
+            };
+            let key_elem =
+                read_array_elem(caller, pair_ptr, 0).unwrap_or_else(value::encode_undefined);
+            let val_elem =
+                read_array_elem(caller, pair_ptr, 1).unwrap_or_else(value::encode_undefined);
+            entries.push((key_elem, val_elem));
+        }
+    } else if let Some(ptr) = resolve_handle(caller, iterable)
+        && let Some(method) = read_iterator_method(caller, ptr)
+    {
+        let iterator = call_iterable_method_async(caller, method, iterable).await;
+        let pairs = match collect_iterator_values_async(caller, iterator).await {
+            Some(v) => v,
+            None => {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: value is not iterable".to_string(),
+                );
+                return value::encode_undefined();
+            }
+        };
+        for pair in pairs {
+            if !value::is_array(pair) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Iterator value is not an entry object".to_string(),
+                );
+                return value::encode_undefined();
+            }
+            let Some(pair_ptr) = resolve_array_ptr(caller, pair) else {
+                continue;
+            };
+            let key_elem =
+                read_array_elem(caller, pair_ptr, 0).unwrap_or_else(value::encode_undefined);
+            let val_elem =
+                read_array_elem(caller, pair_ptr, 1).unwrap_or_else(value::encode_undefined);
+            entries.push((key_elem, val_elem));
+        }
+    } else {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: value is not iterable".to_string(),
+        );
+        return value::encode_undefined();
+    }
+
+    for (key_elem, val_elem) in entries {
+        if value::is_symbol(key_elem) {
+            if let Some(name_id) = crate::property_key::symbol_value_to_name_id(key_elem) {
+                let _ = define_host_data_property_by_name_id(caller, result, name_id, val_elem);
+            }
+        } else {
+            let key_str = to_property_key(caller, key_elem);
+            let _ = define_host_data_property_from_caller(caller, result, &key_str, val_elem);
+        }
+    }
+    result
+}
+
+/// `Object.getOwnPropertyDescriptors(obj)`：返回所有自有属性描述符对象。
+pub(crate) fn object_get_own_property_descriptors_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+) -> i64 {
+    if value::is_null(target) || value::is_undefined(target) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Cannot convert undefined or null to object".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    let boxed = if value::is_js_object(target) {
+        target
+    } else {
+        to_object(caller, target)
+    };
+    let keys_arr = super::proxy_reflect::reflect_own_keys_impl(caller, boxed);
+    let Some(keys_ptr) = resolve_array_ptr(caller, keys_arr) else {
+        return value::encode_undefined();
+    };
+    let len = read_array_length(caller, keys_ptr).unwrap_or(0);
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let result = alloc_host_object(caller, &env, 0);
+    for i in 0..len {
+        let key = read_array_elem(caller, keys_ptr, i).unwrap_or_else(value::encode_undefined);
+        let desc =
+            super::proxy_reflect::reflect_get_own_property_descriptor_impl(caller, boxed, key);
+        if value::is_undefined(desc) {
+            continue;
+        }
+        if let Some(name_id) = crate::property_key::symbol_value_to_name_id(key) {
+            let _ = define_host_data_property_by_name_id(caller, result, name_id, desc);
+        } else if let Ok(name) = render_value(caller, key) {
+            let _ = define_host_data_property_from_caller(caller, result, &name, desc);
+        }
+    }
+    result
 }
 
 pub(crate) fn define_array_object(

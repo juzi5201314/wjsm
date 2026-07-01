@@ -436,7 +436,6 @@ impl Lowerer {
         );
     }
 
-
     pub(crate) fn append_env_key_const(
         &mut self,
         block: BasicBlockId,

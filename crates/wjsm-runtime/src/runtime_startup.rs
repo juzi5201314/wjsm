@@ -290,6 +290,7 @@ pub(super) struct ExecuteInstanceBundle {
     pub(super) wasm_env: WasmEnv,
     pub(super) output: Arc<Mutex<Vec<u8>>>,
     pub(super) runtime_error: Arc<Mutex<Option<String>>>,
+    pub(super) diagnostics: Arc<Mutex<Vec<u8>>>,
     pub(super) host_completion_rx:
         tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
 }
@@ -303,6 +304,7 @@ pub(super) async fn instantiate_execute_bundle(
     let mut store = Store::new(engine, RuntimeState::new_with_shared(shared_state));
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);
+    let diagnostics = Arc::clone(&store.data().diagnostics);
     if use_epoch_async_yield {
         store.set_epoch_deadline(1);
         store.epoch_deadline_async_yield_and_update(1);
@@ -333,6 +335,7 @@ pub(super) async fn instantiate_execute_bundle(
         wasm_env,
         output,
         runtime_error,
+        diagnostics,
         host_completion_rx,
     })
 }

@@ -1,7 +1,9 @@
 use anyhow::Result;
+use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
+use crate::runtime_host_helpers::make_range_error_exception;
 use crate::*;
 
 /// String value consisting of a single UTF-16 code unit (ECMAScript §22.1.3.1).
@@ -21,6 +23,25 @@ pub(crate) fn string_from_utf16_code_unit(unit: u16) -> String {
         ]
     };
     unsafe { String::from_utf8_unchecked(bytes) }
+}
+
+/// ECMAScript §22.1.3.15：按 form 对字符串做 Unicode 规范化。
+fn normalize_string_by_form(s: &str, form: &str) -> Result<String, &'static str> {
+    match form {
+        "NFC" => Ok(ComposingNormalizerBorrowed::new_nfc()
+            .normalize(s)
+            .into_owned()),
+        "NFD" => Ok(DecomposingNormalizerBorrowed::new_nfd()
+            .normalize(s)
+            .into_owned()),
+        "NFKC" => Ok(ComposingNormalizerBorrowed::new_nfkc()
+            .normalize(s)
+            .into_owned()),
+        "NFKD" => Ok(DecomposingNormalizerBorrowed::new_nfkd()
+            .normalize(s)
+            .into_owned()),
+        _ => Err("The normalization form should be one of NFC, NFD, NFKC, NFKD"),
+    }
 }
 
 pub(crate) fn define_string_methods(
@@ -549,6 +570,23 @@ pub(crate) fn define_string_methods(
         },
     );
     linker.define(&mut store, "env", "string_substring", f)?;
+    // string_normalize
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, receiver: i64, form_val: i64, _unused: i64| -> i64 {
+            let s = get_string_value(&mut caller, receiver);
+            let form = if form_val == value::encode_undefined() {
+                "NFC".to_string()
+            } else {
+                get_string_value(&mut caller, form_val)
+            };
+            match normalize_string_by_form(&s, &form) {
+                Ok(out) => store_runtime_string(&caller, out),
+                Err(msg) => make_range_error_exception(&mut caller, msg),
+            }
+        },
+    );
+    linker.define(&mut store, "env", "string_normalize", f)?;
     // string_to_lower_case
     let f = Func::wrap(
         &mut store,

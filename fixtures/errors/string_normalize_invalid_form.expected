@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+Uncaught exception: RangeError: The normalization form should be one of NFC, NFD, NFKC, NFKD
+--- stderr ---
+Runtime error: Uncaught exception: RangeError: The normalization form should be one of NFC, NFD, NFKC, NFKD
