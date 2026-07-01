@@ -64,3 +64,145 @@ pub fn process_weak_refs_after_sweep(ctx: &mut GcContext, freed_handles: &[Handl
         }
     });
 }
+
+/// sweep 清空 obj_table 槽后：对 7 张流侧表执行可达性传播 + 回收不可达条目。
+pub fn cleanup_stream_tables_after_sweep(ctx: &mut GcContext, freed_handles: &[Handle]) {
+    if freed_handles.is_empty() {
+        return;
+    }
+    let freed_set: std::collections::HashSet<u32> = freed_handles.iter().copied().collect();
+
+    ctx.with_state(|st| {
+        use std::collections::HashSet;
+
+        // 1. 收集每张表的直接 root（活 wrapper 或 pin）
+        let readable_roots = st.readable_stream_table.direct_roots_after_pruning(&freed_set);
+        let reader_roots = st.reader_table.direct_roots_after_pruning(&freed_set);
+        let controller_roots = st.stream_controller_table.direct_roots_after_pruning(&freed_set);
+        let byob_roots = st.byob_request_table.direct_roots_after_pruning(&freed_set);
+        let writable_roots = st.writable_stream_table.direct_roots_after_pruning(&freed_set);
+        let writer_roots = st.writer_table.direct_roots_after_pruning(&freed_set);
+        let transform_roots = st.transform_stream_table.direct_roots_after_pruning(&freed_set);
+
+        // 2. 传播可达性：stream ↔ controller ↔ byob, reader → stream, writer → writable, transform → readable+writable
+        let mut reachable = HashSet::new();
+        reachable.extend(readable_roots);
+        reachable.extend(reader_roots);
+        reachable.extend(controller_roots);
+        reachable.extend(byob_roots);
+        reachable.extend(writable_roots);
+        reachable.extend(writer_roots);
+        reachable.extend(transform_roots);
+
+        let mut worklist: Vec<(u8, u32)> = reachable.iter().map(|&h| (0u8, h)).collect();
+        let mut visited = reachable.clone();
+
+        while let Some((table_kind, handle)) = worklist.pop() {
+            match table_kind {
+                0 => {
+                    // readable_stream
+                    if let Ok(inner) = st.readable_stream_table.inner.lock() {
+                        if let Some(entry) = inner.get(handle as usize) {
+                            if let Some(ctrl_h) = entry.controller_handle {
+                                if visited.insert(ctrl_h) {
+                                    worklist.push((2, ctrl_h));
+                                }
+                            }
+                        }
+                    }
+                }
+                1 => {
+                    // reader
+                    if let Ok(inner) = st.reader_table.inner.lock() {
+                        if let Some(entry) = inner.get(handle as usize) {
+                            let stream_h = entry.stream_handle;
+                            if visited.insert(stream_h) {
+                                worklist.push((0, stream_h));
+                            }
+                        }
+                    }
+                }
+                2 => {
+                    // controller
+                    if let Ok(inner) = st.stream_controller_table.inner.lock() {
+                        if let Some(entry) = inner.get(handle as usize) {
+                            let stream_h = entry.stream_handle;
+                            if visited.insert(stream_h) {
+                                worklist.push((0, stream_h));
+                            }
+                            if let Some(byob_h) = entry.active_byob_request {
+                                if visited.insert(byob_h) {
+                                    worklist.push((3, byob_h));
+                                }
+                            }
+                        }
+                    }
+                }
+                3 => {
+                    // byob
+                    if let Ok(inner) = st.byob_request_table.inner.lock() {
+                        if let Some(entry) = inner.get(handle as usize) {
+                            if visited.insert(entry.controller_handle) {
+                                worklist.push((2, entry.controller_handle));
+                            }
+                            if visited.insert(entry.reader_handle) {
+                                worklist.push((1, entry.reader_handle));
+                            }
+                        }
+                    }
+                }
+                4 => {
+                    // writable_stream
+                    if let Ok(inner) = st.writable_stream_table.inner.lock() {
+                        if let Some(entry) = inner.get(handle as usize) {
+                            if let Some(ctrl_h) = entry.controller_handle {
+                                if visited.insert(ctrl_h) {
+                                    worklist.push((2, ctrl_h));
+                                }
+                            }
+                        }
+                    }
+                }
+                5 => {
+                    // writer
+                    if let Ok(inner) = st.writer_table.inner.lock() {
+                        if let Some(entry) = inner.get(handle as usize) {
+                            let writable_h = entry.writable_stream_handle;
+                            if visited.insert(writable_h) {
+                                worklist.push((4, writable_h));
+                            }
+                        }
+                    }
+                }
+                6 => {
+                    // transform_stream
+                    if let Ok(inner) = st.transform_stream_table.inner.lock() {
+                        if let Some(entry) = inner.get(handle as usize) {
+                            if let Some(readable_h) = entry.readable_stream_handle {
+                                if visited.insert(readable_h) {
+                                    worklist.push((0, readable_h));
+                                }
+                            }
+                            if let Some(writable_h) = entry.writable_stream_handle {
+                                if visited.insert(writable_h) {
+                                    worklist.push((4, writable_h));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // 3. 回收不可达条目
+        st.readable_stream_table.reclaim_unreachable(&visited);
+        st.reader_table.reclaim_unreachable(&visited);
+        st.stream_controller_table.reclaim_unreachable(&visited);
+        st.byob_request_table.reclaim_unreachable(&visited);
+        st.writable_stream_table.reclaim_unreachable(&visited);
+        st.writer_table.reclaim_unreachable(&visited);
+        st.transform_stream_table.reclaim_unreachable(&visited);
+    });
+}
+

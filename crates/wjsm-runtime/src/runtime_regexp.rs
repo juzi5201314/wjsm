@@ -275,25 +275,20 @@ fn build_match_result_from_parts(
                             caller,
                             pair_ptr,
                             0,
-                            value::encode_f64(
-                                byte_offset_to_utf16_index(s, r.start) as f64,
-                            ),
+                            value::encode_f64(byte_offset_to_utf16_index(s, r.start) as f64),
                         );
                         write_array_elem(
                             caller,
                             pair_ptr,
                             1,
-                            value::encode_f64(
-                                byte_offset_to_utf16_index(s, r.end) as f64,
-                            ),
+                            value::encode_f64(byte_offset_to_utf16_index(s, r.end) as f64),
                         );
                         write_array_length(caller, pair_ptr, 2);
                         pair
                     }
                     None => value::encode_undefined(),
                 };
-                let _ =
-                    define_host_data_property_from_caller(caller, indices_groups, name, val);
+                let _ = define_host_data_property_from_caller(caller, indices_groups, name, val);
             }
             let _ = define_host_data_property_from_caller(
                 caller,

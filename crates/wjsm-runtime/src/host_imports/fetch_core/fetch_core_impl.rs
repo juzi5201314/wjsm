@@ -222,6 +222,7 @@ pub(crate) fn call_response_method_from_caller(
         let locked = caller
             .data()
             .readable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(sh as usize)

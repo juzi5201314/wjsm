@@ -1100,6 +1100,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 let reader_table = caller
                     .data()
                     .reader_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 reader_table
@@ -1110,6 +1111,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = stream_table.get_mut(sh as usize) {

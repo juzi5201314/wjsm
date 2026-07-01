@@ -71,7 +71,13 @@ pub(crate) fn define_async_fn(
         "env",
         "async_function_resume",
         |mut caller: Caller<'_, RuntimeState>,
-         (fn_table_idx, continuation, state, resume_val, completion_raw): (i64, i64, i64, i64, i64)| {
+         (fn_table_idx, continuation, state, resume_val, completion_raw): (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+        )| {
             Box::new(async move {
                 let resolved_fn_idx = if value::is_function(fn_table_idx) {
                     value::decode_function_idx(fn_table_idx)

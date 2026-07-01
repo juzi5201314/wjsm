@@ -165,15 +165,13 @@ fn get_by_name_id_on_proto_chain(
         let prop = crate::property_key::name_id_to_property_key_value(name_id);
         if let Some(prop) = prop {
             let rt = tokio::runtime::Handle::current();
-            return Some(
-                tokio::task::block_in_place(|| {
-                    rt.block_on(
-                        crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
-                            caller, proxy_val, prop, receiver,
-                        ),
-                    )
-                }),
-            );
+            return Some(tokio::task::block_in_place(|| {
+                rt.block_on(
+                    crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
+                        caller, proxy_val, prop, receiver,
+                    ),
+                )
+            }));
         }
         return None;
     }

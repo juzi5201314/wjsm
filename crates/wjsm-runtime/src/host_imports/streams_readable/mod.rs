@@ -274,6 +274,7 @@ fn fulfill_byob_read(
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -455,6 +456,13 @@ pub(crate) fn create_controller_object(
         undef,
     );
 
+    if let Some(obj_handle) = weak_target_handle_index_of(caller, obj) {
+        caller
+            .data()
+            .stream_controller_table
+            .bind_obj_handle(obj_handle, controller_handle);
+    }
+
     obj
 }
 
@@ -469,14 +477,10 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
     response_body_object: Option<i64>,
 ) -> (i64, u32) {
     // 1. 创建 StreamControllerEntry (ControllerKind::ReadableDefault)
-    let controller_handle = {
-        let mut table = caller
-            .data()
-            .stream_controller_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(StreamControllerEntry {
+    let controller_handle = caller
+        .data()
+        .stream_controller_table
+        .alloc(StreamControllerEntry {
             kind: ControllerKind::ReadableDefault,
             stream_handle: 0, // 稍后回写
             chunk_queue: VecDeque::new(),
@@ -496,8 +500,6 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
             sink_close_callback: None,
             active_byob_request: None,
         });
-        handle
-    };
 
     // 2. 将 body bytes 作为 Uint8Array 推入 controller 的 chunk_queue
     if !bytes.is_empty() {
@@ -506,6 +508,7 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -513,15 +516,10 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
         }
     }
 
-    // 3. 创建 ReadableStreamEntry (controller_handle: Some(ctrl), http_response_handle: None)
-    let stream_handle = {
-        let mut table = caller
-            .data()
-            .readable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(ReadableStreamEntry {
+    let stream_handle = caller
+        .data()
+        .readable_stream_table
+        .alloc(ReadableStreamEntry {
             state: StreamState::Closed, // 已关闭
             error: None,
             disturbed: false,
@@ -532,14 +530,13 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
             controller_handle: Some(controller_handle),
             is_byte_stream: true,
         });
-        handle
-    };
 
     // 4. 回写 stream_handle 到 controller
     {
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -548,8 +545,12 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
         }
     }
 
-    // 5. 构造 ReadableStream JS 对象
     let js_obj = create_readable_stream_js_object(caller, stream_handle);
+    let obj_handle = weak_target_handle_index_of(caller, js_obj).unwrap_or(0);
+    caller
+        .data()
+        .readable_stream_table
+        .bind_obj_handle(obj_handle, stream_handle);
     (js_obj, stream_handle)
 }
 

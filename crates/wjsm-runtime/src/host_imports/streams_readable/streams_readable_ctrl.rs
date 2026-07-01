@@ -42,14 +42,10 @@ pub(crate) async fn construct_readable_stream(
     };
 
     // 3. 创建 StreamControllerEntry (ControllerKind::ReadableDefault)
-    let controller_handle = {
-        let mut table = caller
-            .data()
-            .stream_controller_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(StreamControllerEntry {
+    let controller_handle = caller
+        .data()
+        .stream_controller_table
+        .alloc(StreamControllerEntry {
             kind: ControllerKind::ReadableDefault,
             stream_handle: 0, // 稍后回写
             chunk_queue: VecDeque::new(),
@@ -69,18 +65,11 @@ pub(crate) async fn construct_readable_stream(
             sink_close_callback: None,
             active_byob_request: None,
         });
-        handle
-    };
 
-    // 4. 创建 ReadableStreamEntry
-    let stream_handle = {
-        let mut table = caller
-            .data()
-            .readable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(ReadableStreamEntry {
+    let stream_handle = caller
+        .data()
+        .readable_stream_table
+        .alloc(ReadableStreamEntry {
             state: StreamState::Readable,
             error: None,
             disturbed: false,
@@ -91,14 +80,13 @@ pub(crate) async fn construct_readable_stream(
             controller_handle: Some(controller_handle),
             is_byte_stream,
         });
-        handle
-    };
 
     // 5. 回写 stream_handle 到 controller
     {
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -121,6 +109,7 @@ pub(crate) async fn construct_readable_stream(
                 let mut table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -148,6 +137,7 @@ pub(crate) async fn construct_readable_stream(
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -155,8 +145,12 @@ pub(crate) async fn construct_readable_stream(
         }
     }
 
-    // 8. 构造 ReadableStream JS 对象
     let obj = create_readable_stream_js_object(caller, stream_handle);
+    let obj_handle = weak_target_handle_index_of(caller, obj).unwrap_or(0);
+    caller
+        .data()
+        .readable_stream_table
+        .bind_obj_handle(obj_handle, stream_handle);
 
     Some(obj)
 }
@@ -179,6 +173,7 @@ pub(crate) fn controller_enqueue(
         let table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let ctrl = table.get(controller_handle as usize)?;
@@ -196,6 +191,7 @@ pub(crate) fn controller_enqueue(
         let table = caller
             .data()
             .readable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         table.get(stream_handle as usize).map(|e| e.state.clone())
@@ -215,6 +211,7 @@ pub(crate) fn controller_enqueue(
         let mut reader_table = caller
             .data()
             .reader_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let mut pending_info: Option<(ReaderKind, Option<i64>, i64)> = None;
@@ -246,6 +243,7 @@ pub(crate) fn controller_enqueue(
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -265,6 +263,7 @@ pub(crate) fn controller_close(
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let ctrl = table.get_mut(controller_handle as usize)?;
@@ -288,6 +287,7 @@ pub(crate) fn controller_close(
         let mut table = caller
             .data()
             .readable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(stream_handle as usize) {
@@ -300,6 +300,7 @@ pub(crate) fn controller_close(
         let mut reader_table = caller
             .data()
             .reader_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let mut pending_info: Option<(Option<i64>, i64)> = None;
@@ -336,6 +337,7 @@ pub(crate) fn controller_error(
         let table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let ctrl = table.get(controller_handle as usize)?;
@@ -347,6 +349,7 @@ pub(crate) fn controller_error(
         let mut table = caller
             .data()
             .readable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(stream_handle as usize) {
@@ -363,6 +366,7 @@ pub(crate) fn controller_error(
         let mut reader_table = caller
             .data()
             .reader_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let mut pending_promise: Option<i64> = None;

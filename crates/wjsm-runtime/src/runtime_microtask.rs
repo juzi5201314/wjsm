@@ -221,6 +221,7 @@ pub(crate) async fn drain_microtasks_async<
                     let mut ctrl_table = ctx
                         .state_mut()
                         .stream_controller_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get_mut(readable_controller_handle as usize) {
@@ -232,6 +233,7 @@ pub(crate) async fn drain_microtasks_async<
                     let mut reader_table = ctx
                         .state_mut()
                         .reader_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     let mut pending_promise: Option<i64> = None;
@@ -250,6 +252,7 @@ pub(crate) async fn drain_microtasks_async<
                     let mut stream_table = ctx
                         .state_mut()
                         .readable_stream_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = stream_table.get_mut(readable_stream_handle as usize) {

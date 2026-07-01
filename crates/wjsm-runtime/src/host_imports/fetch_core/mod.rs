@@ -193,14 +193,10 @@ pub(crate) fn create_response_object_with_http_handle(
     let _ = define_host_data_property_from_caller(caller, obj, "redirected", redirected_val);
 
     // body / bodyUsed
-    let stream_handle = {
-        let mut stream_table = caller
-            .data()
-            .readable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let sh = stream_table.len() as u32;
-        stream_table.push(ReadableStreamEntry {
+    let stream_handle = caller
+        .data()
+        .readable_stream_table
+        .alloc(ReadableStreamEntry {
             state: StreamState::Readable,
             error: None,
             disturbed: false,
@@ -211,8 +207,6 @@ pub(crate) fn create_response_object_with_http_handle(
             controller_handle: None,
             is_byte_stream: true,
         });
-        sh
-    };
     {
         let mut table = caller
             .data()
@@ -225,6 +219,11 @@ pub(crate) fn create_response_object_with_http_handle(
     }
     let stream_obj =
         super::streams_readable::create_readable_stream_js_object(caller, stream_handle);
+    let stream_obj_handle = weak_target_handle_index_of(caller, stream_obj).unwrap_or(0);
+    caller
+        .data()
+        .readable_stream_table
+        .bind_obj_handle(stream_obj_handle, stream_handle);
     let _ = define_host_data_property_from_caller(caller, obj, "body", stream_obj);
     let _ =
         define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));

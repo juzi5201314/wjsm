@@ -17,6 +17,7 @@ use wjsm_ir::{constants, value};
 use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
 mod array_named_props;
+mod host_side_table;
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
@@ -28,6 +29,7 @@ mod runtime_eval;
 mod runtime_gc;
 mod runtime_heap;
 mod runtime_host_helpers;
+pub(crate) use host_side_table::HostSideTable;
 mod runtime_json;
 mod runtime_linker;
 mod runtime_microtask;
@@ -664,18 +666,18 @@ struct RuntimeState {
     /// 按 redirect 策略复用的 reqwest HTTP 客户端（连接池）
     fetch_http_clients: Arc<Mutex<HashMap<RedirectMode, reqwest::Client>>>,
     /// ReadableStream 侧表：存储流状态
-    readable_stream_table: Arc<Mutex<Vec<ReadableStreamEntry>>>,
+    readable_stream_table: Arc<HostSideTable<ReadableStreamEntry>>,
     /// Reader 侧表：存储 reader → stream 映射
-    reader_table: Arc<Mutex<Vec<ReaderEntry>>>,
+    reader_table: Arc<HostSideTable<ReaderEntry>>,
     /// Controller 侧表（ReadableStream DefaultController 等）
-    stream_controller_table: Arc<Mutex<Vec<StreamControllerEntry>>>,
-    byob_request_table: Arc<Mutex<Vec<ByobRequestEntry>>>,
+    stream_controller_table: Arc<HostSideTable<StreamControllerEntry>>,
+    byob_request_table: Arc<HostSideTable<ByobRequestEntry>>,
     /// WritableStream 侧表：存储可写流状态
-    writable_stream_table: Arc<Mutex<Vec<WritableStreamEntry>>>,
+    writable_stream_table: Arc<HostSideTable<WritableStreamEntry>>,
     /// Writer 侧表：存储 WritableStreamDefaultWriter → stream 映射
-    writer_table: Arc<Mutex<Vec<WriterEntry>>>,
+    writer_table: Arc<HostSideTable<WriterEntry>>,
     /// TransformStream 侧表：存储转换流状态
-    transform_stream_table: Arc<Mutex<Vec<TransformStreamEntry>>>,
+    transform_stream_table: Arc<HostSideTable<TransformStreamEntry>>,
     /// normal execution 拥有单 agent cluster；$262.agent 可共享同一状态。
     shared_state: Option<Arc<SharedRuntimeState>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
@@ -902,13 +904,13 @@ impl RuntimeState {
             abort_signal_table: Arc::new(Mutex::new(Vec::new())),
             http_response_table: Arc::new(Mutex::new(Vec::new())),
             fetch_http_clients: Arc::new(Mutex::new(HashMap::new())),
-            readable_stream_table: Arc::new(Mutex::new(Vec::new())),
-            reader_table: Arc::new(Mutex::new(Vec::new())),
-            stream_controller_table: Arc::new(Mutex::new(Vec::new())),
-            byob_request_table: Arc::new(Mutex::new(Vec::new())),
-            writable_stream_table: Arc::new(Mutex::new(Vec::new())),
-            transform_stream_table: Arc::new(Mutex::new(Vec::new())),
-            writer_table: Arc::new(Mutex::new(Vec::new())),
+            readable_stream_table: Arc::new(HostSideTable::new()),
+            reader_table: Arc::new(HostSideTable::new()),
+            stream_controller_table: Arc::new(HostSideTable::new()),
+            byob_request_table: Arc::new(HostSideTable::new()),
+            writable_stream_table: Arc::new(HostSideTable::new()),
+            transform_stream_table: Arc::new(HostSideTable::new()),
+            writer_table: Arc::new(HostSideTable::new()),
             shared_state: Some(new_shared_runtime_state()),
             non_extensible_handles: Arc::new(Mutex::new(HashSet::new())),
             scope_records: HashMap::new(),

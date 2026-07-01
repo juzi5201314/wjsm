@@ -367,49 +367,27 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
             .unwrap_or_else(|e| e.into_inner()),
         "http_response_table"
     );
-    check_empty!(
-        *data
-            .readable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-        "readable_stream_table"
-    );
-    check_empty!(
-        *data.reader_table.lock().unwrap_or_else(|e| e.into_inner()),
-        "reader_table"
-    );
-    check_empty!(
-        *data
-            .stream_controller_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-        "stream_controller_table"
-    );
-    check_empty!(
-        *data
-            .byob_request_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-        "byob_request_table"
-    );
-    check_empty!(
-        *data
-            .writable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-        "writable_stream_table"
-    );
-    check_empty!(
-        *data.writer_table.lock().unwrap_or_else(|e| e.into_inner()),
-        "writer_table"
-    );
-    check_empty!(
-        *data
-            .transform_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-        "transform_stream_table"
-    );
+    if !data.readable_stream_table.is_empty() {
+        bail!("capture: readable_stream_table not empty");
+    }
+    if !data.reader_table.is_empty() {
+        bail!("capture: reader_table not empty");
+    }
+    if !data.stream_controller_table.is_empty() {
+        bail!("capture: stream_controller_table not empty");
+    }
+    if !data.byob_request_table.is_empty() {
+        bail!("capture: byob_request_table not empty");
+    }
+    if !data.writable_stream_table.is_empty() {
+        bail!("capture: writable_stream_table not empty");
+    }
+    if !data.writer_table.is_empty() {
+        bail!("capture: writer_table not empty");
+    }
+    if !data.transform_stream_table.is_empty() {
+        bail!("capture: transform_stream_table not empty");
+    }
     {
         let ec = data.eval_cache.lock().unwrap_or_else(|e| e.into_inner());
         if !ec.is_empty() {

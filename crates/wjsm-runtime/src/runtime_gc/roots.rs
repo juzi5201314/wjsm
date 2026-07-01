@@ -361,13 +361,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                         controller,
                         write_promise,
                     } => {
-                        out.extend([
-                            *callback,
-                            *this_val,
-                            *chunk,
-                            *controller,
-                            *write_promise,
-                        ]);
+                        out.extend([*callback, *this_val, *chunk, *controller, *write_promise]);
                     }
                     Microtask::WritableStreamSinkClose {
                         callback,
@@ -427,8 +421,18 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             }
         }
 
+        // readable_stream_table: response_body_object
+        if let Ok(inner) = st.readable_stream_table.inner.lock() {
+            for entry in inner.iter() {
+                if let Some(v) = entry.response_body_object {
+                    out.push(v);
+                }
+            }
+        }
+
+
         // reader_table：pending_read_promise / pending_byob_view
-        if let Ok(readers) = st.reader_table.lock() {
+        if let Ok(readers) = st.reader_table.inner.lock() {
             for r in readers.iter() {
                 if let Some(v) = r.pending_read_promise {
                     out.push(v);
@@ -443,7 +447,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
         }
 
         // byob_request_table：view / promise
-        if let Ok(byobs) = st.byob_request_table.lock() {
+        if let Ok(byobs) = st.byob_request_table.inner.lock() {
             for e in byobs.iter() {
                 out.push(e.view);
                 out.push(e.promise);
@@ -451,7 +455,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
         }
 
         // stream_controller_table：underlying_source / pull / cancel
-        if let Ok(ctrls) = st.stream_controller_table.lock() {
+        if let Ok(ctrls) = st.stream_controller_table.inner.lock() {
             for c in ctrls.iter() {
                 out.extend(c.underlying_source);
                 out.extend(c.pull_callback);
@@ -525,7 +529,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             }
         }
         // writable_stream_table: error + abort_signal
-        if let Ok(table) = st.writable_stream_table.lock() {
+        if let Ok(table) = st.writable_stream_table.inner.lock() {
             for entry in table.iter() {
                 if let Some(v) = entry.error {
                     out.push(v);
@@ -536,7 +540,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             }
         }
         // writer_table: closed_promise + ready_promise
-        if let Ok(table) = st.writer_table.lock() {
+        if let Ok(table) = st.writer_table.inner.lock() {
             for entry in table.iter() {
                 if let Some(v) = entry.closed_promise {
                     out.push(v);
@@ -547,7 +551,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             }
         }
         // transform_stream_table: transform_callback + flush_callback + transformer_this + readable_obj + writable_obj
-        if let Ok(table) = st.transform_stream_table.lock() {
+        if let Ok(table) = st.transform_stream_table.inner.lock() {
             for entry in table.iter() {
                 if let Some(v) = entry.transform_callback {
                     out.push(v);

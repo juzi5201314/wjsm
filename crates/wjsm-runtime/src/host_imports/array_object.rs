@@ -2022,10 +2022,7 @@ pub(crate) fn define_array_object(
                 let obj_handle_raw = handle_index_of(&mut caller, obj) as u32;
                 while current != 0xFFFF_FFFF && current != 0 && depth < MAX_PROTO_DEPTH {
                     if current == obj_handle_raw {
-                        return make_type_error_exception(
-                            &mut caller,
-                            "Cyclic __proto__ value",
-                        );
+                        return make_type_error_exception(&mut caller, "Cyclic __proto__ value");
                     }
                     if current & 0x8000_0000 != 0 {
                         break; // proxy handle: 不走 obj_table，跳过

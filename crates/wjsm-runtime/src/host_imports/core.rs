@@ -1675,7 +1675,6 @@ pub(crate) async fn iterator_from_impl_async(
         }
     }
 
-
     let mut iters = caller
         .data()
         .iterators

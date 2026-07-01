@@ -75,6 +75,7 @@ fn mark_writable_stream_signal_aborted(
         let table = caller
             .data()
             .writable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         table
@@ -143,6 +144,13 @@ pub(crate) fn create_writable_stream_js_object(
     let close_val = value::encode_native_callable_idx(close_idx);
     let _ = define_host_data_property_from_caller(caller, obj, "close", close_val);
 
+    if let Some(obj_handle) = weak_target_handle_index_of(caller, obj) {
+        caller
+            .data()
+            .writable_stream_table
+            .bind_obj_handle(obj_handle, stream_handle);
+    }
+
     obj
 }
 
@@ -177,6 +185,13 @@ fn create_writable_controller_object(
     let undef = value::encode_undefined();
     let _ =
         define_host_accessor_property_with_env(caller, &env, obj, "signal", signal_getter, undef);
+
+    if let Some(obj_handle) = weak_target_handle_index_of(caller, obj) {
+        caller
+            .data()
+            .stream_controller_table
+            .bind_obj_handle(obj_handle, controller_handle);
+    }
 
     obj
 }
@@ -261,6 +276,12 @@ fn create_writer_js_object(caller: &mut Caller<'_, RuntimeState>, writer_handle:
         desired_size_getter,
         undef,
     );
+    if let Some(obj_handle) = weak_target_handle_index_of(caller, obj) {
+        caller
+            .data()
+            .writer_table
+            .bind_obj_handle(obj_handle, writer_handle);
+    }
 
     obj
 }
@@ -300,14 +321,10 @@ pub(crate) async fn construct_writable_stream(
     };
 
     // 3. 创建 StreamControllerEntry (ControllerKind::Writable)
-    let controller_handle = {
-        let mut table = caller
-            .data()
-            .stream_controller_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(StreamControllerEntry {
+    let controller_handle = caller
+        .data()
+        .stream_controller_table
+        .alloc(StreamControllerEntry {
             kind: ControllerKind::Writable,
             stream_handle: 0, // 稍后回写
             chunk_queue: VecDeque::new(),
@@ -327,34 +344,27 @@ pub(crate) async fn construct_writable_stream(
             sink_close_callback: None,
             active_byob_request: None,
         });
-        handle
-    };
 
     let abort_signal = create_writable_abort_signal_object(caller);
 
     // 4. 创建 WritableStreamEntry
-    let stream_handle = {
-        let mut table = caller
-            .data()
-            .writable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(WritableStreamEntry {
+    let stream_handle = caller
+        .data()
+        .writable_stream_table
+        .alloc(WritableStreamEntry {
             state: WritableStreamState::Writable,
             error: None,
             locked: false,
             controller_handle: Some(controller_handle),
             abort_signal: Some(abort_signal),
         });
-        handle
-    };
 
     // 5. 回写 stream_handle 到 controller
     {
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -389,6 +399,7 @@ pub(crate) async fn construct_writable_stream(
             let mut table = caller
                 .data()
                 .stream_controller_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -411,6 +422,7 @@ pub(crate) async fn construct_writable_stream(
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(controller_handle as usize) {
@@ -435,6 +447,7 @@ fn call_sink_write_from_writable(
         let ws_table = caller
             .data()
             .writable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let ctrl_handle = match ws_table.get(writable_stream_handle as usize) {
@@ -459,6 +472,7 @@ fn call_sink_write_from_writable(
         let ctrl_table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let ctrl = match ctrl_table.get(ch as usize) {
@@ -472,11 +486,7 @@ fn call_sink_write_from_writable(
                 return;
             }
         };
-        (
-            ctrl.write_callback,
-            ch,
-            ctrl.underlying_source,
-        )
+        (ctrl.write_callback, ch, ctrl.underlying_source)
     };
 
     let controller_obj = create_writable_controller_object(caller, ctrl_handle);
@@ -513,6 +523,7 @@ fn call_sink_close_from_writable_close(
         let ws_table = caller
             .data()
             .writable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let ctrl_handle = match ws_table.get(writable_stream_handle as usize) {
@@ -525,17 +536,14 @@ fn call_sink_close_from_writable_close(
         let ctrl_table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let ctrl = match ctrl_table.get(ch as usize) {
             Some(c) => c,
             None => return false,
         };
-        (
-            ctrl.sink_close_callback,
-            ch,
-            ctrl.underlying_source,
-        )
+        (ctrl.sink_close_callback, ch, ctrl.underlying_source)
     };
 
     let controller_obj = create_writable_controller_object(caller, ctrl_handle);
@@ -570,6 +578,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
             let table = caller
                 .data()
                 .writable_stream_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let locked = table
@@ -584,6 +593,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let mut stream_table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
@@ -609,6 +619,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get(handle as usize)
@@ -622,26 +633,18 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 }
             }
 
-            let writer_handle = {
-                let mut table = caller
-                    .data()
-                    .writer_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let wh = table.len() as u32;
-                table.push(WriterEntry {
-                    writable_stream_handle: handle,
-                    closed_promise: Some(closed_promise),
-                    ready_promise: Some(ready_promise),
-                });
-                wh
-            };
+            let writer_handle = caller.data().writer_table.alloc(WriterEntry {
+                writable_stream_handle: handle,
+                closed_promise: Some(closed_promise),
+                ready_promise: Some(ready_promise),
+            });
 
             // 如果流已关闭，立即 resolve closed promise
             {
                 let table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get(handle as usize) {
@@ -684,6 +687,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let mut table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
@@ -698,6 +702,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let writer_table = caller
                     .data()
                     .writer_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 for writer_entry in writer_table.iter() {
@@ -727,6 +732,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table
@@ -747,6 +753,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let mut table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
@@ -759,6 +766,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let mut ctrl_table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = ctrl_table.get_mut(ch as usize) {
@@ -771,6 +779,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let mut table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
@@ -783,6 +792,7 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 let writer_table = caller
                     .data()
                     .writer_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 for writer_entry in writer_table.iter() {
@@ -837,6 +847,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let table = caller
                     .data()
                     .writer_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
@@ -854,6 +865,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(stream_handle as usize).map(|e| e.state)
@@ -864,6 +876,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                         let table = caller
                             .data()
                             .writable_stream_table
+                            .inner
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         table.get(stream_handle as usize).and_then(|e| e.error)
@@ -885,6 +898,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                         let ts_table = caller
                             .data()
                             .transform_stream_table
+                            .inner
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         ts_table
@@ -914,6 +928,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let table = caller
                     .data()
                     .writer_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
@@ -925,6 +940,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     let table = caller
                         .data()
                         .writable_stream_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     table
@@ -940,6 +956,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                         let mut table = caller
                             .data()
                             .writable_stream_table
+                            .inner
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = table.get_mut(sh as usize) {
@@ -952,6 +969,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                         let mut ctrl_table = caller
                             .data()
                             .stream_controller_table
+                            .inner
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         if let Some(ctrl) = ctrl_table.get_mut(ch as usize) {
@@ -964,6 +982,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                         let mut table = caller
                             .data()
                             .writable_stream_table
+                            .inner
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = table.get_mut(sh as usize) {
@@ -973,8 +992,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     // TransformStream 路径：flush + readable close 在已排队 transform 之后执行。
                     close_deferred = call_flush_from_writable_close(caller, sh, promise);
                     if !close_deferred {
-                        close_deferred =
-                            call_sink_close_from_writable_close(caller, sh, promise);
+                        close_deferred = call_sink_close_from_writable_close(caller, sh, promise);
                     }
                 }
 
@@ -983,6 +1001,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     let writer_table = caller
                         .data()
                         .writer_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     for writer_entry in writer_table.iter() {
@@ -1024,6 +1043,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let table = caller
                     .data()
                     .writer_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
@@ -1035,6 +1055,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     let mut table = caller
                         .data()
                         .writable_stream_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(sh as usize) {
@@ -1044,12 +1065,12 @@ pub(crate) fn call_default_writer_method_from_caller(
                 }
                 mark_writable_stream_signal_aborted(caller, sh, reason);
 
-
                 // reject writer closed 和 ready promise
                 {
                     let writer_table = caller
                         .data()
                         .writer_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     for writer_entry in writer_table.iter() {
@@ -1089,6 +1110,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let table = caller
                     .data()
                     .writer_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
@@ -1097,6 +1119,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let mut table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(sh as usize) {
@@ -1110,6 +1133,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             let table = caller
                 .data()
                 .writer_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.closed_promise)
@@ -1119,6 +1143,7 @@ pub(crate) fn call_default_writer_method_from_caller(
             let table = caller
                 .data()
                 .writer_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.ready_promise)
@@ -1129,6 +1154,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                 let table = caller
                     .data()
                     .writer_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.writable_stream_handle)
@@ -1139,6 +1165,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     let table = caller
                         .data()
                         .writable_stream_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     table.get(sh as usize).and_then(|e| e.controller_handle)
@@ -1148,6 +1175,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                     let ctrl_table = caller
                         .data()
                         .stream_controller_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get(ch as usize) {
@@ -1184,6 +1212,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
                 let table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.stream_handle)
@@ -1195,6 +1224,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
                     let mut table = caller
                         .data()
                         .writable_stream_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = table.get_mut(sh as usize) {
@@ -1208,6 +1238,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
                     let writer_table = caller
                         .data()
                         .writer_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     for writer_entry in writer_table.iter() {
@@ -1238,6 +1269,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
                 let table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.stream_handle)
@@ -1246,6 +1278,7 @@ pub(crate) fn call_writable_controller_method_from_caller(
                 let table = caller
                     .data()
                     .writable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(sh as usize).and_then(|entry| entry.abort_signal)

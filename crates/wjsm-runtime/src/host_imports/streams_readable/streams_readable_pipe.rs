@@ -17,6 +17,7 @@ pub(super) fn readable_stream_pipe_to(
         let table = caller
             .data()
             .readable_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let entry = table.get(readable_handle as usize)?;
@@ -26,6 +27,7 @@ pub(super) fn readable_stream_pipe_to(
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(ctrl_handle as usize) {
@@ -91,6 +93,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                 let reader_table = caller
                     .data()
                     .reader_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let reader = reader_table.get(handle as usize)?;
@@ -111,6 +114,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(stream_handle as usize)?;
@@ -132,6 +136,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                     let mut ctrl_table = caller
                         .data()
                         .stream_controller_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     ctrl_table
@@ -160,6 +165,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                     let ctrl_table = caller
                         .data()
                         .stream_controller_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     ctrl_table
@@ -188,6 +194,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                     let mut reader_table = caller
                         .data()
                         .reader_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(reader) = reader_table.get_mut(handle as usize) {
@@ -200,25 +207,17 @@ pub(crate) fn call_default_reader_method_from_caller(
                 if reader_kind == ReaderKind::Byob
                     && let Some(view) = byob_view
                 {
-                    let byob_handle = {
-                        let mut table = caller
-                            .data()
-                            .byob_request_table
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        let h = table.len() as u32;
-                        table.push(ByobRequestEntry {
-                            controller_handle: ctrl_handle,
-                            reader_handle: handle,
-                            view,
-                            promise: p,
-                            responded: false,
-                        });
-                        h
-                    };
+                    let byob_handle = caller.data().byob_request_table.alloc(ByobRequestEntry {
+                        controller_handle: ctrl_handle,
+                        reader_handle: handle,
+                        view,
+                        promise: p,
+                        responded: false,
+                    });
                     let mut ctrl_table = caller
                         .data()
                         .stream_controller_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
@@ -231,6 +230,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                     let ctrl_table = caller
                         .data()
                         .stream_controller_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     ctrl_table
@@ -277,6 +277,7 @@ pub(crate) fn call_default_reader_method_from_caller(
                 let reader_table = caller
                     .data()
                     .reader_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 reader_table.get(handle as usize)?.stream_handle
@@ -284,6 +285,7 @@ pub(crate) fn call_default_reader_method_from_caller(
             let mut stream_table = caller
                 .data()
                 .readable_stream_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = stream_table.get_mut(stream_handle as usize) {
@@ -296,6 +298,7 @@ pub(crate) fn call_default_reader_method_from_caller(
             let reader_table = caller
                 .data()
                 .reader_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let reader = reader_table.get(handle as usize)?;
@@ -425,6 +428,7 @@ pub(crate) fn call_default_controller_method_from_caller(
             let table = caller
                 .data()
                 .stream_controller_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(ctrl) = table.get(handle as usize) {
@@ -449,6 +453,7 @@ fn controller_get_byob_request(
         let table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         table
@@ -464,6 +469,7 @@ fn controller_get_byob_request(
         let table = caller
             .data()
             .byob_request_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let Some(entry) = table.get(byob_handle as usize) else {
@@ -493,6 +499,13 @@ fn controller_get_byob_request(
     let respond_idx = push_native_callable(caller, respond_callable);
     let respond_val = value::encode_native_callable_idx(respond_idx);
     let _ = define_host_data_property_from_caller(caller, obj, "respond", respond_val);
+
+    if let Some(obj_handle) = weak_target_handle_index_of(caller, obj) {
+        caller
+            .data()
+            .byob_request_table
+            .bind_obj_handle(obj_handle, byob_handle);
+    }
 
     obj
 }
@@ -535,6 +548,7 @@ pub(crate) fn call_byob_request_method_from_caller(
             let table = caller
                 .data()
                 .byob_request_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let entry = table.get(handle as usize)?;
@@ -572,6 +586,7 @@ pub(crate) fn call_byob_request_method_from_caller(
                 let table = caller
                     .data()
                     .byob_request_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| {
@@ -615,6 +630,7 @@ pub(crate) fn call_byob_request_method_from_caller(
                 let mut table = caller
                     .data()
                     .byob_request_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
@@ -625,6 +641,7 @@ pub(crate) fn call_byob_request_method_from_caller(
                 let mut table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = table.get_mut(controller_handle as usize)
@@ -638,6 +655,7 @@ pub(crate) fn call_byob_request_method_from_caller(
                 let mut reader_table = caller
                     .data()
                     .reader_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(reader) = reader_table.get_mut(reader_handle as usize) {

@@ -58,6 +58,13 @@ fn create_transform_stream_js_object(caller: &mut Caller<'_, RuntimeState>, ts_h
         undef,
     );
 
+    if let Some(obj_handle) = weak_target_handle_index_of(caller, obj) {
+        caller
+            .data()
+            .transform_stream_table
+            .bind_obj_handle(obj_handle, ts_handle);
+    }
+
     obj
 }
 
@@ -218,63 +225,50 @@ pub(crate) async fn construct_transform_stream(
     };
 
     // 5. 创建 ReadableStream 的 controller (ControllerKind::ReadableDefault)
-    let readable_controller_handle = {
-        let mut table = caller
+    let readable_controller_handle =
+        caller
             .data()
             .stream_controller_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(StreamControllerEntry {
-            kind: ControllerKind::ReadableDefault,
-            stream_handle: 0,
-            chunk_queue: VecDeque::new(),
-            high_water_mark: readable_hwm,
-            strategy_size: None,
-            started: false,
-            close_requested: false,
-            byob_reader_handle: None,
-            pull_requested: false,
-            abort_requested: false,
-            abort_reason: None,
-            flush_requested: false,
-            underlying_source: None,
-            pull_callback: None,
-            cancel_callback: None,
-            write_callback: None,
-            sink_close_callback: None,
-            active_byob_request: None,
-        });
-        handle
-    };
+            .alloc(StreamControllerEntry {
+                kind: ControllerKind::ReadableDefault,
+                stream_handle: 0,
+                chunk_queue: VecDeque::new(),
+                high_water_mark: readable_hwm,
+                strategy_size: None,
+                started: false,
+                close_requested: false,
+                byob_reader_handle: None,
+                pull_requested: false,
+                abort_requested: false,
+                abort_reason: None,
+                flush_requested: false,
+                underlying_source: None,
+                pull_callback: None,
+                cancel_callback: None,
+                write_callback: None,
+                sink_close_callback: None,
+                active_byob_request: None,
+            });
 
     // 6. 创建 ReadableStreamEntry（readable 侧）
-    let readable_stream_handle = {
-        let mut table = caller
-            .data()
-            .readable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(ReadableStreamEntry {
-            state: StreamState::Readable,
-            error: None,
-            disturbed: false,
-            locked: false,
-            http_response_handle: None,
-            response_body_handle: None,
-            response_body_object: None,
-            controller_handle: Some(readable_controller_handle),
-            is_byte_stream: false,
-        });
-        handle
-    };
+    let readable_stream_handle = caller.data().readable_stream_table.alloc(ReadableStreamEntry {
+        state: StreamState::Readable,
+        error: None,
+        disturbed: false,
+        locked: false,
+        http_response_handle: None,
+        response_body_handle: None,
+        response_body_object: None,
+        controller_handle: Some(readable_controller_handle),
+        is_byte_stream: false,
+    });
 
     // 7. 回写 stream_handle 到 readable controller，标记 started
     {
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(readable_controller_handle as usize) {
@@ -284,61 +278,51 @@ pub(crate) async fn construct_transform_stream(
     }
 
     // 8. 创建 WritableStream 的 controller (ControllerKind::Writable)
-    let writable_controller_handle = {
-        let mut table = caller
+    let writable_controller_handle =
+        caller
             .data()
             .stream_controller_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(StreamControllerEntry {
-            kind: ControllerKind::Writable,
-            stream_handle: 0,
-            chunk_queue: VecDeque::new(),
-            high_water_mark: writable_hwm,
-            strategy_size: None,
-            started: false,
-            close_requested: false,
-            byob_reader_handle: None,
-            pull_requested: false,
-            abort_requested: false,
-            abort_reason: None,
-            flush_requested: false,
-            underlying_source: None,
-            pull_callback: None,
-            cancel_callback: None,
-            write_callback: None,
-            sink_close_callback: None,
-            active_byob_request: None,
-        });
-        handle
-    };
+            .alloc(StreamControllerEntry {
+                kind: ControllerKind::Writable,
+                stream_handle: 0,
+                chunk_queue: VecDeque::new(),
+                high_water_mark: writable_hwm,
+                strategy_size: None,
+                started: false,
+                close_requested: false,
+                byob_reader_handle: None,
+                pull_requested: false,
+                abort_requested: false,
+                abort_reason: None,
+                flush_requested: false,
+                underlying_source: None,
+                pull_callback: None,
+                cancel_callback: None,
+                write_callback: None,
+                sink_close_callback: None,
+                active_byob_request: None,
+            });
 
     let writable_abort_signal = create_writable_abort_signal_object(caller);
 
     // 9. 创建 WritableStreamEntry（writable 侧）
-    let writable_stream_handle = {
-        let mut table = caller
-            .data()
-            .writable_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(WritableStreamEntry {
+    let writable_stream_handle = caller
+        .data()
+        .writable_stream_table
+        .alloc(WritableStreamEntry {
             state: WritableStreamState::Writable,
             error: None,
             locked: false,
             controller_handle: Some(writable_controller_handle),
             abort_signal: Some(writable_abort_signal),
         });
-        handle
-    };
 
     // 10. 回写 stream_handle 到 writable controller，标记 started
     {
         let mut table = caller
             .data()
             .stream_controller_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ctrl) = table.get_mut(writable_controller_handle as usize) {
@@ -353,14 +337,10 @@ pub(crate) async fn construct_transform_stream(
     let writable_obj = create_writable_stream_js_object(caller, writable_stream_handle);
 
     // 12. 创建 TransformStreamEntry
-    let ts_handle = {
-        let mut table = caller
-            .data()
-            .transform_stream_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(TransformStreamEntry {
+    let ts_handle = caller
+        .data()
+        .transform_stream_table
+        .alloc(TransformStreamEntry {
             readable_stream_handle: Some(readable_stream_handle),
             writable_stream_handle: Some(writable_stream_handle),
             transform_callback: transform_fn,
@@ -375,8 +355,6 @@ pub(crate) async fn construct_transform_stream(
             readable_obj: Some(readable_obj),
             writable_obj: Some(writable_obj),
         });
-        handle
-    };
 
     // 13. 构造 TransformStream JS 对象
     let obj = create_transform_stream_js_object(caller, ts_handle);
@@ -399,6 +377,7 @@ pub(crate) fn call_transform_stream_method_from_caller(
             let table = caller
                 .data()
                 .transform_stream_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.readable_obj)
@@ -407,6 +386,7 @@ pub(crate) fn call_transform_stream_method_from_caller(
             let table = caller
                 .data()
                 .transform_stream_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             table.get(handle as usize).and_then(|e| e.writable_obj)
@@ -427,6 +407,7 @@ pub(crate) fn call_transform_from_writable(
         let table = caller
             .data()
             .transform_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let entry = match table
@@ -478,6 +459,7 @@ pub(crate) fn call_transform_from_writable(
                 let ctrl_table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 ctrl_table
@@ -490,6 +472,7 @@ pub(crate) fn call_transform_from_writable(
                     let mut reader_table = caller
                         .data()
                         .reader_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     let mut pending_promise: Option<i64> = None;
@@ -513,6 +496,7 @@ pub(crate) fn call_transform_from_writable(
                     let mut ctrl_table = caller
                         .data()
                         .stream_controller_table
+                        .inner
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize)
@@ -550,6 +534,7 @@ pub(crate) fn call_flush_from_writable_close(
         let table = caller
             .data()
             .transform_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let entry = match table

@@ -122,6 +122,7 @@ fn spawn_chunk_pull(
         let mut reader_table = caller
             .data()
             .reader_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
@@ -375,6 +376,7 @@ fn clear_reader_pending<C: wasmtime::AsContextMut<Data = RuntimeState>>(
     let mut reader_table = store
         .data()
         .reader_table
+        .inner
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
@@ -517,6 +519,7 @@ fn fulfill_read_from_buffer(
         let mut reader_table = caller
             .data()
             .reader_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(reader) = reader_table.get_mut(reader_handle as usize) {

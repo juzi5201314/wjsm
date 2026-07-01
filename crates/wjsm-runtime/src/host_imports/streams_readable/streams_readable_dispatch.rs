@@ -12,6 +12,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
             let table = caller
                 .data()
                 .readable_stream_table
+                .inner
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let locked = table
@@ -36,6 +37,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
@@ -67,28 +69,20 @@ pub(crate) fn call_readable_stream_method_from_caller(
 
             // 创建 reader + closed_promise
             let closed_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
-            let reader_handle = {
-                let mut table = caller
-                    .data()
-                    .reader_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let rh = table.len() as u32;
-                table.push(ReaderEntry {
-                    stream_handle: handle,
-                    kind: reader_kind,
-                    pending_read_promise: None,
-                    pending_byob_view: None,
-                    closed_promise: Some(closed_promise),
-                });
-                rh
-            };
+            let reader_handle = caller.data().reader_table.alloc(ReaderEntry {
+                stream_handle: handle,
+                kind: reader_kind,
+                pending_read_promise: None,
+                pending_byob_view: None,
+                closed_promise: Some(closed_promise),
+            });
 
             // 如果流已关闭，立即 resolve closed promise
             let stream_state = {
                 let table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.state.clone())
@@ -108,6 +102,14 @@ pub(crate) fn call_readable_stream_method_from_caller(
             // __reader_handle__
             let rh_val = value::encode_f64(reader_handle as f64);
             let _ = define_host_data_property_from_caller(caller, obj, "__reader_handle__", rh_val);
+            if let Some(obj_handle) =
+                crate::runtime_values::weak_target_handle_index_of(caller, obj)
+            {
+                caller
+                    .data()
+                    .reader_table
+                    .bind_obj_handle(obj_handle, reader_handle);
+            }
 
             // read() → method
             let read_callable = NativeCallable::ReadableStreamDefaultReaderMethod {
@@ -160,6 +162,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
@@ -172,6 +175,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let mut ctrl_table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
@@ -191,6 +195,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table
@@ -210,6 +215,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
@@ -227,6 +233,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let ctrl_table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let ctrl = ctrl_table.get(ctrl_handle? as usize)?;
@@ -238,75 +245,60 @@ pub(crate) fn call_readable_stream_method_from_caller(
             };
 
             // 4. 创建两个新的 StreamControllerEntry，各自持有 chunk_queue 的副本
-            let controller1_handle = {
-                let mut table = caller
+            let controller1_handle =
+                caller
                     .data()
                     .stream_controller_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let h = table.len() as u32;
-                table.push(StreamControllerEntry {
-                    kind: ControllerKind::ReadableDefault,
-                    stream_handle: 0, // 稍后回写
-                    chunk_queue: chunk_queue_clone.clone(),
-                    high_water_mark: controller_hwm,
-                    strategy_size: controller_strategy_size,
-                    started: true, // tee 产生的流不需要 start 回调
-                    close_requested: matches!(original_state, StreamState::Closed),
-                    byob_reader_handle: None,
-                    pull_requested: false,
-                    abort_requested: false,
-                    abort_reason: None,
-                    flush_requested: false,
-                    underlying_source: None,
-                    pull_callback: None,
-                    cancel_callback: None,
-                    write_callback: None,
-                    sink_close_callback: None,
-                    active_byob_request: None,
-                });
-                h
-            };
+                    .alloc(StreamControllerEntry {
+                        kind: ControllerKind::ReadableDefault,
+                        stream_handle: 0, // 稍后回写
+                        chunk_queue: chunk_queue_clone.clone(),
+                        high_water_mark: controller_hwm,
+                        strategy_size: controller_strategy_size,
+                        started: true, // tee 产生的流不需要 start 回调
+                        close_requested: matches!(original_state, StreamState::Closed),
+                        byob_reader_handle: None,
+                        pull_requested: false,
+                        abort_requested: false,
+                        abort_reason: None,
+                        flush_requested: false,
+                        underlying_source: None,
+                        pull_callback: None,
+                        cancel_callback: None,
+                        write_callback: None,
+                        sink_close_callback: None,
+                        active_byob_request: None,
+                    });
 
-            let controller2_handle = {
-                let mut table = caller
+            let controller2_handle =
+                caller
                     .data()
                     .stream_controller_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let h = table.len() as u32;
-                table.push(StreamControllerEntry {
-                    kind: ControllerKind::ReadableDefault,
-                    stream_handle: 0, // 稍后回写
-                    chunk_queue: chunk_queue_clone,
-                    high_water_mark: controller_hwm,
-                    strategy_size: controller_strategy_size,
-                    started: true,
-                    close_requested: matches!(original_state, StreamState::Closed),
-                    byob_reader_handle: None,
-                    pull_requested: false,
-                    abort_requested: false,
-                    abort_reason: None,
-                    flush_requested: false,
-                    underlying_source: None,
-                    pull_callback: None,
-                    cancel_callback: None,
-                    write_callback: None,
-                    sink_close_callback: None,
-                    active_byob_request: None,
-                });
-                h
-            };
+                    .alloc(StreamControllerEntry {
+                        kind: ControllerKind::ReadableDefault,
+                        stream_handle: 0, // 稍后回写
+                        chunk_queue: chunk_queue_clone,
+                        high_water_mark: controller_hwm,
+                        strategy_size: controller_strategy_size,
+                        started: true,
+                        close_requested: matches!(original_state, StreamState::Closed),
+                        byob_reader_handle: None,
+                        pull_requested: false,
+                        abort_requested: false,
+                        abort_reason: None,
+                        flush_requested: false,
+                        underlying_source: None,
+                        pull_callback: None,
+                        cancel_callback: None,
+                        write_callback: None,
+                        sink_close_callback: None,
+                        active_byob_request: None,
+                    });
 
-            // 5. 创建两个新的 ReadableStreamEntry
-            let stream1_handle = {
-                let mut table = caller
-                    .data()
-                    .readable_stream_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let h = table.len() as u32;
-                table.push(ReadableStreamEntry {
+            let stream1_handle = caller
+                .data()
+                .readable_stream_table
+                .alloc(ReadableStreamEntry {
                     state: StreamState::Readable,
                     error: None,
                     disturbed: false,
@@ -317,17 +309,11 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     controller_handle: Some(controller1_handle),
                     is_byte_stream: original_is_byte_stream,
                 });
-                h
-            };
 
-            let stream2_handle = {
-                let mut table = caller
-                    .data()
-                    .readable_stream_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let h = table.len() as u32;
-                table.push(ReadableStreamEntry {
+            let stream2_handle = caller
+                .data()
+                .readable_stream_table
+                .alloc(ReadableStreamEntry {
                     state: StreamState::Readable,
                     error: None,
                     disturbed: false,
@@ -338,14 +324,13 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     controller_handle: Some(controller2_handle),
                     is_byte_stream: original_is_byte_stream,
                 });
-                h
-            };
 
             // 6. 回写 stream_handle 到各自的 controller
             {
                 let mut table = caller
                     .data()
                     .stream_controller_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(ctrl) = table.get_mut(controller1_handle as usize) {
@@ -356,9 +341,18 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 }
             }
 
-            // 7. 构造两个 ReadableStream JS 对象
             let stream1_obj = create_readable_stream_js_object(caller, stream1_handle);
+            let stream1_obj_handle = weak_target_handle_index_of(caller, stream1_obj).unwrap_or(0);
+            caller
+                .data()
+                .readable_stream_table
+                .bind_obj_handle(stream1_obj_handle, stream1_handle);
             let stream2_obj = create_readable_stream_js_object(caller, stream2_handle);
+            let stream2_obj_handle = weak_target_handle_index_of(caller, stream2_obj).unwrap_or(0);
+            caller
+                .data()
+                .readable_stream_table
+                .bind_obj_handle(stream2_obj_handle, stream2_handle);
 
             // 8. 创建 JS 数组 [stream1_obj, stream2_obj]
             let env = WasmEnv::from_caller(caller).expect("WasmEnv");
@@ -380,6 +374,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table
@@ -399,6 +394,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let mut table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = table.get_mut(handle as usize) {
@@ -408,28 +404,20 @@ pub(crate) fn call_readable_stream_method_from_caller(
 
             // 创建 closed_promise 和 ReaderEntry（与 GetReader 相同的模式）
             let closed_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
-            let reader_handle = {
-                let mut table = caller
-                    .data()
-                    .reader_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let rh = table.len() as u32;
-                table.push(ReaderEntry {
-                    stream_handle: handle,
-                    kind: ReaderKind::Default,
-                    pending_read_promise: None,
-                    pending_byob_view: None,
-                    closed_promise: Some(closed_promise),
-                });
-                rh
-            };
+            let reader_handle = caller.data().reader_table.alloc(ReaderEntry {
+                stream_handle: handle,
+                kind: ReaderKind::Default,
+                pending_read_promise: None,
+                pending_byob_view: None,
+                closed_promise: Some(closed_promise),
+            });
 
             // 如果流已关闭，立即 resolve closed promise
             let stream_state = {
                 let table = caller
                     .data()
                     .readable_stream_table
+                    .inner
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(handle as usize).map(|e| e.state.clone())
@@ -499,6 +487,7 @@ pub(super) fn transform_parts_from_object(
         let table = caller
             .data()
             .transform_stream_table
+            .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let entry = table.get(handle)?;
