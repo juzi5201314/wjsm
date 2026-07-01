@@ -71,7 +71,7 @@ fn create_readable_stream_js_object_for_transform(
 
     // __stream_handle__ = handle
     let handle_val = value::encode_f64(stream_handle as f64);
-    let _ = define_host_data_property_from_caller(caller, obj, "__stream_handle__", handle_val);
+    let _ = define_host_data_property_non_enumerable(caller, obj, "__stream_handle__", handle_val);
 
     // locked → accessor getter
     let locked_callable = NativeCallable::ReadableStreamMethod {
@@ -81,8 +81,14 @@ fn create_readable_stream_js_object_for_transform(
     let locked_idx = push_native_callable(caller, locked_callable);
     let locked_getter = value::encode_native_callable_idx(locked_idx);
     let undef = value::encode_undefined();
-    let _ =
-        define_host_accessor_property_with_env(caller, &env, obj, "locked", locked_getter, undef);
+    let _ = define_host_accessor_property_with_flags(
+        caller,
+        obj,
+        "locked",
+        locked_getter,
+        undef,
+        constants::FLAG_CONFIGURABLE,
+    );
 
     // getReader() → method
     let get_reader_callable = NativeCallable::ReadableStreamMethod {
@@ -91,7 +97,7 @@ fn create_readable_stream_js_object_for_transform(
     };
     let get_reader_idx = push_native_callable(caller, get_reader_callable);
     let get_reader_val = value::encode_native_callable_idx(get_reader_idx);
-    let _ = define_host_data_property_from_caller(caller, obj, "getReader", get_reader_val);
+    let _ = define_host_data_property_non_enumerable(caller, obj, "getReader", get_reader_val);
 
     // cancel() → method
     let cancel_callable = NativeCallable::ReadableStreamMethod {
@@ -100,7 +106,7 @@ fn create_readable_stream_js_object_for_transform(
     };
     let cancel_idx = push_native_callable(caller, cancel_callable);
     let cancel_val = value::encode_native_callable_idx(cancel_idx);
-    let _ = define_host_data_property_from_caller(caller, obj, "cancel", cancel_val);
+    let _ = define_host_data_property_non_enumerable(caller, obj, "cancel", cancel_val);
 
     // tee() → method
     let tee_callable = NativeCallable::ReadableStreamMethod {
@@ -109,7 +115,7 @@ fn create_readable_stream_js_object_for_transform(
     };
     let tee_idx = push_native_callable(caller, tee_callable);
     let tee_val = value::encode_native_callable_idx(tee_idx);
-    let _ = define_host_data_property_from_caller(caller, obj, "tee", tee_val);
+    let _ = define_host_data_property_non_enumerable(caller, obj, "tee", tee_val);
 
     // [Symbol.asyncIterator] → method
     let async_iter_callable = NativeCallable::ReadableStreamMethod {

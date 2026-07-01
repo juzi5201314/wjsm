@@ -941,6 +941,25 @@ pub(crate) fn define_host_data_property_by_name_id(
     )
 }
 
+/// 定义不可枚举数据属性（configurable + writable，不含 enumerable）。
+pub(crate) fn define_host_data_property_non_enumerable(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    val: i64,
+) -> Option<()> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let name_id = find_memory_c_string_with_env(caller, &env, name)
+        .or_else(|| alloc_heap_c_string_with_env(caller, &env, name))?;
+    define_host_data_property_by_name_id_with_flags(
+        caller,
+        obj,
+        encode_string_name_id(name_id),
+        val,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    )
+}
+
 pub(crate) fn define_host_data_property_by_name_id_with_flags(
     caller: &mut Caller<'_, RuntimeState>,
     obj: i64,
