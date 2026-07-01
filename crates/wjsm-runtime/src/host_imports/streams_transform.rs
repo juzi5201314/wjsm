@@ -2,7 +2,7 @@
 // 包含：构造函数、readable/writable getter、transform 回调调度、flush 回调调度
 
 use super::fetch_core::push_native_callable;
-use super::streams_readable::create_controller_object;
+use super::streams_readable::create_controller_object_with_env;
 use super::streams_writable::{
     create_writable_abort_signal_object, create_writable_stream_js_object,
 };
@@ -251,17 +251,21 @@ pub(crate) async fn construct_transform_stream(
             });
 
     // 6. 创建 ReadableStreamEntry（readable 侧）
-    let readable_stream_handle = caller.data().readable_stream_table.alloc(ReadableStreamEntry {
-        state: StreamState::Readable,
-        error: None,
-        disturbed: false,
-        locked: false,
-        http_response_handle: None,
-        response_body_handle: None,
-        response_body_object: None,
-        controller_handle: Some(readable_controller_handle),
-        is_byte_stream: false,
-    });
+    let readable_stream_handle = caller
+        .data()
+        .readable_stream_table
+        .alloc(ReadableStreamEntry {
+            state: StreamState::Readable,
+            error: None,
+            disturbed: false,
+            locked: false,
+            http_response_handle: None,
+            response_body_handle: None,
+            response_body_object: None,
+            controller_handle: Some(readable_controller_handle),
+            is_byte_stream: false,
+            pipe_to: None,
+        });
 
     // 7. 回写 stream_handle 到 readable controller，标记 started
     {
@@ -402,28 +406,43 @@ pub(crate) fn call_transform_from_writable(
     chunk: i64,
     write_promise: i64,
 ) {
-    // 1. 查找关联的 TransformStreamEntry
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    call_transform_from_writable_with_env(
+        caller,
+        &env,
+        writable_stream_handle,
+        chunk,
+        write_promise,
+    );
+}
+
+pub(crate) fn call_transform_from_writable_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    writable_stream_handle: u32,
+    chunk: i64,
+    write_promise: i64,
+) {
     let (transform_fn, readable_ctrl_handle, transformer_this) = {
-        let table = caller
-            .data()
+        let table = ctx
+            .state_mut()
             .transform_stream_table
             .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let entry = match table
+        let Some(entry) = table
             .iter()
             .find(|e| e.writable_stream_handle == Some(writable_stream_handle))
-        {
-            Some(e) => e,
-            None => {
-                // 不是 TransformStream 的 writable 侧 → 直接 resolve
-                settle_promise(
-                    caller.data(),
-                    write_promise,
-                    PromiseSettlement::Fulfill(value::encode_undefined()),
-                );
-                return;
-            }
+        else {
+            drop(table);
+            settle_promise(
+                ctx.state_mut(),
+                write_promise,
+                PromiseSettlement::Fulfill(value::encode_undefined()),
+            );
+            return;
         };
         (
             entry.transform_callback,
@@ -432,16 +451,13 @@ pub(crate) fn call_transform_from_writable(
         )
     };
 
-    // 2. 创建 readable controller JS 对象（传递给 transform 回调）
     if let Some(ctrl_handle) = readable_ctrl_handle {
-        let controller_obj = create_controller_object(caller, ctrl_handle);
+        let controller_obj = create_controller_object_with_env(ctx, env, ctrl_handle);
 
         if let Some(tf) = transform_fn {
-            // transform 回调必须先运行，writer.write() 的 promise 才能完成；
-            // 否则后续 write/close 可能跑到 enqueue 之前，破坏 readable 侧顺序。
             let this_val = transformer_this.unwrap_or_else(value::encode_undefined);
-            let mut queue = caller
-                .data()
+            let mut queue = ctx
+                .state_mut()
                 .microtask_queue
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
@@ -453,11 +469,9 @@ pub(crate) fn call_transform_from_writable(
                 write_promise,
             });
         } else {
-            // 默认 Identity Transform：直接将 chunk 推入 readable 侧
-            // 检查是否有 pending read promise
             let stream_handle = {
-                let ctrl_table = caller
-                    .data()
+                let ctrl_table = ctx
+                    .state_mut()
                     .stream_controller_table
                     .inner
                     .lock()
@@ -469,8 +483,8 @@ pub(crate) fn call_transform_from_writable(
 
             if let Some(sh) = stream_handle {
                 let pending = {
-                    let mut reader_table = caller
-                        .data()
+                    let mut reader_table = ctx
+                        .state_mut()
                         .reader_table
                         .inner
                         .lock()
@@ -488,13 +502,11 @@ pub(crate) fn call_transform_from_writable(
                 };
 
                 if let Some(promise) = pending {
-                    // 有等待中的 read → 立即 settle
-                    let result = build_reader_result(caller, false, Some(chunk));
-                    settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));
+                    let result = build_reader_result_with_env(ctx, env, false, Some(chunk));
+                    settle_promise(ctx.state_mut(), promise, PromiseSettlement::Fulfill(result));
                 } else {
-                    // 无等待 → 推入 chunk_queue
-                    let mut ctrl_table = caller
-                        .data()
+                    let mut ctrl_table = ctx
+                        .state_mut()
                         .stream_controller_table
                         .inner
                         .lock()
@@ -507,15 +519,14 @@ pub(crate) fn call_transform_from_writable(
                 }
             }
             settle_promise(
-                caller.data(),
+                ctx.state_mut(),
                 write_promise,
                 PromiseSettlement::Fulfill(value::encode_undefined()),
             );
         }
     } else {
-        // 无 controller → 直接 resolve
         settle_promise(
-            caller.data(),
+            ctx.state_mut(),
             write_promise,
             PromiseSettlement::Fulfill(value::encode_undefined()),
         );
@@ -529,10 +540,21 @@ pub(crate) fn call_flush_from_writable_close(
     writable_stream_handle: u32,
     close_promise: i64,
 ) -> bool {
-    // 1. 查找关联的 TransformStreamEntry
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    call_flush_from_writable_close_with_env(caller, &env, writable_stream_handle, close_promise)
+}
+
+pub(crate) fn call_flush_from_writable_close_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    writable_stream_handle: u32,
+    close_promise: i64,
+) -> bool {
     let (flush_fn, readable_ctrl_handle, readable_stream_handle, transformer_this) = {
-        let table = caller
-            .data()
+        let table = ctx
+            .state_mut()
             .transform_stream_table
             .inner
             .lock()
@@ -552,14 +574,12 @@ pub(crate) fn call_flush_from_writable_close(
         )
     };
 
-    // 2. 将 flush + close 作为同一个微任务排队；排在已入队 transform 之后，
-    // 避免 close_requested 提前阻止 transform(controller.enqueue)。
     match (readable_stream_handle, readable_ctrl_handle) {
         (Some(rs_handle), Some(ctrl_handle)) => {
-            let controller_obj = create_controller_object(caller, ctrl_handle);
+            let controller_obj = create_controller_object_with_env(ctx, env, ctrl_handle);
             let this_val = transformer_this.unwrap_or_else(value::encode_undefined);
-            let mut queue = caller
-                .data()
+            let mut queue = ctx
+                .state_mut()
                 .microtask_queue
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
@@ -567,6 +587,7 @@ pub(crate) fn call_flush_from_writable_close(
                 callback: flush_fn,
                 this_val,
                 controller: controller_obj,
+                writable_stream_handle,
                 readable_stream_handle: rs_handle,
                 readable_controller_handle: ctrl_handle,
                 close_promise,
@@ -574,7 +595,7 @@ pub(crate) fn call_flush_from_writable_close(
         }
         _ => {
             settle_promise(
-                caller.data(),
+                ctx.state_mut(),
                 close_promise,
                 PromiseSettlement::Fulfill(value::encode_undefined()),
             );

@@ -1094,6 +1094,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 &args,
             )
         }
+        NativeCallable::ReadableStreamPipeToWriteFulfilled { readable_handle } => {
+            Some(finish_pipe_to_write(caller, readable_handle, None))
+        }
+        NativeCallable::ReadableStreamPipeToWriteRejected { readable_handle } => Some(
+            finish_pipe_to_write(caller, readable_handle, Some(argument)),
+        ),
         NativeCallable::ReadableStreamAsyncIteratorReturn { reader_handle } => {
             // releaseLock：释放流的锁定
             let stream_handle = {

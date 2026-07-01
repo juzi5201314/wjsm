@@ -240,6 +240,15 @@ pub(crate) struct ReadableStreamEntry {
     pub(crate) controller_handle: Option<u32>,
     /// 是否为 byte stream（Phase 3 BYOB 支持预留）
     pub(crate) is_byte_stream: bool,
+    pub(crate) pipe_to: Option<ReadableStreamPipeToEntry>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReadableStreamPipeToEntry {
+    pub(crate) destination: u32,
+    pub(crate) promise: i64,
+    pub(crate) write_in_flight: bool,
+    pub(crate) closing: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -591,6 +600,12 @@ pub(crate) enum NativeCallable {
     /// ReadableStream async iterator return()
     ReadableStreamAsyncIteratorReturn {
         reader_handle: u32,
+    },
+    ReadableStreamPipeToWriteFulfilled {
+        readable_handle: u32,
+    },
+    ReadableStreamPipeToWriteRejected {
+        readable_handle: u32,
     },
     // ── WritableStream (WHATWG Streams Phase 4) ──
     /// WritableStream constructor
@@ -1072,9 +1087,13 @@ pub(crate) enum Microtask {
         callback: Option<i64>,
         this_val: i64,
         controller: i64,
+        writable_stream_handle: u32,
         readable_stream_handle: u32,
         readable_controller_handle: u32,
         close_promise: i64,
+    },
+    ReadableStreamPipeToPump {
+        readable_handle: u32,
     },
     AsyncResume {
         fn_table_idx: u32,
@@ -1104,6 +1123,7 @@ pub(crate) enum Microtask {
         callback: Option<i64>,
         this_val: i64,
         controller: i64,
+        writable_stream_handle: u32,
         close_promise: i64,
     },
 }

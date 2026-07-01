@@ -1,7 +1,5 @@
 exit_code: 0
 --- stdout ---
-ALPHA
-BETA
+LATE false
 pipeTo done
-true
 --- stderr ---

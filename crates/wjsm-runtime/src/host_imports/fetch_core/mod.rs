@@ -206,6 +206,7 @@ pub(crate) fn create_response_object_with_http_handle(
             response_body_object: Some(obj),
             controller_handle: None,
             is_byte_stream: true,
+            pipe_to: None,
         });
     {
         let mut table = caller

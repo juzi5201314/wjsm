@@ -2,7 +2,9 @@
 // 包含：构造函数、DefaultController、DefaultReader、locked getter、cancel
 
 use super::fetch_core::{alloc_type_error_from_caller, push_native_callable};
-use super::streams_transform::{call_flush_from_writable_close, call_transform_from_writable};
+use super::streams_transform::{
+    call_flush_from_writable_close_with_env, call_transform_from_writable_with_env,
+};
 use crate::*;
 use std::collections::VecDeque;
 
@@ -389,79 +391,87 @@ pub(crate) fn create_controller_object(
     controller_handle: u32,
 ) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 6);
-
-    // __controller_handle__ — 内部标识
-    let handle_val = value::encode_f64(controller_handle as f64);
-    let _ = define_host_data_property_from_caller(caller, obj, "__controller_handle__", handle_val);
-
-    // enqueue(chunk)
-    let enqueue_callable = NativeCallable::ReadableStreamDefaultControllerMethod {
-        handle: controller_handle,
-        kind: ReadableStreamDefaultControllerMethodKind::Enqueue,
-    };
-    let enqueue_idx = push_native_callable(caller, enqueue_callable);
-    let enqueue_val = value::encode_native_callable_idx(enqueue_idx);
-    let _ = define_host_data_property_from_caller(caller, obj, "enqueue", enqueue_val);
-
-    // close()
-    let close_callable = NativeCallable::ReadableStreamDefaultControllerMethod {
-        handle: controller_handle,
-        kind: ReadableStreamDefaultControllerMethodKind::Close,
-    };
-    let close_idx = push_native_callable(caller, close_callable);
-    let close_val = value::encode_native_callable_idx(close_idx);
-    let _ = define_host_data_property_from_caller(caller, obj, "close", close_val);
-
-    // error(e)
-    let error_callable = NativeCallable::ReadableStreamDefaultControllerMethod {
-        handle: controller_handle,
-        kind: ReadableStreamDefaultControllerMethodKind::Error,
-    };
-    let error_idx = push_native_callable(caller, error_callable);
-    let error_val = value::encode_native_callable_idx(error_idx);
-    let _ = define_host_data_property_from_caller(caller, obj, "error", error_val);
-
-    // desiredSize → accessor getter
-    let desired_size_callable = NativeCallable::ReadableStreamDefaultControllerMethod {
-        handle: controller_handle,
-        kind: ReadableStreamDefaultControllerMethodKind::GetDesiredSize,
-    };
-    let desired_size_idx = push_native_callable(caller, desired_size_callable);
-    let desired_size_getter = value::encode_native_callable_idx(desired_size_idx);
-    let undef = value::encode_undefined();
-    let _ = define_host_accessor_property_with_env(
-        caller,
-        &env,
-        obj,
-        "desiredSize",
-        desired_size_getter,
-        undef,
-    );
-
-    // ByteStreamController.byobRequest → accessor getter
-    // 返回当前活动的 ReadableStreamBYOBRequest 对象，或 null。
-    let byob_request_callable = NativeCallable::ReadableStreamDefaultControllerMethod {
-        handle: controller_handle,
-        kind: ReadableStreamDefaultControllerMethodKind::GetByobRequest,
-    };
-    let byob_request_idx = push_native_callable(caller, byob_request_callable);
-    let byob_request_getter = value::encode_native_callable_idx(byob_request_idx);
-    let _ = define_host_accessor_property_with_env(
-        caller,
-        &env,
-        obj,
-        "byobRequest",
-        byob_request_getter,
-        undef,
-    );
-
+    let obj = create_controller_object_with_env(caller, &env, controller_handle);
     if let Some(obj_handle) = weak_target_handle_index_of(caller, obj) {
         caller
             .data()
             .stream_controller_table
             .bind_obj_handle(obj_handle, controller_handle);
     }
+    obj
+}
+
+pub(crate) fn create_controller_object_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    controller_handle: u32,
+) -> i64 {
+    let obj = alloc_host_object(ctx, env, 6);
+
+    let handle_val = value::encode_f64(controller_handle as f64);
+    let _ = define_host_data_property_with_env(ctx, env, obj, "__controller_handle__", handle_val);
+
+    let enqueue_callable = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::ReadableStreamDefaultControllerMethod {
+            handle: controller_handle,
+            kind: ReadableStreamDefaultControllerMethodKind::Enqueue,
+        },
+    );
+    let _ = define_host_data_property_with_env(ctx, env, obj, "enqueue", enqueue_callable);
+
+    let close_callable = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::ReadableStreamDefaultControllerMethod {
+            handle: controller_handle,
+            kind: ReadableStreamDefaultControllerMethodKind::Close,
+        },
+    );
+    let _ = define_host_data_property_with_env(ctx, env, obj, "close", close_callable);
+
+    let error_callable = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::ReadableStreamDefaultControllerMethod {
+            handle: controller_handle,
+            kind: ReadableStreamDefaultControllerMethodKind::Error,
+        },
+    );
+    let _ = define_host_data_property_with_env(ctx, env, obj, "error", error_callable);
+
+    let desired_size_getter = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::ReadableStreamDefaultControllerMethod {
+            handle: controller_handle,
+            kind: ReadableStreamDefaultControllerMethodKind::GetDesiredSize,
+        },
+    );
+    let undef = value::encode_undefined();
+    let _ = define_host_accessor_property_with_env(
+        ctx,
+        env,
+        obj,
+        "desiredSize",
+        desired_size_getter,
+        undef,
+    );
+
+    let byob_request_getter = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::ReadableStreamDefaultControllerMethod {
+            handle: controller_handle,
+            kind: ReadableStreamDefaultControllerMethodKind::GetByobRequest,
+        },
+    );
+    let _ = define_host_accessor_property_with_env(
+        ctx,
+        env,
+        obj,
+        "byobRequest",
+        byob_request_getter,
+        undef,
+    );
 
     obj
 }
@@ -529,6 +539,7 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
             response_body_object,
             controller_handle: Some(controller_handle),
             is_byte_stream: true,
+            pipe_to: None,
         });
 
     // 4. 回写 stream_handle 到 controller

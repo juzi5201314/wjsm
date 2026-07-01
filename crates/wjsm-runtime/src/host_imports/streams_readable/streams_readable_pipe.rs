@@ -13,52 +13,332 @@ pub(super) fn readable_stream_pipe_to(
         );
         return Some(promise);
     };
-    let (controller_handle, stream_state) = {
-        let table = caller
+
+    let can_start = {
+        let mut table = caller
             .data()
             .readable_stream_table
             .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let entry = table.get(readable_handle as usize)?;
-        (entry.controller_handle, entry.state.clone())
+        let Some(entry) = table.get_mut(readable_handle as usize) else {
+            return Some(promise);
+        };
+        if entry.pipe_to.is_some() || entry.locked {
+            false
+        } else {
+            entry.disturbed = true;
+            entry.pipe_to = Some(ReadableStreamPipeToEntry {
+                destination: writable_handle,
+                promise,
+                write_in_flight: false,
+                closing: false,
+            });
+            true
+        }
     };
-    let chunks = if let Some(ctrl_handle) = controller_handle {
-        let mut table = caller
-            .data()
+
+    if !can_start {
+        reject_promise_with_type_error(caller, promise, "ReadableStream is already locked");
+        return Some(promise);
+    }
+
+    pump_readable_stream_pipe_to(caller, readable_handle);
+    Some(promise)
+}
+
+pub(crate) fn pump_readable_stream_pipe_to(
+    caller: &mut Caller<'_, RuntimeState>,
+    readable_handle: u32,
+) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    pump_readable_stream_pipe_to_with_env(caller, &env, readable_handle);
+}
+
+pub(crate) fn pump_readable_stream_pipe_to_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    readable_handle: u32,
+) {
+    loop {
+        let next = next_pipe_to_step(ctx, env, readable_handle);
+        match next {
+            PipeToStep::Write { destination, chunk } => {
+                let write_promise = alloc_promise_with_env(ctx, env, PromiseEntry::pending());
+                attach_pipe_to_write_reactions(ctx, write_promise, readable_handle);
+                call_transform_from_writable_with_env(ctx, env, destination, chunk, write_promise);
+                return;
+            }
+            PipeToStep::Close {
+                destination,
+                promise,
+            } => {
+                let close_deferred =
+                    call_flush_from_writable_close_with_env(ctx, env, destination, promise);
+                if !close_deferred {
+                    finish_writable_stream_close(ctx, destination, promise);
+                    clear_pipe_to(ctx, readable_handle);
+                }
+                return;
+            }
+            PipeToStep::WaitForMore => return,
+            PipeToStep::Done => return,
+        }
+    }
+}
+
+enum PipeToStep {
+    Write { destination: u32, chunk: i64 },
+    Close { destination: u32, promise: i64 },
+    WaitForMore,
+    Done,
+}
+
+fn next_pipe_to_step<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    readable_handle: u32,
+) -> PipeToStep {
+    let (controller_handle, state, pipe_to) = {
+        let table = ctx
+            .state_mut()
+            .readable_stream_table
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(entry) = table.get(readable_handle as usize) else {
+            return PipeToStep::Done;
+        };
+        (entry.controller_handle, entry.state.clone(), entry.pipe_to)
+    };
+    let Some(pipe_to) = pipe_to else {
+        return PipeToStep::Done;
+    };
+    if pipe_to.write_in_flight || pipe_to.closing {
+        return PipeToStep::WaitForMore;
+    }
+
+    if let Some(controller_handle) = controller_handle
+        && let Some(chunk) = pop_pipe_to_chunk(ctx, controller_handle)
+    {
+        set_pipe_to_write_in_flight(ctx, readable_handle, true);
+        return PipeToStep::Write {
+            destination: pipe_to.destination,
+            chunk,
+        };
+    }
+
+    if matches!(state, StreamState::Closed) || controller_close_requested(ctx, controller_handle) {
+        mark_pipe_to_closing(ctx, readable_handle);
+        return PipeToStep::Close {
+            destination: pipe_to.destination,
+            promise: pipe_to.promise,
+        };
+    }
+
+    schedule_pipe_to_pull(ctx, env, controller_handle, readable_handle);
+    PipeToStep::WaitForMore
+}
+
+fn pop_pipe_to_chunk<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    controller_handle: u32,
+) -> Option<i64> {
+    let mut table = ctx
+        .state_mut()
+        .stream_controller_table
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    table
+        .get_mut(controller_handle as usize)
+        .and_then(|ctrl| ctrl.chunk_queue.pop_front())
+}
+
+fn controller_close_requested<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    controller_handle: Option<u32>,
+) -> bool {
+    let Some(controller_handle) = controller_handle else {
+        return true;
+    };
+    let table = ctx
+        .state_mut()
+        .stream_controller_table
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    table
+        .get(controller_handle as usize)
+        .map(|ctrl| ctrl.close_requested)
+        .unwrap_or(true)
+}
+
+fn schedule_pipe_to_pull<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    controller_handle: Option<u32>,
+    readable_handle: u32,
+) {
+    let Some(controller_handle) = controller_handle else {
+        return;
+    };
+    let pull_info = {
+        let ctrl_table = ctx
+            .state_mut()
             .stream_controller_table
             .inner
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(ctrl) = table.get_mut(ctrl_handle as usize) {
-            ctrl.chunk_queue.drain(..).collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
+        ctrl_table
+            .get(controller_handle as usize)
+            .and_then(|ctrl| ctrl.pull_callback.map(|cb| (cb, ctrl.underlying_source)))
     };
-    for chunk in chunks {
-        let write_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
-        call_transform_from_writable(caller, writable_handle, chunk, write_promise);
+    if let Some((pull_callback, this_val)) = pull_info {
+        let controller_obj = create_controller_object_with_env(ctx, env, controller_handle);
+        let mut queue = ctx
+            .state_mut()
+            .microtask_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        queue.push_back(Microtask::ReadableStreamPull {
+            callback: pull_callback,
+            this_val: this_val.unwrap_or_else(value::encode_undefined),
+            controller: controller_obj,
+        });
+        queue.push_back(Microtask::ReadableStreamPipeToPump { readable_handle });
     }
-    if matches!(stream_state, StreamState::Closed) {
-        let close_deferred = call_flush_from_writable_close(caller, writable_handle, promise);
-        if !close_deferred {
-            settle_promise(
-                caller.data(),
-                promise,
-                PromiseSettlement::Fulfill(value::encode_undefined()),
-            );
+}
+
+fn attach_pipe_to_write_reactions<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    write_promise: i64,
+    readable_handle: u32,
+) {
+    let fulfill = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::ReadableStreamPipeToWriteFulfilled { readable_handle },
+    );
+    let reject = create_native_callable(
+        ctx.state_mut(),
+        NativeCallable::ReadableStreamPipeToWriteRejected { readable_handle },
+    );
+    let handle = raw_promise_handle(write_promise);
+    let mut table = ctx
+        .state_mut()
+        .promise_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = promise_entry_mut(&mut table, handle) {
+        entry.handled = true;
+        entry.fulfill_reactions.push(PromiseReaction::new(
+            fulfill,
+            write_promise,
+            ReactionType::Fulfill,
+        ));
+        entry.reject_reactions.push(PromiseReaction::new(
+            reject,
+            write_promise,
+            ReactionType::Reject,
+        ));
+    }
+}
+
+pub(crate) fn finish_pipe_to_write_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    readable_handle: u32,
+    error: Option<i64>,
+) -> i64 {
+    if let Some(error) = error {
+        let promise = pipe_to_promise(ctx, readable_handle);
+        if let Some(promise) = promise {
+            settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(error));
         }
+        clear_pipe_to(ctx, readable_handle);
     } else {
-        settle_promise(
-            caller.data(),
-            promise,
-            PromiseSettlement::Fulfill(value::encode_undefined()),
-        );
+        set_pipe_to_write_in_flight(ctx, readable_handle, false);
+        pump_readable_stream_pipe_to_with_env(ctx, env, readable_handle);
     }
-    Some(promise)
+    value::encode_undefined()
+}
+
+pub(crate) fn finish_pipe_to_write(
+    caller: &mut Caller<'_, RuntimeState>,
+    readable_handle: u32,
+    error: Option<i64>,
+) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    finish_pipe_to_write_with_env(caller, &env, readable_handle, error)
+}
+
+fn pipe_to_promise<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    readable_handle: u32,
+) -> Option<i64> {
+    let table = ctx
+        .state_mut()
+        .readable_stream_table
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    table
+        .get(readable_handle as usize)
+        .and_then(|entry| entry.pipe_to.map(|pipe_to| pipe_to.promise))
+}
+
+pub(crate) fn clear_pipe_to<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    readable_handle: u32,
+) {
+    let mut table = ctx
+        .state_mut()
+        .readable_stream_table
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = table.get_mut(readable_handle as usize) {
+        entry.pipe_to = None;
+    }
+}
+
+fn set_pipe_to_write_in_flight<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    readable_handle: u32,
+    write_in_flight: bool,
+) {
+    let mut table = ctx
+        .state_mut()
+        .readable_stream_table
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = table.get_mut(readable_handle as usize)
+        && let Some(pipe_to) = entry.pipe_to.as_mut()
+    {
+        pipe_to.write_in_flight = write_in_flight;
+    }
+}
+
+fn mark_pipe_to_closing<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    readable_handle: u32,
+) {
+    let mut table = ctx
+        .state_mut()
+        .readable_stream_table
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = table.get_mut(readable_handle as usize)
+        && let Some(pipe_to) = entry.pipe_to.as_mut()
+    {
+        pipe_to.closing = true;
+    }
 }
 
 pub(super) fn readable_stream_pipe_through(

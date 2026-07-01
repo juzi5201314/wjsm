@@ -308,6 +308,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     response_body_object: None,
                     controller_handle: Some(controller1_handle),
                     is_byte_stream: original_is_byte_stream,
+                    pipe_to: None,
                 });
 
             let stream2_handle = caller
@@ -323,6 +324,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     response_body_object: None,
                     controller_handle: Some(controller2_handle),
                     is_byte_stream: original_is_byte_stream,
+                    pipe_to: None,
                 });
 
             // 6. 回写 stream_handle 到各自的 controller

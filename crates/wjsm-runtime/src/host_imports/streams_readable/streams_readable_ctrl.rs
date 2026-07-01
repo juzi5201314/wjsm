@@ -79,6 +79,7 @@ pub(crate) async fn construct_readable_stream(
             response_body_object: None,
             controller_handle: Some(controller_handle),
             is_byte_stream,
+            pipe_to: None,
         });
 
     // 5. 回写 stream_handle 到 controller
@@ -251,6 +252,8 @@ pub(crate) fn controller_enqueue(
         }
     }
 
+    pump_readable_stream_pipe_to(caller, stream_handle);
+
     Some(value::encode_undefined())
 }
 
@@ -319,6 +322,8 @@ pub(crate) fn controller_close(
         let result = build_reader_result(caller, true, byob_view);
         settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));
     }
+
+    pump_readable_stream_pipe_to(caller, stream_handle);
 
     Some(value::encode_undefined())
 }

@@ -557,9 +557,57 @@ fn call_sink_close_from_writable_close(
         callback: close_fn,
         this_val,
         controller: controller_obj,
+        writable_stream_handle,
         close_promise,
     });
     true
+}
+
+pub(crate) fn finish_writable_stream_close<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    writable_stream_handle: u32,
+    close_promise: i64,
+) {
+    {
+        let mut table = ctx
+            .state_mut()
+            .writable_stream_table
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = table.get_mut(writable_stream_handle as usize) {
+            entry.state = WritableStreamState::Closed;
+        }
+    }
+
+    let closed_promises = {
+        let writer_table = ctx
+            .state_mut()
+            .writer_table
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        writer_table
+            .iter()
+            .filter(|writer_entry| writer_entry.writable_stream_handle == writable_stream_handle)
+            .filter_map(|writer_entry| writer_entry.closed_promise)
+            .collect::<Vec<_>>()
+    };
+    for promise in closed_promises {
+        settle_promise(
+            ctx.state_mut(),
+            promise,
+            PromiseSettlement::Fulfill(value::encode_undefined()),
+        );
+    }
+
+    settle_promise(
+        ctx.state_mut(),
+        close_promise,
+        PromiseSettlement::Fulfill(value::encode_undefined()),
+    );
 }
 
 // ── WritableStream 方法分发 ─────────────────────────────────────────────────
@@ -774,51 +822,14 @@ pub(crate) fn call_writable_stream_method_from_caller(
                 }
             }
 
-            // 设置状态为 Closed，resolve close promise
-            {
-                let mut table = caller
-                    .data()
-                    .writable_stream_table
-                    .inner
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(entry) = table.get_mut(handle as usize) {
-                    entry.state = WritableStreamState::Closed;
-                }
-            }
-
-            // resolve writer 的 closed_promise
-            {
-                let writer_table = caller
-                    .data()
-                    .writer_table
-                    .inner
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                for writer_entry in writer_table.iter() {
-                    if writer_entry.writable_stream_handle == handle
-                        && let Some(cp) = writer_entry.closed_promise
-                    {
-                        settle_promise(
-                            caller.data(),
-                            cp,
-                            PromiseSettlement::Fulfill(value::encode_undefined()),
-                        );
-                    }
-                }
-            }
-
             let close_deferred = call_flush_from_writable_close(caller, handle, promise);
             if !close_deferred {
                 let sink_deferred = call_sink_close_from_writable_close(caller, handle, promise);
                 if !sink_deferred {
-                    settle_promise(
-                        caller.data(),
-                        promise,
-                        PromiseSettlement::Fulfill(value::encode_undefined()),
-                    );
+                    finish_writable_stream_close(caller, handle, promise);
                 }
             }
+
             Some(promise)
         }
     }
@@ -948,7 +959,7 @@ pub(crate) fn call_default_writer_method_from_caller(
                         .map(|e| (e.controller_handle, e.state))
                         .unwrap_or((None, WritableStreamState::Closed))
                 };
-                let mut close_deferred = false;
+                let mut close_deferred;
 
                 if current_state == WritableStreamState::Writable {
                     // 设置 Closing
@@ -977,52 +988,14 @@ pub(crate) fn call_default_writer_method_from_caller(
                         }
                     }
 
-                    // 设置 Closed
-                    {
-                        let mut table = caller
-                            .data()
-                            .writable_stream_table
-                            .inner
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        if let Some(entry) = table.get_mut(sh as usize) {
-                            entry.state = WritableStreamState::Closed;
-                        }
-                    }
                     // TransformStream 路径：flush + readable close 在已排队 transform 之后执行。
                     close_deferred = call_flush_from_writable_close(caller, sh, promise);
                     if !close_deferred {
                         close_deferred = call_sink_close_from_writable_close(caller, sh, promise);
                     }
-                }
-
-                // resolve writer closed_promise
-                {
-                    let writer_table = caller
-                        .data()
-                        .writer_table
-                        .inner
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    for writer_entry in writer_table.iter() {
-                        if writer_entry.writable_stream_handle == sh
-                            && let Some(cp) = writer_entry.closed_promise
-                        {
-                            settle_promise(
-                                caller.data(),
-                                cp,
-                                PromiseSettlement::Fulfill(value::encode_undefined()),
-                            );
-                        }
+                    if !close_deferred {
+                        finish_writable_stream_close(caller, sh, promise);
                     }
-                }
-
-                if !close_deferred {
-                    settle_promise(
-                        caller.data(),
-                        promise,
-                        PromiseSettlement::Fulfill(value::encode_undefined()),
-                    );
                 }
             } else {
                 let err = type_error_exception(caller, "writer is not attached to a stream");

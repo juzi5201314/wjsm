@@ -321,6 +321,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                         out.extend(*callback);
                         out.extend([*this_val, *controller, *close_promise]);
                     }
+                    Microtask::ReadableStreamPipeToPump { .. } => {}
                     Microtask::AsyncResume {
                         continuation,
                         resume_val,
@@ -368,6 +369,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                         this_val,
                         controller,
                         close_promise,
+                        ..
                     } => {
                         if let Some(cb) = callback {
                             out.push(*cb);
@@ -427,9 +429,11 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                 if let Some(v) = entry.response_body_object {
                     out.push(v);
                 }
+                if let Some(pipe_to) = entry.pipe_to {
+                    out.push(pipe_to.promise);
+                }
             }
         }
-
 
         // reader_table：pending_read_promise / pending_byob_view
         if let Ok(readers) = st.reader_table.inner.lock() {
@@ -454,12 +458,14 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             }
         }
 
-        // stream_controller_table：underlying_source / pull / cancel
+        // stream_controller_table：underlying_source / pull / cancel / write / close
         if let Ok(ctrls) = st.stream_controller_table.inner.lock() {
             for c in ctrls.iter() {
                 out.extend(c.underlying_source);
                 out.extend(c.pull_callback);
                 out.extend(c.cancel_callback);
+                out.extend(c.write_callback);
+                out.extend(c.sink_close_callback);
                 out.extend(c.strategy_size);
                 out.extend(c.abort_reason);
                 for chunk in c.chunk_queue.iter() {

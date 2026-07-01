@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-ALPHA
-BETA
-pipeTo done
-true
+flush
+tail false
+writer closed
+close done
 --- stderr ---

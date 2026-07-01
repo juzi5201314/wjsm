@@ -193,6 +193,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::ReadableStreamByobRequestMethod { .. }
             | NativeCallable::ReadableStreamAsyncIteratorNext { .. }
             | NativeCallable::ReadableStreamAsyncIteratorReturn { .. }
+            | NativeCallable::ReadableStreamPipeToWriteFulfilled { .. }
+            | NativeCallable::ReadableStreamPipeToWriteRejected { .. }
             | NativeCallable::RegExpStringIteratorNext { .. }
             | NativeCallable::RegExpStringIteratorSelf
             | NativeCallable::WritableStreamMethod { .. }
