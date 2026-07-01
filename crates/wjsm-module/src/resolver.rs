@@ -253,9 +253,29 @@ impl ModuleResolver {
         }
     }
 
+    /// 解析入口文件路径（如果已解析过则返回缓存的 ID）。
+    pub fn resolve_entry_path(&mut self, entry: &Path) -> Result<ModuleId> {
+        let path = Self::canonical_entry_path(entry)
+            .with_context(|| format!("Failed to resolve input file: {}", entry.display()))?;
+        self.load_resolved_module(&entry.display().to_string(), path)
+    }
+
+    fn canonical_entry_path(entry: &Path) -> Result<PathBuf> {
+        if !entry.is_file() {
+            bail!("Input file '{}' does not exist", entry.display());
+        }
+        entry
+            .canonicalize()
+            .with_context(|| format!("Failed to canonicalize input file: {}", entry.display()))
+    }
+
     /// 解析模块（如果已解析过则返回缓存的 ID）
     pub fn resolve(&mut self, specifier: &str, parent: &Path) -> Result<ModuleId> {
         let path = Self::resolve_path(specifier, parent)?;
+        self.load_resolved_module(specifier, path)
+    }
+
+    fn load_resolved_module(&mut self, specifier: &str, path: PathBuf) -> Result<ModuleId> {
         if !path.starts_with(&self.root_path) {
             bail!(
                 "Module '{}' resolves outside root '{}': {}",
@@ -275,7 +295,7 @@ impl ModuleResolver {
             .with_context(|| format!("Failed to read module: {}", path.display()))?;
 
         // 解析 AST
-        let ast = wjsm_parser::parse_module_with_filename(&source, &path.to_string_lossy())
+        let ast = wjsm_parser::parse_module_with_path(&source, &path)
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
         Self::validate_typescript_module_syntax(&ast, &path)?;

@@ -17,19 +17,19 @@ use anyhow::Result;
 use std::path::Path;
 
 /// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
-pub fn lower_bundle(entry: &str, root_path: &Path) -> Result<wjsm_ir::Program> {
+pub fn lower_bundle(entry: &Path, root_path: &Path) -> Result<wjsm_ir::Program> {
     let bundler = ModuleBundler::new(root_path)?;
     bundler.lower_bundle(entry)
 }
 
 /// 解析入口模块 AST（用于 dump-ast 等，会构建依赖图）
-pub fn parse_entry_ast(entry: &str, root_path: &Path) -> Result<swc_core::ecma::ast::Module> {
+pub fn parse_entry_ast(entry: &Path, root_path: &Path) -> Result<swc_core::ecma::ast::Module> {
     let bundler = ModuleBundler::new(root_path)?;
     bundler.parse_entry_ast(entry)
 }
 
 /// Bundle entry module and all its dependencies into a single WASM binary
-pub fn bundle(entry: &str, root_path: &Path) -> Result<Vec<u8>> {
+pub fn bundle(entry: &Path, root_path: &Path) -> Result<Vec<u8>> {
     let bundler = ModuleBundler::new(root_path)?;
     bundler.bundle(entry)
 }
@@ -291,7 +291,7 @@ mod tests {
             return;
         }
 
-        let result = bundle("./main.js", &fixtures_dir);
+        let result = bundle(Path::new("main.js"), &fixtures_dir);
         assert!(
             result.is_ok(),
             "public bundle should succeed: {:?}",

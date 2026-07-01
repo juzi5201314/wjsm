@@ -30,12 +30,16 @@ pub struct GraphNode {
 
 impl ModuleGraph {
     /// 从入口模块构建依赖图
-    pub fn build(entry: &str, root: &Path) -> Result<Self> {
+    pub fn build(entry: &Path, root: &Path) -> Result<Self> {
         let mut resolver = ModuleResolver::new(root);
 
-        // 解析入口模块（构造完整的文件路径作为 parent）
-        let entry_path = root.join(entry);
-        let entry_id = resolver.resolve(entry, &entry_path)?;
+        // 入口模块来自 CLI/公共 API 的真实路径，不能经由 UTF-8 specifier 重新拼接。
+        let entry_path = if entry.is_absolute() {
+            entry.to_path_buf()
+        } else {
+            root.join(entry)
+        };
+        let entry_id = resolver.resolve_entry_path(&entry_path)?;
 
         // BFS 遍历所有依赖
         let mut queue = VecDeque::new();
@@ -281,7 +285,7 @@ mod tests {
         );
         write_file(&root, "c.js", "export const c = 1;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let (order, _cycles) = graph
             .topological_order()
             .expect("order should be computable");
@@ -325,7 +329,7 @@ mod tests {
         );
         write_file(&root, "shared.js", "export const shared = 1;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let shared_path = root
             .join("shared.js")
             .canonicalize()
@@ -369,7 +373,7 @@ mod tests {
             "import { a } from './a.js';\nexport const b = 1;\n",
         );
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let (order, cycles) = graph
             .topological_order()
             .expect("cycle should still be orderable");
@@ -430,7 +434,7 @@ mod tests {
         );
         write_file(&root, "a.js", "export const a = 1;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let entry = graph
             .get_module(graph.entry_id())
             .expect("entry should exist");
@@ -451,7 +455,7 @@ mod tests {
         );
         write_file(&root, "lib.js", "export const value = 42;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let lib_id = graph
             .all_module_ids()
             .find(|id| *id != graph.entry_id())
@@ -471,7 +475,7 @@ mod tests {
     fn get_module_returns_none_for_invalid_id() {
         let root = create_temp_project("invalid_id");
         write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         assert!(graph.get_module(ModuleId(999)).is_none());
     }
 
@@ -479,7 +483,7 @@ mod tests {
     fn entry_id_returns_entry_module() {
         let root = create_temp_project("entry_id");
         write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let entry = graph
             .get_module(graph.entry_id())
             .expect("entry should exist");
@@ -490,7 +494,7 @@ mod tests {
     fn single_module_graph_topological_order() {
         let root = create_temp_project("single_mod");
         write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let (order, _cycles) = graph
             .topological_order()
             .expect("order should be computable");

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -66,11 +67,11 @@ pub(crate) enum Commands {
     /// Build a JS/TS file to WebAssembly
     Build {
         /// The input file to compile, or - for stdin. Optional when -e is used.
-        input: Option<String>,
+        input: Option<PathBuf>,
 
         /// The output .wasm file, or - for stdout
         #[arg(short, long, default_value = "out.wasm")]
-        output: String,
+        output: PathBuf,
 
         /// Stop at a specific pipeline stage
         #[arg(long, value_name = "STAGE")]
@@ -78,7 +79,7 @@ pub(crate) enum Commands {
 
         /// The root directory for module resolution
         #[arg(long)]
-        root: Option<String>,
+        root: Option<PathBuf>,
 
         /// Parse as script instead of module (allows await as identifier)
         #[arg(long)]
@@ -92,11 +93,11 @@ pub(crate) enum Commands {
     /// Run a JS/TS file directly
     Run {
         /// The input file to run, or - for stdin. Optional when -e is used.
-        input: Option<String>,
+        input: Option<PathBuf>,
 
         /// The root directory for module resolution
         #[arg(long)]
-        root: Option<String>,
+        root: Option<PathBuf>,
 
         /// Watch for changes and re-run
         #[arg(short, long)]
@@ -114,11 +115,11 @@ pub(crate) enum Commands {
     /// Parse and check a JS/TS file for errors (no output)
     Check {
         /// The input file to check, or - for stdin. Optional when -e is used.
-        input: Option<String>,
+        input: Option<PathBuf>,
 
         /// The root directory for module resolution
         #[arg(long)]
-        root: Option<String>,
+        root: Option<PathBuf>,
 
         /// Parse as script instead of module (allows await as identifier)
         #[arg(long)]
@@ -138,7 +139,7 @@ pub(crate) enum Commands {
     /// Dump IR for a JS/TS file
     DumpIr {
         /// The input file, or - for stdin. Optional when -e is used.
-        input: Option<String>,
+        input: Option<PathBuf>,
 
         /// Output format (text or dot for Graphviz)
         #[arg(long, default_value = "text")]
@@ -146,7 +147,7 @@ pub(crate) enum Commands {
 
         /// The root directory for module resolution
         #[arg(long)]
-        root: Option<String>,
+        root: Option<PathBuf>,
 
         /// Parse as script instead of module (allows await as identifier)
         #[arg(long)]
@@ -164,11 +165,11 @@ pub(crate) enum Commands {
     /// Dump SWC AST as JSON for a JS/TS file
     DumpAst {
         /// The input file, or - for stdin. Optional when -e is used.
-        input: Option<String>,
+        input: Option<PathBuf>,
 
         /// The root directory for module resolution
         #[arg(long)]
-        root: Option<String>,
+        root: Option<PathBuf>,
 
         /// Parse as script instead of module (allows await as identifier)
         #[arg(long)]
@@ -182,11 +183,11 @@ pub(crate) enum Commands {
     /// Dump WAT (WebAssembly Text) for a compiled JS/TS file
     DumpWat {
         /// The input file, or - for stdin. Optional when -e is used.
-        input: Option<String>,
+        input: Option<PathBuf>,
 
         /// The root directory for module resolution
         #[arg(long)]
-        root: Option<String>,
+        root: Option<PathBuf>,
 
         /// Parse as script instead of module (allows await as identifier)
         #[arg(long)]
@@ -208,7 +209,7 @@ pub(crate) enum Commands {
     /// Format a JS/TS file using SWC codegen
     Fmt {
         /// The input file to format
-        input: String,
+        input: PathBuf,
 
         /// Write formatted output back to the file
         #[arg(short, long)]
@@ -218,19 +219,19 @@ pub(crate) enum Commands {
     /// Validate a .wasm file
     Validate {
         /// The .wasm file to validate
-        input: String,
+        input: PathBuf,
     },
 
     /// Show size breakdown of WASM sections
     Size {
         /// The .wasm file to analyze
-        input: String,
+        input: PathBuf,
     },
 
     /// Disassemble a .wasm file with detailed output
     Disasm {
         /// The .wasm file to disassemble
-        input: String,
+        input: PathBuf,
 
         /// Disassemble only the function with this name
         #[arg(long, value_name = "NAME")]
@@ -244,7 +245,7 @@ pub(crate) enum Commands {
     /// Create a new wjsm project
     Init {
         /// The project directory to create
-        path: String,
+        path: PathBuf,
 
         /// Overwrite existing project files
         #[arg(long)]

@@ -58,8 +58,8 @@ pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
 }
 
 /// 根据文件路径选择 SWC 语法模式。
-fn syntax_for_filename(filename: &str) -> Syntax {
-    let ext = std::path::Path::new(filename)
+fn syntax_for_path(path: &std::path::Path) -> Syntax {
+    let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
@@ -90,10 +90,21 @@ fn syntax_for_filename(filename: &str) -> Syntax {
     }
 }
 
+fn syntax_for_filename(filename: &str) -> Syntax {
+    syntax_for_path(std::path::Path::new(filename))
+}
+
 /// 按文件名扩展名选择 TypeScript / ECMAScript 语法解析模块。
 pub fn parse_module_with_filename(source: &str, filename: &str) -> Result<swc_ast::Module> {
     let cm: Lrc<SourceMap> = Default::default();
     parse_module_inner(&cm, filename, source, syntax_for_filename(filename), false)
+}
+
+/// 按路径扩展名选择 TypeScript / ECMAScript 语法解析模块。
+pub fn parse_module_with_path(source: &str, path: &std::path::Path) -> Result<swc_ast::Module> {
+    let cm: Lrc<SourceMap> = Default::default();
+    let filename = path.display().to_string();
+    parse_module_inner(&cm, &filename, source, syntax_for_path(path), false)
 }
 /// 以 Script 模式解析源码并转换为 Module。
 /// Script 模式下 `await` 在非 async 上下文中是合法标识符，

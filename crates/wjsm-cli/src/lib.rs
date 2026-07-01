@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -263,16 +264,16 @@ fn resolve_auto_colors() -> bool {
 
 fn cmd_build(
     cli: &Cli,
-    input: &Option<String>,
+    input: &Option<PathBuf>,
     eval: &Option<String>,
-    output: &str,
+    output: &Path,
     stage: Option<Stage>,
-    root: Option<&str>,
+    root: Option<&Path>,
     script: bool,
 ) -> Result<ExitCode> {
     let stage = stage.unwrap_or(Stage::Compile);
 
-    if matches!(stage, Stage::Parse | Stage::Lower) && output != "out.wasm" {
+    if matches!(stage, Stage::Parse | Stage::Lower) && output != Path::new("out.wasm") {
         bail!(
             "`-o` / `--output` cannot be used with `--stage parse` or `--stage lower` (output goes to stdout)"
         );
@@ -291,7 +292,7 @@ fn cmd_build(
                     script,
                 )?,
                 InputSource::File(path) => {
-                    if path == "-" {
+                    if path_is_stdin(&path) {
                         let (source, filename) = read_input_for_parse(&path)?;
                         run_pipeline(
                             &source,
@@ -318,37 +319,37 @@ fn cmd_build(
             }
         }
         Stage::Compile => {
-            if output == "-" && io::stdout().is_terminal() {
+            if path_is_stdout(output) && io::stdout().is_terminal() {
                 bail!(
                     "refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`"
                 );
             }
 
-            if output != "-" && output == "out.wasm" && Path::new(output).exists() {
+            if !path_is_stdout(output) && output == Path::new("out.wasm") && output.exists() {
                 eprintln!(
                     "warning: '{}' already exists and will be overwritten (use `-o` to choose another path)",
-                    output
+                    output.display()
                 );
             }
 
             let wasm = match resolve_input(input, eval)? {
                 InputSource::Inline(code) => compile_source(&code, None, cli.target, script)?,
                 InputSource::File(path) => {
-                    if path == "-" {
+                    if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
                         compile_source(&source, None, cli.target, script)?
                     } else {
-                        compile_from_file_input(Path::new(&path), root, cli.target, script)?
+                        compile_from_file_input(&path, root, cli.target, script)?
                     }
                 }
             };
 
-            if output == "-" {
+            if path_is_stdout(output) {
                 io::stdout().write_all(&wasm)?;
             } else {
                 fs::write(output, &wasm)?;
                 if cli.verbose >= 1 {
-                    eprintln!("Wrote {} bytes to {}", wasm.len(), output);
+                    eprintln!("Wrote {} bytes to {}", wasm.len(), output.display());
                 }
             }
 
@@ -357,7 +358,7 @@ fn cmd_build(
             }
         }
         Stage::Execute => {
-            if output == "-" && io::stdout().is_terminal() {
+            if path_is_stdout(output) && io::stdout().is_terminal() {
                 bail!(
                     "refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`"
                 );
@@ -372,7 +373,7 @@ fn cmd_build(
                     cli.verbose >= 1,
                 )?,
                 InputSource::File(path) => {
-                    if path == "-" {
+                    if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
                         compile_source_to_pipeline_result(
                             &source,
@@ -383,7 +384,7 @@ fn cmd_build(
                         )?
                     } else {
                         compile_file_input_to_pipeline_result(
-                            Path::new(&path),
+                            &path,
                             root,
                             cli.target,
                             script,
@@ -398,12 +399,12 @@ fn cmd_build(
                 .as_ref()
                 .context("compile stage produced no WASM")?;
 
-            if output == "-" {
+            if path_is_stdout(output) {
                 io::stdout().write_all(wasm)?;
             } else {
                 fs::write(output, wasm)?;
                 if cli.verbose >= 1 {
-                    eprintln!("Wrote {} bytes to {}", wasm.len(), output);
+                    eprintln!("Wrote {} bytes to {}", wasm.len(), output.display());
                 }
             }
 
@@ -414,20 +415,14 @@ fn cmd_build(
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
+fn cmd_run(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result<ExitCode> {
     let verbose_compile = cli.verbose >= 1;
-    let result = if input == "-" {
+    let result = if path_is_stdin(input) {
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
         compile_source_to_pipeline_result(&source, None, cli.target, script, verbose_compile)?
     } else {
-        compile_file_input_to_pipeline_result(
-            Path::new(input),
-            root,
-            cli.target,
-            script,
-            verbose_compile,
-        )?
+        compile_file_input_to_pipeline_result(input, root, cli.target, script, verbose_compile)?
     };
 
     run_compile_then_execute(cli, result)
@@ -439,7 +434,7 @@ fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
     run_compile_then_execute(cli, result)
 }
 
-fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
+fn cmd_run_watch(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result<ExitCode> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
     use std::sync::mpsc::{RecvTimeoutError, channel};
     use std::time::{Duration, Instant};
@@ -457,14 +452,11 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
         }
     }
 
-    let input_path = PathBuf::from(input);
-    if !input_path.exists() {
-        bail!("Input file '{}' does not exist", input);
+    if !input.exists() {
+        bail!("Input file '{}' does not exist", input.display());
     }
 
-    let watch_target = root
-        .map(PathBuf::from)
-        .unwrap_or_else(|| input_path.clone());
+    let watch_target = root.unwrap_or(input);
     let watch_mode = if root.is_some() {
         RecursiveMode::Recursive
     } else {
@@ -479,7 +471,6 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
         }
     };
 
-    // Set up watcher
     let (tx, rx) = channel();
 
     let mut watcher = RecommendedWatcher::new(
@@ -493,7 +484,7 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
         Config::default(),
     )?;
 
-    watcher.watch(&watch_target, watch_mode)?;
+    watcher.watch(watch_target, watch_mode)?;
 
     let mut pending_rebuild = false;
     let mut debounce_deadline: Option<Instant> = None;
@@ -531,9 +522,9 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
 
 fn cmd_check(
     cli: &Cli,
-    input: &Option<String>,
+    input: &Option<PathBuf>,
     eval: &Option<String>,
-    root: Option<&str>,
+    root: Option<&Path>,
     script: bool,
 ) -> Result<ExitCode> {
     let result = match resolve_input(input, eval)? {
@@ -547,7 +538,7 @@ fn cmd_check(
             script,
         )?,
         InputSource::File(path) => {
-            if path == "-" {
+            if path_is_stdin(&path) {
                 let (source, filename) = read_input_for_parse(&path)?;
                 run_pipeline(
                     &source,
@@ -582,10 +573,10 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
 
 fn cmd_dump_ir(
     cli: &Cli,
-    input: &Option<String>,
+    input: &Option<PathBuf>,
     eval: &Option<String>,
     format: DumpFormat,
-    root: Option<&str>,
+    root: Option<&Path>,
     script: bool,
     func: Option<&str>,
 ) -> Result<ExitCode> {
@@ -604,7 +595,7 @@ fn cmd_dump_ir(
             script,
         )?,
         InputSource::File(path) => {
-            if path == "-" {
+            if path_is_stdin(&path) {
                 let (source, filename) = read_input_for_parse(&path)?;
                 run_pipeline(
                     &source,
@@ -637,9 +628,9 @@ fn cmd_dump_ir(
 
 fn cmd_dump_ast(
     cli: &Cli,
-    input: &Option<String>,
+    input: &Option<PathBuf>,
     eval: &Option<String>,
-    root: Option<&str>,
+    root: Option<&Path>,
     script: bool,
 ) -> Result<ExitCode> {
     let result = match resolve_input(input, eval)? {
@@ -653,7 +644,7 @@ fn cmd_dump_ast(
             script,
         )?,
         InputSource::File(path) => {
-            if path == "-" {
+            if path_is_stdin(&path) {
                 let (source, filename) = read_input_for_parse(&path)?;
                 run_pipeline(
                     &source,
@@ -743,9 +734,9 @@ fn filter_wat_func(wat: &str, name: &str) -> Result<String> {
 
 fn cmd_dump_wat(
     cli: &Cli,
-    input: &Option<String>,
+    input: &Option<PathBuf>,
     eval: &Option<String>,
-    root: Option<&str>,
+    root: Option<&Path>,
     script: bool,
     func: Option<&str>,
     skeleton: bool,
@@ -765,7 +756,7 @@ fn cmd_dump_wat(
             script,
         )?,
         InputSource::File(path) => {
-            if path == "-" {
+            if path_is_stdin(&path) {
                 let mut source = String::new();
                 io::stdin().read_to_string(&mut source)?;
                 run_pipeline(
@@ -779,7 +770,7 @@ fn cmd_dump_wat(
                 )?
             } else {
                 let pipeline = compile_file_input_to_pipeline_result(
-                    Path::new(&path),
+                    &path,
                     root,
                     cli.target,
                     script,
@@ -809,15 +800,15 @@ fn cmd_dump_wat(
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_fmt(input: &str, write: bool) -> Result<ExitCode> {
-    let source = fs::read_to_string(input)?;
+fn cmd_fmt(input: &Path, write: bool) -> Result<ExitCode> {
+    let source = read_source_file(input)?;
 
-    let module = parser::parse_module_with_filename(&source, input)?;
+    let module = parser::parse_module_with_path(&source, input)?;
     let formatted = emit_js(&module)?;
 
     if write {
         fs::write(input, &formatted)?;
-        eprintln!("Formatted {}", input);
+        eprintln!("Formatted {}", input.display());
     } else {
         println!("{}", formatted);
     }
@@ -825,23 +816,23 @@ fn cmd_fmt(input: &str, write: bool) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_validate(input: &str) -> Result<ExitCode> {
+fn cmd_validate(input: &Path) -> Result<ExitCode> {
     let bytes = fs::read(input)?;
 
     match wasmparser::validate(&bytes) {
         Ok(_) => {
-            println!("✓ {} is valid WASM", input);
+            println!("✓ {} is valid WASM", input.display());
             Ok(ExitCode::from(EXIT_SUCCESS))
         }
         Err(e) => {
-            println!("✗ {} is NOT valid WASM", input);
+            println!("✗ {} is NOT valid WASM", input.display());
             eprintln!("Validation error: {}", e);
             Ok(ExitCode::from(EXIT_COMPILE_ERROR))
         }
     }
 }
 
-fn cmd_size(input: &str) -> Result<ExitCode> {
+fn cmd_size(input: &Path) -> Result<ExitCode> {
     let bytes = fs::read(input)?;
 
     let mut sizes: Vec<(&str, usize)> = Vec::new();
@@ -877,7 +868,7 @@ fn cmd_size(input: &str) -> Result<ExitCode> {
         sizes.push(("Code", code_size));
     }
 
-    println!("WASM Size Breakdown for {}", input);
+    println!("WASM Size Breakdown for {}", input.display());
     println!("{}", "─".repeat(50));
     println!("{:<15} {:>10} {:>10}", "Section", "Bytes", "% Total");
     println!("{}", "─".repeat(50));
@@ -899,7 +890,7 @@ fn cmd_size(input: &str) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_disasm(input: &str, func: Option<&str>, skeleton: bool) -> Result<ExitCode> {
+fn cmd_disasm(input: &Path, func: Option<&str>, skeleton: bool) -> Result<ExitCode> {
     if func.is_some() && skeleton {
         bail!("--skeleton and --func are mutually exclusive");
     }
@@ -916,8 +907,8 @@ fn cmd_disasm(input: &str, func: Option<&str>, skeleton: bool) -> Result<ExitCod
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_init(path: &str, force: bool) -> Result<ExitCode> {
-    let dir = PathBuf::from(path);
+fn cmd_init(path: &Path, force: bool) -> Result<ExitCode> {
+    let dir = path;
     let name = dir
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("Invalid path"))?
@@ -952,10 +943,10 @@ console.log("Hello from {}!");
     });
     fs::write(&package_path, serde_json::to_string_pretty(&package_json)?)?;
 
-    println!("Created project at {}", path);
+    println!("Created project at {}", path.display());
     println!();
     println!("To run:");
-    println!("  cd {}", path);
+    println!("  cd {}", path.display());
     println!("  wjsm run main.js");
 
     Ok(ExitCode::from(EXIT_SUCCESS))
@@ -1081,13 +1072,13 @@ fn run_pipeline(
 
 /// 文件输入走 compile plan（含 `--root` bundling），在指定 stage 停止。
 fn run_file_input_pipeline(
-    input: &str,
-    root: Option<&str>,
+    input: &Path,
+    root: Option<&Path>,
     stop_at: Stage,
     cli: &Cli,
     script: bool,
 ) -> Result<PipelineResult> {
-    let plan = build_compile_plan(Path::new(input), root)?;
+    let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
             if cli.verbose >= 1 {
@@ -1137,9 +1128,21 @@ fn run_file_input_pipeline(
 // ============================================================================
 // Input/Output Helpers
 
-/// 将路径转为字符串（非 UTF-8 字节用 U+FFFD 替换，与 `to_string_lossy` 一致，但保留 `Path` 入参避免 CLI 层过早丢失路径类型）
-fn path_to_lossy_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+fn path_is_stdio(path: &Path, marker: &str) -> bool {
+    path.as_os_str() == OsStr::new(marker)
+}
+
+fn path_is_stdin(path: &Path) -> bool {
+    path_is_stdio(path, "-")
+}
+
+fn path_is_stdout(path: &Path) -> bool {
+    path_is_stdio(path, "-")
+}
+
+/// 将路径转为字符串作为 SWC 诊断文件名；文件系统操作必须继续使用 `Path`。
+fn path_to_diagnostic_filename(path: &Path) -> String {
+    path.display().to_string()
 }
 
 /// 读取源码文件：按字节读取再 UTF-8 解码，避免对路径本身使用 lossy 转换
@@ -1150,25 +1153,25 @@ fn read_source_file(path: &Path) -> Result<String> {
 
 // ============================================================================
 
-fn read_input(input: &str) -> Result<String> {
-    if input == "-" {
+fn read_input(input: &Path) -> Result<String> {
+    if path_is_stdin(input) {
         let mut source = String::new();
         io::stdin()
             .read_to_string(&mut source)
             .context("Failed to read from stdin")?;
         Ok(source)
     } else {
-        read_source_file(Path::new(input))
+        read_source_file(input)
     }
 }
 
-/// 读取源码，并在输入为文件路径时返回用于选择解析语法的路径字符串。
-fn read_input_for_parse(input: &str) -> Result<(String, Option<String>)> {
+/// 读取源码，并在输入为文件路径时返回用于诊断的路径字符串。
+fn read_input_for_parse(input: &Path) -> Result<(String, Option<String>)> {
     let source = read_input(input)?;
-    let filename = if input == "-" {
+    let filename = if path_is_stdin(input) {
         None
     } else {
-        Some(input.to_string())
+        Some(path_to_diagnostic_filename(input))
     };
     Ok((source, filename))
 }
@@ -1176,11 +1179,11 @@ fn read_input_for_parse(input: &str) -> Result<(String, Option<String>)> {
 /// CLI 输入来源：内联代码或文件路径。
 enum InputSource {
     Inline(String),
-    File(String),
+    File(PathBuf),
 }
 
 /// 统一解析 `-e <code>` 与位置参数 `<file>`：`-e` 优先，二者皆无则报错。
-fn resolve_input(input: &Option<String>, eval: &Option<String>) -> Result<InputSource> {
+fn resolve_input(input: &Option<PathBuf>, eval: &Option<String>) -> Result<InputSource> {
     match (eval, input) {
         (Some(code), _) => Ok(InputSource::Inline(code.clone())),
         (None, Some(path)) => Ok(InputSource::File(path.clone())),
@@ -1219,29 +1222,33 @@ fn emit_js(module: &swc_core::ecma::ast::Module) -> Result<String> {
 // ============================================================================
 
 enum CompilePlan {
-    Bundle { entry: String, root: PathBuf },
+    Bundle { entry: PathBuf, root: PathBuf },
     SingleSource { source: String, filename: String },
 }
 
-fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
+fn build_compile_plan(input: &Path, root: Option<&Path>) -> Result<CompilePlan> {
     if let Some(root_path) = root {
-        return bundle_plan_from_root(input.to_path_buf(), PathBuf::from(root_path));
+        return bundle_plan_from_root(input, root_path);
     }
 
     let source = read_source_file(input)?;
-    let filename = path_to_lossy_string(input);
-    let module = parser::parse_module_with_filename(&source, &filename)?;
+    let module = parser::parse_module_with_path(&source, input)?;
     let is_esm = wjsm_module::is_es_module(&module);
     let is_cjs = wjsm_module::is_commonjs_module(&module);
 
     if !is_esm && !is_cjs {
         return Ok(CompilePlan::SingleSource {
             source,
-            filename: path_to_lossy_string(input),
+            filename: path_to_diagnostic_filename(input),
         });
     }
 
-    let canonical_input = input.canonicalize()?;
+    let canonical_input = input.canonicalize().with_context(|| {
+        format!(
+            "Failed to canonicalize input file after reading '{}'; file may have been moved or deleted",
+            input.display()
+        )
+    })?;
     let parent = canonical_input
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Cannot infer module root from '{}'", input.display()))?;
@@ -1252,24 +1259,32 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
         )
     })?;
 
-    let entry = format!("./{}", file_name.to_string_lossy());
     Ok(CompilePlan::Bundle {
-        entry,
+        entry: PathBuf::from(file_name),
         root: parent.to_path_buf(),
     })
 }
 
-fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
-    let canonical_root = std::fs::canonicalize(&root)
-        .map_err(|e| anyhow::anyhow!("cannot canonicalize root path {:?}: {}", root, e))?;
-    let canonical_input = std::fs::canonicalize(&input)
-        .map_err(|e| anyhow::anyhow!("cannot canonicalize input path {:?}: {}", input, e))?;
-    let rel = canonical_input
-        .strip_prefix(&canonical_root)
-        .map_err(|_| anyhow::anyhow!("input file {:?} is not under root {:?}", input, root))?;
-    let entry = format!("./{}", rel.to_string_lossy());
+fn bundle_plan_from_root(input: &Path, root: &Path) -> Result<CompilePlan> {
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize root path '{}'", root.display()))?;
+    let canonical_input = input.canonicalize().with_context(|| {
+        format!(
+            "Failed to canonicalize input file '{}' under root '{}'",
+            input.display(),
+            root.display()
+        )
+    })?;
+    canonical_input.strip_prefix(&canonical_root).map_err(|_| {
+        anyhow::anyhow!(
+            "input file '{}' is not under root '{}'",
+            input.display(),
+            root.display()
+        )
+    })?;
     Ok(CompilePlan::Bundle {
-        entry,
+        entry: canonical_input,
         root: canonical_root,
     })
 }
@@ -1349,9 +1364,10 @@ fn compile_source_to_pipeline_result(
 
     Ok(result)
 }
+
 fn compile_file_input_to_pipeline_result(
     input: &Path,
-    root: Option<&str>,
+    root: Option<&Path>,
     target: Target,
     script: bool,
     verbose: bool,
@@ -1386,9 +1402,10 @@ fn compile_file_input_to_pipeline_result(
         ),
     }
 }
+
 fn compile_from_file_input(
     input: &Path,
-    root: Option<&str>,
+    root: Option<&Path>,
     target: Target,
     script: bool,
 ) -> Result<Vec<u8>> {

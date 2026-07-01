@@ -19,7 +19,7 @@ impl ModuleBundler {
     }
 
     /// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
-    pub fn lower_bundle(&self, entry: &str) -> Result<wjsm_ir::Program> {
+    pub fn lower_bundle(&self, entry: &Path) -> Result<wjsm_ir::Program> {
         let graph = ModuleGraph::build(entry, &self.root_path)
             .with_context(|| "Failed to build module graph")?;
 
@@ -49,7 +49,7 @@ impl ModuleBundler {
     }
 
     /// 解析入口模块 AST（含依赖图构建，用于 dump-ast 等）
-    pub fn parse_entry_ast(&self, entry: &str) -> Result<swc_core::ecma::ast::Module> {
+    pub fn parse_entry_ast(&self, entry: &Path) -> Result<swc_core::ecma::ast::Module> {
         let graph = ModuleGraph::build(entry, &self.root_path)
             .with_context(|| "Failed to build module graph")?;
         let entry_id = graph.entry_id();
@@ -60,7 +60,7 @@ impl ModuleBundler {
     }
 
     /// Bundle 入口模块及其所有依赖
-    pub fn bundle(&self, entry: &str) -> Result<Vec<u8>> {
+    pub fn bundle(&self, entry: &Path) -> Result<Vec<u8>> {
         let program = self
             .lower_bundle(entry)
             .with_context(|| "Failed to lower modules")?;
@@ -97,7 +97,7 @@ mod tests {
         );
 
         let bundler = ModuleBundler::new(&fixtures_dir).expect("bundler should be created");
-        let result = bundler.bundle("./main.js");
+        let result = bundler.bundle(Path::new("main.js"));
         assert!(result.is_ok(), "bundle should succeed: {:?}", result.err());
         let wasm_bytes = result.unwrap();
         assert!(
@@ -122,7 +122,7 @@ mod tests {
             return;
         }
         let bundler = ModuleBundler::new(&fixtures_dir).expect("bundler");
-        let result = bundler.lower_bundle("./main.js");
+        let result = bundler.lower_bundle(Path::new("main.js"));
         assert!(
             result.is_ok(),
             "re_export lower should succeed: {:?}",

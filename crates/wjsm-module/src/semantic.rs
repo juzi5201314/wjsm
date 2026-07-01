@@ -282,7 +282,7 @@ mod tests {
         );
         write_file(&root, "dep.js", "export const ok = 1;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let error = analyze_module_links(&graph).expect_err("should report missing export");
         let message = error.to_string();
         assert!(message.contains("Missing export 'missing'"));
@@ -302,7 +302,7 @@ mod tests {
             "const a = 1;\nexport { a };\nexport { a as a };\n",
         );
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let error = analyze_module_links(&graph).expect_err("should report duplicate export");
         let message = error.to_string();
         assert!(message.contains("Duplicate export 'a'"));
@@ -319,7 +319,7 @@ mod tests {
         write_file(&root, "a.js", "export const a = 1;\n");
         write_file(&root, "b.js", "export const b = 2;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let error = analyze_module_links(&graph).expect_err("should report duplicate alias");
         let message = error.to_string();
         assert!(message.contains("Duplicate import alias 'same'"));
@@ -335,7 +335,7 @@ mod tests {
         );
         write_file(&root, "dep.js", "export const value = 42;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let link = analyze_module_links(&graph).expect("linking should succeed");
 
         let entry_id = graph.entry_id();
@@ -393,7 +393,7 @@ mod tests {
         write_file(&root, "base.js", "export const anything = 1;\n");
         write_file(&root, "reexport.js", "export * from './base.js';\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let result = analyze_module_links(&graph);
         assert!(
             result.is_ok(),
@@ -411,7 +411,7 @@ mod tests {
         );
         write_file(&root, "dep.js", "export const x = 1;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let result = analyze_module_links(&graph);
         assert!(
             result.is_ok(),
@@ -429,7 +429,7 @@ mod tests {
         );
         write_file(&root, "dep.js", "export default 1;\nexport default 2;\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let error =
             analyze_module_links(&graph).expect_err("should report duplicate default export");
         let message = error.to_string();
@@ -450,7 +450,7 @@ mod tests {
             "export const x = 1;\nexport const y = 2;\n",
         );
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let link = analyze_module_links(&graph).expect("linking should succeed");
 
         let dep_id = graph
@@ -470,7 +470,7 @@ mod tests {
         let root = create_temp_project("empty_module");
         write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
 
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let result = analyze_module_links(&graph);
         assert!(
             result.is_ok(),
@@ -489,7 +489,7 @@ mod tests {
         if !root.join("main.js").exists() {
             return;
         }
-        let graph = ModuleGraph::build("./main.js", &root).expect("graph");
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph");
         let link = analyze_module_links(&graph).expect("link");
         let re_path = root.join("re.js");
         let re_id = graph
