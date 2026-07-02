@@ -32,12 +32,44 @@ pub(crate) struct ErrorEntry {
 }
 
 pub(crate) struct MapEntry {
+    pub(crate) owner: Option<u32>,
     pub(crate) keys: Vec<i64>,
     pub(crate) values: Vec<i64>,
 }
 
+impl MapEntry {
+    pub(crate) fn new_unowned() -> Self {
+        Self {
+            owner: None,
+            keys: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    pub(crate) fn clear_for_reuse(&mut self) {
+        self.owner = None;
+        self.keys.clear();
+        self.values.clear();
+    }
+}
+
 pub(crate) struct SetEntry {
+    pub(crate) owner: Option<u32>,
     pub(crate) values: Vec<i64>,
+}
+
+impl SetEntry {
+    pub(crate) fn new_unowned() -> Self {
+        Self {
+            owner: None,
+            values: Vec::new(),
+        }
+    }
+
+    pub(crate) fn clear_for_reuse(&mut self) {
+        self.owner = None;
+        self.values.clear();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -905,25 +937,30 @@ pub(crate) enum IteratorState {
     },
     MapKeyIter {
         map_handle: u32,
+        owner: i64,
         index: u32,
     },
     MapValueIter {
         map_handle: u32,
+        owner: i64,
         index: u32,
     },
     /// Map [key, value] 对迭代
     MapEntryIter {
         map_handle: u32,
+        owner: i64,
         index: u32,
     },
     /// Set 值迭代：读取 set_table.values，勿与 MapValueIter 混用
     SetValueIter {
         set_handle: u32,
+        owner: i64,
         index: u32,
     },
     /// Set [value, value] 对迭代：Set.prototype.entries 专用。
     SetEntryIter {
         set_handle: u32,
+        owner: i64,
         index: u32,
     },
     /// Headers 迭代：按 pairs 顺序产出 name 或 value

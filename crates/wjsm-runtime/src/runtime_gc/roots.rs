@@ -7,11 +7,10 @@
 //! - IR function property objects（function_props_base..+num_ir_functions）：永久存活。
 //! - primordial 原型（Array/Object/AsyncIterator/AsyncGenerator.prototype）：永久存活。
 //! - fixed-point host 侧表（移植自 trace_runtime_side_table_roots_fixed_point）：
-//!   microtask_queue（PromiseReaction/ResolveThenable/Callback/Transform/Pull/AsyncResume/
-//!   CleanupFinalizationRegistry）、promise_table（state value + reactions）、
-//!   continuation_table（非 completed 的 outer_promise + captured_vars）、
-//!   reader_table（pending_read_promise/byob_view）、byob_request_table（view/promise）、
-//!   stream_controller_table（underlying_source/pull/cancel）、timers（callback）。
+//!   microtask_queue 是真正 root；promise_table、Map/Set 等 owner-backed 侧表只在
+//!   owner handle 已标记时扫描内部引用；continuation captured vars 由 queued
+//!   AsyncResume 或已标记 promise reaction 间接触达；reader/byob/controller/timer 等
+//!   运行时挂起任务仍按 true host root 扫描。
 //!
 //! 值→handle 解析（push_value_roots）：object/array/function → low32 handle；
 //! closure → host closures 表 env_obj（递归解析）；native_callable → host 表内部引用
@@ -117,7 +116,12 @@ impl RootProvider for RuntimeRoots {
         }
     }
 
-    fn for_each_host_table_root(&mut self, ctx: &mut GcContext, visit: &mut dyn FnMut(Handle)) {
+    fn for_each_host_table_root(
+        &mut self,
+        ctx: &mut GcContext,
+        is_marked: &mut dyn FnMut(Handle) -> bool,
+        visit: &mut dyn FnMut(Handle),
+    ) {
         // 稳定 root：IR function property objects，永久存活。
         // startup snapshot 拆分 bootstrap 后，primordial 原型先于函数属性对象分配，
         // 占据更低 handle，故函数属性对象从 __function_props_base 起算，区间为
@@ -186,7 +190,7 @@ impl RootProvider for RuntimeRoots {
         push_value_roots(ctx, promise_proto, visit);
         push_value_roots(ctx, symbol_proto, visit);
         // 动态 root：host 侧表快照 → 解析每个 raw 值为 handle。
-        let snapshot = collect_host_table_values(ctx);
+        let snapshot = collect_host_table_values(ctx, is_marked);
         for val in snapshot {
             push_value_roots(ctx, val, visit);
         }
@@ -455,11 +459,48 @@ fn collect_side_table_backed_host_values(st: &mut crate::RuntimeState, out: &mut
     }
 }
 
+fn collect_collection_values_for_marked_owners(
+    st: &mut crate::RuntimeState,
+    is_marked: &mut dyn FnMut(Handle) -> bool,
+    out: &mut Vec<i64>,
+) {
+    // Map/Set 对象通过普通数字属性保存侧表 handle；数字本身不会被 mark phase 解析。
+    // 因此这里用 entry.owner 作为反向索引：只有 owner 已经从真正 root 可达时，
+    // 才把 entry 内部 key/value 当成 child edge 扫描。owner=None 仅用于构造期，
+    // 此时还没有 wrapper 对象可作为 owner，但 entry 已可能持有刚写入的 JS 值。
+    if let Ok(table) = st.map_table.lock() {
+        for entry in table.iter() {
+            let should_trace = match entry.owner {
+                Some(owner) => is_marked(owner),
+                None => true,
+            };
+            if should_trace {
+                out.extend(entry.keys.iter().copied());
+                out.extend(entry.values.iter().copied());
+            }
+        }
+    }
+    if let Ok(table) = st.set_table.lock() {
+        for entry in table.iter() {
+            let should_trace = match entry.owner {
+                Some(owner) => is_marked(owner),
+                None => true,
+            };
+            if should_trace {
+                out.extend(entry.values.iter().copied());
+            }
+        }
+    }
+}
+
 /// 收集 host 侧表持有的 raw 引用值（移植自 trace_runtime_side_table_roots_fixed_point）。
 /// 这里只复制 raw i64 引用值；侧表本体在锁内按引用迭代，避免 fixed-point 每轮深克隆。
 /// 返回 raw i64 列表，由调用方经 push_value_roots 解析为 handle。
-/// 注：promise_table 的 reactions 只对 marked promise 有意义（fixed-point 二轮起生效），
-fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
+/// owner-backed 侧表只扫描当前 mark bitmap 已标记 owner 的内部引用。
+fn collect_host_table_values(
+    ctx: &mut GcContext,
+    is_marked: &mut dyn FnMut(Handle) -> bool,
+) -> Vec<i64> {
     use crate::{Microtask, PromiseReactionKind, PromiseState};
     let mut out = Vec::new();
 
@@ -562,10 +603,10 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             }
         }
 
-        // promise_table：state value + reactions（handler/target_promise）。
+        // promise_table：只有已可达 Promise 对象的 state value + reactions 才是 child edge。
         if let Ok(promises) = st.promise_table.lock() {
-            for entry in promises.iter() {
-                if !entry.is_promise {
+            for (handle, entry) in promises.iter().enumerate() {
+                if !entry.is_promise || !is_marked(handle as Handle) {
                     continue;
                 }
                 match &entry.state {
@@ -658,20 +699,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             &mut out,
         );
 
-        // map_table: keys + values（全量扫描——Map 对象的 __map_handle__ 属性是数字，
-        // collect_child_raw_values 的 tag_needs_root 对数字返回 false，无法从 mark phase 追踪）
-        if let Ok(table) = st.map_table.lock() {
-            for entry in table.iter() {
-                out.extend(entry.keys.iter().copied());
-                out.extend(entry.values.iter().copied());
-            }
-        }
-        // set_table: values（同 map_table 理由）
-        if let Ok(table) = st.set_table.lock() {
-            for entry in table.iter() {
-                out.extend(entry.values.iter().copied());
-            }
-        }
+        collect_collection_values_for_marked_owners(st, is_marked, &mut out);
         // finalization_registry_table：callback 与 heldValue 为强引用；target/unregisterToken 保持弱语义。
         if let Ok(table) = st.finalization_registry_table.lock() {
             for entry in table.iter() {

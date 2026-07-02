@@ -388,7 +388,9 @@ pub(crate) fn define_core_async(
                 IteratorState::ArrayIter { index, length, .. } => {
                     return value::encode_bool(*index as usize >= *length as usize);
                 }
-                IteratorState::MapKeyIter { index, map_handle } => {
+                IteratorState::MapKeyIter {
+                    index, map_handle, ..
+                } => {
                     let table = caller
                         .data()
                         .map_table
@@ -402,7 +404,9 @@ pub(crate) fn define_core_async(
                     drop(table);
                     return value::encode_bool(done);
                 }
-                IteratorState::MapValueIter { index, map_handle } => {
+                IteratorState::MapValueIter {
+                    index, map_handle, ..
+                } => {
                     let table = caller
                         .data()
                         .map_table
@@ -416,8 +420,12 @@ pub(crate) fn define_core_async(
                     drop(table);
                     return value::encode_bool(done);
                 }
-                IteratorState::SetValueIter { index, set_handle }
-                | IteratorState::SetEntryIter { index, set_handle } => {
+                IteratorState::SetValueIter {
+                    index, set_handle, ..
+                }
+                | IteratorState::SetEntryIter {
+                    index, set_handle, ..
+                } => {
                     let table = caller
                         .data()
                         .set_table
@@ -431,7 +439,9 @@ pub(crate) fn define_core_async(
                     drop(table);
                     return value::encode_bool(done);
                 }
-                IteratorState::MapEntryIter { index, map_handle } => {
+                IteratorState::MapEntryIter {
+                    index, map_handle, ..
+                } => {
                     let table = caller
                         .data()
                         .map_table

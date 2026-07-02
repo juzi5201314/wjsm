@@ -30,6 +30,12 @@ impl MarkSweepCollector {
             freed_handles: Vec::new(),
         }
     }
+
+    fn reclaim_owner_backed_side_tables(&self, ctx: &mut GcContext) {
+        ctx.with_state(|st| {
+            st.reclaim_unmarked_collection_entries(|h| self.mark_bits.is_marked(h));
+        });
+    }
 }
 
 impl Default for MarkSweepCollector {
@@ -102,6 +108,7 @@ impl GcAlgorithm for MarkSweepCollector {
 
         // 3. sweep phase
         self.sweep(ctx);
+        self.reclaim_owner_backed_side_tables(ctx);
 
         // 4. 把 freed_handles 推入 RuntimeState.handle_free_list（P4 接管 fast-path 复用）
         weak_refs::process_weak_refs_after_sweep(ctx, &self.freed_handles);
@@ -151,7 +158,8 @@ impl GcAlgorithm for MarkSweepCollector {
             let before = self.mark_bits.popcount();
             let host_roots: Vec<Handle> = {
                 let mut acc = Vec::new();
-                roots.for_each_host_table_root(ctx, &mut |h| acc.push(h));
+                let mut is_marked = |h| self.mark_bits.is_marked(h);
+                roots.for_each_host_table_root(ctx, &mut is_marked, &mut |h| acc.push(h));
                 acc
             };
             self.mark(ctx, &mut host_roots.into_iter());
@@ -163,6 +171,7 @@ impl GcAlgorithm for MarkSweepCollector {
 
         // 3. sweep
         self.sweep(ctx);
+        self.reclaim_owner_backed_side_tables(ctx);
         weak_refs::process_weak_refs_after_sweep(ctx, &self.freed_handles);
         weak_refs::cleanup_stream_tables_after_sweep(ctx, &self.freed_handles);
         ctx.with_state(|st| {
@@ -192,6 +201,7 @@ impl MarkSweepCollector {
 
         self.mark(ctx, roots);
         self.sweep(ctx);
+        self.reclaim_owner_backed_side_tables(ctx);
 
         weak_refs::process_weak_refs_after_sweep(ctx, &self.freed_handles);
         weak_refs::cleanup_stream_tables_after_sweep(ctx, &self.freed_handles);

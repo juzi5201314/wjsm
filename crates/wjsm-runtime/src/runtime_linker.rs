@@ -553,20 +553,16 @@ pub(super) fn register_complex_bridges(
                         Some("TypeError: callbackfn is not callable".to_string());
                     return value::encode_undefined();
                 }
-                let map_handle = {
-                    let mut map_table = caller
-                        .data()
-                        .map_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    let handle = map_table.len();
-                    map_table.push(MapEntry {
-                        keys: Vec::new(),
-                        values: Vec::new(),
-                    });
-                    handle
-                };
+                let map_handle = caller.data().alloc_map_entry() as usize;
                 let map_result = alloc_object(&mut caller, 13);
+                if !value::is_object(map_result) {
+                    caller.data().release_unowned_map_entry(map_handle as u32);
+                    return map_result;
+                }
+                caller.data().bind_map_entry_owner(
+                    map_handle as u32,
+                    value::decode_object_handle(map_result),
+                );
                 {
                     let state = caller.data();
                     let set_fn = create_map_set_method(state, MapSetMethodKind::MapSet);

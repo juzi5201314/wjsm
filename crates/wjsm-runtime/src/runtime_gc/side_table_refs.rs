@@ -27,8 +27,8 @@ pub(crate) fn collect_proxy_refs(st: &mut crate::RuntimeState, idx: usize) -> Ve
 /// TAG_ITERATOR: iterators[idx] → 持有的 JS 值
 /// - ObjectIter: iterator, next, return_method, throw_method, current_value
 /// - IndexValueIter: values
-/// - MapKeyIter/MapValueIter/MapEntryIter/SetValueIter/SetEntryIter: 间接引用 map_table/set_table，
-///   由 collect_host_table_values 全量扫描覆盖
+/// - MapKeyIter/MapValueIter/MapEntryIter/SetValueIter/SetEntryIter: owner Map/Set 对象。
+///   owner 标记后，roots.rs 会按 owner reachability 扫描 map_table/set_table 内部值。
 /// - StringIter/ArrayIter/HeadersIter/TypedArrayIter/Error: 不持 JS handle
 pub(crate) fn collect_iterator_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec<i64> {
     let g = st.iterators.lock().unwrap_or_else(|e| e.into_inner());
@@ -54,7 +54,12 @@ pub(crate) fn collect_iterator_refs(st: &mut crate::RuntimeState, idx: usize) ->
             out
         }
         IteratorState::IndexValueIter { values, .. } => values.clone(),
-        // 其余 variant 不持直接 JS handle，或间接引用已由 collect_host_table_values 覆盖
+        IteratorState::MapKeyIter { owner, .. }
+        | IteratorState::MapValueIter { owner, .. }
+        | IteratorState::MapEntryIter { owner, .. }
+        | IteratorState::SetValueIter { owner, .. }
+        | IteratorState::SetEntryIter { owner, .. } => vec![*owner],
+        // 其余 variant 不持直接 JS handle
         _ => vec![],
     }
 }

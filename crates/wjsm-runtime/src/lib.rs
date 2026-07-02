@@ -22,6 +22,7 @@ mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
 mod runtime_builtins;
+mod runtime_collection_gc;
 mod runtime_collections;
 mod runtime_combinators;
 mod runtime_date;
@@ -613,6 +614,8 @@ impl Clone for RuntimeState {
             error_table: self.error_table.clone(),
             map_table: self.map_table.clone(),
             set_table: self.set_table.clone(),
+            map_free_slots: self.map_free_slots.clone(),
+            set_free_slots: self.set_free_slots.clone(),
             weakmap_table: self.weakmap_table.clone(),
             weakset_table: self.weakset_table.clone(),
             weakref_table: self.weakref_table.clone(),
@@ -740,6 +743,10 @@ struct RuntimeState {
     map_table: Arc<Mutex<Vec<MapEntry>>>,
     /// Set 侧表：存储 Set 对象的值
     set_table: Arc<Mutex<Vec<SetEntry>>>,
+    /// Map 侧表回收后的可复用槽位。
+    map_free_slots: Arc<Mutex<Vec<u32>>>,
+    /// Set 侧表回收后的可复用槽位。
+    set_free_slots: Arc<Mutex<Vec<u32>>>,
     /// WeakMap 侧表：存储 WeakMap 对象的键值对
     weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>>,
     /// WeakSet 侧表：存储 WeakSet 对象的值
@@ -1027,6 +1034,8 @@ impl RuntimeState {
             error_table: Arc::new(Mutex::new(Vec::new())),
             map_table: Arc::new(Mutex::new(Vec::new())),
             set_table: Arc::new(Mutex::new(Vec::new())),
+            map_free_slots: Arc::new(Mutex::new(Vec::new())),
+            set_free_slots: Arc::new(Mutex::new(Vec::new())),
             weakmap_table: Arc::new(Mutex::new(Vec::new())),
             weakset_table: Arc::new(Mutex::new(Vec::new())),
             weakref_table: Arc::new(Mutex::new(Vec::new())),

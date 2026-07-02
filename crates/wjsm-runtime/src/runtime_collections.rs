@@ -216,6 +216,7 @@ pub(crate) fn map_set_create_iterator(
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapKeyIter {
                         map_handle: map_handle_u32,
+                        owner: this_val,
                         index: 0,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
@@ -240,6 +241,7 @@ pub(crate) fn map_set_create_iterator(
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
+                        owner: this_val,
                         index: 0,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
@@ -267,6 +269,7 @@ pub(crate) fn map_set_create_iterator(
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapValueIter {
                         map_handle: map_handle_u32,
+                        owner: this_val,
                         index: 0,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
@@ -291,6 +294,7 @@ pub(crate) fn map_set_create_iterator(
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
+                        owner: this_val,
                         index: 0,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
@@ -318,6 +322,7 @@ pub(crate) fn map_set_create_iterator(
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::MapEntryIter {
                         map_handle: map_handle_u32,
+                        owner: this_val,
                         index: 0,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
@@ -342,6 +347,7 @@ pub(crate) fn map_set_create_iterator(
                     let iter_handle = iters.len() as u32;
                     iters.push(IteratorState::SetEntryIter {
                         set_handle: set_handle_u32,
+                        owner: this_val,
                         index: 0,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);

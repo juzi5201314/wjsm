@@ -14,19 +14,9 @@ pub(crate) fn define_collections_buffers(
         "map_constructor",
         |mut caller: Caller<'_, RuntimeState>, (arg,): (i64,)| {
             Box::new(async move {
-                let handle = {
-                    let mut table = caller
-                        .data()
-                        .map_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    table.push(MapEntry {
-                        keys: Vec::new(),
-                        values: Vec::new(),
-                    });
-                    table.len() as u32 - 1
-                };
+                let handle = caller.data().alloc_map_entry();
                 if !fill_map_from_constructor_arg_async(&mut caller, handle, arg).await {
+                    caller.data().release_unowned_map_entry(handle);
                     return value::encode_undefined();
                 }
                 let (
@@ -59,6 +49,13 @@ pub(crate) fn define_collections_buffers(
                     let wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                     alloc_host_object(&mut caller, &wjsm_env, 12)
                 };
+                if !value::is_object(obj) {
+                    caller.data().release_unowned_map_entry(handle);
+                    return obj;
+                }
+                caller
+                    .data()
+                    .bind_map_entry_owner(handle, value::decode_object_handle(obj));
                 let handle_val = value::encode_f64(handle as f64);
                 let _ = define_host_data_property_from_caller(
                     &mut caller,
@@ -187,16 +184,9 @@ pub(crate) fn define_collections_buffers(
         "set_constructor",
         |mut caller: Caller<'_, RuntimeState>, (arg,): (i64,)| {
             Box::new(async move {
-                let handle = {
-                    let mut table = caller
-                        .data()
-                        .set_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    table.push(SetEntry { values: Vec::new() });
-                    table.len() as u32 - 1
-                };
+                let handle = caller.data().alloc_set_entry();
                 if !fill_set_from_constructor_arg_async(&mut caller, handle, arg).await {
+                    caller.data().release_unowned_set_entry(handle);
                     return value::encode_undefined();
                 }
                 let (
@@ -227,6 +217,13 @@ pub(crate) fn define_collections_buffers(
                     let wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                     alloc_host_object(&mut caller, &wjsm_env, 12)
                 };
+                if !value::is_object(obj) {
+                    caller.data().release_unowned_set_entry(handle);
+                    return obj;
+                }
+                caller
+                    .data()
+                    .bind_set_entry_owner(handle, value::decode_object_handle(obj));
                 let handle_val = value::encode_f64(handle as f64);
                 let _ = define_host_data_property_from_caller(
                     &mut caller,

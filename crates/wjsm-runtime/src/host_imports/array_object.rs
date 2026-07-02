@@ -1138,9 +1138,15 @@ fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i6
                 IteratorState::StringIter { byte_pos, data } => *byte_pos >= data.len(),
                 IteratorState::ArrayIter { index, length, .. } => *index >= *length,
                 IteratorState::IndexValueIter { index, values } => *index as usize >= values.len(),
-                IteratorState::MapKeyIter { index, map_handle }
-                | IteratorState::MapValueIter { index, map_handle }
-                | IteratorState::MapEntryIter { index, map_handle } => {
+                IteratorState::MapKeyIter {
+                    index, map_handle, ..
+                }
+                | IteratorState::MapValueIter {
+                    index, map_handle, ..
+                }
+                | IteratorState::MapEntryIter {
+                    index, map_handle, ..
+                } => {
                     let table = caller
                         .data()
                         .map_table
@@ -1149,8 +1155,12 @@ fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i6
                     *map_handle >= table.len() as u32
                         || *index as usize >= table[*map_handle as usize].keys.len()
                 }
-                IteratorState::SetValueIter { index, set_handle }
-                | IteratorState::SetEntryIter { index, set_handle } => {
+                IteratorState::SetValueIter {
+                    index, set_handle, ..
+                }
+                | IteratorState::SetEntryIter {
+                    index, set_handle, ..
+                } => {
                     let table = caller
                         .data()
                         .set_table

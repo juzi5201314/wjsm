@@ -60,7 +60,13 @@ pub trait RootProvider {
     /// 扫描 shadow stack，对每个 root handle 调 visit。
     fn for_each_shadow_stack_root(&mut self, ctx: &mut GcContext, visit: &mut dyn FnMut(Handle));
     /// 扫描 host 侧表（promise/microtask/continuation/streams/...），含 fixed-point 驱动。
-    fn for_each_host_table_root(&mut self, ctx: &mut GcContext, visit: &mut dyn FnMut(Handle));
+    /// `is_marked` 用于只扫描已可达 owner 的内部引用，避免侧表把 owner 反向保活。
+    fn for_each_host_table_root(
+        &mut self,
+        ctx: &mut GcContext,
+        is_marked: &mut dyn FnMut(Handle) -> bool,
+        visit: &mut dyn FnMut(Handle),
+    );
     /// 预留：未来精确栈扫描（WASM GC proposal / stack maps）。默认空。
     fn for_each_wasm_local_root(&mut self, _ctx: &mut GcContext, _visit: &mut dyn FnMut(Handle)) {}
 }

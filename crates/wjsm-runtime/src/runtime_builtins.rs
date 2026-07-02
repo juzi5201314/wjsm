@@ -477,9 +477,15 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
     match iter {
         IteratorState::StringIter { byte_pos, data } => *byte_pos >= data.len(),
         IteratorState::ArrayIter { index, length, .. } => *index >= *length,
-        IteratorState::MapKeyIter { index, map_handle }
-        | IteratorState::MapValueIter { index, map_handle }
-        | IteratorState::MapEntryIter { index, map_handle } => {
+        IteratorState::MapKeyIter {
+            index, map_handle, ..
+        }
+        | IteratorState::MapValueIter {
+            index, map_handle, ..
+        }
+        | IteratorState::MapEntryIter {
+            index, map_handle, ..
+        } => {
             let table = caller
                 .data()
                 .map_table
@@ -488,8 +494,12 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
             *map_handle >= table.len() as u32
                 || *index as usize >= table[*map_handle as usize].keys.len()
         }
-        IteratorState::SetValueIter { index, set_handle }
-        | IteratorState::SetEntryIter { index, set_handle } => {
+        IteratorState::SetValueIter {
+            index, set_handle, ..
+        }
+        | IteratorState::SetEntryIter {
+            index, set_handle, ..
+        } => {
             let table = caller
                 .data()
                 .set_table
@@ -1514,7 +1524,9 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
-            Some(IteratorState::MapKeyIter { map_handle, index }) => {
+            Some(IteratorState::MapKeyIter {
+                map_handle, index, ..
+            }) => {
                 let table = caller
                     .data()
                     .map_table
@@ -1537,7 +1549,9 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
-            Some(IteratorState::MapValueIter { map_handle, index }) => {
+            Some(IteratorState::MapValueIter {
+                map_handle, index, ..
+            }) => {
                 let table = caller
                     .data()
                     .map_table
@@ -1560,7 +1574,9 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
-            Some(IteratorState::MapEntryIter { map_handle, index }) => {
+            Some(IteratorState::MapEntryIter {
+                map_handle, index, ..
+            }) => {
                 let table = caller
                     .data()
                     .map_table
@@ -1591,7 +1607,9 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
-            Some(IteratorState::SetValueIter { set_handle, index }) => {
+            Some(IteratorState::SetValueIter {
+                set_handle, index, ..
+            }) => {
                 let table = caller
                     .data()
                     .set_table
@@ -1614,7 +1632,9 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
-            Some(IteratorState::SetEntryIter { set_handle, index }) => {
+            Some(IteratorState::SetEntryIter {
+                set_handle, index, ..
+            }) => {
                 let table = caller
                     .data()
                     .set_table

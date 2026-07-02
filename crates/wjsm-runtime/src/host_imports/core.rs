@@ -276,7 +276,9 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     value::encode_undefined()
                 }
             }
-            IteratorState::MapKeyIter { map_handle, index } => {
+            IteratorState::MapKeyIter {
+                map_handle, index, ..
+            } => {
                 let table = caller
                     .data()
                     .map_table
@@ -296,7 +298,9 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 drop(table);
                 val.unwrap_or(value::encode_undefined())
             }
-            IteratorState::MapValueIter { map_handle, index } => {
+            IteratorState::MapValueIter {
+                map_handle, index, ..
+            } => {
                 let table = caller
                     .data()
                     .map_table
@@ -316,7 +320,9 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 drop(table);
                 val.unwrap_or(value::encode_undefined())
             }
-            IteratorState::MapEntryIter { map_handle, index } => {
+            IteratorState::MapEntryIter {
+                map_handle, index, ..
+            } => {
                 let table = caller
                     .data()
                     .map_table
@@ -445,7 +451,9 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 };
                 val
             }
-            IteratorState::SetValueIter { set_handle, index } => {
+            IteratorState::SetValueIter {
+                set_handle, index, ..
+            } => {
                 let table = caller
                     .data()
                     .set_table
@@ -465,7 +473,9 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 drop(table);
                 val.unwrap_or(value::encode_undefined())
             }
-            IteratorState::SetEntryIter { set_handle, index } => {
+            IteratorState::SetEntryIter {
+                set_handle, index, ..
+            } => {
                 let table = caller
                     .data()
                     .set_table
@@ -1638,6 +1648,7 @@ pub(crate) async fn iterator_from_impl_async(
             let handle = iters.len() as u32;
             iters.push(IteratorState::SetValueIter {
                 set_handle: set_handle_u32,
+                owner: val,
                 index: 0,
             });
             return value::encode_handle(value::TAG_ITERATOR, handle);
