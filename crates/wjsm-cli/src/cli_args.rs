@@ -28,6 +28,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub(crate) stats: bool,
 
+    /// Verify lowered IR invariants before continuing past lower stage
+    #[arg(long, global = true)]
+    pub(crate) verify_ir: bool,
+
     /// Color output control (auto/always/never). Also respects NO_COLOR env var.
     #[arg(long, value_name = "WHEN", global = true)]
     pub(crate) color: Option<ColorChoice>,
@@ -48,6 +52,10 @@ impl Cli {
 
     pub(crate) fn effective_verbose(&self) -> u8 {
         if self.quiet { 0 } else { self.verbose }
+    }
+
+    pub(crate) fn should_verify_ir(&self) -> bool {
+        self.verify_ir
     }
 }
 

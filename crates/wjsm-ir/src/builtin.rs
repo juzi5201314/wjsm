@@ -482,34 +482,10 @@ pub enum Builtin {
     ByteLengthQueuingStrategyConstructor,
 }
 
-impl fmt::Display for Builtin {
-    // 按类别分派到辅助函数，每个辅助函数处理一组相关变体
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = self
-            .fmt_console_iterator_str()
-            .or_else(|| self.fmt_host_api_str())
-            .or_else(|| self.fmt_array_str())
-            .or_else(|| self.fmt_func_object_str())
-            .or_else(|| self.fmt_bigint_regexp_str())
-            .or_else(|| self.fmt_promise_async_str())
-            .or_else(|| self.fmt_proxy_reflect_str())
-            .or_else(|| self.fmt_math_str())
-            .or_else(|| self.fmt_number_boolean_error_str())
-            .or_else(|| self.fmt_collection_date_str())
-            .or_else(|| self.fmt_weak_buffer_str())
-            .or_else(|| self.fmt_dataview_typed_array_str())
-            .or_else(|| self.fmt_misc_str())
-            .expect("missing Builtin Display arm");
-        formatter.write_str(s)
-    }
-}
-
-// ── 各类别的字符串映射辅助函数 ───────────────────────────────────────
-
 impl Builtin {
-    /// Console / debugger / 迭代器 / 枚举器 / 运算符 / 属性描述符
-    fn fmt_console_iterator_str(&self) -> Option<&'static str> {
-        Some(match self {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            // Console / debugger / 迭代器 / 枚举器 / 运算符 / 属性描述符
             Self::ConsoleLog => "console.log",
             Self::ConsoleError => "console.error",
             Self::ConsoleWarn => "console.warn",
@@ -540,13 +516,8 @@ impl Builtin {
             Self::AbstractCompare => "abstract_compare",
             Self::DefineProperty => "define_property",
             Self::GetOwnPropDesc => "get_own_prop_desc",
-            _ => return None,
-        })
-    }
 
-    /// 宿主 API（setTimeout / fetch / eval / JSON / closure）
-    fn fmt_host_api_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // 宿主 API（setTimeout / fetch / eval / JSON / closure）
             Self::SetTimeout => "setTimeout",
             Self::ClearTimeout => "clearTimeout",
             Self::SetInterval => "setInterval",
@@ -562,13 +533,8 @@ impl Builtin {
             Self::JsonStringify => "JSON.stringify",
             Self::JsonParse => "JSON.parse",
             Self::CreateClosure => "create_closure",
-            _ => return None,
-        })
-    }
 
-    /// 数组方法
-    fn fmt_array_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // 数组方法
             Self::ArrayPush => "array.push",
             Self::ArrayPushHole => "array.push_hole",
             Self::ArrayPushSpread => "array.push_spread",
@@ -610,13 +576,8 @@ impl Builtin {
             Self::ArrayToReversed => "array.to_reversed",
             Self::ArrayToSplicedVa => "array.to_spliced_va",
             Self::ArrayWith => "array.with",
-            _ => return None,
-        })
-    }
 
-    /// 函数原型方法 / 对象方法 / Map.groupBy
-    fn fmt_func_object_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // 函数原型方法 / 对象方法 / Map.groupBy
             Self::FuncCall => "func_call",
             Self::FuncApply => "func_apply",
             Self::FuncBind => "func_bind",
@@ -651,13 +612,8 @@ impl Builtin {
             Self::ObjectGetOwnPropertyDescriptors => "object.get_own_property_descriptors",
             Self::ObjectDefineProperties => "object.define_properties",
             Self::MapGroupBy => "map.group_by",
-            _ => return None,
-        })
-    }
 
-    /// BigInt / Symbol / RegExp / 基础字符串方法
-    fn fmt_bigint_regexp_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // BigInt / Symbol / RegExp / 基础字符串方法
             Self::BigIntFromLiteral => "bigint.from_literal",
             Self::BigIntAdd => "bigint.add",
             Self::BigIntSub => "bigint.sub",
@@ -685,13 +641,8 @@ impl Builtin {
             Self::StringReplace => "string.replace",
             Self::StringSearch => "string.search",
             Self::StringSplit => "string.split",
-            _ => return None,
-        })
-    }
 
-    /// Promise / async / continuation / generator
-    fn fmt_promise_async_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // Promise / async / continuation / generator
             Self::PromiseCreate => "promise.create",
             Self::PromiseInstanceResolve => "promise.instance_resolve",
             Self::PromiseInstanceReject => "promise.instance_reject",
@@ -726,13 +677,8 @@ impl Builtin {
             Self::PromiseWithResolvers => "promise.with_resolvers",
             Self::IsCallable => "is_callable",
             Self::IsJsObject => "is_js_object",
-            _ => return None,
-        })
-    }
 
-    /// 动态 import / JSX / Proxy / Reflect / 完整字符串方法
-    fn fmt_proxy_reflect_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // 动态 import / JSX / Proxy / Reflect / 完整字符串方法
             Self::DynamicImport => "dynamic_import",
             Self::RegisterModuleNamespace => "register_module_namespace",
             Self::JsxCreateElement => "jsx.create_element",
@@ -779,13 +725,8 @@ impl Builtin {
             Self::StringIterator => "string.iterator",
             Self::StringFromCharCode => "string.from_char_code",
             Self::StringFromCodePoint => "string.from_code_point",
-            _ => return None,
-        })
-    }
 
-    /// Math 静态方法
-    fn fmt_math_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // Math 静态方法
             Self::MathAbs => "Math.abs",
             Self::MathAcos => "Math.acos",
             Self::MathAcosh => "Math.acosh",
@@ -821,13 +762,8 @@ impl Builtin {
             Self::MathTan => "Math.tan",
             Self::MathTanh => "Math.tanh",
             Self::MathTrunc => "Math.trunc",
-            _ => return None,
-        })
-    }
 
-    /// Number / Boolean / Error 内建对象
-    fn fmt_number_boolean_error_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // Number / Boolean / Error 内建对象
             Self::NumberConstructor => "Number",
             Self::NumberIsNaN => "Number.isNaN",
             Self::NumberIsFinite => "Number.isFinite",
@@ -851,13 +787,8 @@ impl Builtin {
             Self::URIErrorConstructor => "URIError",
             Self::EvalErrorConstructor => "EvalError",
             Self::ErrorProtoToString => "Error.prototype.toString",
-            _ => return None,
-        })
-    }
 
-    /// Map / Set / Date 内建对象
-    fn fmt_collection_date_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // Map / Set / Date 内建对象
             Self::MapConstructor => "Map",
             Self::MapProtoSet => "Map.prototype.set",
             Self::MapProtoGet => "Map.prototype.get",
@@ -876,13 +807,8 @@ impl Builtin {
             Self::DateNow => "Date.now",
             Self::DateParse => "Date.parse",
             Self::DateUTC => "Date.UTC",
-            _ => return None,
-        })
-    }
 
-    /// WeakMap / WeakSet / SharedArrayBuffer / Atomics / WeakRef / FinalizationRegistry
-    fn fmt_weak_buffer_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // WeakMap / WeakSet / SharedArrayBuffer / Atomics / WeakRef / FinalizationRegistry
             Self::WeakMapConstructor => "WeakMap",
             Self::WeakMapProtoSet => "WeakMap.prototype.set",
             Self::WeakMapProtoGet => "WeakMap.prototype.get",
@@ -922,13 +848,8 @@ impl Builtin {
             Self::FinalizationRegistryProtoUnregister => {
                 "FinalizationRegistry.prototype.unregister"
             }
-            _ => return None,
-        })
-    }
 
-    /// ArrayBuffer / DataView / TypedArray
-    fn fmt_dataview_typed_array_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // ArrayBuffer / DataView / TypedArray
             Self::ArrayBufferConstructor => "ArrayBuffer",
             Self::ArrayBufferProtoByteLength => "ArrayBuffer.prototype.byteLength",
             Self::ArrayBufferProtoSlice => "ArrayBuffer.prototype.slice",
@@ -988,13 +909,8 @@ impl Builtin {
             Self::TypedArrayProtoEntries => "TypedArray.prototype.entries",
             Self::TypedArrayProtoKeys => "TypedArray.prototype.keys",
             Self::TypedArrayProtoValues => "TypedArray.prototype.values",
-            _ => return None,
-        })
-    }
 
-    /// 杂项：全局辅助、异常、eval 桥接、参数对象、作用域记录、WHATWG 流
-    fn fmt_misc_str(&self) -> Option<&'static str> {
-        Some(match self {
+            // 杂项：全局辅助、异常、eval 桥接、参数对象、作用域记录、WHATWG 流
             Self::GetBuiltinGlobal => "get_builtin_global",
             Self::CreateGlobalObject => "create_global_object",
             Self::CreateException => "create_exception",
@@ -1016,7 +932,12 @@ impl Builtin {
             Self::TransformStreamConstructor => "TransformStream",
             Self::CountQueuingStrategyConstructor => "CountQueuingStrategy",
             Self::ByteLengthQueuingStrategyConstructor => "ByteLengthQueuingStrategy",
-            _ => return None,
-        })
+        }
+    }
+}
+
+impl fmt::Display for Builtin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }

@@ -318,6 +318,7 @@ fn cmd_build(
                     cli.time,
                     cli.target,
                     script,
+                    cli.should_verify_ir(),
                 )?,
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
@@ -330,6 +331,7 @@ fn cmd_build(
                             cli.time,
                             cli.target,
                             script,
+                            cli.should_verify_ir(),
                         )?
                     } else {
                         run_file_input_pipeline(&path, root, stage, cli, script)?
@@ -365,13 +367,21 @@ fn cmd_build(
             }
 
             let wasm = match resolve_input(input, eval)? {
-                InputSource::Inline(code) => compile_source(&code, None, cli.target, script)?,
+                InputSource::Inline(code) => {
+                    compile_source(&code, None, cli.target, script, cli.should_verify_ir())?
+                }
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
-                        compile_source(&source, None, cli.target, script)?
+                        compile_source(&source, None, cli.target, script, cli.should_verify_ir())?
                     } else {
-                        compile_from_file_input(&path, root, cli.target, script)?
+                        compile_from_file_input(
+                            &path,
+                            root,
+                            cli.target,
+                            script,
+                            cli.should_verify_ir(),
+                        )?
                     }
                 }
             };
@@ -403,6 +413,7 @@ fn cmd_build(
                     cli.target,
                     script,
                     cli.verbose_enabled(1),
+                    cli.should_verify_ir(),
                 )?,
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
@@ -413,6 +424,7 @@ fn cmd_build(
                             cli.target,
                             script,
                             cli.verbose_enabled(1),
+                            cli.should_verify_ir(),
                         )?
                     } else {
                         compile_file_input_to_pipeline_result(
@@ -421,6 +433,7 @@ fn cmd_build(
                             cli.target,
                             script,
                             cli.verbose_enabled(1),
+                            cli.should_verify_ir(),
                         )?
                     }
                 }
@@ -452,17 +465,37 @@ fn cmd_run(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result
     let result = if path_is_stdin(input) {
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
-        compile_source_to_pipeline_result(&source, None, cli.target, script, verbose_compile)?
+        compile_source_to_pipeline_result(
+            &source,
+            None,
+            cli.target,
+            script,
+            verbose_compile,
+            cli.should_verify_ir(),
+        )?
     } else {
-        compile_file_input_to_pipeline_result(input, root, cli.target, script, verbose_compile)?
+        compile_file_input_to_pipeline_result(
+            input,
+            root,
+            cli.target,
+            script,
+            verbose_compile,
+            cli.should_verify_ir(),
+        )?
     };
 
     run_compile_then_execute(cli, result)
 }
 
 fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
-    let result =
-        compile_source_to_pipeline_result(code, None, cli.target, script, cli.verbose_enabled(1))?;
+    let result = compile_source_to_pipeline_result(
+        code,
+        None,
+        cli.target,
+        script,
+        cli.verbose_enabled(1),
+        cli.should_verify_ir(),
+    )?;
     run_compile_then_execute(cli, result)
 }
 
@@ -560,6 +593,7 @@ fn cmd_lint(
             cli.time,
             cli.target,
             script,
+            cli.should_verify_ir(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -572,6 +606,7 @@ fn cmd_lint(
                     cli.time,
                     cli.target,
                     script,
+                    cli.should_verify_ir(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
@@ -733,6 +768,7 @@ fn cmd_check(
             cli.time,
             cli.target,
             script,
+            cli.should_verify_ir(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -745,6 +781,7 @@ fn cmd_check(
                     cli.time,
                     cli.target,
                     script,
+                    cli.should_verify_ir(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
@@ -790,6 +827,7 @@ fn cmd_dump_ir(
             cli.time,
             cli.target,
             script,
+            cli.should_verify_ir(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -802,6 +840,7 @@ fn cmd_dump_ir(
                     cli.time,
                     cli.target,
                     script,
+                    cli.should_verify_ir(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
@@ -839,6 +878,7 @@ fn cmd_dump_ast(
             cli.time,
             cli.target,
             script,
+            cli.should_verify_ir(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -851,6 +891,7 @@ fn cmd_dump_ast(
                     cli.time,
                     cli.target,
                     script,
+                    cli.should_verify_ir(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
@@ -951,6 +992,7 @@ fn cmd_dump_wat(
             cli.time,
             cli.target,
             script,
+            cli.should_verify_ir(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -964,6 +1006,7 @@ fn cmd_dump_wat(
                     cli.time,
                     cli.target,
                     script,
+                    cli.should_verify_ir(),
                 )?
             } else {
                 let pipeline = compile_file_input_to_pipeline_result(
@@ -972,6 +1015,7 @@ fn cmd_dump_wat(
                     cli.target,
                     script,
                     cli.verbose_enabled(1),
+                    cli.should_verify_ir(),
                 )?;
                 if cli.time {
                     pipeline.timings.print(cli.effective_verbose());
@@ -1212,6 +1256,7 @@ fn lower_parsed_module(
     filename: Option<&str>,
     module: swc_core::ecma::ast::Module,
     script: bool,
+    verify_ir: bool,
 ) -> Result<Program> {
     let display_name = filename.map(str::to_string).unwrap_or_else(|| {
         if script {
@@ -1220,13 +1265,22 @@ fn lower_parsed_module(
             "input.ts".into()
         }
     });
-    semantic::lower_module_with_source(
+    let program = semantic::lower_module_with_source(
         module,
         script,
         Some(std::sync::Arc::from(source)),
         display_name,
     )
-    .map_err(|e| anyhow::anyhow!("{e}"))
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    verify_ir_for_pipeline(&program, verify_ir)?;
+    Ok(program)
+}
+
+fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
+    if verify_ir {
+        program.verify().context("IR verification failed")?;
+    }
+    Ok(())
 }
 
 fn run_pipeline(
@@ -1237,6 +1291,7 @@ fn run_pipeline(
     time: bool,
     target: Target,
     script: bool,
+    verify_ir: bool,
 ) -> Result<PipelineResult> {
     let mut result = PipelineResult {
         ast: None,
@@ -1272,7 +1327,13 @@ fn run_pipeline(
         eprintln!("Lowering to IR...");
     }
     let start = Instant::now();
-    let program = lower_parsed_module(source, filename, result.ast.take().unwrap(), script)?;
+    let program = lower_parsed_module(
+        source,
+        filename,
+        result.ast.take().unwrap(),
+        script,
+        verify_ir,
+    )?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     if verbose >= 2 {
         eprintln!(
@@ -1340,11 +1401,12 @@ fn run_file_input_pipeline(
                 }
                 Stage::Lower => {
                     let program = wjsm_module::lower_bundle(&entry, &root)?;
+                    verify_ir_for_pipeline(&program, cli.should_verify_ir())?;
                     result.timings.lower_us = start.elapsed().as_micros() as u64;
                     result.program = Some(program);
                 }
                 Stage::Compile | Stage::Execute => {
-                    let wasm = wjsm_module::bundle(&entry, &root)?;
+                    let wasm = compile_bundle(&entry, &root, cli.target, cli.should_verify_ir())?;
                     result.timings.compile_us = start.elapsed().as_micros() as u64;
                     result.wasm = Some(wasm);
                 }
@@ -1362,6 +1424,7 @@ fn run_file_input_pipeline(
             cli.time,
             cli.target,
             script,
+            cli.should_verify_ir(),
         ),
     }
 }
@@ -1562,6 +1625,7 @@ fn compile_source_to_pipeline_result(
     target: Target,
     script: bool,
     verbose: bool,
+    verify_ir: bool,
 ) -> Result<PipelineResult> {
     let mut result = PipelineResult {
         ast: None,
@@ -1588,7 +1652,13 @@ fn compile_source_to_pipeline_result(
         eprintln!("Lowering to IR...");
     }
     let start = Instant::now();
-    let program = lower_parsed_module(source, filename, result.ast.take().unwrap(), script)?;
+    let program = lower_parsed_module(
+        source,
+        filename,
+        result.ast.take().unwrap(),
+        script,
+        verify_ir,
+    )?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     result.program = Some(program);
 
@@ -1612,6 +1682,7 @@ fn compile_file_input_to_pipeline_result(
     target: Target,
     script: bool,
     verbose: bool,
+    verify_ir: bool,
 ) -> Result<PipelineResult> {
     let plan = build_compile_plan(input, root)?;
     match plan {
@@ -1620,7 +1691,7 @@ fn compile_file_input_to_pipeline_result(
                 eprintln!("Bundling modules...");
             }
             let start = Instant::now();
-            let wasm = wjsm_module::bundle(&entry, &root)?;
+            let wasm = compile_bundle(&entry, &root, target, verify_ir)?;
             let mut result = PipelineResult {
                 ast: None,
                 program: None,
@@ -1640,6 +1711,7 @@ fn compile_file_input_to_pipeline_result(
             target,
             script,
             verbose,
+            verify_ir,
         ),
     }
 }
@@ -1649,18 +1721,13 @@ fn compile_from_file_input(
     root: Option<&Path>,
     target: Target,
     script: bool,
+    verify_ir: bool,
 ) -> Result<Vec<u8>> {
     let plan = build_compile_plan(input, root)?;
     match plan {
-        CompilePlan::Bundle { entry, root } => {
-            let wasm = wjsm_module::bundle(&entry, &root)?;
-            match target {
-                Target::Wasm => Ok(wasm),
-                Target::Jit => bail!("JIT backend is not implemented yet"),
-            }
-        }
+        CompilePlan::Bundle { entry, root } => compile_bundle(&entry, &root, target, verify_ir),
         CompilePlan::SingleSource { source, filename } => {
-            compile_source(&source, Some(filename.as_str()), target, script)
+            compile_source(&source, Some(filename.as_str()), target, script, verify_ir)
         }
     }
 }
@@ -1670,6 +1737,7 @@ fn compile_source(
     filename: Option<&str>,
     target: Target,
     script: bool,
+    verify_ir: bool,
 ) -> Result<Vec<u8>> {
     let module = if script {
         parser::parse_script_as_module(source)?
@@ -1678,9 +1746,24 @@ fn compile_source(
     } else {
         parser::parse_module(source)?
     };
-    let program = lower_parsed_module(source, filename, module, script)?;
+    let program = lower_parsed_module(source, filename, module, script, verify_ir)?;
     match target {
         Target::Wasm => backend_wasm::compile(&program),
+        Target::Jit => bail!("JIT backend is not implemented yet"),
+    }
+}
+
+fn compile_bundle(entry: &Path, root: &Path, target: Target, verify_ir: bool) -> Result<Vec<u8>> {
+    match target {
+        Target::Wasm => {
+            if verify_ir {
+                let program = wjsm_module::lower_bundle(entry, root)?;
+                verify_ir_for_pipeline(&program, true)?;
+                backend_wasm::compile(&program)
+            } else {
+                wjsm_module::bundle(entry, root)
+            }
+        }
         Target::Jit => bail!("JIT backend is not implemented yet"),
     }
 }
@@ -1705,7 +1788,7 @@ pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }
 
-    let wasm = match compile_from_file_input(input, None, Target::Wasm, false) {
+    let wasm = match compile_from_file_input(input, None, Target::Wasm, false, false) {
         Ok(w) => w,
         Err(e) => {
             return (

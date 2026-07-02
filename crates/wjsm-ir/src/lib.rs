@@ -2,10 +2,12 @@ pub mod builtin;
 pub mod constants;
 pub mod types;
 pub mod value;
+mod verify;
 
 pub use builtin::Builtin;
 use std::fmt::{self, Write};
 pub use types::*;
+pub use verify::IrVerificationError;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Module {
@@ -47,6 +49,10 @@ impl Module {
 
     pub fn script_mode(&self) -> bool {
         self.script_mode
+    }
+
+    pub fn verify(&self) -> Result<(), IrVerificationError> {
+        verify::verify_module(self)
     }
     pub fn dump_text(&self) -> String {
         let mut out = String::from("module {\n");
