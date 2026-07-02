@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+n1 start false
+n2 1 false
+n3 5 false
+n4 6 false
+n5 7 false
+n6 done true
+--- stderr ---

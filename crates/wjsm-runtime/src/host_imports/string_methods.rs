@@ -152,6 +152,24 @@ pub(crate) fn define_string_methods(
         result.push_str(&string_from_utf16_code_unit(unit));
     }
 
+    let primitive_string_get_property_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, receiver: i64, name_id: i32| -> i64 {
+            let name = crate::runtime_render::read_string_bytes(&mut caller, name_id as u32);
+            if name == b"length" {
+                let len = js_utf16_len(&get_string_value(&mut caller, receiver));
+                return value::encode_f64(len as f64);
+            }
+            value::encode_undefined()
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_string_get_property",
+        primitive_string_get_property_fn,
+    )?;
+
     // ── string_at ──
     let f = Func::wrap(
         &mut store,

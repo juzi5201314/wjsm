@@ -223,6 +223,7 @@ impl Lowerer {
         }
 
         self.resolve_pending_suspends();
+        let continuation_slot_count = self.async_next_continuation_slot;
         self.emit_async_dispatch_switch(state_scope_id, dispatch_block, body_entry);
 
         let mut old_fn = std::mem::replace(
@@ -311,7 +312,7 @@ impl Lowerer {
 
         let count_const = self
             .module
-            .add_constant(Constant::Number((5 + fn_decl.function.params.len()) as f64));
+            .add_constant(Constant::Number(continuation_slot_count as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,

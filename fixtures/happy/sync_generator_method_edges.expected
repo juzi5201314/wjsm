@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+start-return 7 true
+after-return undefined true
+start-throw x
+first 1 false
+completed undefined true
+completed-throw done
+--- stderr ---

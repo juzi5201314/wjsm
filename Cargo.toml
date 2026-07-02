@@ -45,6 +45,7 @@ regress = "0.11"
 regex = "1"
 toml = "0.9.12"
 reqwest = { version = "0.12", features = ["rustls-tls", "stream"] }
+proptest = "1.9.0"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -52,6 +53,9 @@ wjsm-cli = { path = "crates/wjsm-cli" }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+proptest = { workspace = true }
+tokio = { workspace = true }
+wjsm-runtime = { path = "crates/wjsm-runtime" }
 
 # 仅对 wasmtime/cranelift 这类编译密集型依赖启用优化，
 # 保持本仓库自身 crate 仍走快速 debug 编译。

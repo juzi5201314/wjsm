@@ -81,6 +81,16 @@ pub(crate) fn get_by_name_id_sync(
             )
         });
     }
+    if value::is_string(obj) {
+        let name = crate::runtime_render::read_string_bytes(caller, name_id);
+        if name == b"length" {
+            let len = crate::runtime_values::get_string_value(caller, obj)
+                .encode_utf16()
+                .count();
+            return value::encode_f64(len as f64);
+        }
+        return value::encode_undefined();
+    }
     if !value::is_js_object(obj) {
         return value::encode_undefined();
     }

@@ -73,8 +73,8 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
-    // 对 undefined/null/bool/string/bigint/symbol 等标量类型直接返回 undefined，
-    // 防止错误地将 NaN-boxed 值的低位当作 obj_table handle 导致死循环或内存越界。
+    // 对 undefined/null/bool 等标量类型直接返回 undefined；string/bigint/symbol/regexp
+    // 在下方按各自原型语义分派，避免把 NaN-boxed 低位误当 obj_table handle。
     // 保留 TAG_OBJECT(8)、TAG_FUNCTION(9)、TAG_ARRAY(11)、TAG_EXCEPTION(5)、
     // TAG_ITERATOR(6)、TAG_ENUMERATOR(7) 等对象类型通过。
     func.instruction(&WasmInstruction::LocalGet(3));
@@ -88,6 +88,17 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
+    // TAG_STRING：String 原始值的 length / 原型属性
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::I32Const(value::TAG_STRING as i32));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_PRIMITIVE_STRING_GET_PROPERTY));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+
     // TAG_BIGINT：BigInt.prototype 方法名 → NativeCallable
     func.instruction(&WasmInstruction::LocalGet(3));
     func.instruction(&WasmInstruction::I32Const(value::TAG_BIGINT as i32));

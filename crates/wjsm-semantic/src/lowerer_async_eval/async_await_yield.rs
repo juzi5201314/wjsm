@@ -141,6 +141,151 @@ impl Lowerer {
             undef_val
         };
 
+        if yield_expr.delegate && self.is_generator_fn {
+            return self.lower_sync_yield_delegate(value, block, yield_expr.span());
+        }
+
+        self.lower_yield_value(value, block, yield_expr.span())
+    }
+
+    fn lower_sync_yield_delegate(
+        &mut self,
+        iterable: ValueId,
+        block: BasicBlockId,
+        span: swc_core::common::Span,
+    ) -> Result<ValueId, LoweringError> {
+        let iter_name = format!("$yield_star_iter_{}", self.next_temp);
+        self.next_temp += 1;
+        let scope_id = self
+            .scopes
+            .declare(&iter_name, VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+        let iter_ir_name = format!("${scope_id}.{iter_name}");
+
+        let iter_handle = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(iter_handle),
+                builtin: Builtin::IteratorFrom,
+                args: vec![iterable],
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: iter_ir_name.clone(),
+                value: iter_handle,
+            },
+        );
+
+        let header = self.current_function.new_block();
+        let body = self.current_function.new_block();
+        let exit = self.current_function.new_block();
+        self.current_function
+            .set_terminator(block, Terminator::Jump { target: header });
+
+        let iter_for_done = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::LoadVar {
+                dest: iter_for_done,
+                name: iter_ir_name.clone(),
+            },
+        );
+        let done = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::CallBuiltin {
+                dest: Some(done),
+                builtin: Builtin::IteratorDone,
+                args: vec![iter_for_done],
+            },
+        );
+        let not_done = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::Unary {
+                dest: not_done,
+                op: UnaryOp::Not,
+                value: done,
+            },
+        );
+        self.current_function.set_terminator(
+            header,
+            Terminator::Branch {
+                condition: not_done,
+                true_block: body,
+                false_block: exit,
+            },
+        );
+
+        let iter_for_value = self.alloc_value();
+        self.current_function.append_instruction(
+            body,
+            Instruction::LoadVar {
+                dest: iter_for_value,
+                name: iter_ir_name.clone(),
+            },
+        );
+        let yielded_value = self.alloc_value();
+        self.current_function.append_instruction(
+            body,
+            Instruction::CallBuiltin {
+                dest: Some(yielded_value),
+                builtin: Builtin::IteratorValue,
+                args: vec![iter_for_value],
+            },
+        );
+        let _resume_value = self.lower_yield_value(yielded_value, body, span)?;
+        let after_yield = self.resolve_store_block(body);
+        let iter_for_next = self.alloc_value();
+        self.current_function.append_instruction(
+            after_yield,
+            Instruction::LoadVar {
+                dest: iter_for_next,
+                name: iter_ir_name.clone(),
+            },
+        );
+        self.current_function.append_instruction(
+            after_yield,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::IteratorNext,
+                args: vec![iter_for_next],
+            },
+        );
+        self.current_function
+            .set_terminator(after_yield, Terminator::Jump { target: header });
+
+        let iter_for_final = self.alloc_value();
+        self.current_function.append_instruction(
+            exit,
+            Instruction::LoadVar {
+                dest: iter_for_final,
+                name: iter_ir_name,
+            },
+        );
+        let final_value = self.alloc_value();
+        self.current_function.append_instruction(
+            exit,
+            Instruction::CallBuiltin {
+                dest: Some(final_value),
+                builtin: Builtin::IteratorValue,
+                args: vec![iter_for_final],
+            },
+        );
+
+        self.expr_merge_block = Some(exit);
+        Ok(final_value)
+    }
+
+    fn lower_yield_value(
+        &mut self,
+        value: ValueId,
+        block: BasicBlockId,
+        span: swc_core::common::Span,
+    ) -> Result<ValueId, LoweringError> {
         let gen_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -476,7 +621,7 @@ impl Lowerer {
 
             Ok(yielded_result)
         } else {
-            Err(self.error(yield_expr.span(), "yield outside generator"))
+            Err(self.error(span, "yield outside generator"))
         }
     }
 

@@ -1,0 +1,38 @@
+[package]
+name = "wjsm-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+wjsm-parser = { path = "../crates/wjsm-parser" }
+wjsm-semantic = { path = "../crates/wjsm-semantic" }
+wjsm-runtime = { path = "../crates/wjsm-runtime" }
+
+[[bin]]
+name = "parser"
+path = "fuzz_targets/parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lowering"
+path = "fuzz_targets/lowering.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "runtime"
+path = "fuzz_targets/runtime.rs"
+test = false
+doc = false
+bench = false

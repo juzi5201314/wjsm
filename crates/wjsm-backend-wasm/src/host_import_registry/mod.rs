@@ -51,6 +51,7 @@ pub enum SpecialHostImport {
     NativeCallableGetProperty,
     PrimitiveBigIntGetMethod,
     PrimitiveNumberGetMethod,
+    PrimitiveStringGetProperty,
     PrimitiveSymbolGetProperty,
     PrimitiveRegExpGetProperty,
     PrimitiveRegExpSetProperty,
