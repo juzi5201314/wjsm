@@ -987,10 +987,11 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let env = crate::wasm_env::WasmEnv::from_caller(&mut *caller).expect("WasmEnv");
             let gc_arc = caller.data().gc_algorithm.clone();
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx =
-                crate::runtime_gc::GcContext::new(&mut *caller, &env, gc.algorithm_name());
+            let algorithm = gc.algorithm_name();
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut *caller, &env, algorithm);
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-            gc.collect_with_provider(&mut ctx, &mut roots as _);
+            let stats = gc.collect_with_provider(&mut ctx, &mut roots as _);
+            caller.data().record_gc_cycle("manual", algorithm, stats);
             Some(value::encode_undefined())
         }
         NativeCallable::SharedArrayBufferConstructor => {

@@ -62,6 +62,7 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("primitive_regexp_get_property", 8), // (i64, i32) -> i64
     ("primitive_regexp_set_property", 9), // (i64, i32, i64) -> ()
     ("primitive_string_get_property", 8), // (i64, i32) -> i64
+    ("gc_record_alloc", 39),              // (i32, i32, i32) -> ()
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
@@ -87,8 +88,9 @@ const HOST_ARRAY_NAMED_SET: u32 = 18;
 const HOST_PRIMITIVE_REGEXP_GET_PROPERTY: u32 = 19;
 const HOST_PRIMITIVE_REGEXP_SET_PROPERTY: u32 = 20;
 const HOST_PRIMITIVE_STRING_GET_PROPERTY: u32 = 21;
+const HOST_GC_RECORD_ALLOC: u32 = 22;
 
-const NUM_HOST_IMPORTS: u32 = 22;
+const NUM_HOST_IMPORTS: u32 = 23;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -494,6 +496,10 @@ fn emit_obj_new() -> Function {
     func.instruction(&WasmInstruction::I32Const(16));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalSet(1));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::Call(HOST_GC_RECORD_ALLOC));
 
     // handle 复用：gc_take_freed_handle(); 若 == -1 则新分配
     func.instruction(&WasmInstruction::Call(HOST_GC_TAKE_FREED_HANDLE));
@@ -783,6 +789,10 @@ fn emit_arr_new() -> Function {
     func.instruction(&WasmInstruction::I32Const(16));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalSet(1));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::Call(HOST_GC_RECORD_ALLOC));
 
     // ── handle 复用 ──
     func.instruction(&WasmInstruction::Call(HOST_GC_TAKE_FREED_HANDLE));
@@ -1171,6 +1181,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 22);
+        assert_eq!(HOST_IMPORTS.len(), 23);
     }
 }

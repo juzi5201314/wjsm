@@ -50,6 +50,11 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let size = constants::HEAP_OBJECT_HEADER_SIZE
         .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
+    ctx.as_context().data().record_host_allocation(
+        size as usize,
+        wjsm_ir::HEAP_TYPE_OBJECT,
+        capacity,
+    );
     try_gc_for_host_alloc(ctx, env, size as usize);
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let _obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
@@ -121,13 +126,18 @@ pub(crate) fn try_gc_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(
         return;
     }
 
-    let stats = {
+    let (stats, algorithm) = {
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
+        let algorithm = gc.algorithm_name();
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, algorithm);
         let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-        gc.collect_with_provider(&mut gc_ctx, &mut roots as _)
+        (
+            gc.collect_with_provider(&mut gc_ctx, &mut roots as _),
+            algorithm,
+        )
     };
     let state = ctx.as_context().data();
+    state.record_gc_cycle("host-alloc", algorithm, stats.clone());
     state.update_gc_threshold_after_collection(stats.marked);
     state.reset_alloc_counter_after_gc();
 }

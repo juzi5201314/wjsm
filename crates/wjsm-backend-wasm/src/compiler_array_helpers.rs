@@ -22,6 +22,8 @@ impl Compiler {
                 self.special_host_import_indices[&SpecialHostImport::GcMaybeCollect];
             let gc_take_freed_handle_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcTakeFreedHandle];
+            let gc_record_alloc_idx =
+                self.special_host_import_indices[&SpecialHostImport::GcRecordAlloc];
 
             // ── proactive GC：在分配前调用（GC 完成后再分配，新对象不在 GC 视野，安全）──
             func.instruction(&WasmInstruction::Call(gc_maybe_collect_idx));
@@ -37,6 +39,10 @@ impl Compiler {
             ));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::Call(gc_record_alloc_idx));
 
             // ── handle 复用：take_or_alloc_handle ──
             func.instruction(&WasmInstruction::Call(gc_take_freed_handle_idx));

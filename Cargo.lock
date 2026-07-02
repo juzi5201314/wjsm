@@ -4562,6 +4562,7 @@ dependencies = [
  "reqwest",
  "swc_core",
  "tokio",
+ "wasmparser 0.246.2",
  "wasmtime",
  "wjsm-backend-wasm",
  "wjsm-ir",

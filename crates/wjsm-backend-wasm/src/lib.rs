@@ -3,12 +3,13 @@
 // tests/compiler_gc_analysis_spill.rs for why the WAT-level signal is ambiguous.
 pub use crate::compiler_gc_analysis::GcAnalysis;
 use anyhow::{Context, Result, bail};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
-    ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    Instruction as WasmInstruction, MemArg, MemorySection, MemoryType, Module, NameMap,
-    NameSection, RefType, TableSection, TableType, TypeSection, ValType,
+    BlockType, CodeSection, ConstExpr, CustomSection, DataSection, ElementSection, Elements,
+    EntityType, ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType,
+    ImportSection, Instruction as WasmInstruction, MemArg, MemorySection, MemoryType, Module,
+    NameMap, NameSection, RefType, TableSection, TableType, TypeSection, ValType,
 };
 use wjsm_ir::{
     BasicBlock, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction, HomeObject,
@@ -223,6 +224,9 @@ struct Compiler {
     /// P2.2: Normal mode 下 globals 的编译期初始值，用于 main prologue 的 global.set 初始化。
     /// Eval mode 下为 None（globals 由父模块初始化）。
     normal_init_values: Option<NormalGlobalsInit>,
+    /// 编译期 allocation site 表，运行时 `--trace-gc` 用它把分配聚合到函数/IR 位置。
+    allocation_sites: Vec<AllocationSiteRecord>,
+    next_allocation_site_id: u32,
 }
 
 /// Normal mode 下需要初始化的 globals 编译期值。
@@ -241,6 +245,27 @@ struct NormalGlobalsInit {
     arr_proto_table_base: i32,
     arr_proto_table_len: i32,
     arr_proto_table_hash: i64,
+}
+
+const ALLOCATION_SITES_SECTION: &str = "wjsm.gc.alloc_sites";
+const ALLOCATION_SITES_MAGIC: &[u8; 8] = b"WJSMAS01";
+const ALLOCATION_SITES_VERSION: u32 = 1;
+const FIRST_ALLOCATION_SITE_ID: u32 = 2;
+
+#[derive(Debug, Clone, Copy)]
+enum AllocationSiteKind {
+    Object = 1,
+    Array = 2,
+}
+
+#[derive(Debug, Clone)]
+struct AllocationSiteRecord {
+    id: u32,
+    function_id: Option<u32>,
+    function_name: String,
+    block: u32,
+    instruction: u32,
+    kind: AllocationSiteKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

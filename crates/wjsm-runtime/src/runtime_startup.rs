@@ -350,8 +350,13 @@ pub(super) async fn instantiate_execute_bundle(
     module: &Module,
     shared_state: Option<Arc<SharedRuntimeState>>,
     use_epoch_async_yield: bool,
+    options: RuntimeExecutionOptions,
+    allocation_sites: crate::runtime_gc::diagnostics::AllocationSiteRegistry,
 ) -> Result<ExecuteInstanceBundle> {
     let mut store = Store::new(engine, RuntimeState::new_with_shared(shared_state));
+    store
+        .data()
+        .configure_gc_diagnostics(options.gc, allocation_sites);
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);
     let diagnostics = Arc::clone(&store.data().diagnostics);

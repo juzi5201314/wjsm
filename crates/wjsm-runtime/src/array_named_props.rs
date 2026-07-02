@@ -215,11 +215,19 @@ impl ArrayNamedPropsStore {
 
     /// GC：收集侧表持有的所有值作为根。
     pub(crate) fn trace_roots(store: &ArrayNamedPropsStore, roots: &mut Vec<i64>) {
+        Self::trace_root_sources(store, &mut |_, _, value| roots.push(value));
+    }
+
+    /// GC 诊断：收集侧表根并保留 array handle/name_id 来源。
+    pub(crate) fn trace_root_sources(
+        store: &ArrayNamedPropsStore,
+        visit: &mut dyn FnMut(u32, u32, i64),
+    ) {
         let table = store.0.lock().unwrap_or_else(|e| e.into_inner());
-        for slots in table.values() {
+        for (handle, slots) in table.iter() {
             for slot in slots {
                 if value::tag_needs_root(slot.value) {
-                    roots.push(slot.value);
+                    visit(*handle, slot.name_id, slot.value);
                 }
             }
         }

@@ -73,6 +73,7 @@
 //! 详细设计见 plan.md。
 pub mod api;
 pub mod context;
+pub mod diagnostics;
 pub mod mark_bitmap;
 pub mod mark_sweep;
 pub mod native_callable_refs;
@@ -81,4 +82,8 @@ pub mod side_table_refs;
 pub mod weak_refs;
 
 pub use api::{GcAlgorithm, GcContext};
+pub use diagnostics::{
+    GcDiagnosticsOptions, GcDiagnosticsReport, HeapSnapshot, RuntimeExecutionOptions,
+    RuntimeExecutionReport, format_gc_diagnostics_report,
+};
 pub use mark_sweep::MarkSweepCollector;

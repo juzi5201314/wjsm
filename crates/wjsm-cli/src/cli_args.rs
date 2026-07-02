@@ -32,6 +32,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub(crate) verify_ir: bool,
 
+    /// 输出结构化 GC trace、heap snapshot 与 allocation profile 诊断
+    #[arg(long, global = true)]
+    pub(crate) trace_gc: bool,
+
     /// Color output control (auto/always/never). Also respects NO_COLOR env var.
     #[arg(long, value_name = "WHEN", global = true)]
     pub(crate) color: Option<ColorChoice>,

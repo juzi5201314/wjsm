@@ -396,7 +396,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     diagnostics: Arc<Mutex<Vec<u8>>>,
     writer: W,
     completion_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
-) -> anyhow::Result<(W, Vec<u8>)> {
+) -> anyhow::Result<(W, Vec<u8>, RuntimeExecutionReport)> {
     let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
     let main_result = main.call_async(&mut store, ()).await;
     let main_ok = match main_result {
@@ -468,6 +468,17 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
+    let gc_options = store.data().gc_diagnostics_options();
+    let heap_snapshot = if gc_options.heap_snapshot {
+        Some(crate::runtime_gc::diagnostics::capture_heap_snapshot(
+            &mut store, &wasm_env,
+        ))
+    } else {
+        None
+    };
+    let report = RuntimeExecutionReport {
+        gc: store.data().gc_diagnostics_report(heap_snapshot),
+    };
     drop(store);
 
     let mut writer = writer;
@@ -485,7 +496,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     // Propagate any wasm trap from main() call (must be after output collection)
     main_result?;
 
-    Ok((writer, diag_bytes))
+    Ok((writer, diag_bytes, report))
 }
 
 #[cfg(test)]

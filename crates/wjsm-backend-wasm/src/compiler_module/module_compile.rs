@@ -268,7 +268,7 @@ impl Compiler {
         self.user_func_base_idx = self._next_import_func;
         for (function_id, function) in module.functions().iter().enumerate() {
             if is_module_entry_ir_function(function.name()) {
-                self.compile_function(module, function)?;
+                self.compile_function(module, function, wjsm_ir::FunctionId(function_id as u32))?;
             } else {
                 self.compile_js_function(
                     module,

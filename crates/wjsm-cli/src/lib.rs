@@ -43,12 +43,29 @@ const EXIT_USAGE_ERROR: u8 = 3;
 // Runtime bridge (sync CLI -> async Store)
 // ============================================================================
 
-fn block_on_wasm_execute(wasm: &[u8]) -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
+fn block_on_wasm_execute(wasm: &[u8], trace_gc: bool) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("failed to create Tokio runtime for WASM execution")?
-        .block_on(runtime::execute(wasm))
+        .context("failed to create Tokio runtime for WASM execution")?;
+    if !trace_gc {
+        return runtime.block_on(runtime::execute(wasm));
+    }
+
+    let stdout = io::stdout();
+    let (_, diagnostics, report) = runtime.block_on(runtime::execute_with_writer_and_options(
+        wasm,
+        stdout.lock(),
+        runtime::RuntimeExecutionOptions::trace_gc(),
+    ))?;
+    if !diagnostics.is_empty() {
+        let _ = io::stderr().write_all(&diagnostics);
+    }
+    let formatted = runtime::format_gc_diagnostics_report(&report.gc);
+    if !formatted.is_empty() {
+        let _ = io::stderr().write_all(formatted.as_bytes());
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -1604,7 +1621,7 @@ fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<Exi
     }
 
     let start = Instant::now();
-    let exec_result = block_on_wasm_execute(wasm);
+    let exec_result = block_on_wasm_execute(wasm, cli.trace_gc);
     result.timings.execute_us = start.elapsed().as_micros() as u64;
 
     if cli.time {
