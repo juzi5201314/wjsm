@@ -60,10 +60,10 @@ fn array_prototype_group_is_explicit_not_range_based() {
         .collect();
 
     assert!(names.starts_with(&["arr_proto_push", "arr_proto_pop"]));
-    assert!(names.ends_with(&["arr_proto_splice"]));
+    assert!(names.ends_with(&["arr_proto_with"]));
     assert_eq!(array_proto_table_len() as usize, names.len());
     assert_eq!(properties.first().map(String::as_str), Some("push"));
-    assert_eq!(properties.last().map(String::as_str), Some("splice"));
+    assert_eq!(properties.last().map(String::as_str), Some("with"));
     assert_ne!(array_proto_table_hash(), 0);
 
     let filter_count = specs

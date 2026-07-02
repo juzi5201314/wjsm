@@ -397,7 +397,11 @@ fn array_like_length(caller: &mut Caller<'_, RuntimeState>, target: i64) -> u32 
         .max(0.0) as u32
 }
 
-fn create_array_like_values_iterator(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
+fn create_array_like_iterator(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    kind: ArrayIterKind,
+) -> i64 {
     let length = array_like_length(caller, target);
     let index = Arc::new(Mutex::new(0));
     let next = create_native_callable(
@@ -406,6 +410,7 @@ fn create_array_like_values_iterator(caller: &mut Caller<'_, RuntimeState>, targ
             target,
             index,
             length,
+            kind,
         },
     );
     let obj = {
@@ -556,11 +561,12 @@ fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize
     }
 }
 
-fn advance_array_like_values_iterator(
+fn advance_array_like_iterator(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
     index: Arc<Mutex<u32>>,
     length: u32,
+    kind: ArrayIterKind,
 ) -> i64 {
     let idx = {
         let mut index = index.lock().unwrap_or_else(|e| e.into_inner());
@@ -571,7 +577,10 @@ fn advance_array_like_values_iterator(
         *index += 1;
         idx
     };
-    let value = if value::is_array(target) {
+    if kind == ArrayIterKind::Keys {
+        return alloc_iterator_result_from_caller(caller, value::encode_f64(idx as f64), false);
+    }
+    let element = if value::is_array(target) {
         resolve_handle(caller, target)
             .and_then(|ptr| read_array_elem(caller, ptr, idx))
             .unwrap_or_else(value::encode_undefined)
@@ -581,7 +590,18 @@ fn advance_array_like_values_iterator(
             .and_then(|ptr| read_object_property_by_name(caller, ptr, &key))
             .unwrap_or_else(value::encode_undefined)
     };
-    alloc_iterator_result_from_caller(caller, value, false)
+    let produced = if kind == ArrayIterKind::Entries {
+        let entry = alloc_array(caller, 2);
+        if let Some(entry_ptr) = resolve_array_ptr(caller, entry) {
+            write_array_elem(caller, entry_ptr, 0, value::encode_f64(idx as f64));
+            write_array_elem(caller, entry_ptr, 1, element);
+            write_array_length(caller, entry_ptr, 2);
+        }
+        entry
+    } else {
+        element
+    };
+    alloc_iterator_result_from_caller(caller, produced, false)
 }
 
 pub(crate) fn call_native_callable_with_args_from_caller(
@@ -612,15 +632,28 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ArgumentsStrictCalleeGetter => Some(
             crate::runtime_arguments::arguments_strict_callee_getter(caller, this_val),
         ),
-        NativeCallable::ArrayProtoValues => {
-            Some(create_array_like_values_iterator(caller, this_val))
-        }
+        NativeCallable::ArrayProtoValues => Some(create_array_like_iterator(
+            caller,
+            this_val,
+            ArrayIterKind::Values,
+        )),
+        NativeCallable::ArrayProtoKeys => Some(create_array_like_iterator(
+            caller,
+            this_val,
+            ArrayIterKind::Keys,
+        )),
+        NativeCallable::ArrayProtoEntries => Some(create_array_like_iterator(
+            caller,
+            this_val,
+            ArrayIterKind::Entries,
+        )),
         NativeCallable::ArrayLikeIteratorNext {
             target,
             index,
             length,
-        } => Some(advance_array_like_values_iterator(
-            caller, target, index, length,
+            kind,
+        } => Some(advance_array_like_iterator(
+            caller, target, index, length, kind,
         )),
         NativeCallable::RawIteratorNext { iterator } => {
             Some(raw_iterator_next_result(caller, iterator))

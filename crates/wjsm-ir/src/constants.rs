@@ -81,7 +81,18 @@ pub const PRIMORDIAL_VALUEOF_OFFSET: u32 = 437; // "valueOf\0" (8 bytes)
 pub const PRIMORDIAL_SYMBOL_TOSTRINGTAG_OFFSET: u32 = 445; // "Symbol.toStringTag\0" (19 bytes)
 pub const PRIMORDIAL_ASYNCITERATOR_OFFSET: u32 = 464; // "AsyncIterator\0" (14 bytes)
 pub const PRIMORDIAL_ASYNCGENERATOR_OFFSET: u32 = 478; // "AsyncGenerator\0" (15 bytes)
-pub const PRIMORDIAL_STRINGS_END: u32 = 493;
+// ── ES2023/ES2024 新增数组原型方法名（含 keys/values/entries 迭代器方法） ──
+pub const PRIMORDIAL_FINDLAST_OFFSET: u32 = 493; // "findLast\0" (9 bytes)
+pub const PRIMORDIAL_FINDLASTINDEX_OFFSET: u32 = 502; // "findLastIndex\0" (14 bytes)
+pub const PRIMORDIAL_LASTINDEXOF_OFFSET: u32 = 516; // "lastIndexOf\0" (12 bytes)
+pub const PRIMORDIAL_TOSORTED_OFFSET: u32 = 528; // "toSorted\0" (9 bytes)
+pub const PRIMORDIAL_TOREVERSED_OFFSET: u32 = 537; // "toReversed\0" (11 bytes)
+pub const PRIMORDIAL_TOSPLICED_OFFSET: u32 = 548; // "toSpliced\0" (10 bytes)
+pub const PRIMORDIAL_WITH_OFFSET: u32 = 558; // "with\0" (5 bytes)
+pub const PRIMORDIAL_KEYS_OFFSET: u32 = 563; // "keys\0" (5 bytes)
+pub const PRIMORDIAL_VALUES_OFFSET: u32 = 568; // "values\0" (7 bytes)
+pub const PRIMORDIAL_ENTRIES_OFFSET: u32 = 575; // "entries\0" (8 bytes)
+pub const PRIMORDIAL_STRINGS_END: u32 = 583;
 
 // ── 用户字符串起始位置 ──────────────────────────────────────────────────────
 pub const USER_STRING_START: u32 = PRIMORDIAL_STRINGS_END;
@@ -125,6 +136,16 @@ pub fn primordial_string_offsets() -> &'static [(u32, &'static str)] {
         (PRIMORDIAL_SYMBOL_TOSTRINGTAG_OFFSET, "Symbol.toStringTag"),
         (PRIMORDIAL_ASYNCITERATOR_OFFSET, "AsyncIterator"),
         (PRIMORDIAL_ASYNCGENERATOR_OFFSET, "AsyncGenerator"),
+        (PRIMORDIAL_FINDLAST_OFFSET, "findLast"),
+        (PRIMORDIAL_FINDLASTINDEX_OFFSET, "findLastIndex"),
+        (PRIMORDIAL_LASTINDEXOF_OFFSET, "lastIndexOf"),
+        (PRIMORDIAL_TOSORTED_OFFSET, "toSorted"),
+        (PRIMORDIAL_TOREVERSED_OFFSET, "toReversed"),
+        (PRIMORDIAL_TOSPLICED_OFFSET, "toSpliced"),
+        (PRIMORDIAL_WITH_OFFSET, "with"),
+        (PRIMORDIAL_KEYS_OFFSET, "keys"),
+        (PRIMORDIAL_VALUES_OFFSET, "values"),
+        (PRIMORDIAL_ENTRIES_OFFSET, "entries"),
     ]
 }
 

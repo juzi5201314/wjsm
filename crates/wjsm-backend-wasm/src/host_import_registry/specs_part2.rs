@@ -52,9 +52,57 @@ pub(crate) static SPECS_PART2: &[HostImportSpec] = &[
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
+        name: "arr_proto_find_last",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayFindLast)),
+        group: Some(HostImportGroup::ArrayPrototypeMethod),
+    },
+    HostImportSpec {
+        name: "arr_proto_find_last_index",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayFindLastIndex)),
+        group: Some(HostImportGroup::ArrayPrototypeMethod),
+    },
+    HostImportSpec {
+        name: "arr_proto_last_index_of",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayLastIndexOf)),
+        group: Some(HostImportGroup::ArrayPrototypeMethod),
+    },
+    HostImportSpec {
+        name: "arr_proto_to_sorted",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayToSorted)),
+        group: Some(HostImportGroup::ArrayPrototypeMethod),
+    },
+    HostImportSpec {
+        name: "arr_proto_to_reversed",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayToReversed)),
+        group: Some(HostImportGroup::ArrayPrototypeMethod),
+    },
+    HostImportSpec {
+        name: "arr_proto_to_spliced",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayToSplicedVa)),
+        group: Some(HostImportGroup::ArrayPrototypeMethod),
+    },
+    HostImportSpec {
+        name: "arr_proto_with",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayWith)),
+        group: Some(HostImportGroup::ArrayPrototypeMethod),
+    },
+    HostImportSpec {
         name: "arr_static_is_array",
         type_idx: 12,
         key: Some(HostImportKey::Builtin(Builtin::ArrayIsArray)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "arr_static_of",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayOf)),
         group: None,
     },
     HostImportSpec {

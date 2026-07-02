@@ -140,6 +140,8 @@ pub enum SnapshotNativeCallable {
     SymbolProtoDescriptionGetter = 61,
     SymbolProtoToPrimitive = 62,
     RegExpPrimitiveMethod = 63,
+    ArrayProtoKeys = 64,
+    ArrayProtoEntries = 65,
 }
 
 impl SnapshotNativeCallable {
@@ -209,6 +211,8 @@ impl SnapshotNativeCallable {
             61 => Some(Self::SymbolProtoDescriptionGetter),
             62 => Some(Self::SymbolProtoToPrimitive),
             63 => Some(Self::RegExpPrimitiveMethod),
+            64 => Some(Self::ArrayProtoKeys),
+            65 => Some(Self::ArrayProtoEntries),
             _ => None,
         }
     }
@@ -615,7 +619,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=63 {
+    for d in 0u32..=65 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);

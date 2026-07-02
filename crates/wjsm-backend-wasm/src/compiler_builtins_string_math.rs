@@ -150,6 +150,14 @@ impl Compiler {
             | Builtin::ArraySpliceVa
             | Builtin::ArrayConcatVa
             | Builtin::ArrayFlat
+            | Builtin::ArrayFindLast
+            | Builtin::ArrayFindLastIndex
+            | Builtin::ArrayLastIndexOf
+            | Builtin::ArrayToSorted
+            | Builtin::ArrayToReversed
+            | Builtin::ArrayToSplicedVa
+            | Builtin::ArrayWith
+            | Builtin::ArrayOf
             | Builtin::ArrayIsArray
             | Builtin::ArrayFrom
             | Builtin::DateConstructor => self.compile_proto_method_call(dest, builtin, args).map(Some),

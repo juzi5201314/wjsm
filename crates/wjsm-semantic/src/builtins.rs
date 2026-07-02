@@ -147,6 +147,7 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
         "Array" => match property {
             "isArray" => Some(Builtin::ArrayIsArray),
             "from" => Some(Builtin::ArrayFrom),
+            "of" => Some(Builtin::ArrayOf),
             _ => None,
         },
         "Object" => match property {
@@ -330,6 +331,13 @@ pub(crate) fn builtin_from_array_proto_method(name: &str) -> Option<Builtin> {
         "flat" => Some(ArrayFlat),
         "concat" => Some(ArrayConcatVa),
         "splice" => Some(ArraySpliceVa),
+        "findLast" => Some(ArrayFindLast),
+        "findLastIndex" => Some(ArrayFindLastIndex),
+        "lastIndexOf" => Some(ArrayLastIndexOf),
+        "toSorted" => Some(ArrayToSorted),
+        "toReversed" => Some(ArrayToReversed),
+        "toSpliced" => Some(ArrayToSplicedVa),
+        "with" => Some(ArrayWith),
         _ => None,
     }
 }

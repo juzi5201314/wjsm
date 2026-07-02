@@ -346,6 +346,24 @@ pub(crate) fn define_string_methods(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
+            // 数组接收者回退到 array_last_index_of_from（同 string_index_of）。
+            if value::is_array(receiver)
+                && let Some(ptr) = resolve_array_ptr(&mut caller, receiver)
+            {
+                let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                let from_index = if pos == value::encode_undefined() {
+                    value::encode_f64((len as i64 - 1) as f64)
+                } else {
+                    pos
+                };
+                return super::array_object::array_last_index_of_from(
+                    &mut caller,
+                    ptr,
+                    len,
+                    search,
+                    from_index,
+                );
+            }
             let s = get_string_value(&mut caller, receiver);
             let search_str = get_string_value(&mut caller, search);
             let len_utf16 = utf16_len(&s);

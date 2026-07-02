@@ -396,6 +396,14 @@ pub(crate) struct ClosureEntry {
     pub(crate) env_obj: i64,
 }
 
+/// Array/arguments 迭代器的产出种类：keys 产出下标，values 产出元素，entries 产出 [下标, 元素]。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArrayIterKind {
+    Keys,
+    Values,
+    Entries,
+}
+
 #[derive(Clone)]
 pub(crate) enum NativeCallable {
     EvalIndirect,
@@ -456,12 +464,17 @@ pub(crate) enum NativeCallable {
     },
     /// RegExp String Iterator 的 [Symbol.iterator]() → return this。
     RegExpStringIteratorSelf,
-    /// Array.prototype.values() / arguments @@iterator。
+    /// Array.prototype.values() / arguments @@iterator（产出元素）。
     ArrayProtoValues,
+    /// Array.prototype.keys()（产出下标）。
+    ArrayProtoKeys,
+    /// Array.prototype.entries()（产出 [下标, 元素]）。
+    ArrayProtoEntries,
     ArrayLikeIteratorNext {
         target: i64,
         index: Arc<Mutex<u32>>,
         length: u32,
+        kind: ArrayIterKind,
     },
     /// 内部 TAG_ITERATOR 包装对象的 next()。
     RawIteratorNext {

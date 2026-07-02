@@ -1,0 +1,20 @@
+exit_code: 0
+--- stdout ---
+{"value":0,"done":false}
+{"value":1,"done":false}
+{"value":2,"done":false}
+{"done":true}
+{"value":10,"done":false}
+{"value":20,"done":false}
+{"value":30,"done":false}
+{"done":true}
+{"value":[0,10],"done":false}
+{"value":[1,20],"done":false}
+{"value":[2,30],"done":false}
+{"done":true}
+[0,1]
+[10,20]
+[[0,"x"],[1,"y"]]
+true
+[1,2,3]
+--- stderr ---

@@ -20,6 +20,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
                 NativeCallable::AsyncIteratorProtoSymbolAsyncIterator
             }
             Self::ArrayProtoValues => NativeCallable::ArrayProtoValues,
+            Self::ArrayProtoKeys => NativeCallable::ArrayProtoKeys,
+            Self::ArrayProtoEntries => NativeCallable::ArrayProtoEntries,
             Self::ArrayConstructor => NativeCallable::ArrayConstructor,
             Self::ObjectConstructor => NativeCallable::ObjectConstructor,
             Self::ObjectProtoToString => NativeCallable::ObjectProtoToString,
@@ -97,6 +99,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
                 Self::AsyncIteratorProtoSymbolAsyncIterator
             }
             NativeCallable::ArrayProtoValues => Self::ArrayProtoValues,
+            NativeCallable::ArrayProtoKeys => Self::ArrayProtoKeys,
+            NativeCallable::ArrayProtoEntries => Self::ArrayProtoEntries,
             NativeCallable::ArrayConstructor => Self::ArrayConstructor,
             NativeCallable::ObjectConstructor => Self::ObjectConstructor,
             NativeCallable::ObjectProtoToString => Self::ObjectProtoToString,

@@ -156,6 +156,22 @@ pub(crate) fn define_array_object_async(
     wrap_array_callback_async!(linker, "arr_proto_some", arr_proto_some_async);
     wrap_array_callback_async!(linker, "arr_proto_every", arr_proto_every_async);
     wrap_array_callback_async!(linker, "arr_proto_flat_map", arr_proto_flat_map_async);
+    wrap_array_callback_async!(linker, "arr_proto_find_last", arr_proto_find_last_async);
+    wrap_array_callback_async!(
+        linker,
+        "arr_proto_find_last_index",
+        arr_proto_find_last_index_async
+    );
+    linker.func_wrap_async(
+        "env",
+        "arr_proto_to_sorted",
+        |mut caller: Caller<'_, RuntimeState>,
+         (_env_obj, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                arr_proto_to_sorted_async_body(&mut caller, this_val, args_base, args_count).await
+            })
+        },
+    )?;
 
     linker.func_wrap_async(
         "env",
@@ -612,5 +628,140 @@ async fn arr_proto_flat_map_async(
         write_array_elem(caller, new_ptr, i as u32, *elem);
     }
     write_array_length(caller, new_ptr, elements.len() as u32);
+    new_arr
+}
+
+/// ECMAScript §23.1.3.9 Array.prototype.findLast：从末尾向前查找，返回首个满足谓词的元素。
+async fn arr_proto_find_last_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args_base: i32,
+    _args_count: i32,
+) -> i64 {
+    let cb = read_shadow_arg(caller, args_base, 0);
+    if !value::is_callable(cb) {
+        return value::encode_undefined();
+    }
+    let Some(ptr) = resolve_array_ptr(caller, this_val) else {
+        return value::encode_undefined();
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    for i in (0..len).rev() {
+        let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
+        let idx_val = value::encode_f64(i as f64);
+        if let Ok(r) = call_wasm_callback_async(
+            caller,
+            cb,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
+            && value::is_truthy(r)
+        {
+            return elem;
+        }
+    }
+    value::encode_undefined()
+}
+
+/// ECMAScript §23.1.3.10 Array.prototype.findLastIndex：从末尾向前查找，返回首个满足谓词的下标。
+async fn arr_proto_find_last_index_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args_base: i32,
+    _args_count: i32,
+) -> i64 {
+    let cb = read_shadow_arg(caller, args_base, 0);
+    if !value::is_callable(cb) {
+        return value::encode_f64(-1.0);
+    }
+    let Some(ptr) = resolve_array_ptr(caller, this_val) else {
+        return value::encode_f64(-1.0);
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    for i in (0..len).rev() {
+        let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
+        let idx_val = value::encode_f64(i as f64);
+        if let Ok(r) = call_wasm_callback_async(
+            caller,
+            cb,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
+            && value::is_truthy(r)
+        {
+            return value::encode_f64(i as f64);
+        }
+    }
+    value::encode_f64(-1.0)
+}
+
+/// ECMAScript §23.1.3.34 Array.prototype.toSorted：返回排序后的新数组，原数组不变。
+/// 空洞按 undefined 读取；undefined 元素排至末尾（与 sort 一致）。
+async fn arr_proto_to_sorted_async_body(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args_base: i32,
+    args_count: i32,
+) -> i64 {
+    let has_comparator = args_count > 0 && value::is_callable(read_shadow_arg(caller, args_base, 0));
+    let Some(ptr) = resolve_array_ptr(caller, this_val) else {
+        return value::encode_undefined();
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    let new_arr = alloc_array(caller, len);
+    let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
+        return value::encode_undefined();
+    };
+    if len == 0 {
+        write_array_length(caller, new_ptr, 0);
+        return new_arr;
+    }
+
+    let mut sort_list: Vec<i64> = Vec::new();
+    let mut undefined_count: u32 = 0;
+    for i in 0..len {
+        let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
+        if value::is_undefined(elem) {
+            undefined_count += 1;
+        } else {
+            sort_list.push(elem);
+        }
+    }
+
+    if sort_list.len() > 1 {
+        if has_comparator {
+            let cmp = read_shadow_arg(caller, args_base, 0);
+            for i in 0..sort_list.len() {
+                for j in i + 1..sort_list.len() {
+                    if sort_compare_async(caller, cmp, sort_list[i], sort_list[j]).await
+                        == std::cmp::Ordering::Greater
+                    {
+                        sort_list.swap(i, j);
+                    }
+                }
+            }
+        } else {
+            let keys: Vec<String> = sort_list
+                .iter()
+                .map(|&e| render_value(caller, e).unwrap_or_default())
+                .collect();
+            let mut order: Vec<usize> = (0..sort_list.len()).collect();
+            order.sort_by(|&ia, &ib| keys[ia].cmp(&keys[ib]));
+            sort_list = order.into_iter().map(|i| sort_list[i]).collect();
+        }
+    }
+
+    let mut write_idx: u32 = 0;
+    for value in &sort_list {
+        write_array_elem(caller, new_ptr, write_idx, *value);
+        write_idx += 1;
+    }
+    for _ in 0..undefined_count {
+        write_array_elem(caller, new_ptr, write_idx, value::encode_undefined());
+        write_idx += 1;
+    }
+    write_array_length(caller, new_ptr, len);
     new_arr
 }

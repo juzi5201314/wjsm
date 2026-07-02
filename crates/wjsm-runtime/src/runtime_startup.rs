@@ -219,15 +219,33 @@ fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &Wa
     if array_proto_handle < 0 {
         return;
     }
-    let array_iterator = create_native_callable(store.data(), NativeCallable::ArrayProtoValues);
     let array_proto = value::encode_object_handle(array_proto_handle as u32);
+    // values() 同时作为 [Symbol.iterator]（ES2024 §23.1.3.36：二者是同一函数对象）。
+    let values = create_native_callable(store.data(), NativeCallable::ArrayProtoValues);
+    let keys = create_native_callable(store.data(), NativeCallable::ArrayProtoKeys);
+    let entries = create_native_callable(store.data(), NativeCallable::ArrayProtoEntries);
+    let method_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;
+    for (name, callable) in [("values", values), ("keys", keys), ("entries", entries)] {
+        if let Some(name_id) = find_memory_c_string_with_env(store, wasm_env, name)
+            .or_else(|| alloc_heap_c_string_with_env(store, wasm_env, name))
+        {
+            let _ = define_host_data_property_by_name_id_with_env(
+                store,
+                wasm_env,
+                array_proto,
+                encode_string_name_id(name_id),
+                callable,
+                method_flags,
+            );
+        }
+    }
     let _ = define_host_data_property_by_name_id_with_env(
         store,
         wasm_env,
         array_proto,
         encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
-        array_iterator,
-        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+        values,
+        method_flags,
     );
 }
 

@@ -419,6 +419,7 @@ impl Compiler {
                 builtin,
                 Builtin::ArrayIsArray
                     | Builtin::ArrayFrom
+                    | Builtin::ArrayOf
                     | Builtin::StringFromCharCode
                     | Builtin::StringFromCodePoint
                     | Builtin::MathMax

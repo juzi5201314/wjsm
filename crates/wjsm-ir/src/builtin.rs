@@ -86,6 +86,15 @@ pub enum Builtin {
     ArrayFrom,
     ArraySpliceVa,
     ArrayConcatVa,
+    // ── ES2023/ES2024 新增数组方法 ──
+    ArrayOf,
+    ArrayFindLast,
+    ArrayFindLastIndex,
+    ArrayLastIndexOf,
+    ArrayToSorted,
+    ArrayToReversed,
+    ArrayToSplicedVa,
+    ArrayWith,
     // ── 函数原型方法 ──
     FuncCall,
     FuncApply,
@@ -589,6 +598,14 @@ impl Builtin {
             Self::ArrayFrom => "array.from",
             Self::ArraySpliceVa => "array.splice_va",
             Self::ArrayConcatVa => "array.concat_va",
+            Self::ArrayOf => "array.of",
+            Self::ArrayFindLast => "array.find_last",
+            Self::ArrayFindLastIndex => "array.find_last_index",
+            Self::ArrayLastIndexOf => "array.last_index_of",
+            Self::ArrayToSorted => "array.to_sorted",
+            Self::ArrayToReversed => "array.to_reversed",
+            Self::ArrayToSplicedVa => "array.to_spliced_va",
+            Self::ArrayWith => "array.with",
             _ => return None,
         })
     }

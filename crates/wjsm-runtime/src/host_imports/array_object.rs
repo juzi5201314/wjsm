@@ -480,6 +480,46 @@ pub(crate) fn array_includes_from(
     value::encode_bool(false)
 }
 
+pub(crate) fn array_last_index_of_from(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    len: u32,
+    search: i64,
+    from_index: i64,
+) -> i64 {
+    if len == 0 {
+        return value::encode_f64(-1.0);
+    }
+    let len_i = len as i64;
+    // fromIndex 缺省为 len-1；ToIntegerOrInfinity 语义（ES2024 §23.1.3.20 步骤 3-5）。
+    let f = value::decode_f64(from_index);
+    let start = if f.is_nan() {
+        0
+    } else if f == f64::NEG_INFINITY {
+        return value::encode_f64(-1.0);
+    } else if f == f64::INFINITY || f >= (len_i - 1) as f64 {
+        len_i - 1
+    } else if f >= 0.0 {
+        f.trunc() as i64
+    } else {
+        len_i + f.trunc() as i64
+    };
+    if start < 0 {
+        return value::encode_f64(-1.0);
+    }
+    let mut i = start;
+    while i >= 0 {
+        if array_elem_present(caller, ptr, i as u32)
+            && let Some(elem) = read_array_elem(caller, ptr, i as u32)
+            && elem == search
+        {
+            return value::encode_f64(i as f64);
+        }
+        i -= 1;
+    }
+    value::encode_f64(-1.0)
+}
+
 /// ECMAScript `Get(O, P)`（同步宿主路径；Proxy / 访问器经 reflect_get）。
 fn concat_get_sync(caller: &mut Caller<'_, RuntimeState>, obj: i64, prop: i64) -> i64 {
     let rt = tokio::runtime::Handle::current();
@@ -1987,6 +2027,227 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "arr_proto_splice", arr_proto_splice_fn)?;
+
+    // ── arr_proto_last_index_of (ES2024 §23.1.3.20) ──────────────────
+    let arr_proto_last_index_of_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let search = read_shadow_arg(&mut caller, args_base, 0);
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_f64(-1.0);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let from_index = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_f64((len as i64 - 1) as f64)
+            };
+            array_last_index_of_from(&mut caller, ptr, len, search, from_index)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_last_index_of",
+        arr_proto_last_index_of_fn,
+    )?;
+
+    // ── arr_proto_to_reversed (ES2024 §23.1.3.33) ────────────────────
+    let arr_proto_to_reversed_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         _args_base: i32,
+         _args_count: i32|
+         -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let new_arr = alloc_array(&mut caller, len);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            // 结果为稠密数组：空洞按 undefined 读取。
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, len - 1 - i)
+                    .unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, new_ptr, i, elem);
+            }
+            write_array_length(&mut caller, new_ptr, len);
+            new_arr
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_to_reversed",
+        arr_proto_to_reversed_fn,
+    )?;
+
+    // ── arr_proto_to_spliced (ES2024 §23.1.3.35) ─────────────────────
+    let arr_proto_to_spliced_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i64;
+            // start（ToIntegerOrInfinity + 负数回绕 + 截断）
+            let raw_start = if args_count > 0 {
+                let s = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
+                if s.is_nan() {
+                    0
+                } else if s == f64::NEG_INFINITY {
+                    i64::MIN
+                } else if s == f64::INFINITY {
+                    len
+                } else {
+                    s.trunc() as i64
+                }
+            } else {
+                0
+            };
+            let start_idx = if raw_start < 0 {
+                (len + raw_start).max(0)
+            } else {
+                raw_start.min(len)
+            };
+            // skipCount（deleteCount）
+            let skip = if args_count == 0 {
+                0
+            } else if args_count == 1 {
+                len - start_idx
+            } else {
+                let d = value::decode_f64(read_shadow_arg(&mut caller, args_base, 1));
+                let d = if d.is_nan() { 0 } else { d.trunc() as i64 };
+                d.max(0).min(len - start_idx)
+            };
+            let insert_count = (args_count as i64 - 2).max(0);
+            let new_len = len - skip + insert_count;
+            if new_len as u64 > u64::from(MAX_ARRAY_LENGTH) {
+                return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+            }
+            let new_arr = alloc_array(&mut caller, new_len as u32);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            let mut write_idx: u32 = 0;
+            // [0, start) 原样复制
+            for i in 0..start_idx {
+                let elem =
+                    read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, new_ptr, write_idx, elem);
+                write_idx += 1;
+            }
+            // 插入新元素
+            for j in 0..insert_count {
+                let item = read_shadow_arg(&mut caller, args_base, 2 + j as u32);
+                write_array_elem(&mut caller, new_ptr, write_idx, item);
+                write_idx += 1;
+            }
+            // [start+skip, len) 复制
+            for i in (start_idx + skip)..len {
+                let elem =
+                    read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, new_ptr, write_idx, elem);
+                write_idx += 1;
+            }
+            write_array_length(&mut caller, new_ptr, new_len as u32);
+            new_arr
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_to_spliced",
+        arr_proto_to_spliced_fn,
+    )?;
+
+    // ── arr_proto_with (ES2024 §23.1.3.39) ───────────────────────────
+    let arr_proto_with_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i64;
+            let raw_index = if args_count > 0 {
+                let idx = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
+                if idx.is_nan() { 0 } else { idx.trunc() as i64 }
+            } else {
+                0
+            };
+            let actual_index = if raw_index >= 0 {
+                raw_index
+            } else {
+                len + raw_index
+            };
+            if actual_index < 0 || actual_index >= len {
+                return make_range_error_exception(&mut caller, "Invalid index");
+            }
+            let new_value = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_undefined()
+            };
+            let new_arr = alloc_array(&mut caller, len as u32);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            for i in 0..len {
+                let elem = if i == actual_index {
+                    new_value
+                } else {
+                    read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined())
+                };
+                write_array_elem(&mut caller, new_ptr, i as u32, elem);
+            }
+            write_array_length(&mut caller, new_ptr, len as u32);
+            new_arr
+        },
+    );
+    linker.define(&mut store, "env", "arr_proto_with", arr_proto_with_fn)?;
+
+    // ── arr_static_of (ES2024 §23.1.2.3 Array.of) ────────────────────
+    let arr_static_of_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         _this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let count = args_count.max(0) as u32;
+            let new_arr = alloc_array(&mut caller, count);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            for i in 0..count {
+                let arg = read_shadow_arg(&mut caller, args_base, i);
+                write_array_elem(&mut caller, new_ptr, i, arg);
+            }
+            write_array_length(&mut caller, new_ptr, count);
+            new_arr
+        },
+    );
+    linker.define(&mut store, "env", "arr_static_of", arr_static_of_fn)?;
 
     // ── arr_static_is_array (#75) ──────────────────────────────────────
     let arr_static_is_array_fn = Func::wrap(

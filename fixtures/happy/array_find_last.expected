@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+2
+1
+undefined
+-1
+undefined
+-1
+this: true
+30
+--- stderr ---
