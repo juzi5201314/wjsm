@@ -943,11 +943,8 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::LocalSet(7));
     func.instruction(&WasmInstruction::End);
-    // new_ptr = heap_ptr
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::LocalSet(8));
-    // heap_ptr += 16 + new_capacity * 32（扩容前 new_ptr 已写入 local 8）
-    emit_heap_bump_for_object_resize_support(&mut func, 7, 16);
+    // 分配扩容后的新区域；fast-path 失败时由 gc_alloc_slow 负责 GC/grow/OOM。
+    emit_heap_bump_for_object_resize_support(&mut func, 7, 16, 8);
 
     // 拷贝旧数据到新内存：memory.copy(dst=new_ptr, src=old_ptr, len=16+num_props*32)
     func.instruction(&WasmInstruction::LocalGet(8));

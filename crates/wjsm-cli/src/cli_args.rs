@@ -2,6 +2,37 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 use std::path::PathBuf;
 
+pub(crate) fn parse_heap_size(raw: &str) -> Result<usize, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("heap size must not be empty".to_string());
+    }
+    let split_at = trimmed
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(trimmed.len());
+    let (digits, suffix) = trimmed.split_at(split_at);
+    if digits.is_empty() {
+        return Err(format!("invalid heap size `{raw}`"));
+    }
+    let value = digits
+        .parse::<usize>()
+        .map_err(|_| format!("invalid heap size `{raw}`"))?;
+    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1024,
+        "m" | "mb" | "mib" => 1024 * 1024,
+        "g" | "gb" | "gib" => 1024 * 1024 * 1024,
+        _ => return Err(format!("unsupported heap size suffix `{suffix}`")),
+    };
+    let bytes = value
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("heap size `{raw}` is too large"))?;
+    if bytes == 0 {
+        return Err("heap size must be greater than zero".to_string());
+    }
+    Ok(bytes)
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
@@ -43,6 +74,10 @@ pub struct Cli {
     /// Target backend (wasm or jit)
     #[arg(long, default_value = "wasm", global = true)]
     pub(crate) target: Target,
+
+    /// Limit JavaScript heap allocations (bytes, or K/M/G suffixes)
+    #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
+    pub(crate) max_heap_size: Option<usize>,
 }
 
 impl Cli {

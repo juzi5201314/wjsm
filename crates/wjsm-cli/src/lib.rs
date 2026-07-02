@@ -43,12 +43,18 @@ const EXIT_USAGE_ERROR: u8 = 3;
 // Runtime bridge (sync CLI -> async Store)
 // ============================================================================
 
-fn block_on_wasm_execute(wasm: &[u8]) -> Result<()> {
+fn runtime_options(cli: &Cli) -> runtime::RuntimeOptions {
+    runtime::RuntimeOptions {
+        max_heap_size: cli.max_heap_size,
+    }
+}
+
+fn block_on_wasm_execute(wasm: &[u8], options: runtime::RuntimeOptions) -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to create Tokio runtime for WASM execution")?
-        .block_on(runtime::execute(wasm))
+        .block_on(runtime::execute_with_options(wasm, options))
 }
 
 // ============================================================================
@@ -1604,7 +1610,7 @@ fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<Exi
     }
 
     let start = Instant::now();
-    let exec_result = block_on_wasm_execute(wasm);
+    let exec_result = block_on_wasm_execute(wasm, runtime_options(cli));
     result.timings.execute_us = start.elapsed().as_micros() as u64;
 
     if cli.time {

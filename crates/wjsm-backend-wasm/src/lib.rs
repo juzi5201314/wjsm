@@ -158,6 +158,8 @@ struct Compiler {
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
     arr_proto_table_base: u32,
+    /// WASM global index for __heap_limit (controlled JS heap budget end).
+    heap_limit_global_idx: u32,
     /// WASM global index for Array.prototype method table base.
     arr_proto_table_base_global_idx: u32,
     /// WASM global index for Array.prototype method table length.

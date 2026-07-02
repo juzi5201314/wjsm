@@ -1,7 +1,7 @@
 use super::*;
 use crate::host_import_registry::{HostImportKey, host_import_specs};
 
-/// 19 个 env global 的 export 名称，与 support module abi::ENV_GLOBALS 对齐。
+/// 20 个 env global 的 export 名称，与 support module abi::ENV_GLOBALS 对齐。
 /// 用于 Normal mode user wasm re-export imported globals。
 const ENV_GLOBAL_EXPORT_NAMES: &[&str] = &[
     "__func_props",
@@ -23,6 +23,7 @@ const ENV_GLOBAL_EXPORT_NAMES: &[&str] = &[
     "__arr_proto_table_base",
     "__arr_proto_table_len",
     "__arr_proto_table_hash",
+    "__heap_limit",
 ];
 
 impl Compiler {
@@ -76,8 +77,9 @@ impl Compiler {
             import_eval_global(&mut imports, "__arr_proto_table_base", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_len", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_hash", ValType::I64, true);
+            import_eval_global(&mut imports, "__heap_limit", ValType::I32, true);
         } else {
-            // Normal mode (P2.2): import memory + table + 19 globals from env，
+            // Normal mode (P2.2): import memory + table + 20 globals from env，
             // 与 support module 共享同一份运行时状态。runtime 在 instantiate 前创建
             // memory/table/globals 并通过 Linker 注册到 env namespace。
             imports.import(
@@ -102,7 +104,7 @@ impl Compiler {
                     shared: false,
                 }),
             );
-            // 19 个 env globals — 与 support module 的 abi::ENV_GLOBALS 完全对齐。
+            // 20 个 env globals — 与 support module 的 abi::ENV_GLOBALS 完全对齐。
             // 全部 mutable：P2.2 后 user wasm 在 bootstrap 中用 global.set 初始化。
             import_eval_global(&mut imports, "__func_props", ValType::I32, true);
             import_eval_global(&mut imports, "__heap_ptr", ValType::I32, true);
@@ -123,6 +125,7 @@ impl Compiler {
             import_eval_global(&mut imports, "__arr_proto_table_base", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_len", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_hash", ValType::I64, true);
+            import_eval_global(&mut imports, "__heap_limit", ValType::I32, true);
 
             // P2.5+: import obj_*/arr_*/elem_*/string_eq/to_int32/get_proto_from_ctor from wjsm_support。
             // 10 个 helper imports 替代原来的 inline 函数定义。
@@ -168,12 +171,12 @@ impl Compiler {
             }
         } else {
             // Normal mode (P2.2)：re-export imported memory (idx 0) + table (idx 0) +
-            // 19 globals (idx 0..18)，使 WasmEnv::from_caller 仍能从 user instance
+            // 20 globals (idx 0..19)，使 WasmEnv::from_caller 仍能从 user instance
             // 的 exports 获取它们（零改动 host 函数）。
             exports.export("memory", ExportKind::Memory, 0);
             exports.export("__table", ExportKind::Table, 0);
-            for g in 0..19u32 {
-                exports.export(ENV_GLOBAL_EXPORT_NAMES[g as usize], ExportKind::Global, g);
+            for (g, name) in ENV_GLOBAL_EXPORT_NAMES.iter().enumerate() {
+                exports.export(name, ExportKind::Global, g as u32);
             }
             for (index, spec) in host_import_specs().iter().enumerate() {
                 exports.export(spec.name, ExportKind::Func, index as u32);
@@ -252,6 +255,7 @@ impl Compiler {
             arr_proto_table_base_global_idx: 16,
             arr_proto_table_len_global_idx: 17,
             arr_proto_table_hash_global_idx: 18,
+            heap_limit_global_idx: 19,
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             function_id_to_wasm_idx: HashMap::new(),

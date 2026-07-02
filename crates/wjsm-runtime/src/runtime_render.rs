@@ -1285,30 +1285,26 @@ pub(crate) fn alloc_heap_c_string_global(
     caller: &mut Caller<'_, RuntimeState>,
     name: &str,
 ) -> Option<u32> {
-    let heap_ptr = caller
-        .get_export("__heap_ptr")
-        .and_then(|e| e.into_global())?
-        .get(&mut *caller)
-        .i32()
-        .unwrap_or(0) as usize;
+    let env = WasmEnv::from_caller(caller)?;
+    let heap_ptr = env.heap_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
     let bytes = name.as_bytes();
     let end = heap_ptr.checked_add(bytes.len() + 1)?;
     let aligned_end = (end + 7) & !7;
+    if !crate::runtime_heap::ensure_heap_allocation_bytes(
+        caller,
+        &env,
+        heap_ptr,
+        aligned_end.saturating_sub(heap_ptr),
+    ) {
+        return None;
+    }
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data_mut(&mut *caller);
-        if aligned_end > data.len() {
-            return None;
-        }
+        let data = env.memory.data_mut(&mut *caller);
         data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
         data[heap_ptr + bytes.len()] = 0;
         data[end..aligned_end].fill(0);
     }
-    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
-        let _ = global.set(&mut *caller, Val::I32(aligned_end as i32));
-    }
+    let _ = env.heap_ptr.set(&mut *caller, Val::I32(aligned_end as i32));
     Some(heap_ptr as u32)
 }
 

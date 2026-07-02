@@ -76,12 +76,16 @@ impl Compiler {
         func.instruction(&WasmInstruction::I32Or);
     }
 
-    /// 对象扩容路径：size = 16 + capacity_local * 32；与 obj_new 相同用 memory.size 比较，不足则 memory.grow 一次再检查，仍不足则 trap。
+    /// 对象扩容路径：size = 16 + capacity_local * 32；fast-path 仅在 memory 与 heap_limit 都容纳时 bump，
+    /// 否则走 gc_alloc_slow（free list → GC → grow/受控 OOM），并把返回 ptr 写入 new_ptr_local。
     pub(super) fn emit_heap_bump_for_object_resize(
         func: &mut Function,
         heap_global: u32,
+        heap_limit_global: u32,
         capacity_local: u32,
         size_scratch_local: u32,
+        new_ptr_local: u32,
+        gc_alloc_slow_idx: u32,
     ) {
         // size_scratch = 16 + capacity * 32
         func.instruction(&WasmInstruction::LocalGet(capacity_local));
@@ -92,7 +96,7 @@ impl Compiler {
         func.instruction(&WasmInstruction::LocalSet(size_scratch_local));
 
         func.instruction(&WasmInstruction::Block(BlockType::Empty));
-        // new_end = heap_ptr + size；若 new_end <= mem_size 则直接 bump
+        // new_end = heap_ptr + size；若 new_end <= min(mem_size, heap_limit) 则直接 bump。
         func.instruction(&WasmInstruction::GlobalGet(heap_global));
         func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
         func.instruction(&WasmInstruction::I32Add);
@@ -102,51 +106,32 @@ impl Compiler {
         func.instruction(&WasmInstruction::I64Mul);
         func.instruction(&WasmInstruction::I32WrapI64);
         func.instruction(&WasmInstruction::I32LeU);
+        func.instruction(&WasmInstruction::GlobalGet(heap_global));
+        func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+        func.instruction(&WasmInstruction::I32Add);
+        func.instruction(&WasmInstruction::GlobalGet(heap_limit_global));
+        func.instruction(&WasmInstruction::I32LeU);
+        func.instruction(&WasmInstruction::I32And);
         func.instruction(&WasmInstruction::If(BlockType::Empty));
         func.instruction(&WasmInstruction::GlobalGet(heap_global));
+        func.instruction(&WasmInstruction::LocalTee(new_ptr_local));
         func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
         func.instruction(&WasmInstruction::I32Add);
         func.instruction(&WasmInstruction::GlobalSet(heap_global));
         func.instruction(&WasmInstruction::Br(1));
         func.instruction(&WasmInstruction::End);
-        // memory.grow(ceil((new_end - mem_size) / 65536))
-        func.instruction(&WasmInstruction::GlobalGet(heap_global));
+
+        // slow-path：gc_alloc_slow(size, HEAP_TYPE_OBJECT, capacity)
         func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-        func.instruction(&WasmInstruction::I32Add);
-        func.instruction(&WasmInstruction::MemorySize(0));
-        func.instruction(&WasmInstruction::I64ExtendI32U);
-        func.instruction(&WasmInstruction::I64Const(65536));
-        func.instruction(&WasmInstruction::I64Mul);
-        func.instruction(&WasmInstruction::I32WrapI64);
-        func.instruction(&WasmInstruction::I32Sub);
-        func.instruction(&WasmInstruction::I32Const(65535));
-        func.instruction(&WasmInstruction::I32Add);
-        func.instruction(&WasmInstruction::I32Const(65536));
-        func.instruction(&WasmInstruction::I32DivU);
-        func.instruction(&WasmInstruction::MemoryGrow(0));
+        func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
+        func.instruction(&WasmInstruction::LocalGet(capacity_local));
+        func.instruction(&WasmInstruction::Call(gc_alloc_slow_idx));
+        func.instruction(&WasmInstruction::LocalTee(new_ptr_local));
         func.instruction(&WasmInstruction::I32Const(-1));
         func.instruction(&WasmInstruction::I32Eq);
         func.instruction(&WasmInstruction::If(BlockType::Empty));
         func.instruction(&WasmInstruction::Unreachable);
         func.instruction(&WasmInstruction::End);
-        // grow 后再次检查并 bump
-        func.instruction(&WasmInstruction::GlobalGet(heap_global));
-        func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-        func.instruction(&WasmInstruction::I32Add);
-        func.instruction(&WasmInstruction::MemorySize(0));
-        func.instruction(&WasmInstruction::I64ExtendI32U);
-        func.instruction(&WasmInstruction::I64Const(65536));
-        func.instruction(&WasmInstruction::I64Mul);
-        func.instruction(&WasmInstruction::I32WrapI64);
-        func.instruction(&WasmInstruction::I32LeU);
-        func.instruction(&WasmInstruction::If(BlockType::Empty));
-        func.instruction(&WasmInstruction::GlobalGet(heap_global));
-        func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-        func.instruction(&WasmInstruction::I32Add);
-        func.instruction(&WasmInstruction::GlobalSet(heap_global));
-        func.instruction(&WasmInstruction::Br(1));
-        func.instruction(&WasmInstruction::End);
-        func.instruction(&WasmInstruction::Unreachable);
         func.instruction(&WasmInstruction::End);
     }
 }

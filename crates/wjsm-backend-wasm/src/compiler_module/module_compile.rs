@@ -431,6 +431,11 @@ impl Compiler {
                 ExportKind::Global,
                 self.arr_proto_table_hash_global_idx,
             );
+            self.exports.export(
+                "__heap_limit",
+                ExportKind::Global,
+                self.heap_limit_global_idx,
+            );
         }
         if !self.string_data.is_empty() {
             self.data.active(
@@ -507,6 +512,9 @@ impl Compiler {
         // global 18: __arr_proto_table_hash
         self.emit(WasmInstruction::I64Const(init.arr_proto_table_hash));
         self.emit(WasmInstruction::GlobalSet(18));
+        // global 19: __heap_limit = u32::MAX (runtime overrides when max_heap_size is configured)
+        self.emit(WasmInstruction::I32Const(-1));
+        self.emit(WasmInstruction::GlobalSet(19));
     }
 
     fn compile_init_globals_function(&mut self) {

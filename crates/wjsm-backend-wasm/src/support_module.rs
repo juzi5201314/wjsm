@@ -9,7 +9,7 @@
 //! - `arr_new`/`elem_get`/`elem_set`/`get_proto_from_ctor`：✅ 真实 body（P2.4+P2.5 完成）
 //! - `wjsm_bootstrap_once`/`wjsm_init_function_props`：占位 `unreachable`，待 P2.6 迁移
 //!
-//! support module 的 global 索引与 user wasm 完全对齐（0..18），
+//! support module 的 global 索引与 user wasm 完全对齐（0..19），
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
 
 use crate::shared_types::build_shared_type_section;
@@ -114,7 +114,7 @@ const FN_BOOTSTRAP: u32 = NUM_HOST_IMPORTS + 10;
 #[allow(dead_code)]
 const FN_INIT_FUNC_PROPS: u32 = NUM_HOST_IMPORTS + 11;
 
-// ── Global indices (与 user wasm 0..18 对齐) ──────────────────────────
+// ── Global indices (与 user wasm 0..19 对齐) ──────────────────────────
 #[allow(dead_code)]
 const G_FUNC_PROPS: u32 = 0;
 const G_HEAP_PTR: u32 = 1;
@@ -145,8 +145,9 @@ const G_ARR_PROTO_TABLE_BASE: u32 = 16;
 const G_ARR_PROTO_TABLE_LEN: u32 = 17;
 #[allow(dead_code)]
 const G_ARR_PROTO_TABLE_HASH: u32 = 18;
+const G_HEAP_LIMIT: u32 = 19;
 
-// Imported env globals — 与 abi::ENV_GLOBALS 同步：19 项。
+// Imported env globals — 与 abi::ENV_GLOBALS 同步：20 项。
 const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     ("__func_props", ValType::I32, true),
     ("__heap_ptr", ValType::I32, true),
@@ -167,6 +168,7 @@ const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     ("__arr_proto_table_base", ValType::I32, true),
     ("__arr_proto_table_len", ValType::I32, true),
     ("__arr_proto_table_hash", ValType::I64, true),
+    ("__heap_limit", ValType::I32, true),
 ];
 
 /// 必须与 `wjsm-runtime-support::abi::SUPPORT_TABLE_RESERVED_LEN` 一致。
@@ -239,7 +241,7 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
             shared: false,
         }),
     );
-    // 19 env globals
+    // 20 env globals
     for (name, ty, mutable) in ENV_GLOBAL_IMPORTS {
         imports.import(
             "env",
@@ -409,11 +411,12 @@ fn emit_resolve_callable_for_helper(
     func.instruction(&WasmInstruction::End);
 }
 
-/// 对象扩容 bump：与 user wasm emit_heap_bump_for_object_resize 同逻辑（G_HEAP_PTR）。
+/// 对象扩容 bump：fast-path 受 memory 与 heap_limit 双重约束；失败走 gc_alloc_slow。
 fn emit_heap_bump_for_object_resize_support(
     func: &mut Function,
     capacity_local: u32,
     size_scratch_local: u32,
+    new_ptr_local: u32,
 ) {
     func.instruction(&WasmInstruction::LocalGet(capacity_local));
     func.instruction(&WasmInstruction::I32Const(32));
@@ -432,49 +435,31 @@ fn emit_heap_bump_for_object_resize_support(
     func.instruction(&WasmInstruction::I64Mul);
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_LIMIT));
+    func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalTee(new_ptr_local));
     func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
     func.instruction(&WasmInstruction::Br(1));
     func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+
     func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::MemorySize(0));
-    func.instruction(&WasmInstruction::I64ExtendI32U);
-    func.instruction(&WasmInstruction::I64Const(65536));
-    func.instruction(&WasmInstruction::I64Mul);
-    func.instruction(&WasmInstruction::I32WrapI64);
-    func.instruction(&WasmInstruction::I32Sub);
-    func.instruction(&WasmInstruction::I32Const(65535));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Const(65536));
-    func.instruction(&WasmInstruction::I32DivU);
-    func.instruction(&WasmInstruction::MemoryGrow(0));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
+    func.instruction(&WasmInstruction::LocalGet(capacity_local));
+    func.instruction(&WasmInstruction::Call(HOST_GC_ALLOC_SLOW));
+    func.instruction(&WasmInstruction::LocalTee(new_ptr_local));
     func.instruction(&WasmInstruction::I32Const(-1));
     func.instruction(&WasmInstruction::I32Eq);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::Unreachable);
     func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::MemorySize(0));
-    func.instruction(&WasmInstruction::I64ExtendI32U);
-    func.instruction(&WasmInstruction::I64Const(65536));
-    func.instruction(&WasmInstruction::I64Mul);
-    func.instruction(&WasmInstruction::I32WrapI64);
-    func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::Br(1));
-    func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::Unreachable);
     func.instruction(&WasmInstruction::End);
 }
 
@@ -510,7 +495,7 @@ fn emit_obj_new() -> Function {
     func.instruction(&WasmInstruction::GlobalSet(G_OBJ_TABLE_COUNT));
     func.instruction(&WasmInstruction::End);
 
-    // bump fast-path：heap_ptr + size <= mem_size
+    // bump fast-path：heap_ptr + size <= min(mem_size, heap_limit)
     func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::I32Add);
@@ -520,6 +505,12 @@ fn emit_obj_new() -> Function {
     func.instruction(&WasmInstruction::I64Mul);
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_LIMIT));
+    func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
     // fast-path
     func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
@@ -610,7 +601,7 @@ fn emit_obj_new() -> Function {
 // 避免单文件过长。以下 include! 将它们的 Function 返回值直接嵌入。
 //
 // 这些函数移植自 compiler_helpers.rs，所有 GlobalGet/GlobalSet 索引不变
-// （与 user wasm 0..18 对齐），所有 host Call 替换为 support module 的
+// （与 user wasm 0..19 对齐），所有 host Call 替换为 support module 的
 // host import 索引，string_eq Call 替换为 FN_STRING_EQ。
 
 include!("support_object_helpers.rs");
@@ -809,6 +800,12 @@ fn emit_arr_new() -> Function {
     func.instruction(&WasmInstruction::I64Mul);
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_LIMIT));
+    func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
     // fast-path
     func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
@@ -1166,7 +1163,7 @@ mod tests {
 
     #[test]
     fn env_global_imports_count_locked() {
-        assert_eq!(ENV_GLOBAL_IMPORTS.len(), 19);
+        assert_eq!(ENV_GLOBAL_IMPORTS.len(), 20);
     }
 
     #[test]

@@ -50,11 +50,15 @@ impl Allocator for MarkSweepCollector {
         if let Some(ptr) = self.free_list.alloc(size) {
             return Some(ptr);
         }
-        // 2. 试 bump（heap_ptr 推进）
+        // 2. 试 bump（heap_ptr 推进），同时受当前线性内存和 JS 堆预算约束。
         let heap_ptr = ctx.heap_ptr();
+        let Some(new_heap_ptr) = heap_ptr.checked_add(size) else {
+            return None;
+        };
         let mem_end = ctx.env.memory.data_size(&ctx.store);
-        if heap_ptr + size <= mem_end {
-            ctx.set_heap_ptr(heap_ptr + size);
+        let alloc_end = mem_end.min(ctx.heap_limit());
+        if new_heap_ptr <= alloc_end {
+            ctx.set_heap_ptr(new_heap_ptr);
             return Some(heap_ptr);
         }
         None

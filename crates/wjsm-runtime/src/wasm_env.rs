@@ -23,6 +23,7 @@ pub(crate) struct WasmEnv {
     pub arr_proto_table_base: Option<Global>,
     pub arr_proto_table_len: Option<Global>,
     pub arr_proto_table_hash: Option<Global>,
+    pub heap_limit: Option<Global>,
 }
 
 impl WasmEnv {
@@ -63,6 +64,9 @@ impl WasmEnv {
                 .and_then(Extern::into_global),
             arr_proto_table_hash: caller
                 .get_export("__arr_proto_table_hash")
+                .and_then(Extern::into_global),
+            heap_limit: caller
+                .get_export("__heap_limit")
                 .and_then(Extern::into_global),
         })
     }

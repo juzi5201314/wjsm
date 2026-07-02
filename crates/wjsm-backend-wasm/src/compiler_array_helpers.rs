@@ -4,6 +4,7 @@ use crate::host_import_registry::SpecialHostImport;
 impl Compiler {
     pub(crate) fn compile_array_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
+        let heap_limit_global = self.heap_limit_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
         let shadow_stack_end_global = self.shadow_stack_end_global_idx;
@@ -69,6 +70,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Mul);
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::I32LeU);
+            func.instruction(&WasmInstruction::GlobalGet(heap_global));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalGet(heap_limit_global));
+            func.instruction(&WasmInstruction::I32LeU);
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
             // fast-path：ptr = heap_ptr; heap_ptr += size
             func.instruction(&WasmInstruction::GlobalGet(heap_global));

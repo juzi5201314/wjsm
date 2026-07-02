@@ -5,7 +5,7 @@
 //!   wjsm_bootstrap_once/wjsm_init_function_props）
 //! - support module 重新 export imported memory/table/globals，让从 support module
 //!   发起的 host callback 仍能通过 `Caller::get_export` 读取同一份 WasmEnv
-//! - 19 个 imported env globals：与 user wasm 的 19 个 global（索引 0..18）完全对齐，
+//! - 20 个 imported env globals：与 user wasm 的 20 个 global（索引 0..19）完全对齐，
 //!   使 support module 的 global 索引与 user wasm 一致——helper body 移植时无需改索引
 //! - support module 额外 import 它需要的 host 函数（gc_*/proxy_trap_*/native_call 等），
 //!   通过 `env` namespace 引入，wasmtime Linker 已注册全部 host 函数实现
@@ -22,7 +22,7 @@ pub const TABLE_IMPORT_NAME: &str = "__table";
 pub const MEMORY_IMPORT_NAME: &str = "memory";
 
 /// Support module ABI 版本；任何不兼容改动必须 +1。
-pub const SUPPORT_VERSION: u32 = 4;
+pub const SUPPORT_VERSION: u32 = 5;
 
 /// Support module 在共享 table 起始保留的 slot 数：
 /// 12 helper exports + 约 30 个 Array.prototype 方法 + 22 个 headroom = 64。
@@ -44,7 +44,7 @@ pub struct EnvGlobal {
     pub mutable: bool,
 }
 
-/// 19 个 env globals：与 user wasm 的全局索引 0..18 完全对齐。
+/// 20 个 env globals：与 user wasm 的全局索引 0..19 完全对齐。
 /// 顺序与 user wasm compiler_module.rs 中的 global 定义顺序一致，
 /// 使 support module import 的 global index 与 user wasm 一致。
 /// 全部 mutable：P2.2 后 user wasm 在 bootstrap 中用 global.set 初始化。
@@ -163,6 +163,12 @@ pub const ENV_GLOBALS: &[EnvGlobal] = &[
         ty: GlobalValTy::I64,
         mutable: true,
     },
+    // idx 19
+    EnvGlobal {
+        name: "__heap_limit",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
 ];
 
 /// 12 个 helper export 名字；用户 wasm 通过 `import "wjsm_support" "<name>"` 引用。
@@ -219,12 +225,12 @@ mod tests {
         );
     }
 
-    /// 19 env globals 数量锁死（与 user wasm 全局索引 0..18 对齐）。
+    /// 20 env globals 数量锁死（与 user wasm 全局索引 0..19 对齐）。
     #[test]
     fn env_globals_count_locked() {
         assert_eq!(
             ENV_GLOBALS.len(),
-            19,
+            20,
             "ENV_GLOBALS 数量改变必须同步更新 ABI 测试"
         );
     }

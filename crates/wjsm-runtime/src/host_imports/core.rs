@@ -1508,18 +1508,23 @@ pub(crate) fn define_core(
                     return Ok(ptr as i32);
                 }
             }
-            // 3. grow + 重试（真 OOM 前最后手段）
+            // 3. grow 到本次分配刚好够用（仍受 heap_limit 约束）后重试。
             {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
-                if ctx.grow(1).is_ok()
+                if matches!(ctx.grow_to_fit_heap_allocation(size), Ok(true))
                     && let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity)
                 {
                     return Ok(ptr as i32);
                 }
             }
-            // 真 OOM：trap 中止执行，避免 u32::MAX/-1 被当作线性内存地址（#117）。
+            // 真 OOM：先写入可诊断 runtime_error，再 trap 中止执行。
+            let used = {
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, "oom");
+                ctx.heap_used()
+            };
+            caller.data().set_heap_oom_error(used, size);
             Err(wasmtime::Trap::AllocationTooLarge.into())
         },
     );
