@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+class
+Example
+decorated
+method
+work
+method decorated
+--- stderr ---

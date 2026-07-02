@@ -4,7 +4,7 @@ impl Lowerer {
     pub(crate) fn lower_class_expr(
         &mut self,
         class_expr: &swc_ast::ClassExpr,
-        block: BasicBlockId,
+        mut block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         // 类表达式可选名称（匿名类表达式无名称）
         let class_name = class_expr
@@ -359,12 +359,23 @@ impl Lowerer {
                         };
 
                         if method.function.is_generator {
-                            let method_value = self.lower_method_prop_to_fn(
+                            let mut method_value = self.lower_method_prop_to_fn(
                                 &method.key,
                                 &method.function,
                                 Some(target),
                                 block,
                             )?;
+                            if !method.function.decorators.is_empty() {
+                                (block, method_value) = self.emit_apply_value_decorators(
+                                    block,
+                                    method_value,
+                                    &method.function.decorators,
+                                    "method",
+                                    &method_name,
+                                    is_static,
+                                    false,
+                                )?;
+                            }
                             self.current_function.append_instruction(
                                 block,
                                 Instruction::SetProp {
@@ -459,7 +470,7 @@ impl Lowerer {
 
                         self.pop_function_context();
 
-                        let m_dest = self.alloc_value();
+                        let mut m_dest = self.alloc_value();
                         let m_ref_const = self
                             .module
                             .add_constant(Constant::FunctionRef(m_function_id));
@@ -470,6 +481,17 @@ impl Lowerer {
                                 constant: m_ref_const,
                             },
                         );
+                        if !method.function.decorators.is_empty() {
+                            (block, m_dest) = self.emit_apply_value_decorators(
+                                block,
+                                m_dest,
+                                &method.function.decorators,
+                                "method",
+                                &method_name,
+                                is_static,
+                                false,
+                            )?;
+                        }
                         self.current_function.append_instruction(
                             block,
                             Instruction::SetProp {
@@ -612,7 +634,7 @@ impl Lowerer {
                         let m_function_id = self.module.push_function(m_ir_function);
                         self.pop_function_context();
 
-                        let fn_dest = self.alloc_value();
+                        let mut fn_dest = self.alloc_value();
                         let fn_ref_const = self
                             .module
                             .add_constant(Constant::FunctionRef(m_function_id));
@@ -623,6 +645,22 @@ impl Lowerer {
                                 constant: fn_ref_const,
                             },
                         );
+                        if !method.function.decorators.is_empty() {
+                            let kind = if matches!(method.kind, swc_ast::MethodKind::Getter) {
+                                "getter"
+                            } else {
+                                "setter"
+                            };
+                            (block, fn_dest) = self.emit_apply_value_decorators(
+                                block,
+                                fn_dest,
+                                &method.function.decorators,
+                                kind,
+                                &method_name,
+                                is_static,
+                                false,
+                            )?;
+                        }
 
                         let desc = self.build_descriptor(accessor, fn_dest, false, true, block)?;
                         self.current_function.append_instruction(
@@ -817,6 +855,13 @@ impl Lowerer {
                 value: proto_dest,
             },
         );
+
+        let (block, ctor_dest) = self.emit_apply_class_decorators(
+            block,
+            ctor_dest,
+            &class_expr.class.decorators,
+            class_expr.ident.as_ref().map(|ident| ident.sym.as_ref()),
+        )?;
 
         if let Some((ref name, scope_id)) = class_body_name_scope {
             self.scopes

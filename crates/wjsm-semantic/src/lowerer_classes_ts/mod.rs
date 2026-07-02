@@ -292,6 +292,225 @@ impl Lowerer {
         Ok(closure_val)
     }
 
+    fn emit_string_const(&mut self, block: BasicBlockId, value: &str) -> ValueId {
+        let constant = self
+            .module
+            .add_constant(Constant::String(value.to_string()));
+        let dest = self.alloc_value();
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
+        dest
+    }
+
+    fn emit_undefined_const(&mut self, block: BasicBlockId) -> ValueId {
+        let constant = self.module.add_constant(Constant::Undefined);
+        let dest = self.alloc_value();
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
+        dest
+    }
+
+    fn emit_bool_const(&mut self, block: BasicBlockId, value: bool) -> ValueId {
+        let constant = self.module.add_constant(Constant::Bool(value));
+        let dest = self.alloc_value();
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
+        dest
+    }
+
+    fn emit_context_prop(
+        &mut self,
+        block: BasicBlockId,
+        context: ValueId,
+        key: &str,
+        value: ValueId,
+    ) {
+        let key = self.emit_string_const(block, key);
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: context,
+                key,
+                value,
+            },
+        );
+    }
+
+    fn emit_decorator_context(
+        &mut self,
+        block: BasicBlockId,
+        kind: &str,
+        name: Option<&str>,
+        is_static: Option<bool>,
+        is_private: Option<bool>,
+    ) -> ValueId {
+        let context = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: context,
+                capacity: 5,
+            },
+        );
+
+        let kind = self.emit_string_const(block, kind);
+        self.emit_context_prop(block, context, "kind", kind);
+
+        let name = name
+            .map(|name| self.emit_string_const(block, name))
+            .unwrap_or_else(|| self.emit_undefined_const(block));
+        self.emit_context_prop(block, context, "name", name);
+
+        if let Some(is_static) = is_static {
+            let value = self.emit_bool_const(block, is_static);
+            self.emit_context_prop(block, context, "static", value);
+        }
+        if let Some(is_private) = is_private {
+            let value = self.emit_bool_const(block, is_private);
+            self.emit_context_prop(block, context, "private", value);
+        }
+
+        context
+    }
+
+    fn emit_decorator_result_or_original(
+        &mut self,
+        block: BasicBlockId,
+        original: ValueId,
+        result: ValueId,
+    ) -> (BasicBlockId, ValueId) {
+        let undefined = self.emit_undefined_const(block);
+        let has_replacement = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Compare {
+                dest: has_replacement,
+                op: CompareOp::StrictNotEq,
+                lhs: result,
+                rhs: undefined,
+            },
+        );
+
+        let replacement_block = self.current_function.new_block();
+        let original_block = self.current_function.new_block();
+        let merge_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition: has_replacement,
+                true_block: replacement_block,
+                false_block: original_block,
+            },
+        );
+        self.current_function.set_terminator(
+            replacement_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+        self.current_function.set_terminator(
+            original_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+
+        let value = self.alloc_value();
+        self.current_function.append_instruction(
+            merge_block,
+            Instruction::Phi {
+                dest: value,
+                sources: vec![
+                    PhiSource {
+                        predecessor: replacement_block,
+                        value: result,
+                    },
+                    PhiSource {
+                        predecessor: original_block,
+                        value: original,
+                    },
+                ],
+            },
+        );
+        (merge_block, value)
+    }
+
+    fn emit_apply_class_decorators(
+        &mut self,
+        mut block: BasicBlockId,
+        mut class_value: ValueId,
+        decorators: &[swc_ast::Decorator],
+        class_name: Option<&str>,
+    ) -> Result<(BasicBlockId, ValueId), LoweringError> {
+        let mut decorator_values = Vec::with_capacity(decorators.len());
+        for decorator in decorators {
+            let value = self.lower_expr(&decorator.expr, block)?;
+            block = self.resolve_store_block(block);
+            decorator_values.push(value);
+        }
+
+        for decorator in decorator_values.into_iter().rev() {
+            let context = self.emit_decorator_context(block, "class", class_name, None, None);
+            let result = self.alloc_value();
+            let this_val = self.emit_undefined_const(block);
+            self.current_function.append_instruction(
+                block,
+                Instruction::Call {
+                    dest: Some(result),
+                    callee: decorator,
+                    this_val,
+                    args: vec![class_value, context],
+                },
+            );
+            (block, class_value) =
+                self.emit_decorator_result_or_original(block, class_value, result);
+        }
+
+        Ok((block, class_value))
+    }
+
+    fn emit_apply_value_decorators(
+        &mut self,
+        mut block: BasicBlockId,
+        mut original: ValueId,
+        decorators: &[swc_ast::Decorator],
+        kind: &str,
+        name: &str,
+        is_static: bool,
+        is_private: bool,
+    ) -> Result<(BasicBlockId, ValueId), LoweringError> {
+        let mut decorator_values = Vec::with_capacity(decorators.len());
+        for decorator in decorators {
+            let value = self.lower_expr(&decorator.expr, block)?;
+            block = self.resolve_store_block(block);
+            decorator_values.push(value);
+        }
+
+        for decorator in decorator_values.into_iter().rev() {
+            let context = self.emit_decorator_context(
+                block,
+                kind,
+                Some(name),
+                Some(is_static),
+                Some(is_private),
+            );
+            let result = self.alloc_value();
+            let this_val = self.emit_undefined_const(block);
+            self.current_function.append_instruction(
+                block,
+                Instruction::Call {
+                    dest: Some(result),
+                    callee: decorator,
+                    this_val,
+                    args: vec![original, context],
+                },
+            );
+            (block, original) = self.emit_decorator_result_or_original(block, original, result);
+        }
+
+        Ok((block, original))
+    }
+
     fn emit_instance_initializers(
         &mut self,
         mut block: BasicBlockId,

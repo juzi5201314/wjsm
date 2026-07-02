@@ -7,6 +7,23 @@ use swc_core::ecma::ast as swc_ast;
 use swc_core::ecma::parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
 
 pub use diagnostic::format_byte_diagnostic;
+fn typescript_syntax(tsx: bool) -> Syntax {
+    Syntax::Typescript(TsSyntax {
+        tsx,
+        decorators: true,
+        ..Default::default()
+    })
+}
+
+fn ecmascript_syntax(jsx: bool) -> Syntax {
+    Syntax::Es(EsSyntax {
+        jsx,
+        decorators: true,
+        decorators_before_export: true,
+        allow_super_outside_method: true,
+        ..Default::default()
+    })
+}
 
 fn parse_module_inner(
     cm: &Lrc<SourceMap>,
@@ -45,16 +62,7 @@ fn parse_module_inner(
 
 pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
     let cm: Lrc<SourceMap> = Default::default();
-    parse_module_inner(
-        &cm,
-        "input.ts",
-        source,
-        Syntax::Typescript(swc_core::ecma::parser::TsSyntax {
-            tsx: true,
-            ..Default::default()
-        }),
-        false,
-    )
+    parse_module_inner(&cm, "input.ts", source, typescript_syntax(true), false)
 }
 
 /// 根据文件路径选择 SWC 语法模式。
@@ -65,28 +73,11 @@ fn syntax_for_path(path: &std::path::Path) -> Syntax {
         .map(|e| e.to_ascii_lowercase());
 
     match ext.as_deref() {
-        Some("ts") => Syntax::Typescript(TsSyntax {
-            tsx: false,
-            ..Default::default()
-        }),
-        Some("tsx") => Syntax::Typescript(TsSyntax {
-            tsx: true,
-            ..Default::default()
-        }),
-        Some("jsx") => Syntax::Es(EsSyntax {
-            jsx: true,
-            allow_super_outside_method: true,
-            ..Default::default()
-        }),
-        Some("js") | Some("mjs") | Some("cjs") => Syntax::Es(EsSyntax {
-            jsx: false,
-            allow_super_outside_method: true,
-            ..Default::default()
-        }),
-        _ => Syntax::Typescript(TsSyntax {
-            tsx: true,
-            ..Default::default()
-        }),
+        Some("ts") => typescript_syntax(false),
+        Some("tsx") => typescript_syntax(true),
+        Some("jsx") => ecmascript_syntax(true),
+        Some("js") | Some("mjs") | Some("cjs") => ecmascript_syntax(false),
+        _ => typescript_syntax(true),
     }
 }
 
@@ -111,16 +102,7 @@ pub fn parse_module_with_path(source: &str, path: &std::path::Path) -> Result<sw
 /// 适用于 test262 等需要严格 ECMAScript 合规性的场景。
 pub fn parse_script_as_module(source: &str) -> Result<swc_ast::Module> {
     let cm: Lrc<SourceMap> = Default::default();
-    parse_module_inner(
-        &cm,
-        "input.js",
-        source,
-        Syntax::Es(swc_core::ecma::parser::EsSyntax {
-            allow_super_outside_method: true,
-            ..Default::default()
-        }),
-        true,
-    )
+    parse_module_inner(&cm, "input.js", source, ecmascript_syntax(false), true)
 }
 
 #[cfg(test)]
@@ -157,6 +139,21 @@ mod tests {
         assert!(message.starts_with("error: "));
         assert!(message.contains(" --> input.ts:"));
         assert!(message.contains("Expected"));
+    }
+    #[test]
+    fn parses_class_decorator() {
+        let module =
+            parse_module(r#"@sealed class Foo {}"#).expect("parser should accept decorators");
+        let first = module
+            .body
+            .first()
+            .expect("fixture should produce one item");
+        let swc_ast::ModuleItem::Stmt(swc_ast::Stmt::Decl(swc_ast::Decl::Class(class_decl))) =
+            first
+        else {
+            panic!("expected class declaration");
+        };
+        assert_eq!(class_decl.class.decorators.len(), 1);
     }
 
     #[test]
