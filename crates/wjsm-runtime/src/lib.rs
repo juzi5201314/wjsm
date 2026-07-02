@@ -27,6 +27,7 @@ mod runtime_combinators;
 mod runtime_date;
 mod runtime_eval;
 mod runtime_gc;
+mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;
 pub(crate) use host_side_table::HostSideTable;
@@ -94,6 +95,7 @@ use runtime_collections::*;
 use runtime_combinators::*;
 use runtime_date::*;
 use runtime_eval::*;
+use runtime_generator::*;
 use runtime_heap::*;
 use runtime_host_helpers::*;
 use runtime_json::*;
@@ -505,7 +507,10 @@ impl Clone for RuntimeState {
             microtask_queue: self.microtask_queue.clone(),
             continuation_table: self.continuation_table.clone(),
             async_generator_table: self.async_generator_table.clone(),
+            generator_table: self.generator_table.clone(),
             async_from_sync_iterators: self.async_from_sync_iterators.clone(),
+            iterator_prototype: self.iterator_prototype,
+            generator_prototype: self.generator_prototype,
             async_iterator_prototype: self.async_iterator_prototype,
             async_gen_prototype: self.async_gen_prototype,
             error_prototypes: self.error_prototypes,
@@ -614,8 +619,14 @@ struct RuntimeState {
     continuation_table: Arc<Mutex<Vec<ContinuationEntry>>>,
     /// AsyncGenerator 侧表：存储异步生成器状态
     async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>>,
+    /// Generator 侧表：存储同步生成器状态
+    generator_table: Arc<Mutex<Vec<GeneratorEntry>>>,
     /// async-from-sync iterator 侧表
     async_from_sync_iterators: Arc<Mutex<Vec<AsyncFromSyncIteratorEntry>>>,
+    /// %IteratorPrototype% 对象
+    iterator_prototype: i64,
+    /// Generator.prototype 对象
+    generator_prototype: i64,
     /// %AsyncIteratorPrototype% 对象
     async_iterator_prototype: i64,
     /// AsyncGenerator.prototype 对象
@@ -882,7 +893,10 @@ impl RuntimeState {
             microtask_queue: Arc::new(Mutex::new(VecDeque::new())),
             continuation_table: Arc::new(Mutex::new(Vec::new())),
             async_generator_table: Arc::new(Mutex::new(Vec::new())),
+            generator_table: Arc::new(Mutex::new(Vec::new())),
             async_from_sync_iterators: Arc::new(Mutex::new(Vec::new())),
+            iterator_prototype: value::encode_undefined(),
+            generator_prototype: value::encode_undefined(),
             async_iterator_prototype: value::encode_undefined(),
             promise_prototype: value::encode_undefined(),
             regexp_prototype: value::encode_undefined(),

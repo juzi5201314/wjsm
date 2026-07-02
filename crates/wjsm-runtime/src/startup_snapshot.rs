@@ -140,6 +140,8 @@ pub(crate) fn capture_startup_snapshot(
     // 检查排除项: 不能让运行态进入 snapshot
     assert_excluded_tables_clean(store)?;
 
+    let iterator_prototype = store.data().iterator_prototype;
+    let generator_prototype = store.data().generator_prototype;
     let async_iterator_prototype = store.data().async_iterator_prototype;
     let async_gen_prototype = store.data().async_gen_prototype;
     let array_proto_values = store
@@ -159,6 +161,8 @@ pub(crate) fn capture_startup_snapshot(
         arr_proto_table_base,
         arr_proto_table_len,
         arr_proto_table_hash,
+        iterator_prototype,
+        generator_prototype,
         async_iterator_prototype,
         async_gen_prototype,
         array_proto_values,
@@ -223,6 +227,8 @@ pub(crate) fn reset_primordial_heap_before_restore(
         .unwrap_or_else(|e| e.into_inner())
         .clear();
     crate::symbol_well_known::clear_symbol_constructor_static_props(state);
+    state.iterator_prototype = value::encode_undefined();
+    state.generator_prototype = value::encode_undefined();
     state.async_iterator_prototype = value::encode_undefined();
     state.async_gen_prototype = value::encode_undefined();
     state.array_proto_values.store(
@@ -577,6 +583,8 @@ pub(crate) fn restore_startup_snapshot(
                 .unwrap_or(0);
             ncs.push(snap_nc.into_native_callable(method));
         }
+        state.iterator_prototype = snapshot.header.iterator_prototype;
+        state.generator_prototype = snapshot.header.generator_prototype;
         state.async_iterator_prototype = snapshot.header.async_iterator_prototype;
         state.async_gen_prototype = snapshot.header.async_gen_prototype;
         state.array_proto_values.store(

@@ -362,14 +362,13 @@ impl Lowerer {
             );
             Ok(dest)
         } else {
+            let name = match self.scopes.lookup("$this") {
+                Ok((scope_id, _)) => format!("${scope_id}.$this"),
+                Err(_) => "$this".to_string(),
+            };
             let dest = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::LoadVar {
-                    dest,
-                    name: "$this".to_string(),
-                },
-            );
+            self.current_function
+                .append_instruction(block, Instruction::LoadVar { dest, name });
             Ok(dest)
         }
     }

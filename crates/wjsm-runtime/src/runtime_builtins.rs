@@ -142,6 +142,10 @@ pub(crate) fn create_async_generator_identity(state: &RuntimeState, generator: i
     value::encode_native_callable_idx(handle)
 }
 
+pub(crate) fn create_iterator_proto_identity(state: &RuntimeState) -> i64 {
+    create_native_callable(state, NativeCallable::IteratorProtoSymbolIterator)
+}
+
 pub(crate) fn create_map_set_method(state: &RuntimeState, kind: MapSetMethodKind) -> i64 {
     let mut table = state
         .native_callables
@@ -714,6 +718,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         // 正常情况下被 drain loop 拦截，不会作为函数被调用；保险起见返回 undefined。
         NativeCallable::PromiseFinallyAwait { .. } => Some(value::encode_undefined()),
         NativeCallable::AsyncGeneratorIdentity { generator } => Some(generator),
+        NativeCallable::GeneratorIdentity { generator } => Some(generator),
         NativeCallable::AsyncGeneratorMethod { generator, kind } => {
             let result_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
             let request = AsyncGeneratorRequest {
@@ -755,6 +760,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             }
             Some(result_promise)
         }
+        NativeCallable::IteratorProtoSymbolIterator => Some(this_val),
+        NativeCallable::GeneratorMethod { .. } => Some(value::encode_undefined()),
         NativeCallable::MapSetMethod { kind } => Some(call_map_set_method_from_caller(
             caller, this_val, kind, args,
         )),
@@ -1301,6 +1308,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         NativeCallable::MapSetMethod {
             kind: MapSetMethodKind::ForEach,
         } => Some(map_set_for_each_impl_async(caller, this_val, &args).await),
+        NativeCallable::GeneratorMethod { generator, kind } => {
+            Some(call_generator_method_from_caller_async(caller, generator, kind, argument).await)
+        }
         NativeCallable::AgentStart
         | NativeCallable::AgentBroadcast
         | NativeCallable::AgentMonotonicNow => {

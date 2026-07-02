@@ -456,8 +456,17 @@ pub(crate) enum NativeCallable {
     AsyncGeneratorIdentity {
         generator: i64,
     },
+    GeneratorMethod {
+        generator: i64,
+        kind: GeneratorCompletionType,
+    },
+    GeneratorIdentity {
+        generator: i64,
+    },
     /// %AsyncIteratorPrototype%[Symbol.asyncIterator]() → return this
     AsyncIteratorProtoSymbolAsyncIterator,
+    /// %IteratorPrototype%[Symbol.iterator]() → return this
+    IteratorProtoSymbolIterator,
     /// RegExp String Iterator 的 next()：推进 RegExpStringIter 状态，返回 {value, done}。
     RegExpStringIteratorNext {
         iter_handle: u32,
@@ -1186,6 +1195,26 @@ pub(crate) enum AsyncGeneratorHostAction {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AsyncGeneratorCompletionType {
+    Next,
+    Return,
+    Throw,
+}
+
+pub(crate) struct GeneratorEntry {
+    pub(crate) state: GeneratorState,
+    pub(crate) continuation: i64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GeneratorState {
+    SuspendedStart,
+    SuspendedYield,
+    Executing,
+    Completed,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GeneratorCompletionType {
     Next,
     Return,
     Throw,

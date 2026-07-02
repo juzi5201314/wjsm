@@ -93,7 +93,8 @@ fn instr_dest(ins: &Instruction) -> Option<ValueId> {
         | SetElem { .. }
         | PromiseResolve { .. }
         | PromiseReject { .. }
-        | Suspend { .. } => return None,
+        | Suspend { .. }
+        | GeneratorSuspend { .. } => return None,
     })
 }
 
@@ -171,6 +172,7 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
             vec![*promise, *value]
         }
         Suspend { promise, .. } => vec![*promise],
+        GeneratorSuspend { result, .. } => vec![*result],
         IsException { value, .. }
         | EncodeException { value, .. }
         | ExceptionToObject { value, .. } => {

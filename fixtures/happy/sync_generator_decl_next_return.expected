@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+n1 1 false
+r2 99 true
+n3 undefined true
+--- stderr ---

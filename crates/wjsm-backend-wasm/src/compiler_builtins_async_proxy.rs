@@ -210,7 +210,8 @@ impl Compiler {
             | Builtin::IsCallable
             | Builtin::IsJsObject
             | Builtin::IsPromise
-            | Builtin::AsyncGeneratorStart => {
+            | Builtin::AsyncGeneratorStart
+            | Builtin::GeneratorStart => {
                 let val = args.first().context("expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 let func_idx = self
@@ -346,13 +347,12 @@ impl Compiler {
             }
             Builtin::AsyncGeneratorNext
             | Builtin::AsyncGeneratorReturn
-            | Builtin::AsyncGeneratorThrow => {
-                let generator = args
-                    .first()
-                    .context("async generator method expects 2 args")?;
-                let val = args
-                    .get(1)
-                    .context("async generator method expects 2 args")?;
+            | Builtin::AsyncGeneratorThrow
+            | Builtin::GeneratorNext
+            | Builtin::GeneratorReturn
+            | Builtin::GeneratorThrow => {
+                let generator = args.first().context("generator method expects 2 args")?;
+                let val = args.get(1).context("generator method expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(generator.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 let func_idx = self

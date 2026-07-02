@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+n1 body false
+r2 cleanup false
+n3 done true
+n4 undefined true
+--- stderr ---

@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+obj obj:1 true
+call call:2 true
+class1 4 false
+class2 5 false
+--- stderr ---

@@ -134,10 +134,12 @@ impl Lowerer {
 
         let Some((suspend_idx, instruction_count)) =
             self.current_function.block(block_id).and_then(|block| {
-                let suspend_idx = block
-                    .instructions()
-                    .iter()
-                    .position(|instr| matches!(instr, Instruction::Suspend { .. }))?;
+                let suspend_idx = block.instructions().iter().position(|instr| {
+                    matches!(
+                        instr,
+                        Instruction::Suspend { .. } | Instruction::GeneratorSuspend { .. }
+                    )
+                })?;
                 Some((suspend_idx, block.instructions().len()))
             })
         else {

@@ -46,6 +46,28 @@ fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str,
     value::encode_handle(value::TAG_EXCEPTION, idx)
 }
 
+/// 将任意 JS 抛出值封装为可捕获的 TAG_EXCEPTION。
+/// 与 `create_exception` 宿主导入保持相同编码：error_table.message 仅作诊断展示，
+/// 真正的异常值保留在 `value` 字段中，供 `ExceptionValue` / `exception_reason` 取回。
+pub(crate) fn make_exception_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    thrown_value: i64,
+) -> i64 {
+    let rendered = render_value(caller, thrown_value).unwrap_or_else(|_| "unknown".to_string());
+    let mut errors = caller
+        .data()
+        .error_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: String::new(),
+        message: rendered,
+        value: thrown_value,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
 /// 从 TAG_EXCEPTION 中提取 error_table 里的真实错误对象值。
 /// 用于需要 reject promise 或传播真实错误值的场景（如 async 迭代器异常、array spread）。
 pub(crate) fn exception_reason_from_state(state: &RuntimeState, exception: i64) -> i64 {

@@ -686,6 +686,16 @@ impl Compiler {
                 self.emit(WasmInstruction::Return);
                 Ok(true)
             }
+            Instruction::GeneratorSuspend { result, state } => {
+                let save_func_idx = self.builtin_func_indices[&Builtin::ContinuationSaveVar];
+                self.emit(WasmInstruction::LocalGet(self.continuation_local_idx));
+                self.emit(WasmInstruction::I64Const(value::encode_f64(0.0)));
+                self.emit(WasmInstruction::I64Const(value::encode_f64(*state as f64)));
+                self.emit(WasmInstruction::Call(save_func_idx));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(result.0)));
+                self.emit(WasmInstruction::Return);
+                Ok(true)
+            }
             Instruction::CollectRestArgs { dest, skip } => {
                 // P4-b4 safepoint：arr_new 在此 handler 内调用（alloc，可能触发 GC）。
                 // 循环内 ArrayPush 经 grow_array 分配但不主动触发 GC（无 gc_maybe_collect），

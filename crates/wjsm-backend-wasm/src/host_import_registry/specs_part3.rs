@@ -39,6 +39,30 @@ pub(crate) static SPECS_PART3: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "generator_start",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::GeneratorStart)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "generator_next",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::GeneratorNext)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "generator_return",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::GeneratorReturn)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "generator_throw",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::GeneratorThrow)),
+        group: None,
+    },
+    HostImportSpec {
         name: "native_call",
         type_idx: 12,
         key: Some(HostImportKey::Special(SpecialHostImport::NativeCall)),

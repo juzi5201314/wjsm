@@ -309,6 +309,30 @@ impl Lowerer {
                         .set_terminator(after_finally, Terminator::Return { value: None });
                 } else if self.is_async_fn {
                     self.emit_async_reject(after_finally, value);
+                } else if self.is_generator_fn {
+                    let gen_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: gen_val,
+                            name: format!("${}.$generator", self.async_generator_scope_id),
+                        },
+                    );
+                    let result = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::CallBuiltin {
+                            dest: Some(result),
+                            builtin: Builtin::GeneratorThrow,
+                            args: vec![gen_val, value],
+                        },
+                    );
+                    self.current_function.set_terminator(
+                        after_finally,
+                        Terminator::Return {
+                            value: Some(result),
+                        },
+                    );
                 } else {
                     self.current_function
                         .set_terminator(after_finally, Terminator::Throw { value });
@@ -445,6 +469,42 @@ impl Lowerer {
             return Ok(StmtFlow::Terminated);
         }
 
+        if self.is_generator_fn {
+            let value = if let Some(arg) = &return_stmt.arg {
+                self.lower_expr(arg, block)?
+            } else {
+                self.alloc_undefined_value(block)
+            };
+            let return_block = self.resolve_store_block(block);
+            if let StmtFlow::Open(after_close) =
+                self.emit_unwind_for_abrupt(return_block, -1, Some(value), false)?
+            {
+                let gen_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    after_close,
+                    Instruction::LoadVar {
+                        dest: gen_val,
+                        name: format!("${}.$generator", self.async_generator_scope_id),
+                    },
+                );
+                let result = self.alloc_value();
+                self.current_function.append_instruction(
+                    after_close,
+                    Instruction::CallBuiltin {
+                        dest: Some(result),
+                        builtin: Builtin::GeneratorReturn,
+                        args: vec![gen_val, value],
+                    },
+                );
+                self.current_function.set_terminator(
+                    after_close,
+                    Terminator::Return {
+                        value: Some(result),
+                    },
+                );
+            }
+            return Ok(StmtFlow::Terminated);
+        }
         let value = if let Some(arg) = &return_stmt.arg {
             Some(self.lower_expr(arg, block)?)
         } else {
@@ -482,8 +542,8 @@ impl Lowerer {
 
         // ── 降低判别式表达式 ──────────────────────────────────────────────
         let mut discr_block = block;
-        let can_throw = self.expr_exception_fork_allowed()
-            && self.expr_can_throw(&switch_stmt.discriminant);
+        let can_throw =
+            self.expr_exception_fork_allowed() && self.expr_can_throw(&switch_stmt.discriminant);
         let discr = if can_throw {
             self.lower_expr_then_continue(&switch_stmt.discriminant, &mut discr_block)?
         } else {
@@ -542,8 +602,7 @@ impl Lowerer {
 
             // 降低 case test 表达式（任意表达式）
             let mut current_block = test_block;
-            let test_can_throw =
-                self.expr_exception_fork_allowed() && self.expr_can_throw(test);
+            let test_can_throw = self.expr_exception_fork_allowed() && self.expr_can_throw(test);
             let test_val = if test_can_throw {
                 self.lower_expr_then_continue(test, &mut current_block)?
             } else {
@@ -583,8 +642,12 @@ impl Lowerer {
 
         // 入口块跳到第一个测试块（或 default/exit，若无测试块）
         let entry_target = test_blocks.first().copied().unwrap_or(default_target);
-        self.current_function
-            .set_terminator(discr_entry, Terminator::Jump { target: entry_target });
+        self.current_function.set_terminator(
+            discr_entry,
+            Terminator::Jump {
+                target: entry_target,
+            },
+        );
 
         // ── 降低 case body（含 fall-through 和 break）────────────────────
         self.label_stack.push(LabelContext {
@@ -743,6 +806,30 @@ impl Lowerer {
                         .set_terminator(after_close, Terminator::Return { value: None });
                 } else if self.is_async_fn {
                     self.emit_async_reject(after_close, value);
+                } else if self.is_generator_fn {
+                    let gen_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_close,
+                        Instruction::LoadVar {
+                            dest: gen_val,
+                            name: format!("${}.$generator", self.async_generator_scope_id),
+                        },
+                    );
+                    let result = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_close,
+                        Instruction::CallBuiltin {
+                            dest: Some(result),
+                            builtin: Builtin::GeneratorThrow,
+                            args: vec![gen_val, value],
+                        },
+                    );
+                    self.current_function.set_terminator(
+                        after_close,
+                        Terminator::Return {
+                            value: Some(result),
+                        },
+                    );
                 } else {
                     self.current_function
                         .set_terminator(after_close, Terminator::Throw { value });

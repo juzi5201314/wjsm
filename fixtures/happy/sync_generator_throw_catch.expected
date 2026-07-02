@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+n1 start false
+t2 caught:boom false
+n3 after false
+n4 undefined true
+--- stderr ---

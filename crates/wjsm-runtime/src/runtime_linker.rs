@@ -266,6 +266,7 @@ pub(super) fn register_linker(
     define_misc(linker, store)?;
     define_async_fn(linker, store)?;
     define_async_generator(linker, store)?;
+    define_generator(linker, store)?;
     define_proxy_reflect(linker, store)?;
     define_proxy_reflect_async(linker, store)?;
     define_object_builtins(linker, store)?;

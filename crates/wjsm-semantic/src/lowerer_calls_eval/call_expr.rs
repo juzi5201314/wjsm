@@ -58,6 +58,7 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let callee_val: ValueId;
         let this_val: ValueId;
+        let mut callee_block = block;
 
         match &call.callee {
             swc_ast::Callee::Expr(expr) => {
@@ -443,6 +444,7 @@ impl Lowerer {
                         this_val,
                         &mut member_block,
                     )?;
+                    callee_block = member_block;
                 } else {
                     // 普通调用 → this = undefined
                     let undef_const = self.module.add_constant(Constant::Undefined);
@@ -493,8 +495,7 @@ impl Lowerer {
             }
         }
         // 性能优化：预分配容量避免循环中多次 reallocation
-        let mut call_block = self.resolve_store_block(block);
-        let entry_block = call_block;
+        let mut call_block = self.resolve_store_block(callee_block);
         let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
             let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
@@ -514,11 +515,11 @@ impl Lowerer {
                 args,
             },
         );
-        // 参数求值引入控制流（如实参为 `new RegExp(...)` 的异常分叉、三元、await 等）时，
-        // Call 已发射在推进后的延续块上。必须把该块经 expr_merge_block 上报，
-        // 否则外层语句（如变量声明的异常检查分叉）会在过时的入口块上继续，
-        // 覆盖延续块的终结器并使真正的 Call 落入不可达块。
-        if call_block != entry_block {
+        // callee/member receiver 或参数求值引入控制流（如 `new C().m()`、
+        // `new RegExp(...)` 的异常分叉、三元、await 等）时，Call 已发射在推进后的
+        // 延续块上。必须把该块经 expr_merge_block 上报，否则外层语句会在过时的入口块
+        // 上继续，覆盖延续块的终结器并使真正的 Call 落入不可达块。
+        if call_block != block {
             self.expr_merge_block = Some(call_block);
         }
         Ok(dest)

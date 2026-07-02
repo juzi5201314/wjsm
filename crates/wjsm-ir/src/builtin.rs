@@ -195,6 +195,10 @@ pub enum Builtin {
     AsyncGeneratorNext,
     AsyncGeneratorReturn,
     AsyncGeneratorThrow,
+    GeneratorStart,
+    GeneratorNext,
+    GeneratorReturn,
+    GeneratorThrow,
     PromiseWithResolvers,
     IsCallable,
     /// ECMAScript Type(argument) is Object（含 array/function 等可构造返回值类型）
@@ -714,10 +718,14 @@ impl Builtin {
             Self::AsyncGeneratorStart => "async_generator.start",
             Self::AsyncGeneratorNext => "async_generator.next",
             Self::AsyncGeneratorReturn => "async_generator.return",
+            Self::AsyncGeneratorThrow => "async_generator.throw",
+            Self::GeneratorStart => "generator.start",
+            Self::GeneratorNext => "generator.next",
+            Self::GeneratorReturn => "generator.return",
+            Self::GeneratorThrow => "generator.throw",
             Self::PromiseWithResolvers => "promise.with_resolvers",
             Self::IsCallable => "is_callable",
             Self::IsJsObject => "is_js_object",
-            Self::AsyncGeneratorThrow => "async_generator.throw",
             _ => return None,
         })
     }

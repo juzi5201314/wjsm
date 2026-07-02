@@ -312,17 +312,171 @@ impl Lowerer {
             );
 
             Ok(result)
-        } else {
+        } else if self.is_generator_fn {
+            let next_state = self.async_state_counter;
+            self.async_state_counter += 1;
+
+            let resume_block = self.current_function.new_block();
+            let reject_block = self.current_function.new_block();
+            let continue_block = self.current_function.new_block();
+            let return_block = self.current_function.new_block();
+
+            self.async_resume_blocks.push((next_state, resume_block));
+            let visible_bindings = self.async_visible_binding_names();
+            self.pending_suspends.push(PendingSuspend {
+                suspend_block: block,
+                resume_block,
+                visible_bindings,
+            });
+
             let result = self.alloc_value();
             self.current_function.append_instruction(
                 block,
                 Instruction::CallBuiltin {
                     dest: Some(result),
-                    builtin: Builtin::AsyncGeneratorNext,
+                    builtin: Builtin::GeneratorNext,
                     args: vec![gen_val, value],
                 },
             );
-            Ok(result)
+            self.current_function.append_instruction(
+                block,
+                Instruction::GeneratorSuspend {
+                    result,
+                    state: next_state,
+                },
+            );
+            self.current_function.set_terminator(
+                block,
+                Terminator::Jump {
+                    target: continue_block,
+                },
+            );
+
+            let resume_val = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::LoadVar {
+                    dest: resume_val,
+                    name: format!("${}.$resume_val", self.async_resume_val_scope_id),
+                },
+            );
+            let completion = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::LoadVar {
+                    dest: completion,
+                    name: format!("${}.$is_rejected", self.async_is_rejected_scope_id),
+                },
+            );
+
+            let one_const = self.module.add_constant(Constant::Number(1.0));
+            let one_val = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::Const {
+                    dest: one_val,
+                    constant: one_const,
+                },
+            );
+            let is_throw = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::Compare {
+                    dest: is_throw,
+                    op: CompareOp::StrictEq,
+                    lhs: completion,
+                    rhs: one_val,
+                },
+            );
+            let check_return = self.current_function.new_block();
+            self.current_function.set_terminator(
+                resume_block,
+                Terminator::Branch {
+                    condition: is_throw,
+                    true_block: reject_block,
+                    false_block: check_return,
+                },
+            );
+
+            let two_const = self.module.add_constant(Constant::Number(2.0));
+            let two_val = self.alloc_value();
+            self.current_function.append_instruction(
+                check_return,
+                Instruction::Const {
+                    dest: two_val,
+                    constant: two_const,
+                },
+            );
+            let is_return = self.alloc_value();
+            self.current_function.append_instruction(
+                check_return,
+                Instruction::Compare {
+                    dest: is_return,
+                    op: CompareOp::StrictEq,
+                    lhs: completion,
+                    rhs: two_val,
+                },
+            );
+            self.current_function.set_terminator(
+                check_return,
+                Terminator::Branch {
+                    condition: is_return,
+                    true_block: return_block,
+                    false_block: continue_block,
+                },
+            );
+
+            self.emit_throw_value(reject_block, resume_val)?;
+
+            match self.lower_pending_finalizers(return_block)? {
+                StmtFlow::Open(after_finally) => {
+                    let gen_val2 = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: gen_val2,
+                            name: format!("${}.$generator", self.async_generator_scope_id),
+                        },
+                    );
+                    let return_value = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: return_value,
+                            name: format!("${}.$resume_val", self.async_resume_val_scope_id),
+                        },
+                    );
+                    let final_result = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::CallBuiltin {
+                            dest: Some(final_result),
+                            builtin: Builtin::GeneratorReturn,
+                            args: vec![gen_val2, return_value],
+                        },
+                    );
+                    self.current_function.set_terminator(
+                        after_finally,
+                        Terminator::Return {
+                            value: Some(final_result),
+                        },
+                    );
+                }
+                StmtFlow::Terminated => {}
+            }
+
+            let yielded_result = self.alloc_value();
+            self.current_function.append_instruction(
+                continue_block,
+                Instruction::LoadVar {
+                    dest: yielded_result,
+                    name: format!("${}.$resume_val", self.async_resume_val_scope_id),
+                },
+            );
+
+            Ok(yielded_result)
+        } else {
+            Err(self.error(yield_expr.span(), "yield outside generator"))
         }
     }
 

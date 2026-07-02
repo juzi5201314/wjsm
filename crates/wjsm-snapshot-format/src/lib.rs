@@ -13,16 +13,16 @@ use wjsm_ir::constants;
 use wjsm_ir::value;
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
-/// 格式版本：v4 记录 Array.prototype 方法表基址、长度与表 ABI hash。
+/// 格式版本：v6 新增 %IteratorPrototype% / Generator.prototype 两个 header 字段。
 /// 任何 wire 改动必须递增。
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 5;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 6;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
 /// 不会与合法 rel 值碰撞，并显式区分「rel == 0（heap 起点）」与「null 句柄」。
 pub const NULL_HANDLE_REL: u32 = u32::MAX;
 
-const HEADER_LEN: usize = 84;
+const HEADER_LEN: usize = 100;
 
 // ── snapshot data types ────────────────────────────────────────────
 
@@ -39,6 +39,8 @@ pub struct StartupSnapshotHeader {
     pub arr_proto_table_base: u32,
     pub arr_proto_table_len: u32,
     pub arr_proto_table_hash: u64,
+    pub iterator_prototype: i64,
+    pub generator_prototype: i64,
     pub async_iterator_prototype: i64,
     pub async_gen_prototype: i64,
     pub array_proto_values: i64,
@@ -129,7 +131,7 @@ pub enum SnapshotNativeCallable {
     CountQueuingStrategyConstructor = 52,
     ByteLengthQueuingStrategyConstructor = 53,
     // 预留: 不允许新增运行时状态捕获
-    // 最后 3 个是运行时杂类（不是 constructor）。
+    // 最后几项是运行时杂类（不是 constructor）。
     StubGlobal = 54,
     NumberPrimitiveMethod = 55,
     ArgumentsStrictCalleeGetter = 56,
@@ -142,6 +144,7 @@ pub enum SnapshotNativeCallable {
     RegExpPrimitiveMethod = 63,
     ArrayProtoKeys = 64,
     ArrayProtoEntries = 65,
+    IteratorProtoSymbolIterator = 66,
 }
 
 impl SnapshotNativeCallable {
@@ -213,6 +216,7 @@ impl SnapshotNativeCallable {
             63 => Some(Self::RegExpPrimitiveMethod),
             64 => Some(Self::ArrayProtoKeys),
             65 => Some(Self::ArrayProtoEntries),
+            66 => Some(Self::IteratorProtoSymbolIterator),
             _ => None,
         }
     }
@@ -308,6 +312,8 @@ fn build_header_bytes(header: &StartupSnapshotHeader) -> Vec<u8> {
     b.extend_from_slice(&header.arr_proto_table_base.to_le_bytes());
     b.extend_from_slice(&header.arr_proto_table_len.to_le_bytes());
     b.extend_from_slice(&header.arr_proto_table_hash.to_le_bytes());
+    b.extend_from_slice(&header.iterator_prototype.to_le_bytes());
+    b.extend_from_slice(&header.generator_prototype.to_le_bytes());
     b.extend_from_slice(&header.async_iterator_prototype.to_le_bytes());
     b.extend_from_slice(&header.async_gen_prototype.to_le_bytes());
     b.extend_from_slice(&header.array_proto_values.to_le_bytes());
@@ -392,11 +398,13 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     let arr_proto_table_base = u32::from_le_bytes(bytes[40..44].try_into()?);
     let arr_proto_table_len = u32::from_le_bytes(bytes[44..48].try_into()?);
     let arr_proto_table_hash = u64::from_le_bytes(bytes[48..56].try_into()?);
-    let async_iterator_prototype = i64::from_le_bytes(bytes[56..64].try_into()?);
-    let async_gen_prototype = i64::from_le_bytes(bytes[64..72].try_into()?);
-    let array_proto_values = i64::from_le_bytes(bytes[72..80].try_into()?);
+    let iterator_prototype = i64::from_le_bytes(bytes[56..64].try_into()?);
+    let generator_prototype = i64::from_le_bytes(bytes[64..72].try_into()?);
+    let async_iterator_prototype = i64::from_le_bytes(bytes[72..80].try_into()?);
+    let async_gen_prototype = i64::from_le_bytes(bytes[80..88].try_into()?);
+    let array_proto_values = i64::from_le_bytes(bytes[88..96].try_into()?);
 
-    let section_count = u32::from_le_bytes(bytes[80..84].try_into()?) as usize;
+    let section_count = u32::from_le_bytes(bytes[96..100].try_into()?) as usize;
     if section_count > 16 {
         bail!("too many sections: {}", section_count);
     }
@@ -413,6 +421,8 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         arr_proto_table_base,
         arr_proto_table_len,
         arr_proto_table_hash,
+        iterator_prototype,
+        generator_prototype,
         async_iterator_prototype,
         async_gen_prototype,
         array_proto_values,
@@ -619,7 +629,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=65 {
+    for d in 0u32..=66 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);

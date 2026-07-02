@@ -139,11 +139,21 @@ impl RootProvider for RuntimeRoots {
         if let Some(h) = ctx.object_proto_handle() {
             visit(h);
         }
-        // %AsyncIteratorPrototype% / AsyncGenerator.prototype 同样位于 function_props_base
-        // 之下，且仅由 RuntimeState 字段持有；旧布局下靠 0..num_ir_functions 扫描被顺带 root，
-        // 区间改为 base.. 后失去覆盖，必须显式 root。
-        let (async_iterator_proto, async_gen_proto) =
-            ctx.with_state(|st| (st.async_iterator_prototype, st.async_gen_prototype));
+        // %IteratorPrototype% / Generator.prototype / %AsyncIteratorPrototype% /
+        // AsyncGenerator.prototype 同样位于 function_props_base 之下，且仅由 RuntimeState
+        // 字段持有；旧布局下靠 0..num_ir_functions 扫描被顺带 root，区间改为
+        // base.. 后失去覆盖，必须显式 root。
+        let (iterator_proto, generator_proto, async_iterator_proto, async_gen_proto) = ctx
+            .with_state(|st| {
+                (
+                    st.iterator_prototype,
+                    st.generator_prototype,
+                    st.async_iterator_prototype,
+                    st.async_gen_prototype,
+                )
+            });
+        push_value_roots(ctx, iterator_proto, visit);
+        push_value_roots(ctx, generator_proto, visit);
         push_value_roots(ctx, async_iterator_proto, visit);
         push_value_roots(ctx, async_gen_proto, visit);
         let protos = ctx.with_state(|st| st.error_prototypes);
@@ -525,6 +535,12 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                     out.push(req.value);
                     out.push(req.promise);
                 }
+            }
+        }
+        // generator_table: continuation
+        if let Ok(table) = st.generator_table.lock() {
+            for entry in table.iter() {
+                out.push(entry.continuation);
             }
         }
         // async_from_sync_iterators: sync_iterator + outer_iter

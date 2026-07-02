@@ -87,6 +87,7 @@ pub(crate) struct Lowerer {
 
     pub(crate) is_async_fn: bool,
     pub(crate) is_async_generator_fn: bool,
+    pub(crate) is_generator_fn: bool,
 
     pub(crate) async_state_counter: u32,
     pub(crate) captured_var_slots: std::collections::HashMap<String, u32>,
@@ -156,6 +157,7 @@ pub(crate) struct ActiveUsingVar {
 pub(crate) struct AsyncContextState {
     pub(crate) is_async_fn: bool,
     pub(crate) is_async_generator_fn: bool,
+    pub(crate) is_generator_fn: bool,
     pub(crate) async_state_counter: u32,
     pub(crate) captured_var_slots: std::collections::HashMap<String, u32>,
     pub(crate) async_next_continuation_slot: u32,

@@ -493,6 +493,10 @@ pub enum Instruction {
         promise: ValueId,
         state: u32,
     },
+    GeneratorSuspend {
+        result: ValueId,
+        state: u32,
+    },
     CollectRestArgs {
         dest: ValueId,
         skip: u32,
@@ -718,6 +722,9 @@ impl fmt::Display for Instruction {
             }
             Self::Suspend { promise, state } => {
                 write!(formatter, "suspend {promise}, state={state}")
+            }
+            Self::GeneratorSuspend { result, state } => {
+                write!(formatter, "generator_suspend {result}, state={state}")
             }
             Self::CollectRestArgs { dest, skip } => {
                 write!(formatter, "{dest} = collect_rest_args skip={skip}")

@@ -19,6 +19,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::AsyncIteratorProtoSymbolAsyncIterator => {
                 NativeCallable::AsyncIteratorProtoSymbolAsyncIterator
             }
+            Self::IteratorProtoSymbolIterator => NativeCallable::IteratorProtoSymbolIterator,
             Self::ArrayProtoValues => NativeCallable::ArrayProtoValues,
             Self::ArrayProtoKeys => NativeCallable::ArrayProtoKeys,
             Self::ArrayProtoEntries => NativeCallable::ArrayProtoEntries,
@@ -98,6 +99,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::AsyncIteratorProtoSymbolAsyncIterator => {
                 Self::AsyncIteratorProtoSymbolAsyncIterator
             }
+            NativeCallable::IteratorProtoSymbolIterator => Self::IteratorProtoSymbolIterator,
             NativeCallable::ArrayProtoValues => Self::ArrayProtoValues,
             NativeCallable::ArrayProtoKeys => Self::ArrayProtoKeys,
             NativeCallable::ArrayProtoEntries => Self::ArrayProtoEntries,
@@ -173,6 +175,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::PromiseCombinatorReaction { .. }
             | NativeCallable::AsyncGeneratorMethod { .. }
             | NativeCallable::AsyncGeneratorIdentity { .. }
+            | NativeCallable::GeneratorMethod { .. }
+            | NativeCallable::GeneratorIdentity { .. }
             | NativeCallable::ArrayLikeIteratorNext { .. }
             | NativeCallable::RawIteratorNext { .. }
             | NativeCallable::AsyncFromSyncNext { .. }

@@ -255,22 +255,51 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
         let _ = alloc_host_object(store, wasm_env, 0);
     }
     install_array_iterator_methods(store, wasm_env);
+    let iterator_proto = alloc_host_object(store, wasm_env, 2);
+    let iterator_symbol_iterator = create_iterator_proto_identity(store.data());
+    let _ = define_host_data_property_by_name_id_with_env(
+        store,
+        wasm_env,
+        iterator_proto,
+        encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+        iterator_symbol_iterator,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    );
+    let iterator_tag = store_runtime_string_in_state(store.data(), "Iterator".to_string());
+    let _ = define_host_data_property_with_env(
+        store,
+        wasm_env,
+        iterator_proto,
+        "Symbol.toStringTag",
+        iterator_tag,
+    );
+
+    let generator_proto = alloc_host_object(store, wasm_env, 2);
+    let generator_handle = value::decode_object_handle(generator_proto);
+    let iterator_handle = value::decode_object_handle(iterator_proto);
+    let generator_ptr =
+        resolve_handle_idx_with_env(store, wasm_env, generator_handle as usize).expect("obj_ptr");
+    let data = wasm_env.memory.data_mut(&mut *store);
+    data[generator_ptr..generator_ptr + 4].copy_from_slice(&iterator_handle.to_le_bytes());
+    let generator_tag = store_runtime_string_in_state(store.data(), "Generator".to_string());
+    let _ = define_host_data_property_with_env(
+        store,
+        wasm_env,
+        generator_proto,
+        "Symbol.toStringTag",
+        generator_tag,
+    );
+
     let async_iterator_proto = alloc_host_object(store, wasm_env, 2);
-    let async_iterator_symbol_async_iterator = {
-        let mut table = store
-            .data()
-            .native_callables
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
-        value::encode_native_callable_idx(handle)
-    };
+    let async_iterator_symbol_async_iterator = create_native_callable(
+        store.data(),
+        NativeCallable::AsyncIteratorProtoSymbolAsyncIterator,
+    );
     let _ = define_host_data_property_by_name_id_with_env(
         store,
         wasm_env,
         async_iterator_proto,
-        encode_symbol_name_id(3),
+        encode_symbol_name_id(wjsm_ir::wk_symbol::ASYNC_ITERATOR),
         async_iterator_symbol_async_iterator,
         constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
     );
@@ -283,13 +312,14 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
         "Symbol.toStringTag",
         async_iterator_tag,
     );
+
     let async_gen_proto = alloc_host_object(store, wasm_env, 2);
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let obj_ptr =
+    let async_gen_ptr =
         resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize).expect("obj_ptr");
     let data = wasm_env.memory.data_mut(&mut *store);
-    data[obj_ptr..obj_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
+    data[async_gen_ptr..async_gen_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
     let _ = define_host_data_property_with_env(
         store,
@@ -298,6 +328,8 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
         "Symbol.toStringTag",
         async_gen_tag,
     );
+    store.data_mut().iterator_prototype = iterator_proto;
+    store.data_mut().generator_prototype = generator_proto;
     store.data_mut().async_iterator_prototype = async_iterator_proto;
     store.data_mut().async_gen_prototype = async_gen_proto;
 }

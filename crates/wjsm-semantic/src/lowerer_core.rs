@@ -103,6 +103,7 @@ impl Lowerer {
 
             is_async_fn: false,
             is_async_generator_fn: false,
+            is_generator_fn: false,
             async_state_counter: 0,
             captured_var_slots: std::collections::HashMap::new(),
             async_next_continuation_slot: 0,
@@ -147,6 +148,7 @@ impl Lowerer {
         AsyncContextState {
             is_async_fn: self.is_async_fn,
             is_async_generator_fn: self.is_async_generator_fn,
+            is_generator_fn: self.is_generator_fn,
             async_state_counter: self.async_state_counter,
             captured_var_slots: self.captured_var_slots.clone(),
             async_next_continuation_slot: self.async_next_continuation_slot,
@@ -166,6 +168,7 @@ impl Lowerer {
     pub(crate) fn restore_async_context(&mut self, context: AsyncContextState) {
         self.is_async_fn = context.is_async_fn;
         self.is_async_generator_fn = context.is_async_generator_fn;
+        self.is_generator_fn = context.is_generator_fn;
         self.async_state_counter = context.async_state_counter;
         self.captured_var_slots = context.captured_var_slots;
         self.async_next_continuation_slot = context.async_next_continuation_slot;
@@ -185,6 +188,7 @@ impl Lowerer {
         self.restore_async_context(AsyncContextState {
             is_async_fn: false,
             is_async_generator_fn: false,
+            is_generator_fn: false,
             async_state_counter: 0,
             captured_var_slots: std::collections::HashMap::new(),
             async_next_continuation_slot: 0,

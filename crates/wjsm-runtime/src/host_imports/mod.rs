@@ -1,6 +1,7 @@
 // register_xxx → define_xxx 模块
 mod async_fn;
 mod async_generator;
+mod generator;
 mod misc;
 mod promise;
 mod promise_combinators;
@@ -10,6 +11,7 @@ mod reentrant_async;
 
 pub(crate) use async_fn::define_async_fn;
 pub(crate) use async_generator::define_async_generator;
+pub(crate) use generator::define_generator;
 pub(crate) use misc::define_misc;
 pub(crate) use promise::define_promise;
 pub(crate) use promise_combinators::define_promise_combinators;

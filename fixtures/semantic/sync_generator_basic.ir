@@ -1,0 +1,189 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = number(0)
+    c21 = number(1)
+    c22 = number(2)
+    c23 = number(3)
+    c24 = number(4)
+    c25 = number(0)
+    c26 = functionref(@0)
+    c27 = undefined
+    c28 = number(1)
+    c29 = number(1)
+    c30 = number(2)
+    c31 = number(2)
+    c32 = number(0)
+    c33 = number(1)
+    c34 = number(0)
+    c35 = undefined
+    c36 = string("$0.gen")
+    c37 = string("callee")
+    c38 = functionref(@0)
+    c39 = number(5)
+    c40 = undefined
+    c41 = number(2)
+    c42 = number(3)
+    c43 = number(4)
+    c44 = functionref(@1)
+
+  fn @gen$gen [params: $1.$env, $1.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $1.$env
+      %1 = const c20
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $1.$state, %2
+      %3 = const c21
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $1.$is_rejected, %4
+      %5 = const c22
+      %6 = call builtin.continuation.load_var(%0, %5)
+      store var $1.$generator, %6
+      %7 = const c23
+      %8 = call builtin.continuation.load_var(%0, %7)
+      store var $1.$closure_env, %8
+      %9 = load var $1.$this
+      store var $1.$resume_val, %9
+      %10 = const c24
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $1.$this, %11
+      %12 = collect_rest_args skip=0
+      %13 = const c25
+      %15 = const c26
+      %14 = call builtin.create_mapped_arguments_object(%12, %13, %15)
+      store var $1.arguments, %14
+      jump bb1
+    bb1:
+      %16 = const c27
+      store var $1.$shared_env, %16
+      %35 = load var $1.$state
+      switch %35 [case c32 -> bb2, case c33 -> bb3], default bb8, exit bb9
+    bb2:
+      %17 = const c28
+      %18 = load var $1.$generator
+      %19 = call builtin.generator.next(%18, %17)
+      generator_suspend %19, state=1
+      jump bb5
+    bb3:
+      %20 = load var $1.$resume_val
+      %21 = load var $1.$is_rejected
+      %22 = const c29
+      %23 = stricteq %21, %22
+      branch %23, bb4, bb7
+    bb4:
+      %26 = load var $1.$generator
+      %27 = call builtin.generator.throw(%26, %20)
+      return %27
+    bb5:
+      %31 = load var $1.$resume_val
+      %32 = const c31
+      %33 = load var $1.$generator
+      %34 = call builtin.generator.return(%33, %32)
+      return %34
+    bb6:
+      %28 = load var $1.$generator
+      %29 = load var $1.$resume_val
+      %30 = call builtin.generator.return(%28, %29)
+      return %30
+    bb7:
+      %24 = const c30
+      %25 = stricteq %21, %24
+      branch %25, bb6, bb5
+    bb8:
+      return
+    bb9:
+      unreachable
+
+  fn @gen [params: $2.$env, $2.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c34
+      %3 = const c35
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      store var $2.arguments, %2
+      %4 = load var $env
+      %5 = const c36
+      %6 = get_prop %4, %5
+      %7 = const c37
+      set_prop %2, %7, %6
+      %8 = const c38
+      %9 = const c39
+      %10 = const c40
+      %11 = call builtin.continuation.create(%8, %10, %9)
+      %12 = call builtin.generator.start(%11)
+      %13 = load var $2.$this
+      %14 = const c41
+      call builtin.continuation.save_var(%11, %14, %12)
+      %15 = const c42
+      call builtin.continuation.save_var(%11, %15, %10)
+      %16 = const c43
+      call builtin.continuation.save_var(%11, %16, %13)
+      return %12
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = const c44
+      store var $0.gen, %21
+      return
+}

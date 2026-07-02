@@ -14,6 +14,7 @@ use wjsm_ir::value;
 /// - PromiseResolvingFunction → promise
 /// - PromiseCombinatorReaction → result_promise + result_array
 /// - AsyncGeneratorMethod/Identity → generator
+/// - GeneratorMethod/Identity → generator
 /// - EvalFunction → scope_env
 /// - 其余变体不直接持 obj_table 引用（method dispatch 的 handle 是 side-table 索引，
 ///   由对应 side-table 的 fixed-point root 路径覆盖）。
@@ -39,7 +40,9 @@ pub(crate) fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: us
             vec![rp, ra]
         }
         NativeCallable::AsyncGeneratorMethod { generator, .. }
-        | NativeCallable::AsyncGeneratorIdentity { generator } => vec![generator],
+        | NativeCallable::AsyncGeneratorIdentity { generator }
+        | NativeCallable::GeneratorMethod { generator, .. }
+        | NativeCallable::GeneratorIdentity { generator } => vec![generator],
         NativeCallable::EvalFunction(function) => function.scope_env.into_iter().collect(),
         NativeCallable::ArrayLikeIteratorNext { target, .. } => vec![target],
         NativeCallable::RawIteratorNext { iterator } => vec![iterator],

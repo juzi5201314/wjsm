@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+self true
+n1 expr false
+n2 undefined true
+--- stderr ---

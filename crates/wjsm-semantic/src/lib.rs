@@ -4,9 +4,9 @@ use swc_core::common::Spanned;
 use swc_core::ecma::ast as swc_ast;
 use thiserror::Error;
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function,
-    FunctionId, HomeObject, Instruction, MODULE_ENTRY_IR_NAME, Module, PhiSource, Program,
-    SwitchCaseTarget, Terminator, UnaryOp, ValueId,
+    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function, FunctionId,
+    HomeObject, Instruction, MODULE_ENTRY_IR_NAME, Module, PhiSource, Program, SwitchCaseTarget,
+    Terminator, UnaryOp, ValueId,
 };
 
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";

@@ -11,6 +11,37 @@ impl Lowerer {
         if fn_expr.function.is_async {
             return self.lower_async_fn_expr(fn_expr, block);
         }
+        if fn_expr.function.is_generator {
+            let temp_name = format!("$__wjsm_gen_expr_{}", self.module.functions().len());
+            let _ = self
+                .scopes
+                .declare(&temp_name, VarKind::Let, true)
+                .map_err(|msg| self.error(fn_expr.span(), msg))?;
+            let fake_decl = swc_ast::FnDecl {
+                ident: swc_ast::Ident::new(
+                    temp_name.clone().into(),
+                    fn_expr.span(),
+                    swc_core::common::SyntaxContext::empty(),
+                ),
+                declare: false,
+                function: fn_expr.function.clone(),
+            };
+            let flow = self.lower_gen_fn_decl(&fake_decl, StmtFlow::Open(block))?;
+            let load_block = self.ensure_open(flow)?;
+            let (scope_id, _) = self
+                .scopes
+                .lookup(&temp_name)
+                .map_err(|msg| self.error(fn_expr.span(), msg))?;
+            let callee = self.alloc_value();
+            self.current_function.append_instruction(
+                load_block,
+                Instruction::LoadVar {
+                    dest: callee,
+                    name: format!("${scope_id}.{temp_name}"),
+                },
+            );
+            return Ok(callee);
+        }
         let name = fn_expr.ident.as_ref().map_or_else(
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),

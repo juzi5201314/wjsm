@@ -356,6 +356,23 @@ impl Lowerer {
                             }
                         };
 
+                        if method.function.is_generator {
+                            let method_value = self.lower_method_prop_to_fn(
+                                &method.key,
+                                &method.function,
+                                Some(target),
+                                block,
+                            )?;
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::SetProp {
+                                    object: target,
+                                    key: m_key_dest,
+                                    value: method_value,
+                                },
+                            );
+                            continue;
+                        }
                         let fn_name = format!("{}.{}", class_name, method_name);
                         self.push_function_context(&fn_name, BasicBlockId(0));
                         self.is_method = true;

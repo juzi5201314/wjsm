@@ -12,6 +12,9 @@ impl Lowerer {
         if fn_decl.function.is_async {
             return self.lower_async_fn_decl(fn_decl, flow);
         }
+        if fn_decl.function.is_generator {
+            return self.lower_gen_fn_decl(fn_decl, flow);
+        }
         let name = fn_decl.ident.sym.to_string();
         self.push_function_context(&name, BasicBlockId(0));
 

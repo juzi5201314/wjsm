@@ -681,6 +681,11 @@ fn jsx_fragment_fixture_matches_ir_snapshot() {
     assert_snapshot("jsx_fragment");
 }
 
+#[test]
+fn sync_generator_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("sync_generator_basic");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));

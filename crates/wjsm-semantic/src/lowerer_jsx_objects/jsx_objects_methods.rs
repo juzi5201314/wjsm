@@ -454,6 +454,22 @@ impl Lowerer {
         home_object: Option<ValueId>,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        if function.is_generator {
+            let method_name = match key {
+                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                _ => "anonymous".to_string(),
+            };
+            let fn_expr = swc_ast::FnExpr {
+                ident: Some(swc_ast::Ident::new(
+                    method_name.into(),
+                    key.span(),
+                    swc_core::common::SyntaxContext::empty(),
+                )),
+                function: Box::new(function.clone()),
+            };
+            return self.lower_fn_expr(&fn_expr, block);
+        }
         let method_name = match key {
             swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
             swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
