@@ -81,6 +81,8 @@ pub(crate) struct ArrayBufferEntry {
 #[derive(Clone, Debug)]
 pub(crate) struct DataViewEntry {
     pub(crate) buffer_handle: u32,
+    /// 规范内部槽 [[ViewedArrayBuffer]] 对应的 JS buffer 对象；由 GC 追踪。
+    pub(crate) buffer_object: Option<i64>,
     pub(crate) byte_offset: u32,
     pub(crate) byte_length: u32,
     pub(crate) is_shared: bool,
@@ -90,6 +92,8 @@ pub(crate) struct DataViewEntry {
 
 pub(crate) struct TypedArrayEntry {
     pub(crate) buffer_handle: u32,
+    /// 规范内部槽 [[ViewedArrayBuffer]] 对应的 JS buffer 对象；由 GC 追踪。
+    pub(crate) buffer_object: Option<i64>,
     pub(crate) byte_offset: u32,
     pub(crate) length: u32,
     pub(crate) element_size: u8,
@@ -162,6 +166,8 @@ pub(crate) struct FetchResponseEntry {
     pub(crate) status: u16,
     pub(crate) status_text: String,
     pub(crate) headers_handle: u32,
+    /// 与 headers_handle 对应的 JS Headers wrapper；由 GC 追踪。
+    pub(crate) headers_object: Option<i64>,
     pub(crate) url: String,
     pub(crate) body: Vec<u8>,
     pub(crate) response_type: ResponseType,
@@ -176,6 +182,8 @@ pub(crate) struct FetchRequestEntry {
     pub(crate) method: String,
     pub(crate) url: String,
     pub(crate) headers_handle: u32,
+    /// 与 headers_handle 对应的 JS Headers wrapper；由 GC 追踪。
+    pub(crate) headers_object: Option<i64>,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) redirect: RedirectMode,
     #[allow(dead_code)]

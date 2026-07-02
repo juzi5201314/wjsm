@@ -641,6 +641,7 @@ pub(crate) fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
         let handle = ta_table.len() as u32;
         ta_table.push(TypedArrayEntry {
             buffer_handle: ab_handle,
+            buffer_object: None,
             byte_offset: 0,
             length: bytes.len() as u32,
             element_size: 1,

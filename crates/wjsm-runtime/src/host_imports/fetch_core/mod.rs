@@ -40,6 +40,7 @@ pub(crate) fn create_response_object(
         status,
         status_text: status_text.clone(),
         headers_handle,
+        headers_object: None,
         url: url.clone(),
         body,
         response_type,
@@ -113,6 +114,15 @@ pub(crate) fn create_response_object(
 
     // headers object
     let headers_obj = create_headers_object_from_handle(caller, headers_handle);
+    if let Some(entry) = caller
+        .data()
+        .fetch_response_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(handle as usize)
+    {
+        entry.headers_object = Some(headers_obj);
+    }
     let _ = define_host_data_property_from_caller(caller, obj, "headers", headers_obj);
 
     // Attach method callables (text, json, arrayBuffer, clone)
@@ -158,6 +168,7 @@ pub(crate) fn create_response_object_with_http_handle(
         status,
         status_text: status_text.clone(),
         headers_handle,
+        headers_object: None,
         url: url.clone(),
         body: Vec::new(),
         response_type,
@@ -230,6 +241,15 @@ pub(crate) fn create_response_object_with_http_handle(
         define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
 
     let headers_obj = create_headers_object_from_handle(caller, headers_handle);
+    if let Some(entry) = caller
+        .data()
+        .fetch_response_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(handle as usize)
+    {
+        entry.headers_object = Some(headers_obj);
+    }
     let _ = define_host_data_property_from_caller(caller, obj, "headers", headers_obj);
 
     attach_response_methods(caller, obj, handle);
@@ -258,6 +278,7 @@ pub(crate) fn create_request_object(
         method: method.clone(),
         url: url.clone(),
         headers_handle,
+        headers_object: None,
         body,
         redirect,
         body_used: false,
@@ -303,6 +324,15 @@ pub(crate) fn create_request_object(
     let _ =
         define_host_data_property_from_caller(caller, obj, "keepalive", value::encode_bool(false));
     let headers_obj = create_headers_object_from_handle(caller, headers_handle);
+    if let Some(entry) = caller
+        .data()
+        .fetch_request_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(handle as usize)
+    {
+        entry.headers_object = Some(headers_obj);
+    }
     let _ = define_host_data_property_from_caller(caller, obj, "headers", headers_obj);
 
     attach_request_methods(caller, obj, handle);
