@@ -26,11 +26,15 @@ impl Compiler {
             // ── proactive GC：在分配前调用（GC 完成后再分配，新对象不在 GC 视野，安全）──
             func.instruction(&WasmInstruction::Call(gc_maybe_collect_idx));
 
-            // size = 16 + capacity * 8
+            // size = header + capacity * element_size
             func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Const(
+                constants::HEAP_ARRAY_ELEMENT_SIZE as i32,
+            ));
             func.instruction(&WasmInstruction::I32Mul);
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(
+                constants::HEAP_OBJECT_HEADER_SIZE as i32,
+            ));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
 
@@ -94,48 +98,52 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::GlobalGet(array_proto_global));
             func.instruction(&WasmInstruction::I32Store(MemArg {
-                offset: 0,
+                offset: constants::HEAP_OBJECT_PROTO_OFFSET as u64,
                 align: 2,
                 memory_index: 0,
             }));
-            // type byte HEAP_TYPE_ARRAY (0x01) at offset 4
+            // type byte HEAP_TYPE_ARRAY at layout-defined offset
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
             func.instruction(&WasmInstruction::I32Store8(MemArg {
-                offset: 4,
+                offset: constants::HEAP_OBJECT_TYPE_OFFSET as u64,
                 align: 0,
                 memory_index: 0,
             }));
-            // Zero pad at offsets 5-7
-            for off in [5u64, 6, 7] {
+            // Zero pad bytes
+            for off in
+                constants::HEAP_OBJECT_HEADER_PAD_START..constants::HEAP_OBJECT_HEADER_PAD_END
+            {
                 func.instruction(&WasmInstruction::LocalGet(2));
                 func.instruction(&WasmInstruction::I32Const(0));
                 func.instruction(&WasmInstruction::I32Store8(MemArg {
-                    offset: off,
+                    offset: off as u64,
                     align: 0,
                     memory_index: 0,
                 }));
             }
-            // length = 0 at offset 8
+            // length = 0
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::I32Store(MemArg {
-                offset: 8,
+                offset: constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
                 align: 2,
                 memory_index: 0,
             }));
-            // capacity = capacity (param 0) at offset 12
+            // capacity = capacity (param 0)
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32Store(MemArg {
-                offset: 12,
+                offset: constants::HEAP_ARRAY_CAPACITY_OFFSET as u64,
                 align: 2,
                 memory_index: 0,
             }));
 
             // ── obj_table[handle_idx] = ptr ──
             func.instruction(&WasmInstruction::LocalGet(3));
-            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Const(
+                constants::HANDLE_TABLE_ENTRY_SIZE as i32,
+            ));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
             func.instruction(&WasmInstruction::I32Add);

@@ -167,6 +167,58 @@ pub const PROP_SLOT_VALUE_OFFSET: u32 = 8;
 pub const PROP_SLOT_GETTER_OFFSET: u32 = 16;
 pub const PROP_SLOT_SETTER_OFFSET: u32 = 24;
 
+// ── 启动快照相关堆布局常量 ──────────────────────────────────────────────────
+// 这些值决定 object heap 与 handle table 的二进制布局；任何变更都必须进入
+// `wjsm-snapshot-format::abi_hash()`，否则旧启动快照会按新布局静默恢复。
+pub const HEAP_OBJECT_HEADER_SIZE: u32 = 16;
+pub const HEAP_OBJECT_PROTO_OFFSET: u32 = 0;
+pub const HEAP_OBJECT_TYPE_OFFSET: u32 = 4;
+pub const HEAP_OBJECT_HEADER_PAD_START: u32 = 5;
+pub const HEAP_OBJECT_HEADER_PAD_LEN: u32 = 3;
+pub const HEAP_OBJECT_HEADER_PAD_END: u32 =
+    HEAP_OBJECT_HEADER_PAD_START + HEAP_OBJECT_HEADER_PAD_LEN;
+pub const HEAP_OBJECT_CAPACITY_OFFSET: u32 = 8;
+pub const HEAP_OBJECT_PROPERTY_COUNT_OFFSET: u32 = 12;
+pub const HEAP_OBJECT_PROPERTY_SLOT_SIZE: u32 = PROP_SLOT_SIZE;
+pub const HEAP_ARRAY_LENGTH_OFFSET: u32 = 8;
+pub const HEAP_ARRAY_CAPACITY_OFFSET: u32 = 12;
+pub const HEAP_ARRAY_ELEMENT_SIZE: u32 = 8;
+pub const HANDLE_TABLE_ENTRY_SIZE: u32 = 4;
+pub const HANDLE_TABLE_MIN_ENTRIES: u32 = 8192;
+pub const HANDLE_TABLE_FUNCTION_ENTRY_FACTOR: u32 = 4;
+pub const HEAP_ALLOCATION_ALIGNMENT: u32 = 8;
+
+/// 返回所有会影响启动快照 object heap / handle table 兼容性的布局输入。
+/// 名称也参与 hash，避免两个常量值交换时 hash 不变。
+pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
+    &[
+        ("heap_object_header_size", HEAP_OBJECT_HEADER_SIZE),
+        ("heap_object_proto_offset", HEAP_OBJECT_PROTO_OFFSET),
+        ("heap_object_type_offset", HEAP_OBJECT_TYPE_OFFSET),
+        ("heap_object_header_pad_start", HEAP_OBJECT_HEADER_PAD_START),
+        ("heap_object_header_pad_len", HEAP_OBJECT_HEADER_PAD_LEN),
+        ("heap_object_capacity_offset", HEAP_OBJECT_CAPACITY_OFFSET),
+        (
+            "heap_object_property_count_offset",
+            HEAP_OBJECT_PROPERTY_COUNT_OFFSET,
+        ),
+        (
+            "heap_object_property_slot_size",
+            HEAP_OBJECT_PROPERTY_SLOT_SIZE,
+        ),
+        ("heap_array_length_offset", HEAP_ARRAY_LENGTH_OFFSET),
+        ("heap_array_capacity_offset", HEAP_ARRAY_CAPACITY_OFFSET),
+        ("heap_array_element_size", HEAP_ARRAY_ELEMENT_SIZE),
+        ("handle_table_entry_size", HANDLE_TABLE_ENTRY_SIZE),
+        ("handle_table_min_entries", HANDLE_TABLE_MIN_ENTRIES),
+        (
+            "handle_table_function_entry_factor",
+            HANDLE_TABLE_FUNCTION_ENTRY_FACTOR,
+        ),
+        ("heap_allocation_alignment", HEAP_ALLOCATION_ALIGNMENT),
+    ]
+}
+
 // ── 属性标志位定义 ──────────────────────────────────────────────────────────
 // flags 字段的位定义
 pub const FLAG_CONFIGURABLE: i32 = 1 << 0; // bit 0: 可配置

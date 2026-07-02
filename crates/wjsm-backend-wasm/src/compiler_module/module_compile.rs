@@ -293,10 +293,14 @@ impl Compiler {
         // P2.2: 提前计算 heap 布局，供 bootstrap 函数中的 emit_globals_init 使用。
         // 这些值原本在 globals 定义段中计算，现在 globals 是 import 的，
         // 需要在编译 bootstrap 之前确定初始值。
-        let heap_start = (self.data_offset + 7) & !7; // align to 8 bytes
+        let heap_start = (self.data_offset + (constants::HEAP_ALLOCATION_ALIGNMENT - 1))
+            & !(constants::HEAP_ALLOCATION_ALIGNMENT - 1);
         let num_functions = self.num_ir_functions;
-        let handle_table_entries = std::cmp::max(8192, num_functions * 4);
-        let handle_table_size = handle_table_entries * 4;
+        let handle_table_entries = std::cmp::max(
+            constants::HANDLE_TABLE_MIN_ENTRIES,
+            num_functions * constants::HANDLE_TABLE_FUNCTION_ENTRY_FACTOR,
+        );
+        let handle_table_size = handle_table_entries * constants::HANDLE_TABLE_ENTRY_SIZE;
         let shadow_stack_base = heap_start + handle_table_size;
         let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
         let object_heap_start = shadow_stack_end + SHADOW_STACK_HEAP_GUARD_SIZE;

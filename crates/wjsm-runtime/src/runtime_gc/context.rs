@@ -6,11 +6,12 @@
 //! - `obj_table` global 读取辅助。
 use crate::runtime_gc::api::{GcContext, Handle};
 use wasmtime::Val;
+use wjsm_ir::constants;
 
 /// 对象 header 常量（与 runtime_heap.rs / runtime_values.rs 一致）。
-pub const HEADER_SIZE: usize = 16;
-pub const OBJECT_ELEM_SIZE: usize = 32; // 属性槽 [name_id(4) flags(4) value(8) getter(8) setter(8)]
-pub const ARRAY_ELEM_SIZE: usize = 8; // NaN-boxed element
+pub const HEADER_SIZE: usize = constants::HEAP_OBJECT_HEADER_SIZE as usize;
+pub const OBJECT_ELEM_SIZE: usize = constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
+pub const ARRAY_ELEM_SIZE: usize = constants::HEAP_ARRAY_ELEMENT_SIZE as usize;
 
 /// GC 已知的堆对象布局分类（issue #119：禁止把未知 tag 静默当成 OBJECT 而不告警）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,8 +41,14 @@ pub(crate) fn gc_heap_layout(heap_type: u8) -> GcHeapLayout {
 
 fn object_cap_and_elem_size(heap_type: u8) -> (usize, usize) {
     match gc_heap_layout(heap_type) {
-        GcHeapLayout::Array => (12usize, ARRAY_ELEM_SIZE),
-        GcHeapLayout::ObjectLike => (8usize, OBJECT_ELEM_SIZE),
+        GcHeapLayout::Array => (
+            constants::HEAP_ARRAY_CAPACITY_OFFSET as usize,
+            ARRAY_ELEM_SIZE,
+        ),
+        GcHeapLayout::ObjectLike => (
+            constants::HEAP_OBJECT_CAPACITY_OFFSET as usize,
+            OBJECT_ELEM_SIZE,
+        ),
     }
 }
 
@@ -56,7 +63,7 @@ pub fn object_size_from_memory(data: &[u8], ptr: usize) -> Option<usize> {
     if ptr + HEADER_SIZE > data.len() {
         return None;
     }
-    let heap_type = data[ptr + 4];
+    let heap_type = data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize];
     let (cap_off, elem_size) = object_cap_and_elem_size(heap_type);
     let capacity = u32::from_le_bytes([
         data[ptr + cap_off],

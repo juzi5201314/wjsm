@@ -1,6 +1,7 @@
 use super::*;
 use crate::runtime_heap::{ensure_linear_memory_bytes, host_handle_slot_fits};
 use std::sync::atomic::Ordering;
+use wjsm_ir::constants;
 
 /// Well-known `Symbol.species` table index (see `RuntimeState::symbol_table` init order).
 const WELL_KNOWN_SYMBOL_SPECIES: u32 = 1;
@@ -142,7 +143,8 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    let size = 16u32.saturating_add(capacity.saturating_mul(8));
+    let size = constants::HEAP_OBJECT_HEADER_SIZE
+        .saturating_add(capacity.saturating_mul(constants::HEAP_ARRAY_ELEMENT_SIZE));
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
@@ -156,14 +158,24 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
         return value::encode_undefined();
     }
     let ptr = heap_ptr as usize;
-    let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
+    let slot_addr = obj_table_ptr as usize
+        + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
     let d = env.memory.data_mut(&mut *ctx);
-    d[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
-    d[ptr + 4] = 1u8;
-    d[ptr + 5..ptr + 8].fill(0);
-    d[ptr + 8..ptr + 12].copy_from_slice(&0u32.to_le_bytes());
-    d[ptr + 12..ptr + 16].copy_from_slice(&capacity.to_le_bytes());
-    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+    d[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
+        ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
+        .copy_from_slice(&proto.to_le_bytes());
+    d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_ARRAY;
+    d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
+        ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
+        .fill(0);
+    d[ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize
+        ..ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize + 4]
+        .copy_from_slice(&0u32.to_le_bytes());
+    d[ptr + constants::HEAP_ARRAY_CAPACITY_OFFSET as usize
+        ..ptr + constants::HEAP_ARRAY_CAPACITY_OFFSET as usize + 4]
+        .copy_from_slice(&capacity.to_le_bytes());
+    d[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
+        .copy_from_slice(&heap_ptr.to_le_bytes());
     let _ = d;
     let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env
@@ -188,17 +200,24 @@ pub(crate) fn set_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
         return;
     };
     let data = env.memory.data_mut(&mut *ctx);
-    let slot_offset = ptr + 16 + index as usize * 8;
-    if slot_offset + 8 > data.len() {
+    let slot_offset = ptr
+        + constants::HEAP_OBJECT_HEADER_SIZE as usize
+        + index as usize * constants::HEAP_ARRAY_ELEMENT_SIZE as usize;
+    if slot_offset + constants::HEAP_ARRAY_ELEMENT_SIZE as usize > data.len() {
         return;
     }
-    data[slot_offset..slot_offset + 8].copy_from_slice(&val.to_le_bytes());
+    data[slot_offset..slot_offset + constants::HEAP_ARRAY_ELEMENT_SIZE as usize]
+        .copy_from_slice(&val.to_le_bytes());
     // Update length to max(length, index+1)
-    let old_len =
-        u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]]);
+    let length_offset = ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize;
+    let old_len = u32::from_le_bytes(
+        data[length_offset..length_offset + 4]
+            .try_into()
+            .expect("array length"),
+    );
     if (index as u32) >= old_len {
         let new_len = (index as u32) + 1;
-        data[ptr + 8..ptr + 12].copy_from_slice(&new_len.to_le_bytes());
+        data[length_offset..length_offset + 4].copy_from_slice(&new_len.to_le_bytes());
     }
 }
 // ── 辅助函数：分配新对象 ────────────────────────────────────────────
@@ -207,7 +226,8 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    let size = 16u32.saturating_add(capacity.saturating_mul(32));
+    let size = constants::HEAP_OBJECT_HEADER_SIZE
+        .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
@@ -217,18 +237,28 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     if (new_heap_ptr as usize) > d.len() {
         return value::encode_undefined();
     }
-    let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
+    let slot_addr = obj_table_ptr as usize
+        + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
     // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
     // 不前进 heap_ptr，保持 handle->slot 映射与 obj_table_count 一致。
-    if slot_addr + 4 > d.len() {
+    if slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize > d.len() {
         return value::encode_undefined();
     }
-    d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
-    d[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
-    d[ptr + 5..ptr + 8].fill(0);
-    d[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes()); // capacity
-    d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes()); // num_props = 0
-    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+    d[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
+        ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
+        .copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
+    d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
+    d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
+        ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
+        .fill(0);
+    d[ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize
+        ..ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize + 4]
+        .copy_from_slice(&capacity.to_le_bytes()); // capacity
+    d[ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize
+        ..ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize + 4]
+        .copy_from_slice(&0u32.to_le_bytes()); // num_props = 0
+    d[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
+        .copy_from_slice(&heap_ptr.to_le_bytes());
     let _ = d;
     let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env

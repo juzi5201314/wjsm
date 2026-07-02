@@ -638,12 +638,25 @@ pub fn abi_hash() -> u64 {
 
     // Property slot constants
     constants::PROP_SLOT_SIZE.hash(&mut hasher);
+    constants::PROP_SLOT_NAME_ID_OFFSET.hash(&mut hasher);
+    constants::PROP_SLOT_FLAGS_OFFSET.hash(&mut hasher);
+    constants::PROP_SLOT_VALUE_OFFSET.hash(&mut hasher);
+    constants::PROP_SLOT_GETTER_OFFSET.hash(&mut hasher);
+    constants::PROP_SLOT_SETTER_OFFSET.hash(&mut hasher);
     constants::FLAG_CONFIGURABLE.hash(&mut hasher);
     constants::FLAG_ENUMERABLE.hash(&mut hasher);
     constants::FLAG_WRITABLE.hash(&mut hasher);
     constants::FLAG_IS_ACCESSOR.hash(&mut hasher);
     constants::FLAG_PRIVATE.hash(&mut hasher);
 
+    // Heap / handle-table layout constants
+    for (name, value) in constants::heap_layout_abi_inputs() {
+        name.hash(&mut hasher);
+        value.hash(&mut hasher);
+    }
+    wjsm_ir::SHADOW_STACK_SIZE.hash(&mut hasher);
+    wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE.hash(&mut hasher);
+    wjsm_ir::SHADOW_STACK_HEAP_GUARD_CANARY.hash(&mut hasher);
     // Embedded support module / builtin JS bundle hash（运行时通过
     // `register_abi_hash_external_input` 注入；未注入时为 0，不参与 hash 改变）。
     if let Some(extra) = ABI_HASH_EXTERNAL_INPUT.get() {
@@ -665,4 +678,103 @@ pub fn register_abi_hash_external_input(value: u64) {
 
 fn align_up(n: u32, align: u32) -> u32 {
     (n + align - 1) & !(align - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expected_static_abi_hash() -> u64 {
+        let mut hasher = DefaultHasher::new();
+        SNAPSHOT_FORMAT_VERSION.hash(&mut hasher);
+
+        value::BOX_BASE.hash(&mut hasher);
+        value::TAG_MASK.hash(&mut hasher);
+        value::TAG_STRING.hash(&mut hasher);
+        value::TAG_UNDEFINED.hash(&mut hasher);
+        value::TAG_NULL.hash(&mut hasher);
+        value::TAG_BOOL.hash(&mut hasher);
+        value::TAG_ITERATOR.hash(&mut hasher);
+        value::TAG_ENUMERATOR.hash(&mut hasher);
+        value::TAG_NATIVE_CALLABLE.hash(&mut hasher);
+        value::TAG_OBJECT.hash(&mut hasher);
+        value::TAG_FUNCTION.hash(&mut hasher);
+        value::TAG_CLOSURE.hash(&mut hasher);
+        value::TAG_ARRAY.hash(&mut hasher);
+        value::TAG_BOUND.hash(&mut hasher);
+        value::TAG_BIGINT.hash(&mut hasher);
+        value::TAG_SYMBOL.hash(&mut hasher);
+        value::TAG_REGEXP.hash(&mut hasher);
+        value::TAG_PROXY.hash(&mut hasher);
+        value::TAG_SCOPE_RECORD.hash(&mut hasher);
+        value::TAG_ARRAY_HOLE.hash(&mut hasher);
+
+        wjsm_ir::HEAP_TYPE_OBJECT.hash(&mut hasher);
+        wjsm_ir::HEAP_TYPE_ARRAY.hash(&mut hasher);
+        wjsm_ir::HEAP_TYPE_PROMISE.hash(&mut hasher);
+        wjsm_ir::HEAP_TYPE_CONTINUATION.hash(&mut hasher);
+        wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR.hash(&mut hasher);
+        wjsm_ir::HEAP_TYPE_ARGUMENTS.hash(&mut hasher);
+
+        for (offset, s) in constants::primordial_string_offsets() {
+            offset.hash(&mut hasher);
+            s.hash(&mut hasher);
+        }
+
+        for d in 0u32..=66 {
+            if SnapshotNativeCallable::from_discriminant(d).is_some() {
+                d.hash(&mut hasher);
+            }
+        }
+
+        constants::PROP_SLOT_SIZE.hash(&mut hasher);
+        constants::PROP_SLOT_NAME_ID_OFFSET.hash(&mut hasher);
+        constants::PROP_SLOT_FLAGS_OFFSET.hash(&mut hasher);
+        constants::PROP_SLOT_VALUE_OFFSET.hash(&mut hasher);
+        constants::PROP_SLOT_GETTER_OFFSET.hash(&mut hasher);
+        constants::PROP_SLOT_SETTER_OFFSET.hash(&mut hasher);
+        constants::FLAG_CONFIGURABLE.hash(&mut hasher);
+        constants::FLAG_ENUMERABLE.hash(&mut hasher);
+        constants::FLAG_WRITABLE.hash(&mut hasher);
+        constants::FLAG_IS_ACCESSOR.hash(&mut hasher);
+        constants::FLAG_PRIVATE.hash(&mut hasher);
+
+        for (name, value) in constants::heap_layout_abi_inputs() {
+            name.hash(&mut hasher);
+            value.hash(&mut hasher);
+        }
+        wjsm_ir::SHADOW_STACK_SIZE.hash(&mut hasher);
+        wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE.hash(&mut hasher);
+        wjsm_ir::SHADOW_STACK_HEAP_GUARD_CANARY.hash(&mut hasher);
+
+        hasher.finish()
+    }
+
+    #[test]
+    fn abi_hash_includes_heap_layout_inputs() {
+        assert_eq!(abi_hash(), expected_static_abi_hash());
+    }
+
+    #[test]
+    fn heap_layout_abi_inputs_cover_snapshot_heap_shape() {
+        let inputs = constants::heap_layout_abi_inputs();
+        for required in [
+            "heap_object_header_size",
+            "heap_object_capacity_offset",
+            "heap_object_property_count_offset",
+            "heap_object_property_slot_size",
+            "heap_array_length_offset",
+            "heap_array_capacity_offset",
+            "heap_array_element_size",
+            "handle_table_entry_size",
+            "handle_table_min_entries",
+            "handle_table_function_entry_factor",
+            "heap_allocation_alignment",
+        ] {
+            assert!(
+                inputs.iter().any(|(name, _)| *name == required),
+                "missing heap layout ABI input `{required}`"
+            );
+        }
+    }
 }

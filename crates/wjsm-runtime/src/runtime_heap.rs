@@ -1,7 +1,7 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
-use wjsm_ir::SHADOW_STACK_SIZE;
+use wjsm_ir::{SHADOW_STACK_SIZE, constants};
 
 /// handle 表上界（止于 shadow stack 基址），与 WASM emit_handle_table_alloc_check 一致。
 fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(
@@ -22,8 +22,10 @@ pub(crate) fn host_handle_slot_fits<C: AsContextMut<Data = RuntimeState>>(
 ) -> bool {
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
     let need_end = obj_table_ptr
-        .saturating_add((candidate as usize).saturating_mul(4))
-        .saturating_add(4);
+        .saturating_add(
+            (candidate as usize).saturating_mul(constants::HANDLE_TABLE_ENTRY_SIZE as usize),
+        )
+        .saturating_add(constants::HANDLE_TABLE_ENTRY_SIZE as usize);
     need_end <= handle_table_end_byte(env, ctx)
 }
 
@@ -46,7 +48,8 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     capacity: u32,
     proto: u32,
 ) -> i64 {
-    let size = 16u32.saturating_add(capacity.saturating_mul(32));
+    let size = constants::HEAP_OBJECT_HEADER_SIZE
+        .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
     try_gc_for_host_alloc(ctx, env, size as usize);
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let _obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
@@ -74,15 +77,25 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
         return value::encode_undefined();
     }
     let ptr = heap_ptr as usize;
-    let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
+    let slot_addr = obj_table_ptr as usize
+        + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
     {
         let data = env.memory.data_mut(&mut *ctx);
-        data[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
-        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
-        data[ptr + 5..ptr + 8].fill(0);
-        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
-        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
-        data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        data[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
+            ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
+            .copy_from_slice(&proto.to_le_bytes());
+        data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
+        data[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
+            ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
+            .fill(0);
+        data[ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize
+            ..ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize + 4]
+            .copy_from_slice(&capacity.to_le_bytes());
+        data[ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize
+            ..ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize + 4]
+            .copy_from_slice(&0u32.to_le_bytes());
+        data[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
+            .copy_from_slice(&heap_ptr.to_le_bytes());
     }
     let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env

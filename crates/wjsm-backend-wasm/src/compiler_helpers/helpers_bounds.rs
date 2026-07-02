@@ -27,10 +27,14 @@ impl Compiler {
     ) {
         func.instruction(&WasmInstruction::GlobalGet(obj_table_ptr_global));
         func.instruction(&WasmInstruction::LocalGet(candidate_local));
-        func.instruction(&WasmInstruction::I32Const(4));
+        func.instruction(&WasmInstruction::I32Const(
+            constants::HANDLE_TABLE_ENTRY_SIZE as i32,
+        ));
         func.instruction(&WasmInstruction::I32Mul);
         func.instruction(&WasmInstruction::I32Add);
-        func.instruction(&WasmInstruction::I32Const(4));
+        func.instruction(&WasmInstruction::I32Const(
+            constants::HANDLE_TABLE_ENTRY_SIZE as i32,
+        ));
         func.instruction(&WasmInstruction::I32Add);
         func.instruction(&WasmInstruction::GlobalGet(shadow_stack_end_global));
         func.instruction(&WasmInstruction::I32Const(crate::SHADOW_STACK_SIZE as i32));
