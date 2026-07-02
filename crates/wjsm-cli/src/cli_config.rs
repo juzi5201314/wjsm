@@ -15,7 +15,6 @@ struct CliConfig {
     time: Option<bool>,
     stats: Option<bool>,
     verify_ir: Option<bool>,
-    trace_gc: Option<bool>,
     color: Option<ColorChoice>,
     no_color: Option<bool>,
     target: Option<Target>,
@@ -116,11 +115,6 @@ fn apply_global_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &CliCo
         && !command_line_global(matches, "verify_ir")
     {
         cli.verify_ir = verify_ir;
-    }
-    if let Some(trace_gc) = config.trace_gc
-        && !command_line_global(matches, "trace_gc")
-    {
-        cli.trace_gc = trace_gc;
     }
     if let Some(target) = config.target
         && !command_line_global(matches, "target")

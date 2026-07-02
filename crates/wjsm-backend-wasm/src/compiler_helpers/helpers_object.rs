@@ -1,32 +1,13 @@
 use super::*;
 
-fn emit_helper_shadow_stack_capacity_check(
-    func: &mut Function,
-    ensure_func_idx: u32,
-    shadow_base_local: u32,
-    bytes: i32,
-    shadow_stack_end_global: u32,
-) {
-    func.instruction(&WasmInstruction::LocalGet(shadow_base_local));
-    func.instruction(&WasmInstruction::I32Const(bytes));
-    func.instruction(&WasmInstruction::GlobalGet(shadow_stack_end_global));
-    func.instruction(&WasmInstruction::Call(ensure_func_idx));
-    func.instruction(&WasmInstruction::I32Eqz);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::Unreachable);
-    func.instruction(&WasmInstruction::End);
-}
-
 impl Compiler {
     pub(crate) fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
         let heap_limit_global = self.heap_limit_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
-        let object_heap_start_global = self.object_heap_start_global_idx;
+        let shadow_stack_end_global = self.shadow_stack_end_global_idx;
         let num_ir_functions_global = self.num_ir_functions_global_idx;
-        let ensure_shadow_stack_capacity_idx =
-            self.builtin_func_indices[&Builtin::EnsureShadowStackCapacity];
         let function_props_base_global = self.function_props_base_global_idx;
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
@@ -42,8 +23,6 @@ impl Compiler {
                 self.special_host_import_indices[&SpecialHostImport::GcMaybeCollect];
             let gc_take_freed_handle_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcTakeFreedHandle];
-            let gc_record_alloc_idx =
-                self.special_host_import_indices[&SpecialHostImport::GcRecordAlloc];
 
             // ── proactive GC：在分配前调用（GC 完成后再分配，新对象不在 GC 视野，安全）──
             // host 递增 alloc_counter，达 gc_threshold 时 collect，重置 counter。
@@ -60,10 +39,6 @@ impl Compiler {
             ));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::Call(gc_record_alloc_idx));
 
             // ── handle 复用：take_or_alloc_handle ──
             // handle_idx = gc_take_freed_handle(); 若 == -1 则 handle_idx = obj_table_count++
@@ -79,7 +54,7 @@ impl Compiler {
             Self::emit_handle_table_alloc_check(
                 &mut func,
                 obj_table_global,
-                object_heap_start_global,
+                shadow_stack_end_global,
                 3,
             );
             func.instruction(&WasmInstruction::I32Const(1));
@@ -845,13 +820,6 @@ impl Compiler {
             // 保存 shadow_sp 到 local 12
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalSet(12));
-            emit_helper_shadow_stack_capacity_check(
-                &mut func,
-                ensure_shadow_stack_capacity_idx,
-                12,
-                8,
-                self.shadow_stack_end_global_idx,
-            );
             // 写入 value 到影子栈
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalGet(2)); // value
@@ -1013,13 +981,6 @@ impl Compiler {
             // NativeCallable: 推入 value 到影子栈，通过宿主调用
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalSet(12));
-            emit_helper_shadow_stack_capacity_check(
-                &mut func,
-                ensure_shadow_stack_capacity_idx,
-                12,
-                8,
-                self.shadow_stack_end_global_idx,
-            );
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalGet(2)); // value
             func.instruction(&WasmInstruction::I64Store(MemArg {
@@ -1049,13 +1010,6 @@ impl Compiler {
             // 将 value (local 2) 写入影子栈
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalSet(12));
-            emit_helper_shadow_stack_capacity_check(
-                &mut func,
-                ensure_shadow_stack_capacity_idx,
-                12,
-                8,
-                self.shadow_stack_end_global_idx,
-            );
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalGet(2)); // value
             func.instruction(&WasmInstruction::I64Store(MemArg {

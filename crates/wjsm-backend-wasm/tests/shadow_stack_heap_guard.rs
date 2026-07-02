@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
 use wasmparser::{Operator, Parser, Payload};
-use wjsm_ir::{
-    SHADOW_STACK_HEAP_GUARD_CANARY, SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_INITIAL_SIZE,
-    SHADOW_STACK_MAX_SIZE,
-};
+use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_CANARY, SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_SIZE};
 
 #[test]
 fn shadow_stack_heap_guard_layout_and_canary() {
@@ -24,15 +21,15 @@ fn shadow_stack_heap_guard_layout_and_canary() {
 
     assert_eq!(
         object_heap_start - shadow_stack_end,
-        (SHADOW_STACK_MAX_SIZE - SHADOW_STACK_INITIAL_SIZE + SHADOW_STACK_HEAP_GUARD_SIZE) as i32,
-        "object heap must start after the reserved growable shadow stack window and guard"
+        SHADOW_STACK_HEAP_GUARD_SIZE as i32,
+        "object heap must start after a fixed guard past shadow_stack_end"
     );
     assert_eq!(
         heap_ptr, object_heap_start,
         "initial heap_ptr must equal object_heap_start"
     );
 
-    let guard_start = object_heap_start as usize - SHADOW_STACK_HEAP_GUARD_SIZE as usize;
+    let guard_start = shadow_stack_end as usize;
     let guard_end = object_heap_start as usize;
     assert!(
         guard_end <= data.len(),
@@ -56,65 +53,8 @@ fn shadow_stack_heap_guard_layout_and_canary() {
     let shadow_sp = *globals.get(&4).expect("__shadow_sp");
     assert_eq!(
         shadow_stack_end - shadow_sp,
-        SHADOW_STACK_INITIAL_SIZE as i32,
-        "cold shadow stack span must equal SHADOW_STACK_INITIAL_SIZE"
-    );
-}
-
-#[test]
-fn deep_recursion_emits_growable_shadow_stack_check() {
-    let wasm = compile(
-        r#"
-function f(n) {
-  var x = [];
-  if (n === 0) { return x.length; }
-  return f(n - 1);
-}
-console.log(f(3));
-"#,
-    );
-
-    assert!(
-        count_ensure_shadow_stack_capacity_calls(&wasm) > 0,
-        "deep recursion path must call the runtime growable-capacity helper"
-    );
-}
-
-#[test]
-fn long_loop_spill_emits_growable_shadow_stack_check() {
-    let wasm = compile(
-        r#"
-let total = 0;
-for (let i = 0; i < 3; i++) {
-  const tmp = { x: i, y: i + 1 };
-  total += tmp.x;
-}
-console.log(total);
-"#,
-    );
-
-    assert!(
-        count_ensure_shadow_stack_capacity_calls(&wasm) > 0,
-        "loop safepoints with live handles must call the runtime growable-capacity helper"
-    );
-}
-
-#[test]
-fn nested_call_safepoint_emits_growable_shadow_stack_check() {
-    let wasm = compile(
-        r#"
-function outer(o) {
-  function inner(x) { return { v: x }; }
-  let a = { v: 1 };
-  return inner(o).v + a.v;
-}
-console.log(outer(1));
-"#,
-    );
-
-    assert!(
-        count_ensure_shadow_stack_capacity_calls(&wasm) > 0,
-        "nested call safepoint must call the runtime growable-capacity helper"
+        SHADOW_STACK_SIZE as i32,
+        "shadow stack span must remain SHADOW_STACK_SIZE"
     );
 }
 
@@ -202,42 +142,4 @@ fn extract_init_globals_i32_sets(wasm: &[u8]) -> HashMap<u32, i32> {
         "init_globals did not set expected layout globals: {out:?}"
     );
     out
-}
-
-fn count_ensure_shadow_stack_capacity_calls(wasm: &[u8]) -> usize {
-    let mut imported_func_count = 0u32;
-    let mut ensure_func_idx = None;
-    let mut calls = 0usize;
-
-    for payload in Parser::new(0).parse_all(wasm) {
-        match payload.expect("valid wasm module") {
-            Payload::ImportSection(section) => {
-                for import in section.into_imports() {
-                    let import = import.expect("import");
-                    if matches!(import.ty, wasmparser::TypeRef::Func(_)) {
-                        if import.module == "env" && import.name == "ensure_shadow_stack_capacity" {
-                            ensure_func_idx = Some(imported_func_count);
-                        }
-                        imported_func_count += 1;
-                    }
-                }
-            }
-            Payload::CodeSectionEntry(body) => {
-                let expected =
-                    ensure_func_idx.expect("missing ensure_shadow_stack_capacity import");
-                let mut reader = body.get_operators_reader().expect("operators");
-                while !reader.eof() {
-                    match reader.read().expect("operator") {
-                        Operator::Call { function_index } if function_index == expected => {
-                            calls += 1;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    calls
 }

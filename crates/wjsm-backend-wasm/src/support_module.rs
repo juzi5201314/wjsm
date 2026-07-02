@@ -62,7 +62,6 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("primitive_regexp_get_property", 8), // (i64, i32) -> i64
     ("primitive_regexp_set_property", 9), // (i64, i32, i64) -> ()
     ("primitive_string_get_property", 8), // (i64, i32) -> i64
-    ("gc_record_alloc", 39),              // (i32, i32, i32) -> ()
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
@@ -88,9 +87,8 @@ const HOST_ARRAY_NAMED_SET: u32 = 18;
 const HOST_PRIMITIVE_REGEXP_GET_PROPERTY: u32 = 19;
 const HOST_PRIMITIVE_REGEXP_SET_PROPERTY: u32 = 20;
 const HOST_PRIMITIVE_STRING_GET_PROPERTY: u32 = 21;
-const HOST_GC_RECORD_ALLOC: u32 = 22;
 
-const NUM_HOST_IMPORTS: u32 = 23;
+const NUM_HOST_IMPORTS: u32 = 22;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -122,7 +120,6 @@ const G_FUNC_PROPS: u32 = 0;
 const G_HEAP_PTR: u32 = 1;
 const G_OBJ_TABLE_PTR: u32 = 2;
 const G_OBJ_TABLE_COUNT: u32 = 3;
-#[allow(dead_code)]
 const G_SHADOW_SP: u32 = 4;
 #[allow(dead_code)]
 const G_ALLOC_COUNTER: u32 = 5;
@@ -339,9 +336,9 @@ fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJECT_HEAP_START));
+    func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_STACK_END));
     func.instruction(&WasmInstruction::I32Const(
-        (wjsm_ir::SHADOW_STACK_MAX_SIZE + wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE) as i32,
+        wjsm_ir::SHADOW_STACK_SIZE as i32,
     ));
     func.instruction(&WasmInstruction::I32Sub);
     func.instruction(&WasmInstruction::I32GtU);
@@ -482,10 +479,6 @@ fn emit_obj_new() -> Function {
     func.instruction(&WasmInstruction::I32Const(16));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalSet(1));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
-    func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::Call(HOST_GC_RECORD_ALLOC));
 
     // handle 复用：gc_take_freed_handle(); 若 == -1 则新分配
     func.instruction(&WasmInstruction::Call(HOST_GC_TAKE_FREED_HANDLE));
@@ -781,10 +774,6 @@ fn emit_arr_new() -> Function {
     func.instruction(&WasmInstruction::I32Const(16));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalSet(1));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
-    func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::Call(HOST_GC_RECORD_ALLOC));
 
     // ── handle 复用 ──
     func.instruction(&WasmInstruction::Call(HOST_GC_TAKE_FREED_HANDLE));
@@ -1179,6 +1168,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 23);
+        assert_eq!(HOST_IMPORTS.len(), 22);
     }
 }

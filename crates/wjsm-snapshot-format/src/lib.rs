@@ -654,8 +654,7 @@ pub fn abi_hash() -> u64 {
         name.hash(&mut hasher);
         value.hash(&mut hasher);
     }
-    wjsm_ir::SHADOW_STACK_INITIAL_SIZE.hash(&mut hasher);
-    wjsm_ir::SHADOW_STACK_MAX_SIZE.hash(&mut hasher);
+    wjsm_ir::SHADOW_STACK_SIZE.hash(&mut hasher);
     wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE.hash(&mut hasher);
     wjsm_ir::SHADOW_STACK_HEAP_GUARD_CANARY.hash(&mut hasher);
     // Embedded support module / builtin JS bundle hash（运行时通过
@@ -744,8 +743,7 @@ mod tests {
             name.hash(&mut hasher);
             value.hash(&mut hasher);
         }
-        wjsm_ir::SHADOW_STACK_INITIAL_SIZE.hash(&mut hasher);
-        wjsm_ir::SHADOW_STACK_MAX_SIZE.hash(&mut hasher);
+        wjsm_ir::SHADOW_STACK_SIZE.hash(&mut hasher);
         wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE.hash(&mut hasher);
         wjsm_ir::SHADOW_STACK_HEAP_GUARD_CANARY.hash(&mut hasher);
 

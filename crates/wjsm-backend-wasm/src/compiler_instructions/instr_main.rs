@@ -338,7 +338,6 @@ impl Compiler {
                 // GC safepoint（P2）：spill live handles，调 $obj_new，复位 shadow_sp。
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);
-                self.emit_allocation_site_marker(AllocationSiteKind::Object);
                 // Call $obj_new(capacity)
                 self.emit(WasmInstruction::I32Const(*capacity as i32));
                 self.emit(WasmInstruction::Call(self.obj_new_func_idx));
@@ -558,7 +557,6 @@ impl Compiler {
                 // GC safepoint（P2）：spill live handles，调 $arr_new，复位 shadow_sp。
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);
-                self.emit_allocation_site_marker(AllocationSiteKind::Array);
                 // Call $arr_new(capacity) -> i32 (handle index)
                 self.emit(WasmInstruction::I32Const(*capacity as i32));
                 self.emit(WasmInstruction::Call(self.arr_new_func_idx));

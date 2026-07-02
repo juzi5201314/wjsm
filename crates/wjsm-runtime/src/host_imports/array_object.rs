@@ -5,7 +5,6 @@ use wjsm_ir::wk_symbol;
 
 use crate::host_imports::get_method::get_by_name_id_sync;
 use crate::property_key::encode_symbol_name_id;
-use crate::wasm_env::WasmEnv;
 use crate::*;
 /// Maximum array length per ECMAScript (2^32 - 1).
 const MAX_ARRAY_LENGTH: u32 = u32::MAX;
@@ -2270,31 +2269,33 @@ pub(crate) fn define_array_object(
         arr_static_is_array_fn,
     )?;
 
-    // ── ensure_shadow_stack_capacity (#76) ─────────────────────────────
-    let ensure_shadow_stack_capacity_fn = Func::wrap(
+    // ── abort_shadow_stack_overflow (#76) ─────────────────────────────
+    let abort_shadow_stack_overflow_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         shadow_sp: i32,
-         args_bytes: i32,
-         stack_end: i32|
-         -> i32 {
-            let Some(env) = WasmEnv::from_caller(&mut caller) else {
-                return 0;
-            };
-            i32::from(crate::runtime_heap::ensure_shadow_stack_capacity(
-                &mut caller,
-                &env,
-                shadow_sp,
-                args_bytes,
-                stack_end,
-            ))
+        |caller: Caller<'_, RuntimeState>, shadow_sp: i32, args_bytes: i32, stack_end: i32| {
+            let mut buffer = caller
+                .data()
+                .output
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            writeln!(
+                &mut *buffer,
+                "shadow stack overflow: sp=0x{shadow_sp:x} + {args_bytes} bytes > end=0x{stack_end:x}"
+            ).ok();
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(format!(
+                "shadow stack overflow: sp={shadow_sp} + {args_bytes} > end={stack_end}"
+            ));
         },
     );
     linker.define(
         &mut store,
         "env",
-        "ensure_shadow_stack_capacity",
-        ensure_shadow_stack_capacity_fn,
+        "abort_shadow_stack_overflow",
+        abort_shadow_stack_overflow_fn,
     )?;
 
     // ── func_bind (#80): Function.prototype.bind ────────────────────────────

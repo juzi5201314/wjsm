@@ -22,7 +22,7 @@ impl Compiler {
     pub(crate) fn emit_handle_table_alloc_check(
         func: &mut Function,
         obj_table_ptr_global: u32,
-        object_heap_start_global: u32,
+        shadow_stack_end_global: u32,
         candidate_local: u32,
     ) {
         func.instruction(&WasmInstruction::GlobalGet(obj_table_ptr_global));
@@ -36,12 +36,9 @@ impl Compiler {
             constants::HANDLE_TABLE_ENTRY_SIZE as i32,
         ));
         func.instruction(&WasmInstruction::I32Add);
-        func.instruction(&WasmInstruction::GlobalGet(object_heap_start_global));
-        func.instruction(&WasmInstruction::I32Const(
-            (wjsm_ir::SHADOW_STACK_MAX_SIZE + wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE) as i32,
-        ));
+        func.instruction(&WasmInstruction::GlobalGet(shadow_stack_end_global));
+        func.instruction(&WasmInstruction::I32Const(crate::SHADOW_STACK_SIZE as i32));
         func.instruction(&WasmInstruction::I32Sub);
-
         func.instruction(&WasmInstruction::I32GtU);
         func.instruction(&WasmInstruction::If(BlockType::Empty));
         func.instruction(&WasmInstruction::Unreachable);

@@ -7,7 +7,7 @@ impl Compiler {
         let heap_limit_global = self.heap_limit_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
-        let object_heap_start_global = self.object_heap_start_global_idx;
+        let shadow_stack_end_global = self.shadow_stack_end_global_idx;
         let array_proto_global = self.array_proto_handle_global_idx;
 
         // ── $arr_new (param $capacity i32) (result i32) — Type 7 ──
@@ -23,8 +23,6 @@ impl Compiler {
                 self.special_host_import_indices[&SpecialHostImport::GcMaybeCollect];
             let gc_take_freed_handle_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcTakeFreedHandle];
-            let gc_record_alloc_idx =
-                self.special_host_import_indices[&SpecialHostImport::GcRecordAlloc];
 
             // ── proactive GC：在分配前调用（GC 完成后再分配，新对象不在 GC 视野，安全）──
             func.instruction(&WasmInstruction::Call(gc_maybe_collect_idx));
@@ -40,10 +38,6 @@ impl Compiler {
             ));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::Call(gc_record_alloc_idx));
 
             // ── handle 复用：take_or_alloc_handle ──
             func.instruction(&WasmInstruction::Call(gc_take_freed_handle_idx));
@@ -58,7 +52,7 @@ impl Compiler {
             Self::emit_handle_table_alloc_check(
                 &mut func,
                 obj_table_global,
-                object_heap_start_global,
+                shadow_stack_end_global,
                 3,
             );
             func.instruction(&WasmInstruction::I32Const(1));

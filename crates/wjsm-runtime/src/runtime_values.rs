@@ -1617,19 +1617,6 @@ pub(crate) async fn resolve_and_call_async(
             .unwrap();
         let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
         let ptr = shadow_sp;
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv in resolve_and_call_async bound");
-        let Some(total_size) = total_count.checked_mul(8) else {
-            return value::encode_undefined();
-        };
-        let stack_end = env
-            .shadow_stack_end
-            .and_then(|g| g.get(&mut *caller).i32())
-            .unwrap_or(0);
-        if !crate::runtime_heap::ensure_shadow_stack_capacity(
-            caller, &env, shadow_sp, total_size, stack_end,
-        ) {
-            return value::encode_undefined();
-        }
 
         for (i, arg) in bound_args_ref.iter().enumerate() {
             memory

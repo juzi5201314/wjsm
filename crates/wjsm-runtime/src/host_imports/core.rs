@@ -1489,19 +1489,13 @@ pub(crate) fn define_core(
                 }
             }
             // 2. collect 后重试
-            let (stats, algorithm) = {
+            let stats = {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let algorithm = gc.algorithm_name();
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                (
-                    gc.collect_with_provider(&mut ctx, &mut roots as _),
-                    algorithm,
-                )
+                gc.collect_with_provider(&mut ctx, &mut roots as _)
             };
-            caller
-                .data()
-                .record_gc_cycle("alloc-slow", algorithm, stats.clone());
             caller
                 .data()
                 .update_gc_threshold_after_collection(stats.marked);
@@ -1552,47 +1546,18 @@ pub(crate) fn define_core(
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
         };
-        let (stats, algorithm) = {
+        let stats = {
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let algorithm = gc.algorithm_name();
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-            (
-                gc.collect_with_provider(&mut ctx, &mut roots as _),
-                algorithm,
-            )
+            gc.collect_with_provider(&mut ctx, &mut roots as _)
         };
-        caller
-            .data()
-            .record_gc_cycle("proactive", algorithm, stats.clone());
         caller
             .data()
             .update_gc_threshold_after_collection(stats.marked);
         caller.data().reset_alloc_counter_after_gc();
     });
     linker.define(&mut store, "env", "gc_maybe_collect", f)?;
-
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, site_id: i32| {
-            caller
-                .data()
-                .set_pending_allocation_site(site_id.max(0) as u32);
-        },
-    );
-    linker.define(&mut store, "env", "gc_set_alloc_site", f)?;
-
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| {
-            caller.data().record_allocation(
-                size.max(0) as usize,
-                heap_type.clamp(0, 255) as u8,
-                capacity.max(0) as u32,
-            );
-        },
-    );
-    linker.define(&mut store, "env", "gc_record_alloc", f)?;
 
     // gc_take_freed_handle() -> i32：从 host handle_free_list pop 复用（fast-path take_or_alloc）。
     //   返回 handle（≥0）或 -1（空，调用方走 count++ 分支）。

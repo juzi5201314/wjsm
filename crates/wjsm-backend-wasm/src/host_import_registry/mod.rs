@@ -68,10 +68,6 @@ pub enum SpecialHostImport {
     GcMaybeCollect,
     /// gc_take_freed_handle() -> handle（-1 表空）：从 host handle_free_list pop 复用。
     GcTakeFreedHandle,
-    /// gc_set_alloc_site(site_id)：设置下一次 support/runtime allocation 的采样点。
-    GcSetAllocSite,
-    /// gc_record_alloc(size, heap_type, capacity)：记录一次 allocation profile 样本。
-    GcRecordAlloc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

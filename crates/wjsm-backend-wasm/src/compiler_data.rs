@@ -321,7 +321,7 @@ impl Compiler {
             .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1))
     }
 
-    pub(crate) fn emit_shadow_stack_capacity_check(&mut self, arg_count_bytes: i32) {
+    pub(crate) fn emit_shadow_stack_overflow_check(&mut self, arg_count_bytes: i32) {
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(arg_count_bytes));
         self.emit(WasmInstruction::I32Add);
@@ -330,17 +330,14 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Empty));
         let func_idx = self
             .builtin_func_indices
-            .get(&Builtin::EnsureShadowStackCapacity)
+            .get(&Builtin::AbortShadowStackOverflow)
             .copied()
-            .expect("EnsureShadowStackCapacity import must be registered");
+            .expect("AbortShadowStackOverflow import must be registered");
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(arg_count_bytes));
         self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
         self.emit(WasmInstruction::Call(func_idx));
-        self.emit(WasmInstruction::I32Eqz);
-        self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::Unreachable);
-        self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::End);
     }
 
@@ -349,44 +346,6 @@ impl Compiler {
             .as_mut()
             .expect("compiler function should be initialized before emission")
             .instruction(&instruction);
-    }
-
-    pub(crate) fn emit_allocation_site_marker(&mut self, kind: AllocationSiteKind) {
-        let site_id = self.next_allocation_site_id;
-        self.next_allocation_site_id = self.next_allocation_site_id.saturating_add(1);
-        let function_id = self.current_function_id.map(|id| id.0);
-        let function_name = function_id
-            .and_then(|id| self.function_names.get(id as usize).cloned())
-            .unwrap_or_else(|| "<unknown>".to_string());
-        self.allocation_sites.push(AllocationSiteRecord {
-            id: site_id,
-            function_id,
-            function_name,
-            block: self.current_emit_block_idx as u32,
-            instruction: self.current_emit_instr_idx as u32,
-            kind,
-        });
-        let func_idx = self.special_host_import_indices
-            [&crate::host_import_registry::SpecialHostImport::GcSetAllocSite];
-        self.emit(WasmInstruction::I32Const(site_id as i32));
-        self.emit(WasmInstruction::Call(func_idx));
-    }
-
-    fn encode_allocation_sites(&self) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(ALLOCATION_SITES_MAGIC);
-        data.extend_from_slice(&ALLOCATION_SITES_VERSION.to_le_bytes());
-        data.extend_from_slice(&(self.allocation_sites.len() as u32).to_le_bytes());
-        for site in &self.allocation_sites {
-            data.extend_from_slice(&site.id.to_le_bytes());
-            data.extend_from_slice(&site.function_id.unwrap_or(u32::MAX).to_le_bytes());
-            data.extend_from_slice(&site.block.to_le_bytes());
-            data.extend_from_slice(&site.instruction.to_le_bytes());
-            data.push(site.kind as u8);
-            data.extend_from_slice(&(site.function_name.len() as u32).to_le_bytes());
-            data.extend_from_slice(site.function_name.as_bytes());
-        }
-        data
     }
 
     pub(crate) fn finish(mut self) -> Vec<u8> {
@@ -405,14 +364,6 @@ impl Compiler {
 
         if !self.string_data.is_empty() {
             self.module.section(&self.data);
-        }
-
-        if !self.allocation_sites.is_empty() {
-            let data = self.encode_allocation_sites();
-            self.module.section(&CustomSection {
-                name: Cow::Borrowed(ALLOCATION_SITES_SECTION),
-                data: Cow::Owned(data),
-            });
         }
 
         // 发射 WASM name 自定义段（函数名），供 dump-wat/disasm 生成可读输出。

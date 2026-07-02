@@ -273,7 +273,7 @@ impl Compiler {
             | Builtin::ByteLengthQueuingStrategyConstructor => {
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
-                self.emit_shadow_stack_capacity_check((args.len() * 8) as i32);
+                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
                 for arg in args {
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -325,7 +325,7 @@ impl Compiler {
                 // Type 12: constructor - env=undefined, this=undefined, shadow_args=all args
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
-                self.emit_shadow_stack_capacity_check((args.len() * 8) as i32);
+                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
                 for arg in args {
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -364,7 +364,7 @@ impl Compiler {
                 let shadow_args = &args[1..];
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
-                self.emit_shadow_stack_capacity_check((shadow_args.len() * 8) as i32);
+                self.emit_shadow_stack_overflow_check((shadow_args.len() * 8) as i32);
                 for arg in shadow_args {
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));

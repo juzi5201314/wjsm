@@ -483,18 +483,6 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
-        name: "gc_set_alloc_site",
-        type_idx: 38,
-        key: Some(HostImportKey::Special(SpecialHostImport::GcSetAllocSite)),
-        group: None,
-    },
-    HostImportSpec {
-        name: "gc_record_alloc",
-        type_idx: 39,
-        key: Some(HostImportKey::Special(SpecialHostImport::GcRecordAlloc)),
-        group: None,
-    },
-    HostImportSpec {
         name: "to_number",
         type_idx: 3,
         key: Some(HostImportKey::Special(SpecialHostImport::ToNumber)),

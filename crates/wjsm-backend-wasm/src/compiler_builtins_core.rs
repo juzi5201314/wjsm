@@ -23,7 +23,7 @@ impl Compiler {
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
                 // 影子栈边界检查
-                self.emit_shadow_stack_capacity_check((args.len() * 8) as i32);
+                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
                 // 将所有参数写入影子栈
                 for arg in args {
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));

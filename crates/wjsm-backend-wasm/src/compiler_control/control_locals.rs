@@ -10,7 +10,7 @@ impl Compiler {
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalTee(self.eval_var_base_local_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
-        self.emit_shadow_stack_capacity_check(frame_bytes as i32);
+        self.emit_shadow_stack_overflow_check(frame_bytes as i32);
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::I32Const(frame_bytes as i32));
         self.emit(WasmInstruction::I32Add);

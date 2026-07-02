@@ -10,7 +10,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 [dependencies]
 anyhow = { workspace = true }
 wasmtime = { workspace = true }
-wasmparser = { workspace = true }
 tokio = { workspace = true }
 wjsm-ir = { path = "../wjsm-ir" }
 wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }

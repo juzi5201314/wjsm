@@ -401,17 +401,12 @@ pub(super) async fn instantiate_execute_bundle(
     module: &Module,
     shared_state: Option<Arc<SharedRuntimeState>>,
     use_epoch_async_yield: bool,
-    options: RuntimeExecutionOptions,
-    allocation_sites: crate::runtime_gc::diagnostics::AllocationSiteRegistry,
+    options: RuntimeOptions,
 ) -> Result<ExecuteInstanceBundle> {
     let mut store = Store::new(
         engine,
         RuntimeState::new_with_shared_and_options(shared_state, options),
     );
-    store
-        .data()
-        .configure_gc_diagnostics(options.gc, allocation_sites);
-
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);
     let diagnostics = Arc::clone(&store.data().diagnostics);
@@ -498,8 +493,8 @@ pub(super) async fn setup_shared_env_and_support(
     store: &mut Store<RuntimeState>,
     engine: &Engine,
 ) -> Result<()> {
-    // 创建 shared memory。影子栈保留 1MB 窗口，初始内存需覆盖冷启动 data segment。
-    let memory = Memory::new(&mut *store, MemoryType::new(32, None))?;
+    // 创建 shared memory (4 pages = 256KB)
+    let memory = Memory::new(&mut *store, MemoryType::new(4, None))?;
     linker.define(&*store, "env", "memory", memory)?;
 
     // 创建 shared table (minimum 256, 覆盖 support 12 + user ~200 函数)

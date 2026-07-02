@@ -286,8 +286,6 @@ impl Compiler {
             current_emit_instr_idx: 0,
             gc_analysis: None,
             normal_init_values: None,
-            allocation_sites: Vec::new(),
-            next_allocation_site_id: FIRST_ALLOCATION_SITE_ID,
         }
     }
 }

@@ -1,20 +1,18 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
-use wjsm_ir::{
-    constants, shadow_stack_base_from_object_heap_start, shadow_stack_limit_from_object_heap_start,
-};
+use wjsm_ir::{SHADOW_STACK_SIZE, constants};
 
 /// handle 表上界（止于 shadow stack 基址），与 WASM emit_handle_table_alloc_check 一致。
 fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     ctx: &mut C,
 ) -> usize {
-    let Some(g) = env.object_heap_start else {
+    let Some(g) = env.shadow_stack_end else {
         return env.memory.data(&*ctx).len();
     };
-    let object_heap_start = g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-    shadow_stack_base_from_object_heap_start(object_heap_start)
+    let end = g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
+    end.saturating_sub(SHADOW_STACK_SIZE as usize)
 }
 
 pub(crate) fn host_handle_slot_fits<C: AsContextMut<Data = RuntimeState>>(
@@ -36,98 +34,6 @@ fn heap_limit_bytes<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env: &Was
         .and_then(|g| g.get(&mut *ctx).i32())
         .map(|v| v as u32 as usize)
         .unwrap_or(u32::MAX as usize)
-}
-
-pub(crate) fn ensure_shadow_stack_capacity<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    shadow_sp: i32,
-    needed_bytes: i32,
-    observed_end: i32,
-) -> bool {
-    let Ok(sp) = usize::try_from(shadow_sp) else {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, 0);
-        return false;
-    };
-    let Ok(bytes) = usize::try_from(needed_bytes) else {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, 0);
-        return false;
-    };
-    let Some(required_end) = sp.checked_add(bytes) else {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, usize::MAX);
-        return false;
-    };
-    let current_end = observed_end.max(0) as usize;
-    if required_end <= current_end {
-        return true;
-    }
-    let Some(object_heap_start_global) = env.object_heap_start else {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, current_end);
-        return false;
-    };
-    let object_heap_start = object_heap_start_global
-        .get(&mut *ctx)
-        .i32()
-        .unwrap_or(0)
-        .max(0) as usize;
-    let stack_base = shadow_stack_base_from_object_heap_start(object_heap_start);
-    let stack_limit = shadow_stack_limit_from_object_heap_start(object_heap_start);
-    if sp < stack_base || required_end > stack_limit {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, stack_limit);
-        return false;
-    }
-    let current_capacity = current_end.saturating_sub(stack_base);
-    let required_capacity = required_end - stack_base;
-    let next_capacity = current_capacity
-        .saturating_mul(2)
-        .max(required_capacity)
-        .min(stack_limit - stack_base);
-    let next_end = stack_base + ((next_capacity + 7) & !7);
-    ensure_linear_memory_bytes(ctx, env, next_end);
-    if env.memory.data(&*ctx).len() < next_end {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, stack_limit);
-        return false;
-    }
-    let Some(shadow_stack_end_global) = env.shadow_stack_end else {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, stack_limit);
-        return false;
-    };
-    if shadow_stack_end_global
-        .set(&mut *ctx, Val::I32(next_end as i32))
-        .is_err()
-    {
-        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, stack_limit);
-        return false;
-    }
-    true
-}
-
-fn set_shadow_stack_overflow<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    shadow_sp: i32,
-    needed_bytes: i32,
-    limit: usize,
-) {
-    *ctx.as_context()
-        .data()
-        .runtime_error
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(format!(
-        "RangeError: Maximum call stack size exceeded (shadow stack: sp={shadow_sp} + {needed_bytes} > limit={limit})"
-    ));
-}
-
-/// 线性内存不足时按页扩展，供 host 侧 bump / resize 使用。
-pub(crate) fn ensure_linear_memory_bytes<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    need_end: usize,
-) {
-    while env.memory.data(&*ctx).len() < need_end {
-        if env.memory.grow(&mut *ctx, 1).is_err() {
-            break;
-        }
-    }
 }
 
 pub(crate) fn heap_used_bytes<C: AsContextMut<Data = RuntimeState>>(
@@ -204,11 +110,6 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
         return value::encode_undefined();
     };
     let heap_ptr = ptr as u32;
-    ctx.as_context().data().record_host_allocation(
-        size as usize,
-        wjsm_ir::HEAP_TYPE_OBJECT,
-        capacity,
-    );
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     if !host_handle_slot_fits(env, ctx, obj_table_count) {
@@ -243,18 +144,13 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
 
 fn collect_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env: &WasmEnv) {
     let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    let (stats, algorithm) = {
+    let stats = {
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let algorithm = gc.algorithm_name();
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, algorithm);
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
         let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-        (
-            gc.collect_with_provider(&mut gc_ctx, &mut roots as _),
-            algorithm,
-        )
+        gc.collect_with_provider(&mut gc_ctx, &mut roots as _)
     };
     let state = ctx.as_context().data();
-    state.record_gc_cycle("host-alloc", algorithm, stats.clone());
     state.update_gc_threshold_after_collection(stats.marked);
     state.reset_alloc_counter_after_gc();
 }
@@ -1274,142 +1170,4 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
         set_object_proto_header(ctx, env, obj, proto);
     }
     obj
-}
-
-#[cfg(test)]
-mod shadow_stack_tests {
-    use super::*;
-    use wasmtime::{Engine, GlobalType, Mutability, Ref, RefType, TableType, ValType};
-    use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_INITIAL_SIZE, SHADOW_STACK_MAX_SIZE};
-
-    struct StackEnv {
-        store: Store<RuntimeState>,
-        env: WasmEnv,
-        stack_base: usize,
-        stack_limit: usize,
-    }
-
-    fn i32_global(store: &mut Store<RuntimeState>, value: i32) -> Global {
-        Global::new(
-            &mut *store,
-            GlobalType::new(ValType::I32, Mutability::Var),
-            Val::I32(value),
-        )
-        .expect("i32 global")
-    }
-
-    fn i64_global(store: &mut Store<RuntimeState>, value: i64) -> Global {
-        Global::new(
-            &mut *store,
-            GlobalType::new(ValType::I64, Mutability::Var),
-            Val::I64(value),
-        )
-        .expect("i64 global")
-    }
-
-    fn stack_env() -> StackEnv {
-        let engine = Engine::default();
-        let mut store = Store::new(&engine, RuntimeState::new());
-        let memory = Memory::new(&mut store, MemoryType::new(32, None)).expect("memory");
-        let func_table = Table::new(
-            &mut store,
-            TableType::new(RefType::FUNCREF, 1, None),
-            Ref::Func(None),
-        )
-        .expect("table");
-        let stack_base = 1024usize;
-        let stack_limit = stack_base + SHADOW_STACK_MAX_SIZE as usize;
-        let object_heap_start = stack_limit + SHADOW_STACK_HEAP_GUARD_SIZE as usize;
-        let shadow_stack_end = stack_base + SHADOW_STACK_INITIAL_SIZE as usize;
-
-        let env = WasmEnv {
-            memory,
-            func_table,
-            shadow_sp: i32_global(&mut store, shadow_stack_end as i32),
-            heap_ptr: i32_global(&mut store, object_heap_start as i32),
-            obj_table_ptr: i32_global(&mut store, 0),
-            obj_table_count: i32_global(&mut store, 0),
-            shadow_stack_end: Some(i32_global(&mut store, shadow_stack_end as i32)),
-            object_proto_handle: i32_global(&mut store, -1),
-            array_proto_handle: i32_global(&mut store, -1),
-            object_heap_start: Some(i32_global(&mut store, object_heap_start as i32)),
-            bootstrap_done: None,
-            function_props_done: None,
-            function_props_base: None,
-            num_ir_functions: None,
-            arr_proto_table_base: None,
-            arr_proto_table_len: None,
-            arr_proto_table_hash: Some(i64_global(&mut store, 0)),
-            heap_limit: None,
-        };
-
-        StackEnv {
-            store,
-            env,
-            stack_base,
-            stack_limit,
-        }
-    }
-
-    #[test]
-    fn ensure_shadow_stack_capacity_grows_past_initial_window() {
-        let StackEnv {
-            mut store,
-            env,
-            stack_base,
-            ..
-        } = stack_env();
-        let old_end = stack_base + SHADOW_STACK_INITIAL_SIZE as usize;
-        let shadow_sp = old_end as i32 - 8;
-
-        assert!(ensure_shadow_stack_capacity(
-            &mut store,
-            &env,
-            shadow_sp,
-            32,
-            old_end as i32,
-        ));
-
-        let grown_end = env
-            .shadow_stack_end
-            .expect("shadow_stack_end")
-            .get(&mut store)
-            .i32()
-            .expect("i32") as usize;
-        assert!(grown_end > old_end);
-        assert!(grown_end >= shadow_sp as usize + 32);
-        assert!(
-            store
-                .data()
-                .runtime_error
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn ensure_shadow_stack_capacity_reports_stable_overflow() {
-        let StackEnv {
-            mut store,
-            env,
-            stack_limit,
-            ..
-        } = stack_env();
-        let shadow_sp = stack_limit as i32 - 8;
-
-        assert!(!ensure_shadow_stack_capacity(
-            &mut store, &env, shadow_sp, 16, shadow_sp,
-        ));
-
-        let message = store
-            .data()
-            .runtime_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("runtime error");
-        assert!(message.starts_with("RangeError: Maximum call stack size exceeded"));
-        assert!(message.contains("shadow stack"));
-    }
 }

@@ -268,7 +268,7 @@ impl Compiler {
         self.user_func_base_idx = self._next_import_func;
         for (function_id, function) in module.functions().iter().enumerate() {
             if is_module_entry_ir_function(function.name()) {
-                self.compile_function(module, function, wjsm_ir::FunctionId(function_id as u32))?;
+                self.compile_function(module, function)?;
             } else {
                 self.compile_js_function(
                     module,
@@ -302,14 +302,11 @@ impl Compiler {
         );
         let handle_table_size = handle_table_entries * constants::HANDLE_TABLE_ENTRY_SIZE;
         let shadow_stack_base = heap_start + handle_table_size;
-        let shadow_stack_end = shadow_stack_base + SHADOW_STACK_INITIAL_SIZE;
-        let shadow_stack_limit = shadow_stack_base + SHADOW_STACK_MAX_SIZE;
-        let object_heap_start = shadow_stack_limit + SHADOW_STACK_HEAP_GUARD_SIZE;
-
+        let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
+        let object_heap_start = shadow_stack_end + SHADOW_STACK_HEAP_GUARD_SIZE;
         if self.mode == CompileMode::Normal {
-            let guard_start = shadow_stack_limit;
+            let guard_start = shadow_stack_end;
             let guard_end = object_heap_start;
-
             let needed_len = guard_end as usize;
             if self.string_data.len() < needed_len {
                 self.string_data.resize(needed_len, 0);

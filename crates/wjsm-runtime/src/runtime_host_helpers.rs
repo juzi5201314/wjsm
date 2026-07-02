@@ -131,23 +131,9 @@ pub(crate) fn push_args_to_shadow_stack<C: AsContextMut<Data = RuntimeState>>(
 ) -> Option<i32> {
     let saved_sp = env.shadow_sp.get(&mut *ctx).i32().unwrap_or(0);
     let args_bytes = args.len().checked_mul(8)?;
-    let args_bytes_i32 = i32::try_from(args_bytes).ok()?;
-    let stack_end = env
-        .shadow_stack_end
-        .and_then(|g| g.get(&mut *ctx).i32())
-        .unwrap_or(0);
-    if !crate::runtime_heap::ensure_shadow_stack_capacity(
-        ctx,
-        env,
-        saved_sp,
-        args_bytes_i32,
-        stack_end,
-    ) {
-        return None;
-    }
     {
         let data = env.memory.data_mut(&mut *ctx);
-        let offset = usize::try_from(saved_sp).ok()?;
+        let offset = saved_sp as usize;
         if offset + args_bytes > data.len() {
             return None;
         }
@@ -156,7 +142,7 @@ pub(crate) fn push_args_to_shadow_stack<C: AsContextMut<Data = RuntimeState>>(
             data[write_offset..write_offset + 8].copy_from_slice(&arg.to_le_bytes());
         }
     }
-    let new_sp = saved_sp.checked_add(args_bytes_i32)?;
+    let new_sp = saved_sp + (args.len() as i32) * 8;
     let _ = env.shadow_sp.set(&mut *ctx, Val::I32(new_sp));
     Some(saved_sp)
 }

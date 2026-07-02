@@ -74,8 +74,7 @@ pub fn build_shared_type_section() -> TypeSection {
         vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64],
         vec![ValType::I64],
     );
-    // Type 18: (i32, i32, i32) -> () — legacy empty-return stack helper slot
-
+    // Type 18: (i32, i32, i32) -> () — abort_shadow_stack_overflow
     types
         .ty()
         .function(vec![ValType::I32, ValType::I32, ValType::I32], vec![]);
@@ -159,7 +158,7 @@ pub fn build_shared_type_section() -> TypeSection {
         ],
         vec![ValType::I64],
     );
-    // Type 35: (i32, i32, i32) -> (i32) — ensure_shadow_stack_capacity
+    // Type 35: (i32, i32, i32) -> (i32) — gc_alloc_slow
     types.ty().function(
         vec![ValType::I32, ValType::I32, ValType::I32],
         vec![ValType::I32],
@@ -171,11 +170,5 @@ pub fn build_shared_type_section() -> TypeSection {
         vec![ValType::I64, ValType::I32, ValType::I64, ValType::I64],
         vec![ValType::I64],
     );
-    // 类型 38: (i32) -> () — gc_set_alloc_site
-    types.ty().function(vec![ValType::I32], vec![]);
-    // 类型 39: (i32, i32, i32) -> () — gc_record_alloc
-    types
-        .ty()
-        .function(vec![ValType::I32, ValType::I32, ValType::I32], vec![]);
     types
 }

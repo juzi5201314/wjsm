@@ -176,9 +176,7 @@ impl Compiler {
         &mut self,
         module: &IrModule,
         function: &IrFunction,
-        function_id: wjsm_ir::FunctionId,
     ) -> Result<()> {
-        self.current_function_id = Some(function_id);
         self.current_func_is_main = is_module_entry_ir_function(function.name());
         self.current_func_returns_value =
             self.mode == CompileMode::Eval || self.current_func_is_main;
@@ -276,7 +274,6 @@ impl Compiler {
         self.current_fn_value_ty = None;
         self.current_fn_var_liveness = None;
         self.current_fn_var_ty = None;
-        self.current_function_id = None;
 
         Ok(())
     }
