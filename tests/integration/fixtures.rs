@@ -80,6 +80,176 @@ fn explicit_root_accepts_non_utf8_module_entry_path() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn quiet_suppresses_verbose_progress_but_keeps_program_output() -> Result<()> {
+    let output = Command::new(resolve_binary_path())
+        .args(["-v", "--quiet", "run", "-e", "console.log(7);"])
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert_eq!(stdout, "7\n");
+    assert!(
+        stderr.is_empty(),
+        "quiet should suppress progress: {stderr}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn config_file_supplies_defaults_and_cli_overrides_target() -> Result<()> {
+    let root = unique_temp_dir("wjsm_config");
+    fs::create_dir_all(&root)?;
+    let config = root.join("wjsm.toml");
+    fs::write(&config, "script = true\ntarget = 'jit'\nquiet = true\n")?;
+
+    let output = Command::new(resolve_binary_path())
+        .arg("--config")
+        .arg(&config)
+        .args(["--target", "wasm", "check", "-e", "var await = 1;"])
+        .output()?;
+
+    let stderr = normalized_stderr(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.is_empty(),
+        "quiet config should suppress check progress: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn color_env_force_and_no_color_are_respected() -> Result<()> {
+    let forced = Command::new(resolve_binary_path())
+        .env("CLICOLOR_FORCE", "1")
+        .args(["dump-ir", "-e", "console.log(1);"])
+        .output()?;
+    let forced_stdout = normalized_stdout(&forced);
+    assert!(
+        forced.status.success(),
+        "stderr: {}",
+        normalized_stderr(&forced)
+    );
+    assert!(
+        forced_stdout.contains('\u{1b}'),
+        "CLICOLOR_FORCE should enable ANSI color: {forced_stdout}"
+    );
+
+    let plain = Command::new(resolve_binary_path())
+        .env("CLICOLOR_FORCE", "1")
+        .args(["--no-color", "dump-ir", "-e", "console.log(1);"])
+        .output()?;
+    let plain_stdout = normalized_stdout(&plain);
+    assert!(
+        plain.status.success(),
+        "stderr: {}",
+        normalized_stderr(&plain)
+    );
+    assert!(
+        !plain_stdout.contains('\u{1b}'),
+        "--no-color should disable ANSI color: {plain_stdout}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn added_cli_commands_have_observable_contracts() -> Result<()> {
+    let cache_dir = unique_temp_dir("wjsm_cache_cmd");
+    fs::create_dir_all(&cache_dir)?;
+
+    let completions = Command::new(resolve_binary_path())
+        .args(["completions", "bash"])
+        .output()?;
+    assert!(
+        completions.status.success(),
+        "stderr: {}",
+        normalized_stderr(&completions)
+    );
+    assert!(normalized_stdout(&completions).contains("wjsm"));
+
+    let stats = Command::new(resolve_binary_path())
+        .env("WJSM_CACHE_DIR", &cache_dir)
+        .args(["cache", "stats"])
+        .output()?;
+    assert!(
+        stats.status.success(),
+        "stderr: {}",
+        normalized_stderr(&stats)
+    );
+    assert!(normalized_stdout(&stats).contains("Entries:"));
+
+    let clear = Command::new(resolve_binary_path())
+        .env("WJSM_CACHE_DIR", &cache_dir)
+        .args(["cache", "clear"])
+        .output()?;
+    assert!(
+        clear.status.success(),
+        "stderr: {}",
+        normalized_stderr(&clear)
+    );
+    assert!(normalized_stdout(&clear).contains("Cleared"));
+
+    let lint = Command::new(resolve_binary_path())
+        .args(["lint", "-e", "const ok = 1 === 1;"])
+        .output()?;
+    assert!(
+        lint.status.success(),
+        "stderr: {}",
+        normalized_stderr(&lint)
+    );
+
+    let test = Command::new(resolve_binary_path())
+        .args(["test", "-e", "console.log(11);"])
+        .output()?;
+    assert!(
+        test.status.success(),
+        "stderr: {}",
+        normalized_stderr(&test)
+    );
+    assert_eq!(normalized_stdout(&test), "11\n");
+
+    let repl = Command::new(resolve_binary_path())
+        .args(["repl", "--eval", "1 + 2"])
+        .output()?;
+    assert!(
+        repl.status.success(),
+        "stderr: {}",
+        normalized_stderr(&repl)
+    );
+    assert_eq!(normalized_stdout(&repl), "3\n");
+    Ok(())
+}
+
+#[test]
+fn backend_control_flow_compiles_loop_and_if_without_region_tree() -> Result<()> {
+    let output = Command::new(resolve_binary_path())
+        .args([
+            "dump-wat",
+            "--skeleton",
+            "-e",
+            "let i = 0; while (i < 3) { if (i < 2) { i = i + 1; } else { i = i + 1; } }",
+        ])
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(stdout.contains("(module"), "wat output: {stdout}");
+    Ok(())
+}
+
+fn normalized_stdout(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+}
+
+fn normalized_stderr(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n")
+}
+
 #[cfg(unix)]
 fn unique_temp_dir(name: &str) -> PathBuf {
     let suffix = format!(

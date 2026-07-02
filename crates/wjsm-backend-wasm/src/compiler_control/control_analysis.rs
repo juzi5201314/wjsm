@@ -83,20 +83,16 @@ fn block_successors(block: &BasicBlock) -> impl Iterator<Item = usize> + '_ {
 }
 
 impl Compiler {
-    pub(crate) fn compile_region_tree(
+    pub(crate) fn compile_control_flow(
         &mut self,
         module: &IrModule,
         function: &IrFunction,
-        region_tree: &RegionTree,
+        start_idx: usize,
     ) -> Result<()> {
-        match &region_tree.root {
-            Region::Linear { start_idx } => {
-                if self.needs_cfg_dispatch(function) {
-                    self.compile_cfg_dispatch(module, function, *start_idx)
-                } else {
-                    self.compile_structured(module, function, *start_idx)
-                }
-            }
+        if self.needs_cfg_dispatch(function) {
+            self.compile_cfg_dispatch(module, function, start_idx)
+        } else {
+            self.compile_structured(module, function, start_idx)
         }
     }
 

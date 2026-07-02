@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 wjsm-backend-jit = { path = "../wjsm-backend-jit" }
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 wjsm-ir = { path = "../wjsm-ir" }
@@ -18,9 +19,11 @@ wjsm-module = { path = "../wjsm-module" }
 colored = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
+toml = { workspace = true }
 wasmprinter = { workspace = true }
 wasmparser = { workspace = true }
 notify = { workspace = true }
 swc_core = { workspace = true }
  tokio = { workspace = true, features = ["rt-multi-thread"] }
 regex = "1"
+walkdir = { workspace = true }

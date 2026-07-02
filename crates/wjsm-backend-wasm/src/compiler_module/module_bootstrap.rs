@@ -237,19 +237,25 @@ impl Compiler {
             self.emit_startup_phase_call(self.init_function_props_func_idx);
         }
 
-        let cfg = Cfg::from_function(function);
-        let region_tree = RegionTree::build(function, &cfg)
-            .map_err(|error| anyhow::anyhow!("failed to build region tree: {error:?}"))?;
+        let start_idx = function.entry().0 as usize;
+        if !function.blocks().is_empty() && start_idx >= function.blocks().len() {
+            anyhow::bail!(
+                "function '{}' entry block {} is out of range ({} blocks)",
+                function.name(),
+                start_idx,
+                function.blocks().len()
+            );
+        }
 
         self.compiled_blocks.clear();
         self.loop_stack.clear();
         self.if_depth = 0;
 
-        if cfg.successors.is_empty() {
+        if function.blocks().is_empty() {
             // Empty function body — emit end directly.
             self.emit(WasmInstruction::End);
         } else {
-            self.compile_region_tree(module, function, &region_tree)?;
+            self.compile_control_flow(module, function, start_idx)?;
             self.emit(WasmInstruction::End);
         }
 
@@ -443,21 +449,27 @@ impl Compiler {
         }
 
         self.emit_init_module_global_for_js_function(function);
-        let cfg = Cfg::from_function(function);
-        let region_tree = RegionTree::build(function, &cfg)
-            .map_err(|error| anyhow::anyhow!("failed to build region tree: {error:?}"))?;
+        let start_idx = function.entry().0 as usize;
+        if !function.blocks().is_empty() && start_idx >= function.blocks().len() {
+            anyhow::bail!(
+                "function '{}' entry block {} is out of range ({} blocks)",
+                function.name(),
+                start_idx,
+                function.blocks().len()
+            );
+        }
 
         self.compiled_blocks.clear();
         self.loop_stack.clear();
         self.if_depth = 0;
 
-        if cfg.successors.is_empty() {
+        if function.blocks().is_empty() {
             // Empty function — return undefined.
             self.emit(WasmInstruction::I64Const(value::encode_undefined()));
             self.emit(WasmInstruction::Return);
             self.emit(WasmInstruction::End);
         } else {
-            self.compile_region_tree(module, function, &region_tree)?;
+            self.compile_control_flow(module, function, start_idx)?;
             self.emit(WasmInstruction::End);
         }
 

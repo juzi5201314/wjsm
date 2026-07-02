@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -6,6 +7,14 @@ use std::path::PathBuf;
 pub struct Cli {
     #[command(subcommand)]
     pub(crate) command: Commands,
+
+    /// Load defaults from a wjsm.toml/wjsm.json configuration file
+    #[arg(long, value_name = "PATH", global = true)]
+    pub(crate) config: Option<PathBuf>,
+
+    /// Suppress non-essential diagnostic output
+    #[arg(short = 'q', long, global = true)]
+    pub(crate) quiet: bool,
 
     /// Verbose output (-v shows progress, -vv shows details)
     #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
@@ -23,12 +32,27 @@ pub struct Cli {
     #[arg(long, value_name = "WHEN", global = true)]
     pub(crate) color: Option<ColorChoice>,
 
+    /// Disable colored output
+    #[arg(long, global = true, conflicts_with = "color")]
+    pub(crate) no_color: bool,
+
     /// Target backend (wasm or jit)
     #[arg(long, default_value = "wasm", global = true)]
     pub(crate) target: Target,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+impl Cli {
+    pub(crate) fn verbose_enabled(&self, level: u8) -> bool {
+        !self.quiet && self.verbose >= level
+    }
+
+    pub(crate) fn effective_verbose(&self) -> u8 {
+        if self.quiet { 0 } else { self.verbose }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum ColorChoice {
     /// Auto-detect based on terminal
     Auto,
@@ -38,7 +62,8 @@ pub(crate) enum ColorChoice {
     Never,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum Target {
     Wasm,
     Jit,
@@ -112,9 +137,45 @@ pub(crate) enum Commands {
         eval: Option<String>,
     },
 
+    /// Run JS/TS test files or an inline test snippet
+    Test {
+        /// File or directory to test. Directories run *.test.js/*.test.ts and *_test.js/*_test.ts.
+        input: Option<PathBuf>,
+
+        /// The root directory for module resolution
+        #[arg(long)]
+        root: Option<PathBuf>,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
+
+        /// Evaluate inline test code instead of discovering files
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
+    },
+
     /// Parse and check a JS/TS file for errors (no output)
     Check {
         /// The input file to check, or - for stdin. Optional when -e is used.
+        input: Option<PathBuf>,
+
+        /// The root directory for module resolution
+        #[arg(long)]
+        root: Option<PathBuf>,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
+
+        /// Evaluate inline code string instead of a file
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
+    },
+
+    /// Lint a JS/TS file or inline source
+    Lint {
+        /// The input file to lint, or - for stdin. Optional when -e is used.
         input: Option<PathBuf>,
 
         /// The root directory for module resolution
@@ -134,6 +195,17 @@ pub(crate) enum Commands {
     Eval {
         /// The JS expression to evaluate
         code: String,
+    },
+
+    /// Start an interactive expression REPL
+    Repl {
+        /// Evaluate one expression through the REPL pipeline and exit
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
+
+        /// Parse REPL input as script instead of module
+        #[arg(long)]
+        script: bool,
     },
 
     /// Dump IR for a JS/TS file
@@ -242,6 +314,18 @@ pub(crate) enum Commands {
         skeleton: bool,
     },
 
+    /// Inspect or clear the compiled WASM cache
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommand,
+    },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
+
     /// Create a new wjsm project
     Init {
         /// The project directory to create
@@ -258,4 +342,12 @@ pub(crate) enum Commands {
         #[arg(long)]
         extended: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum CacheCommand {
+    /// Show compiled WASM cache location and size
+    Stats,
+    /// Remove compiled WASM cache entries
+    Clear,
 }

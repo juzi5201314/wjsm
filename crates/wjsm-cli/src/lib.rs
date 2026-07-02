@@ -7,7 +7,7 @@
 //! - 3: usage error (invalid arguments)
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::CommandFactory;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -21,9 +21,13 @@ use wjsm_runtime as runtime;
 use wjsm_semantic as semantic;
 
 mod cli_args;
+mod cli_config;
+mod cli_lint;
 mod ir_output;
 
 use cli_args::*;
+use cli_config::parse_cli;
+use cli_lint::lint_module;
 use ir_output::{print_ir, print_ir_dot, print_ir_func, print_stats};
 
 // ============================================================================
@@ -109,7 +113,7 @@ pub fn main_entry() -> ExitCode {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }
 
-    let cli = match Cli::try_parse() {
+    let cli = match parse_cli(std::env::args_os()) {
         Ok(c) => c,
         Err(e) => {
             e.print().ok();
@@ -134,7 +138,7 @@ pub fn main_entry() -> ExitCode {
 
 pub fn execute(cli: Cli) -> Result<ExitCode> {
     // Handle color configuration
-    setup_colors(cli.color);
+    setup_colors(cli.color, cli.no_color);
 
     match cli.command {
         Commands::Build {
@@ -166,6 +170,13 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             }
         }
 
+        Commands::Test {
+            ref input,
+            ref eval,
+            ref root,
+            script,
+        } => cmd_test(&cli, input, eval, root.as_deref(), script),
+
         Commands::Check {
             ref input,
             ref eval,
@@ -173,7 +184,16 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             script,
         } => cmd_check(&cli, input, eval, root.as_deref(), script),
 
+        Commands::Lint {
+            ref input,
+            ref eval,
+            ref root,
+            script,
+        } => cmd_lint(&cli, input, eval, root.as_deref(), script),
+
         Commands::Eval { ref code } => cmd_eval(&cli, code),
+
+        Commands::Repl { ref eval, script } => cmd_repl(&cli, eval.as_deref(), script),
 
         Commands::DumpIr {
             ref input,
@@ -228,6 +248,10 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             skeleton,
         } => cmd_disasm(input, func.as_deref(), skeleton),
 
+        Commands::Cache { ref command } => cmd_cache(command),
+
+        Commands::Completions { shell } => cmd_completions(shell),
+
         Commands::Init { ref path, force } => cmd_init(path, force),
         Commands::Version { extended } => cmd_version(extended),
     }
@@ -237,11 +261,15 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
 // Color Setup
 // ============================================================================
 
-fn setup_colors(choice: Option<ColorChoice>) {
-    let use_colors = match choice {
-        Some(ColorChoice::Always) => true,
-        Some(ColorChoice::Never) => false,
-        Some(ColorChoice::Auto) | None => resolve_auto_colors(),
+fn setup_colors(choice: Option<ColorChoice>, no_color: bool) {
+    let use_colors = if no_color {
+        false
+    } else {
+        match choice {
+            Some(ColorChoice::Always) => true,
+            Some(ColorChoice::Never) => false,
+            Some(ColorChoice::Auto) | None => resolve_auto_colors(),
+        }
     };
 
     colored::control::set_override(use_colors);
@@ -286,7 +314,7 @@ fn cmd_build(
                     &code,
                     None,
                     stage,
-                    cli.verbose,
+                    cli.effective_verbose(),
                     cli.time,
                     cli.target,
                     script,
@@ -298,7 +326,7 @@ fn cmd_build(
                             &source,
                             filename.as_deref(),
                             stage,
-                            cli.verbose,
+                            cli.effective_verbose(),
                             cli.time,
                             cli.target,
                             script,
@@ -325,7 +353,11 @@ fn cmd_build(
                 );
             }
 
-            if !path_is_stdout(output) && output == Path::new("out.wasm") && output.exists() {
+            if !cli.quiet
+                && !path_is_stdout(output)
+                && output == Path::new("out.wasm")
+                && output.exists()
+            {
                 eprintln!(
                     "warning: '{}' already exists and will be overwritten (use `-o` to choose another path)",
                     output.display()
@@ -348,7 +380,7 @@ fn cmd_build(
                 io::stdout().write_all(&wasm)?;
             } else {
                 fs::write(output, &wasm)?;
-                if cli.verbose >= 1 {
+                if cli.verbose_enabled(1) {
                     eprintln!("Wrote {} bytes to {}", wasm.len(), output.display());
                 }
             }
@@ -370,7 +402,7 @@ fn cmd_build(
                     None,
                     cli.target,
                     script,
-                    cli.verbose >= 1,
+                    cli.verbose_enabled(1),
                 )?,
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
@@ -380,7 +412,7 @@ fn cmd_build(
                             None,
                             cli.target,
                             script,
-                            cli.verbose >= 1,
+                            cli.verbose_enabled(1),
                         )?
                     } else {
                         compile_file_input_to_pipeline_result(
@@ -388,7 +420,7 @@ fn cmd_build(
                             root,
                             cli.target,
                             script,
-                            cli.verbose >= 1,
+                            cli.verbose_enabled(1),
                         )?
                     }
                 }
@@ -403,7 +435,7 @@ fn cmd_build(
                 io::stdout().write_all(wasm)?;
             } else {
                 fs::write(output, wasm)?;
-                if cli.verbose >= 1 {
+                if cli.verbose_enabled(1) {
                     eprintln!("Wrote {} bytes to {}", wasm.len(), output.display());
                 }
             }
@@ -416,7 +448,7 @@ fn cmd_build(
 }
 
 fn cmd_run(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result<ExitCode> {
-    let verbose_compile = cli.verbose >= 1;
+    let verbose_compile = cli.verbose_enabled(1);
     let result = if path_is_stdin(input) {
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
@@ -430,8 +462,173 @@ fn cmd_run(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result
 
 fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
     let result =
-        compile_source_to_pipeline_result(code, None, cli.target, script, cli.verbose >= 1)?;
+        compile_source_to_pipeline_result(code, None, cli.target, script, cli.verbose_enabled(1))?;
     run_compile_then_execute(cli, result)
+}
+
+fn cmd_test(
+    cli: &Cli,
+    input: &Option<PathBuf>,
+    eval: &Option<String>,
+    root: Option<&Path>,
+    script: bool,
+) -> Result<ExitCode> {
+    if let Some(code) = eval {
+        return cmd_run_eval(cli, code, script);
+    }
+
+    let input = input.as_deref().unwrap_or_else(|| Path::new("."));
+    let files = if input.is_dir() {
+        discover_test_files(input)?
+    } else {
+        vec![input.to_path_buf()]
+    };
+
+    if files.is_empty() {
+        bail!("no JS/TS test files found under '{}'", input.display());
+    }
+
+    let mut failed = 0usize;
+    for file in &files {
+        if cli.verbose_enabled(1) {
+            eprintln!("test {}", file.display());
+        }
+        match cmd_run(cli, file, root, script) {
+            Ok(code) if code == ExitCode::from(EXIT_SUCCESS) => {
+                if cli.verbose_enabled(1) {
+                    eprintln!("ok {}", file.display());
+                }
+            }
+            Ok(code) => {
+                failed += 1;
+                eprintln!("FAILED {} (exit {:?})", file.display(), code);
+            }
+            Err(error) => {
+                failed += 1;
+                eprintln!("FAILED {}: {:#}", file.display(), error);
+            }
+        }
+    }
+
+    if !cli.quiet {
+        let passed = files.len() - failed;
+        eprintln!("test result: {passed} passed; {failed} failed");
+    }
+
+    if failed == 0 {
+        Ok(ExitCode::from(EXIT_SUCCESS))
+    } else {
+        Ok(ExitCode::from(EXIT_COMPILE_ERROR))
+    }
+}
+
+fn discover_test_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        let entry = entry?;
+        if entry.file_type().is_file() && is_test_file(entry.path()) {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn is_test_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name.ends_with(".test.js")
+        || name.ends_with(".test.ts")
+        || name.ends_with("_test.js")
+        || name.ends_with("_test.ts")
+}
+
+fn cmd_lint(
+    cli: &Cli,
+    input: &Option<PathBuf>,
+    eval: &Option<String>,
+    root: Option<&Path>,
+    script: bool,
+) -> Result<ExitCode> {
+    let result = match resolve_input(input, eval)? {
+        InputSource::Inline(code) => run_pipeline(
+            &code,
+            None,
+            Stage::Parse,
+            cli.effective_verbose(),
+            cli.time,
+            cli.target,
+            script,
+        )?,
+        InputSource::File(path) => {
+            if path_is_stdin(&path) {
+                let (source, filename) = read_input_for_parse(&path)?;
+                run_pipeline(
+                    &source,
+                    filename.as_deref(),
+                    Stage::Parse,
+                    cli.effective_verbose(),
+                    cli.time,
+                    cli.target,
+                    script,
+                )?
+            } else {
+                run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
+            }
+        }
+    };
+
+    let diagnostics = result.ast.as_ref().map(lint_module).unwrap_or_default();
+    if diagnostics.is_empty() {
+        if cli.verbose_enabled(1) {
+            eprintln!("✓ No lint warnings found");
+        }
+        return Ok(ExitCode::from(EXIT_SUCCESS));
+    }
+
+    for diagnostic in &diagnostics {
+        eprintln!("warning[{}]: {}", diagnostic.code, diagnostic.message);
+    }
+    Ok(ExitCode::from(EXIT_COMPILE_ERROR))
+}
+
+fn cmd_repl(cli: &Cli, eval: Option<&str>, script: bool) -> Result<ExitCode> {
+    if let Some(code) = eval {
+        return if script {
+            cmd_run_eval(cli, code, true)
+        } else {
+            cmd_eval(cli, code)
+        };
+    }
+
+    let mut line = String::new();
+    loop {
+        if io::stdin().is_terminal() {
+            print!("wjsm> ");
+            io::stdout().flush()?;
+        }
+        line.clear();
+        if io::stdin().read_line(&mut line)? == 0 {
+            break;
+        }
+        let source = line.trim();
+        if source.is_empty() {
+            continue;
+        }
+        if matches!(source, ".exit" | ".quit") {
+            break;
+        }
+        let result = if script {
+            cmd_run_eval(cli, source, true)
+        } else {
+            cmd_eval(cli, source)
+        };
+        if let Err(error) = result {
+            eprintln!("Error: {error:#}");
+        }
+    }
+    Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
 fn cmd_run_watch(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result<ExitCode> {
@@ -532,7 +729,7 @@ fn cmd_check(
             &code,
             None,
             Stage::Lower,
-            cli.verbose,
+            cli.effective_verbose(),
             cli.time,
             cli.target,
             script,
@@ -544,7 +741,7 @@ fn cmd_check(
                     &source,
                     filename.as_deref(),
                     Stage::Lower,
-                    cli.verbose,
+                    cli.effective_verbose(),
                     cli.time,
                     cli.target,
                     script,
@@ -555,7 +752,7 @@ fn cmd_check(
         }
     };
 
-    if cli.verbose >= 1 {
+    if cli.verbose_enabled(1) {
         eprintln!("✓ No errors found");
     }
 
@@ -589,7 +786,7 @@ fn cmd_dump_ir(
             &code,
             None,
             Stage::Lower,
-            cli.verbose,
+            cli.effective_verbose(),
             cli.time,
             cli.target,
             script,
@@ -601,7 +798,7 @@ fn cmd_dump_ir(
                     &source,
                     filename.as_deref(),
                     Stage::Lower,
-                    cli.verbose,
+                    cli.effective_verbose(),
                     cli.time,
                     cli.target,
                     script,
@@ -638,7 +835,7 @@ fn cmd_dump_ast(
             &code,
             None,
             Stage::Parse,
-            cli.verbose,
+            cli.effective_verbose(),
             cli.time,
             cli.target,
             script,
@@ -650,7 +847,7 @@ fn cmd_dump_ast(
                     &source,
                     filename.as_deref(),
                     Stage::Parse,
-                    cli.verbose,
+                    cli.effective_verbose(),
                     cli.time,
                     cli.target,
                     script,
@@ -750,7 +947,7 @@ fn cmd_dump_wat(
             &code,
             None,
             Stage::Compile,
-            cli.verbose,
+            cli.effective_verbose(),
             cli.time,
             cli.target,
             script,
@@ -763,7 +960,7 @@ fn cmd_dump_wat(
                     &source,
                     None,
                     Stage::Compile,
-                    cli.verbose,
+                    cli.effective_verbose(),
                     cli.time,
                     cli.target,
                     script,
@@ -774,10 +971,10 @@ fn cmd_dump_wat(
                     root,
                     cli.target,
                     script,
-                    cli.verbose >= 1,
+                    cli.verbose_enabled(1),
                 )?;
                 if cli.time {
-                    pipeline.timings.print(cli.verbose);
+                    pipeline.timings.print(cli.effective_verbose());
                 }
                 pipeline
             }
@@ -907,6 +1104,38 @@ fn cmd_disasm(input: &Path, func: Option<&str>, skeleton: bool) -> Result<ExitCo
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
+fn cmd_cache(command: &CacheCommand) -> Result<ExitCode> {
+    match command {
+        CacheCommand::Stats => {
+            let stats = runtime::module_cache_stats()?;
+            match stats.path {
+                Some(path) => {
+                    println!("Cache directory: {}", path.display());
+                    println!("Entries: {}", stats.entries);
+                    println!("Bytes: {}", stats.bytes);
+                }
+                None => {
+                    println!("Cache disabled");
+                    println!("Entries: 0");
+                    println!("Bytes: 0");
+                }
+            }
+        }
+        CacheCommand::Clear => {
+            let removed = runtime::clear_module_cache()?;
+            println!("Cleared {removed} cache entries");
+        }
+    }
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+fn cmd_completions(shell: clap_complete::Shell) -> Result<ExitCode> {
+    let mut command = Cli::command();
+    let bin_name = command.get_name().to_string();
+    clap_complete::generate(shell, &mut command, bin_name, &mut io::stdout());
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
 fn cmd_init(path: &Path, force: bool) -> Result<ExitCode> {
     let dir = path;
     let name = dir
@@ -968,8 +1197,7 @@ fn cmd_version(verbose: bool) -> Result<ExitCode> {
             println!("  Git: {}", hash.trim());
         }
 
-        // Features (derived from Cargo.toml dependencies)
-        println!("  Features: serde, wasmprinter, wasmparser, notify, regex");
+        println!("  Target: wasm");
     }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
@@ -1030,6 +1258,9 @@ fn run_pipeline(
         parser::parse_module(source)?
     };
     result.timings.parse_us = start.elapsed().as_micros() as u64;
+    if verbose >= 2 {
+        eprintln!("Parsed module items: {}", module.body.len());
+    }
     result.ast = Some(module);
 
     if matches!(stop_at, Stage::Parse) {
@@ -1043,6 +1274,13 @@ fn run_pipeline(
     let start = Instant::now();
     let program = lower_parsed_module(source, filename, result.ast.take().unwrap(), script)?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
+    if verbose >= 2 {
+        eprintln!(
+            "Lowered IR: {} constants, {} functions",
+            program.constants().len(),
+            program.functions().len()
+        );
+    }
     result.program = Some(program);
 
     if matches!(stop_at, Stage::Lower) {
@@ -1061,6 +1299,9 @@ fn run_pipeline(
         }
     };
     result.timings.compile_us = start.elapsed().as_micros() as u64;
+    if verbose >= 2 {
+        eprintln!("Compiled WASM bytes: {}", wasm.len());
+    }
     result.wasm = Some(wasm);
 
     if time {
@@ -1081,7 +1322,7 @@ fn run_file_input_pipeline(
     let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
-            if cli.verbose >= 1 {
+            if cli.verbose_enabled(1) {
                 eprintln!("Bundling modules...");
             }
             let start = Instant::now();
@@ -1109,7 +1350,7 @@ fn run_file_input_pipeline(
                 }
             }
             if cli.time {
-                result.timings.print(cli.verbose);
+                result.timings.print(cli.effective_verbose());
             }
             Ok(result)
         }
@@ -1117,7 +1358,7 @@ fn run_file_input_pipeline(
             &source,
             Some(filename.as_str()),
             stop_at,
-            cli.verbose,
+            cli.effective_verbose(),
             cli.time,
             cli.target,
             script,
@@ -1304,7 +1545,7 @@ fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<Exi
     result.timings.execute_us = start.elapsed().as_micros() as u64;
 
     if cli.time {
-        result.timings.print(cli.verbose);
+        result.timings.print(cli.effective_verbose());
     }
 
     if let Err(e) = exec_result {

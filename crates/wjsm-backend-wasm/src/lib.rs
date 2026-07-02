@@ -11,8 +11,8 @@ use wasm_encoder::{
     NameSection, RefType, TableSection, TableType, TypeSection, ValType,
 };
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
-    HomeObject, Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants,
+    BasicBlock, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction, HomeObject,
+    Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants,
     is_module_entry_ir_function, value,
 };
 
@@ -258,64 +258,6 @@ struct LoopInfo {
     exit_idx: usize,
 }
 
-#[derive(Debug, Clone)]
-struct Cfg {
-    successors: Vec<Vec<usize>>,
-    predecessors: Vec<Vec<usize>>,
-}
-
-impl Cfg {
-    fn from_function(function: &IrFunction) -> Self {
-        let len = function.blocks().len();
-        let mut successors = vec![Vec::new(); len];
-        let mut predecessors = vec![Vec::new(); len];
-
-        for (idx, block) in function.blocks().iter().enumerate() {
-            let mut add_edge = |target: BasicBlockId| {
-                let target_idx = target.0 as usize;
-                if target_idx < len {
-                    successors[idx].push(target_idx);
-                    predecessors[target_idx].push(idx);
-                }
-            };
-
-            match block.terminator() {
-                Terminator::Jump { target } => add_edge(*target),
-                Terminator::Branch {
-                    true_block,
-                    false_block,
-                    ..
-                } => {
-                    add_edge(*true_block);
-                    add_edge(*false_block);
-                }
-                Terminator::Switch {
-                    cases,
-                    default_block,
-                    exit_block,
-                    ..
-                } => {
-                    for case in cases {
-                        add_edge(case.target);
-                    }
-                    add_edge(*default_block);
-                    add_edge(*exit_block);
-                }
-                Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}
-            }
-        }
-
-        Self {
-            successors,
-            predecessors,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-enum Region {
-    Linear { start_idx: usize },
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompileMode {
     Normal,
@@ -337,29 +279,6 @@ fn import_eval_global(
             shared: false,
         }),
     );
-}
-
-#[derive(Debug, Clone)]
-struct RegionTree {
-    root: Region,
-}
-
-#[derive(Debug, Clone)]
-enum RegionTreeError {
-    MissingEntry,
-}
-
-impl RegionTree {
-    fn build(function: &IrFunction, cfg: &Cfg) -> Result<Self, RegionTreeError> {
-        let _ = (cfg.successors.len(), cfg.predecessors.len());
-        let start_idx = function.entry().0 as usize;
-        if start_idx >= function.blocks().len() {
-            return Err(RegionTreeError::MissingEntry);
-        }
-        Ok(Self {
-            root: Region::Linear { start_idx },
-        })
-    }
 }
 
 pub mod analysis_liveness;

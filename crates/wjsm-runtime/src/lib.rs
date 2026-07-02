@@ -128,6 +128,62 @@ pub fn compile_source(source: &str) -> Result<Vec<u8>> {
     wjsm_backend_wasm::compile(&program)
 }
 
+/// 编译缓存统计信息，供 CLI `wjsm cache` 命令展示和清理。
+pub struct ModuleCacheStats {
+    pub path: Option<std::path::PathBuf>,
+    pub entries: usize,
+    pub bytes: u64,
+}
+
+/// 返回当前模块编译缓存目录及已落盘条目统计。
+pub fn module_cache_stats() -> Result<ModuleCacheStats> {
+    let Some(path) = runtime_startup::module_cache_dir() else {
+        return Ok(ModuleCacheStats {
+            path: None,
+            entries: 0,
+            bytes: 0,
+        });
+    };
+
+    let (entries, bytes) = cache_entry_stats(&path)?;
+    Ok(ModuleCacheStats {
+        path: Some(path),
+        entries,
+        bytes,
+    })
+}
+
+/// 删除当前模块编译缓存目录中的所有条目，返回删除前可见条目数。
+pub fn clear_module_cache() -> Result<usize> {
+    let Some(path) = runtime_startup::module_cache_dir() else {
+        return Ok(0);
+    };
+    let (entries, _) = cache_entry_stats(&path)?;
+    if path.exists() {
+        std::fs::remove_dir_all(&path)?;
+    }
+    std::fs::create_dir_all(&path)?;
+    Ok(entries)
+}
+
+fn cache_entry_stats(path: &std::path::Path) -> Result<(usize, u64)> {
+    if !path.exists() {
+        return Ok((0, 0));
+    }
+
+    let mut entries = 0;
+    let mut bytes = 0;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_file() {
+            entries += 1;
+            bytes += metadata.len();
+        }
+    }
+    Ok((entries, bytes))
+}
+
 /// 构建时生成嵌入式 startup snapshot 字节（空 seed JS → cold bootstrap → capture）。
 pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
     // build.rs 路径不会进入运行时 `startup_snapshot_enabled()`，必须在此显式注册
