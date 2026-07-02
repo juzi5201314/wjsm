@@ -788,14 +788,29 @@ pub struct ReExportBinding {
 }
 
 // ── Shadow Stack Constants ──────────────────────────────────────────────
-/// 影子栈大小（64KB = 8192 个 i64 槽位）。
-/// runtime 和 backend-wasm 共享此值，编译期保证一致性。
-pub const SHADOW_STACK_SIZE: u32 = 65536;
+/// 影子栈初始容量（64KB = 8192 个 i64 槽位）。
+///
+/// 运行期可把 `__shadow_stack_end` 向上增长到 `SHADOW_STACK_MAX_SIZE`，因此
+/// 本值只表示冷启动容量和向后兼容的初始窗口，不再是生产容量上限。
+pub const SHADOW_STACK_INITIAL_SIZE: u32 = 65536;
+/// 向后兼容别名：表示影子栈初始容量，而非最大容量。
+pub const SHADOW_STACK_SIZE: u32 = SHADOW_STACK_INITIAL_SIZE;
+/// 影子栈最大保留容量。对象堆从该上限之后开始，确保增长时无需搬迁堆对象。
+pub const SHADOW_STACK_MAX_SIZE: u32 = 1024 * 1024;
 /// 影子栈与对象堆之间的隔离带大小（字节）。
 pub const SHADOW_STACK_HEAP_GUARD_SIZE: u32 = 64;
 
 /// 隔离带 canary 图案（按字节重复填充整个 guard 区）。
 pub const SHADOW_STACK_HEAP_GUARD_CANARY: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
+
+pub fn shadow_stack_base_from_object_heap_start(object_heap_start: usize) -> usize {
+    object_heap_start
+        .saturating_sub(SHADOW_STACK_MAX_SIZE as usize + SHADOW_STACK_HEAP_GUARD_SIZE as usize)
+}
+
+pub fn shadow_stack_limit_from_object_heap_start(object_heap_start: usize) -> usize {
+    object_heap_start.saturating_sub(SHADOW_STACK_HEAP_GUARD_SIZE as usize)
+}
 
 // ── Well-Known Symbol 索引 ─────────────────────────────────────────────
 /// Well-known symbol 索引常量，semantic 和 runtime 共享。

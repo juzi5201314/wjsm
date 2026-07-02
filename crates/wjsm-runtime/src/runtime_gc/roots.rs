@@ -22,13 +22,14 @@
 //!
 //! ## Shadow Stack 布局
 //!
-//! Shadow stack 位于 WASM 线性内存的前 64KB（由 `SHADOW_STACK_SIZE` 定义）。
+//! Shadow stack 位于 handle table 与 object heap 之间。冷启动时只开放
+//! `SHADOW_STACK_INITIAL_SIZE`，运行期可把 `__shadow_stack_end` 向上推进到
+//! `object_heap_start - SHADOW_STACK_HEAP_GUARD_SIZE`。
 //! 编译器通过 `global.set $shadow_sp` 维护栈指针（以字节为单位）。
 //!
 //! **不变量 INV-SP**：在任何 GC 安全点（safepoint），shadow stack 的 `[stack_base, sp)` 区间
 //! 包含所有活跃的 root 值。GC 通过 `tag_needs_root` 过滤标量值（如 smallint、bool），
 //! 只保留真正的 handle。
-//!
 //! ## Spill 策略
 //!
 //! 编译器在调用可能触发 GC 的函数前执行 spill prologue：
@@ -75,7 +76,7 @@
 //! 这允许编译器采用保守策略（宁可多 spill，也不漏 spill）。
 use crate::runtime_gc::GcContext;
 use crate::runtime_gc::api::{Handle, RootProvider};
-use wjsm_ir::{SHADOW_STACK_SIZE, value};
+use wjsm_ir::{shadow_stack_base_from_object_heap_start, value};
 
 /// 运行时 root 提供者：扫描 shadow stack + host 侧表（fixed-point 友好）。
 pub struct RuntimeRoots;
@@ -84,11 +85,12 @@ impl RootProvider for RuntimeRoots {
     fn for_each_shadow_stack_root(&mut self, ctx: &mut GcContext, visit: &mut dyn FnMut(Handle)) {
         let sp = ctx.shadow_sp();
         let end = ctx.shadow_stack_end();
+        let stack_base = shadow_stack_base_from_object_heap_start(ctx.object_heap_start());
         // shadow stack 区间：[stack_base, sp)；位于 handle table 之后，非从地址 0 起扫。
         if end == 0 {
             return;
         }
-        let stack_base = end.saturating_sub(SHADOW_STACK_SIZE as usize);
+
         if sp <= stack_base || sp > end {
             return;
         }
@@ -595,4 +597,84 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
     });
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RuntimeState, WasmEnv};
+    use wasmtime::{
+        Engine, Global, GlobalType, Memory, MemoryType, Mutability, Ref, RefType, Store, Table,
+        TableType, Val, ValType,
+    };
+    use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_INITIAL_SIZE, SHADOW_STACK_MAX_SIZE};
+
+    fn i32_global(store: &mut Store<RuntimeState>, value: i32) -> Global {
+        Global::new(
+            &mut *store,
+            GlobalType::new(ValType::I32, Mutability::Var),
+            Val::I32(value),
+        )
+        .expect("i32 global")
+    }
+
+    fn env_with_grown_stack() -> (Store<RuntimeState>, WasmEnv, usize, usize) {
+        let engine = Engine::default();
+        let mut store = Store::new(&engine, RuntimeState::new());
+        let memory = Memory::new(&mut store, MemoryType::new(32, None)).expect("memory");
+        let func_table = Table::new(
+            &mut store,
+            TableType::new(RefType::FUNCREF, 1, None),
+            Ref::Func(None),
+        )
+        .expect("table");
+        let stack_base = 2048usize;
+        let old_end = stack_base + SHADOW_STACK_INITIAL_SIZE as usize;
+        let grown_end = old_end + 16;
+        let object_heap_start =
+            stack_base + SHADOW_STACK_MAX_SIZE as usize + SHADOW_STACK_HEAP_GUARD_SIZE as usize;
+
+        let env = WasmEnv {
+            memory,
+            func_table,
+            shadow_sp: i32_global(&mut store, grown_end as i32),
+            heap_ptr: i32_global(&mut store, object_heap_start as i32),
+            obj_table_ptr: i32_global(&mut store, 0),
+            obj_table_count: i32_global(&mut store, 10),
+            shadow_stack_end: Some(i32_global(&mut store, grown_end as i32)),
+            object_proto_handle: i32_global(&mut store, -1),
+            array_proto_handle: i32_global(&mut store, -1),
+            object_heap_start: Some(i32_global(&mut store, object_heap_start as i32)),
+            bootstrap_done: None,
+            function_props_done: None,
+            function_props_base: None,
+            num_ir_functions: None,
+            arr_proto_table_base: None,
+            arr_proto_table_len: None,
+            arr_proto_table_hash: None,
+        };
+        (store, env, stack_base, old_end)
+    }
+
+    #[test]
+    fn shadow_stack_roots_scan_grown_window() {
+        let (mut store, env, stack_base, old_end) = env_with_grown_stack();
+        {
+            let data = env.memory.data_mut(&mut store);
+            data[stack_base..stack_base + 8]
+                .copy_from_slice(&value::encode_object_handle(3).to_le_bytes());
+            data[old_end + 8..old_end + 16]
+                .copy_from_slice(&value::encode_object_handle(4).to_le_bytes());
+        }
+
+        let mut ctx = GcContext::new(&mut store, &env, "test");
+        let mut roots = Vec::new();
+        RuntimeRoots.for_each_shadow_stack_root(&mut ctx, &mut |handle| roots.push(handle));
+
+        assert!(roots.contains(&3), "root below initial end must be scanned");
+        assert!(
+            roots.contains(&4),
+            "root above initial end must be scanned after growth"
+        );
+    }
 }

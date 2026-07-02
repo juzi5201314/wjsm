@@ -397,8 +397,8 @@ pub(super) async fn setup_shared_env_and_support(
     store: &mut Store<RuntimeState>,
     engine: &Engine,
 ) -> Result<()> {
-    // 创建 shared memory (4 pages = 256KB)
-    let memory = Memory::new(&mut *store, MemoryType::new(4, None))?;
+    // 创建 shared memory。影子栈保留 1MB 窗口，初始内存需覆盖冷启动 data segment。
+    let memory = Memory::new(&mut *store, MemoryType::new(32, None))?;
     linker.define(&*store, "env", "memory", memory)?;
 
     // 创建 shared table (minimum 256, 覆盖 support 12 + user ~200 函数)

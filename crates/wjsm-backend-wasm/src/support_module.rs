@@ -120,6 +120,7 @@ const G_FUNC_PROPS: u32 = 0;
 const G_HEAP_PTR: u32 = 1;
 const G_OBJ_TABLE_PTR: u32 = 2;
 const G_OBJ_TABLE_COUNT: u32 = 3;
+#[allow(dead_code)]
 const G_SHADOW_SP: u32 = 4;
 #[allow(dead_code)]
 const G_ALLOC_COUNTER: u32 = 5;
@@ -334,9 +335,9 @@ fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_STACK_END));
+    func.instruction(&WasmInstruction::GlobalGet(G_OBJECT_HEAP_START));
     func.instruction(&WasmInstruction::I32Const(
-        wjsm_ir::SHADOW_STACK_SIZE as i32,
+        (wjsm_ir::SHADOW_STACK_MAX_SIZE + wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE) as i32,
     ));
     func.instruction(&WasmInstruction::I32Sub);
     func.instruction(&WasmInstruction::I32GtU);
