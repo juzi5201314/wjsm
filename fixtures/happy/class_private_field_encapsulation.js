@@ -20,3 +20,32 @@ box["#x"] = 7;
 console.log(box.getX());
 console.log(box["#x"]);
 console.log(Object.keys(box).join("|"));
+
+class OtherBox {
+  #x = 99;
+}
+
+try {
+  SecretBox.prototype.getX.call(new OtherBox());
+  console.log("cross-brand-fail");
+} catch (e) {
+  console.log("cross-brand-error");
+}
+
+class StaticA {
+  #x = 1;
+  static read(o) {
+    return o.#x;
+  }
+}
+
+class StaticB {
+  #x = 2;
+}
+
+try {
+  StaticA.read(new StaticB());
+  console.log("static-cross-brand-fail");
+} catch (e) {
+  console.log("static-cross-brand-error");
+}

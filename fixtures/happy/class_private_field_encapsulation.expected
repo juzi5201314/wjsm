@@ -8,4 +8,6 @@ none
 42
 7
 #x
+cross-brand-error
+static-cross-brand-error
 --- stderr ---

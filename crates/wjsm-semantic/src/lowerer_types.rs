@@ -16,6 +16,9 @@ pub(crate) struct Lowerer {
     pub(crate) active_finalizers: Vec<PendingFinalizer>,
     /// 匿名类 / 匿名函数计数器
     pub(crate) anon_counter: u32,
+    /// 类私有名词法栈：源名 → 该声明类的不可公开运行时槽名。
+    pub(crate) private_name_stack: Vec<std::collections::HashMap<String, String>>,
+    pub(crate) next_private_name_id: u32,
     // ── Function context stack ────────────────────────────────────────────
     pub(crate) function_stack: Vec<FunctionBuilder>,
     pub(crate) function_hoisted_stack: Vec<FunctionHoistedState>,

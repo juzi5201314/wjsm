@@ -39,6 +39,8 @@ impl Lowerer {
                 _ => None,
             });
 
+        self.push_class_private_name_scope(&class_expr.class.body);
+
         let private_members =
             self.collect_class_private_members(&class_name, &class_expr.class.body)?;
 
@@ -719,7 +721,8 @@ impl Lowerer {
                     );
                 }
                 swc_ast::ClassMember::PrivateProp(prop) if prop.is_static => {
-                    let field_name = format!("#{}", prop.key.name);
+                    let field_name =
+                        self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
                     let key_const = self.module.add_constant(Constant::String(field_name));
                     let key_dest = self.alloc_value();
                     self.current_function.append_instruction(
@@ -830,6 +833,7 @@ impl Lowerer {
             self.scopes.pop_scope();
         }
 
+        self.pop_class_private_name_scope();
         Ok(ctor_dest)
     }
 }

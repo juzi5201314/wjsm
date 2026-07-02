@@ -218,6 +218,45 @@ pub(crate) enum PrivateMemberKind {
 }
 
 impl Lowerer {
+    fn push_class_private_name_scope(&mut self, body: &[swc_ast::ClassMember]) {
+        let class_private_id = self.next_private_name_id;
+        self.next_private_name_id += 1;
+        let mut names = std::collections::HashMap::new();
+        for member in body {
+            let source_name = match member {
+                swc_ast::ClassMember::PrivateMethod(method) => method.key.name.to_string(),
+                swc_ast::ClassMember::PrivateProp(prop) => prop.key.name.to_string(),
+                _ => continue,
+            };
+            names
+                .entry(source_name.clone())
+                .or_insert_with(|| format!("#{source_name}@{class_private_id}"));
+        }
+        self.private_name_stack.push(names);
+    }
+
+    fn pop_class_private_name_scope(&mut self) {
+        self.private_name_stack.pop();
+    }
+
+    pub(crate) fn resolve_private_storage_name(
+        &self,
+        source_name: &str,
+        span: Span,
+    ) -> Result<String, LoweringError> {
+        self.private_name_stack
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(source_name))
+            .cloned()
+            .ok_or_else(|| {
+                self.error(
+                    span,
+                    format!("Private field '#{source_name}' is not declared"),
+                )
+            })
+    }
+
     /// 将类构造器 IR 函数物化为运行时可调用值：无捕获时为 FunctionRef，有捕获时为 CreateClosure + 共享 env。
     fn materialize_constructor_value(
         &mut self,
@@ -263,7 +302,8 @@ impl Lowerer {
         for member in members {
             match member {
                 swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
-                    let field_name = format!("#{}", prop.key.name);
+                    let field_name =
+                        self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
                     block = self.emit_field_init(
                         block,
                         this_scope_id,
@@ -342,7 +382,8 @@ impl Lowerer {
             let swc_ast::ClassMember::PrivateMethod(pm) = member else {
                 continue;
             };
-            let field_name = format!("#{}", pm.key.name);
+            let field_name =
+                self.resolve_private_storage_name(pm.key.name.as_ref(), pm.key.span)?;
             let is_static = pm.is_static;
             let accessor = matches!(
                 pm.kind,

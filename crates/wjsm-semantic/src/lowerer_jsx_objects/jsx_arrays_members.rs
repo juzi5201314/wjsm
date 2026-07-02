@@ -170,7 +170,8 @@ impl Lowerer {
                 self.lower_expr_then_continue(&computed.expr, block)?
             }
             swc_ast::MemberProp::PrivateName(name) => {
-                let field_name = format!("#{}", name.name);
+                let field_name =
+                    self.resolve_private_storage_name(name.name.as_ref(), name.span)?;
                 let key_const = self.module.add_constant(Constant::String(field_name));
                 let key_dest = self.alloc_value();
                 self.current_function.append_instruction(

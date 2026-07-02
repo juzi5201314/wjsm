@@ -65,6 +65,8 @@ impl Lowerer {
             pending_loop_label: None,
             active_finalizers: Vec::new(),
             anon_counter: 0,
+            private_name_stack: Vec::new(),
+            next_private_name_id: 0,
             function_stack: Vec::new(),
             function_hoisted_stack: Vec::new(),
             function_next_value_stack: Vec::new(),

@@ -24,6 +24,8 @@ impl Lowerer {
                 _ => None,
             });
 
+        self.push_class_private_name_scope(&class_decl.class.body);
+
         let private_members =
             self.collect_class_private_members(&class_name, &class_decl.class.body)?;
 
@@ -733,7 +735,8 @@ impl Lowerer {
                     );
                 }
                 swc_ast::ClassMember::PrivateProp(prop) if prop.is_static => {
-                    let field_name = format!("#{}", prop.key.name);
+                    let field_name =
+                        self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
                     self.emit_static_field_init(
                         outer_block,
                         ctor_dest,
@@ -819,6 +822,7 @@ impl Lowerer {
             },
         );
 
+        self.pop_class_private_name_scope();
         Ok(StmtFlow::Open(outer_block))
     }
 }
