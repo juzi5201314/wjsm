@@ -2146,8 +2146,8 @@ pub(crate) fn define_array_object(
             let mut write_idx: u32 = 0;
             // [0, start) 原样复制
             for i in 0..start_idx {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                let elem = read_array_elem(&mut caller, ptr, i as u32)
+                    .unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, new_ptr, write_idx, elem);
                 write_idx += 1;
             }
@@ -2159,8 +2159,8 @@ pub(crate) fn define_array_object(
             }
             // [start+skip, len) 复制
             for i in (start_idx + skip)..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                let elem = read_array_elem(&mut caller, ptr, i as u32)
+                    .unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, new_ptr, write_idx, elem);
                 write_idx += 1;
             }

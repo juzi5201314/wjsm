@@ -705,7 +705,8 @@ async fn arr_proto_to_sorted_async_body(
     args_base: i32,
     args_count: i32,
 ) -> i64 {
-    let has_comparator = args_count > 0 && value::is_callable(read_shadow_arg(caller, args_base, 0));
+    let has_comparator =
+        args_count > 0 && value::is_callable(read_shadow_arg(caller, args_base, 0));
     let Some(ptr) = resolve_array_ptr(caller, this_val) else {
         return value::encode_undefined();
     };
