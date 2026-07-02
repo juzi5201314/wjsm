@@ -642,6 +642,7 @@ pub fn abi_hash() -> u64 {
     constants::FLAG_ENUMERABLE.hash(&mut hasher);
     constants::FLAG_WRITABLE.hash(&mut hasher);
     constants::FLAG_IS_ACCESSOR.hash(&mut hasher);
+    constants::FLAG_PRIVATE.hash(&mut hasher);
 
     // Embedded support module / builtin JS bundle hash（运行时通过
     // `register_abi_hash_external_input` 注入；未注入时为 0，不参与 hash 改变）。

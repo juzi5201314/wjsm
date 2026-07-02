@@ -290,6 +290,12 @@ fn emit_obj_get() -> Function {
         memory_index: 0,
     }));
     func.instruction(&WasmInstruction::LocalTee(6));
+    // 普通属性访问必须跳过类私有成员槽。
+    func.instruction(&WasmInstruction::I32Const(constants::FLAG_PRIVATE));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Eqz);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(6));
     // 检查 is_accessor 位
     func.instruction(&WasmInstruction::I32Const(constants::FLAG_IS_ACCESSOR));
     func.instruction(&WasmInstruction::I32And);
@@ -354,6 +360,7 @@ fn emit_obj_get() -> Function {
         memory_index: 0,
     }));
     func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::LocalGet(3));
     func.instruction(&WasmInstruction::I32Const(1));
@@ -588,6 +595,12 @@ fn emit_obj_set() -> Function {
         memory_index: 0,
     }));
     func.instruction(&WasmInstruction::LocalTee(10));
+    // 普通属性写入必须跳过类私有成员槽。
+    func.instruction(&WasmInstruction::I32Const(constants::FLAG_PRIVATE));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Eqz);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(10));
     // 检查 is_accessor 位
     func.instruction(&WasmInstruction::I32Const(constants::FLAG_IS_ACCESSOR));
     func.instruction(&WasmInstruction::I32And);
@@ -663,6 +676,7 @@ fn emit_obj_set() -> Function {
         memory_index: 0,
     }));
     func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::LocalGet(5));
     func.instruction(&WasmInstruction::I32Const(1));
@@ -743,6 +757,12 @@ fn emit_obj_set() -> Function {
         memory_index: 0,
     }));
     func.instruction(&WasmInstruction::LocalTee(10));
+    // 原型链上的普通 setter 查找也必须跳过类私有成员槽。
+    func.instruction(&WasmInstruction::I32Const(constants::FLAG_PRIVATE));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Eqz);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(10));
     func.instruction(&WasmInstruction::I32Const(constants::FLAG_IS_ACCESSOR));
     func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::I32Const(0));
@@ -837,6 +857,7 @@ fn emit_obj_set() -> Function {
     // 是数据属性 → 跳出原型链遍历，fall through 到创建 own data property
     // br depth: If(name_found)=0, Loop(search_loop)=1, Block(search_exit)=2, Loop(proto_chain_loop)=3, Block(proto_chain_done)=4
     func.instruction(&WasmInstruction::Br(4));
+    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End); // end name_found
     func.instruction(&WasmInstruction::LocalGet(5));
     func.instruction(&WasmInstruction::I32Const(1));
@@ -1145,16 +1166,24 @@ fn emit_obj_delete() -> Function {
     emit_property_name_id_match(&mut func, 6, 1);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
 
-    // 检查 configurable 标志 (flags bit 0)
+    // 普通 delete 必须跳过类私有成员槽。
     func.instruction(&WasmInstruction::LocalGet(4)); // slot_addr
     func.instruction(&WasmInstruction::I32Load(MemArg {
         offset: 4,
         align: 2,
         memory_index: 0,
     })); // flags
-    func.instruction(&WasmInstruction::I32Const(1));
-    func.instruction(&WasmInstruction::I32And); // flags & 1
-    func.instruction(&WasmInstruction::I32Eqz); // (flags & 1) == 0 → not configurable
+    func.instruction(&WasmInstruction::LocalTee(6));
+    func.instruction(&WasmInstruction::I32Const(constants::FLAG_PRIVATE));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Eqz);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+
+    // 检查 configurable 标志 (flags bit 0)
+    func.instruction(&WasmInstruction::LocalGet(6));
+    func.instruction(&WasmInstruction::I32Const(constants::FLAG_CONFIGURABLE));
+    func.instruction(&WasmInstruction::I32And); // flags & configurable
+    func.instruction(&WasmInstruction::I32Eqz); // (flags & configurable) == 0 → not configurable
     func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
     func.instruction(&WasmInstruction::Return);
@@ -1262,6 +1291,7 @@ fn emit_obj_delete() -> Function {
     // 返回 true
     func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
     func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
 
     // 继续搜索

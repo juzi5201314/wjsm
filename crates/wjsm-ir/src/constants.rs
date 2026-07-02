@@ -173,3 +173,4 @@ pub const FLAG_CONFIGURABLE: i32 = 1 << 0; // bit 0: 可配置
 pub const FLAG_ENUMERABLE: i32 = 1 << 1; // bit 1: 可枚举
 pub const FLAG_WRITABLE: i32 = 1 << 2; // bit 2: 可写（数据属性专用）
 pub const FLAG_IS_ACCESSOR: i32 = 1 << 3; // bit 3: 是否为访问器属性
+pub const FLAG_PRIVATE: i32 = 1 << 4; // bit 4: 类私有成员槽（不参与普通属性访问）

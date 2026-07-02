@@ -2478,7 +2478,7 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "date_utc", date_utc_fn)?;
 
-    // 私有成员以 "#name" 槽存储；访问器槽走 FLAG_IS_ACCESSOR，读/写时调用 getter/setter。
+    // 私有成员使用 FLAG_PRIVATE 槽存储；普通属性访问会跳过该槽。
     fn invoke_private_accessor_get(
         caller: &mut Caller<'_, RuntimeState>,
         getter: i64,
@@ -2535,7 +2535,7 @@ pub(crate) fn define_collections_buffers(
                 );
             };
             let Some((slot_offset, flags, val)) =
-                find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32)
+                find_private_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32)
             else {
                 return make_type_error_exception(
                     &mut caller,
@@ -2578,7 +2578,8 @@ pub(crate) fn define_collections_buffers(
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_undefined();
             };
-            let found_slot = find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
+            let found_slot =
+                find_private_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
             if let Some((slot_offset, flags, _old_val)) = found_slot {
                 if (flags & constants::FLAG_IS_ACCESSOR) != 0 {
                     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
@@ -2600,7 +2601,14 @@ pub(crate) fn define_collections_buffers(
                 data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
                 val
             } else {
-                write_object_property_by_name_id(&mut caller, ptr, obj, key_name_id as u32, val, 0);
+                write_object_property_by_name_id(
+                    &mut caller,
+                    ptr,
+                    obj,
+                    key_name_id as u32,
+                    val,
+                    constants::FLAG_PRIVATE,
+                );
                 val
             }
         },
@@ -2647,7 +2655,7 @@ pub(crate) fn define_collections_buffers(
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_bool(false);
             };
-            let found = find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
+            let found = find_private_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
             value::encode_bool(found.is_some())
         },
     );

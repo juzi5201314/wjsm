@@ -221,6 +221,9 @@ pub(crate) fn collect_own_property_names(
             data[slot_offset + 6],
             data[slot_offset + 7],
         ]);
+        if (flags & constants::FLAG_PRIVATE) != 0 {
+            continue;
+        }
         if enumerable_only && (flags & 2) == 0 {
             continue;
         }
@@ -327,6 +330,9 @@ pub(crate) fn collect_own_property_values(
             data[slot_offset + 6],
             data[slot_offset + 7],
         ]);
+        if (flags & constants::FLAG_PRIVATE) != 0 {
+            continue;
+        }
         if enumerable_only && (flags & 2) == 0 {
             continue;
         }
@@ -401,18 +407,28 @@ pub(crate) fn collect_own_property_key_values(
         data[obj_ptr + 14],
         data[obj_ptr + 15],
     ]) as usize;
-    let mut name_ids = Vec::new();
+    let mut slots = Vec::new();
     for i in 0..num_props {
         let slot_offset = obj_ptr + 16 + i * 32;
         if slot_offset + 32 > data.len() {
             break;
         }
-        name_ids.push(u32::from_le_bytes([
+        let flags = i32::from_le_bytes([
+            data[slot_offset + 4],
+            data[slot_offset + 5],
+            data[slot_offset + 6],
+            data[slot_offset + 7],
+        ]);
+        if (flags & constants::FLAG_PRIVATE) != 0 {
+            continue;
+        }
+        let name_id = u32::from_le_bytes([
             data[slot_offset],
             data[slot_offset + 1],
             data[slot_offset + 2],
             data[slot_offset + 3],
-        ]));
+        ]);
+        slots.push(name_id);
     }
     let _ = data;
     let _ = mem;
@@ -420,7 +436,7 @@ pub(crate) fn collect_own_property_key_values(
     let mut string_name_ids = Vec::new();
     let mut sym_name_ids = Vec::new();
     let mut int_index_entries = Vec::new();
-    for name_id in name_ids {
+    for name_id in slots {
         if let Some(symbol_key) = name_id_to_property_key_value(name_id) {
             sym_name_ids.push(symbol_key);
         } else if !symbols_only {

@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+42
+true
+none
+none
+{}
+42
+7
+#x
+--- stderr ---

@@ -480,23 +480,33 @@ pub(crate) fn read_object_property_by_name_proto_walk_with_env<
             data[obj_ptr + 15],
         ]) as usize
     };
-    let mut name_ids = Vec::with_capacity(num_props);
+    let mut slots = Vec::with_capacity(num_props);
     {
         let data = env.memory.data(&*ctx);
         for i in 0..num_props {
             let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 4 > data.len() {
+            if slot_offset + 8 > data.len() {
                 break;
             }
-            name_ids.push(u32::from_le_bytes([
+            let name_id = u32::from_le_bytes([
                 data[slot_offset],
                 data[slot_offset + 1],
                 data[slot_offset + 2],
                 data[slot_offset + 3],
-            ]));
+            ]);
+            let flags = i32::from_le_bytes([
+                data[slot_offset + 4],
+                data[slot_offset + 5],
+                data[slot_offset + 6],
+                data[slot_offset + 7],
+            ]);
+            slots.push((name_id, flags));
         }
     }
-    for (i, name_id) in name_ids.iter().enumerate() {
+    for (i, (name_id, flags)) in slots.iter().enumerate() {
+        if (*flags & constants::FLAG_PRIVATE) != 0 || is_symbol_name_id(*name_id) {
+            continue;
+        }
         let name_bytes = read_string_bytes_mem(ctx, &env.memory, *name_id);
         if name_bytes == prop_name.as_bytes() {
             let data = env.memory.data(&*ctx);
@@ -555,24 +565,31 @@ pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = Runti
             data[obj_ptr + 15],
         ]) as usize
     };
-    let mut name_ids = Vec::with_capacity(num_props);
+    let mut slots = Vec::with_capacity(num_props);
     {
         let data = env.memory.data(&*ctx);
         for i in 0..num_props {
             let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 4 > data.len() {
+            if slot_offset + 8 > data.len() {
                 break;
             }
-            name_ids.push(u32::from_le_bytes([
+            let name_id = u32::from_le_bytes([
                 data[slot_offset],
                 data[slot_offset + 1],
                 data[slot_offset + 2],
                 data[slot_offset + 3],
-            ]));
+            ]);
+            let flags = i32::from_le_bytes([
+                data[slot_offset + 4],
+                data[slot_offset + 5],
+                data[slot_offset + 6],
+                data[slot_offset + 7],
+            ]);
+            slots.push((name_id, flags));
         }
     }
-    for (i, name_id) in name_ids.iter().enumerate() {
-        if is_symbol_name_id(*name_id) {
+    for (i, (name_id, flags)) in slots.iter().enumerate() {
+        if (*flags & constants::FLAG_PRIVATE) != 0 || is_symbol_name_id(*name_id) {
             continue;
         }
         let name_bytes = read_string_bytes_mem(ctx, &env.memory, *name_id);
@@ -616,12 +633,12 @@ pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = Runti
     read_object_property_by_name_proto_walk_with_env(ctx, env, proto_ptr, prop_name, &mut visited)
 }
 
-/// 从对象中按 name_id 查找属性的 slot_offset
-pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = RuntimeState>>(
+fn find_property_slot_by_name_id_with_visibility<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     obj_ptr: usize,
     name_id: u32,
+    private_slot: bool,
 ) -> Option<(usize, i32, i64)> {
     let num_props = {
         let data = env.memory.data(&*ctx);
@@ -671,6 +688,9 @@ pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = Runt
             ]);
             (slot_name_id, flags, val)
         };
+        if ((flags & constants::FLAG_PRIVATE) != 0) != private_slot {
+            continue;
+        }
         let same_name = slot_name_id == name_id
             || (!is_symbol_name_id(name_id)
                 && !is_symbol_name_id(slot_name_id)
@@ -681,6 +701,28 @@ pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = Runt
         }
     }
     None
+}
+
+/// 从对象中按 name_id 查找普通属性的 slot_offset。
+pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    obj_ptr: usize,
+    name_id: u32,
+) -> Option<(usize, i32, i64)> {
+    find_property_slot_by_name_id_with_visibility(ctx, env, obj_ptr, name_id, false)
+}
+
+/// 从对象中按 name_id 查找类私有成员槽。
+pub(crate) fn find_private_property_slot_by_name_id_with_env<
+    C: AsContextMut<Data = RuntimeState>,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    obj_ptr: usize,
+    name_id: u32,
+) -> Option<(usize, i32, i64)> {
+    find_property_slot_by_name_id_with_visibility(ctx, env, obj_ptr, name_id, true)
 }
 
 pub(crate) fn read_object_property_by_name_id(
@@ -796,9 +838,9 @@ pub(crate) fn write_private_accessor_slot(
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let undef = value::encode_undefined();
-    let accessor_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_IS_ACCESSOR;
+    let accessor_flags = constants::FLAG_PRIVATE | constants::FLAG_IS_ACCESSOR;
     if let Some((slot_offset, flags, _)) =
-        find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
+        find_private_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
     {
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return;
@@ -922,8 +964,17 @@ pub(crate) fn enumerate_object_keys(
     let mut name_ids = Vec::with_capacity(num_props);
     for i in 0..num_props {
         let slot_offset = ptr + 16 + i * 32;
-        if slot_offset + 4 > data.len() {
+        if slot_offset + 8 > data.len() {
             break;
+        }
+        let flags = i32::from_le_bytes([
+            data[slot_offset + 4],
+            data[slot_offset + 5],
+            data[slot_offset + 6],
+            data[slot_offset + 7],
+        ]);
+        if (flags & constants::FLAG_PRIVATE) != 0 {
+            continue;
         }
         let name_id = u32::from_le_bytes([
             data[slot_offset],
@@ -2192,4 +2243,9 @@ caller_env_wrapper! {
 caller_env_wrapper! {
     #[inline]
     pub(crate) fn find_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_property_slot_by_name_id_with_env
+}
+
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn find_private_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_private_property_slot_by_name_id_with_env
 }
