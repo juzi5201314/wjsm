@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+child value: child
+proto value: proto
+child owns value: true
+proto owns value: true
+--- stderr ---

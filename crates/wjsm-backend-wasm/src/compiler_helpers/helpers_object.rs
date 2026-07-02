@@ -1018,8 +1018,8 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End); // end is_accessor
             // 是数据属性 → 跳出原型链遍历，fall through 到创建 own data property
-            // br depth: If(name_found)=0, Loop(search_loop)=1, Block(search_exit)=2, Loop(proto_chain_loop)=3, Block(proto_chain_done)=4
-            func.instruction(&WasmInstruction::Br(4));
+            // br depth: If(private_ok)=0, If(name_found)=1, Loop(search_loop)=2, Block(search_exit)=3, Loop(proto_chain_loop)=4, Block(proto_chain_done)=5
+            func.instruction(&WasmInstruction::Br(5));
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End); // end name_found
             func.instruction(&WasmInstruction::LocalGet(5));
