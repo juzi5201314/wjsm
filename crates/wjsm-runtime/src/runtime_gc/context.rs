@@ -113,6 +113,42 @@ impl<'a> GcContext<'a> {
             .max(0) as usize
     }
 
+    /// 读 JS 堆预算上界。缺省为 u32::MAX，WASM fast-path 用无符号比较同一语义。
+    pub fn heap_limit(&mut self) -> usize {
+        self.env
+            .heap_limit
+            .and_then(|g| g.get(&mut self.store).i32())
+            .map(|v| v as u32 as usize)
+            .unwrap_or(u32::MAX as usize)
+    }
+
+    pub fn heap_used(&mut self) -> usize {
+        let heap_start = self
+            .env
+            .object_heap_start
+            .and_then(|g| g.get(&mut self.store).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        self.heap_ptr().saturating_sub(heap_start)
+    }
+
+    pub fn grow_to_fit_heap_allocation(&mut self, size: usize) -> Result<bool, ()> {
+        let heap_ptr = self.heap_ptr();
+        let Some(needed_end) = heap_ptr.checked_add(size) else {
+            return Ok(false);
+        };
+        if needed_end > self.heap_limit() {
+            return Ok(false);
+        }
+        let mem_end = self.env.memory.data_size(&self.store);
+        if needed_end <= mem_end {
+            return Ok(true);
+        }
+        let pages = (needed_end - mem_end).div_ceil(65536).max(1) as u64;
+        self.grow(pages)?;
+        Ok(needed_end <= self.env.memory.data_size(&self.store))
+    }
+
     /// 设置 heap_ptr global。
     pub fn set_heap_ptr(&mut self, val: usize) {
         let _ = self.env.heap_ptr.set(&mut self.store, Val::I32(val as i32));

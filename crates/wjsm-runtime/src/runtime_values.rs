@@ -348,18 +348,7 @@ pub(crate) fn grow_array(
     this_val: i64,
     new_cap: u32,
 ) -> Option<usize> {
-    let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
-    let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
+    let env = WasmEnv::from_caller(caller)?;
     let new_size = 16 + new_cap as usize * 8;
     // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
     let handle_idx = handle_index_of(caller, this_val);
@@ -367,19 +356,15 @@ pub(crate) fn grow_array(
         let cap = read_array_capacity(caller, ptr)?;
         16 + cap as usize * 8
     };
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return None;
-    };
-    let need_end = heap_ptr.saturating_add(new_size);
-    while mem.data(&*caller).len() < need_end {
-        if mem.grow(&mut *caller, 1).is_err() {
-            break;
-        }
-    }
-    let d = mem.data_mut(&mut *caller);
-    if heap_ptr + new_size > d.len() {
-        return None;
-    }
+    let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
+        caller,
+        &env,
+        new_size,
+        wjsm_ir::HEAP_TYPE_ARRAY,
+        new_cap,
+    )?;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
+    let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
     let slot_addr = obj_table_ptr + handle_idx * 4;
@@ -389,9 +374,6 @@ pub(crate) fn grow_array(
     // 注册被抛弃的旧区域（P4-blocker #1）：handle 现在指向 heap_ptr，
     // 旧 ptr 区域不再被 obj_table 索引，sweep 单独遍历看不到 → 注册供 sweeper 回收。
     caller.data().abandon_region(ptr, old_size);
-    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
-        let _ = g.set(&mut *caller, Val::I32((heap_ptr + new_size) as i32));
-    }
     Some(heap_ptr)
 }
 /// 对象动态扩容 — 遵循 capacity × 2 倍增策略，与 grow_array 同构
@@ -402,18 +384,7 @@ pub(crate) fn grow_object(
     handle_val: i64,
     new_cap: u32,
 ) -> Option<usize> {
-    let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
-    let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
+    let env = WasmEnv::from_caller(caller)?;
     let new_size = 16 + new_cap as usize * 32;
     // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
     let handle_idx = handle_index_of(caller, handle_val);
@@ -428,19 +399,15 @@ pub(crate) fn grow_object(
         u32::from_le_bytes([d[ptr + 8], d[ptr + 9], d[ptr + 10], d[ptr + 11]]) as usize
     };
     let old_size = 16 + old_cap * 32;
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return None;
-    };
-    let need_end = heap_ptr.saturating_add(new_size);
-    while mem.data(&*caller).len() < need_end {
-        if mem.grow(&mut *caller, 1).is_err() {
-            break;
-        }
-    }
-    let d = mem.data_mut(&mut *caller);
-    if heap_ptr + new_size > d.len() {
-        return None;
-    }
+    let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
+        caller,
+        &env,
+        new_size,
+        wjsm_ir::HEAP_TYPE_OBJECT,
+        new_cap,
+    )?;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
+    let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
     let slot_addr = obj_table_ptr + handle_idx * 4;
@@ -449,9 +416,6 @@ pub(crate) fn grow_object(
     }
     // 注册被抛弃的旧区域（P4-blocker #1）：同 grow_array。
     caller.data().abandon_region(ptr, old_size);
-    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
-        let _ = g.set(&mut *caller, Val::I32((heap_ptr + new_size) as i32));
-    }
     Some(heap_ptr)
 }
 
@@ -1012,39 +976,23 @@ pub(crate) fn allocate_descriptor_object(
     getter: i64,
     setter: i64,
 ) -> Option<i64> {
-    // 读取全局变量
-    let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
-    let obj_table_count = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
-    let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
+    let env = WasmEnv::from_caller(caller)?;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
+    let obj_table_count = env.obj_table_count.get(&mut *caller).i32().unwrap_or(0) as usize;
 
     // 对象大小：16 (header) + 4 * 32 (slots) = 144 bytes
     let obj_size = 16 + 4 * 32;
     let handle_idx = obj_table_count;
 
-    // 分配对象
+    let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
+        caller,
+        &env,
+        obj_size,
+        wjsm_ir::HEAP_TYPE_OBJECT,
+        4,
+    )?;
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data_mut(&mut *caller);
-        if heap_ptr + obj_size > data.len() {
-            return None;
-        }
+        let data = env.memory.data_mut(&mut *caller);
 
         // 初始化 header: proto=0, type=OBJECT, pad=0, capacity=4, num_props=0
         data[heap_ptr..heap_ptr + 4].copy_from_slice(&0u32.to_le_bytes()); // proto
@@ -1060,13 +1008,6 @@ pub(crate) fn allocate_descriptor_object(
         }
     }
 
-    // 更新 __heap_ptr 和 __obj_table_count
-    {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-            return None;
-        };
-        let _ = g.set(&mut *caller, Val::I32((heap_ptr + obj_size) as i32));
-    }
     {
         let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
             return None;

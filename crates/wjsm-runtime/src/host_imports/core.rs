@@ -1489,13 +1489,19 @@ pub(crate) fn define_core(
                 }
             }
             // 2. collect 后重试
-            let stats = {
+            let (stats, algorithm) = {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
+                let algorithm = gc.algorithm_name();
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                gc.collect_with_provider(&mut ctx, &mut roots as _)
+                (
+                    gc.collect_with_provider(&mut ctx, &mut roots as _),
+                    algorithm,
+                )
             };
+            caller
+                .data()
+                .record_gc_cycle("alloc-slow", algorithm, stats.clone());
             caller
                 .data()
                 .update_gc_threshold_after_collection(stats.marked);
@@ -1508,18 +1514,23 @@ pub(crate) fn define_core(
                     return Ok(ptr as i32);
                 }
             }
-            // 3. grow + 重试（真 OOM 前最后手段）
+            // 3. grow 到本次分配刚好够用（仍受 heap_limit 约束）后重试。
             {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
-                if ctx.grow(1).is_ok()
+                if matches!(ctx.grow_to_fit_heap_allocation(size), Ok(true))
                     && let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity)
                 {
                     return Ok(ptr as i32);
                 }
             }
-            // 真 OOM：trap 中止执行，避免 u32::MAX/-1 被当作线性内存地址（#117）。
+            // 真 OOM：先写入可诊断 runtime_error，再 trap 中止执行。
+            let used = {
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, "oom");
+                ctx.heap_used()
+            };
+            caller.data().set_heap_oom_error(used, size);
             Err(wasmtime::Trap::AllocationTooLarge.into())
         },
     );
@@ -1541,18 +1552,47 @@ pub(crate) fn define_core(
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
         };
-        let stats = {
+        let (stats, algorithm) = {
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
+            let algorithm = gc.algorithm_name();
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-            gc.collect_with_provider(&mut ctx, &mut roots as _)
+            (
+                gc.collect_with_provider(&mut ctx, &mut roots as _),
+                algorithm,
+            )
         };
+        caller
+            .data()
+            .record_gc_cycle("proactive", algorithm, stats.clone());
         caller
             .data()
             .update_gc_threshold_after_collection(stats.marked);
         caller.data().reset_alloc_counter_after_gc();
     });
     linker.define(&mut store, "env", "gc_maybe_collect", f)?;
+
+    let f = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, site_id: i32| {
+            caller
+                .data()
+                .set_pending_allocation_site(site_id.max(0) as u32);
+        },
+    );
+    linker.define(&mut store, "env", "gc_set_alloc_site", f)?;
+
+    let f = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| {
+            caller.data().record_allocation(
+                size.max(0) as usize,
+                heap_type.clamp(0, 255) as u8,
+                capacity.max(0) as u32,
+            );
+        },
+    );
+    linker.define(&mut store, "env", "gc_record_alloc", f)?;
 
     // gc_take_freed_handle() -> i32：从 host handle_free_list pop 复用（fast-path take_or_alloc）。
     //   返回 handle（≥0）或 -1（空，调用方走 count++ 分支）。

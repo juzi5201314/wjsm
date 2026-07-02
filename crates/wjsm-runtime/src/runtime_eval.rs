@@ -141,21 +141,23 @@ pub(crate) fn reserve_eval_data_segment(
     };
     let base = (current + 7) & !7;
     let reserve = (constants::USER_STRING_START + code_len + 4096 + 7) & !7;
-    let need_end = base.saturating_add(reserve) as usize;
-    let memory = caller
-        .get_export("memory")
-        .and_then(Extern::into_memory)
-        .ok_or_else(|| anyhow::anyhow!("eval parent missing memory"))?;
-    let page_size = 65536usize;
-    loop {
-        let mem_len = memory.data_size(&*caller);
-        if need_end <= mem_len {
-            break;
-        }
-        let grow_pages = (need_end - mem_len).div_ceil(page_size).max(1) as u64;
-        memory
-            .grow(&mut *caller, grow_pages)
-            .map_err(|e| anyhow::anyhow!("eval memory grow failed: {e}"))?;
+    let env = WasmEnv::from_caller(caller)
+        .ok_or_else(|| anyhow::anyhow!("eval parent missing runtime environment"))?;
+    crate::runtime_heap::try_gc_for_host_alloc(caller, &env, reserve as usize);
+    if !crate::runtime_heap::ensure_heap_allocation_bytes(
+        caller,
+        &env,
+        base as usize,
+        reserve as usize,
+    ) {
+        let message = caller
+            .data()
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| format!("eval memory grow failed: requested {reserve} bytes"));
+        anyhow::bail!(message);
     }
     heap_ptr.set(&mut *caller, Val::I32((base + reserve) as i32))?;
     Ok(base)

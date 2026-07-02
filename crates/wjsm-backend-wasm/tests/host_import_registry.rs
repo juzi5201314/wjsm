@@ -238,7 +238,7 @@ fn compiler_registry_matches_expected_import_count() {
         .next()
         .expect("import section");
 
-    const SHARED_ENV_IMPORTS: usize = 1 + 1 + 19; // memory + table + 共享 globals
+    const SHARED_ENV_IMPORTS: usize = 1 + 1 + 20; // memory + table + 共享 globals
     const SUPPORT_HELPER_IMPORTS: usize = 10; // obj_*/arr_*/elem_*/string_eq/to_int32/get_proto_from_ctor
     assert_eq!(
         import_count as usize,

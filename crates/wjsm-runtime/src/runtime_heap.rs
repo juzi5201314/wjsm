@@ -29,17 +29,71 @@ pub(crate) fn host_handle_slot_fits<C: AsContextMut<Data = RuntimeState>>(
     need_end <= handle_table_end_byte(env, ctx)
 }
 
-/// 线性内存不足时按页扩展，供 host 侧 bump / resize 使用。
-pub(crate) fn ensure_linear_memory_bytes<C: AsContextMut<Data = RuntimeState>>(
+fn heap_limit_bytes<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env: &WasmEnv) -> usize {
+    env.heap_limit
+        .and_then(|g| g.get(&mut *ctx).i32())
+        .map(|v| v as u32 as usize)
+        .unwrap_or(u32::MAX as usize)
+}
+
+pub(crate) fn heap_used_bytes<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
-    need_end: usize,
-) {
+) -> usize {
+    let heap_start = env
+        .object_heap_start
+        .and_then(|g| g.get(&mut *ctx).i32())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
+    heap_ptr.saturating_sub(heap_start)
+}
+
+/// 线性内存不足时按页扩展，供 host 侧 bump / resize 使用；同时遵守 JS 堆预算。
+pub(crate) fn ensure_heap_allocation_bytes<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    heap_ptr: usize,
+    size: usize,
+) -> bool {
+    let Some(need_end) = heap_ptr.checked_add(size) else {
+        let used = heap_used_bytes(ctx, env);
+        ctx.as_context().data().set_heap_oom_error(used, size);
+        return false;
+    };
+
+    if need_end > heap_limit_bytes(ctx, env) {
+        collect_for_host_alloc(ctx, env);
+        if need_end > heap_limit_bytes(ctx, env) {
+            let used = heap_used_bytes(ctx, env);
+            ctx.as_context().data().set_heap_oom_error(used, size);
+            return false;
+        }
+    }
+
     while env.memory.data(&*ctx).len() < need_end {
-        if env.memory.grow(&mut *ctx, 1).is_err() {
+        let current = env.memory.data(&*ctx).len();
+        let pages = (need_end - current).div_ceil(65536).max(1) as u64;
+        if env.memory.grow(&mut *ctx, pages).is_err() {
             break;
         }
     }
+    if need_end > env.memory.data(&*ctx).len() {
+        collect_for_host_alloc(ctx, env);
+        while env.memory.data(&*ctx).len() < need_end {
+            let current = env.memory.data(&*ctx).len();
+            let pages = (need_end - current).div_ceil(65536).max(1) as u64;
+            if env.memory.grow(&mut *ctx, pages).is_err() {
+                break;
+            }
+        }
+        if need_end > env.memory.data(&*ctx).len() {
+            let used = heap_used_bytes(ctx, env);
+            ctx.as_context().data().set_heap_oom_error(used, size);
+            return false;
+        }
+    }
+    true
 }
 
 fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
@@ -50,29 +104,19 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let size = constants::HEAP_OBJECT_HEADER_SIZE
         .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
-    try_gc_for_host_alloc(ctx, env, size as usize);
-    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let _obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let _obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let new_heap_ptr = heap_ptr.saturating_add(size);
-
-    // 空间不足时已在分配前按阈值尝试 GC；仍不足则 memory.grow。
-    if new_heap_ptr as usize > env.memory.data(&*ctx).len() {
-        let cur_len = env.memory.data(&*ctx).len();
-        let hp = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
-        if hp + size as usize > cur_len {
-            let _ = env.memory.grow(&mut *ctx, 1);
-        }
-    }
-
-    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let Some(ptr) =
+        alloc_heap_region_for_host(ctx, env, size as usize, wjsm_ir::HEAP_TYPE_OBJECT, capacity)
+    else {
+        return value::encode_undefined();
+    };
+    let heap_ptr = ptr as u32;
+    ctx.as_context().data().record_host_allocation(
+        size as usize,
+        wjsm_ir::HEAP_TYPE_OBJECT,
+        capacity,
+    );
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let new_heap_ptr = heap_ptr.saturating_add(size);
-    ensure_linear_memory_bytes(ctx, env, new_heap_ptr as usize);
-    if new_heap_ptr as usize > env.memory.data(&*ctx).len() {
-        return value::encode_undefined();
-    }
     if !host_handle_slot_fits(env, ctx, obj_table_count) {
         return value::encode_undefined();
     }
@@ -97,11 +141,28 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
         data[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
             .copy_from_slice(&heap_ptr.to_le_bytes());
     }
-    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env
         .obj_table_count
         .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
     value::encode_object_handle(obj_table_count)
+}
+
+fn collect_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env: &WasmEnv) {
+    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
+    let (stats, algorithm) = {
+        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let algorithm = gc.algorithm_name();
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, algorithm);
+        let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+        (
+            gc.collect_with_provider(&mut gc_ctx, &mut roots as _),
+            algorithm,
+        )
+    };
+    let state = ctx.as_context().data();
+    state.record_gc_cycle("host-alloc", algorithm, stats.clone());
+    state.update_gc_threshold_after_collection(stats.marked);
+    state.reset_alloc_counter_after_gc();
 }
 
 /// host 端对象分配前的主动 GC 触发。
@@ -110,26 +171,48 @@ pub(crate) fn try_gc_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     _size: usize,
 ) {
-    let (should_collect, gc_arc) = {
-        let state = ctx.as_context().data();
-        (
-            state.bump_alloc_counter_should_collect(),
-            state.gc_algorithm.clone(),
-        )
-    };
-    if !should_collect {
-        return;
+    let should_collect = ctx.as_context().data().bump_alloc_counter_should_collect();
+    if should_collect {
+        collect_for_host_alloc(ctx, env);
     }
+}
 
-    let stats = {
+pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    size: usize,
+    heap_type: u8,
+    capacity: u32,
+) -> Option<usize> {
+    try_gc_for_host_alloc(ctx, env, size);
+    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
+    {
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
         let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
-        let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-        gc.collect_with_provider(&mut gc_ctx, &mut roots as _)
-    };
-    let state = ctx.as_context().data();
-    state.update_gc_threshold_after_collection(stats.marked);
-    state.reset_alloc_counter_after_gc();
+        if let Some(ptr) = gc.alloc_slow(&mut gc_ctx, size, heap_type, capacity) {
+            return Some(ptr);
+        }
+    }
+    collect_for_host_alloc(ctx, env);
+    {
+        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
+        if let Some(ptr) = gc.alloc_slow(&mut gc_ctx, size, heap_type, capacity) {
+            return Some(ptr);
+        }
+    }
+    {
+        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
+        if matches!(gc_ctx.grow_to_fit_heap_allocation(size), Ok(true))
+            && let Some(ptr) = gc.alloc_slow(&mut gc_ctx, size, heap_type, capacity)
+        {
+            return Some(ptr);
+        }
+    }
+    let used = heap_used_bytes(ctx, env);
+    ctx.as_context().data().set_heap_oom_error(used, size);
+    None
 }
 
 pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(

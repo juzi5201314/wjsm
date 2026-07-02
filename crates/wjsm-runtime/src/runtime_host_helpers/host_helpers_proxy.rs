@@ -206,17 +206,8 @@ pub(crate) fn write_new_property_to_memory(
     let mut actual_obj_ptr = obj_ptr;
 
     if num_props >= capacity {
-        let obj_table_ptr = {
-            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-                return;
-            };
-            g.get(&mut *caller).i32().unwrap_or(0) as usize
-        };
-        let heap_ptr = {
-            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-                return;
-            };
-            g.get(&mut *caller).i32().unwrap_or(0) as usize
+        let Some(env) = WasmEnv::from_caller(caller) else {
+            return;
         };
         // 扩容后写回 obj_table 槽：必须与上面 resolve_handle 读取的 handle 一致。
         // 函数 target 的属性对象 handle 经 __function_props_base 重定位，故走 handle_index_of。
@@ -232,14 +223,18 @@ pub(crate) fn write_new_property_to_memory(
             return;
         };
 
+        let Some(heap_ptr) = crate::runtime_heap::alloc_heap_region_for_host(
+            caller,
+            &env,
+            new_size,
+            wjsm_ir::HEAP_TYPE_OBJECT,
+            new_capacity as u32,
+        ) else {
+            return;
+        };
+        let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
         {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return;
-            };
-            let data = memory.data_mut(&mut *caller);
-            if heap_ptr + new_size > data.len() {
-                return;
-            }
+            let data = env.memory.data_mut(&mut *caller);
 
             let old_size = 16 + num_props * 32;
             data.copy_within(actual_obj_ptr..actual_obj_ptr + old_size, heap_ptr);
@@ -250,13 +245,6 @@ pub(crate) fn write_new_property_to_memory(
             if slot_addr + 4 <= data.len() {
                 data[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
             }
-        }
-
-        {
-            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-                return;
-            };
-            let _ = g.set(&mut *caller, Val::I32((heap_ptr + new_size) as i32));
         }
 
         actual_obj_ptr = heap_ptr;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime_heap::{ensure_linear_memory_bytes, host_handle_slot_fits};
+use crate::runtime_heap::{alloc_heap_region_for_host, host_handle_slot_fits};
 use std::sync::atomic::Ordering;
 use wjsm_ir::constants;
 
@@ -145,15 +145,15 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let size = constants::HEAP_OBJECT_HEADER_SIZE
         .saturating_add(capacity.saturating_mul(constants::HEAP_ARRAY_ELEMENT_SIZE));
-    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let Some(ptr) =
+        alloc_heap_region_for_host(ctx, env, size as usize, wjsm_ir::HEAP_TYPE_ARRAY, capacity)
+    else {
+        return value::encode_undefined();
+    };
+    let heap_ptr = ptr as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let new_heap_ptr = heap_ptr.saturating_add(size);
     let proto = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
-    ensure_linear_memory_bytes(ctx, env, new_heap_ptr as usize);
-    if new_heap_ptr as usize > env.memory.data(&*ctx).len() {
-        return value::encode_undefined();
-    }
     if !host_handle_slot_fits(env, ctx, obj_table_count) {
         return value::encode_undefined();
     }
@@ -177,7 +177,6 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     d[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
         .copy_from_slice(&heap_ptr.to_le_bytes());
     let _ = d;
-    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env
         .obj_table_count
         .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
@@ -228,39 +227,38 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let size = constants::HEAP_OBJECT_HEADER_SIZE
         .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
-    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let new_heap_ptr = heap_ptr.saturating_add(size);
-    let d = env.memory.data_mut(&mut *ctx);
-    let ptr = heap_ptr as usize;
-    if (new_heap_ptr as usize) > d.len() {
+    if !host_handle_slot_fits(env, ctx, obj_table_count) {
         return value::encode_undefined();
     }
+    let Some(ptr) =
+        alloc_heap_region_for_host(ctx, env, size as usize, wjsm_ir::HEAP_TYPE_OBJECT, capacity)
+    else {
+        return value::encode_undefined();
+    };
+    let heap_ptr = ptr as u32;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let ptr = heap_ptr as usize;
     let slot_addr = obj_table_ptr as usize
         + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-    // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
-    // 不前进 heap_ptr，保持 handle->slot 映射与 obj_table_count 一致。
-    if slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize > d.len() {
-        return value::encode_undefined();
+    {
+        let d = env.memory.data_mut(&mut *ctx);
+        d[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
+            ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
+            .copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
+        d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
+        d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
+            ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
+            .fill(0);
+        d[ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize
+            ..ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize + 4]
+            .copy_from_slice(&capacity.to_le_bytes()); // capacity
+        d[ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize
+            ..ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize + 4]
+            .copy_from_slice(&0u32.to_le_bytes()); // num_props = 0
+        d[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
+            .copy_from_slice(&heap_ptr.to_le_bytes());
     }
-    d[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
-        ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
-        .copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
-    d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
-    d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
-        ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
-        .fill(0);
-    d[ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize
-        ..ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize + 4]
-        .copy_from_slice(&capacity.to_le_bytes()); // capacity
-    d[ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize
-        ..ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize + 4]
-        .copy_from_slice(&0u32.to_le_bytes()); // num_props = 0
-    d[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
-        .copy_from_slice(&heap_ptr.to_le_bytes());
-    let _ = d;
-    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env
         .obj_table_count
         .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
@@ -303,11 +301,16 @@ pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
     let end = heap_ptr.checked_add(bytes.len() + 1)?;
     let aligned_end = (end + 7) & !7;
+    if !crate::runtime_heap::ensure_heap_allocation_bytes(
+        ctx,
+        env,
+        heap_ptr,
+        aligned_end.saturating_sub(heap_ptr),
+    ) {
+        return None;
+    }
     {
         let data = env.memory.data_mut(&mut *ctx);
-        if aligned_end > data.len() {
-            return None;
-        }
         data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
         data[heap_ptr + bytes.len()] = 0;
         data[end..aligned_end].fill(0);

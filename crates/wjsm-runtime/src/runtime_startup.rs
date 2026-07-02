@@ -207,6 +207,9 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
         arr_proto_table_hash: instance
             .get_export(&mut *store, "__arr_proto_table_hash")
             .and_then(|e| e.into_global()),
+        heap_limit: instance
+            .get_export(&mut *store, "__heap_limit")
+            .and_then(|e| e.into_global()),
     }
 }
 
@@ -249,13 +252,46 @@ fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &Wa
     );
 }
 
-pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
+fn startup_runtime_error(store: &Store<RuntimeState>) -> Option<String> {
+    store
+        .data()
+        .runtime_error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+fn ensure_startup_object(store: &Store<RuntimeState>, value: i64, label: &str) -> Result<()> {
+    if value::is_object(value) {
+        return Ok(());
+    }
+    if let Some(message) = startup_runtime_error(store) {
+        anyhow::bail!(message);
+    }
+    anyhow::bail!("startup allocation failed for {label}")
+}
+
+fn ensure_no_startup_error(store: &Store<RuntimeState>) -> Result<()> {
+    if let Some(message) = startup_runtime_error(store) {
+        anyhow::bail!(message);
+    }
+    Ok(())
+}
+
+pub(super) fn initialize_host_post_bootstrap(
+    store: &mut Store<RuntimeState>,
+    wasm_env: &WasmEnv,
+) -> Result<()> {
     if wasm_env.obj_table_count.get(&mut *store).i32().unwrap_or(0) == 0 {
         // handle 0 仍作为旧原型链 null 哨兵；host primordial 从 1 开始，避免 Object.getPrototypeOf 误判。
-        let _ = alloc_host_object(store, wasm_env, 0);
+        let null_sentinel = alloc_host_object(store, wasm_env, 0);
+        ensure_startup_object(store, null_sentinel, "null sentinel")?;
     }
     install_array_iterator_methods(store, wasm_env);
+    ensure_no_startup_error(store)?;
+
     let iterator_proto = alloc_host_object(store, wasm_env, 2);
+    ensure_startup_object(store, iterator_proto, "IteratorPrototype")?;
     let iterator_symbol_iterator = create_iterator_proto_identity(store.data());
     let _ = define_host_data_property_by_name_id_with_env(
         store,
@@ -273,12 +309,17 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
         "Symbol.toStringTag",
         iterator_tag,
     );
+    ensure_no_startup_error(store)?;
 
     let generator_proto = alloc_host_object(store, wasm_env, 2);
+    ensure_startup_object(store, generator_proto, "GeneratorPrototype")?;
     let generator_handle = value::decode_object_handle(generator_proto);
     let iterator_handle = value::decode_object_handle(iterator_proto);
-    let generator_ptr =
-        resolve_handle_idx_with_env(store, wasm_env, generator_handle as usize).expect("obj_ptr");
+    let Some(generator_ptr) =
+        resolve_handle_idx_with_env(store, wasm_env, generator_handle as usize)
+    else {
+        anyhow::bail!("startup allocation failed for GeneratorPrototype");
+    };
     let data = wasm_env.memory.data_mut(&mut *store);
     data[generator_ptr..generator_ptr + 4].copy_from_slice(&iterator_handle.to_le_bytes());
     let generator_tag = store_runtime_string_in_state(store.data(), "Generator".to_string());
@@ -289,8 +330,10 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
         "Symbol.toStringTag",
         generator_tag,
     );
+    ensure_no_startup_error(store)?;
 
     let async_iterator_proto = alloc_host_object(store, wasm_env, 2);
+    ensure_startup_object(store, async_iterator_proto, "AsyncIteratorPrototype")?;
     let async_iterator_symbol_async_iterator = create_native_callable(
         store.data(),
         NativeCallable::AsyncIteratorProtoSymbolAsyncIterator,
@@ -312,12 +355,17 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
         "Symbol.toStringTag",
         async_iterator_tag,
     );
+    ensure_no_startup_error(store)?;
 
     let async_gen_proto = alloc_host_object(store, wasm_env, 2);
+    ensure_startup_object(store, async_gen_proto, "AsyncGeneratorPrototype")?;
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let async_gen_ptr =
-        resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize).expect("obj_ptr");
+    let Some(async_gen_ptr) =
+        resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize)
+    else {
+        anyhow::bail!("startup allocation failed for AsyncGeneratorPrototype");
+    };
     let data = wasm_env.memory.data_mut(&mut *store);
     data[async_gen_ptr..async_gen_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
@@ -328,10 +376,13 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
         "Symbol.toStringTag",
         async_gen_tag,
     );
+    ensure_no_startup_error(store)?;
+
     store.data_mut().iterator_prototype = iterator_proto;
     store.data_mut().generator_prototype = generator_proto;
     store.data_mut().async_iterator_prototype = async_iterator_proto;
     store.data_mut().async_gen_prototype = async_gen_proto;
+    Ok(())
 }
 
 pub(super) struct ExecuteInstanceBundle {
@@ -350,8 +401,17 @@ pub(super) async fn instantiate_execute_bundle(
     module: &Module,
     shared_state: Option<Arc<SharedRuntimeState>>,
     use_epoch_async_yield: bool,
+    options: RuntimeExecutionOptions,
+    allocation_sites: crate::runtime_gc::diagnostics::AllocationSiteRegistry,
 ) -> Result<ExecuteInstanceBundle> {
-    let mut store = Store::new(engine, RuntimeState::new_with_shared(shared_state));
+    let mut store = Store::new(
+        engine,
+        RuntimeState::new_with_shared_and_options(shared_state, options),
+    );
+    store
+        .data()
+        .configure_gc_diagnostics(options.gc, allocation_sites);
+
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);
     let diagnostics = Arc::clone(&store.data().diagnostics);
@@ -390,6 +450,47 @@ pub(super) async fn instantiate_execute_bundle(
     })
 }
 
+fn configured_heap_limit(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) -> Result<u32> {
+    let Some(max_heap_size) = store.data().max_heap_size() else {
+        return Ok(u32::MAX);
+    };
+    let heap_start = wasm_env
+        .object_heap_start
+        .and_then(|g| g.get(&mut *store).i32())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let limit = heap_start.checked_add(max_heap_size).ok_or_else(|| {
+        anyhow::anyhow!("max heap size exceeds wasm32 heap address space: {max_heap_size} bytes")
+    })?;
+    if limit > u32::MAX as usize {
+        anyhow::bail!("max heap size exceeds wasm32 heap address space: {max_heap_size} bytes");
+    }
+    Ok(limit as u32)
+}
+
+fn enforce_heap_limit(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) -> Result<()> {
+    let Some(heap_limit) = wasm_env.heap_limit else {
+        if store.data().max_heap_size().is_some() {
+            anyhow::bail!("module does not expose __heap_limit for max heap enforcement");
+        }
+        return Ok(());
+    };
+    let limit = configured_heap_limit(store, wasm_env)?;
+    heap_limit.set(&mut *store, Val::I32(limit as i32))?;
+    let heap_ptr = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+    if heap_ptr > limit as usize {
+        let heap_start = wasm_env
+            .object_heap_start
+            .and_then(|g| g.get(&mut *store).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        let used = heap_ptr.saturating_sub(heap_start);
+        store.data().set_heap_oom_error(used, 0);
+        anyhow::bail!(store.data().heap_oom_message(used, 0));
+    }
+    Ok(())
+}
+
 /// P2.2+P2.3: 创建 shared memory/table/globals 注册到 "env" namespace，
 /// 然后 instantiate support module 并把 exports 注册到 "wjsm_support" namespace。
 pub(super) async fn setup_shared_env_and_support(
@@ -409,7 +510,7 @@ pub(super) async fn setup_shared_env_and_support(
     )?;
     linker.define(&*store, "env", "__table", table)?;
 
-    // 创建 19 个 shared globals（全部 mutable，user bootstrap 中用 global.set 初始化）
+    // 创建 20 个 shared globals（全部 mutable，user bootstrap 中用 global.set 初始化）
     // 顺序与 abi::ENV_GLOBALS 和 compiler_core.rs::ENV_GLOBAL_EXPORT_NAMES 对齐。
     define_env_global(
         linker,
@@ -556,6 +657,14 @@ pub(super) async fn setup_shared_env_and_support(
         true,
         Val::I64(0),
     );
+    define_env_global(
+        linker,
+        store,
+        "__heap_limit",
+        ValType::I32,
+        true,
+        Val::I32(-1),
+    );
 
     // 获取 support module：优先从 embedded cwasm deserialize，否则从 emit_support_module 编译。
     // cwasm 的 precompile 配置必须与运行时 engine 配置匹配（epoch interruption 等），
@@ -620,21 +729,29 @@ pub(super) fn define_env_global(
 /// 供 build-time snapshot 生成使用，避免构建期执行用户 main。
 pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
     run_init_globals_only(bundle).await?;
-    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env);
+    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env)?;
     if let Ok(bootstrap_fn) = bundle
         .instance
         .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_bootstrap_once")
     {
-        bootstrap_fn
-            .call_async(&mut bundle.store, ())
-            .await
-            .map_err(|e| anyhow::anyhow!("bootstrap_once failed: {e:?}"))?;
+        if let Err(error) = bootstrap_fn.call_async(&mut bundle.store, ()).await {
+            if let Some(message) = startup_runtime_error(&bundle.store) {
+                anyhow::bail!(message);
+            }
+            anyhow::bail!("bootstrap_once failed: {error:?}");
+        }
+        ensure_no_startup_error(&bundle.store)?;
     }
     install_array_iterator_methods(&mut bundle.store, &bundle.wasm_env);
+    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
+    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_promise_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_regexp_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    ensure_no_startup_error(&bundle.store)?;
     Ok(())
 }
 
@@ -650,6 +767,7 @@ pub(super) async fn run_init_globals_only(bundle: &mut ExecuteInstanceBundle) ->
             .await
             .map_err(|e| anyhow::anyhow!("init_globals failed: {e:?}"))?;
     }
+    enforce_heap_limit(&mut bundle.store, &bundle.wasm_env)?;
     Ok(())
 }
 
@@ -671,7 +789,9 @@ pub(super) async fn try_restore_snapshot(
             return false;
         }
     };
-    match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view) {
+    match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)
+        .and_then(|()| enforce_heap_limit(&mut bundle.store, &bundle.wasm_env))
+    {
         Ok(()) => true,
         Err(e) => {
             if startup_snapshot_debug_enabled() {

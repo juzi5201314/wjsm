@@ -27,6 +27,10 @@ mod runtime_combinators;
 mod runtime_date;
 mod runtime_eval;
 mod runtime_gc;
+pub use runtime_gc::{
+    GcDiagnosticsOptions, GcDiagnosticsReport, HeapSnapshot, RuntimeExecutionOptions,
+    RuntimeExecutionReport, format_gc_diagnostics_report,
+};
 mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;
@@ -107,16 +111,62 @@ use runtime_typedarray::*;
 use runtime_values::*;
 use types::*;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuntimeOptions {
+    pub max_heap_size: Option<usize>,
+}
+
+impl RuntimeOptions {
+    pub fn with_max_heap_size(max_heap_size: usize) -> Self {
+        Self {
+            max_heap_size: Some(max_heap_size),
+        }
+    }
+}
+
+impl From<RuntimeOptions> for RuntimeExecutionOptions {
+    fn from(options: RuntimeOptions) -> Self {
+        Self {
+            max_heap_size: options.max_heap_size,
+            gc: GcDiagnosticsOptions::default(),
+        }
+    }
+}
+
 pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
+    execute_with_options(wasm_bytes, RuntimeOptions::default()).await
+}
+
+pub async fn execute_with_options(wasm_bytes: &[u8], options: RuntimeOptions) -> Result<()> {
     let stdout = io::stdout();
-    let (_, diagnostics) = execute_with_writer(wasm_bytes, stdout.lock()).await?;
+    let (_, diagnostics) =
+        execute_with_writer_with_options(wasm_bytes, stdout.lock(), options).await?;
     if !diagnostics.is_empty() {
         let _ = io::stderr().write_all(&diagnostics);
     }
     Ok(())
 }
+
 pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<(W, Vec<u8>)> {
-    execute_with_writer_shared(wasm_bytes, writer, None).await
+    execute_with_writer_with_options(wasm_bytes, writer, RuntimeOptions::default()).await
+}
+
+pub async fn execute_with_writer_with_options<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    options: RuntimeOptions,
+) -> Result<(W, Vec<u8>)> {
+    let (writer, diagnostics, _) =
+        execute_with_writer_shared_inner(wasm_bytes, writer, None, true, options.into()).await?;
+    Ok((writer, diagnostics))
+}
+
+pub async fn execute_with_writer_and_options<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    options: RuntimeExecutionOptions,
+) -> Result<(W, Vec<u8>, RuntimeExecutionReport)> {
+    execute_with_writer_shared_inner(wasm_bytes, writer, None, true, options).await
 }
 
 /// 编译 JS/TS 源码到 WASM 字节码的共享辅助函数。
@@ -202,7 +252,16 @@ async fn build_embedded_startup_snapshot_bytes_async(wasm: &[u8]) -> Result<Vec<
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
     let module = Module::new(&engine, wasm)
         .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e))?;
-    let mut bundle = instantiate_execute_bundle(&engine, &module, None, true).await?;
+    let allocation_sites = runtime_gc::diagnostics::AllocationSiteRegistry::from_wasm(wasm);
+    let mut bundle = instantiate_execute_bundle(
+        &engine,
+        &module,
+        None,
+        true,
+        RuntimeExecutionOptions::default(),
+        allocation_sites,
+    )
+    .await?;
     run_bootstrap_only(&mut bundle).await?;
     let snap = startup_snapshot::capture_startup_snapshot(&mut bundle.store, &bundle.wasm_env)?;
     let bytes = startup_snapshot_format::encode_snapshot(&snap);
@@ -274,14 +333,15 @@ pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     writer: W,
     shared_state: Arc<SharedRuntimeState>,
 ) -> Result<(W, Vec<u8>)> {
-    execute_with_writer_shared_inner(wasm_bytes, writer, Some(shared_state), false).await
-}
-pub(crate) async fn execute_with_writer_shared<W: Write>(
-    wasm_bytes: &[u8],
-    writer: W,
-    shared_state: Option<Arc<SharedRuntimeState>>,
-) -> Result<(W, Vec<u8>)> {
-    execute_with_writer_shared_inner(wasm_bytes, writer, shared_state, true).await
+    let (writer, diagnostics, _) = execute_with_writer_shared_inner(
+        wasm_bytes,
+        writer,
+        Some(shared_state),
+        false,
+        RuntimeExecutionOptions::default(),
+    )
+    .await?;
+    Ok((writer, diagnostics))
 }
 
 use runtime_startup::*;
@@ -358,7 +418,7 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     {
         let _ = init_globals_fn.call_async(&mut store, ()).await;
     }
-    initialize_host_post_bootstrap(&mut store, &wasm_env);
+    initialize_host_post_bootstrap(&mut store, &wasm_env)?;
     timings.host_post_bootstrap = start.elapsed();
 
     let start = std::time::Instant::now();
@@ -403,7 +463,7 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     {
         let _ = init_globals_fn.call_async(&mut store2, ()).await;
     }
-    initialize_host_post_bootstrap(&mut store2, &env2);
+    initialize_host_post_bootstrap(&mut store2, &env2)?;
     let start = std::time::Instant::now();
     startup_snapshot::restore_startup_snapshot(&mut store2, &env2, view)?;
     timings.snapshot_restore = start.elapsed();
@@ -435,7 +495,16 @@ async fn execute_for_startup_bench(
         None
     };
 
-    let mut bundle = instantiate_execute_bundle(&engine, &module, None, true).await?;
+    let allocation_sites = runtime_gc::diagnostics::AllocationSiteRegistry::from_wasm(wasm_bytes);
+    let mut bundle = instantiate_execute_bundle(
+        &engine,
+        &module,
+        None,
+        true,
+        RuntimeExecutionOptions::default(),
+        allocation_sites,
+    )
+    .await?;
 
     let startup_start = std::time::Instant::now();
     let mut snapshot_restored = false;
@@ -478,12 +547,14 @@ async fn execute_with_writer_shared_inner<W: Write>(
     writer: W,
     shared_state: Option<Arc<SharedRuntimeState>>,
     use_epoch_async_yield: bool,
-) -> Result<(W, Vec<u8>)> {
+    options: RuntimeExecutionOptions,
+) -> Result<(W, Vec<u8>, RuntimeExecutionReport)> {
     let config = startup_engine_config(use_epoch_async_yield);
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
 
     let module = compile_or_load_cached(&engine, wasm_bytes)?;
+    let allocation_sites = runtime_gc::diagnostics::AllocationSiteRegistry::from_wasm(wasm_bytes);
     let snapshot_bytes = if startup_snapshot_enabled() {
         embedded_startup_snapshot_view()
     } else {
@@ -495,6 +566,8 @@ async fn execute_with_writer_shared_inner<W: Write>(
         &module,
         shared_state.clone(),
         use_epoch_async_yield,
+        options,
+        allocation_sites.clone(),
     )
     .await?;
 
@@ -508,6 +581,8 @@ async fn execute_with_writer_shared_inner<W: Write>(
                 &module,
                 shared_state.clone(),
                 use_epoch_async_yield,
+                options,
+                allocation_sites.clone(),
             )
             .await?;
         }
@@ -538,6 +613,7 @@ impl Clone for RuntimeState {
             runtime_strings: self.runtime_strings.clone(),
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
+            max_heap_size: self.max_heap_size,
             gc_mark_bits: self.gc_mark_bits.clone(),
             alloc_counter: self.alloc_counter.clone(),
             gc_threshold: self.gc_threshold.clone(),
@@ -551,6 +627,7 @@ impl Clone for RuntimeState {
             handle_free_list: self.handle_free_list.clone(),
             abandoned_regions: self.abandoned_regions.clone(),
             gc_algorithm: self.gc_algorithm.clone(),
+            gc_diagnostics: self.gc_diagnostics.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -619,6 +696,8 @@ struct RuntimeState {
     /// 进程内可捕获的诊断输出（如 unhandled rejection 警告）；真实 CLI 由 execute 刷到 stderr。
     diagnostics: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
+    /// 用户配置的 JS 堆预算（字节）。None 表示只受 wasm32 地址空间和宿主内存约束。
+    max_heap_size: Option<usize>,
     /// GC 标记位图：每个 handle 对应 1 bit，用于标记-清除 GC。
     gc_mark_bits: Arc<Mutex<Vec<u64>>>,
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
@@ -651,6 +730,8 @@ struct RuntimeState {
     /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports gc_alloc_slow/
     /// gc_maybe_collect 经此驱动（P4）。Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
     gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
+    /// GC 诊断采集器：trace、heap snapshot 和 allocation profile 的结构化运行时状态。
+    gc_diagnostics: Arc<Mutex<crate::runtime_gc::diagnostics::GcDiagnosticsState>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -795,11 +876,98 @@ impl RuntimeState {
         let mut threshold = self.gc_threshold.lock().unwrap_or_else(|e| e.into_inner());
         *threshold = next_threshold;
     }
+    pub(crate) fn configure_gc_diagnostics(
+        &self,
+        options: GcDiagnosticsOptions,
+        allocation_sites: crate::runtime_gc::diagnostics::AllocationSiteRegistry,
+    ) {
+        self.gc_diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .configure(options, allocation_sites);
+    }
 
+    pub(crate) fn gc_diagnostics_options(&self) -> GcDiagnosticsOptions {
+        self.gc_diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .options()
+    }
+
+    pub(crate) fn set_pending_allocation_site(&self, site_id: u32) {
+        self.gc_diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_pending_allocation_site(site_id);
+    }
+
+    pub(crate) fn record_allocation(&self, size: usize, heap_type: u8, capacity: u32) {
+        self.gc_diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_allocation(size, heap_type, capacity);
+    }
+
+    pub(crate) fn record_host_allocation(&self, size: usize, heap_type: u8, capacity: u32) {
+        self.gc_diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_host_allocation(size, heap_type, capacity);
+    }
+
+    pub(crate) fn record_gc_cycle(
+        &self,
+        trigger: &'static str,
+        algorithm: &str,
+        stats: crate::runtime_gc::api::GcStats,
+    ) {
+        self.gc_diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_cycle(trigger, algorithm, stats);
+    }
+
+    pub(crate) fn gc_diagnostics_report(
+        &self,
+        heap_snapshot: Option<crate::runtime_gc::diagnostics::HeapSnapshot>,
+    ) -> GcDiagnosticsReport {
+        self.gc_diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .report(heap_snapshot)
+    }
+
+    #[cfg(test)]
     fn new_with_shared(shared_state: Option<Arc<SharedRuntimeState>>) -> Self {
+        Self::new_with_shared_and_options(shared_state, RuntimeExecutionOptions::default())
+    }
+
+    fn new_with_shared_and_options(
+        shared_state: Option<Arc<SharedRuntimeState>>,
+        options: RuntimeExecutionOptions,
+    ) -> Self {
         let mut state = Self::new();
         state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
+        state.max_heap_size = options.max_heap_size;
         state
+    }
+
+    pub(crate) fn max_heap_size(&self) -> Option<usize> {
+        self.max_heap_size
+    }
+
+    pub(crate) fn set_heap_oom_error(&self, used: usize, requested: usize) {
+        crate::runtime_promises::set_runtime_error(self, self.heap_oom_message(used, requested));
+    }
+
+    pub(crate) fn heap_oom_message(&self, used: usize, requested: usize) -> String {
+        if let Some(max) = self.max_heap_size {
+            format!(
+                "JavaScript heap budget exhausted: requested {requested} bytes with {used}/{max} bytes used"
+            )
+        } else {
+            format!("JavaScript heap allocation failed: requested {requested} bytes")
+        }
     }
 
     /// GC 框架访问 handle_free_list（runtime_gc::MarkSweepCollector::collect 用）。
@@ -860,6 +1028,7 @@ impl RuntimeState {
             runtime_strings: Arc::new(Mutex::new(Vec::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
+            max_heap_size: None,
             gc_mark_bits: Arc::new(Mutex::new(Vec::new())),
             alloc_counter: Arc::new(Mutex::new(0)),
             gc_threshold: Arc::new(Mutex::new(Self::GC_MIN_THRESHOLD)),
@@ -875,6 +1044,9 @@ impl RuntimeState {
             gc_algorithm: Arc::new(Mutex::new(Box::new(
                 crate::runtime_gc::MarkSweepCollector::new(),
             ))),
+            gc_diagnostics: Arc::new(Mutex::new(
+                crate::runtime_gc::diagnostics::GcDiagnosticsState::default(),
+            )),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -1000,7 +1172,10 @@ impl RuntimeState {
 
 #[cfg(test)]
 mod tests {
-    use super::execute_with_writer;
+    use super::{
+        RuntimeExecutionOptions, RuntimeOptions, execute_with_writer,
+        execute_with_writer_and_options, execute_with_writer_with_options,
+    };
     use anyhow::Result;
     use tokio::runtime::Runtime;
     // Phase 5 TDD 回归标记（严格按主代理 2026-06-01 授权方案）：
@@ -1021,6 +1196,90 @@ mod tests {
         let (output, _) =
             rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
         assert_eq!(String::from_utf8(output)?, "Hello, Async Runtime!\n");
+        Ok(())
+    }
+
+    #[test]
+    fn max_heap_size_near_limit_allows_execution() -> Result<()> {
+        let rt = Runtime::new()?;
+        let wasm_bytes = compile_source(
+            r#"let xs=[]; for (let i=0; i<100; i=i+1) { xs.push({a:i,b:i}); } console.log(xs.length);"#,
+        )?;
+        let (output, _) = rt.block_on(async {
+            execute_with_writer_with_options(
+                &wasm_bytes,
+                Vec::new(),
+                RuntimeOptions::with_max_heap_size(24 * 1024),
+            )
+            .await
+        })?;
+
+        assert_eq!(String::from_utf8(output)?, "100\n");
+        Ok(())
+    }
+
+    #[test]
+    fn max_heap_size_over_limit_returns_controlled_oom() -> Result<()> {
+        let rt = Runtime::new()?;
+        let wasm_bytes = compile_source(
+            r#"let xs=[]; for (let i=0; i<100; i=i+1) { xs.push({a:i,b:i}); } console.log(xs.length);"#,
+        )?;
+        let error = rt
+            .block_on(async {
+                execute_with_writer_with_options(
+                    &wasm_bytes,
+                    Vec::new(),
+                    RuntimeOptions::with_max_heap_size(9 * 1024),
+                )
+                .await
+            })
+            .expect_err("heap budget should reject the allocation before a wasm trap escapes");
+        let message = error.to_string();
+
+        assert!(message.contains("JavaScript heap budget exhausted"));
+        assert!(message.contains("9216 bytes used"));
+        assert!(!message.contains("wasm trap"));
+        Ok(())
+    }
+
+    #[test]
+    fn trace_gc_report_contains_cycle_snapshot_and_allocation_profile() -> Result<()> {
+        let rt = Runtime::new()?;
+        let wasm_bytes = compile_source(
+            r#"
+function makeObject(i) { return { value: i }; }
+for (let i = 0; i < 5; i = i + 1) { makeObject(i); }
+gc();
+console.log("done");
+"#,
+        )?;
+        let (output, diagnostics, report) = rt.block_on(async {
+            execute_with_writer_and_options(
+                &wasm_bytes,
+                Vec::new(),
+                RuntimeExecutionOptions::trace_gc(),
+            )
+            .await
+        })?;
+
+        assert_eq!(String::from_utf8(output)?, "done\n");
+        assert!(diagnostics.is_empty());
+        assert!(!report.gc.cycles.is_empty());
+        assert_eq!(report.gc.cycles[0].trigger, "manual");
+        assert!(report.gc.summary.total_marked > 0);
+        let snapshot = report
+            .gc
+            .heap_snapshot
+            .as_ref()
+            .expect("trace-gc 应包含 heap snapshot");
+        assert!(!snapshot.objects.is_empty());
+        let make_object_profile = report
+            .gc
+            .allocation_profile
+            .iter()
+            .find(|entry| entry.function_name == "makeObject" && entry.kind == "object")
+            .expect("allocation profile 应按用户函数聚合对象分配");
+        assert_eq!(make_object_profile.count, 5);
         Ok(())
     }
 

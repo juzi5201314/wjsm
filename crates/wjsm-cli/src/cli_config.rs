@@ -15,9 +15,11 @@ struct CliConfig {
     time: Option<bool>,
     stats: Option<bool>,
     verify_ir: Option<bool>,
+    trace_gc: Option<bool>,
     color: Option<ColorChoice>,
     no_color: Option<bool>,
     target: Option<Target>,
+    max_heap_size: Option<usize>,
     root: Option<PathBuf>,
     script: Option<bool>,
 }
@@ -115,10 +117,20 @@ fn apply_global_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &CliCo
     {
         cli.verify_ir = verify_ir;
     }
+    if let Some(trace_gc) = config.trace_gc
+        && !command_line_global(matches, "trace_gc")
+    {
+        cli.trace_gc = trace_gc;
+    }
     if let Some(target) = config.target
         && !command_line_global(matches, "target")
     {
         cli.target = target;
+    }
+    if let Some(max_heap_size) = config.max_heap_size
+        && !command_line_global(matches, "max_heap_size")
+    {
+        cli.max_heap_size = Some(max_heap_size);
     }
     if let Some(color) = config.color
         && !command_line_global(matches, "color")
