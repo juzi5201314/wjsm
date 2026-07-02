@@ -13,10 +13,9 @@
 //! fixed-point host 侧表追踪（spec §10）：由 collect_with_roots 的调用方在 P4 集成时
 //! 经 roots 迭代器分轮注入（continuation_table.captured_vars 等顶层 root）。
 //!
-//! 借用结构：drain 循环交替两步——(a) ctx.with_memory 读子引用收集 raw values，
-//! (b) ctx.with_state 解析 closure/native_callable 的内部引用为 obj_table handle 或更多
-//! raw values（递归收敛），最后 mark_bits.mark_if_new + push。mark_bits 是 collector 字段，
-//! 与 ctx 借用独立，无冲突。
+//! 借用结构：drain 循环用一个可复用 scratch buffer 收集当前对象的 raw child values，
+//! 之后释放 memory 借用，再经 ctx.with_state 解析 closure/native_callable 的内部引用为
+//! obj_table handle。mark_bits 是 collector 字段，与 ctx 借用独立，无冲突。
 use crate::runtime_gc::api::{GcContext, Handle};
 use crate::runtime_gc::context::GcHeapLayout;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
@@ -40,28 +39,31 @@ pub fn mark_roots_and_drain(
     let obj_table_ptr = ctx.obj_table_ptr();
     let obj_table_count = ctx.obj_table_count();
 
+    let mut raw_vals: Vec<i64> = Vec::new();
+
     // drain
     while let Some(h) = worklist.pop() {
         // 收集本对象的子引用 raw values（proto + props/elements）。
-        // 每次只读一个对象的子，借用周期短（单对象），无 grow。
-        let raw_vals: Vec<i64> = ctx
-            .with_memory(|data| collect_child_raw_values(data, h, obj_table_ptr, obj_table_count));
+        // scratch buffer 跨对象复用，避免 mark 阶段为每个对象分配 Vec。
+        ctx.with_memory(|data| {
+            collect_child_raw_values(data, h, obj_table_ptr, obj_table_count, &mut raw_vals);
+        });
         // 把每个 raw value 解析为 handle（含 closure/native_callable 经 host 表解析）。
-        for val in raw_vals {
-            for child in resolve_value_handles(ctx, val, obj_table_count) {
+        for &val in &raw_vals {
+            push_resolved_value_handles(ctx, val, obj_table_count, &mut |child| {
                 if collector.mark_bits.mark_if_new(child) {
                     worklist.push(child);
                 }
-            }
+            });
         }
     }
 
     ctx.stats.marked = collector.mark_bits.popcount();
 }
 
-/// 读单个对象 h 的子引用，返回所有应进一步解析的 raw value 列表。
+/// 读单个对象 h 的子引用，写入调用方提供的 scratch buffer。
 ///
-/// 返回 raw i64 值（尚未解析为 handle），由调用方经 resolve_value_handles 解析。
+/// 写入 raw i64 值（尚未解析为 handle），由调用方经 push_resolved_value_handles 解析。
 /// 这样 object/array/function 直接转 handle，closure/native_callable 走 host 表解析。
 ///
 /// 移植自 runtime_heap.rs:620-748（children 收集逻辑）：
@@ -73,14 +75,15 @@ fn collect_child_raw_values(
     h: Handle,
     obj_table_ptr: usize,
     obj_table_count: usize,
-) -> Vec<i64> {
-    let mut out: Vec<i64> = Vec::new();
+    out: &mut Vec<i64>,
+) {
+    out.clear();
     let obj_ptr = match resolve_handle(data, h, obj_table_ptr, obj_table_count) {
         Some(p) => p,
-        None => return out,
+        None => return,
     };
     if obj_ptr + 16 > data.len() {
-        return out;
+        return;
     }
 
     // proto_handle（offset 0..4）
@@ -155,40 +158,42 @@ fn collect_child_raw_values(
             }
         }
     }
-    out
 }
 
-/// 把一个 NaN-boxed value 解析为它引用的 obj_table handle 列表（P4-blocker #2）。
+/// 把一个 NaN-boxed value 解析为它引用的 obj_table handle，并逐个回调给调用方（P4-blocker #2）。
 ///
 /// - object/array → decode_object_handle（直接 handle）
 /// - function → function_props_base + low32（函数属性对象 handle）
 /// - closure → host closures 表的 env_obj，递归解析（env_obj 可能是 object/closure）
 /// - native_callable → host native_callables 表内部引用（promise/generator/combinator/env）
 ///   递归解析（这些引用本身可能又是 object/closure/native_callable）
-/// - 标量 → 空
+/// - 标量 → 不回调
 ///
 /// closure/native_callable 的解析需要 with_state（读 host 侧表），与 with_memory 独立借用。
 /// 递归收敛：env_obj/native 引用链最终落到 object/array/function（有界，受 host 表大小约束）。
-fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) -> Vec<Handle> {
+fn push_resolved_value_handles(
+    ctx: &mut GcContext,
+    val: i64,
+    obj_table_count: usize,
+    visit: &mut dyn FnMut(Handle),
+) {
     if !value::tag_needs_root(val) {
-        return vec![];
+        return;
     }
     if value::is_object(val) || value::is_array(val) {
         let h = value::decode_object_handle(val);
-        return if (h as usize) < obj_table_count {
-            vec![h]
-        } else {
-            vec![]
-        };
+        if (h as usize) < obj_table_count {
+            visit(h);
+        }
+        return;
     }
     if value::is_function(val) {
         let base = ctx.function_props_base();
         let h = ((val as u32) as usize).saturating_add(base) as Handle;
-        return if (h as usize) < obj_table_count {
-            vec![h]
-        } else {
-            vec![]
-        };
+        if (h as usize) < obj_table_count {
+            visit(h);
+        }
+        return;
     }
     if value::is_closure(val) {
         // closure → env_obj（可能 object/closure，递归解析）
@@ -199,64 +204,57 @@ fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) 
                 .ok()
                 .and_then(|g| g.get(closure_idx).map(|e| e.env_obj))
         });
-        return match env_obj {
-            Some(env) => resolve_value_handles(ctx, env, obj_table_count),
-            None => vec![],
-        };
+        if let Some(env) = env_obj {
+            push_resolved_value_handles(ctx, env, obj_table_count, visit);
+        }
+        return;
     }
     if value::is_native_callable(val) {
         let idx = value::decode_native_callable_idx(val) as usize;
         let refs: Vec<i64> = ctx.with_state(|st| collect_native_callable_refs(st, idx));
-        let mut out = Vec::new();
         for r in refs {
-            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+            push_resolved_value_handles(ctx, r, obj_table_count, visit);
         }
-        return out;
+        return;
     }
     if value::is_bound(val) {
         let idx = value::decode_bound_idx(val) as usize;
         let refs: Vec<i64> =
             ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_bound_refs(st, idx));
-        let mut out = Vec::new();
         for r in refs {
-            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+            push_resolved_value_handles(ctx, r, obj_table_count, visit);
         }
-        return out;
+        return;
     }
     if value::is_proxy(val) {
         let idx = value::decode_proxy_handle(val) as usize;
         let refs: Vec<i64> =
             ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_proxy_refs(st, idx));
-        let mut out = Vec::new();
         for r in refs {
-            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+            push_resolved_value_handles(ctx, r, obj_table_count, visit);
         }
-        return out;
+        return;
     }
     if value::is_iterator(val) {
         let idx = value::decode_handle(val) as usize;
         let refs: Vec<i64> =
             ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx));
-        let mut out = Vec::new();
         for r in refs {
-            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+            push_resolved_value_handles(ctx, r, obj_table_count, visit);
         }
-        return out;
+        return;
     }
     if value::is_scope_record(val) {
         let handle = value::decode_scope_record_handle(val);
         let refs: Vec<i64> = ctx.with_state(|st| {
             crate::runtime_gc::side_table_refs::collect_scope_record_refs(st, handle)
         });
-        let mut out = Vec::new();
         for r in refs {
-            out.extend(resolve_value_handles(ctx, r, obj_table_count));
+            push_resolved_value_handles(ctx, r, obj_table_count, visit);
         }
-        return out;
     }
     // 其余 tag（bigint/symbol/regexp/enumerator/runtime_string/exception）：
     // 侧表不含 obj_table 引用，不需追踪。
-    vec![]
 }
 
 /// 从 native_callable 表项提取其内部持有的对象引用。
@@ -306,9 +304,10 @@ pub(crate) fn mark_drain_on_buffer(
             worklist.push(h);
         }
     }
+    let mut raw_vals: Vec<i64> = Vec::new();
     while let Some(h) = worklist.pop() {
-        let raw_vals = collect_child_raw_values(data, h, obj_table_ptr, obj_table_count);
-        for val in raw_vals {
+        collect_child_raw_values(data, h, obj_table_ptr, obj_table_count, &mut raw_vals);
+        for &val in &raw_vals {
             // buffer 作用域：只解析 object/array/function（closure/native_callable 需 host 表）
             if let Some(child) =
                 resolve_buffer_value_handle(val, obj_table_count, function_props_base)
@@ -395,6 +394,36 @@ mod tests {
     /// 编码 object handle 为 NaN-boxed value。
     fn enc_obj(h: u32) -> i64 {
         value::encode_handle(wjsm_ir::value::TAG_OBJECT, h)
+    }
+
+    #[test]
+    fn collect_child_raw_values_reuses_caller_scratch_buffer() {
+        let obj_table_ptr = 1000;
+        let objects = vec![
+            (0u32, 2000, 1, vec![enc_obj(2)]),
+            (1u32, 3000, 0xFFFF_FFFF, vec![]),
+            (2u32, 4000, 0xFFFF_FFFF, vec![]),
+        ];
+        let buf = build_object_buffer(obj_table_ptr, &objects, 3);
+        let mut raw_vals = Vec::with_capacity(8);
+        raw_vals.push(enc_obj(99));
+        let scratch_ptr = raw_vals.as_ptr();
+
+        collect_child_raw_values(&buf, 0, obj_table_ptr, 3, &mut raw_vals);
+
+        assert_eq!(raw_vals.as_ptr(), scratch_ptr);
+        assert_eq!(raw_vals[0], enc_obj(1));
+        assert!(raw_vals.contains(&enc_obj(2)));
+
+        collect_child_raw_values(&buf, 1, obj_table_ptr, 3, &mut raw_vals);
+
+        assert_eq!(raw_vals.as_ptr(), scratch_ptr);
+        assert!(raw_vals.is_empty());
+
+        collect_child_raw_values(&buf, 42, obj_table_ptr, 3, &mut raw_vals);
+
+        assert_eq!(raw_vals.as_ptr(), scratch_ptr);
+        assert!(raw_vals.is_empty());
     }
 
     #[test]
