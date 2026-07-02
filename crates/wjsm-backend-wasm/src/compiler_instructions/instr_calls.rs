@@ -28,7 +28,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
 
         // Step 1b: 影子栈边界检查
-        self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+        self.emit_shadow_stack_capacity_check((args.len() * 8) as i32);
 
         // Step 2: 将所有参数写入影子栈
         for arg in args {
@@ -179,7 +179,7 @@ impl Compiler {
         } else {
             self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
-            self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+            self.emit_shadow_stack_capacity_check((args.len() * 8) as i32);
             for arg in args {
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -446,7 +446,7 @@ impl Compiler {
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
         // 影子栈边界检查
-        self.emit_shadow_stack_overflow_check((shadow_args.len() * 8) as i32);
+        self.emit_shadow_stack_capacity_check((shadow_args.len() * 8) as i32);
 
         // 将 shadow_args 写入影子栈
         for arg in shadow_args {
@@ -535,7 +535,7 @@ impl Compiler {
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
         // 影子栈边界检查
-        self.emit_shadow_stack_overflow_check((parts.len() * 8) as i32);
+        self.emit_shadow_stack_capacity_check((parts.len() * 8) as i32);
         // 将 parts 写入影子栈
         for part in parts {
             self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -652,7 +652,7 @@ impl Compiler {
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
 
-        self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+        self.emit_shadow_stack_capacity_check((args.len() * 8) as i32);
 
         for arg in args.iter() {
             self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));

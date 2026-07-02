@@ -12,10 +12,11 @@ impl Compiler {
 
     /// GC safepoint 容量检查（P2 T2.3，spec IMPL-13/R2）。
     /// 函数 prologue 一次性检查：当前 shadow_sp + 本函数 spill_upper_bound
-    /// 是否超出 shadow_stack_end。若超出，trap（防止 spill 区溢出覆盖对象堆）。
+    /// 是否超出当前 shadow_stack_end。若超出，调用运行时增长容量；运行时若无法
+    /// 在 object_heap_start 前保留区内满足需求，会设置可诊断的栈溢出错误并返回失败。
     ///
     /// spill_upper_bound = 本函数所有 safepoint 处 live handle local 数的最大值 × 8。
-    /// 编译期静态计算；运行期只发一个比较。
+    /// 编译期静态计算；运行期与 shadow stack 容量管理协同。
     pub(super) fn emit_safepoint_capacity_check(
         &mut self,
         _module: &IrModule,
@@ -25,15 +26,9 @@ impl Compiler {
         if spill_upper_bound == 0 {
             return;
         }
-        // if (shadow_sp + spill_upper_bound) > shadow_stack_end: unreachable
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-        self.emit(WasmInstruction::I32Const(spill_upper_bound as i32));
-        self.emit(WasmInstruction::I32Add);
-        self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
-        self.emit(WasmInstruction::I32GtU);
-        self.emit(WasmInstruction::If(BlockType::Empty));
-        self.emit(WasmInstruction::Unreachable);
-        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+        self.emit_shadow_stack_capacity_check(spill_upper_bound as i32);
     }
 
     /// 计算本函数所有 safepoint 处 live handle local 数的最大值 × 8（字节）。

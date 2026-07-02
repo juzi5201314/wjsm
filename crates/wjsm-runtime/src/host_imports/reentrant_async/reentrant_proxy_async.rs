@@ -5,33 +5,14 @@ pub(crate) async fn proxy_trap_call_trap_with_args_async(
     this_val: i64,
     args: &[i64],
 ) -> i64 {
-    let memory = caller
-        .get_export("memory")
-        .and_then(|e| e.into_memory())
-        .unwrap();
-    let shadow_sp_global = caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-        .unwrap();
-    let saved_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
-    let total_size = (args.len() * 8) as i32;
-    let new_sp = saved_sp + total_size;
-    for (i, &arg) in args.iter().enumerate() {
-        memory
-            .write(
-                &mut *caller,
-                (saved_sp + i as i32 * 8) as usize,
-                &arg.to_le_bytes(),
-            )
-            .unwrap();
-    }
-    shadow_sp_global
-        .set(&mut *caller, Val::I32(new_sp))
-        .unwrap();
+    let env =
+        WasmEnv::from_caller(caller).expect("WasmEnv in proxy_trap_call_trap_with_args_async");
+    let Some(saved_sp) = crate::runtime_host_helpers::push_args_to_shadow_stack(caller, &env, args)
+    else {
+        return value::encode_undefined();
+    };
     let result = resolve_and_call_async(caller, trap, this_val, saved_sp, args.len() as i32).await;
-    shadow_sp_global
-        .set(&mut *caller, Val::I32(saved_sp))
-        .unwrap();
+    crate::runtime_host_helpers::restore_shadow_sp(caller, &env, saved_sp);
     result
 }
 

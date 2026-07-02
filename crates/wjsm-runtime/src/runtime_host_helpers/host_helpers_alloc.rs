@@ -102,31 +102,20 @@ pub(crate) async fn array_species_create_async(
     if !is_constructor_in_runtime(caller, constructor) {
         return value::encode_undefined();
     }
-    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-        Some(m) => m,
-        None => return value::encode_undefined(),
-    };
-    let shadow_sp_global = match caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-    {
-        Some(g) => g,
-        None => return value::encode_undefined(),
-    };
-    let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap_or(0);
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv in array_species_create_async");
     let len_val = value::encode_f64(length as f64);
-    if memory
-        .write(&mut *caller, shadow_sp as usize, &len_val.to_le_bytes())
-        .is_err()
-    {
+    let Some(shadow_sp) =
+        crate::runtime_host_helpers::push_args_to_shadow_stack(caller, &env, &[len_val])
+    else {
         return value::encode_undefined();
-    }
+    };
     let previous_new_target = caller
         .data()
         .new_target
         .swap(constructor, Ordering::Relaxed);
     let result =
         resolve_and_call_async(caller, constructor, value::encode_undefined(), shadow_sp, 1).await;
+    crate::runtime_host_helpers::restore_shadow_sp(caller, &env, shadow_sp);
     caller
         .data()
         .new_target
