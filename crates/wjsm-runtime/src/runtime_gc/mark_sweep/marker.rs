@@ -21,6 +21,62 @@ use crate::runtime_gc::context::GcHeapLayout;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 use wjsm_ir::value;
 
+const TYPEDARRAY_HANDLE_PROP: &str = "__typedarray_handle__";
+const DATAVIEW_HANDLE_PROP: &str = "__dataview_handle__";
+
+#[derive(Default)]
+struct SideTableChildHandles {
+    typedarrays: Vec<usize>,
+    dataviews: Vec<usize>,
+}
+
+impl SideTableChildHandles {
+    fn clear(&mut self) {
+        self.typedarrays.clear();
+        self.dataviews.clear();
+    }
+}
+
+fn decode_side_table_handle_value(raw: i64) -> Option<usize> {
+    if !value::is_f64(raw) {
+        return None;
+    }
+    let n = value::decode_f64(raw);
+    (n.is_finite() && n >= 0.0 && n.fract() == 0.0).then_some(n as usize)
+}
+
+fn memory_c_string_eq(data: &[u8], name_id: u32, expected: &str) -> bool {
+    let start = name_id as usize;
+    let end = match start.checked_add(expected.len()) {
+        Some(end) => end,
+        None => return false,
+    };
+    end < data.len() && data.get(start..end) == Some(expected.as_bytes()) && data[end] == 0
+}
+
+fn collect_side_table_child_raw_values(
+    ctx: &mut GcContext,
+    handles: &SideTableChildHandles,
+    out: &mut Vec<i64>,
+) {
+    ctx.with_state(|st| {
+        if let Ok(table) = st.typedarray_table.lock() {
+            for &handle in &handles.typedarrays {
+                if let Some(value) = table.get(handle).and_then(|entry| entry.buffer_object) {
+                    out.push(value);
+                }
+            }
+        }
+        if let Ok(table) = st.dataview_table.lock() {
+            for &handle in &handles.dataviews {
+                if let Some(value) = table.get(handle).and_then(|entry| entry.buffer_object) {
+                    out.push(value);
+                }
+            }
+        }
+    });
+}
+
 /// 标记 roots 并 drain worklist。
 pub fn mark_roots_and_drain(
     collector: &mut MarkSweepCollector,
@@ -40,14 +96,23 @@ pub fn mark_roots_and_drain(
     let obj_table_count = ctx.obj_table_count();
 
     let mut raw_vals: Vec<i64> = Vec::new();
+    let mut side_child_handles = SideTableChildHandles::default();
 
     // drain
     while let Some(h) = worklist.pop() {
         // 收集本对象的子引用 raw values（proto + props/elements）。
         // scratch buffer 跨对象复用，避免 mark 阶段为每个对象分配 Vec。
         ctx.with_memory(|data| {
-            collect_child_raw_values(data, h, obj_table_ptr, obj_table_count, &mut raw_vals);
+            collect_child_raw_values(
+                data,
+                h,
+                obj_table_ptr,
+                obj_table_count,
+                &mut raw_vals,
+                &mut side_child_handles,
+            );
         });
+        collect_side_table_child_raw_values(ctx, &side_child_handles, &mut raw_vals);
         // 把每个 raw value 解析为 handle（含 closure/native_callable 经 host 表解析）。
         for &val in &raw_vals {
             push_resolved_value_handles(ctx, val, obj_table_count, &mut |child| {
@@ -70,14 +135,17 @@ pub fn mark_roots_and_drain(
 /// - proto_handle（若有效）
 /// - 数组：elements
 /// - 对象：每属性的 value/getter/setter
+/// - TypedArray/DataView hidden handle → 侧表中的 [[ViewedArrayBuffer]]
 fn collect_child_raw_values(
     data: &[u8],
     h: Handle,
     obj_table_ptr: usize,
     obj_table_count: usize,
     out: &mut Vec<i64>,
+    side_children: &mut SideTableChildHandles,
 ) {
     out.clear();
+    side_children.clear();
     let obj_ptr = match resolve_handle(data, h, obj_table_ptr, obj_table_count) {
         Some(p) => p,
         None => return,
@@ -141,8 +209,24 @@ fn collect_child_raw_values(
                 if slot + 32 > data.len() {
                     break;
                 }
-                // value@+8, getter@+16, setter@+24
-                for val_off in [8usize, 16, 24] {
+                let name_id = u32::from_le_bytes([
+                    data[slot],
+                    data[slot + 1],
+                    data[slot + 2],
+                    data[slot + 3],
+                ]);
+                let value_raw = i64::from_le_bytes([
+                    data[slot + 8],
+                    data[slot + 9],
+                    data[slot + 10],
+                    data[slot + 11],
+                    data[slot + 12],
+                    data[slot + 13],
+                    data[slot + 14],
+                    data[slot + 15],
+                ]);
+                out.push(value_raw);
+                for val_off in [16usize, 24] {
                     let v = i64::from_le_bytes([
                         data[slot + val_off],
                         data[slot + val_off + 1],
@@ -154,6 +238,15 @@ fn collect_child_raw_values(
                         data[slot + val_off + 7],
                     ]);
                     out.push(v);
+                }
+                if memory_c_string_eq(data, name_id, TYPEDARRAY_HANDLE_PROP) {
+                    if let Some(handle) = decode_side_table_handle_value(value_raw) {
+                        side_children.typedarrays.push(handle);
+                    }
+                } else if memory_c_string_eq(data, name_id, DATAVIEW_HANDLE_PROP)
+                    && let Some(handle) = decode_side_table_handle_value(value_raw)
+                {
+                    side_children.dataviews.push(handle);
                 }
             }
         }
@@ -305,8 +398,16 @@ pub(crate) fn mark_drain_on_buffer(
         }
     }
     let mut raw_vals: Vec<i64> = Vec::new();
+    let mut side_child_handles = SideTableChildHandles::default();
     while let Some(h) = worklist.pop() {
-        collect_child_raw_values(data, h, obj_table_ptr, obj_table_count, &mut raw_vals);
+        collect_child_raw_values(
+            data,
+            h,
+            obj_table_ptr,
+            obj_table_count,
+            &mut raw_vals,
+            &mut side_child_handles,
+        );
         for &val in &raw_vals {
             // buffer 作用域：只解析 object/array/function（closure/native_callable 需 host 表）
             if let Some(child) =
@@ -396,6 +497,11 @@ mod tests {
         value::encode_handle(wjsm_ir::value::TAG_OBJECT, h)
     }
 
+    fn write_prop_name_id(buf: &mut [u8], obj_ptr: usize, prop_idx: usize, name_id: u32) {
+        let slot = obj_ptr + 16 + prop_idx * 32;
+        buf[slot..slot + 4].copy_from_slice(&name_id.to_le_bytes());
+    }
+
     #[test]
     fn collect_child_raw_values_reuses_caller_scratch_buffer() {
         let obj_table_ptr = 1000;
@@ -407,23 +513,87 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, 3);
         let mut raw_vals = Vec::with_capacity(8);
         raw_vals.push(enc_obj(99));
+        let mut side_child_handles = SideTableChildHandles::default();
         let scratch_ptr = raw_vals.as_ptr();
 
-        collect_child_raw_values(&buf, 0, obj_table_ptr, 3, &mut raw_vals);
+        collect_child_raw_values(
+            &buf,
+            0,
+            obj_table_ptr,
+            3,
+            &mut raw_vals,
+            &mut side_child_handles,
+        );
 
         assert_eq!(raw_vals.as_ptr(), scratch_ptr);
         assert_eq!(raw_vals[0], enc_obj(1));
         assert!(raw_vals.contains(&enc_obj(2)));
 
-        collect_child_raw_values(&buf, 1, obj_table_ptr, 3, &mut raw_vals);
+        collect_child_raw_values(
+            &buf,
+            1,
+            obj_table_ptr,
+            3,
+            &mut raw_vals,
+            &mut side_child_handles,
+        );
 
         assert_eq!(raw_vals.as_ptr(), scratch_ptr);
         assert!(raw_vals.is_empty());
 
-        collect_child_raw_values(&buf, 42, obj_table_ptr, 3, &mut raw_vals);
+        collect_child_raw_values(
+            &buf,
+            42,
+            obj_table_ptr,
+            3,
+            &mut raw_vals,
+            &mut side_child_handles,
+        );
 
         assert_eq!(raw_vals.as_ptr(), scratch_ptr);
         assert!(raw_vals.is_empty());
+    }
+
+    #[test]
+    fn collect_child_raw_values_records_side_table_backed_handles() {
+        let obj_table_ptr = 1000;
+        let obj_ptr = 2000;
+        let mut buf = build_object_buffer(
+            obj_table_ptr,
+            &[(
+                0u32,
+                obj_ptr,
+                0xFFFF_FFFF,
+                vec![value::encode_f64(7.0), value::encode_f64(9.0)],
+            )],
+            1,
+        );
+        let typedarray_name_id = 11;
+        let dataview_name_id = typedarray_name_id + TYPEDARRAY_HANDLE_PROP.len() + 1;
+        buf[typedarray_name_id..typedarray_name_id + TYPEDARRAY_HANDLE_PROP.len()]
+            .copy_from_slice(TYPEDARRAY_HANDLE_PROP.as_bytes());
+        buf[typedarray_name_id + TYPEDARRAY_HANDLE_PROP.len()] = 0;
+        buf[dataview_name_id..dataview_name_id + DATAVIEW_HANDLE_PROP.len()]
+            .copy_from_slice(DATAVIEW_HANDLE_PROP.as_bytes());
+        buf[dataview_name_id + DATAVIEW_HANDLE_PROP.len()] = 0;
+        write_prop_name_id(&mut buf, obj_ptr, 0, typedarray_name_id as u32);
+        write_prop_name_id(&mut buf, obj_ptr, 1, dataview_name_id as u32);
+
+        let mut raw_vals = Vec::new();
+        let mut side_child_handles = SideTableChildHandles::default();
+        collect_child_raw_values(
+            &buf,
+            0,
+            obj_table_ptr,
+            1,
+            &mut raw_vals,
+            &mut side_child_handles,
+        );
+
+        assert_eq!(side_child_handles.typedarrays, vec![7]);
+        assert_eq!(side_child_handles.dataviews, vec![9]);
+        assert!(raw_vals.contains(&value::encode_f64(7.0)));
+        assert!(raw_vals.contains(&value::encode_f64(9.0)));
     }
 
     #[test]

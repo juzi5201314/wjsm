@@ -339,6 +339,7 @@ pub(crate) fn typedarray_construct(
     let elem_size_u32 = elem_size as u32;
     let mut initial_values: Option<Vec<i64>> = None;
     let mut backing_is_shared = false;
+    let mut buffer_object = None;
 
     let (buf_handle, offset, len, byte_len) = if value::is_array(buffer) {
         let Some(arr_ptr) = resolve_array_ptr(caller, buffer) else {
@@ -419,6 +420,7 @@ pub(crate) fn typedarray_construct(
                 _ => return value::encode_undefined(),
             };
         backing_is_shared = is_shared_from_backing;
+        buffer_object = Some(buffer);
         if offset > byte_len || offset % elem_size_u32 != 0 {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array byteOffset");
             return value::encode_undefined();
@@ -483,6 +485,7 @@ pub(crate) fn typedarray_construct(
         let handle = table.len() as u32;
         table.push(TypedArrayEntry {
             buffer_handle: buf_handle,
+            buffer_object,
             byte_offset: offset,
             length: len,
             element_size: elem_size,

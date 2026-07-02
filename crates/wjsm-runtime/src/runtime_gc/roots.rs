@@ -283,6 +283,178 @@ fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec
     crate::runtime_gc::native_callable_refs::collect_native_callable_refs(st, idx)
 }
 
+fn collect_http_response_handle_values(
+    st: &mut crate::RuntimeState,
+    handle: usize,
+    out: &mut Vec<i64>,
+) {
+    if let Ok(table) = st.http_response_table.lock()
+        && let Some(entry) = table.get(handle)
+        && let Some(v) = entry.pending_read_promise
+    {
+        out.push(v);
+    }
+}
+
+fn collect_abort_signal_handle_values(
+    st: &mut crate::RuntimeState,
+    handle: usize,
+    out: &mut Vec<i64>,
+) {
+    if let Ok(table) = st.abort_signal_table.lock()
+        && let Some(entry) = table.get(handle)
+        && let Some(v) = entry.reason
+    {
+        out.push(v);
+    }
+}
+
+fn collect_fetch_response_handle_values(
+    st: &mut crate::RuntimeState,
+    handle: usize,
+    out: &mut Vec<i64>,
+) {
+    let http_handle = if let Ok(table) = st.fetch_response_table.lock() {
+        if let Some(entry) = table.get(handle) {
+            out.extend(entry.headers_object);
+            entry.http_response_handle
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(handle) = http_handle {
+        collect_http_response_handle_values(st, handle as usize, out);
+    }
+}
+
+fn collect_fetch_request_handle_values(
+    st: &mut crate::RuntimeState,
+    handle: usize,
+    out: &mut Vec<i64>,
+) {
+    let signal_handle = if let Ok(table) = st.fetch_request_table.lock() {
+        if let Some(entry) = table.get(handle) {
+            out.extend(entry.headers_object);
+            entry.signal_handle
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(handle) = signal_handle {
+        collect_abort_signal_handle_values(st, handle as usize, out);
+    }
+}
+
+fn collect_stream_controller_handle_values(
+    st: &mut crate::RuntimeState,
+    handle: usize,
+    out: &mut Vec<i64>,
+) {
+    if let Ok(inner) = st.stream_controller_table.inner.lock()
+        && let Some(c) = inner.get(handle)
+    {
+        out.extend(c.underlying_source);
+        out.extend(c.pull_callback);
+        out.extend(c.cancel_callback);
+        out.extend(c.write_callback);
+        out.extend(c.sink_close_callback);
+        out.extend(c.strategy_size);
+        out.extend(c.abort_reason);
+        for chunk in c.chunk_queue.iter() {
+            out.push(*chunk);
+        }
+    }
+}
+
+/// #331：补齐由 host side table 或 side-table-backed heap object 持有的 JS 引用。
+fn collect_side_table_backed_host_values(st: &mut crate::RuntimeState, out: &mut Vec<i64>) {
+    let mut http_response_handles = Vec::new();
+    let mut fetch_response_handles = Vec::new();
+    let mut fetch_request_handles = Vec::new();
+    let mut abort_signal_handles = Vec::new();
+    let mut controller_handles = Vec::new();
+
+    if let Ok(inner) = st.readable_stream_table.inner.lock() {
+        for entry in inner.iter() {
+            out.extend(entry.response_body_object);
+            if let Some(pipe_to) = entry.pipe_to {
+                out.push(pipe_to.promise);
+            }
+            if let Some(handle) = entry.http_response_handle {
+                http_response_handles.push(handle);
+            }
+            if let Some(handle) = entry.response_body_handle {
+                fetch_response_handles.push(handle);
+            }
+            if let Some(handle) = entry.controller_handle {
+                controller_handles.push(handle);
+            }
+        }
+    }
+
+    if let Ok(table) = st.http_response_table.lock() {
+        for entry in table.iter() {
+            out.extend(entry.pending_read_promise);
+        }
+    }
+    if let Ok(table) = st.fetch_response_table.lock() {
+        for (handle, entry) in table.iter().enumerate() {
+            out.extend(entry.headers_object);
+            if let Some(http_handle) = entry.http_response_handle {
+                http_response_handles.push(http_handle);
+            }
+            fetch_response_handles.push(handle as u32);
+        }
+    }
+    if let Ok(table) = st.fetch_request_table.lock() {
+        for (handle, entry) in table.iter().enumerate() {
+            out.extend(entry.headers_object);
+            if let Some(signal_handle) = entry.signal_handle {
+                abort_signal_handles.push(signal_handle);
+            }
+            fetch_request_handles.push(handle as u32);
+        }
+    }
+    if let Ok(table) = st.abort_signal_table.lock() {
+        for entry in table.iter() {
+            out.extend(entry.reason);
+        }
+    }
+    if let Ok(cache) = st.module_namespace_cache.lock() {
+        out.extend(cache.values().copied());
+    }
+    if let Ok(table) = st.dataview_table.lock() {
+        for entry in table.iter() {
+            out.extend(entry.buffer_object);
+        }
+    }
+    if let Ok(table) = st.typedarray_table.lock() {
+        for entry in table.iter() {
+            out.extend(entry.buffer_object);
+        }
+    }
+
+    for handle in http_response_handles {
+        collect_http_response_handle_values(st, handle as usize, out);
+    }
+    for handle in fetch_response_handles {
+        collect_fetch_response_handle_values(st, handle as usize, out);
+    }
+    for handle in fetch_request_handles {
+        collect_fetch_request_handle_values(st, handle as usize, out);
+    }
+    for handle in abort_signal_handles {
+        collect_abort_signal_handle_values(st, handle as usize, out);
+    }
+    for handle in controller_handles {
+        collect_stream_controller_handle_values(st, handle as usize, out);
+    }
+}
+
 /// 收集 host 侧表持有的 raw 引用值（移植自 trace_runtime_side_table_roots_fixed_point）。
 /// 这里只复制 raw i64 引用值；侧表本体在锁内按引用迭代，避免 fixed-point 每轮深克隆。
 /// 返回 raw i64 列表，由调用方经 push_value_roots 解析为 handle。
@@ -433,17 +605,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             }
         }
 
-        // readable_stream_table: response_body_object
-        if let Ok(inner) = st.readable_stream_table.inner.lock() {
-            for entry in inner.iter() {
-                if let Some(v) = entry.response_body_object {
-                    out.push(v);
-                }
-                if let Some(pipe_to) = entry.pipe_to {
-                    out.push(pipe_to.promise);
-                }
-            }
-        }
+        collect_side_table_backed_host_values(st, &mut out);
 
         // reader_table：pending_read_promise / pending_byob_view
         if let Ok(readers) = st.reader_table.inner.lock() {
@@ -595,4 +757,182 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
     });
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ControllerKind;
+    use crate::types::{
+        AbortSignalEntry, DataViewEntry, FetchRequestEntry, FetchResponseEntry, HttpResponseEntry,
+        ReadableStreamEntry, RedirectMode, RequestCache, RequestCredentials, RequestMode,
+        ResponseType, StreamControllerEntry, StreamState, TypedArrayEntry,
+    };
+    use std::collections::VecDeque;
+
+    fn obj(handle: u32) -> i64 {
+        value::encode_object_handle(handle)
+    }
+
+    #[test]
+    fn issue_331_side_table_backed_host_values_are_reported() {
+        let mut st = crate::RuntimeState::new();
+        let response_obj = obj(10);
+        let pipe_promise = obj(11);
+        let http_promise = obj(12);
+        let response_headers = obj(13);
+        let request_headers = obj(14);
+        let abort_reason = obj(15);
+        let namespace = obj(16);
+        let dataview_buffer = obj(17);
+        let typedarray_buffer = obj(18);
+        let controller_underlying = obj(19);
+        let controller_chunk = obj(20);
+
+        {
+            st.http_response_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(HttpResponseEntry {
+                    response: None,
+                    pending_read_promise: Some(http_promise),
+                    pending_bytes: VecDeque::new(),
+                    eof: false,
+                    error: None,
+                });
+        }
+        {
+            st.fetch_response_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(FetchResponseEntry {
+                    status: 200,
+                    status_text: "OK".to_string(),
+                    headers_handle: 0,
+                    headers_object: Some(response_headers),
+                    url: String::new(),
+                    body: Vec::new(),
+                    response_type: ResponseType::Basic,
+                    redirected: false,
+                    body_used: false,
+                    http_response_handle: Some(0),
+                    stream_handle: None,
+                });
+        }
+        {
+            st.abort_signal_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(AbortSignalEntry {
+                    aborted: true,
+                    reason: Some(abort_reason),
+                });
+        }
+        {
+            st.fetch_request_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(FetchRequestEntry {
+                    method: "GET".to_string(),
+                    url: "https://example.invalid".to_string(),
+                    headers_handle: 0,
+                    headers_object: Some(request_headers),
+                    body: None,
+                    redirect: RedirectMode::Follow,
+                    body_used: false,
+                    signal_handle: Some(0),
+                    mode: RequestMode::Cors,
+                    credentials: RequestCredentials::SameOrigin,
+                    cache: RequestCache::Default,
+                    referrer: String::new(),
+                    referrer_policy: String::new(),
+                    integrity: String::new(),
+                    keepalive: false,
+                    destination: String::new(),
+                    duplex: String::new(),
+                });
+        }
+        st.module_namespace_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(0, namespace);
+        st.dataview_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(DataViewEntry {
+                buffer_handle: 0,
+                buffer_object: Some(dataview_buffer),
+                byte_offset: 0,
+                byte_length: 8,
+                is_shared: false,
+            });
+        st.typedarray_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(TypedArrayEntry {
+                buffer_handle: 0,
+                buffer_object: Some(typedarray_buffer),
+                byte_offset: 0,
+                length: 8,
+                element_size: 1,
+                element_kind: 1,
+                is_shared: false,
+            });
+        let controller_handle = st.stream_controller_table.alloc(StreamControllerEntry {
+            kind: ControllerKind::ReadableDefault,
+            stream_handle: 0,
+            chunk_queue: VecDeque::from([controller_chunk]),
+            high_water_mark: 1.0,
+            strategy_size: None,
+            started: true,
+            close_requested: false,
+            byob_reader_handle: None,
+            pull_requested: false,
+            abort_requested: false,
+            abort_reason: None,
+            flush_requested: false,
+            underlying_source: Some(controller_underlying),
+            pull_callback: None,
+            write_callback: None,
+            sink_close_callback: None,
+            cancel_callback: None,
+            active_byob_request: None,
+        });
+        st.readable_stream_table.alloc(ReadableStreamEntry {
+            state: StreamState::Readable,
+            error: None,
+            disturbed: false,
+            locked: false,
+            http_response_handle: Some(0),
+            response_body_handle: Some(0),
+            response_body_object: Some(response_obj),
+            controller_handle: Some(controller_handle),
+            is_byte_stream: false,
+            pipe_to: Some(crate::ReadableStreamPipeToEntry {
+                destination: 0,
+                promise: pipe_promise,
+                write_in_flight: false,
+                closing: false,
+            }),
+        });
+
+        let mut out = Vec::new();
+        collect_side_table_backed_host_values(&mut st, &mut out);
+
+        for expected in [
+            response_obj,
+            pipe_promise,
+            http_promise,
+            response_headers,
+            request_headers,
+            abort_reason,
+            namespace,
+            dataview_buffer,
+            typedarray_buffer,
+            controller_underlying,
+            controller_chunk,
+        ] {
+            assert!(out.contains(&expected), "missing {expected:#x}");
+        }
+    }
 }

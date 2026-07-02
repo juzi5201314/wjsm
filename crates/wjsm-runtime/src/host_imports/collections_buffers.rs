@@ -1059,6 +1059,7 @@ pub(crate) fn define_collections_buffers(
                 handle = table.len() as u32;
                 table.push(DataViewEntry {
                     buffer_handle: buf_handle,
+                    buffer_object: Some(buffer),
                     byte_offset: offset,
                     byte_length: length,
                     is_shared,
@@ -1608,6 +1609,7 @@ pub(crate) fn define_collections_buffers(
                     new_ta_handle = ta_table.len() as u32;
                     ta_table.push(TypedArrayEntry {
                         buffer_handle: new_buf_handle,
+                        buffer_object: None,
                         byte_offset: 0,
                         length: 0,
                         element_size: elem_size,
@@ -1707,6 +1709,7 @@ pub(crate) fn define_collections_buffers(
                 new_ta_handle = ta_table.len() as u32;
                 ta_table.push(TypedArrayEntry {
                     buffer_handle: new_buf_handle,
+                    buffer_object: None,
                     byte_offset: 0,
                     length: slice_len,
                     element_size: elem_size,
@@ -1783,6 +1786,7 @@ pub(crate) fn define_collections_buffers(
                 return value::encode_undefined();
             };
             let buf_handle = entry.buffer_handle;
+            let buffer_object = entry.buffer_object;
             let byte_offset = entry.byte_offset;
             let length = entry.length;
             let elem_size = entry.element_size;
@@ -1826,6 +1830,7 @@ pub(crate) fn define_collections_buffers(
                 new_ta_handle = ta_table.len() as u32;
                 ta_table.push(TypedArrayEntry {
                     buffer_handle: buf_handle,
+                    buffer_object,
                     byte_offset: new_byte_offset,
                     length: sub_len,
                     element_size: elem_size,

@@ -167,6 +167,7 @@ pub(crate) fn transfer_byob_view_with_env<C: wasmtime::AsContextMut<Data = Runti
         let handle = ta_table.len() as u32;
         ta_table.push(TypedArrayEntry {
             buffer_handle: new_buffer_handle,
+            buffer_object: None,
             byte_offset: 0,
             length: (bytes_written / elem_size) as u32,
             element_size: entry.element_size,
