@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    io::Write,
+    ffi::OsStr,
+    path::PathBuf,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -10,40 +11,42 @@ use std::os::unix::process::CommandExt;
 
 use rayon::prelude::*;
 
-use crate::read::{Harness, Negative, Phase, Test, TestSuite};
+use crate::{
+    process::{CapturedOutput, ProcessOutcome, run_with_input},
+    read::{Harness, Negative, Phase, Test, TestSuite},
+};
+
+pub const DEFAULT_TIMEOUT_SECS: u64 = 15;
+pub const DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB: u64 = 256;
+pub const DEFAULT_CHILD_MEMORY_LIMIT_MIB: u64 = 5 * 1024;
+pub const DEFAULT_JOB_MEMORY_COST_MIB: u64 = 2 * 1024;
 
 /// 单条 Test262 用例的资源与超时限制（防止挂死 / WSL OOM）。
 #[derive(Debug, Clone, Copy)]
 pub struct RunLimits {
-    /// 等待 `wjsm run` 子进程的最长时间；超时则 kill 并记为失败。
+    /// 等待 `wjsm run` 子进程的最长时间；0 表示不设置超时。
     pub timeout: Duration,
-    /// Linux：子进程虚拟地址空间上限（MiB）；0 表示不设置。
-    pub memory_limit_mib: u64,
-    /// 并行 worker 数；建议 WSL 上保持 1–2。
+    /// Linux：单条子进程虚拟地址空间上限（MiB）；0 表示不设置。
+    pub child_memory_limit_mib: u64,
+    /// 传给 wjsm CLI 的 Wasmtime 线性内存虚拟地址预留（MiB）；0 表示使用 Wasmtime 默认值。
+    pub wasmtime_memory_reservation_mib: u64,
+    /// 整个 runner 允许并发子进程使用的近似物理内存预算（MiB）；0 表示不限制并发。
+    pub memory_budget_mib: u64,
+    /// 单个并发 worker 计入预算的估算物理内存成本（MiB）。
+    pub job_memory_cost_mib: u64,
+    /// 并行 worker 数；最终值应已按 `memory_budget_mib / job_memory_cost_mib` 收敛。
     pub jobs: usize,
 }
 
 impl Default for RunLimits {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(15),
-            memory_limit_mib: 512,
-            jobs: 2,
-        }
-    }
-}
-
-/// 在 `timeout` 内等待子进程结束；超时返回 `Ok(None)`。
-fn wait_child_timeout(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> std::io::Result<Option<std::process::ExitStatus>> {
-    let start = Instant::now();
-    loop {
-        match child.try_wait()? {
-            Some(status) => return Ok(Some(status)),
-            None if start.elapsed() >= timeout => return Ok(None),
-            None => std::thread::sleep(Duration::from_millis(50)),
+            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            child_memory_limit_mib: DEFAULT_CHILD_MEMORY_LIMIT_MIB,
+            wasmtime_memory_reservation_mib: DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB,
+            memory_budget_mib: DEFAULT_JOB_MEMORY_COST_MIB,
+            job_memory_cost_mib: DEFAULT_JOB_MEMORY_COST_MIB,
+            jobs: 1,
         }
     }
 }
@@ -52,7 +55,15 @@ fn wait_child_timeout(
 #[derive(Debug, Clone)]
 pub enum TestResult {
     Passed,
-    Failed { expected: String, actual: String },
+    Failed {
+        expected: String,
+        actual: String,
+    },
+    TimedOut {
+        timeout: Duration,
+        stdout: String,
+        stderr: String,
+    },
     Error(String),
 }
 
@@ -62,6 +73,7 @@ pub struct Statistics {
     pub total: usize,
     pub passed: usize,
     pub failed: usize,
+    pub timed_out: usize,
     pub ignored: usize,
     pub errors: usize,
 }
@@ -72,6 +84,7 @@ impl Statistics {
         match result {
             TestResult::Passed => self.passed += 1,
             TestResult::Failed { .. } => self.failed += 1,
+            TestResult::TimedOut { .. } => self.timed_out += 1,
             TestResult::Error(_) => self.errors += 1,
         }
     }
@@ -104,41 +117,65 @@ pub struct Failure {
 /// 运行单个测试（带超时与可选内存上限）。
 pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult {
     let source = build_test_source(test, harness);
-    let wjsm_binary = find_wjsm_binary();
+    let mut command =
+        match build_wjsm_command(test.is_module(), limits.wasmtime_memory_reservation_mib) {
+            Ok(command) => command,
+            Err(error) => return TestResult::Error(error),
+        };
 
-    // 模块模式测试不传 --script，使 wjsm 以 ES module 方式解析
-    let is_module = test.is_module();
+    apply_child_memory_limit(&mut command, limits.child_memory_limit_mib);
 
-    let mut cmd = if wjsm_binary.file_name() == Some(std::ffi::OsStr::new("cargo")) {
-        let mut c = Command::new("cargo");
-        c.args(["run", "--bin", "wjsm-cli", "--", "run", "-"]);
-        if !is_module {
-            c.arg("--script");
-        }
-        c
-    } else {
-        let mut c = Command::new(&wjsm_binary);
-        c.args(["run", "-"]);
-        if !is_module {
-            c.arg("--script");
-        }
-        c
-    };
+    match run_with_input(command, source.into_bytes(), limits.timeout) {
+        Ok(ProcessOutcome::Completed(output)) => evaluate_wjsm_output(
+            test,
+            &output.stdout,
+            &output.stderr,
+            output.status.code().unwrap_or(-1),
+        ),
+        Ok(ProcessOutcome::TimedOut { stdout, stderr }) => TestResult::TimedOut {
+            timeout: limits.timeout,
+            stdout: stdout.text(),
+            stderr: stderr.text(),
+        },
+        Err(error) => TestResult::Error(error),
+    }
+}
 
-    cmd.stdin(Stdio::piped())
+fn build_wjsm_command(
+    is_module: bool,
+    wasmtime_memory_reservation_mib: u64,
+) -> Result<Command, String> {
+    let wjsm_binary = find_wjsm_binary()?;
+    let mut command = Command::new(&wjsm_binary);
+    if wasmtime_memory_reservation_mib > 0 {
+        command
+            .arg("--wasmtime-memory-reservation")
+            .arg(format!("{wasmtime_memory_reservation_mib}M"));
+    }
+    command.args(["run", "-"]);
+    if !is_module {
+        command.arg("--script");
+    }
+    command
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    Ok(command)
+}
 
+fn apply_child_memory_limit(command: &mut Command, memory_limit_mib: u64) {
     #[cfg(target_os = "linux")]
-    if limits.memory_limit_mib > 0 {
-        let bytes = limits.memory_limit_mib.saturating_mul(1024 * 1024);
+    if memory_limit_mib > 0 {
+        let bytes = memory_limit_mib.saturating_mul(1024 * 1024);
+        // SAFETY: `pre_exec` 闭包只调用 async-signal-safe 的 `setrlimit`，不分配内存、
+        // 不获取锁，也不访问 Rust 共享状态；失败通过 `last_os_error` 返回给 `spawn`。
         unsafe {
-            cmd.pre_exec(move || {
-                let lim = libc::rlimit {
+            command.pre_exec(move || {
+                let limit = libc::rlimit {
                     rlim_cur: bytes,
                     rlim_max: bytes,
                 };
-                if libc::setrlimit(libc::RLIMIT_AS, &lim) != 0 {
+                if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
@@ -146,50 +183,74 @@ pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult
         }
     }
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return TestResult::Error(format!("failed to spawn wjsm: {}", e)),
-    };
+    #[cfg(not(target_os = "linux"))]
+    let _ = (command, memory_limit_mib);
+}
 
-    if let Some(mut stdin) = child.stdin.take()
-        && let Err(e) = stdin.write_all(source.as_bytes())
-    {
-        return TestResult::Error(format!("failed to write to stdin: {}", e));
+fn find_wjsm_binary() -> Result<PathBuf, String> {
+    if let Some(path) = binary_from_env("WJSM_TEST262_WJSM")? {
+        return Ok(path);
+    }
+    if let Some(path) = binary_from_env("CARGO_BIN_EXE_wjsm")? {
+        return Ok(path);
     }
 
-    let status = match wait_child_timeout(&mut child, limits.timeout) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return TestResult::Failed {
-                expected: "complete within timeout".to_string(),
-                actual: format!("timeout after {}s (child killed)", limits.timeout.as_secs()),
-            };
+    for candidate in wjsm_binary_candidates() {
+        if candidate.exists() {
+            return Ok(candidate);
         }
-        Err(e) => return TestResult::Error(format!("failed to wait for wjsm: {}", e)),
+    }
+
+    Err(
+        "wjsm binary not found; run `cargo build --bin wjsm` first or set WJSM_TEST262_WJSM"
+            .to_string(),
+    )
+}
+
+fn binary_from_env(name: &str) -> Result<Option<PathBuf>, String> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
     };
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = std::io::Read::read_to_end(&mut out, &mut stdout);
+    let path = PathBuf::from(value);
+    if path.exists() {
+        Ok(Some(path))
+    } else {
+        Err(format!(
+            "{name} points to missing binary: {}",
+            path.display()
+        ))
     }
-    if let Some(mut err) = child.stderr.take() {
-        let _ = std::io::Read::read_to_end(&mut err, &mut stderr);
-    }
+}
 
-    evaluate_wjsm_output(test, &stdout, &stderr, status.code().unwrap_or(-1))
+fn wjsm_binary_candidates() -> [PathBuf; 4] {
+    [
+        executable_path("target/debug/wjsm"),
+        executable_path("target/debug/wjsm-cli"),
+        executable_path("target/release/wjsm"),
+        executable_path("target/release/wjsm-cli"),
+    ]
+}
+
+fn executable_path(path: &str) -> PathBuf {
+    let mut path = PathBuf::from(path);
+    if !std::env::consts::EXE_SUFFIX.is_empty() {
+        let file_name = path
+            .file_name()
+            .unwrap_or_else(|| OsStr::new("wjsm"))
+            .to_string_lossy();
+        path.set_file_name(format!("{file_name}{}", std::env::consts::EXE_SUFFIX));
+    }
+    path
 }
 
 fn evaluate_wjsm_output(
     test: &Test,
-    stdout_raw: &[u8],
-    stderr_raw: &[u8],
+    stdout_raw: &CapturedOutput,
+    stderr_raw: &CapturedOutput,
     exit_code: i32,
 ) -> TestResult {
-    let stdout = String::from_utf8_lossy(stdout_raw);
-    let stderr = String::from_utf8_lossy(stderr_raw);
+    let stdout = stdout_raw.text();
+    let stderr = stderr_raw.text();
 
     if let Some(negative) = &test.metadata.negative {
         return check_negative_result(exit_code, &stderr, negative);
@@ -222,32 +283,6 @@ fn evaluate_wjsm_output(
             actual: format!("exit_code={}, stderr={}", exit_code, stderr.trim()),
         }
     }
-}
-
-/// 查找 wjsm binary 路径。
-fn find_wjsm_binary() -> std::path::PathBuf {
-    // 优先使用 CARGO_BIN_EXE_wjsm 环境变量
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_wjsm") {
-        return path.into();
-    }
-
-    // 尝试常见的构建输出路径
-    let candidates = [
-        "target/release/wjsm-cli",
-        "target/debug/wjsm-cli",
-        "target/release/wjsm",
-        "target/debug/wjsm",
-    ];
-
-    for candidate in &candidates {
-        let path = std::path::Path::new(candidate);
-        if path.exists() {
-            return path.to_path_buf();
-        }
-    }
-
-    // 回退到 cargo run（会慢但有缓存时可用）
-    std::path::PathBuf::from("cargo")
 }
 
 /// 检查 negative 测试的结果。
@@ -444,12 +479,32 @@ fn record_result(
 ) {
     stats.add(result);
     add_by_feature(by_feature, test, result);
-    if let TestResult::Failed { expected, actual } = result {
+    if let Some((expected, actual)) = failure_details(result) {
         failures.push(Failure {
             path: test.path.display().to_string(),
-            expected: expected.clone(),
-            actual: actual.clone(),
+            expected,
+            actual,
         });
+    }
+}
+
+fn failure_details(result: &TestResult) -> Option<(String, String)> {
+    match result {
+        TestResult::Failed { expected, actual } => Some((expected.clone(), actual.clone())),
+        TestResult::TimedOut {
+            timeout,
+            stdout,
+            stderr,
+        } => Some((
+            format!("complete within {}s", timeout.as_secs()),
+            format!(
+                "timeout after {}s; stdout={}; stderr={}",
+                timeout.as_secs(),
+                stdout.trim(),
+                stderr.trim()
+            ),
+        )),
+        TestResult::Passed | TestResult::Error(_) => None,
     }
 }
 
@@ -500,5 +555,20 @@ mod tests {
 
         assert!(source.contains("var $262 = { gc: gc };"));
         assert!(!source.contains("function gc()"));
+    }
+
+    #[test]
+    fn default_memory_settings_are_test262_friendly() {
+        let limits = RunLimits::default();
+
+        assert_eq!(
+            limits.wasmtime_memory_reservation_mib,
+            DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB
+        );
+        assert_eq!(
+            limits.child_memory_limit_mib,
+            DEFAULT_CHILD_MEMORY_LIMIT_MIB
+        );
+        assert!(limits.child_memory_limit_mib > limits.wasmtime_memory_reservation_mib);
     }
 }

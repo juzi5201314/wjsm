@@ -115,6 +115,7 @@ use types::*;
 #[derive(Clone, Debug)]
 pub struct RuntimeOptions {
     pub max_heap_size: Option<usize>,
+    pub wasmtime_memory_reservation: Option<u64>,
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
@@ -129,6 +130,7 @@ impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
             max_heap_size: None,
+            wasmtime_memory_reservation: None,
             argv: Vec::new(),
             cwd: None,
             env: Vec::new(),
@@ -264,7 +266,7 @@ pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
 }
 
 async fn build_embedded_startup_snapshot_bytes_async(wasm: &[u8]) -> Result<Vec<u8>> {
-    let config = startup_engine_config(true);
+    let config = startup_engine_config(true, None);
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
     let module = Module::new(&engine, wasm)
@@ -376,7 +378,7 @@ struct StartupBenchTimings {
 async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTimings> {
     let mut timings = StartupBenchTimings::default();
 
-    let config = startup_engine_config(true);
+    let config = startup_engine_config(true, None);
     let start = std::time::Instant::now();
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
@@ -485,7 +487,7 @@ async fn execute_for_startup_bench(
 ) -> Result<StartupBenchTimings> {
     let mut timings = StartupBenchTimings::default();
     let total_start = std::time::Instant::now();
-    let config = startup_engine_config(true);
+    let config = startup_engine_config(true, None);
 
     let start = std::time::Instant::now();
     let engine = Engine::new(&config)
@@ -549,7 +551,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
     use_epoch_async_yield: bool,
     options: RuntimeOptions,
 ) -> Result<(W, Vec<u8>)> {
-    let config = startup_engine_config(use_epoch_async_yield);
+    let config = startup_engine_config(use_epoch_async_yield, options.wasmtime_memory_reservation);
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
 
@@ -1421,7 +1423,7 @@ mod tests {
             std::env::set_var("WJSM_CACHE_DIR", &cache_dir);
         }
 
-        let config = startup_engine_config(true);
+        let config = startup_engine_config(true, None);
         let engine = Engine::new(&config).map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
 
         // ── 1. WASM 缓存 warm 命中 ──────────────────────────────────
@@ -1490,7 +1492,7 @@ mod tests {
                 let mut total = Duration::ZERO;
                 for _ in 0..iters {
                     rt.block_on(async {
-                        let config = startup_engine_config(true);
+                        let config = startup_engine_config(true, None);
                         let engine = Engine::new(&config).expect("engine");
                         let module = Module::new(&engine, &wasm).expect("module");
                         let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));

@@ -88,6 +88,7 @@ fn runtime_options_with_script(
 fn runtime_options_with_argv(cli: &Cli, argv: Vec<String>) -> runtime::RuntimeOptions {
     runtime::RuntimeOptions {
         max_heap_size: cli.max_heap_size,
+        wasmtime_memory_reservation: cli.wasmtime_memory_reservation.map(|value| value as u64),
         argv,
         cwd: runtime_cwd_string(),
         env: runtime_env_snapshot(),

@@ -78,6 +78,10 @@ pub struct Cli {
     /// Limit JavaScript heap allocations (bytes, or K/M/G suffixes)
     #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
     pub(crate) max_heap_size: Option<usize>,
+
+    /// 覆盖 Wasmtime 线性内存虚拟地址预留（字节，或 K/M/G 后缀）
+    #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
+    pub(crate) wasmtime_memory_reservation: Option<usize>,
 }
 
 impl Cli {

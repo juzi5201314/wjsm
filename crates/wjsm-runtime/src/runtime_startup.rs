@@ -90,7 +90,10 @@ pub(super) fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Resu
     Ok(module)
 }
 
-pub(super) fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
+pub(super) fn startup_engine_config(
+    use_epoch_async_yield: bool,
+    wasmtime_memory_reservation: Option<u64>,
+) -> Config {
     let mut config = Config::new();
     // WJSM_COMPILER=winch 使用 Winch 基线编译器
     if std::env::var("WJSM_COMPILER").as_deref() == Ok("winch") {
@@ -108,6 +111,12 @@ pub(super) fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
     }
     if use_epoch_async_yield {
         config.epoch_interruption(true);
+    }
+    if let Some(bytes) = wasmtime_memory_reservation {
+        config.memory_reservation(bytes);
+        config.memory_reservation_for_growth(bytes.clamp(1 << 20, 64 << 20));
+        config.memory_guard_size(64 << 10);
+        config.guard_before_linear_memory(false);
     }
     // 启用 WASM backtrace 捕获，供运行时错误堆栈映射到 JS 函数名和源码位置。
     config.wasm_backtrace_max_frames(std::num::NonZero::new(50));
