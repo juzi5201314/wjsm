@@ -1,18 +1,28 @@
 use super::*;
 
+pub(crate) struct SwitchCaseContext<'a> {
+    pub module: &'a IrModule,
+    pub blocks: &'a [BasicBlock],
+    pub case_start: usize,
+    pub exit_idx: usize,
+    pub switch_break_depth: u32,
+    pub extra_depth: u32,
+    pub loops: &'a [LoopInfo],
+}
+
 impl Compiler {
-    pub(crate) fn compile_switch_case(
-        &mut self,
-        module: &IrModule,
-        blocks: &[BasicBlock],
-        case_start: usize,
-        exit_idx: usize,
-        switch_break_depth: u32,
-        extra_depth: u32,
-        loops: &[LoopInfo],
-    ) -> Result<()> {
+    pub(crate) fn compile_switch_case(&mut self, ctx: &SwitchCaseContext) -> Result<()> {
+        let SwitchCaseContext {
+            module,
+            blocks,
+            case_start,
+            exit_idx,
+            switch_break_depth,
+            extra_depth,
+            loops,
+        } = ctx;
         let initial_loop_depth = self.loop_stack.len();
-        let mut idx = case_start;
+        let mut idx = *case_start;
 
         loop {
             if idx >= blocks.len() {
@@ -38,7 +48,7 @@ impl Compiler {
             }
 
             // Switch case 入口必须编译，即使 compiled_blocks 已标记（避免 async resume 块被跳过）。
-            if self.compiled_blocks.contains(&idx) && idx != case_start {
+            if self.compiled_blocks.contains(&idx) && idx != *case_start {
                 break;
             }
             self.compiled_blocks.insert(idx);
@@ -68,21 +78,21 @@ impl Compiler {
                 }
                 Terminator::Jump { target } => {
                     let target_idx = target.0 as usize;
-                    if target_idx == exit_idx {
+                    if target_idx == *exit_idx {
                         // switch break
                         self.emit_phi_moves(blocks, idx, target_idx);
-                        self.emit(WasmInstruction::Br(switch_break_depth + self.if_depth));
+                        self.emit(WasmInstruction::Br(*switch_break_depth + self.if_depth));
                         break;
                     } else if let Some(depth) = self.loop_continue_depth(target_idx) {
                         // loop continue（仅当循环在 case body 外部时加 extra_depth）
                         self.emit_phi_moves(blocks, idx, target_idx);
-                        let adj = if target_idx >= case_start {
+                        let adj = if target_idx >= *case_start {
                             depth
                         } else {
-                            depth + extra_depth
+                            depth + *extra_depth
                         };
                         self.emit(WasmInstruction::Br(adj));
-                        if target_idx >= case_start {
+                        if target_idx >= *case_start {
                             idx += 1; // 循环在 case body 内部，继续编译下一个 block（循环出口）
                         } else {
                             break; // 循环在 case body 外部（switch 在循环内），退出 case body 编译
@@ -90,13 +100,13 @@ impl Compiler {
                     } else if let Some(depth) = self.loop_break_depth(target_idx) {
                         // loop break（仅当循环在 case body 外部时加 extra_depth）
                         self.emit_phi_moves(blocks, idx, target_idx);
-                        let adj = if target_idx >= case_start {
+                        let adj = if target_idx >= *case_start {
                             depth
                         } else {
-                            depth + extra_depth
+                            depth + *extra_depth
                         };
                         self.emit(WasmInstruction::Br(adj));
-                        if target_idx >= case_start {
+                        if target_idx >= *case_start {
                             idx = target_idx; // 循环在 case body 内部，继续到循环出口
                         } else {
                             break; // 循环在 case body 外部，退出 case body 编译
@@ -134,10 +144,10 @@ impl Compiler {
                         self.emit_to_bool_i32(condition.0);
                         self.emit(WasmInstruction::I32Eqz);
                         let break_depth = self.loop_break_depth(false_idx).unwrap_or(1);
-                        let adj = if false_idx >= case_start {
+                        let adj = if false_idx >= *case_start {
                             break_depth
                         } else {
-                            break_depth + extra_depth
+                            break_depth + *extra_depth
                         };
                         self.emit(WasmInstruction::BrIf(adj));
                         idx = true_idx;
@@ -147,10 +157,10 @@ impl Compiler {
                     // do-while 条件（true 目标是循环头）
                     if let Some(depth) = self.loop_continue_depth(true_idx) {
                         self.emit_to_bool_i32(condition.0);
-                        let adj = if true_idx >= case_start {
+                        let adj = if true_idx >= *case_start {
                             depth
                         } else {
-                            depth + extra_depth
+                            depth + *extra_depth
                         };
                         self.emit(WasmInstruction::BrIf(adj));
                         idx = false_idx;
@@ -173,8 +183,8 @@ impl Compiler {
                             module,
                             blocks,
                             true_idx,
-                            case_start,
-                            extra_depth,
+                            *case_start,
+                            *extra_depth,
                         )?;
                         self.emit(WasmInstruction::Br(1));
 
@@ -185,8 +195,8 @@ impl Compiler {
                             module,
                             blocks,
                             false_idx,
-                            case_start,
-                            extra_depth,
+                            *case_start,
+                            *extra_depth,
                         )?;
                         self.emit(WasmInstruction::Br(2));
 
@@ -211,9 +221,9 @@ impl Compiler {
                     let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                     let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
                     let true_exits_switch =
-                        self.branch_continuation_target(blocks, true_idx) == Some(exit_idx);
+                        self.branch_continuation_target(blocks, true_idx) == Some(*exit_idx);
                     let false_exits_switch =
-                        self.branch_continuation_target(blocks, false_idx) == Some(exit_idx);
+                        self.branch_continuation_target(blocks, false_idx) == Some(*exit_idx);
 
                     let true_terminates = if true_is_merge {
                         self.emit_phi_moves(blocks, idx, true_idx);
@@ -225,8 +235,8 @@ impl Compiler {
                             module,
                             blocks,
                             true_idx,
-                            case_start,
-                            extra_depth,
+                            *case_start,
+                            *extra_depth,
                         )?;
                         if !terminates && true_exits_switch {
                             self.emit(WasmInstruction::Br(switch_break_depth + self.if_depth));
@@ -247,8 +257,8 @@ impl Compiler {
                             module,
                             blocks,
                             false_idx,
-                            case_start,
-                            extra_depth,
+                            *case_start,
+                            *extra_depth,
                         )?;
                         if !terminates && false_exits_switch {
                             self.emit(WasmInstruction::Br(switch_break_depth + self.if_depth));
@@ -335,29 +345,29 @@ impl Compiler {
                         self.compiled_blocks.insert(cidx);
                         let nested_break = (num_cases - i) as u32;
                         let nested_extra = extra_depth + (num_cases - i) as u32 + 1;
-                        self.compile_switch_case(
+                        self.compile_switch_case(&SwitchCaseContext {
                             module,
                             blocks,
-                            cidx,
-                            nested_exit_idx,
-                            nested_break,
-                            nested_extra,
+                            case_start: cidx,
+                            exit_idx: nested_exit_idx,
+                            switch_break_depth: nested_break,
+                            extra_depth: nested_extra,
                             loops,
-                        )?;
+                        })?;
                     }
 
                     // 编译嵌套 default body
                     self.emit(WasmInstruction::End);
                     self.compiled_blocks.insert(nested_default_idx);
-                    self.compile_switch_case(
+                    self.compile_switch_case(&SwitchCaseContext {
                         module,
                         blocks,
-                        nested_default_idx,
-                        nested_exit_idx,
-                        0,
-                        extra_depth + 1,
+                        case_start: nested_default_idx,
+                        exit_idx: nested_exit_idx,
+                        switch_break_depth: 0,
+                        extra_depth: extra_depth + 1,
                         loops,
-                    )?;
+                    })?;
 
                     // 关闭 nested exit block
                     self.emit(WasmInstruction::End);

@@ -123,6 +123,7 @@ impl Lowerer {
 
     /// 声明 async 续体的公共作用域变量
     /// ($env, $this, $state, $resume_val, $is_rejected, $promise, $closure_env)
+    #[allow(clippy::type_complexity)]
     fn declare_async_continuation_scopes(
         &mut self,
         span: swc_core::common::Span,

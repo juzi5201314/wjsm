@@ -184,7 +184,7 @@ impl Compiler {
     /// - null → +0
     /// - true → 1.0，false → 0.0
     /// - 其他 boxed 类型 → 调用 to_number 宿主函数
-    /// 执行后栈顶为 ToNumber 结果（i64）。
+    ///   执行后栈顶为 ToNumber 结果（i64）。
     pub(crate) fn emit_to_number(&mut self, val_local: u32) -> Result<()> {
         let box_base = value::BOX_BASE as i64;
         let to_number_idx = self.special_host_import_indices

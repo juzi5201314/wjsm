@@ -48,6 +48,14 @@ impl Visit for DerivedCtorPreSuperUse {
     fn visit_class(&mut self, _: &swc_ast::Class) {}
 }
 
+struct ValueDecoratorContext<'a> {
+    decorators: &'a [swc_ast::Decorator],
+    kind: &'a str,
+    name: &'a str,
+    is_static: bool,
+    is_private: bool,
+}
+
 pub(super) fn first_pre_super_this_or_super_span(body: &swc_ast::BlockStmt) -> Option<Span> {
     let mut visitor = DerivedCtorPreSuperUse::default();
     body.visit_with(&mut visitor);
@@ -473,14 +481,17 @@ impl Lowerer {
         &mut self,
         mut block: BasicBlockId,
         mut original: ValueId,
-        decorators: &[swc_ast::Decorator],
-        kind: &str,
-        name: &str,
-        is_static: bool,
-        is_private: bool,
+        ctx: &ValueDecoratorContext,
     ) -> Result<(BasicBlockId, ValueId), LoweringError> {
+        let ValueDecoratorContext {
+            decorators,
+            kind,
+            name,
+            is_static,
+            is_private,
+        } = ctx;
         let mut decorator_values = Vec::with_capacity(decorators.len());
-        for decorator in decorators {
+        for decorator in *decorators {
             let value = self.lower_expr(&decorator.expr, block)?;
             block = self.resolve_store_block(block);
             decorator_values.push(value);
@@ -491,8 +502,8 @@ impl Lowerer {
                 block,
                 kind,
                 Some(name),
-                Some(is_static),
-                Some(is_private),
+                Some(*is_static),
+                Some(*is_private),
             );
             let result = self.alloc_value();
             let this_val = self.emit_undefined_const(block);
@@ -710,7 +721,7 @@ impl Lowerer {
                     entry.1 = Some(m_function_id);
                 }
                 if entry.0.is_some() || entry.1.is_some() {
-                    let (g, s) = entry.clone();
+                    let (g, s) = *entry;
                     if let Some(pos) = out.iter().position(|(n, st, k)| {
                         n == &key.0
                             && *st == key.1

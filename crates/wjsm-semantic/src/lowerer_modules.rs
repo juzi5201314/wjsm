@@ -151,10 +151,10 @@ fn predeclare_module_exports(
                         }
                     }
                 }
-                swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportNamed(named)) => {
-                    if named.src.is_none() {
-                        lower_export_named(lowerer, named);
-                    }
+                swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportNamed(named))
+                    if named.src.is_none() =>
+                {
+                    lower_export_named(lowerer, named);
                 }
                 _ => {}
             }
@@ -188,14 +188,17 @@ fn apply_re_export_map(lowerer: &mut Lowerer) -> Result<(), LoweringError> {
                             .insert((module_id, export_name), ir_name.clone());
                     }
                 }
-            } else if let (Some(local), Some(exported)) =
-                (binding.local_name.as_ref(), binding.exported_name.as_ref())
-            {
-                if let Some(ir_name) = resolve_export_ir(lowerer, binding.source_module, local) {
-                    lowerer
-                        .export_map
-                        .insert((module_id, exported.clone()), ir_name);
-                }
+            } else if let (Some(_local), Some(exported), Some(ir_name)) = (
+                binding.local_name.as_ref(),
+                binding.exported_name.as_ref(),
+                binding
+                    .local_name
+                    .as_ref()
+                    .and_then(|local| resolve_export_ir(lowerer, binding.source_module, local)),
+            ) {
+                lowerer
+                    .export_map
+                    .insert((module_id, exported.clone()), ir_name);
             }
         }
     }

@@ -380,11 +380,13 @@ impl Lowerer {
                         (block, method_value) = self.emit_apply_value_decorators(
                             block,
                             method_value,
-                            &method.function.decorators,
-                            "method",
-                            &method_name,
-                            is_static,
-                            false,
+                            &ValueDecoratorContext {
+                                decorators: &method.function.decorators,
+                                kind: "method",
+                                name: &method_name,
+                                is_static,
+                                is_private: false,
+                            },
                         )?;
                     }
                     self.current_function.append_instruction(
@@ -412,11 +414,13 @@ impl Lowerer {
                     (block, m_dest) = self.emit_apply_value_decorators(
                         block,
                         m_dest,
-                        &method.function.decorators,
-                        "method",
-                        &method_name,
-                        is_static,
-                        false,
+                        &ValueDecoratorContext {
+                            decorators: &method.function.decorators,
+                            kind: "method",
+                            name: &method_name,
+                            is_static,
+                            is_private: false,
+                        },
                     )?;
                 }
                 self.current_function.append_instruction(
@@ -454,11 +458,13 @@ impl Lowerer {
                     (block, fn_dest) = self.emit_apply_value_decorators(
                         block,
                         fn_dest,
-                        &method.function.decorators,
-                        kind,
-                        &method_name,
-                        is_static,
-                        false,
+                        &ValueDecoratorContext {
+                            decorators: &method.function.decorators,
+                            kind,
+                            name: &method_name,
+                            is_static,
+                            is_private: false,
+                        },
                     )?;
                 }
                 let desc = self.build_descriptor(accessor, fn_dest, false, true, block)?;

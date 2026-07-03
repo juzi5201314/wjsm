@@ -34,7 +34,7 @@ fn embedded_support_cwasm_deserializes() {
 
     for name in abi::SUPPORT_EXPORTS {
         assert!(
-            exports.iter().any(|e| *e == *name),
+            exports.contains(name),
             "support cwasm 缺少 export: {name}（实际 exports: {exports:?}）"
         );
     }

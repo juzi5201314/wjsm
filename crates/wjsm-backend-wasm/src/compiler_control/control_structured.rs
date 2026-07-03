@@ -1,3 +1,4 @@
+use super::control_switch::SwitchCaseContext;
 use super::*;
 
 impl Compiler {
@@ -481,15 +482,15 @@ impl Compiler {
                         let entry_target = entry.target_idx;
                         let switch_break_depth = (num_entries - i - 1) as u32;
                         let extra_depth = (num_entries - i) as u32;
-                        self.compile_switch_case(
+                        self.compile_switch_case(&SwitchCaseContext {
                             module,
                             blocks,
-                            entry_target,
+                            case_start: entry_target,
                             exit_idx,
                             switch_break_depth,
                             extra_depth,
-                            &loops,
-                        )?;
+                            loops: &loops,
+                        })?;
                     }
 
                     self.emit(WasmInstruction::End);

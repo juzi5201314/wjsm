@@ -254,7 +254,7 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::AsyncFunctionStart => {
-                if args.len() < 1 {
+                if args.is_empty() {
                     bail!(
                         "AsyncFunctionStart requires at least 1 argument, got {}",
                         args.len()
