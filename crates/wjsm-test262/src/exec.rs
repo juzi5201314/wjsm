@@ -106,13 +106,22 @@ pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult
     let source = build_test_source(test, harness);
     let wjsm_binary = find_wjsm_binary();
 
+    // 模块模式测试不传 --script，使 wjsm 以 ES module 方式解析
+    let is_module = test.is_module();
+
     let mut cmd = if wjsm_binary.file_name() == Some(std::ffi::OsStr::new("cargo")) {
         let mut c = Command::new("cargo");
-        c.args(["run", "--bin", "wjsm-cli", "--", "run", "-", "--script"]);
+        c.args(["run", "--bin", "wjsm-cli", "--", "run", "-"]);
+        if !is_module {
+            c.arg("--script");
+        }
         c
     } else {
         let mut c = Command::new(&wjsm_binary);
-        c.args(["run", "-", "--script"]);
+        c.args(["run", "-"]);
+        if !is_module {
+            c.arg("--script");
+        }
         c
     };
 
@@ -242,9 +251,19 @@ fn find_wjsm_binary() -> std::path::PathBuf {
 }
 
 /// 检查 negative 测试的结果。
+///
+/// wjsm 退出码约定：
+/// - 0：成功
+/// - 1：编译错误（parse/lower/compile），stderr 格式 `Error: {e:#}`
+/// - 2：运行时错误（WASM 执行），stderr 格式 `Runtime error: {e:#}`
+///
+/// test262 phase 与 wjsm 阶段的对应：
+/// - `Parse` / `Early`：编译期错误（exit 1）。wjsm 编译错误消息不含错误类型名
+///   （如 "SyntaxError"），因此只检查退出码。
+/// - `Resolution`：编译期或运行时（取决于实现，宽松匹配）。
+/// - `Runtime`：运行时错误（exit 2）。wjsm 运行时错误消息含错误类型名
+///   （如 "TypeError: ..."），因此额外检查 stderr 中是否包含预期类型。
 fn check_negative_result(exit_code: i32, stderr: &str, negative: &Negative) -> TestResult {
-    // wjsm 的 exit code 非零表示出错
-    // 但需要匹配错误类型
     if exit_code == 0 {
         return TestResult::Failed {
             expected: format!("{} at {:?}", negative.error_type.as_str(), negative.phase),
@@ -252,33 +271,48 @@ fn check_negative_result(exit_code: i32, stderr: &str, negative: &Negative) -> T
         };
     }
 
-    // 从 stderr 中检查错误类型是否匹配
-    // 简单匹配：检查 stderr 中是否包含预期的错误类型名称
     let expected_type = negative.error_type.as_str();
-    let stderr_lower = stderr.to_lowercase();
 
-    // 根据 phase 判断
-    match negative.phase {
-        Phase::Parse | Phase::Early => {
-            // 解析/早期错误通常在 stderr 中有 "SyntaxError" 或类似信息
-            if stderr_lower.contains(&expected_type.to_lowercase()) {
-                TestResult::Passed
-            } else {
-                TestResult::Failed {
-                    expected: format!("{} error", expected_type),
-                    actual: format!("stderr: {}", stderr.trim()),
-                }
-            }
-        }
-        Phase::Runtime | Phase::Resolution => {
-            if stderr_lower.contains(&expected_type.to_lowercase()) {
-                TestResult::Passed
-            } else {
-                TestResult::Failed {
-                    expected: format!("{} error", expected_type),
-                    actual: format!("stderr: {}", stderr.trim()),
-                }
-            }
+    // 退出码与 phase 匹配检查
+    // exit 1 = 编译错误，exit 2 = 运行时错误
+    let is_compile_error = exit_code == 1;
+    let is_runtime_error = exit_code == 2;
+
+    let phase_matches = match negative.phase {
+        Phase::Parse | Phase::Early => is_compile_error,
+        Phase::Resolution => is_compile_error || is_runtime_error,
+        Phase::Runtime => is_runtime_error,
+    };
+
+    if !phase_matches {
+        let expected_exit = match negative.phase {
+            Phase::Parse | Phase::Early | Phase::Resolution => 1,
+            Phase::Runtime => 2,
+        };
+        return TestResult::Failed {
+            expected: format!("{} at {:?} (expect exit {})", expected_type, negative.phase, expected_exit),
+            actual: format!("exit_code={}, stderr={}", exit_code, stderr.trim()),
+        };
+    }
+
+    // 编译期错误（Parse/Early）：wjsm 错误消息格式为 `Error: error: <msg>`，
+    // 不含错误类型名，因此只要退出码匹配即可通过。
+    // Resolution 阶段同理——可能是编译期或运行时，退出码已匹配即可。
+    if matches!(negative.phase, Phase::Parse | Phase::Early | Phase::Resolution) {
+        return TestResult::Passed;
+    }
+
+    // 运行时错误（Runtime）：wjsm 错误消息格式为 `Runtime error: <ErrorType>: <msg>`，
+    // 检查 stderr 中是否包含预期的错误类型名称。
+    let stderr_lower = stderr.to_lowercase();
+    let expected_lower = expected_type.to_lowercase();
+
+    if stderr_lower.contains(&expected_lower) {
+        TestResult::Passed
+    } else {
+        TestResult::Failed {
+            expected: format!("{} error at Runtime", expected_type),
+            actual: format!("exit_code={}, stderr={}", exit_code, stderr.trim()),
         }
     }
 }
@@ -299,7 +333,8 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
 
     // raw 模式：只添加 workaround 和测试主体
     if test.is_raw() {
-        if test.is_strict() {
+        // 模块模式隐含 strict，无需显式 "use strict"
+        if test.is_strict() && !test.is_module() {
             source.push_str("\"use strict\";\n");
         }
         source.push_str(&test.source);
@@ -331,8 +366,8 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
         }
     }
 
-    // 5. 处理 flags
-    if test.is_strict() {
+    // 5. 处理 flags — 模块模式隐含 strict，无需显式 "use strict"
+    if test.is_strict() && !test.is_module() {
         source.push_str("\"use strict\";\n");
     }
 

@@ -51,6 +51,34 @@ Hello, wjsm!
 7
 ```
 
+## Test262 一致性测试
+
+wjsm 使用 [test262](https://github.com/tc39/test262) 作为 ECMAScript 一致性测试套件。test262 以 git submodule 形式集成。
+
+### 初始化 submodule
+
+```bash
+git submodule update --init test262
+```
+
+如果 build 时未初始化，`wjsm-test262` crate 的 `build.rs` 会发出警告。CI 会自动初始化 submodule 并运行一致性测试。
+
+### 运行测试
+
+```bash
+# 构建 wjsm（test262 runner 依赖 wjsm 二进制）
+cargo build --release
+
+# 运行 built-ins 测试套件
+cargo run --release -p wjsm-test262 -- run --suite test/built-ins --plain
+
+# 运行所有已支持特性的测试
+cargo run --release -p wjsm-test262 -- run --suite test --plain
+
+# 运行全部测试（包括未支持特性，会产生大量失败）
+cargo run --release -p wjsm-test262 -- run --suite test --all --plain
+```
+
 ## Roadmap
 
 ### 语言特性

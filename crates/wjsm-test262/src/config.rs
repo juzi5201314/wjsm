@@ -128,13 +128,18 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "array-grouping",
 ];
 
-/// 需要忽略的 flags（当前 wjsm 不支持）。
-pub const IGNORED_FLAGS: &[TestFlag] = &[TestFlag::Module];
+/// 需要忽略的 flags（wjsm 当前不支持或不适用的测试模式）。
+///
+/// - `CanBlockIsFalse`：wjsm 的 Agent [[CanBlock]] 为 true，不满足此 flag 的前提条件。
+///
+/// 注意：`TestFlag::Module` 已从忽略列表中移除——模块模式测试现在会被运行。
+pub const IGNORED_FLAGS: &[TestFlag] = &[TestFlag::CanBlockIsFalse];
 
 /// 检查是否应该运行某个测试。
 ///
 /// - 如果 `--all` 被指定，返回 true
 /// - 如果测试包含任何 IGNORED_FLAGS，返回 false
+/// - 如果测试没有任何 feature 标记，返回 true（基础语法测试）
 /// - 如果测试的 features 中有任何一个是 SUPPORTED_FEATURES 中的，返回 true
 /// - 否则返回 false
 pub fn should_run_test(test: &Test, run_all: bool) -> bool {
@@ -147,6 +152,11 @@ pub fn should_run_test(test: &Test, run_all: bool) -> bool {
         if test.metadata.flags.contains(flag) {
             return false;
         }
+    }
+
+    // 没有 feature 标记的测试通常是基础语法测试，应该运行
+    if test.metadata.features.is_empty() {
+        return true;
     }
 
     // 检查是否有支持的 feature

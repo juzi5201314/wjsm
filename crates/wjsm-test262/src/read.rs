@@ -40,6 +40,9 @@ pub enum Phase {
 }
 
 /// 错误类型。
+///
+/// 对应 ECMAScript 规范中定义的所有原生错误构造器名称，
+/// 以及 test262 harness 自定义的 `Test262Error`。
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum ErrorType {
@@ -49,6 +52,10 @@ pub enum ErrorType {
     RangeError,
     TypeError,
     EvalError,
+    URIError,
+    AggregateError,
+    SuppressedError,
+    Error,
 }
 
 impl ErrorType {
@@ -60,6 +67,10 @@ impl ErrorType {
             Self::RangeError => "RangeError",
             Self::TypeError => "TypeError",
             Self::EvalError => "EvalError",
+            Self::URIError => "URIError",
+            Self::AggregateError => "AggregateError",
+            Self::SuppressedError => "SuppressedError",
+            Self::Error => "Error",
         }
     }
 }
@@ -109,6 +120,10 @@ impl Test {
 
     pub fn is_raw(&self) -> bool {
         self.metadata.flags.contains(&TestFlag::Raw)
+    }
+
+    pub fn is_module(&self) -> bool {
+        self.metadata.flags.contains(&TestFlag::Module)
     }
 }
 
