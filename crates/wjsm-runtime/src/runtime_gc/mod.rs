@@ -77,9 +77,15 @@ pub mod heap_governance;
 pub mod mark_bitmap;
 pub mod mark_sweep;
 pub mod native_callable_refs;
+pub mod registry;
 pub mod roots;
 pub mod side_table_refs;
 pub mod weak_refs;
 
 pub use api::{GcAlgorithm, GcContext};
 pub use mark_sweep::MarkSweepCollector;
+#[expect(
+    unused_imports,
+    reason = "T0.3 wires registry into RuntimeState after v2 switch"
+)]
+pub use registry::GcAlgorithmKind;
