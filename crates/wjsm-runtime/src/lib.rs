@@ -6,7 +6,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
@@ -625,6 +625,7 @@ impl Clone for RuntimeState {
             gc_mark_bits: self.gc_mark_bits.clone(),
             alloc_counter: self.alloc_counter.clone(),
             gc_threshold: self.gc_threshold.clone(),
+            gc_epoch: self.gc_epoch.clone(),
             timers: self.timers.clone(),
             cancelled_timers: self.cancelled_timers.clone(),
             next_timer_id: self.next_timer_id.clone(),
@@ -722,6 +723,8 @@ struct RuntimeState {
     alloc_counter: Arc<Mutex<u64>>,
     /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。自适应——每次 GC 后根据存活对象数调整。
     gc_threshold: Arc<Mutex<u64>>,
+    /// GC epoch：任何可能改变 obj_table ptr/色位的 GC 点递增，用于 debug INV-C2 断言。
+    gc_epoch: Arc<AtomicU64>,
     /// 定时器列表
     timers: Arc<Mutex<Vec<TimerEntry>>>,
     /// 已取消的定时器 ID 集合
@@ -1008,6 +1011,7 @@ impl RuntimeState {
             gc_mark_bits: Arc::new(Mutex::new(Vec::new())),
             alloc_counter: Arc::new(Mutex::new(0)),
             gc_threshold: Arc::new(Mutex::new(Self::GC_MIN_THRESHOLD)),
+            gc_epoch: Arc::new(AtomicU64::new(0)),
             timers: Arc::new(Mutex::new(Vec::new())),
             cancelled_timers: Arc::new(Mutex::new(HashSet::new())),
             next_timer_id: Arc::new(Mutex::new(1)),

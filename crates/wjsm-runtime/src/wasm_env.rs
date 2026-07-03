@@ -24,6 +24,8 @@ pub(crate) struct WasmEnv {
     pub arr_proto_table_len: Option<Global>,
     pub arr_proto_table_hash: Option<Global>,
     pub heap_limit: Option<Global>,
+    pub alloc_ptr: Option<Global>,
+    pub alloc_end: Option<Global>,
 }
 
 impl WasmEnv {
@@ -67,6 +69,12 @@ impl WasmEnv {
                 .and_then(Extern::into_global),
             heap_limit: caller
                 .get_export("__heap_limit")
+                .and_then(Extern::into_global),
+            alloc_ptr: caller
+                .get_export("__alloc_ptr")
+                .and_then(Extern::into_global),
+            alloc_end: caller
+                .get_export("__alloc_end")
                 .and_then(Extern::into_global),
         })
     }

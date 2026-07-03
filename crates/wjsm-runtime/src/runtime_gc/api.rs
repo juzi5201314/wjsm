@@ -1,17 +1,13 @@
 //! GC trait 框架（spec §6）。
 //!
-//! 算法 trait 抽象：`GcAlgorithm: Allocator + Marker + Sweeper`。
-//! 默认实现 `MarkSweepCollector`（non-moving + segregated free list）。
-//! 预留 generational/incremental/parallel 接入点（WriteBarrier/ReadBarrier/
-//! HeapRegionManager/mark_step/sweep_step，默认 no-op）。
+//! 当前文件在 P0 期间同时承载 v1 组合 trait 与 v2 生命周期 trait。
+//! `GcAlgorithmV2` 是后续 G1/ZGC 接入边界；T0.3 会删除 v1 trait 并将其更名为
+//! `GcAlgorithm`。
 //!
-//! **稳定性承诺**（spec 附录 D）：trait 签名、GcContext 字段集（只增不减）、
-//! Handle/Value 别名、fast-path 物理边界均稳定，后续算法只 impl 新 struct 不改框架。
-//!
-//! **关键不变量**（spec §18）：
-//! - INV-C 对象永不动（non-moving）：所有算法实现必须维护，否则 WASM locals 失效 → O2 复现。
-//! - IMPL-8 `GcContext` 不持 `&mut [u8]`；每阶段 `with_memory`/`with_memory_mut` 重借；
-//!   grow 经 `ctx.grow()`（#9，grow 借用安全）。
+//! **关键不变量**（v2 spec §22）：
+//! - INV-C1：JS 值层引用是 handle；`obj_table[h]` 是唯一 ptr truth。
+//! - INV-C2：raw ptr 不跨潜在 moving/collect GC 点；跨越必须重新 resolve。
+//! - IMPL-8：`GcContext` 不持 `&mut [u8]`；每阶段重借，grow 经 `ctx.grow()`。
 #![allow(dead_code)]
 use crate::RuntimeState;
 use crate::wasm_env::WasmEnv;
@@ -22,6 +18,29 @@ use wasmtime::{AsContextMut, StoreContextMut};
 pub type Handle = u32;
 /// NaN-boxed JS 值（i64）。
 pub type Value = i64;
+
+/// fast-path 分配窗口耗尽后交给算法的完整 slow-path 请求。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllocRequest {
+    pub size: usize,
+    pub heap_type: u8,
+    pub capacity: u32,
+}
+
+/// 增量 GC 步进预算，由调度器按 pause target 与吞吐估算生成。
+#[derive(Debug, Clone, Copy)]
+pub struct StepBudget {
+    pub work_bytes: usize,
+    pub deadline: std::time::Instant,
+}
+
+/// 单次 safepoint 步进结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepOutcome {
+    Idle,
+    Progress { remaining_estimate: usize },
+    CycleComplete,
+}
 
 // ── 对象元信息查询（所有算法共享，只读） ──
 /// 查询对象堆元信息。算法通过 GcContext.with_memory 现场算，不缓存。
@@ -142,6 +161,68 @@ pub trait GcAlgorithm: Allocator + Marker + Sweeper {
     }
 }
 
+/// v2 算法接口：用完整生命周期方法取代 v1 `Allocator + Marker + Sweeper` 切片。
+///
+/// 本 trait 先以 `GcAlgorithmV2` 与 v1 共存；T0.3 迁移调用方后更名为
+/// `GcAlgorithm`。默认 hook 只用于非对应算法的不可达路径，不提供行为兜底。
+pub trait GcAlgorithmV2: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    /// 实例化后一次性接管动态堆域 `[dynamic_start, heap_limit)`。
+    fn attach_heap(&mut self, ctx: &mut GcContext, dynamic_start: usize);
+
+    /// 分配 slow-path：返回线性内存 ptr，handle 注册仍由调用方完成。
+    fn alloc_slow(
+        &mut self,
+        ctx: &mut GcContext,
+        roots: &mut dyn RootProvider,
+        req: AllocRequest,
+    ) -> Option<usize>;
+
+    /// safepoint 轮询入口，按预算推进增量工作。
+    fn safepoint_step(
+        &mut self,
+        ctx: &mut GcContext,
+        roots: &mut dyn RootProvider,
+        budget: StepBudget,
+    ) -> StepOutcome;
+
+    /// 显式 `gc()` / OOM 兜底入口：同步跑完当前或新周期。
+    fn collect_full(&mut self, ctx: &mut GcContext, roots: &mut dyn RootProvider) -> GcStats;
+
+    /// ZGC load barrier slow-path；非 ZGC 算法不应被调用。
+    fn load_barrier_slow(&mut self, ctx: &mut GcContext, h: Handle) -> u32 {
+        let _ = (ctx, h);
+        debug_assert!(false, "load_barrier_slow called on non-zgc algorithm");
+        0
+    }
+
+    /// 统一 barrier event buffer flush。硬约束：只 drain，不 collect/grow/move/recolor。
+    fn barrier_flush(&mut self, ctx: &mut GcContext) {
+        let _ = ctx;
+    }
+
+    /// host 侧堆写 hook，由 `heap_access` 统一入口调用。
+    fn on_host_write(
+        &mut self,
+        ctx: &mut GcContext,
+        target: Handle,
+        slot_addr: usize,
+        old_val: Value,
+        new_val: Value,
+    ) {
+        let _ = (ctx, target, slot_addr, old_val, new_val);
+    }
+
+    /// host 侧解引用 hook；ZGC relocate 期可同步 heal 后返回新 ptr。
+    fn on_host_resolve(&mut self, ctx: &mut GcContext, h: Handle) -> Option<usize> {
+        let _ = (ctx, h);
+        None
+    }
+
+    fn last_stats(&self) -> &GcStats;
+}
+
 // ── 算法运行时上下文（注入给 trait 方法） ──
 //
 // 【IMPL-8 / #9 关键约束】不持有 `&mut [u8]`。原因：gc_alloc_slow 在 mark/sweep 后可能
@@ -194,6 +275,24 @@ impl<'a> GcContext<'a> {
     /// 读/写 RuntimeState（store.data_mut）。
     pub fn with_state<R>(&mut self, f: impl FnOnce(&mut RuntimeState) -> R) -> R {
         f(self.store.data_mut())
+    }
+
+    /// 当前 GC epoch。debug INV-C2 用：任何可能改写 obj_table ptr/色位的 GC 点递增。
+    pub fn gc_epoch(&self) -> u64 {
+        self.store
+            .data()
+            .gc_epoch
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 设置 v2 分配窗口。P1 前这些 globals 不存在，因此按 Option 容错。
+    pub fn alloc_window_set(&mut self, ptr: usize, end: usize) {
+        if let Some(global) = self.env.alloc_ptr {
+            let _ = global.set(&mut self.store, wasmtime::Val::I32(ptr as i32));
+        }
+        if let Some(global) = self.env.alloc_end {
+            let _ = global.set(&mut self.store, wasmtime::Val::I32(end as i32));
+        }
     }
 }
 

@@ -222,6 +222,12 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
         heap_limit: instance
             .get_export(&mut *store, "__heap_limit")
             .and_then(|e| e.into_global()),
+        alloc_ptr: instance
+            .get_export(&mut *store, "__alloc_ptr")
+            .and_then(|e| e.into_global()),
+        alloc_end: instance
+            .get_export(&mut *store, "__alloc_end")
+            .and_then(|e| e.into_global()),
     }
 }
 
