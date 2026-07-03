@@ -435,7 +435,7 @@ pub(crate) fn define_primitive_core(
                 None
             } else if value::is_string(desc) {
                 // 字符串直接使用原始值，不裁剪引号（ES §20.4.1.1）
-                Some(get_string_value(&mut caller, desc))
+                Some(get_string_utf8_lossy(&mut caller, desc))
             } else {
                 Some(render_value(&mut caller, desc).unwrap_or_default())
             };

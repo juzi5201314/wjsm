@@ -287,6 +287,40 @@ fn liveness_dead_value_not_live() {
 }
 
 #[test]
+fn liveness_block_use_ignores_values_defined_inside_successor() {
+    // bb0 跳到 bb1；bb1 内部定义 v0 后只在本块 StoreVar 使用。
+    // v0 不应成为 bb1 live_in，更不应污染 bb0 live_out；否则 safepoint 会把
+    // 已死 SSA 临时对象暴露给显式 gc()，破坏 WeakRef/FinalizationRegistry 语义。
+    let mut module = Module::new();
+    let mut f = Function::new("test", bb(0));
+
+    let mut b0 = BasicBlock::new(bb(0));
+    b0.set_terminator(Terminator::Jump { target: bb(1) });
+
+    let mut b1 = BasicBlock::new(bb(1));
+    b1.push_instruction(Instruction::NewObject {
+        dest: v(0),
+        capacity: 4,
+    });
+    b1.push_instruction(Instruction::StoreVar {
+        name: "$0.obj".to_string(),
+        value: v(0),
+    });
+    b1.set_terminator(Terminator::Return { value: None });
+
+    f.push_block(b0);
+    f.push_block(b1);
+    module.push_function(f);
+
+    let live = compute_liveness(module.functions().last().unwrap());
+    let b0_out = live.get(&(bb(0), 0)).unwrap();
+    assert!(
+        !b0_out.contains(&v(0)),
+        "successor-local v0 must not be live out of predecessor: {b0_out:?}"
+    );
+}
+
+#[test]
 fn liveness_if_else_join_phi_edge_distribution() {
     // CFG:
     //   bb0: v0 = Const(0); Branch(v0) -> bb1 / bb2

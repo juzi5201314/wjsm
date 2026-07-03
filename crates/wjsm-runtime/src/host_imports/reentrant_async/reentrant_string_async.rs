@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_string::RuntimeString;
 use wjsm_ir::wk_symbol;
 fn build_groups_obj_from_named(
     caller: &mut Caller<'_, RuntimeState>,
@@ -124,7 +125,7 @@ fn replace_callback_result_to_string(caller: &mut Caller<'_, RuntimeState>, resu
         return String::new();
     }
     if value::is_runtime_string_handle(result) || value::is_string(result) {
-        return get_string_value(caller, result);
+        return get_string_utf8_lossy(caller, result);
     }
     eval_to_string(caller, result)
 }
@@ -171,6 +172,7 @@ pub(crate) async fn string_replace_default_async_body(
     replace: i64,
 ) -> i64 {
     let s = get_string_value(caller, receiver);
+    let subject_lossy = s.to_utf8_lossy();
 
     // 检查 replace 是否为函数（支持函数替换）
     let is_func_replace = value::is_callable(replace);
@@ -199,7 +201,7 @@ pub(crate) async fn string_replace_default_async_body(
             }
             let matches: Vec<MatchInfo> = entry
                 .compiled
-                .find_iter(&s)
+                .find_iter(&subject_lossy)
                 .map(|m| MatchInfo {
                     start: m.start(),
                     end: m.end(),
@@ -215,18 +217,18 @@ pub(crate) async fn string_replace_default_async_body(
             let mut last_end = 0;
             for mi in &matches {
                 // 添加匹配前的部分
-                result.push_str(&s[last_end..mi.start]);
+                result.push_str(&subject_lossy[last_end..mi.start]);
                 // 根据是否为函数选择替换方式
                 let replaced = if is_func_replace {
                     let groups_obj = if mi.named.is_empty() {
                         value::encode_undefined()
                     } else {
-                        build_groups_obj_from_named(caller, &mi.named, &s)
+                        build_groups_obj_from_named(caller, &mi.named, &subject_lossy)
                     };
                     call_replace_func_async(
                         caller,
                         replace,
-                        &s,
+                        &subject_lossy,
                         mi.start,
                         mi.end,
                         &mi.captures,
@@ -234,10 +236,10 @@ pub(crate) async fn string_replace_default_async_body(
                     )
                     .await
                 } else {
-                    let replace_str = get_string_value(caller, replace);
+                    let replace_str_lossy = get_string_utf8_lossy(caller, replace);
                     process_replacement_from_captures(
-                        &replace_str,
-                        &s,
+                        &replace_str_lossy,
+                        &subject_lossy,
                         mi.start,
                         mi.end,
                         &mi.captures,
@@ -247,11 +249,11 @@ pub(crate) async fn string_replace_default_async_body(
                 result.push_str(&replaced);
                 last_end = mi.end;
             }
-            result.push_str(&s[last_end..]);
-            store_runtime_string(&*caller, result)
+            result.push_str(&subject_lossy[last_end..]);
+            store_runtime_string(&*caller, RuntimeString::from_utf8_str(&result))
         } else {
             // 单次替换
-            match entry.compiled.find(&s) {
+            match entry.compiled.find(&subject_lossy) {
                 Some(m) => {
                     let captures: Vec<Option<std::ops::Range<usize>>> =
                         (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
@@ -264,14 +266,14 @@ pub(crate) async fn string_replace_default_async_body(
                     let groups_obj = if named.is_empty() {
                         value::encode_undefined()
                     } else {
-                        build_groups_obj_from_named(caller, &named, &s)
+                        build_groups_obj_from_named(caller, &named, &subject_lossy)
                     };
                     // Match 不再使用 — 所有数据已提取
                     let replaced = if is_func_replace {
                         call_replace_func_async(
                             caller,
                             replace,
-                            &s,
+                            &subject_lossy,
                             match_start,
                             match_end,
                             &captures,
@@ -279,10 +281,10 @@ pub(crate) async fn string_replace_default_async_body(
                         )
                         .await
                     } else {
-                        let replace_str = get_string_value(caller, replace);
+                        let replace_str_lossy = get_string_utf8_lossy(caller, replace);
                         process_replacement_from_captures(
-                            &replace_str,
-                            &s,
+                            &replace_str_lossy,
+                            &subject_lossy,
                             match_start,
                             match_end,
                             &captures,
@@ -290,10 +292,10 @@ pub(crate) async fn string_replace_default_async_body(
                         )
                     };
                     let mut result = String::new();
-                    result.push_str(&s[..match_start]);
+                    result.push_str(&subject_lossy[..match_start]);
                     result.push_str(&replaced);
-                    result.push_str(&s[match_end..]);
-                    store_runtime_string(&*caller, result)
+                    result.push_str(&subject_lossy[match_end..]);
+                    store_runtime_string(&*caller, RuntimeString::from_utf8_str(&result))
                 }
                 None => store_runtime_string(&*caller, s),
             }
@@ -301,28 +303,32 @@ pub(crate) async fn string_replace_default_async_body(
     } else {
         // 字符串替换
         let search_str = get_string_value(caller, search);
-        if let Some(pos) = s.find(&search_str) {
-            // 对于字符串搜索，函数替换的参数是：matched, offset, string
+        if let Some(pos) = s.find_units(&search_str, 0) {
             let replaced = if is_func_replace {
-                // 构造 captures（只有完整匹配）
-                let captures = vec![Some(pos..pos + search_str.len())];
-                call_replace_func_async(
-                    caller,
-                    replace,
-                    &s,
-                    pos,
-                    pos + search_str.len(),
-                    &captures,
-                    value::encode_undefined(),
+                let search_lossy = search_str.to_utf8_lossy();
+                let subject_lossy = s.to_utf8_lossy();
+                let Some(byte_pos) = subject_lossy.find(&search_lossy) else {
+                    return store_runtime_string(&*caller, s);
+                };
+                let captures = vec![Some(byte_pos..byte_pos + search_lossy.len())];
+                RuntimeString::from_utf8_str(
+                    &call_replace_func_async(
+                        caller,
+                        replace,
+                        &subject_lossy,
+                        byte_pos,
+                        byte_pos + search_lossy.len(),
+                        &captures,
+                        value::encode_undefined(),
+                    )
+                    .await,
                 )
-                .await
             } else {
                 get_string_value(caller, replace)
             };
-            let mut result = String::new();
-            result.push_str(&s[..pos]);
-            result.push_str(&replaced);
-            result.push_str(&s[pos + search_str.len()..]);
+            let mut result = s.slice_units(0..pos);
+            result.push_units_from(&replaced);
+            result.push_units_from(&s.slice_units(pos + search_str.utf16_len()..s.utf16_len()));
             store_runtime_string(&*caller, result)
         } else {
             store_runtime_string(&*caller, s)

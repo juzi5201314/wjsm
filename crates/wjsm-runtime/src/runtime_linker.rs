@@ -112,23 +112,7 @@ pub(super) fn register_common_bridges(
     let f = Func::wrap(
         &mut *store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
-            if let Some(name_id) = symbol_value_to_name_id(key) {
-                return name_id as i32;
-            }
-            // 运行期字符串（拼接 / 模板 / String() 等）与数字 key：低 32 位是 handle 或 f64 位，
-            // 不是 data-section name_id。必须取内容（ToString）后 find-or-alloc 出稳定 name_id，
-            // 否则动态属性名（o["p"+i]）或数字 key（o[5]）会错位。
-            if value::is_runtime_string_handle(key) || value::is_f64(key) {
-                if let Ok(s) = render_value(&mut caller, key)
-                    && let Some(id) = find_memory_c_string(&mut caller, &s)
-                        .or_else(|| alloc_heap_c_string(&mut caller, &s))
-                {
-                    return id as i32;
-                }
-                return 0;
-            }
-            // 编译期常量字符串：低 32 位即 data 区指针，本身就是 name_id。
-            key as i32
+            property_key_value_to_name_id(&mut caller, key, true).unwrap_or(0) as i32
         },
     );
     linker.define(&mut *store, "env", "symbol_property_key", f)?;
@@ -187,8 +171,8 @@ pub(super) fn register_common_bridges(
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(idx).cloned()
             };
-            match record {
-                Some(ref nc) => crate::runtime_heap::native_callable_prototype(&mut caller, nc)
+            match &record {
+                Some(nc) => crate::runtime_heap::native_callable_prototype(&mut caller, nc)
                     .unwrap_or_else(value::encode_undefined),
                 None => value::encode_undefined(),
             }

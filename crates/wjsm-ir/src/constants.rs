@@ -150,9 +150,11 @@ pub fn primordial_string_offsets() -> &'static [(u32, &'static str)] {
 }
 
 // ── 属性键编码 ──────────────────────────────────────────────────────────────
-// name_id 的最高位区分字符串键和 Symbol 键；低 31 位是对应表下标。
+// name_id 的高位区分 memory string、runtime string 和 Symbol；低位是对应表下标。
+pub const NAME_ID_RUNTIME_STRING_FLAG: u32 = 0x4000_0000;
 pub const NAME_ID_SYMBOL_FLAG: u32 = 0x8000_0000;
-pub const NAME_ID_INDEX_MASK: u32 = !NAME_ID_SYMBOL_FLAG;
+pub const NAME_ID_KIND_MASK: u32 = NAME_ID_RUNTIME_STRING_FLAG | NAME_ID_SYMBOL_FLAG;
+pub const NAME_ID_INDEX_MASK: u32 = !NAME_ID_KIND_MASK;
 // ── 属性槽相关常量 ──────────────────────────────────────────────────────────
 // 属性槽格式（32 字节）：
 // Offset 0:  name_id (4 bytes)  - 字符串或 Symbol 属性键编码
@@ -215,6 +217,10 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
             "handle_table_function_entry_factor",
             HANDLE_TABLE_FUNCTION_ENTRY_FACTOR,
         ),
+        ("name_id_runtime_string_flag", NAME_ID_RUNTIME_STRING_FLAG),
+        ("name_id_symbol_flag", NAME_ID_SYMBOL_FLAG),
+        ("name_id_kind_mask", NAME_ID_KIND_MASK),
+        ("name_id_index_mask", NAME_ID_INDEX_MASK),
         ("heap_allocation_alignment", HEAP_ALLOCATION_ALIGNMENT),
     ]
 }

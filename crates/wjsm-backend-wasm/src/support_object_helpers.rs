@@ -193,6 +193,13 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
+    emit_runtime_string_name_id_test(&mut func, 1);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_OBJ_GET_RUNTIME_KEY));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
     // 数组的 length 是内建数据属性，不存放在对象属性槽里。
     func.instruction(&WasmInstruction::LocalGet(5));
     func.instruction(&WasmInstruction::I32Load8U(MemArg {
@@ -563,6 +570,14 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::Call(HOST_ARRAY_NAMED_SET));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::End);
+    emit_runtime_string_name_id_test(&mut func, 1);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Call(HOST_OBJ_SET_RUNTIME_KEY));
+    func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
     // ── 搜索已有属性 ──
     func.instruction(&WasmInstruction::LocalGet(8));
@@ -1136,6 +1151,13 @@ fn emit_obj_delete() -> Function {
     func.instruction(&WasmInstruction::I32Eqz);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    emit_runtime_string_name_id_test(&mut func, 1);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_OBJ_DELETE_RUNTIME_KEY));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
 

@@ -421,7 +421,7 @@ pub(crate) fn symbol_proto_to_string_impl(
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let s = if let Some(entry) = table.get(handle) {
-        if let Some(ref desc) = entry.description {
+        if let Some(desc) = &entry.description {
             format!("Symbol({desc})")
         } else {
             "Symbol()".to_string()

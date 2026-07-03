@@ -13,9 +13,9 @@ use wjsm_ir::constants;
 use wjsm_ir::value;
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
-/// 格式版本：v6 新增 %IteratorPrototype% / Generator.prototype 两个 header 字段。
+/// 格式版本：v7 runtime string section stores UTF-16 code units。
 /// 任何 wire 改动必须递增。
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 6;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 7;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
@@ -46,13 +46,15 @@ pub struct StartupSnapshotHeader {
     pub array_proto_values: i64,
 }
 
+pub type SnapshotRuntimeString = Vec<u16>;
+
 /// Owned snapshot suitable for capture/write to disk.
 #[derive(Debug, Clone)]
 pub struct StartupSnapshotOwned {
     pub header: StartupSnapshotHeader,
     pub object_bytes: Vec<u8>,
     pub handle_rel_offsets: Vec<u32>,
-    pub runtime_strings: Vec<String>,
+    pub runtime_strings: Vec<SnapshotRuntimeString>,
     pub native_callables: Vec<SnapshotNativeCallable>,
     pub native_callable_methods: Vec<u8>,
 }
@@ -64,7 +66,7 @@ pub struct StartupSnapshotView<'a> {
     pub header: StartupSnapshotHeader,
     pub object_bytes: &'a [u8],
     pub handle_rel_offsets: Vec<u32>,
-    pub runtime_strings: Vec<String>,
+    pub runtime_strings: Vec<SnapshotRuntimeString>,
     pub native_callables: Vec<SnapshotNativeCallable>,
     pub native_callable_methods: Vec<u8>,
 }
@@ -332,9 +334,10 @@ fn build_section_payloads(snapshot: &StartupSnapshotOwned) -> (Vec<u8>, Vec<u8>,
     let mut rs_payload = Vec::new();
     rs_payload.extend_from_slice(&(snapshot.runtime_strings.len() as u32).to_le_bytes());
     for s in &snapshot.runtime_strings {
-        let b = s.as_bytes();
-        rs_payload.extend_from_slice(&(b.len() as u32).to_le_bytes());
-        rs_payload.extend_from_slice(b);
+        rs_payload.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        for unit in s {
+            rs_payload.extend_from_slice(&unit.to_le_bytes());
+        }
     }
 
     let mut nc_payload = Vec::new();
@@ -369,7 +372,7 @@ fn append_padded(buf: &mut Vec<u8>, data: &[u8]) {
 
 /// Decode a snapshot from bytes. `object_bytes` 安全借用输入 bytes，
 /// 其余字段 owned；不再使用 `unsafe`/`leak`/`from_raw_parts`。
-/// `runtime_strings` 以拥有 `String` 返回，调用方直接用于 `RuntimeState`。
+/// `runtime_strings` 以 UTF-16 code units 返回，调用方直接用于 `RuntimeState`。
 pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     if bytes.len() < HEADER_LEN {
         bail!("snapshot too short: {} bytes", bytes.len());
@@ -436,7 +439,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
 
     let mut object_bytes: &[u8] = &[];
     let mut handle_rel_offsets: Vec<u32> = Vec::new();
-    let mut runtime_strings: Vec<String> = Vec::new();
+    let mut runtime_strings: Vec<SnapshotRuntimeString> = Vec::new();
     let mut native_callables: Vec<SnapshotNativeCallable> = Vec::new();
     let mut native_callable_methods: Vec<u8> = Vec::new();
     let mut seen_object = false;
@@ -502,20 +505,26 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                     bail!("runtime_strings section too short");
                 }
                 let count = u32::from_le_bytes(data[0..4].try_into()?) as usize;
-                let mut strings: Vec<String> = Vec::with_capacity(count);
+                let mut strings: Vec<SnapshotRuntimeString> = Vec::with_capacity(count);
                 let mut pos = 4usize;
                 for _ in 0..count {
                     if pos + 4 > data.len() {
                         bail!("runtime_strings entry truncated");
                     }
-                    let slen = u32::from_le_bytes(data[pos..pos + 4].try_into()?) as usize;
+                    let unit_len = u32::from_le_bytes(data[pos..pos + 4].try_into()?) as usize;
                     pos += 4;
-                    if pos + slen > data.len() {
+                    let byte_len = unit_len.checked_mul(2).ok_or_else(|| {
+                        anyhow::anyhow!("runtime_strings entry byte length overflow")
+                    })?;
+                    if pos + byte_len > data.len() {
                         bail!("runtime_strings entry body truncated");
                     }
-                    let s = std::str::from_utf8(&data[pos..pos + slen])?;
-                    strings.push(s.to_string());
-                    pos += slen;
+                    let mut units = Vec::with_capacity(unit_len);
+                    for chunk in data[pos..pos + byte_len].chunks_exact(2) {
+                        units.push(u16::from_le_bytes(chunk.try_into()?));
+                    }
+                    strings.push(units);
+                    pos += byte_len;
                 }
                 runtime_strings = strings;
             }
@@ -748,6 +757,54 @@ mod tests {
         wjsm_ir::SHADOW_STACK_HEAP_GUARD_CANARY.hash(&mut hasher);
 
         hasher.finish()
+    }
+
+    fn snapshot_with_runtime_strings(
+        runtime_strings: Vec<SnapshotRuntimeString>,
+    ) -> StartupSnapshotOwned {
+        StartupSnapshotOwned {
+            header: StartupSnapshotHeader {
+                magic: SNAPSHOT_MAGIC,
+                format_version: SNAPSHOT_FORMAT_VERSION,
+                abi_hash: abi_hash(),
+                heap_used: 0,
+                obj_table_count: 0,
+                function_props_base: 0,
+                object_proto_handle: 0,
+                array_proto_handle: 0,
+                arr_proto_table_base: 0,
+                arr_proto_table_len: 0,
+                arr_proto_table_hash: 0,
+                iterator_prototype: 0,
+                generator_prototype: 0,
+                async_iterator_prototype: 0,
+                async_gen_prototype: 0,
+                array_proto_values: 0,
+            },
+            object_bytes: Vec::new(),
+            handle_rel_offsets: Vec::new(),
+            runtime_strings,
+            native_callables: Vec::new(),
+            native_callable_methods: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn snapshot_format_version_is_v7_utf16_runtime_strings() {
+        assert_eq!(SNAPSHOT_FORMAT_VERSION, 7);
+    }
+
+    #[test]
+    fn runtime_string_section_roundtrips_utf16_units() {
+        let snapshot = snapshot_with_runtime_strings(vec![vec![0xD800], vec![0x0041, 0xDFFF]]);
+
+        let bytes = encode_snapshot(&snapshot);
+        let decoded = decode_snapshot(&bytes).expect("snapshot decodes");
+
+        assert_eq!(
+            decoded.runtime_strings,
+            vec![vec![0xD800], vec![0x0041, 0xDFFF]]
+        );
     }
 
     #[test]

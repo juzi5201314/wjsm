@@ -1,6 +1,7 @@
 //! builtin 编译：StringEndsWith ~ FinalizationRegistryProtoUnregister
 
 use super::*;
+use crate::compiler_builtins::BuiltinDispatch;
 
 impl Compiler {
     /// 处理 StringEndsWith ~ FinalizationRegistryProtoUnregister 等 builtin。
@@ -9,7 +10,7 @@ impl Compiler {
         dest: Option<ValueId>,
         builtin: &Builtin,
         args: &[ValueId],
-    ) -> Result<Option<()>> {
+    ) -> Result<BuiltinDispatch> {
         match builtin {
             Builtin::StringEndsWith
             | Builtin::StringIncludes
@@ -31,16 +32,12 @@ impl Compiler {
                 } else {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::StringNormalize => {
                 let receiver = args.first().context("String method expects receiver")?;
@@ -52,16 +49,12 @@ impl Compiler {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
                 self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             // ── String varargs builtins (shadow stack) ──
             Builtin::StringConcatVa
@@ -69,7 +62,7 @@ impl Compiler {
             | Builtin::StringFromCodePoint
             | Builtin::StringMatchAll => self
                 .compile_proto_method_call(dest, builtin, args)
-                .map(Some),
+                .map(|_| BuiltinDispatch::Handled),
             // ── Proxy / Reflect builtins ──────────────────────────────────────────
             Builtin::ProxyCreate
             | Builtin::ProxyRevocable
@@ -83,64 +76,69 @@ impl Compiler {
             | Builtin::ReflectGetOwnPropertyDescriptor
             | Builtin::ReflectDefineProperty
             | Builtin::ReflectOwnKeys => {
-                for arg in args {
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                }
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit_value_args(args);
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             // Reflect.get(target, prop[, receiver]) — 省略 receiver 时按规范使用 target。
             Builtin::ReflectGet => {
-                for arg in args {
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                if let Some(target) = args.first() {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(target.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                if args.len() < 3 {
-                    let receiver = args.first().copied().unwrap_or(ValueId(0));
+                if let Some(property_key) = args.get(1) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(property_key.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                if let Some(receiver) = args.get(2).or_else(|| args.first()) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             // Reflect.set(target, prop, val[, receiver]) — 省略 receiver 时按规范使用 target（与 ReflectGet 一致）。
             Builtin::ReflectSet => {
-                for arg in args {
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                if let Some(target) = args.first() {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(target.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                if args.len() < 4 {
-                    let receiver = args.first().copied().unwrap_or(ValueId(0));
+                if let Some(property_key) = args.get(1) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(property_key.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                if let Some(value_arg) = args.get(2) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(value_arg.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                if let Some(receiver) = args.get(3).or_else(|| args.first()) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::ReflectConstruct => {
-                for arg in args {
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                }
+                self.emit_value_args(args);
                 if args.len() < 3 {
                     if let Some(target) = args.first() {
                         self.emit(WasmInstruction::LocalGet(self.local_idx(target.0)));
@@ -151,70 +149,50 @@ impl Compiler {
                         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                     }
                 }
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::GetBuiltinGlobal => {
                 let name_val = args.first().context("GetBuiltinGlobal expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(name_val.0)));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::CreateGlobalObject => {
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::CreateException => {
                 let value = args.first().context("CreateException expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::ExceptionValue => {
                 let handle = args.first().context("ExceptionValue expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(handle.0)));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::CreateUnmappedArgumentsObject => {
                 let args_array = args.first().with_context(|| {
@@ -225,16 +203,12 @@ impl Compiler {
                 })?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(args_array.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(param_count.0)));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::CreateMappedArgumentsObject => {
                 let args_array = args.first().with_context(|| {
@@ -249,16 +223,12 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(args_array.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(param_count.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(func_ref.0)));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             // ── WeakRef / FinalizationRegistry builtins ──
             Builtin::WeakRefConstructor
@@ -291,35 +261,27 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::I32Const(args.len() as i32));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .unwrap_or(356);
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::WeakRefProtoDeref => {
                 // Type 3: direct call (this_val) -> i64
                 let this_val = args
                     .first()
                     .with_context(|| format!("{builtin} expects 1 argument (this_val)"))?;
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .unwrap_or(357);
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::FinalizationRegistryConstructor => {
                 // Type 12: constructor - env=undefined, this=undefined, shadow_args=all args
@@ -343,18 +305,14 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::I32Const(args.len() as i32));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .unwrap_or(358);
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::FinalizationRegistryProtoRegister => {
                 // Type 12: method - env=undefined, this=args[0], shadow_args=args[1..]
@@ -382,18 +340,14 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::I32Const(shadow_args.len() as i32));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .unwrap_or(359);
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
             Builtin::FinalizationRegistryProtoUnregister => {
                 // Type 2: direct call (this_val, token) -> i64
@@ -403,20 +357,16 @@ impl Compiler {
                 let token = args
                     .get(1)
                     .with_context(|| format!("{builtin} expects 2 arguments: this_val, token"))?;
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .unwrap_or(360);
+                let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(token.0)));
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(Some(()))
+                Ok(BuiltinDispatch::Handled)
             }
-            _ => Ok(None),
+            _ => Ok(BuiltinDispatch::NotHandled),
         }
     }
 }

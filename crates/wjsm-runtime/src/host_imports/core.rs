@@ -3,40 +3,45 @@ use wasmtime::{Caller, Linker};
 use wjsm_ir::wk_symbol;
 
 use crate::host_imports::get_method_by_name_id;
+use crate::runtime_string::RuntimeString;
 use crate::*;
 
-/// 根据 UTF-8 首字节返回该码点的字节长度（字符串迭代器按码点步进）。
-pub(crate) fn utf8_code_unit_len(lead: u8) -> usize {
-    match lead {
-        0x00..=0x7F => 1,
-        0xC0..=0xDF => 2,
-        0xE0..=0xEF => 3,
-        0xF0..=0xF7 => 4,
-        _ => 1,
-    }
-}
-
-/// 返回当前 `byte_pos` 处完整 UTF-8 码点对应的运行时字符串值（不推进位置）。
+/// 返回当前 `unit_pos` 处完整 UTF-16 码点对应的运行时字符串值（不推进位置）。
 pub(crate) fn string_iter_current_value(
     caller: &Caller<'_, RuntimeState>,
-    data: &[u8],
-    byte_pos: usize,
+    string: &RuntimeString,
+    unit_pos: usize,
 ) -> i64 {
-    if byte_pos >= data.len() {
+    let Some(unit) = string.code_unit_at(unit_pos) else {
         return value::encode_undefined();
-    }
-    let ch_len = utf8_code_unit_len(data[byte_pos]);
-    let end = (byte_pos + ch_len).min(data.len());
-    let s = String::from_utf8_lossy(&data[byte_pos..end]).into_owned();
-    store_runtime_string(caller, s)
+    };
+    let width = if (0xD800..=0xDBFF).contains(&unit)
+        && string
+            .code_unit_at(unit_pos + 1)
+            .is_some_and(|next| (0xDC00..=0xDFFF).contains(&next))
+    {
+        2
+    } else {
+        1
+    };
+    store_runtime_string(caller, string.slice_units(unit_pos..unit_pos + width))
 }
 
-/// 将字符串迭代器 `byte_pos` 推进到下一个码点。
-pub(crate) fn string_iter_advance_byte_pos(data: &[u8], byte_pos: &mut usize) {
-    if *byte_pos < data.len() {
-        let ch_len = utf8_code_unit_len(data[*byte_pos]);
-        *byte_pos += ch_len;
-    }
+/// 将字符串迭代器 `unit_pos` 推进到下一个码点。
+pub(crate) fn string_iter_advance_unit_pos(string: &RuntimeString, unit_pos: &mut usize) {
+    let Some(unit) = string.code_unit_at(*unit_pos) else {
+        return;
+    };
+    let width = if (0xD800..=0xDBFF).contains(&unit)
+        && string
+            .code_unit_at(*unit_pos + 1)
+            .is_some_and(|next| (0xDC00..=0xDFFF).contains(&next))
+    {
+        2
+    } else {
+        1
+    };
+    *unit_pos += width;
 }
 
 /// ECMAScript `Object.defineProperty` / `DefineProperty`（§10.1.6.3 ValidateAndApplyPropertyDescriptor）。
@@ -75,7 +80,7 @@ fn concat_operand_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<
         if value::is_exception(prim) {
             return Vec::new();
         }
-        return get_string_value(caller, prim).into_bytes();
+        return get_string_value(caller, prim).to_utf8_lossy_bytes();
     }
     render_value(caller, val).unwrap_or_default().into_bytes()
 }
@@ -117,18 +122,7 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
     let prop_symbol_name_id = symbol_value_to_name_id(prop);
     // 获取属性名（ToPropertyKey 转换）
     let prop_str = if value::is_string(prop) {
-        if value::is_runtime_string_handle(prop) {
-            let handle = value::decode_runtime_string_handle(prop) as usize;
-            let strings = caller
-                .data()
-                .runtime_strings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            strings.get(handle).cloned().unwrap_or_default()
-        } else {
-            let ptr = value::decode_string_ptr(prop);
-            read_string(caller, ptr).unwrap_or_default()
-        }
+        read_runtime_string_utf8_lossy(caller, prop)
     } else if value::is_f64(prop) {
         let f = value::decode_f64(prop);
         if f.is_nan() {
@@ -148,6 +142,11 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
         format!("{}", value::decode_bool(prop))
     } else {
         String::new()
+    };
+    let prop_key = if value::is_string(prop) {
+        get_string_value(caller, prop)
+    } else {
+        RuntimeString::from_utf8_str(&prop_str)
     };
 
     // 解析对象指针：通过 handle 表统一解析（支持 object 和 function）
@@ -170,6 +169,8 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
             return value::encode_bool(true);
         }
     }
+
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
 
     // 搜索属性，遍历原型链
     loop {
@@ -217,8 +218,7 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
             if is_symbol_name_id(name_id) {
                 continue;
             }
-            let name_str = read_string_bytes(caller, name_id);
-            if name_str == prop_str.as_bytes() {
+            if name_id_matches_runtime_string(caller, &env, name_id, &prop_key) {
                 return value::encode_bool(true);
             }
         }
@@ -256,12 +256,9 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
         .unwrap_or_else(|e| e.into_inner());
     if let Some(iter) = iters.get_mut(handle_idx) {
         match iter {
-            IteratorState::StringIter { data, byte_pos } => {
-                if *byte_pos < data.len() {
-                    let pos = *byte_pos;
-                    let bytes = data.clone();
-                    drop(iters);
-                    string_iter_current_value(caller, &bytes, pos)
+            IteratorState::StringIter { string, unit_pos } => {
+                if *unit_pos < string.utf16_len() {
+                    string_iter_current_value(caller, string, *unit_pos)
                 } else {
                     value::encode_undefined()
                 }
@@ -1386,7 +1383,7 @@ pub(crate) fn define_core(
             if value::is_string(pa) && value::is_string(pb) {
                 let a_str = get_string_value(&mut caller, pa);
                 let b_str = get_string_value(&mut caller, pb);
-                return value::encode_bool(a_str < b_str);
+                return value::encode_bool(a_str.cmp_utf16(&b_str).is_lt());
             }
 
             // 3. 否则 → ToNumeric(px), ToNumeric(py) (§7.2.13 step 5)
@@ -1597,7 +1594,8 @@ pub(crate) async fn iterator_from_impl_async(
     if value::is_iterator(val) {
         return val;
     }
-    if let Some(string_data) = read_value_string_bytes(caller, val) {
+    if value::is_string(val) {
+        let string = get_string_value(caller, val);
         let mut iters = caller
             .data()
             .iterators
@@ -1605,8 +1603,8 @@ pub(crate) async fn iterator_from_impl_async(
             .unwrap_or_else(|e| e.into_inner());
         let handle = iters.len() as u32;
         iters.push(IteratorState::StringIter {
-            data: string_data,
-            byte_pos: 0,
+            string,
+            unit_pos: 0,
         });
         return value::encode_handle(value::TAG_ITERATOR, handle);
     }

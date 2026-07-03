@@ -1,4 +1,6 @@
 use super::*;
+use crate::runtime_string::RuntimeString;
+
 pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -171,6 +173,19 @@ fn canonical_integer_index(s: &str) -> Option<u32> {
     None
 }
 
+fn name_id_to_runtime_property_string(
+    caller: &mut Caller<'_, RuntimeState>,
+    name_id: u32,
+) -> Option<RuntimeString> {
+    match decode_name_id(name_id) {
+        DecodedNameId::MemoryString(index) => Some(RuntimeString::from_utf8_lossy(
+            &crate::runtime_render::read_string_bytes(caller, index),
+        )),
+        DecodedNameId::RuntimeString(index) => runtime_property_key_units(caller.data(), index),
+        DecodedNameId::Symbol(_) => None,
+    }
+}
+
 pub(crate) fn collect_own_property_names(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
@@ -256,6 +271,116 @@ pub(crate) fn collect_own_property_names(
     let mut names: Vec<String> = int_index_names.into_iter().map(|(_, name)| name).collect();
     names.extend(string_ids);
     names
+}
+
+pub(crate) fn collect_own_property_string_key_values(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    obj_ptr: usize,
+    enumerable_only: bool,
+) -> Vec<i64> {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return vec![];
+    };
+    let data = mem.data(&*caller);
+    if obj_ptr + 16 > data.len() {
+        return vec![];
+    }
+    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
+        let len = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let _ = data;
+        let _ = mem;
+        let mut keys = Vec::new();
+        for i in 0..len {
+            if array_elem_present(caller, obj_ptr, i) {
+                keys.push(store_runtime_string(
+                    caller,
+                    RuntimeString::from_utf8_str(&i.to_string()),
+                ));
+            }
+        }
+        if !enumerable_only {
+            keys.push(store_runtime_string(
+                caller,
+                RuntimeString::from_utf8_str("length"),
+            ));
+        }
+        let name_ids = crate::array_named_props::ArrayNamedPropsStore::collect_string_name_ids(
+            caller,
+            obj,
+            enumerable_only,
+        );
+        for name_id in name_ids {
+            if let Some(name) = name_id_to_runtime_property_string(caller, name_id) {
+                keys.push(store_runtime_string(caller, name));
+            }
+        }
+        return keys;
+    }
+    let num_props = u32::from_le_bytes([
+        data[obj_ptr + 12],
+        data[obj_ptr + 13],
+        data[obj_ptr + 14],
+        data[obj_ptr + 15],
+    ]) as usize;
+    let mut name_ids = Vec::new();
+    for i in 0..num_props {
+        let slot_offset = obj_ptr + 16 + i * 32;
+        if slot_offset + 32 > data.len() {
+            break;
+        }
+        let flags = i32::from_le_bytes([
+            data[slot_offset + 4],
+            data[slot_offset + 5],
+            data[slot_offset + 6],
+            data[slot_offset + 7],
+        ]);
+        if (flags & constants::FLAG_PRIVATE) != 0 {
+            continue;
+        }
+        if enumerable_only && (flags & constants::FLAG_ENUMERABLE) == 0 {
+            continue;
+        }
+        let name_id = u32::from_le_bytes([
+            data[slot_offset],
+            data[slot_offset + 1],
+            data[slot_offset + 2],
+            data[slot_offset + 3],
+        ]);
+        if !is_symbol_name_id(name_id) {
+            name_ids.push(name_id);
+        }
+    }
+    let _ = data;
+    let _ = mem;
+
+    let mut int_index_names = Vec::new();
+    let mut string_names = Vec::new();
+    for name_id in name_ids {
+        let Some(name) = name_id_to_runtime_property_string(caller, name_id) else {
+            continue;
+        };
+        let name_lossy = name.to_utf8_lossy();
+        if let Some(int_idx) = canonical_integer_index(&name_lossy) {
+            int_index_names.push((int_idx, name));
+        } else {
+            string_names.push(name);
+        }
+    }
+    int_index_names.sort_by_key(|(idx, _)| *idx);
+    let mut keys: Vec<i64> = int_index_names
+        .into_iter()
+        .map(|(_, name)| store_runtime_string(caller, name))
+        .collect();
+    for name in string_names {
+        keys.push(store_runtime_string(caller, name));
+    }
+    keys
 }
 
 /// 从 boxed 对象/数组收集 own 字符串属性名（数组含侧表命名属性）。
@@ -433,20 +558,28 @@ pub(crate) fn collect_own_property_key_values(
     let _ = data;
     let _ = mem;
 
-    let mut string_name_ids = Vec::new();
+    let mut string_keys = Vec::new();
     let mut sym_name_ids = Vec::new();
     let mut int_index_entries = Vec::new();
     for name_id in slots {
-        if let Some(symbol_key) = name_id_to_property_key_value(name_id) {
-            sym_name_ids.push(symbol_key);
-        } else if !symbols_only {
-            let name_bytes = read_string_bytes(caller, name_id);
-            let name = String::from_utf8_lossy(&name_bytes).to_string();
-            if let Some(int_idx) = canonical_integer_index(&name) {
-                int_index_entries.push((int_idx, name));
-            } else {
-                string_name_ids.push(name);
+        match decode_name_id(name_id) {
+            DecodedNameId::Symbol(_) => {
+                if let Some(symbol_key) = name_id_to_property_key_value(name_id) {
+                    sym_name_ids.push(symbol_key);
+                }
             }
+            _ if !symbols_only => {
+                let Some(name) = name_id_to_runtime_property_string(caller, name_id) else {
+                    continue;
+                };
+                let name_lossy = name.to_utf8_lossy();
+                if let Some(int_idx) = canonical_integer_index(&name_lossy) {
+                    int_index_entries.push((int_idx, name));
+                } else {
+                    string_keys.push(name);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -456,7 +589,7 @@ pub(crate) fn collect_own_property_key_values(
         .into_iter()
         .map(|(_, name)| store_runtime_string(caller, name))
         .collect();
-    for name in string_name_ids {
+    for name in string_keys {
         keys.push(store_runtime_string(caller, name));
     }
     keys.extend(sym_name_ids);

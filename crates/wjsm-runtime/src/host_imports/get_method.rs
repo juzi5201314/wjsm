@@ -1,5 +1,5 @@
 use crate::array_named_props::array_named_get_sync;
-use crate::property_key::{is_symbol_name_id, name_id_to_property_key_value};
+use crate::property_key::name_id_to_property_key_value;
 use crate::runtime_host_helpers::is_callable_in_runtime;
 use crate::runtime_values::{find_property_slot_by_name_id, resolve_handle};
 use crate::{WasmEnv, constants, value};
@@ -58,7 +58,13 @@ pub(crate) fn get_by_name_id_sync(
     obj: i64,
     name_id: u32,
 ) -> i64 {
-    if value::is_array(obj) && is_symbol_name_id(name_id) {
+    if value::is_array(obj) {
+        if name_id_matches_utf8(caller, name_id, "length")
+            && let Some(ptr) = crate::runtime_values::resolve_array_ptr(caller, obj)
+        {
+            let len = crate::runtime_values::read_array_length(caller, ptr).unwrap_or(0);
+            return value::encode_f64(len as f64);
+        }
         let own = array_named_get_sync(caller, obj, name_id);
         if !value::is_undefined(own) {
             return own;
@@ -82,11 +88,8 @@ pub(crate) fn get_by_name_id_sync(
         });
     }
     if value::is_string(obj) {
-        let name = crate::runtime_render::read_string_bytes(caller, name_id);
-        if name == b"length" {
-            let len = crate::runtime_values::get_string_value(caller, obj)
-                .encode_utf16()
-                .count();
+        if name_id_matches_utf8(caller, name_id, "length") {
+            let len = crate::runtime_values::get_string_value(caller, obj).utf16_len();
             return value::encode_f64(len as f64);
         }
         return value::encode_undefined();
@@ -100,6 +103,18 @@ pub(crate) fn get_by_name_id_sync(
     let mut visited = std::collections::HashSet::new();
     get_by_name_id_on_proto_chain(caller, obj, ptr, name_id, &mut visited)
         .unwrap_or_else(value::encode_undefined)
+}
+
+fn name_id_matches_utf8(
+    caller: &mut Caller<'_, RuntimeState>,
+    name_id: u32,
+    expected: &'static str,
+) -> bool {
+    let Some(env) = WasmEnv::from_caller(caller) else {
+        return false;
+    };
+    let expected = crate::runtime_string::RuntimeString::from_utf8_str(expected);
+    crate::property_key::name_id_matches_runtime_string(caller, &env, name_id, &expected)
 }
 
 fn read_getter_from_slot(caller: &mut Caller<'_, RuntimeState>, slot_offset: usize) -> i64 {

@@ -788,7 +788,7 @@ fn js_string_from_value(
         ));
     }
     if value::is_string(raw) {
-        return Ok(get_string_value(caller, raw));
+        return Ok(get_string_utf8_lossy(caller, raw));
     }
     Ok(render_value(caller, raw)
         .unwrap_or_default()
@@ -1114,18 +1114,8 @@ fn valid_status_text(status_text: &str) -> bool {
 }
 
 pub(crate) fn extract_string_from_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
-    if value::is_runtime_string_handle(val) {
-        let handle = value::decode_runtime_string_handle(val) as usize;
-        caller
-            .data()
-            .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(handle)
-            .cloned()
-            .unwrap_or_default()
-    } else if value::is_string(val) {
-        read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
+    if value::is_string(val) {
+        get_string_utf8_lossy(caller, val)
     } else {
         String::new()
     }

@@ -13,7 +13,7 @@ pub use graph::{ModuleGraph, ModuleId};
 pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
 pub use semantic::{ModuleLinkResult, analyze_module_links};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 /// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
@@ -28,10 +28,20 @@ pub fn parse_entry_ast(entry: &Path, root_path: &Path) -> Result<swc_core::ecma:
     bundler.parse_entry_ast(entry)
 }
 
-/// Bundle entry module and all its dependencies into a single WASM binary
+/// 将入口模块和按 bundle graph 收集到的所有依赖编译为完整 WASM bytes。
+///
+/// 返回值可直接交给 runtime 执行；失败时错误会携带 `entry` 和 `root_path`，
+/// 方便调用方定位是哪个入口图构建失败。
 pub fn bundle(entry: &Path, root_path: &Path) -> Result<Vec<u8>> {
-    let bundler = ModuleBundler::new(root_path)?;
-    bundler.bundle(entry)
+    let bundler = ModuleBundler::new(root_path)
+        .with_context(|| format!("create module bundler for root {}", root_path.display()))?;
+    bundler.bundle(entry).with_context(|| {
+        format!(
+            "bundle entry {} from root {}",
+            entry.display(),
+            root_path.display()
+        )
+    })
 }
 
 // ── 模块类型检测 ───────────────────────────────────────────────────

@@ -16,7 +16,7 @@ pub(crate) async fn construct_readable_stream(
         resolve_handle(caller, source)
             .and_then(|ptr| read_object_property_by_name(caller, ptr, "type"))
             .filter(|raw| value::is_string(*raw))
-            .map(|raw| get_string_value(caller, raw) == "bytes")
+            .map(|raw| get_string_utf8_lossy(caller, raw) == "bytes")
             .unwrap_or(false)
     } else {
         false

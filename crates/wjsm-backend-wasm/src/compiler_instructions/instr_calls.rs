@@ -411,7 +411,10 @@ impl Compiler {
         let (env_obj_val, this_val_idx, shadow_args, needs_env_this) =
             if matches!(builtin, Builtin::FuncCall | Builtin::FuncBind) {
                 // args = [func, this_val, ...restArgs]
-                let func: ValueId = args.first().copied().unwrap_or(ValueId(0));
+                let func = args
+                    .first()
+                    .copied()
+                    .with_context(|| format!("{builtin} expects function argument"))?;
                 let this: Option<ValueId> = args.get(1).copied();
                 let shadow_slice: &[ValueId] = if args.len() > 2 { &args[2..] } else { &[] };
                 (Some(func), this, shadow_slice, true)

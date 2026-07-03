@@ -1,32 +1,25 @@
 use anyhow::Result;
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
-use wasmtime::Store;
-use wasmtime::{Caller, Func, Linker};
+use wasmtime::{Caller, Func, Linker, Store};
 
 use crate::runtime_host_helpers::make_range_error_exception;
+use crate::runtime_string::RuntimeString;
 use crate::*;
 
-/// String value consisting of a single UTF-16 code unit (ECMAScript §22.1.3.1).
-pub(crate) fn string_from_utf16_code_unit(unit: u16) -> String {
-    if !(0xD800..=0xDFFF).contains(&unit) {
-        if let Some(ch) = char::from_u32(unit as u32) {
-            return ch.to_string();
-        }
-    }
-    let bytes = if unit < 0x800 {
-        vec![0xC0 | ((unit >> 6) as u8), 0x80 | ((unit & 0x3F) as u8)]
-    } else {
-        vec![
-            0xE0 | ((unit >> 12) as u8),
-            0x80 | (((unit >> 6) & 0x3F) as u8),
-            0x80 | ((unit & 0x3F) as u8),
-        ]
-    };
-    unsafe { String::from_utf8_unchecked(bytes) }
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..=0xDBFF).contains(&unit)
 }
 
-/// ECMAScript §22.1.3.15：按 form 对字符串做 Unicode 规范化。
-fn normalize_string_by_form(s: &str, form: &str) -> Result<String, &'static str> {
+fn is_low_surrogate(unit: u16) -> bool {
+    (0xDC00..=0xDFFF).contains(&unit)
+}
+
+fn decode_surrogate_pair(high: u16, low: u16) -> u32 {
+    0x10000 + (((high as u32 - 0xD800) << 10) | (low as u32 - 0xDC00))
+}
+
+/// ECMAScript §22.1.3.15：按 form 对 valid Unicode scalar run 做规范化。
+fn normalize_string_by_form(s: &str, form: &str) -> std::result::Result<String, &'static str> {
     match form {
         "NFC" => Ok(ComposingNormalizerBorrowed::new_nfc()
             .normalize(s)
@@ -42,6 +35,175 @@ fn normalize_string_by_form(s: &str, form: &str) -> Result<String, &'static str>
             .into_owned()),
         _ => Err("The normalization form should be one of NFC, NFD, NFKC, NFKD"),
     }
+}
+
+fn flush_transformed_run<F>(out: &mut Vec<u16>, run: &mut String, transform: &mut F)
+where
+    F: FnMut(&str) -> String,
+{
+    if run.is_empty() {
+        return;
+    }
+    out.extend(transform(run).encode_utf16());
+    run.clear();
+}
+
+fn transform_scalar_runs<F>(input: &RuntimeString, mut transform: F) -> RuntimeString
+where
+    F: FnMut(&str) -> String,
+{
+    let units = input.as_utf16_units();
+    let mut out = Vec::with_capacity(units.len());
+    let mut run = String::new();
+    let mut i = 0usize;
+    while i < units.len() {
+        let unit = units[i];
+        if is_high_surrogate(unit) && i + 1 < units.len() && is_low_surrogate(units[i + 1]) {
+            let cp = decode_surrogate_pair(unit, units[i + 1]);
+            run.push(char::from_u32(cp).expect("valid surrogate pair"));
+            i += 2;
+            continue;
+        }
+        if is_high_surrogate(unit) || is_low_surrogate(unit) {
+            flush_transformed_run(&mut out, &mut run, &mut transform);
+            out.push(unit);
+            i += 1;
+            continue;
+        }
+        run.push(char::from_u32(unit as u32).expect("valid BMP scalar"));
+        i += 1;
+    }
+    flush_transformed_run(&mut out, &mut run, &mut transform);
+    RuntimeString::from_utf16_units(out)
+}
+
+fn normalize_runtime_string_by_form(
+    input: &RuntimeString,
+    form: &str,
+) -> std::result::Result<RuntimeString, &'static str> {
+    let mut error = None;
+    let normalized =
+        transform_scalar_runs(input, |run| match normalize_string_by_form(run, form) {
+            Ok(out) => out,
+            Err(msg) => {
+                error = Some(msg);
+                run.to_string()
+            }
+        });
+    match error {
+        Some(msg) => Err(msg),
+        None => Ok(normalized),
+    }
+}
+
+fn code_point_width_at(units: &[u16], index: usize) -> Option<(u32, usize, bool)> {
+    let unit = *units.get(index)?;
+    if is_high_surrogate(unit) && index + 1 < units.len() && is_low_surrogate(units[index + 1]) {
+        return Some((decode_surrogate_pair(unit, units[index + 1]), 2, true));
+    }
+    Some((
+        unit as u32,
+        1,
+        !(is_high_surrogate(unit) || is_low_surrogate(unit)),
+    ))
+}
+
+fn previous_code_point_width(units: &[u16], end: usize) -> Option<(usize, u32, usize, bool)> {
+    if end == 0 || end > units.len() {
+        return None;
+    }
+    let last = units[end - 1];
+    if is_low_surrogate(last) && end >= 2 && is_high_surrogate(units[end - 2]) {
+        let start = end - 2;
+        return Some((start, decode_surrogate_pair(units[start], last), 2, true));
+    }
+    Some((
+        end - 1,
+        last as u32,
+        1,
+        !(is_high_surrogate(last) || is_low_surrogate(last)),
+    ))
+}
+
+fn is_ecmascript_trim_whitespace(cp: u32) -> bool {
+    cp == 0xFEFF || char::from_u32(cp).is_some_and(char::is_whitespace)
+}
+
+fn trim_runtime_string(input: &RuntimeString, trim_start: bool, trim_end: bool) -> RuntimeString {
+    let units = input.as_utf16_units();
+    let mut start = 0usize;
+    let mut end = units.len();
+    if trim_start {
+        while start < end {
+            let Some((cp, width, scalar)) = code_point_width_at(units, start) else {
+                break;
+            };
+            if !scalar || !is_ecmascript_trim_whitespace(cp) {
+                break;
+            }
+            start += width;
+        }
+    }
+    if trim_end {
+        while start < end {
+            let Some((cp_start, cp, _width, scalar)) = previous_code_point_width(units, end) else {
+                break;
+            };
+            if !scalar || !is_ecmascript_trim_whitespace(cp) {
+                break;
+            }
+            end = cp_start;
+        }
+    }
+    input.slice_units(start..end)
+}
+
+fn repeat_units_to_len(source: &RuntimeString, len: usize) -> RuntimeString {
+    let source_units = source.as_utf16_units();
+    if len == 0 || source_units.is_empty() {
+        return RuntimeString::empty();
+    }
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        let remaining = len - out.len();
+        let take = remaining.min(source_units.len());
+        out.extend_from_slice(&source_units[..take]);
+    }
+    RuntimeString::from_utf16_units(out)
+}
+
+fn replace_all_units(
+    haystack: &RuntimeString,
+    search: &RuntimeString,
+    replacement: &RuntimeString,
+) -> RuntimeString {
+    let mut out = Vec::new();
+    if search.is_empty() {
+        out.extend_from_slice(replacement.as_utf16_units());
+        for unit in haystack.as_utf16_units() {
+            out.push(*unit);
+            out.extend_from_slice(replacement.as_utf16_units());
+        }
+        return RuntimeString::from_utf16_units(out);
+    }
+
+    let search_len = search.utf16_len();
+    let mut pos = 0usize;
+    while let Some(found) = haystack.find_units(search, pos) {
+        out.extend_from_slice(&haystack.as_utf16_units()[pos..found]);
+        out.extend_from_slice(replacement.as_utf16_units());
+        pos = found + search_len;
+    }
+    out.extend_from_slice(&haystack.as_utf16_units()[pos..]);
+    RuntimeString::from_utf16_units(out)
+}
+
+fn runtime_string_from_code_point(cp: u32) -> RuntimeString {
+    let Some(ch) = char::from_u32(cp) else {
+        return RuntimeString::empty();
+    };
+    let mut buf = [0u16; 2];
+    RuntimeString::from_utf16_units(ch.encode_utf16(&mut buf).to_vec())
 }
 
 pub(crate) fn define_string_methods(
@@ -80,67 +242,11 @@ pub(crate) fn define_string_methods(
         to_uint32_number(value::decode_f64(to_number(caller, val)))
     }
 
-    fn js_utf16_units(s: &str) -> Vec<u16> {
-        let mut units = Vec::new();
-        let b = s.as_bytes();
-        let mut i = 0usize;
-        while i < b.len() {
-            if b[i] < 0x80 {
-                units.push(b[i] as u16);
-                i += 1;
-                continue;
-            }
-            if i + 2 < b.len() && (b[i] & 0xF0) == 0xE0 {
-                let unit = (((b[i] as u32 & 0x0F) << 12)
-                    | ((b[i + 1] as u32 & 0x3F) << 6)
-                    | (b[i + 2] as u32 & 0x3F)) as u16;
-                if (0xD800..=0xDFFF).contains(&unit) {
-                    units.push(unit);
-                    i += 3;
-                    continue;
-                }
-            }
-            if i + 1 < b.len() && (b[i] & 0xE0) == 0xC0 {
-                let unit = (((b[i] as u32 & 0x1F) << 6) | (b[i + 1] as u32 & 0x3F)) as u16;
-                if (0xD800..=0xDFFF).contains(&unit) {
-                    units.push(unit);
-                    i += 2;
-                    continue;
-                }
-            }
-            if let Some(ch) = std::str::from_utf8(&b[i..])
-                .ok()
-                .and_then(|tail| tail.chars().next())
-            {
-                let cp = ch as u32;
-                if cp > 0xFFFF {
-                    let base = cp - 0x10000;
-                    units.push((0xD800 + (base >> 10)) as u16);
-                    units.push((0xDC00 + (base & 0x3FF)) as u16);
-                } else {
-                    units.push(cp as u16);
-                }
-                i += ch.len_utf8();
-                continue;
-            }
-            i += 1;
-        }
-        units
-    }
-
-    fn utf16_code_unit_at_stored(s: &str, utf16_idx: usize) -> Option<u16> {
-        js_utf16_units(s).get(utf16_idx).copied()
-    }
-
-    fn js_utf16_len(s: &str) -> usize {
-        js_utf16_units(s).len()
-    }
-
-    fn concat_arg_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+    fn concat_arg_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> RuntimeString {
         if value::is_string(val) {
             get_string_value(caller, val)
         } else {
-            render_value(caller, val).unwrap_or_default()
+            RuntimeString::from_utf8_str(&render_value(caller, val).unwrap_or_default())
         }
     }
 
@@ -148,16 +254,23 @@ pub(crate) fn define_string_methods(
         cp <= 0x10FFFF && !(0xD800..=0xDFFF).contains(&cp)
     }
 
-    fn push_utf16_code_unit(result: &mut String, unit: u16) {
-        result.push_str(&string_from_utf16_code_unit(unit));
-    }
-
     let primitive_string_get_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, name_id: i32| -> i64 {
-            let name = crate::runtime_render::read_string_bytes(&mut caller, name_id as u32);
-            if name == b"length" {
-                let len = js_utf16_len(&get_string_value(&mut caller, receiver));
+            let name_id = name_id as u32;
+            let is_length = crate::runtime_render::read_string_bytes(&mut caller, name_id)
+                == b"length"
+                || WasmEnv::from_caller(&mut caller).is_some_and(|env| {
+                    let expected = RuntimeString::from_utf8_str("length");
+                    crate::property_key::name_id_matches_runtime_string(
+                        &mut caller,
+                        &env,
+                        name_id,
+                        &expected,
+                    )
+                });
+            if is_length {
+                let len = get_string_value(&mut caller, receiver).utf16_len();
                 return value::encode_f64(len as f64);
             }
             value::encode_undefined()
@@ -170,12 +283,11 @@ pub(crate) fn define_string_methods(
         primitive_string_get_property_fn,
     )?;
 
-    // ── string_at ──
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, index: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = js_utf16_len(&s) as i64;
+            let len = s.utf16_len() as i64;
             let idx = to_f64_or(index, 0.0);
             let mut i = idx as i64;
             if idx < 0.0 {
@@ -184,67 +296,51 @@ pub(crate) fn define_string_methods(
             if i < 0 || i >= len {
                 return value::encode_undefined();
             }
-            let unit = utf16_code_unit_at_stored(&s, i as usize).unwrap_or(0);
-            store_runtime_string(&caller, string_from_utf16_code_unit(unit))
+            store_runtime_string(
+                &caller,
+                RuntimeString::from_utf16_code_unit(s.code_unit_at(i as usize).unwrap_or(0)),
+            )
         },
     );
     linker.define(&mut store, "env", "string_at", f)?;
-    // string_char_at
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = js_utf16_len(&s);
             let p = to_uint32_caller(&mut caller, pos) as usize;
-            if p >= len {
-                return store_runtime_string(&caller, String::new());
-            }
-            let unit = utf16_code_unit_at_stored(&s, p).unwrap_or(0);
-            store_runtime_string(&caller, string_from_utf16_code_unit(unit))
+            let Some(unit) = s.code_unit_at(p) else {
+                return store_runtime_string(&caller, RuntimeString::empty());
+            };
+            store_runtime_string(&caller, RuntimeString::from_utf16_code_unit(unit))
         },
     );
     linker.define(&mut store, "env", "string_char_at", f)?;
-    // string_char_code_at
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = js_utf16_len(&s);
             let p = to_uint32_caller(&mut caller, pos) as usize;
-            if p >= len {
-                return value::encode_f64(f64::NAN);
-            }
-            let unit = utf16_code_unit_at_stored(&s, p).unwrap_or(0);
-            value::encode_f64(unit as f64)
+            s.code_unit_at(p)
+                .map(|unit| value::encode_f64(unit as f64))
+                .unwrap_or_else(|| value::encode_f64(f64::NAN))
         },
     );
     linker.define(&mut store, "env", "string_char_code_at", f)?;
-    // string_code_point_at
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = js_utf16_len(&s);
             let p = to_uint32_caller(&mut caller, pos) as usize;
-            if p >= len {
-                return value::encode_undefined();
-            }
-            let units = js_utf16_units(&s);
-            let Some(&unit) = units.get(p) else {
-                return value::encode_undefined();
-            };
-            if (0xD800..=0xDBFF).contains(&unit) && p + 1 < units.len() {
-                let lo = units[p + 1];
-                if (0xDC00..=0xDFFF).contains(&lo) {
-                    let cp = 0x10000 + (((unit as u32 - 0xD800) << 10) | (lo as u32 - 0xDC00));
-                    return value::encode_f64(cp as f64);
-                }
-            }
-            value::encode_f64(unit as f64)
+            s.code_point_at(p)
+                .map(|cp| value::encode_f64(cp as f64))
+                .unwrap_or_else(value::encode_undefined)
         },
     );
     linker.define(&mut store, "env", "string_code_point_at", f)?;
-    // string_proto_concat
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -262,41 +358,36 @@ pub(crate) fn define_string_methods(
                 );
             }
             let mut result = get_string_value(&mut caller, this_val);
-            let parts: Vec<String> = (0..args_count as u32)
+            let parts: Vec<RuntimeString> = (0..args_count as u32)
                 .map(|i| {
                     let arg = read_shadow_arg(&mut caller, args_base, i);
                     concat_arg_to_string(&mut caller, arg)
                 })
                 .collect();
-            for p in parts {
-                result.push_str(&p);
+            for part in parts {
+                result.push_units_from(&part);
             }
             store_runtime_string(&caller, result)
         },
     );
     linker.define(&mut store, "env", "string_proto_concat", f)?;
-    // string_ends_with
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, end_pos: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
             let search_str = get_string_value(&mut caller, search);
-            let len = utf16_len(&s);
+            let len = s.utf16_len();
             let end_utf16 = if end_pos == value::encode_undefined() {
                 len
             } else {
                 (to_f64_or(end_pos, 0.0) as usize).min(len)
             };
-            let end_byte = utf16_index_to_byte_offset(&s, end_utf16);
-            value::encode_bool(if search_str.is_empty() {
-                true
-            } else {
-                s[..end_byte].ends_with(&search_str)
-            })
+            value::encode_bool(s.ends_with_units(&search_str, end_utf16))
         },
     );
     linker.define(&mut store, "env", "string_ends_with", f)?;
-    // string_includes
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
@@ -316,14 +407,16 @@ pub(crate) fn define_string_methods(
             let start_utf16 = if pos == value::encode_undefined() {
                 0
             } else {
-                (to_f64_or(pos, 0.0) as usize).min(utf16_len(&s))
+                (to_f64_or(pos, 0.0) as usize).min(s.utf16_len())
             };
-            let start_byte = utf16_index_to_byte_offset(&s, start_utf16);
-            value::encode_bool(s[start_byte..].contains(&get_string_value(&mut caller, search)))
+            value::encode_bool(
+                s.find_units(&get_string_value(&mut caller, search), start_utf16)
+                    .is_some(),
+            )
         },
     );
     linker.define(&mut store, "env", "string_includes", f)?;
-    // string_index_of
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
@@ -344,27 +437,18 @@ pub(crate) fn define_string_methods(
             let start_utf16 = if pos == value::encode_undefined() {
                 0
             } else {
-                (to_f64_or(pos, 0.0) as usize).min(utf16_len(&s))
+                (to_f64_or(pos, 0.0) as usize).min(s.utf16_len())
             };
-            let start_byte = utf16_index_to_byte_offset(&s, start_utf16);
-            match if search_str.is_empty() {
-                Some(start_byte)
-            } else {
-                s[start_byte..].find(&search_str).map(|i| start_byte + i)
-            } {
-                Some(byte_idx) => {
-                    value::encode_f64(byte_offset_to_utf16_index(&s, byte_idx) as f64)
-                }
-                None => value::encode_f64(-1.0),
-            }
+            s.find_units(&search_str, start_utf16)
+                .map(|index| value::encode_f64(index as f64))
+                .unwrap_or_else(|| value::encode_f64(-1.0))
         },
     );
     linker.define(&mut store, "env", "string_index_of", f)?;
-    // string_last_index_of
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
-            // 数组接收者回退到 array_last_index_of_from（同 string_index_of）。
             if value::is_array(receiver)
                 && let Some(ptr) = resolve_array_ptr(&mut caller, receiver)
             {
@@ -384,32 +468,23 @@ pub(crate) fn define_string_methods(
             }
             let s = get_string_value(&mut caller, receiver);
             let search_str = get_string_value(&mut caller, search);
-            let len_utf16 = utf16_len(&s);
-            if search_str.is_empty() {
-                let end_utf16 = if pos == value::encode_undefined() {
-                    len_utf16
-                } else {
-                    (to_f64_or(pos, 0.0) as usize).min(len_utf16)
-                };
-                return value::encode_f64(end_utf16 as f64);
-            }
-            let end_utf16 = if pos == value::encode_undefined() {
-                len_utf16
+            let len = s.utf16_len();
+            let from = if pos == value::encode_undefined() {
+                len
             } else {
-                (to_f64_or(pos, 0.0) as usize).min(len_utf16)
+                (to_f64_or(pos, 0.0) as usize).min(len)
             };
-            let end_byte = utf16_index_to_byte_offset(&s, end_utf16);
-            match s[..end_byte].rfind(&search_str) {
-                Some(byte_idx) => {
-                    value::encode_f64(byte_offset_to_utf16_index(&s, byte_idx) as f64)
-                }
-                None => value::encode_f64(-1.0),
+            if search_str.is_empty() {
+                return value::encode_f64(from as f64);
             }
+            let end = from.saturating_add(search_str.utf16_len()).min(len);
+            s.rfind_units_before(&search_str, end)
+                .map(|index| value::encode_f64(index as f64))
+                .unwrap_or_else(|| value::encode_f64(-1.0))
         },
     );
     linker.define(&mut store, "env", "string_last_index_of", f)?;
-    // string_match_all 已移至 reentrant_string_async（需异步 reentry 以支持 @@matchAll 自定义匹配器）
-    // string_pad_end
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -417,8 +492,8 @@ pub(crate) fn define_string_methods(
          target_len: i64,
          pad_str_val: i64|
          -> i64 {
-            let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s);
+            let mut s = get_string_value(&mut caller, receiver);
+            let len = s.utf16_len();
             let target = if value::is_f64(target_len) {
                 to_f64_or(target_len, 0.0) as usize
             } else {
@@ -427,22 +502,22 @@ pub(crate) fn define_string_methods(
             if target <= len {
                 return store_runtime_string(&caller, s);
             }
-            let pad_str = if pad_str_val == value::encode_undefined() {
-                " ".to_string()
+            let pad = if pad_str_val == value::encode_undefined() {
+                RuntimeString::from_utf8_str(" ")
             } else {
                 let p = get_string_value(&mut caller, pad_str_val);
-                if p.is_empty() { " ".to_string() } else { p }
+                if p.is_empty() {
+                    RuntimeString::from_utf8_str(" ")
+                } else {
+                    p
+                }
             };
-            let pad_chars: Vec<char> = pad_str.chars().collect();
-            let mut result = s.clone();
-            for i in len..target {
-                result.push(pad_chars[(i - len) % pad_chars.len()]);
-            }
-            store_runtime_string(&caller, result)
+            s.push_units_from(&repeat_units_to_len(&pad, target - len));
+            store_runtime_string(&caller, s)
         },
     );
     linker.define(&mut store, "env", "string_pad_end", f)?;
-    // string_pad_start
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -451,7 +526,7 @@ pub(crate) fn define_string_methods(
          pad_str_val: i64|
          -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s);
+            let len = s.utf16_len();
             let target = if value::is_f64(target_len) {
                 to_f64_or(target_len, 0.0) as usize
             } else {
@@ -460,23 +535,23 @@ pub(crate) fn define_string_methods(
             if target <= len {
                 return store_runtime_string(&caller, s);
             }
-            let pad_str = if pad_str_val == value::encode_undefined() {
-                " ".to_string()
+            let pad = if pad_str_val == value::encode_undefined() {
+                RuntimeString::from_utf8_str(" ")
             } else {
                 let p = get_string_value(&mut caller, pad_str_val);
-                if p.is_empty() { " ".to_string() } else { p }
+                if p.is_empty() {
+                    RuntimeString::from_utf8_str(" ")
+                } else {
+                    p
+                }
             };
-            let pad_chars: Vec<char> = pad_str.chars().collect();
-            let mut result = String::new();
-            for i in 0..(target - len) {
-                result.push(pad_chars[i % pad_chars.len()]);
-            }
-            result.push_str(&s);
+            let mut result = repeat_units_to_len(&pad, target - len);
+            result.push_units_from(&s);
             store_runtime_string(&caller, result)
         },
     );
     linker.define(&mut store, "env", "string_pad_start", f)?;
-    // string_repeat
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, count: i64| -> i64 {
@@ -495,7 +570,7 @@ pub(crate) fn define_string_methods(
         },
     );
     linker.define(&mut store, "env", "string_repeat", f)?;
-    // string_replace_all
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, replace: i64| -> i64 {
@@ -515,7 +590,9 @@ pub(crate) fn define_string_methods(
                 if !is_global {
                     *caller
                         .data()
-                        .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                        .runtime_error
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(
                         "TypeError: String.prototype.replaceAll called with a non-global RegExp argument"
                             .to_string(),
                     );
@@ -529,11 +606,11 @@ pub(crate) fn define_string_methods(
             let s = get_string_value(&mut caller, receiver);
             let search_str = get_string_value(&mut caller, search);
             let replace_str = get_string_value(&mut caller, replace);
-            store_runtime_string(&caller, s.replace(&search_str, &replace_str))
+            store_runtime_string(&caller, replace_all_units(&s, &search_str, &replace_str))
         },
     );
     linker.define(&mut store, "env", "string_replace_all", f)?;
-    // string_slice
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, start: i64, end: i64| -> i64 {
@@ -541,7 +618,7 @@ pub(crate) fn define_string_methods(
                 return super::array_object::array_slice_range(&mut caller, receiver, start, end);
             }
             let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s) as i64;
+            let len = s.utf16_len() as i64;
             let si = if value::is_f64(start) {
                 let v = to_f64_or(start, 0.0) as i64;
                 if v < 0 { (v + len).max(0) } else { v.min(len) }
@@ -557,15 +634,13 @@ pub(crate) fn define_string_methods(
                 0
             };
             if si >= ei {
-                return store_runtime_string(&caller, String::new());
+                return store_runtime_string(&caller, RuntimeString::empty());
             }
-            let start_byte = utf16_index_to_byte_offset(&s, si as usize);
-            let end_byte = utf16_index_to_byte_offset(&s, ei as usize);
-            store_runtime_string(&caller, s[start_byte..end_byte].to_string())
+            store_runtime_string(&caller, s.slice_units(si as usize..ei as usize))
         },
     );
     linker.define(&mut store, "env", "string_slice", f)?;
-    // string_starts_with
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
@@ -573,19 +648,20 @@ pub(crate) fn define_string_methods(
             let start_utf16 = if pos == value::encode_undefined() {
                 0
             } else {
-                (to_f64_or(pos, 0.0) as usize).min(utf16_len(&s))
+                (to_f64_or(pos, 0.0) as usize).min(s.utf16_len())
             };
-            let start_byte = utf16_index_to_byte_offset(&s, start_utf16);
-            value::encode_bool(s[start_byte..].starts_with(&get_string_value(&mut caller, search)))
+            value::encode_bool(
+                s.starts_with_units(&get_string_value(&mut caller, search), start_utf16),
+            )
         },
     );
     linker.define(&mut store, "env", "string_starts_with", f)?;
-    // string_substring
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, start: i64, end: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let len = utf16_len(&s) as i64;
+            let len = s.utf16_len() as i64;
             let s1 = if value::is_f64(start) {
                 (to_f64_or(start, 0.0) as i64).max(0).min(len)
             } else {
@@ -598,81 +674,77 @@ pub(crate) fn define_string_methods(
             };
             let (lo, hi) = if s1 < e1 { (s1, e1) } else { (e1, s1) };
             if lo >= hi {
-                return store_runtime_string(&caller, String::new());
+                return store_runtime_string(&caller, RuntimeString::empty());
             }
-            let lo_byte = utf16_index_to_byte_offset(&s, lo as usize);
-            let hi_byte = utf16_index_to_byte_offset(&s, hi as usize);
-            store_runtime_string(&caller, s[lo_byte..hi_byte].to_string())
+            store_runtime_string(&caller, s.slice_units(lo as usize..hi as usize))
         },
     );
     linker.define(&mut store, "env", "string_substring", f)?;
-    // string_normalize
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, form_val: i64, _unused: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
-            let form = if form_val == value::encode_undefined() {
+            let form_lossy = if form_val == value::encode_undefined() {
                 "NFC".to_string()
             } else {
-                get_string_value(&mut caller, form_val)
+                get_string_utf8_lossy(&mut caller, form_val)
             };
-            match normalize_string_by_form(&s, &form) {
+            match normalize_runtime_string_by_form(&s, &form_lossy) {
                 Ok(out) => store_runtime_string(&caller, out),
                 Err(msg) => make_range_error_exception(&mut caller, msg),
             }
         },
     );
     linker.define(&mut store, "env", "string_normalize", f)?;
-    // string_to_lower_case
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
-            let s = get_string_value(&mut caller, receiver).to_lowercase();
+            let s =
+                transform_scalar_runs(&get_string_value(&mut caller, receiver), str::to_lowercase);
             store_runtime_string(&caller, s)
         },
     );
     linker.define(&mut store, "env", "string_to_lower_case", f)?;
-    // string_to_upper_case
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
-            let s = get_string_value(&mut caller, receiver).to_uppercase();
+            let s =
+                transform_scalar_runs(&get_string_value(&mut caller, receiver), str::to_uppercase);
             store_runtime_string(&caller, s)
         },
     );
     linker.define(&mut store, "env", "string_to_upper_case", f)?;
-    // string_trim
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
-            let s = get_string_value(&mut caller, receiver).trim().to_string();
+            let s = trim_runtime_string(&get_string_value(&mut caller, receiver), true, true);
             store_runtime_string(&caller, s)
         },
     );
     linker.define(&mut store, "env", "string_trim", f)?;
-    // string_trim_end
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
-            let s = get_string_value(&mut caller, receiver)
-                .trim_end()
-                .to_string();
+            let s = trim_runtime_string(&get_string_value(&mut caller, receiver), false, true);
             store_runtime_string(&caller, s)
         },
     );
     linker.define(&mut store, "env", "string_trim_end", f)?;
-    // string_trim_start
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
-            let s = get_string_value(&mut caller, receiver)
-                .trim_start()
-                .to_string();
+            let s = trim_runtime_string(&get_string_value(&mut caller, receiver), true, false);
             store_runtime_string(&caller, s)
         },
     );
     linker.define(&mut store, "env", "string_trim_start", f)?;
-    // string_to_string
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
@@ -685,7 +757,7 @@ pub(crate) fn define_string_methods(
         },
     );
     linker.define(&mut store, "env", "string_to_string", f)?;
-    // string_value_of
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
@@ -694,7 +766,7 @@ pub(crate) fn define_string_methods(
         },
     );
     linker.define(&mut store, "env", "string_value_of", f)?;
-    // string_iterator
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
@@ -706,14 +778,14 @@ pub(crate) fn define_string_methods(
                 .unwrap_or_else(|e| e.into_inner());
             let handle = iters.len() as u32;
             iters.push(IteratorState::StringIter {
-                data: s.into_bytes(),
-                byte_pos: 0,
+                string: s,
+                unit_pos: 0,
             });
             value::encode_handle(value::TAG_ITERATOR, handle)
         },
     );
     linker.define(&mut store, "env", "string_iterator", f)?;
-    // string_from_char_code
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -722,17 +794,16 @@ pub(crate) fn define_string_methods(
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let mut result = String::new();
+            let mut units = Vec::with_capacity(args_count.max(0) as usize);
             for i in 0..args_count as u32 {
                 let arg = read_shadow_arg(&mut caller, args_base, i);
-                let code = to_uint16_caller(&mut caller, arg);
-                push_utf16_code_unit(&mut result, code);
+                units.push(to_uint16_caller(&mut caller, arg));
             }
-            store_runtime_string(&caller, result)
+            store_runtime_string(&caller, RuntimeString::from_utf16_units(units))
         },
     );
     linker.define(&mut store, "env", "string_from_char_code", f)?;
-    // string_from_code_point
+
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -741,22 +812,19 @@ pub(crate) fn define_string_methods(
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let mut result = String::new();
+            let mut result = RuntimeString::empty();
             for i in 0..args_count as u32 {
                 let arg = read_shadow_arg(&mut caller, args_base, i);
                 let code = to_uint32_caller(&mut caller, arg);
                 if !is_valid_code_point(code) {
                     return make_range_error_exception(&mut caller, "Invalid code point");
                 }
-                if let Some(c) = char::from_u32(code) {
-                    result.push(c);
-                }
+                result.push_units_from(&runtime_string_from_code_point(code));
             }
             store_runtime_string(&caller, result)
         },
     );
     linker.define(&mut store, "env", "string_from_code_point", f)?;
 
-    // ── promise_create ──
     Ok(())
 }

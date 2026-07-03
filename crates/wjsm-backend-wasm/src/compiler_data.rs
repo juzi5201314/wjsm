@@ -389,7 +389,7 @@ impl Compiler {
             && (self.source_file.is_some() || !self.source_map_entries.is_empty())
         {
             let mut data = Vec::new();
-            if let Some(ref file) = self.source_file {
+            if let Some(file) = &self.source_file {
                 let bytes = file.as_bytes();
                 data.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
                 data.extend_from_slice(bytes);

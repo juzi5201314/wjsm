@@ -64,8 +64,8 @@ pub(crate) use atomics::define_atomics;
 pub(crate) use collections_buffers::define_collections_buffers;
 
 pub(crate) use core::{
-    define_core, iterator_from_impl_async, iterator_value_impl, string_iter_advance_byte_pos,
-    utf8_code_unit_len,
+    define_core, iterator_from_impl_async, iterator_value_impl, string_iter_advance_unit_pos,
+    string_iter_current_value,
 };
 
 pub(crate) use fetch::define_fetch;

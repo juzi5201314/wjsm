@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_string::RuntimeString;
 use crate::wasm_env::WasmEnv;
 
 /// 对象属性容量倍增并至少容纳 needed；溢出或超出 u32 容量时返回 None。
@@ -529,6 +530,7 @@ pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = Runti
             data[obj_ptr + 15],
         ]) as usize
     };
+    let prop_key = RuntimeString::from_utf8_str(prop_name);
     let mut slots = Vec::with_capacity(num_props);
     {
         let data = env.memory.data(&*ctx);
@@ -556,8 +558,7 @@ pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = Runti
         if (*flags & constants::FLAG_PRIVATE) != 0 || is_symbol_name_id(*name_id) {
             continue;
         }
-        let name_bytes = read_string_bytes_mem(ctx, &env.memory, *name_id);
-        if name_bytes == prop_name.as_bytes() {
+        if name_id_matches_runtime_string(ctx, env, *name_id, &prop_key) {
             let data = env.memory.data(&*ctx);
             let slot_offset = obj_ptr + 16 + i * 32;
             if slot_offset + 32 > data.len() {
@@ -616,10 +617,14 @@ fn find_property_slot_by_name_id_with_visibility<C: AsContextMut<Data = RuntimeS
             data[obj_ptr + 15],
         ]) as usize
     };
-    let target_name_bytes = if is_symbol_name_id(name_id) {
-        Vec::new()
-    } else {
-        read_string_bytes_mem(ctx, &env.memory, name_id)
+    let target_key = match decode_name_id(name_id) {
+        DecodedNameId::MemoryString(index) => Some(RuntimeString::from_utf8_lossy(
+            &read_string_bytes_mem(ctx, &env.memory, index),
+        )),
+        DecodedNameId::RuntimeString(index) => {
+            runtime_property_key_units(ctx.as_context().data(), index)
+        }
+        DecodedNameId::Symbol(_) => None,
     };
     for i in 0..num_props {
         let slot_offset = obj_ptr + 16 + i * 32;
@@ -656,10 +661,9 @@ fn find_property_slot_by_name_id_with_visibility<C: AsContextMut<Data = RuntimeS
             continue;
         }
         let same_name = slot_name_id == name_id
-            || (!is_symbol_name_id(name_id)
-                && !is_symbol_name_id(slot_name_id)
-                && !target_name_bytes.is_empty()
-                && read_string_bytes_mem(ctx, &env.memory, slot_name_id) == target_name_bytes);
+            || target_key
+                .as_ref()
+                .is_some_and(|key| name_id_matches_runtime_string(ctx, env, slot_name_id, key));
         if same_name {
             return Some((slot_offset, flags, val));
         }
@@ -1242,19 +1246,8 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
 
     // string → parseFloat (可能失败 → NaN)
     if value::is_string(val) {
-        let s = if value::is_runtime_string_handle(val) {
-            let handle = value::decode_runtime_string_handle(val) as usize;
-            let strings = caller
-                .data()
-                .runtime_strings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            strings.get(handle).cloned().unwrap_or_default()
-        } else {
-            read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
-        };
-
-        let num = crate::runtime_string_to_number::js_string_content_to_f64(&s);
+        let string_lossy = get_string_utf8_lossy(caller, val);
+        let num = crate::runtime_string_to_number::js_string_content_to_f64(&string_lossy);
         return num.to_bits() as i64;
     }
 
@@ -1430,12 +1423,12 @@ pub(crate) fn to_object(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     if value::is_string(val) {
         let s = get_string_value(caller, val);
-        let len = utf16_len(&s);
+        let len = s.utf16_len();
         let cap = (len.saturating_add(1)).max(1) as u32;
         let obj = alloc_host_object(caller, &env, cap);
-        for (i, ch) in s.chars().enumerate() {
+        for (i, unit) in s.as_utf16_units().iter().copied().enumerate() {
             let idx_str = i.to_string();
-            let ch_val = store_runtime_string(caller, ch.to_string());
+            let ch_val = store_runtime_string(caller, RuntimeString::from_utf16_code_unit(unit));
             let _ = define_host_data_property_from_caller(caller, obj, &idx_str, ch_val);
         }
         let len_val = value::encode_f64(len as f64);
@@ -1456,23 +1449,6 @@ pub(crate) fn to_object(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     alloc_host_object(caller, &env, 0)
 }
 
-pub(crate) fn utf16_len(s: &str) -> usize {
-    s.chars()
-        .map(|ch| if ch as u32 > 0xFFFF { 2 } else { 1 })
-        .sum()
-}
-
-pub(crate) fn utf16_index_to_byte_offset(s: &str, utf16_idx: usize) -> usize {
-    let mut utf16_count = 0usize;
-    for (byte_off, ch) in s.char_indices() {
-        if utf16_count >= utf16_idx {
-            return byte_off;
-        }
-        utf16_count += if ch as u32 > 0xFFFF { 2 } else { 1 };
-    }
-    s.len()
-}
-
 pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
     let mut utf16_count = 0usize;
     for (off, ch) in s.char_indices() {
@@ -1482,11 +1458,6 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
         utf16_count += if ch as u32 > 0xFFFF { 2 } else { 1 };
     }
     utf16_count
-}
-
-pub(crate) fn truncate_utf16_prefix(s: &str, max_units: usize) -> String {
-    let end = utf16_index_to_byte_offset(s, max_units);
-    s[..end].to_string()
 }
 
 /// 严格相等比较 (ECMAScript 7.2.16)
@@ -1567,8 +1538,8 @@ pub(crate) fn type_tag(val: i64) -> u64 {
     } // object, function, iterator, enumerator, exception, bound
 }
 
-/// 获取字符串值
-pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+/// 获取 ECMAScript 字符串值，保留 UTF-16 code units。
+pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> RuntimeString {
     if value::is_runtime_string_handle(val) {
         let handle = value::decode_runtime_string_handle(val) as usize;
         let strings = caller
@@ -1577,9 +1548,15 @@ pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) 
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         strings.get(handle).cloned().unwrap_or_default()
+    } else if value::is_string(val) {
+        RuntimeString::from_utf8_lossy(&read_string_bytes(caller, value::decode_string_ptr(val)))
     } else {
-        read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
+        RuntimeString::empty()
     }
+}
+
+pub(crate) fn get_string_utf8_lossy(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+    get_string_value(caller, val).to_utf8_lossy()
 }
 
 pub(crate) async fn resolve_and_call_async(

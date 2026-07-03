@@ -281,10 +281,12 @@ fn push_resolved_value_handles(
         return;
     }
     if value::is_function(val) {
-        let base = ctx.function_props_base();
-        let h = ((val as u32) as usize).saturating_add(base) as Handle;
-        if (h as usize) < obj_table_count {
-            visit(h);
+        let function_idx = val as u32 as usize;
+        if function_idx < ctx.num_ir_functions() {
+            let h = function_idx.saturating_add(ctx.function_props_base()) as Handle;
+            if (h as usize) < obj_table_count {
+                visit(h);
+            }
         }
         return;
     }
@@ -390,6 +392,7 @@ pub(crate) fn mark_drain_on_buffer(
     obj_table_count: usize,
     roots: &[Handle],
     function_props_base: usize,
+    num_ir_functions: usize,
 ) {
     let mut worklist: Vec<Handle> = Vec::new();
     for &h in roots {
@@ -410,9 +413,12 @@ pub(crate) fn mark_drain_on_buffer(
         );
         for &val in &raw_vals {
             // buffer 作用域：只解析 object/array/function（closure/native_callable 需 host 表）
-            if let Some(child) =
-                resolve_buffer_value_handle(val, obj_table_count, function_props_base)
-            {
+            if let Some(child) = resolve_buffer_value_handle(
+                val,
+                obj_table_count,
+                function_props_base,
+                num_ir_functions,
+            ) {
                 if mark_bits.mark_if_new(child) {
                     worklist.push(child);
                 }
@@ -427,6 +433,7 @@ fn resolve_buffer_value_handle(
     val: i64,
     obj_table_count: usize,
     function_props_base: usize,
+    num_ir_functions: usize,
 ) -> Option<Handle> {
     if !value::tag_needs_root(val) {
         return None;
@@ -436,8 +443,12 @@ fn resolve_buffer_value_handle(
         return ((h as usize) < obj_table_count).then_some(h);
     }
     if value::is_function(val) {
-        let h = ((val as u32) as usize).saturating_add(function_props_base) as Handle;
-        return ((h as usize) < obj_table_count).then_some(h);
+        let function_idx = val as u32 as usize;
+        if function_idx < num_ir_functions {
+            let h = function_idx.saturating_add(function_props_base) as Handle;
+            return ((h as usize) < obj_table_count).then_some(h);
+        }
+        return None;
     }
     None
 }
@@ -461,18 +472,19 @@ mod tests {
     ) -> Vec<u8> {
         // 算 buffer 大小：max(obj 末尾, obj_table 末尾)
         let mut size = obj_table_ptr + obj_table_count * 4;
-        for &(_h, ptr, _proto, ref props) in objects {
-            let end = ptr + 16 + props.len() * 32;
+        for (_h, ptr, _proto, props) in objects {
+            let end = *ptr + 16 + props.len() * 32;
             size = size.max(end);
         }
         let mut buf = vec![0u8; size];
         // 写 obj_table
-        for &(h, ptr, _, _) in objects {
-            let addr = obj_table_ptr + h as usize * 4;
-            buf[addr..addr + 4].copy_from_slice(&(ptr as u32).to_le_bytes());
+        for (h, ptr, _, _) in objects {
+            let addr = obj_table_ptr + *h as usize * 4;
+            buf[addr..addr + 4].copy_from_slice(&(*ptr as u32).to_le_bytes());
         }
         // 写对象 header + props
-        for &(_h, ptr, proto, ref props) in objects {
+        for (_h, ptr, proto, props) in objects {
+            let ptr = *ptr;
             // proto@+0
             buf[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
             // heap_type@+4 = OBJECT(0)
@@ -611,7 +623,7 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, 3);
         let mut bm = MarkBitmap::new();
         bm.reset(3);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0], 0);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0], 0, 0);
         assert!(bm.is_marked(0));
         assert!(bm.is_marked(1));
         assert!(bm.is_marked(2));
@@ -630,7 +642,7 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, 3);
         let mut bm = MarkBitmap::new();
         bm.reset(3);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0], 0);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0], 0, 0);
         assert!(bm.is_marked(0));
         assert!(bm.is_marked(1));
         assert!(!bm.is_marked(2)); // 不可达
@@ -647,7 +659,7 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, 2);
         let mut bm = MarkBitmap::new();
         bm.reset(2);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 2, &[0], 0);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 2, &[0], 0, 0);
         assert!(bm.is_marked(0));
         assert!(bm.is_marked(1));
         assert_eq!(bm.popcount(), 2); // 不重复
@@ -674,12 +686,36 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, N);
         let mut bm = MarkBitmap::new();
         bm.reset(N);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, N, &[0], 0);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, N, &[0], 0, 0);
         // 全部 marked
         assert_eq!(bm.popcount(), N);
         assert!(bm.is_marked((N - 1) as u32)); // 链尾
     }
 
+    #[test]
+    fn function_value_root_rejects_out_of_range_function_id() {
+        const N: usize = 4;
+        let obj_table_ptr = 0;
+        let root_ptr = 100;
+        let function_value = value::encode_function_idx(2);
+        let buf = build_object_buffer(
+            obj_table_ptr,
+            &[
+                (0u32, root_ptr, 0xFFFF_FFFF, vec![function_value]),
+                (1u32, 200, 0xFFFF_FFFF, vec![]),
+                (2u32, 300, 0xFFFF_FFFF, vec![]),
+                (3u32, 400, 0xFFFF_FFFF, vec![]),
+            ],
+            N,
+        );
+
+        let mut bm = MarkBitmap::new();
+        bm.reset(N);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, N, &[0], 1, 2);
+
+        assert!(bm.is_marked(0));
+        assert!(!bm.is_marked(3));
+    }
     // ── P4-blocker #2 测试：closure env_obj + native_callable 内部引用解析 ──
 
     /// native_callable 表项内部引用提取（不需 wasmtime，直接测 collect_native_callable_refs）。

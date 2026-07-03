@@ -121,7 +121,7 @@ pub(crate) async fn define_value_on_receiver(
     }
 
     let existing = receiver_own_descriptor_from_trap_result(caller, existing_handle);
-    if let Some(ref desc) = existing {
+    if let Some(desc) = &existing {
         let completed = complete_property_descriptor(desc.clone());
         if is_accessor_descriptor(&completed) {
             return false;
@@ -239,10 +239,7 @@ pub(crate) async fn reflect_set_impl_with_receiver(
     if !value::is_js_object(target) && !value::is_array(target) && !value::is_function(target) {
         return value::encode_bool(false);
     }
-    let Ok(_prop_name) = render_value(caller, prop) else {
-        return value::encode_bool(false);
-    };
-    let Some(name_id) = find_memory_c_string(caller, &_prop_name) else {
+    let Some(name_id) = property_key_value_to_name_id(caller, prop, true) else {
         return value::encode_bool(false);
     };
     let ok = ordinary_set_by_name_id(caller, target, receiver, name_id, val).await;
@@ -304,10 +301,7 @@ pub(crate) fn reflect_has_impl(
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_bool(false);
     };
-    let Ok(_prop_name) = render_value(caller, prop) else {
-        return value::encode_bool(false);
-    };
-    let Some(name_id) = find_memory_c_string(caller, &_prop_name) else {
+    let Some(name_id) = property_key_value_to_name_id(caller, prop, false) else {
         return value::encode_bool(false);
     };
     let mut visited = std::collections::HashSet::new();
@@ -320,14 +314,18 @@ pub(crate) fn reflect_delete_property_impl(
     target: i64,
     prop: i64,
 ) -> i64 {
-    let prop_name = match render_value(caller, prop) {
-        Ok(name) => name,
-        Err(_) => return value::encode_bool(true),
+    let prop_name = if value::is_string(prop) {
+        get_string_utf8_lossy(caller, prop)
+    } else {
+        match render_value(caller, prop) {
+            Ok(name) => name,
+            Err(_) => return value::encode_bool(true),
+        }
     };
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_bool(true);
     };
-    let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
+    let Some(name_id) = property_key_value_to_name_id(caller, prop, false) else {
         return value::encode_bool(true);
     };
     // 数组元素删除：将对应 slot 置 hole
@@ -337,15 +335,24 @@ pub(crate) fn reflect_delete_property_impl(
             return value::encode_bool(true);
         }
     }
+    delete_property_by_name_id(caller, target, name_id)
+}
+
+pub(crate) fn delete_property_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    name_id: u32,
+) -> i64 {
+    let Some(ptr) = resolve_handle(caller, target) else {
+        return value::encode_bool(true);
+    };
     let Some((slot_offset, flags, _val)) = find_property_slot_by_name_id(caller, ptr, name_id)
     else {
         return value::encode_bool(true);
     };
-    // Not configurable → can't delete
     if (flags & constants::FLAG_CONFIGURABLE) == 0 {
         return value::encode_bool(false);
     }
-    // Perform shift-based removal to preserve property order
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         return value::encode_bool(false);
     };
@@ -362,7 +369,6 @@ pub(crate) fn reflect_delete_property_impl(
     if num_props == 0 {
         return value::encode_bool(true);
     }
-    // Shift all subsequent properties down to preserve insertion order
     data[ptr + 12..ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
     let prop_idx = (slot_offset - (ptr + 16)) / 32;
     for i in prop_idx..num_props - 1 {
@@ -371,9 +377,7 @@ pub(crate) fn reflect_delete_property_impl(
         if src + 32 > data.len() || dst + 32 > data.len() {
             break;
         }
-        for j in 0..32 {
-            data[dst + j] = data[src + j];
-        }
+        data.copy_within(src..src + 32, dst);
     }
     value::encode_bool(true)
 }
@@ -1153,12 +1157,14 @@ pub(crate) async fn object_enumerable_own_keys_async(
         }
         return arr;
     }
-    let names = collect_own_property_names_from_value(caller, obj, true);
-    let len = names.len() as u32;
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return alloc_array(caller, 0);
+    };
+    let keys = collect_own_property_string_key_values(caller, obj, ptr, true);
+    let len = keys.len() as u32;
     let arr = alloc_array(caller, len);
-    for (i, name) in names.into_iter().enumerate() {
-        let name_val = store_runtime_string(caller, name);
-        set_array_elem(caller, arr, i as i32, name_val);
+    for (i, key) in keys.into_iter().enumerate() {
+        set_array_elem(caller, arr, i as i32, key);
     }
     if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
         write_array_length(caller, arr_ptr, len);
@@ -1202,12 +1208,14 @@ pub(crate) async fn object_get_own_property_names_async(
         }
         return arr;
     }
-    let names = collect_own_property_names_from_value(caller, obj, false);
-    let len = names.len() as u32;
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return alloc_array(caller, 0);
+    };
+    let keys = collect_own_property_string_key_values(caller, obj, ptr, false);
+    let len = keys.len() as u32;
     let arr = alloc_array(caller, len);
-    for (i, name) in names.into_iter().enumerate() {
-        let name_val = store_runtime_string(caller, name);
-        set_array_elem(caller, arr, i as i32, name_val);
+    for (i, key) in keys.into_iter().enumerate() {
+        set_array_elem(caller, arr, i as i32, key);
     }
     if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
         write_array_length(caller, arr_ptr, len);

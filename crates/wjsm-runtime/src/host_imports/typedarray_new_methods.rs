@@ -596,7 +596,7 @@ pub(crate) fn define_typedarray_new_methods(
             let sep = if value::is_undefined(separator) || value::is_null(separator) {
                 ",".to_string()
             } else {
-                get_string_value(&mut caller, separator)
+                get_string_utf8_lossy(&mut caller, separator)
             };
             let mut parts = Vec::new();
             for i in 0..length {

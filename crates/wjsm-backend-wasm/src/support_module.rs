@@ -62,6 +62,9 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("primitive_regexp_get_property", 8), // (i64, i32) -> i64
     ("primitive_regexp_set_property", 9), // (i64, i32, i64) -> ()
     ("primitive_string_get_property", 8), // (i64, i32) -> i64
+    ("obj_get_runtime_key", 8),           // (i64, i32) -> i64
+    ("obj_set_runtime_key", 9),           // (i64, i32, i64) -> ()
+    ("obj_delete_runtime_key", 8),        // (i64, i32) -> i64
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
@@ -87,8 +90,11 @@ const HOST_ARRAY_NAMED_SET: u32 = 18;
 const HOST_PRIMITIVE_REGEXP_GET_PROPERTY: u32 = 19;
 const HOST_PRIMITIVE_REGEXP_SET_PROPERTY: u32 = 20;
 const HOST_PRIMITIVE_STRING_GET_PROPERTY: u32 = 21;
+const HOST_OBJ_GET_RUNTIME_KEY: u32 = 22;
+const HOST_OBJ_SET_RUNTIME_KEY: u32 = 23;
+const HOST_OBJ_DELETE_RUNTIME_KEY: u32 = 24;
 
-const NUM_HOST_IMPORTS: u32 = 22;
+const NUM_HOST_IMPORTS: u32 = 25;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -374,6 +380,16 @@ fn emit_property_name_id_match(func: &mut Function, left_local: u32, right_local
     func.instruction(&WasmInstruction::I32Const(0));
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::I32Or);
+}
+
+fn emit_runtime_string_name_id_test(func: &mut Function, name_id_local: u32) {
+    func.instruction(&WasmInstruction::LocalGet(name_id_local));
+    func.instruction(&WasmInstruction::I32Const(
+        constants::NAME_ID_RUNTIME_STRING_FLAG as i32,
+    ));
+    func.instruction(&WasmInstruction::I32And);
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Ne);
 }
 
 /// 解析 callable：若为 closure 则通过 host 获取 func_idx + env_obj，
@@ -1168,6 +1184,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 22);
+        assert_eq!(HOST_IMPORTS.len(), 25);
     }
 }

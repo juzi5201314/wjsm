@@ -266,17 +266,8 @@ pub(crate) fn define_object_builtins(
             let Some(ptr) = resolve_handle(&mut caller, target) else {
                 return value::encode_undefined();
             };
-            let name_id = if let Some(name_id) = symbol_value_to_name_id(prop) {
-                name_id
-            } else {
-                let prop_name = match render_value(&mut caller, prop) {
-                    Ok(name) => name,
-                    Err(_) => return value::encode_undefined(),
-                };
-                let Some(name_id) = find_memory_c_string(&mut caller, &prop_name) else {
-                    return value::encode_undefined();
-                };
-                name_id
+            let Some(name_id) = property_key_value_to_name_id(&mut caller, prop, false) else {
+                return value::encode_undefined();
             };
             let Some((slot_offset, flags, val)) =
                 find_property_slot_by_name_id(&mut caller, ptr, name_id)
@@ -441,11 +432,7 @@ fn object_property_name_id_from_key(
     caller: &mut Caller<'_, RuntimeState>,
     prop: i64,
 ) -> Option<u32> {
-    if let Some(name_id) = symbol_value_to_name_id(prop) {
-        return Some(name_id);
-    }
-    let prop_name = render_value(caller, prop).ok()?;
-    find_memory_c_string(caller, &prop_name)
+    property_key_value_to_name_id(caller, prop, false)
 }
 
 fn write_slot_flags(caller: &mut Caller<'_, RuntimeState>, slot_offset: usize, flags: i32) -> bool {
@@ -648,16 +635,12 @@ fn read_property_by_string_key(
     obj: i64,
     key_val: i64,
 ) -> i64 {
-    let key_str = match render_value(caller, key_val) {
-        Ok(s) => s,
-        Err(_) => return value::encode_undefined(),
-    };
+    let key = get_string_value(caller, key_val);
     let Some(ptr) = resolve_handle(caller, obj) else {
         return value::encode_undefined();
     };
-    let Some(name_id) = find_memory_c_string(caller, &key_str) else {
-        return value::encode_undefined();
-    };
+    let key_index = intern_runtime_property_key(caller.data(), key);
+    let name_id = encode_runtime_string_name_id(key_index);
     let Some((_, _, val)) = find_property_slot_by_name_id(caller, ptr, name_id) else {
         return value::encode_undefined();
     };

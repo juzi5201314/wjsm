@@ -202,7 +202,7 @@ pub fn is_string(val: i64) -> bool {
 
 pub fn is_runtime_string_handle(val: i64) -> bool {
     let uval = val as u64;
-    is_string(val) && ((uval >> 32) & STRING_RUNTIME_HANDLE_FLAG) != 0
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & STRING_RUNTIME_HANDLE_FLAG) != 0
 }
 
 pub fn decode_string_ptr(val: i64) -> u32 {

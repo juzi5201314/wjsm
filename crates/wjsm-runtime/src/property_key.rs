@@ -1,38 +1,139 @@
+use wasmtime::{AsContext, Caller};
 use wjsm_ir::{constants, value};
+
+use crate::runtime_string::RuntimeString;
+use crate::{RuntimeState, WasmEnv};
+
+/// 属性槽 `name_id` 的三种存储来源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DecodedNameId {
+    MemoryString(u32),
+    RuntimeString(u32),
+    Symbol(u32),
+}
 
 #[inline]
 pub(crate) fn encode_string_name_id(string_idx: u32) -> u32 {
-    debug_assert!(string_idx < constants::NAME_ID_SYMBOL_FLAG);
+    assert!(string_idx <= constants::NAME_ID_INDEX_MASK);
     string_idx
 }
 
 #[inline]
+pub(crate) fn encode_runtime_string_name_id(index: u32) -> u32 {
+    assert!(index <= constants::NAME_ID_INDEX_MASK);
+    constants::NAME_ID_RUNTIME_STRING_FLAG | index
+}
+
+#[inline]
 pub(crate) fn encode_symbol_name_id(symbol_idx: u32) -> u32 {
-    debug_assert!(symbol_idx < constants::NAME_ID_SYMBOL_FLAG);
+    assert!(symbol_idx <= constants::NAME_ID_INDEX_MASK);
     constants::NAME_ID_SYMBOL_FLAG | symbol_idx
 }
 
 #[inline]
 pub(crate) fn is_symbol_name_id(name_id: u32) -> bool {
-    (name_id & constants::NAME_ID_SYMBOL_FLAG) != 0
+    matches!(decode_name_id(name_id), DecodedNameId::Symbol(_))
 }
 
 #[inline]
-pub(crate) fn decode_name_id(name_id: u32) -> (bool, u32) {
-    (
-        is_symbol_name_id(name_id),
-        name_id & constants::NAME_ID_INDEX_MASK,
-    )
+pub(crate) fn decode_name_id(name_id: u32) -> DecodedNameId {
+    let index = name_id & constants::NAME_ID_INDEX_MASK;
+    match name_id & constants::NAME_ID_KIND_MASK {
+        constants::NAME_ID_SYMBOL_FLAG => DecodedNameId::Symbol(index),
+        constants::NAME_ID_RUNTIME_STRING_FLAG => DecodedNameId::RuntimeString(index),
+        _ => DecodedNameId::MemoryString(index),
+    }
 }
 
 #[inline]
 pub(crate) fn name_id_to_property_key_value(name_id: u32) -> Option<i64> {
-    let (is_symbol, index) = decode_name_id(name_id);
-    if is_symbol {
-        Some(value::encode_symbol_handle(index))
-    } else {
-        None
+    match decode_name_id(name_id) {
+        DecodedNameId::MemoryString(_) => None,
+        DecodedNameId::RuntimeString(index) => Some(value::encode_runtime_string_handle(index)),
+        DecodedNameId::Symbol(index) => Some(value::encode_symbol_handle(index)),
     }
+}
+
+pub(crate) fn intern_runtime_property_key(state: &RuntimeState, key: RuntimeString) -> u32 {
+    let mut keys = state
+        .runtime_property_keys
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(index) = keys.iter().position(|existing| existing == &key) {
+        return index as u32;
+    }
+    let index = keys.len() as u32;
+    keys.push(key);
+    index
+}
+
+pub(crate) fn runtime_property_key_units(
+    state: &RuntimeState,
+    index: u32,
+) -> Option<RuntimeString> {
+    state
+        .runtime_property_keys
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(index as usize)
+        .cloned()
+}
+
+pub(crate) fn name_id_matches_runtime_string<C: AsContext<Data = RuntimeState>>(
+    ctx: &C,
+    env: &WasmEnv,
+    slot_name_id: u32,
+    key: &RuntimeString,
+) -> bool {
+    match decode_name_id(slot_name_id) {
+        DecodedNameId::MemoryString(index) => {
+            let bytes = crate::runtime_render::read_string_bytes_mem(ctx, &env.memory, index);
+            RuntimeString::from_utf8_lossy(&bytes) == *key
+        }
+        DecodedNameId::RuntimeString(index) => {
+            runtime_property_key_units(ctx.as_context().data(), index)
+                .is_some_and(|stored| stored == *key)
+        }
+        DecodedNameId::Symbol(_) => false,
+    }
+}
+
+pub(crate) fn property_key_value_to_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    prop: i64,
+    allocate_memory_string: bool,
+) -> Option<u32> {
+    if let Some(id) = symbol_value_to_name_id(prop) {
+        return Some(id);
+    }
+    if value::is_runtime_string_handle(prop) {
+        let key = crate::runtime_values::get_string_value(caller, prop);
+        if let Some(key_utf8) = key.to_utf8()
+            && !key_utf8.as_bytes().contains(&0)
+            && let Some(memory_id) = if allocate_memory_string {
+                crate::runtime_host_helpers::find_memory_c_string(caller, &key_utf8)
+                    .or_else(|| crate::runtime_host_helpers::alloc_heap_c_string(caller, &key_utf8))
+            } else {
+                crate::runtime_host_helpers::find_memory_c_string(caller, &key_utf8)
+            }
+        {
+            return Some(encode_string_name_id(memory_id));
+        }
+        let index = intern_runtime_property_key(caller.data(), key);
+        return Some(encode_runtime_string_name_id(index));
+    }
+
+    if value::is_string(prop) {
+        return Some(encode_string_name_id(value::decode_string_ptr(prop)));
+    }
+    let prop_name = crate::runtime_render::render_value(caller, prop).ok()?;
+    let memory_id = if allocate_memory_string {
+        crate::runtime_host_helpers::find_memory_c_string(caller, &prop_name)
+            .or_else(|| crate::runtime_host_helpers::alloc_heap_c_string(caller, &prop_name))
+    } else {
+        crate::runtime_host_helpers::find_memory_c_string(caller, &prop_name)
+    }?;
+    Some(encode_string_name_id(memory_id))
 }
 
 #[inline]

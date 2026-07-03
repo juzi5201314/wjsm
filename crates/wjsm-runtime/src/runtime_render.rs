@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_string::RuntimeString;
 
 fn read_string_bytes_with_env<C: AsContext>(ctx: &C, env: &WasmEnv, ptr: u32) -> Vec<u8> {
     let data = env.memory.data(ctx);
@@ -30,16 +31,7 @@ pub(crate) fn render_unhandled_rejection_reason_with_env<
         return render_unhandled_rejection_reason_with_env(ctx, env, reason);
     }
     if value::is_string(val) {
-        if value::is_runtime_string_handle(val) {
-            let handle = value::decode_runtime_string_handle(val) as usize;
-            let strings = ctx
-                .state_mut()
-                .runtime_strings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            return strings.get(handle).cloned().unwrap_or_default();
-        }
-        return read_string_with_env(ctx, env, value::decode_string_ptr(val)).unwrap_or_default();
+        return read_runtime_string_with_env_lossy(ctx, env, val);
     }
     if value::is_object(val) || value::is_array(val) {
         if let Some(op) = resolve_handle_with_env(ctx, env, val) {
@@ -93,20 +85,7 @@ pub(crate) fn render_unhandled_rejection_reason_with_env<
 
 pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<String> {
     if value::is_string(val) {
-        if value::is_runtime_string_handle(val) {
-            let handle = value::decode_runtime_string_handle(val) as usize;
-            let strings = caller
-                .data()
-                .runtime_strings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(value) = strings.get(handle) {
-                return Ok(value.clone());
-            }
-            return Ok(String::new());
-        }
-
-        return read_string(caller, value::decode_string_ptr(val));
+        return Ok(read_runtime_string_utf8_lossy(caller, val));
     }
 
     if value::is_undefined(val) {
@@ -391,7 +370,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get(handle) {
-            if let Some(ref desc) = entry.description {
+            if let Some(desc) = &entry.description {
                 // Escape the description for display
                 return Ok(format!("Symbol({})", desc));
             }
@@ -507,7 +486,7 @@ fn build_space_string(caller: &mut Caller<'_, RuntimeState>, space: i64) -> Stri
         }
     } else if value::is_string(space) {
         let s = read_runtime_string(caller, space);
-        truncate_utf16_prefix(&s, 10)
+        s.slice_units(0..s.utf16_len().min(10)).to_utf8_lossy()
     } else {
         String::new()
     }
@@ -536,7 +515,7 @@ fn build_replacer_whitelist(
         }
         if value::is_string(elem) || value::is_f64(elem) {
             let key = if value::is_string(elem) {
-                read_runtime_string(caller, elem)
+                read_runtime_string_utf8_lossy(caller, elem)
             } else {
                 let f = value::decode_f64(elem);
                 if f.is_finite() {
@@ -711,8 +690,7 @@ async fn serialize_json_property_async(
         ));
     }
     if value::is_string(value) {
-        let s = read_runtime_string(caller, value);
-        return Ok(json_escape_string(&s));
+        return Ok(read_runtime_string(caller, value).to_json_quoted());
     }
     if value::is_bool(value) {
         return Ok(value::decode_bool(value).to_string());
@@ -926,7 +904,10 @@ pub(crate) fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Re
     Ok(std::str::from_utf8(&data)?.to_owned())
 }
 
-pub(crate) fn read_runtime_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+pub(crate) fn read_runtime_string(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+) -> RuntimeString {
     if value::is_runtime_string_handle(val) {
         let handle = value::decode_runtime_string_handle(val) as usize;
         let strings = caller
@@ -936,25 +917,40 @@ pub(crate) fn read_runtime_string(caller: &mut Caller<'_, RuntimeState>, val: i6
             .unwrap_or_else(|e| e.into_inner());
         strings.get(handle).cloned().unwrap_or_default()
     } else if value::is_string(val) {
-        let ptr = value::decode_string_ptr(val);
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return String::new();
-        };
-        let data = memory.data(caller);
-        let start = ptr as usize;
-        if start >= data.len() {
-            return String::new();
-        }
-        let end = data[start..]
-            .iter()
-            .position(|byte| *byte == 0)
-            .map_or(data.len(), |offset| start + offset);
-        std::str::from_utf8(&data[start..end])
-            .unwrap_or_default()
-            .to_owned()
+        RuntimeString::from_utf8_lossy(&read_string_bytes(caller, value::decode_string_ptr(val)))
     } else {
-        String::new()
+        RuntimeString::empty()
     }
+}
+
+pub(crate) fn read_runtime_string_utf8_lossy(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+) -> String {
+    read_runtime_string(caller, val).to_utf8_lossy()
+}
+
+fn read_runtime_string_with_env_lossy<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    val: i64,
+) -> String {
+    if value::is_runtime_string_handle(val) {
+        let handle = value::decode_runtime_string_handle(val) as usize;
+        let strings = ctx
+            .state_mut()
+            .runtime_strings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        return strings
+            .get(handle)
+            .map(RuntimeString::to_utf8_lossy)
+            .unwrap_or_default();
+    }
+    if value::is_string(val) {
+        return read_string_with_env(ctx, env, value::decode_string_ptr(val)).unwrap_or_default();
+    }
+    String::new()
 }
 
 pub(crate) fn read_string_bytes_mem<C: AsContext>(ctx: &C, memory: &Memory, ptr: u32) -> Vec<u8> {
@@ -979,25 +975,18 @@ pub(crate) fn read_string_bytes(caller: &mut Caller<'_, RuntimeState>, ptr: u32)
     read_string_bytes_mem(caller, &memory, ptr)
 }
 
+pub(crate) fn read_value_string_utf8_lossy_bytes(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+) -> Option<Vec<u8>> {
+    value::is_string(val).then(|| read_runtime_string(caller, val).to_utf8_lossy_bytes())
+}
+
 pub(crate) fn read_value_string_bytes(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
 ) -> Option<Vec<u8>> {
-    if !value::is_string(val) {
-        return None;
-    }
-
-    if value::is_runtime_string_handle(val) {
-        let handle = value::decode_runtime_string_handle(val) as usize;
-        let strings = caller
-            .data()
-            .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        return strings.get(handle).map(|string| string.as_bytes().to_vec());
-    }
-
-    Some(read_string_bytes(caller, value::decode_string_ptr(val)))
+    read_value_string_utf8_lossy_bytes(caller, val)
 }
 
 pub(crate) fn read_i32_global_from_caller(
@@ -1072,24 +1061,30 @@ pub(crate) fn read_eval_var_map(caller: &mut Caller<'_, RuntimeState>) -> Vec<Ev
     entries
 }
 
-pub(crate) fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i64 {
+pub(crate) fn store_runtime_string<S>(caller: &Caller<'_, RuntimeState>, string: S) -> i64
+where
+    S: Into<RuntimeString>,
+{
     let mut strings = caller
         .data()
         .runtime_strings
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let handle = strings.len() as u32;
-    strings.push(string);
+    strings.push(string.into());
     value::encode_runtime_string_handle(handle)
 }
 
-pub(crate) fn store_runtime_string_in_state(state: &RuntimeState, string: String) -> i64 {
+pub(crate) fn store_runtime_string_in_state<S>(state: &RuntimeState, string: S) -> i64
+where
+    S: Into<RuntimeString>,
+{
     let mut strings = state
         .runtime_strings
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let handle = strings.len() as u32;
-    strings.push(string);
+    strings.push(string.into());
     value::encode_runtime_string_handle(handle)
 }
 

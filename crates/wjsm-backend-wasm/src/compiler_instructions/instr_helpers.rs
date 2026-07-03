@@ -50,7 +50,7 @@ impl Compiler {
         let mut spill: Vec<u32> = Vec::new();
 
         // ── SSA 值 spill：存活且 Handle 类型的 ValueId → local（ValueTy 缺失保守当 Handle）──
-        if let Some(ref liveness) = self.current_fn_liveness
+        if let Some(liveness) = &self.current_fn_liveness
             && let Some(live) = liveness
                 .get(&block_id)
                 .and_then(|m| m.get(&self.current_emit_instr_idx))
@@ -71,7 +71,7 @@ impl Compiler {
         // per-ValueId liveness 看不到变量存活（StoreVar 无 ValueId def、LoadVar 无 use），
         // 故 store/load 之间存在 liveness 空洞，handle 仅活在变量 local。这里按变量活跃集 +
         // 变量类型补 spill；标量变量（循环计数器、Math.E 等内建）被 ValueTy 过滤，热循环不退化。
-        if let Some(ref var_live) = self.current_fn_var_liveness
+        if let Some(var_live) = &self.current_fn_var_liveness
             && let Some(names) = var_live
                 .get(&block_id)
                 .and_then(|m| m.get(&self.current_emit_instr_idx))

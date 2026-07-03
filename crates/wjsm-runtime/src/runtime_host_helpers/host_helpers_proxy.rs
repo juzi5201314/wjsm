@@ -1,4 +1,5 @@
 use super::*;
+
 pub(crate) fn define_property_on_normal_object(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -513,20 +514,8 @@ pub(crate) async fn define_property_internal_async(
 
     let desc = parse_descriptor(caller, descriptor)?;
 
-    let name_id = if let Some(id) = symbol_value_to_name_id(prop) {
-        id
-    } else {
-        let prop_name = match render_value(caller, prop) {
-            Ok(s) => s,
-            Err(_) => return Err("TypeError: Cannot convert property key to string".to_string()),
-        };
-        match find_memory_c_string(caller, &prop_name)
-            .or_else(|| alloc_heap_c_string(caller, &prop_name))
-        {
-            Some(id) => id,
-            None => return Err("TypeError: Failed to allocate property name string".to_string()),
-        }
-    };
+    let name_id = property_key_value_to_name_id(caller, prop, true)
+        .ok_or_else(|| "TypeError: Failed to allocate property name string".to_string())?;
 
     define_property_on_target_async(caller, target, name_id, prop, descriptor, &desc).await
 }
@@ -715,9 +704,13 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         return value::encode_undefined();
     }
 
-    let prop_name = match render_value(caller, prop) {
-        Ok(name) => name,
-        Err(_) => return value::encode_undefined(),
+    let prop_name = if value::is_string(prop) {
+        get_string_utf8_lossy(caller, prop)
+    } else {
+        match render_value(caller, prop) {
+            Ok(name) => name,
+            Err(_) => return value::encode_undefined(),
+        }
     };
 
     if value::is_native_callable(target) {
@@ -745,11 +738,13 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
             .and_then(|record| crate::runtime_heap::native_callable_prototype(caller, record))
             .unwrap_or_else(value::encode_undefined);
     }
+
+    let name_id = property_key_value_to_name_id(caller, prop, false);
+
     let obj_ptr = match resolve_handle(caller, target) {
         Some(ptr) => ptr,
         None => return value::encode_undefined(),
     };
-    let name_id = find_memory_c_string(caller, &prop_name);
 
     if prop_name == "prototype"
         && (value::is_function(target) || value::is_closure(target) || value::is_bound(target))

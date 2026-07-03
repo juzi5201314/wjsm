@@ -1,6 +1,6 @@
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, BinaryOp, Builtin, Constant, ConstantId, Function, Instruction,
-    MODULE_ENTRY_IR_NAME, Module, PhiSource, Terminator, ValueId,
+    BasicBlock, BasicBlockId, BinaryOp, Builtin, Constant, ConstantId, Function, FunctionId,
+    HomeObject, Instruction, MODULE_ENTRY_IR_NAME, Module, PhiSource, Terminator, ValueId,
 };
 
 #[test]
@@ -71,6 +71,128 @@ fn verifier_rejects_phi_source_from_non_predecessor() {
     });
 
     assert_verify_error_contains(module, &["phi", "predecessor"]);
+}
+
+#[test]
+fn verifier_rejects_empty_phi_sources() {
+    let module = branching_phi_module(|merge| {
+        merge.push_instruction(Instruction::Phi {
+            dest: ValueId(2),
+            sources: vec![],
+        });
+        merge.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+    });
+
+    assert_verify_error_contains(module, &["phi instruction has no sources"]);
+}
+
+#[test]
+fn verifier_rejects_phi_in_entry_block() {
+    let mut module = Module::new();
+    let constant = module.add_constant(Constant::Number(1.0));
+    let mut entry = BasicBlock::new(BasicBlockId(0));
+    entry.push_instruction(const_value(0, constant));
+    entry.push_instruction(Instruction::Phi {
+        dest: ValueId(1),
+        sources: vec![PhiSource {
+            predecessor: BasicBlockId(0),
+            value: ValueId(0),
+        }],
+    });
+    entry.set_terminator(Terminator::Return {
+        value: Some(ValueId(1)),
+    });
+
+    assert_verify_error_contains(
+        module_with_existing_module(module, [entry]),
+        &["entry block must not contain phi instruction"],
+    );
+}
+
+#[test]
+fn verifier_rejects_phi_source_definition_not_dominating_predecessor() {
+    let mut module = Module::new();
+    let constant = module.add_constant(Constant::Number(1.0));
+
+    let mut entry = BasicBlock::new(BasicBlockId(0));
+    entry.push_instruction(const_value(0, constant));
+    entry.set_terminator(Terminator::Branch {
+        condition: ValueId(0),
+        true_block: BasicBlockId(1),
+        false_block: BasicBlockId(2),
+    });
+
+    let mut left = BasicBlock::new(BasicBlockId(1));
+    left.push_instruction(const_value(1, constant));
+    left.set_terminator(Terminator::Jump {
+        target: BasicBlockId(3),
+    });
+
+    let mut right = BasicBlock::new(BasicBlockId(2));
+    right.set_terminator(Terminator::Jump {
+        target: BasicBlockId(3),
+    });
+
+    let mut merge = BasicBlock::new(BasicBlockId(3));
+    merge.push_instruction(Instruction::Phi {
+        dest: ValueId(2),
+        sources: vec![
+            PhiSource {
+                predecessor: BasicBlockId(1),
+                value: ValueId(1),
+            },
+            PhiSource {
+                predecessor: BasicBlockId(2),
+                value: ValueId(1),
+            },
+        ],
+    });
+    merge.set_terminator(Terminator::Return {
+        value: Some(ValueId(2)),
+    });
+
+    assert_verify_error_contains(
+        module_with_existing_module(module, [entry, left, right, merge]),
+        &["does not dominate", "phi source"],
+    );
+}
+
+#[test]
+fn verifier_rejects_invalid_home_object_function_id() {
+    let mut module = Module::new();
+    let mut entry = BasicBlock::new(BasicBlockId(0));
+    entry.set_terminator(Terminator::Return { value: None });
+    let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
+    function.home_object = Some(HomeObject::Prototype(FunctionId(99)));
+    function.push_block(entry);
+    module.push_function(function);
+
+    assert_verify_error_contains(module, &["invalid home_object function id"]);
+}
+
+#[test]
+fn verifier_rejects_super_call_forward_args_with_explicit_args() {
+    let mut module = Module::new();
+    let constant = module.add_constant(Constant::Number(1.0));
+    let mut entry = BasicBlock::new(BasicBlockId(0));
+    entry.push_instruction(const_value(0, constant));
+    entry.push_instruction(const_value(1, constant));
+    entry.push_instruction(const_value(2, constant));
+    entry.push_instruction(Instruction::SuperCall {
+        dest: None,
+        callee: ValueId(0),
+        this_val: ValueId(1),
+        args: vec![ValueId(2)],
+        forward_args: true,
+    });
+    entry.set_terminator(Terminator::Return { value: None });
+
+    assert_verify_error_contains(
+        module_with_existing_module(module, [entry]),
+        &["super_call cannot combine forward_args with explicit args"],
+    );
 }
 
 #[test]

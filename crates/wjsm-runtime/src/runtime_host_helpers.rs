@@ -90,11 +90,46 @@ pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
     index: u32,
 ) -> i64 {
     let data = env.memory.data(ctx);
-    let offset = args_base as usize + (index as usize) * 8;
-    if offset + 8 > data.len() {
-        return value::encode_undefined();
+    checked_shadow_arg_offset(args_base, index)
+        .and_then(|offset| read_i64_le(data, offset))
+        .unwrap_or_else(value::encode_undefined)
+}
+
+fn checked_shadow_arg_offset(args_base: i32, index: u32) -> Option<usize> {
+    let base = usize::try_from(args_base).ok()?;
+    let bytes = (index as usize).checked_mul(8)?;
+    base.checked_add(bytes)
+}
+
+fn read_i64_le(data: &[u8], offset: usize) -> Option<i64> {
+    let bytes: [u8; 8] = data.get(offset..offset.checked_add(8)?)?.try_into().ok()?;
+    Some(i64::from_le_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{checked_shadow_arg_offset, read_i64_le};
+
+    #[test]
+    fn checked_shadow_arg_offset_rejects_negative_base() {
+        assert_eq!(checked_shadow_arg_offset(-1, 0), None);
     }
-    i64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
+
+    #[test]
+    fn checked_shadow_arg_offset_uses_eight_byte_slots() {
+        assert_eq!(checked_shadow_arg_offset(16, 3), Some(40));
+    }
+
+    #[test]
+    fn read_i64_le_rejects_short_range() {
+        assert_eq!(read_i64_le(&[1, 2, 3], 0), None);
+    }
+
+    #[test]
+    fn read_i64_le_decodes_little_endian_value() {
+        let value = -42_i64;
+        assert_eq!(read_i64_le(&value.to_le_bytes(), 0), Some(value));
+    }
 }
 
 // ── call_wasm_callback 共享核心（sync/async 复用）─────────────────

@@ -4,6 +4,7 @@
 //! used by the runtime. Separating types from execution logic improves locality
 //! when adding new heap types or modifying internal representations.
 
+use crate::runtime_string::RuntimeString;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -936,8 +937,8 @@ pub(crate) struct TimerEntry {
 
 pub(crate) enum IteratorState {
     StringIter {
-        data: Vec<u8>,
-        byte_pos: usize,
+        string: RuntimeString,
+        unit_pos: usize,
     },
     ArrayIter {
         ptr: usize,

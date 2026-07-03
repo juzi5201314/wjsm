@@ -287,7 +287,7 @@ impl Compiler {
                 // Layer 3d: 检查 callee 是否可能触发 GC
                 // 如果 callee 是已知 no-GC 函数，可省 safepoint spill
                 let may_gc = if let Some(func_id) = self.current_function_id {
-                    if let Some(ref analysis) = self.gc_analysis {
+                    if let Some(analysis) = &self.gc_analysis {
                         analysis.call_may_trigger_gc(func_id, *callee)
                     } else {
                         true // 无分析结果，保守 spill

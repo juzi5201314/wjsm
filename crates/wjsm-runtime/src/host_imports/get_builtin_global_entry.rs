@@ -13,7 +13,7 @@ pub(crate) fn define_get_builtin_global(
         let get_builtin_global_fn = Func::wrap(
             &mut store,
             |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
-                let name = read_runtime_string(&mut caller, name_val);
+                let name = read_runtime_string_utf8_lossy(&mut caller, name_val);
                 let mut native_callables = caller
                     .data()
                     .native_callables

@@ -475,7 +475,7 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
         return true;
     };
     match iter {
-        IteratorState::StringIter { byte_pos, data } => *byte_pos >= data.len(),
+        IteratorState::StringIter { string, unit_pos } => *unit_pos >= string.utf16_len(),
         IteratorState::ArrayIter { index, length, .. } => *index >= *length,
         IteratorState::MapKeyIter {
             index, map_handle, ..
@@ -550,8 +550,8 @@ fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize
         return;
     };
     match iter {
-        IteratorState::StringIter { byte_pos, data } => {
-            string_iter_advance_byte_pos(data, byte_pos)
+        IteratorState::StringIter { string, unit_pos } => {
+            string_iter_advance_unit_pos(string, unit_pos)
         }
         IteratorState::ArrayIter { index, .. }
         | IteratorState::MapKeyIter { index, .. }
@@ -844,7 +844,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let description = if value::is_undefined(desc) {
                 None
             } else if value::is_string(desc) {
-                Some(get_string_value(caller, desc))
+                Some(get_string_utf8_lossy(caller, desc))
             } else {
                 Some(
                     render_value(caller, desc)
@@ -1738,16 +1738,13 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((false, val))
                 }
             }
-            Some(IteratorState::StringIter { byte_pos, data }) => {
-                if *byte_pos < data.len() {
-                    let pos = *byte_pos;
-                    let bytes = data.clone();
-                    let ch_len = utf8_code_unit_len(bytes[pos]);
-                    *byte_pos += ch_len;
+            Some(IteratorState::StringIter { string, unit_pos }) => {
+                if *unit_pos < string.utf16_len() {
+                    let pos = *unit_pos;
+                    let string = string.clone();
+                    string_iter_advance_unit_pos(&string, unit_pos);
                     drop(iters);
-                    let end = (pos + ch_len).min(bytes.len());
-                    let s = String::from_utf8_lossy(&bytes[pos..end]).into_owned();
-                    let val = store_runtime_string(caller, s);
+                    let val = string_iter_current_value(caller, &string, pos);
                     Some((false, val))
                 } else {
                     Some((true, value::encode_undefined()))

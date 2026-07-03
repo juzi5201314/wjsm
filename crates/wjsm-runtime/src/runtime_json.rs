@@ -5,6 +5,7 @@
 //! - StringBlock: parallel quote/backslash/control detection (32 bytes at once, AVX2)
 //! - NonspaceBitmap: cached 64-byte whitespace bitmap for skip_whitespace
 
+use crate::runtime_string::RuntimeString;
 use crate::*;
 use wasmtime::{AsContextMut, Caller};
 
@@ -157,9 +158,9 @@ pub(crate) enum JsonValue {
     Null,
     Bool(bool),
     Number(f64),
-    String(String),
+    String(RuntimeString),
     Array(Vec<JsonValue>),
-    Object(Vec<(String, JsonValue)>),
+    Object(Vec<(RuntimeString, JsonValue)>),
 }
 
 pub(crate) struct JsonParser<'a> {
@@ -286,14 +287,13 @@ impl<'a> JsonParser<'a> {
             Err("Expected 'false'".to_string())
         }
     }
-    fn parse_string(&mut self) -> Result<String, String> {
+    fn parse_string(&mut self) -> Result<RuntimeString, String> {
         if self.next() != Some(b'"') {
             return Err("Expected '\"'".to_string());
         }
 
         let start_pos = self.pos; // 位置在 '"' 之后
 
-        // ── SIMD 快路径（AVX2）──
         #[cfg(target_arch = "x86_64")]
         {
             if is_x86_feature_detected!("avx2") {
@@ -301,58 +301,29 @@ impl<'a> JsonParser<'a> {
                 // SAFETY: AVX2 feature detected at runtime.
                 unsafe { self.parse_string_simd(&mut simd_result) }?;
                 if let Some(s) = simd_result {
-                    return Ok(s); // SIMD 完整解析，直接返回
+                    return Ok(s);
                 }
-                // SIMD 未完成（遇到转义或尾部），fall through 到慢路径
-                // 此时 self.pos 已被重置为 start_pos
             }
         }
 
-        let _ = start_pos; // referenced in SIMD fallback comment above; keeps binding for doc intent across cfg (silences unused_variable when !avx2 or avx2 not detected)
+        let _ = start_pos;
 
-        // ── 慢路径：逐字节处理（含转义序列） ──
-        let mut result = String::new();
+        let mut units = Vec::new();
         loop {
             match self.next() {
                 None => return Err("Unterminated string".to_string()),
-                Some(b'"') => return Ok(result),
+                Some(b'"') => return Ok(RuntimeString::from_utf16_units(units)),
                 Some(b'\\') => match self.next() {
                     None => return Err("Unterminated escape sequence".to_string()),
-                    Some(b'"') => result.push('"'),
-                    Some(b'\\') => result.push('\\'),
-                    Some(b'/') => result.push('/'),
-                    Some(b'b') => result.push('\u{0008}'),
-                    Some(b'f') => result.push('\u{000C}'),
-                    Some(b'n') => result.push('\n'),
-                    Some(b'r') => result.push('\r'),
-                    Some(b't') => result.push('\t'),
-                    Some(b'u') => {
-                        let code_point = self.parse_hex_escape()?;
-                        if (0xD800..=0xDBFF).contains(&code_point) {
-                            if self.next() != Some(b'\\') {
-                                return Err("Expected '\\' before low surrogate".to_string());
-                            }
-                            if self.next() != Some(b'u') {
-                                return Err("Expected 'u' before low surrogate".to_string());
-                            }
-                            let low = self.parse_hex_escape()?;
-                            if !(0xDC00..=0xDFFF).contains(&low) {
-                                return Err("Invalid low surrogate".to_string());
-                            }
-                            let full = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
-                            match char::from_u32(full) {
-                                Some(ch) => result.push(ch),
-                                None => return Err("Invalid surrogate pair code point".to_string()),
-                            }
-                        } else if (0xDC00..=0xDFFF).contains(&code_point) {
-                            return Err("Unexpected low surrogate".to_string());
-                        } else {
-                            match char::from_u32(code_point) {
-                                Some(ch) => result.push(ch),
-                                None => return Err("Invalid unicode escape".to_string()),
-                            }
-                        }
-                    }
+                    Some(b'"') => units.push(b'"' as u16),
+                    Some(b'\\') => units.push(b'\\' as u16),
+                    Some(b'/') => units.push(b'/' as u16),
+                    Some(b'b') => units.push(0x0008),
+                    Some(b'f') => units.push(0x000C),
+                    Some(b'n') => units.push(b'\n' as u16),
+                    Some(b'r') => units.push(b'\r' as u16),
+                    Some(b't') => units.push(b'\t' as u16),
+                    Some(b'u') => units.push(self.parse_hex_escape()? as u16),
                     Some(ch) => return Err(format!("Invalid escape sequence: \\{}", ch as char)),
                 },
                 Some(ch) if ch < 0x20 => {
@@ -360,7 +331,7 @@ impl<'a> JsonParser<'a> {
                 }
                 Some(ch) => {
                     if ch < 0x80 {
-                        result.push(ch as char);
+                        units.push(ch as u16);
                     } else {
                         let start = self.pos - 1;
                         let width = match ch {
@@ -379,10 +350,9 @@ impl<'a> JsonParser<'a> {
                             }
                         }
                         self.pos = start + width;
-                        match std::str::from_utf8(&self.input[start..self.pos]) {
-                            Ok(s) => result.push_str(s),
-                            Err(_) => return Err("Invalid UTF-8 sequence".to_string()),
-                        }
+                        let scalar = std::str::from_utf8(&self.input[start..self.pos])
+                            .map_err(|_| "Invalid UTF-8 sequence".to_string())?;
+                        units.extend(scalar.encode_utf16());
                     }
                 }
             }
@@ -390,18 +360,18 @@ impl<'a> JsonParser<'a> {
     }
 
     #[cfg(target_arch = "x86_64")]
-    unsafe fn parse_string_simd(&mut self, result_out: &mut Option<String>) -> Result<(), String> {
+    unsafe fn parse_string_simd(
+        &mut self,
+        result_out: &mut Option<RuntimeString>,
+    ) -> Result<(), String> {
         let start_pos = self.pos;
         while self.pos + 32 <= self.input.len() {
             // SAFETY: We are inside `unsafe fn parse_string_simd` (guarded by `is_x86_feature_detected!("avx2")` in the caller).
             // `self.pos + 32 <= self.input.len()` guarantees at least 32 readable bytes from `self.input[self.pos..]`.
             // This explicit unsafe block is required under Rust 2024 `unsafe_op_in_unsafe_fn`.
             let block = unsafe { StringBlock::new_avx2(self.input[self.pos..].as_ptr()) };
-            // 只检查在第一个 quote/backslash 之前的控制字符
             let first_structural =
                 (block.quote_bits | block.backslash_bits).trailing_zeros() as usize;
-            // 当 block 没有引号/反斜杠时，trailing_zeros() 返回 32
-            // 1u32 << 32 是 UB，必须用 u32::MAX 作为全量掩码
             let mask = if first_structural >= 32 {
                 u32::MAX
             } else {
@@ -416,21 +386,18 @@ impl<'a> JsonParser<'a> {
             if block.has_quote_first() {
                 let idx = block.quote_index();
                 let end = self.pos + idx;
-                let s = String::from_utf8(self.input[start_pos..end].to_vec())
+                let s = std::str::from_utf8(&self.input[start_pos..end])
                     .map_err(|_| "Invalid UTF-8 in string".to_string())?;
-                self.pos = end + 1; // 跳过引号
-                *result_out = Some(s);
+                self.pos = end + 1;
+                *result_out = Some(RuntimeString::from_utf8_str(s));
                 return Ok(());
             }
             if block.has_backslash() {
-                // 有转义 → 重置 pos 到 start_pos，交给慢路径从头处理
                 self.pos = start_pos;
-                return Ok(()); // result_out 仍为 None → 慢路径接管
+                return Ok(());
             }
-            // 无特殊字符，前进 32 字节
             self.pos += 32;
         }
-        // SIMD 扫描完毕但未找到引号或转义，交给慢路径
         self.pos = start_pos;
         Ok(())
     }
@@ -620,7 +587,7 @@ pub(crate) fn json_parse_to_string(
     value: i64,
 ) -> Result<String, i64> {
     if value::is_string(value) {
-        return Ok(read_runtime_string(caller, value));
+        return Ok(read_runtime_string_utf8_lossy(caller, value));
     }
     if value::is_symbol(value) {
         return Err(make_exception(
@@ -660,7 +627,7 @@ async fn json_parse_to_string_async(
     value: i64,
 ) -> Result<String, i64> {
     if value::is_string(value) {
-        return Ok(read_runtime_string(caller, value));
+        return Ok(read_runtime_string_utf8_lossy(caller, value));
     }
     if value::is_symbol(value) {
         return Err(make_exception(
@@ -727,9 +694,8 @@ pub(crate) fn build_wasm_value_with_env<C: AsContextMut<Data = RuntimeState>>(
         JsonValue::Bool(b) => value::encode_bool(*b),
         JsonValue::Number(n) => value::encode_f64(*n),
         JsonValue::String(s) => {
-            let text = s.clone();
             let state = ctx.as_context().data();
-            store_runtime_string_in_state(state, text)
+            store_runtime_string_in_state(state, s.clone())
         }
         JsonValue::Array(elements) => {
             let arr = alloc_array_with_env(ctx, env, elements.len() as u32);
@@ -746,7 +712,8 @@ pub(crate) fn build_wasm_value_with_env<C: AsContextMut<Data = RuntimeState>>(
             let obj = alloc_host_object(ctx, env, properties.len() as u32);
             for (key, val) in properties {
                 let val_encoded = build_wasm_value_with_env(ctx, env, val);
-                let _ = define_host_data_property_with_env(ctx, env, obj, key, val_encoded);
+                let key_lossy = key.to_utf8_lossy();
+                let _ = define_host_data_property_with_env(ctx, env, obj, &key_lossy, val_encoded);
             }
             obj
         }

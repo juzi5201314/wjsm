@@ -185,19 +185,10 @@ fn object_define_property_or_throw(
             return false;
         }
     };
-    let name_id = if let Some(id) = crate::property_key::symbol_value_to_name_id(prop) {
-        id
-    } else {
-        let Ok(prop_name) = render_value(caller, prop) else {
-            set_runtime_error(caller.data(), "TypeError: Invalid property key".to_string());
-            return false;
-        };
-        match find_memory_c_string(caller, &prop_name)
-            .or_else(|| alloc_heap_c_string(caller, &prop_name))
-        {
-            Some(id) => id,
-            None => return false,
-        }
+    let Some(name_id) = crate::property_key::property_key_value_to_name_id(caller, prop, true)
+    else {
+        set_runtime_error(caller.data(), "TypeError: Invalid property key".to_string());
+        return false;
     };
     match define_property_on_normal_object_for_create(caller, target, name_id, &desc) {
         Ok(_) => true,
@@ -962,14 +953,12 @@ pub(crate) async fn array_push_spread_impl_async(
         return value::encode_undefined();
     }
 
-    if let Some(bytes) = read_value_string_bytes(caller, iterable) {
-        let mut byte_pos = 0usize;
-        while byte_pos < bytes.len() {
-            let ch_len = super::utf8_code_unit_len(bytes[byte_pos]);
-            let end = (byte_pos + ch_len).min(bytes.len());
-            let s = String::from_utf8_lossy(&bytes[byte_pos..end]).into_owned();
-            byte_pos += ch_len;
-            let val = store_runtime_string(caller, s);
+    if value::is_string(iterable) {
+        let string = get_string_value(caller, iterable);
+        let mut unit_pos = 0usize;
+        while unit_pos < string.utf16_len() {
+            let val = super::string_iter_current_value(caller, &string, unit_pos);
+            super::string_iter_advance_unit_pos(&string, &mut unit_pos);
             if push_array_value(caller, arr, val).is_err() {
                 set_runtime_error(caller.data(), ARRAY_LENGTH_RANGE_ERROR.to_string());
                 return value::encode_undefined();
@@ -1069,15 +1058,13 @@ async fn collect_array_from_values_async(
         return Some(out);
     }
     // 字符串：按码点
-    if let Some(bytes) = read_value_string_bytes(caller, source) {
+    if value::is_string(source) {
+        let string = get_string_value(caller, source);
         let mut out = Vec::new();
-        let mut byte_pos = 0usize;
-        while byte_pos < bytes.len() {
-            let ch_len = super::utf8_code_unit_len(bytes[byte_pos]);
-            let end = (byte_pos + ch_len).min(bytes.len());
-            let s = String::from_utf8_lossy(&bytes[byte_pos..end]).into_owned();
-            byte_pos += ch_len;
-            out.push(store_runtime_string(caller, s));
+        let mut unit_pos = 0usize;
+        while unit_pos < string.utf16_len() {
+            out.push(super::string_iter_current_value(caller, &string, unit_pos));
+            super::string_iter_advance_unit_pos(&string, &mut unit_pos);
         }
         return Some(out);
     }
@@ -1135,7 +1122,7 @@ fn drain_raw_iterator_values(caller: &mut Caller<'_, RuntimeState>, iterator: i6
                 break;
             };
             match iter {
-                IteratorState::StringIter { byte_pos, data } => *byte_pos >= data.len(),
+                IteratorState::StringIter { string, unit_pos } => *unit_pos >= string.utf16_len(),
                 IteratorState::ArrayIter { index, length, .. } => *index >= *length,
                 IteratorState::IndexValueIter { index, values } => *index as usize >= values.len(),
                 IteratorState::MapKeyIter {
@@ -1200,10 +1187,8 @@ fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize
         return;
     };
     match iter {
-        IteratorState::StringIter { byte_pos, data } => {
-            if *byte_pos < data.len() {
-                *byte_pos += super::utf8_code_unit_len(data[*byte_pos]);
-            }
+        IteratorState::StringIter { string, unit_pos } => {
+            super::string_iter_advance_unit_pos(string, unit_pos);
         }
         IteratorState::ArrayIter { index, .. }
         | IteratorState::IndexValueIter { index, .. }
@@ -1336,13 +1321,10 @@ pub(crate) async fn object_from_entries_impl_async(
     }
 
     for (key_elem, val_elem) in entries {
-        if value::is_symbol(key_elem) {
-            if let Some(name_id) = crate::property_key::symbol_value_to_name_id(key_elem) {
-                let _ = define_host_data_property_by_name_id(caller, result, name_id, val_elem);
-            }
-        } else {
-            let key_str = to_property_key(caller, key_elem);
-            let _ = define_host_data_property_from_caller(caller, result, &key_str, val_elem);
+        if let Some(name_id) =
+            crate::property_key::property_key_value_to_name_id(caller, key_elem, true)
+        {
+            let _ = define_host_data_property_by_name_id(caller, result, name_id, val_elem);
         }
     }
     result
@@ -1379,10 +1361,9 @@ pub(crate) fn object_get_own_property_descriptors_impl(
         if value::is_undefined(desc) {
             continue;
         }
-        if let Some(name_id) = crate::property_key::symbol_value_to_name_id(key) {
+        if let Some(name_id) = crate::property_key::property_key_value_to_name_id(caller, key, true)
+        {
             let _ = define_host_data_property_by_name_id(caller, result, name_id, desc);
-        } else if let Ok(name) = render_value(caller, key) {
-            let _ = define_host_data_property_from_caller(caller, result, &name, desc);
         }
     }
     result
@@ -1535,7 +1516,7 @@ pub(crate) fn define_array_object(
             let sep_str = if value::is_undefined(sep_val) || value::is_null(sep_val) {
                 ",".to_string()
             } else {
-                get_string_value(&mut caller, sep_val)
+                get_string_utf8_lossy(&mut caller, sep_val)
             };
             let mut parts = Vec::new();
             for i in 0..len {

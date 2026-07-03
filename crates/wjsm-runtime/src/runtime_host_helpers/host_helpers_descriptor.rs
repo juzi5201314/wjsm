@@ -17,9 +17,9 @@ pub(crate) fn value_to_number_wasm(
         return Ok(0.0);
     }
     if value::is_string(arg) {
-        let s = get_string_value(caller, arg);
+        let string_lossy = get_string_utf8_lossy(caller, arg);
         return Ok(crate::runtime_string_to_number::js_string_content_to_f64(
-            &s,
+            &string_lossy,
         ));
     }
     if value::is_symbol(arg) {

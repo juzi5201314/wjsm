@@ -1,4 +1,5 @@
 use super::*;
+use crate::host_imports::proxy_reflect;
 pub(crate) async fn proxy_trap_call_trap_with_args_async(
     caller: &mut Caller<'_, RuntimeState>,
     trap: i64,
@@ -179,6 +180,47 @@ pub(crate) fn define_proxy_traps_async(
             Box::new(
                 async move { proxy_trap_internal_delete_async(&mut caller, proxy, name_id).await },
             )
+        },
+    )?;
+    linker.func_wrap_async(
+        "env",
+        "obj_get_runtime_key",
+        |mut caller: Caller<'_, RuntimeState>, (obj, name_id): (i64, i32)| {
+            Box::new(async move {
+                crate::host_imports::get_by_name_id_sync(&mut caller, obj, name_id as u32)
+            })
+        },
+    )?;
+
+    linker.func_wrap_async(
+        "env",
+        "obj_set_runtime_key",
+        |mut caller: Caller<'_, RuntimeState>, (obj, name_id, val): (i64, i32, i64)| {
+            Box::new(async move {
+                if let Some(env) = WasmEnv::from_caller(&mut caller) {
+                    let _ =
+                        crate::runtime_host_helpers::define_host_data_property_by_name_id_with_env(
+                            &mut caller,
+                            &env,
+                            obj,
+                            name_id as u32,
+                            val,
+                            constants::FLAG_CONFIGURABLE
+                                | constants::FLAG_ENUMERABLE
+                                | constants::FLAG_WRITABLE,
+                        );
+                }
+            })
+        },
+    )?;
+
+    linker.func_wrap_async(
+        "env",
+        "obj_delete_runtime_key",
+        |mut caller: Caller<'_, RuntimeState>, (obj, name_id): (i64, i32)| {
+            Box::new(async move {
+                proxy_reflect::delete_property_by_name_id(&mut caller, obj, name_id as u32)
+            })
         },
     )?;
 

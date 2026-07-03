@@ -203,16 +203,7 @@ fn block_use_def_phi(f: &Function) -> (BlockUse, BlockDef, PhiSources) {
         let mut uses = HashSet::new();
         let mut defs = HashSet::new();
         for ins in bb.instructions() {
-            if let Some(d) = instr_dest(ins) {
-                defs.insert(d);
-            }
-            // Phi 的 use 不计入；其他指令的 use 计入（先 use 后 def 语义：若同一变量
-            // 在块内先 use 后 def，仍算 live-through，但 wjsm IR 是 SSA-like，dest
-            // 唯一，故 use 与 def 不重叠，顺序不影响 use 集）
-            for u in instr_uses(ins) {
-                uses.insert(u);
-            }
-            // Phi：dest 是 def；sources 经边分发
+            // Phi：dest 是本块 def；sources 经边分发到对应前驱，不计入本块 use。
             if let Instruction::Phi { dest, sources } = ins {
                 defs.insert(*dest);
                 for PhiSource { predecessor, value } in sources {
@@ -223,12 +214,26 @@ fn block_use_def_phi(f: &Function) -> (BlockUse, BlockDef, PhiSources) {
                         .or_default()
                         .push(*value);
                 }
+                continue;
+            }
+
+            // 块级 use 只记录「在本块定义前被使用」的值；块内先 def 后 use 的 SSA 值
+            // 不应污染 live_in，否则 safepoint 会 spill 已死临时对象并把 WeakRef 目标错误保活。
+            for used in instr_uses(ins) {
+                if !defs.contains(&used) {
+                    uses.insert(used);
+                }
+            }
+            if let Some(dest) = instr_dest(ins) {
+                defs.insert(dest);
             }
         }
         // terminator 的 use（return 值 / branch 条件 / throw 值 / switch 值）
-        // terminator 无 def，其 use 计入块 use 集。
-        for u in terminator_uses(bb.terminator()) {
-            uses.insert(u);
+        // terminator 无 def，其 use 计入块 use 集；同样只保留本块未定义的外来值。
+        for used in terminator_uses(bb.terminator()) {
+            if !defs.contains(&used) {
+                uses.insert(used);
+            }
         }
         block_use.insert(bb.id(), uses);
         block_def.insert(bb.id(), defs);

@@ -38,7 +38,7 @@ impl Compiler {
 
     /// 计算本函数所有 safepoint 处 live handle local 数的最大值 × 8（字节）。
     pub(super) fn compute_max_spill_bytes(&self, function: &IrFunction) -> usize {
-        let Some(ref liveness) = self.current_fn_liveness else {
+        let Some(liveness) = &self.current_fn_liveness else {
             return 0;
         };
         let value_ty = self.current_fn_value_ty.as_ref();

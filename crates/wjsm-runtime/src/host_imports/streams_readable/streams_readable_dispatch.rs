@@ -29,7 +29,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 .and_then(|options| resolve_handle(caller, options))
                 .and_then(|ptr| read_object_property_by_name(caller, ptr, "mode"))
                 .filter(|mode| value::is_string(*mode))
-                .map(|mode| get_string_value(caller, mode) == "byob")
+                .map(|mode| get_string_utf8_lossy(caller, mode) == "byob")
                 .unwrap_or(false);
 
             // 检查 locked；BYOB reader 只能用于 byte stream。

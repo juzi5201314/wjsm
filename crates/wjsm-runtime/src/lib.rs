@@ -40,6 +40,7 @@ mod runtime_promises;
 mod runtime_regexp;
 mod runtime_source_map;
 mod runtime_startup;
+mod runtime_string;
 mod runtime_string_to_number;
 mod runtime_typedarray;
 mod runtime_value_adapter;
@@ -614,6 +615,7 @@ impl Clone for RuntimeState {
             iterators: self.iterators.clone(),
             enumerators: self.enumerators.clone(),
             runtime_strings: self.runtime_strings.clone(),
+            runtime_property_keys: self.runtime_property_keys.clone(),
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
@@ -701,7 +703,8 @@ struct RuntimeState {
     output: Arc<Mutex<Vec<u8>>>,
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
-    runtime_strings: Arc<Mutex<Vec<String>>>,
+    runtime_strings: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
+    runtime_property_keys: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
     /// 进程内可捕获的诊断输出（如 unhandled rejection 警告）；真实 CLI 由 execute 刷到 stderr。
     diagnostics: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
@@ -995,6 +998,7 @@ impl RuntimeState {
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
             runtime_strings: Arc::new(Mutex::new(Vec::new())),
+            runtime_property_keys: Arc::new(Mutex::new(Vec::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
             max_heap_size: None,
@@ -1179,7 +1183,7 @@ mod tests {
             execute_with_writer_with_options(
                 &wasm_bytes,
                 Vec::new(),
-                RuntimeOptions::with_max_heap_size(24 * 1024),
+                RuntimeOptions::with_max_heap_size(25 * 1024),
             )
             .await
         })?;

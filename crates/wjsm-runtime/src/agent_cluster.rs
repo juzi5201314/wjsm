@@ -9,7 +9,7 @@ use wasmtime::Caller;
 use wjsm_ir::value;
 
 use crate::runtime_promises::set_runtime_error;
-use crate::runtime_render::read_runtime_string;
+use crate::runtime_render::read_runtime_string_utf8_lossy;
 use crate::shared_buffer::{
     SharedRuntimeState, materialize_shared_array_buffer_by_handle, read_sab_handle_from_object,
 };
@@ -28,7 +28,7 @@ pub(crate) fn push_agent_report(shared: &Arc<SharedRuntimeState>, text: String) 
 
 pub(crate) fn agent_start(caller: &mut Caller<'_, RuntimeState>, script_raw: i64) -> Option<i64> {
     let shared = caller.data().shared_state.clone()?;
-    let script = read_runtime_string(caller, script_raw);
+    let script = read_runtime_string_utf8_lossy(caller, script_raw);
     let _ = shared
         .agent_state
         .next_agent_id
@@ -229,7 +229,7 @@ fn wait_broadcast_sab_handle(
 
 pub(crate) fn agent_report(caller: &mut Caller<'_, RuntimeState>, msg: i64) -> Option<i64> {
     let shared = caller.data().shared_state.clone()?;
-    let text = read_runtime_string(caller, msg);
+    let text = read_runtime_string_utf8_lossy(caller, msg);
     push_agent_report(&shared, text);
     Some(value::encode_undefined())
 }

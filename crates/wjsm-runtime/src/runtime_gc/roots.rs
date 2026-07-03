@@ -212,11 +212,14 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
         return;
     }
     if value::is_function(val) {
-        // 函数值低 32 位是函数表索引；其属性对象 handle 从 function_props_base 起算。
-        let base = ctx.function_props_base();
-        let h = (val as u32 as usize).saturating_add(base);
-        if h < count {
-            visit(h as Handle);
+        // 函数值低 32 位是 IR function id；只有 id < num_ir_functions 才有
+        // function_props_base + id 属性对象。越界 function-like 值不能映射到普通对象 handle。
+        let function_idx = val as u32 as usize;
+        if function_idx < ctx.num_ir_functions() {
+            let h = function_idx.saturating_add(ctx.function_props_base());
+            if h < count {
+                visit(h as Handle);
+            }
         }
         return;
     }

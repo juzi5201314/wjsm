@@ -3,6 +3,7 @@ use std::ops::Range;
 use wasmtime::Caller;
 use wjsm_ir::{value, wk_symbol};
 
+use crate::runtime_string::RuntimeString;
 use crate::*;
 
 pub(crate) const RE_METHOD_EXEC: u8 = 0;
@@ -31,27 +32,9 @@ fn js_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
         return "undefined".to_string();
     }
     if value::is_string(val) || value::is_runtime_string_handle(val) {
-        return get_string_value(caller, val);
+        return get_string_utf8_lossy(caller, val);
     }
     render_value(caller, val).unwrap_or_default()
-}
-
-fn string_from_utf16_code_unit(unit: u16) -> String {
-    if !(0xD800..=0xDFFF).contains(&unit)
-        && let Some(ch) = char::from_u32(unit as u32)
-    {
-        return ch.to_string();
-    }
-    let bytes = if unit < 0x800 {
-        vec![0xC0 | ((unit >> 6) as u8), 0x80 | ((unit & 0x3F) as u8)]
-    } else {
-        vec![
-            0xE0 | ((unit >> 12) as u8),
-            0x80 | (((unit >> 6) & 0x3F) as u8),
-            0x80 | ((unit & 0x3F) as u8),
-        ]
-    };
-    unsafe { String::from_utf8_unchecked(bytes) }
 }
 
 fn regexp_entry(caller: &mut Caller<'_, RuntimeState>, regexp: i64) -> Option<RegexEntry> {
@@ -335,7 +318,7 @@ pub(crate) fn regexp_test_impl(
         return value::encode_bool(false);
     }
     let handle = value::decode_regexp_handle(regex_val);
-    let s = get_string_value(caller, str_val);
+    let subject_lossy = get_string_utf8_lossy(caller, str_val);
     let (entry, is_global, is_sticky, start_pos) = {
         let table = caller
             .data()
@@ -358,12 +341,12 @@ pub(crate) fn regexp_test_impl(
     };
 
     let match_result = if is_global || is_sticky {
-        entry.compiled.find_from(&s, start_pos).next()
+        entry.compiled.find_from(&subject_lossy, start_pos).next()
     } else {
-        entry.compiled.find(&s)
+        entry.compiled.find(&subject_lossy)
     };
-    let (found, match_end) = match match_result {
-        Some(ref m) if is_sticky && m.start() != start_pos => (false, None),
+    let (found, match_end) = match &match_result {
+        Some(m) if is_sticky && m.start() != start_pos => (false, None),
         Some(m) => (true, Some(m.end())),
         None => (false, None),
     };
@@ -377,8 +360,8 @@ pub(crate) fn regexp_test_impl(
         if let Some(e) = table.get_mut(handle as usize) {
             if let Some(end) = match_end {
                 let mut new_index = end as i64;
-                if end == start_pos && start_pos < s.len() {
-                    new_index = advance_string_index(&s, start_pos) as i64;
+                if end == start_pos && start_pos < subject_lossy.len() {
+                    new_index = advance_string_index(&subject_lossy, start_pos) as i64;
                 }
                 e.last_index = new_index;
             } else {
@@ -399,7 +382,7 @@ pub(crate) fn regexp_exec_impl(
         return value::encode_null();
     }
     let handle = value::decode_regexp_handle(regex_val);
-    let s = get_string_value(caller, str_val);
+    let subject_lossy = get_string_utf8_lossy(caller, str_val);
     let (entry, is_global, is_sticky, start_pos) = {
         let table = caller
             .data()
@@ -421,8 +404,8 @@ pub(crate) fn regexp_exec_impl(
         }
     };
 
-    match entry.compiled.find_from(&s, start_pos).next() {
-        Some(ref m) if is_sticky && m.start() != start_pos => {
+    match entry.compiled.find_from(&subject_lossy, start_pos).next() {
+        Some(m) if is_sticky && m.start() != start_pos => {
             if is_global || is_sticky {
                 let mut table = caller
                     .data()
@@ -445,14 +428,14 @@ pub(crate) fn regexp_exec_impl(
                 if let Some(e) = table.get_mut(handle as usize) {
                     let end = m.end();
                     let mut new_index = end as i64;
-                    if end == start_pos && start_pos < s.len() {
-                        new_index = advance_string_index(&s, start_pos) as i64;
+                    if end == start_pos && start_pos < subject_lossy.len() {
+                        new_index = advance_string_index(&subject_lossy, start_pos) as i64;
                     }
                     e.last_index = new_index;
                 }
             }
             let info = match_info_from_match(&m);
-            build_match_result_from_parts(caller, &s, &entry.flags, &info)
+            build_match_result_from_parts(caller, &subject_lossy, &entry.flags, &info)
         }
         None => {
             if is_global || is_sticky {
@@ -475,14 +458,14 @@ pub(crate) fn regexp_string_match_default(
     receiver: i64,
     regexp: i64,
 ) -> i64 {
-    let s = get_string_value(caller, receiver);
+    let subject_lossy = get_string_utf8_lossy(caller, receiver);
     if !value::is_regexp(regexp) {
         let pattern = js_to_string(caller, regexp);
         return match regress::Regex::with_flags(&pattern, "") {
-            Ok(compiled) => match compiled.find(&s) {
+            Ok(compiled) => match compiled.find(&subject_lossy) {
                 Some(m) => {
                     let info = match_info_from_match(&m);
-                    build_match_result_from_parts(caller, &s, "", &info)
+                    build_match_result_from_parts(caller, &subject_lossy, "", &info)
                 }
                 None => value::encode_null(),
             },
@@ -516,9 +499,9 @@ pub(crate) fn regexp_string_match_default(
 
     if is_global {
         let mut matches = Vec::new();
-        for m in entry.compiled.find_iter(&s) {
+        for m in entry.compiled.find_iter(&subject_lossy) {
             if let Some(range) = m.group(0) {
-                matches.push(s[range].to_string());
+                matches.push(subject_lossy[range].to_string());
             }
         }
         if matches.is_empty() {
@@ -539,14 +522,14 @@ pub(crate) fn regexp_string_match_default(
         let is_sticky = entry.flags.contains('y');
         let last_idx = entry.last_index as usize;
         let match_result = if is_sticky {
-            entry.compiled.find_from(&s, last_idx).next()
+            entry.compiled.find_from(&subject_lossy, last_idx).next()
         } else {
-            entry.compiled.find(&s)
+            entry.compiled.find(&subject_lossy)
         };
         match match_result {
             Some(m) if !is_sticky || m.start() == last_idx => {
                 let info = match_info_from_match(&m);
-                build_match_result_from_parts(caller, &s, &entry.flags, &info)
+                build_match_result_from_parts(caller, &subject_lossy, &entry.flags, &info)
             }
             _ => value::encode_null(),
         }
@@ -558,12 +541,14 @@ pub(crate) fn regexp_string_search_default(
     receiver: i64,
     regexp: i64,
 ) -> i64 {
-    let s = get_string_value(caller, receiver);
+    let subject_lossy = get_string_utf8_lossy(caller, receiver);
     if !value::is_regexp(regexp) {
         let pattern = js_to_string(caller, regexp);
         return match regress::Regex::with_flags(&pattern, "") {
-            Ok(compiled) => match compiled.find(&s) {
-                Some(m) => value::encode_f64(byte_offset_to_utf16_index(&s, m.start()) as f64),
+            Ok(compiled) => match compiled.find(&subject_lossy) {
+                Some(m) => {
+                    value::encode_f64(byte_offset_to_utf16_index(&subject_lossy, m.start()) as f64)
+                }
                 None => value::encode_f64(-1.0),
             },
             Err(e) => {
@@ -593,8 +578,8 @@ pub(crate) fn regexp_string_search_default(
         }
         (entry.clone(), prev)
     };
-    let result = match entry.compiled.find(&s) {
-        Some(m) => value::encode_f64(byte_offset_to_utf16_index(&s, m.start()) as f64),
+    let result = match entry.compiled.find(&subject_lossy) {
+        Some(m) => value::encode_f64(byte_offset_to_utf16_index(&subject_lossy, m.start()) as f64),
         None => value::encode_f64(-1.0),
     };
     {
@@ -617,6 +602,7 @@ pub(crate) fn regexp_string_split_default(
     limit: i64,
 ) -> i64 {
     let s = get_string_value(caller, receiver);
+    let subject_lossy = s.to_utf8_lossy();
     let limit_val = if value::is_undefined(limit) {
         usize::MAX
     } else if value::is_f64(limit) {
@@ -658,21 +644,27 @@ pub(crate) fn regexp_string_split_default(
         };
         let mut parts = Vec::new();
         let mut last_end = 0;
-        for m in entry.compiled.find_iter(&s) {
+        for m in entry.compiled.find_iter(&subject_lossy) {
             if parts.len() >= limit_val {
                 break;
             }
             let start = m.start();
             let end = m.end();
             if start >= last_end {
-                parts.push(store_runtime_string(caller, s[last_end..start].to_string()));
+                parts.push(store_runtime_string(
+                    caller,
+                    RuntimeString::from_utf8_str(&subject_lossy[last_end..start]),
+                ));
             }
             for i in 1..m.captures.len() + 1 {
                 if parts.len() >= limit_val {
                     break;
                 }
                 let elem = if let Some(range) = m.group(i) {
-                    store_runtime_string(caller, s[range].to_string())
+                    store_runtime_string(
+                        caller,
+                        RuntimeString::from_utf8_str(&subject_lossy[range]),
+                    )
                 } else {
                     value::encode_undefined()
                 };
@@ -680,8 +672,11 @@ pub(crate) fn regexp_string_split_default(
             }
             last_end = end;
         }
-        if parts.len() < limit_val && last_end <= s.len() {
-            parts.push(store_runtime_string(caller, s[last_end..].to_string()));
+        if parts.len() < limit_val && last_end <= subject_lossy.len() {
+            parts.push(store_runtime_string(
+                caller,
+                RuntimeString::from_utf8_str(&subject_lossy[last_end..]),
+            ));
         }
         let arr = alloc_array(caller, parts.len() as u32);
         let Some(arr_ptr) = resolve_array_ptr(caller, arr) else {
@@ -693,32 +688,52 @@ pub(crate) fn regexp_string_split_default(
         write_array_length(caller, arr_ptr, parts.len() as u32);
         arr
     } else {
-        let sep_str = js_to_string(caller, sep);
+        let sep_str = if value::is_string(sep) {
+            get_string_value(caller, sep)
+        } else {
+            RuntimeString::from_utf8_str(&js_to_string(caller, sep))
+        };
         if sep_str.is_empty() {
-            let chars: Vec<String> = s
-                .encode_utf16()
-                .map(string_from_utf16_code_unit)
-                .take(limit_val)
-                .collect();
+            let mut chars = Vec::new();
+            for unit in s.as_utf16_units().iter().take(limit_val) {
+                chars.push(store_runtime_string(
+                    caller,
+                    RuntimeString::from_utf16_code_unit(*unit),
+                ));
+            }
             let arr = alloc_array(caller, chars.len() as u32);
             let Some(arr_ptr) = resolve_array_ptr(caller, arr) else {
                 return value::encode_null();
             };
-            for (i, ch) in chars.iter().enumerate() {
-                let elem = store_runtime_string(caller, ch.clone());
-                write_array_elem(caller, arr_ptr, i as u32, elem);
+            for (i, elem) in chars.iter().enumerate() {
+                write_array_elem(caller, arr_ptr, i as u32, *elem);
             }
             write_array_length(caller, arr_ptr, chars.len() as u32);
             return arr;
         }
-        let parts: Vec<&str> = s.split(&sep_str).take(limit_val).collect();
+
+        let mut parts = Vec::new();
+        let mut from = 0usize;
+        while parts.len() + 1 < limit_val {
+            let Some(pos) = s.find_units(&sep_str, from) else {
+                break;
+            };
+            parts.push(store_runtime_string(caller, s.slice_units(from..pos)));
+            from = pos + sep_str.utf16_len();
+        }
+        if parts.len() < limit_val {
+            parts.push(store_runtime_string(
+                caller,
+                s.slice_units(from..s.utf16_len()),
+            ));
+        }
+
         let arr = alloc_array(caller, parts.len() as u32);
         let Some(arr_ptr) = resolve_array_ptr(caller, arr) else {
             return value::encode_null();
         };
-        for (i, part) in parts.iter().enumerate() {
-            let elem = store_runtime_string(caller, part.to_string());
-            write_array_elem(caller, arr_ptr, i as u32, elem);
+        for (i, elem) in parts.iter().enumerate() {
+            write_array_elem(caller, arr_ptr, i as u32, *elem);
         }
         write_array_length(caller, arr_ptr, parts.len() as u32);
         arr
@@ -738,7 +753,7 @@ pub(crate) fn regexp_match_all_default(
         }
     }
 
-    let s = get_string_value(caller, receiver);
+    let subject_lossy = get_string_utf8_lossy(caller, receiver);
     let entry = match regexp_entry(caller, regexp) {
         Some(e) => e,
         None => return value::encode_undefined(),
@@ -761,7 +776,7 @@ pub(crate) fn regexp_match_all_default(
         let handle = iters.len() as u32;
         iters.push(IteratorState::RegExpStringIter {
             entry,
-            string: s,
+            string: subject_lossy,
             next_index: start_index,
             current: None,
             done: false,
@@ -917,8 +932,7 @@ pub(crate) fn primitive_regexp_get_property_impl(
         return value::encode_undefined();
     }
 
-    if is_symbol_name_id(name_id) {
-        let (_, symbol_idx) = decode_name_id(name_id);
+    if let DecodedNameId::Symbol(symbol_idx) = decode_name_id(name_id) {
         return match symbol_idx {
             wk_symbol::MATCH => create_native_callable(
                 caller.data(),

@@ -91,7 +91,7 @@ pub(crate) fn create_response_object(
             .filter(|entry| !entry.body.is_empty())
             .map(|entry| entry.body.clone())
     };
-    let (body_val, stream_handle) = if let Some(ref bytes) = body_bytes_opt {
+    let (body_val, stream_handle) = if let Some(bytes) = &body_bytes_opt {
         let (obj, sh) =
             create_closed_readable_stream_from_bytes(caller, bytes, Some(handle), Some(obj));
         (obj, Some(sh))

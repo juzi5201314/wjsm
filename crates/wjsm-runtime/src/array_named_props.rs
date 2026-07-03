@@ -109,6 +109,31 @@ impl ArrayNamedPropsStore {
         }
     }
 
+    pub(crate) fn collect_string_name_ids(
+        caller: &Caller<'_, RuntimeState>,
+        arr: i64,
+        enumerable_only: bool,
+    ) -> Vec<u32> {
+        let Some(handle) = Self::handle_of(caller, arr) else {
+            return Vec::new();
+        };
+        let table = caller
+            .data()
+            .array_named_props
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(slots) = table.get(&handle) else {
+            return Vec::new();
+        };
+        slots
+            .iter()
+            .filter(|slot| !is_symbol_name_id(slot.name_id))
+            .filter(|slot| !enumerable_only || (slot.flags & constants::FLAG_ENUMERABLE) != 0)
+            .map(|slot| slot.name_id)
+            .collect()
+    }
+
     /// 收集数组命名 own 属性名（可选仅可枚举；不含 symbol）。
     pub(crate) fn collect_string_property_names(
         caller: &mut Caller<'_, RuntimeState>,

@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use wasmtime::*;
 use wjsm_ir::value;
 
+use crate::runtime_string::RuntimeString;
 use crate::startup_snapshot_native_bridge::SnapshotNativeCallableBridge;
 use crate::startup_snapshot_remap::remap_array_proto_function_indices;
 use crate::types::NativeCallable;
@@ -103,13 +104,16 @@ pub(crate) fn capture_startup_snapshot(
     }
 
     // 保存 runtime_strings
-    let runtime_strings: Vec<String> = {
+    let runtime_strings: Vec<SnapshotRuntimeString> = {
         let strings = store
             .data()
             .runtime_strings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        strings.clone()
+        strings
+            .iter()
+            .map(|s| s.as_utf16_units().to_vec())
+            .collect()
     };
 
     // 保存 native_callables
@@ -568,7 +572,8 @@ pub(crate) fn restore_startup_snapshot(
             .unwrap_or_else(|e| e.into_inner()) = snapshot
             .runtime_strings
             .iter()
-            .map(|s| s.to_string())
+            .cloned()
+            .map(RuntimeString::from_utf16_units)
             .collect();
         let mut ncs = state
             .native_callables

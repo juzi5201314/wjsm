@@ -373,19 +373,7 @@ pub(crate) fn compiled_eval_import(
             return Func::wrap(
                 &mut *caller,
                 |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
-                    if let Some(name_id) = symbol_value_to_name_id(key) {
-                        return name_id as i32;
-                    }
-                    if value::is_runtime_string_handle(key) || value::is_f64(key) {
-                        if let Ok(s) = render_value(&mut caller, key)
-                            && let Some(id) = find_memory_c_string(&mut caller, &s)
-                                .or_else(|| alloc_heap_c_string(&mut caller, &s))
-                        {
-                            return id as i32;
-                        }
-                        return 0;
-                    }
-                    key as i32
+                    property_key_value_to_name_id(&mut caller, key, true).unwrap_or(0) as i32
                 },
             );
         }

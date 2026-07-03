@@ -635,7 +635,7 @@ pub(crate) fn runtime_error_value(state: &RuntimeState, message: String) -> i64 
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
-    table.push(message);
+    table.push(message.into());
     value::encode_runtime_string_handle(handle)
 }
 

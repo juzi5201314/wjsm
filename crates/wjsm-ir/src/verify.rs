@@ -3,8 +3,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    BasicBlock, BasicBlockId, Constant, ConstantId, Function, Instruction, Module, PhiSource,
-    Terminator, ValueId,
+    BasicBlock, BasicBlockId, Constant, ConstantId, Function, HomeObject, Instruction, Module,
+    PhiSource, Terminator, ValueId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +77,7 @@ fn verify_function(
             format_args!("entry block {} does not exist", function.entry()),
         ));
     }
+    verify_function_id_refs(module, function)?;
 
     let mut predecessors = empty_predecessors(function);
     let mut successors = HashMap::new();
@@ -122,7 +123,15 @@ fn verify_function(
     }
 
     let definitions = collect_definitions(function)?;
-    verify_phi_sources(function, &predecessors, &definitions)?;
+    let reachable = reachable_blocks(function, &successors);
+    let dominators = compute_dominators(function, &predecessors, &reachable);
+    verify_phi_sources(
+        function,
+        &predecessors,
+        &definitions,
+        &reachable,
+        &dominators,
+    )?;
     verify_non_phi_uses(function, &definitions, &predecessors, &successors)?;
 
     let _ = function_index;
@@ -179,6 +188,25 @@ fn verify_constant_id(
     Ok(())
 }
 
+fn verify_function_id_refs(
+    module: &Module,
+    function: &Function,
+) -> Result<(), IrVerificationError> {
+    let Some(home_object) = function.home_object else {
+        return Ok(());
+    };
+    let function_id = match home_object {
+        HomeObject::Prototype(function_id) | HomeObject::Constructor(function_id) => function_id,
+    };
+    if module.functions().get(function_id.0 as usize).is_none() {
+        return Err(function_error(
+            function,
+            format_args!("invalid home_object function id @{function_id}"),
+        ));
+    }
+    Ok(())
+}
+
 fn collect_definitions(function: &Function) -> Result<Definitions, IrVerificationError> {
     let mut definitions = HashMap::new();
     for block in function.blocks() {
@@ -211,6 +239,8 @@ fn verify_phi_sources(
     function: &Function,
     predecessors: &Predecessors,
     definitions: &Definitions,
+    reachable: &HashSet<BasicBlockId>,
+    dominators: &Dominators,
 ) -> Result<(), IrVerificationError> {
     for block in function.blocks() {
         let actual_predecessors = predecessors.get(&block.id()).expect("block key must exist");
@@ -218,6 +248,20 @@ fn verify_phi_sources(
             let Instruction::Phi { sources, .. } = instruction else {
                 continue;
             };
+            if sources.is_empty() {
+                return Err(block_error(
+                    function,
+                    block,
+                    format_args!("phi instruction has no sources"),
+                ));
+            }
+            if block.id() == function.entry() {
+                return Err(block_error(
+                    function,
+                    block,
+                    format_args!("entry block must not contain phi instruction"),
+                ));
+            }
             let mut seen = HashSet::new();
             for source in sources {
                 verify_phi_source_predecessor(
@@ -235,7 +279,7 @@ fn verify_phi_sources(
                         phi_block: block.id(),
                         predecessor: source.predecessor,
                     },
-                    None,
+                    Some((reachable, dominators)),
                 )?;
             }
             for predecessor in actual_predecessors {
@@ -355,18 +399,29 @@ fn verify_instruction_uses(
             args,
             ..
         }
-        | Instruction::SuperCall {
-            callee,
-            this_val,
-            args,
-            ..
-        }
         | Instruction::ConstructCall {
             callee,
             this_val,
             args,
             ..
         } => {
+            verify_value_use(function, definitions, *callee, site, dominance)?;
+            verify_value_use(function, definitions, *this_val, site, dominance)?;
+            verify_value_slice(function, definitions, args, site, dominance)?;
+        }
+        Instruction::SuperCall {
+            callee,
+            this_val,
+            args,
+            forward_args,
+            ..
+        } => {
+            if *forward_args && !args.is_empty() {
+                return Err(function_error(
+                    function,
+                    format_args!("super_call cannot combine forward_args with explicit args"),
+                ));
+            }
             verify_value_use(function, definitions, *callee, site, dominance)?;
             verify_value_use(function, definitions, *this_val, site, dominance)?;
             verify_value_slice(function, definitions, args, site, dominance)?;
