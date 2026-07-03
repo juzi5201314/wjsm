@@ -13,6 +13,7 @@
 | 2026-06-07 | Runtime Side Table Lifecycle (Phase 4 GC) | [specs/2026-06-07-runtime-side-table-lifecycle-design.md](specs/2026-06-07-runtime-side-table-lifecycle-design.md) |
 | 2026-06-13 | Fetch/Streams Streaming Completion | [specs/2026-06-13-fetch-streams-completion-design.md](specs/2026-06-13-fetch-streams-completion-design.md) |
 | 2026-06-14 | Pluggable GC Framework (non-moving MarkSweep) | [specs/2026-06-14-pluggable-gc-framework-design.md](specs/2026-06-14-pluggable-gc-framework-design.md) |
+| 2026-07-03 | N-API Native Addon Compatibility Layer | [specs/2026-07-03-napi-native-addon-design.md](specs/2026-07-03-napi-native-addon-design.md) |
 ## Plans
 
 | Date | Title | File |
