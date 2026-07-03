@@ -12,11 +12,36 @@ use crate::runtime_gc::context::object_size_from_memory;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 
 /// 收集的块信息：(ptr, size, handle, is_marked)。
+#[derive(Clone, Copy)]
 struct BlockInfo {
     ptr: usize,
     size: usize,
     handle: u32,
     marked: bool,
+}
+
+/// lazy sweep 过程中的真实游标状态。
+pub(crate) struct LazySweepState {
+    obj_table_ptr: usize,
+    blocks: Vec<BlockInfo>,
+    next_block: usize,
+    pending_free_run: Option<(usize, usize)>,
+    free_runs: Vec<(usize, usize)>,
+    swept: usize,
+    freed_bytes: usize,
+    remaining_bytes: usize,
+    started_at: std::time::Instant,
+}
+
+impl LazySweepState {
+    pub(crate) fn started_at(&self) -> std::time::Instant {
+        self.started_at
+    }
+}
+
+pub(crate) enum LazySweepStep {
+    Progress { remaining_estimate: usize },
+    Complete,
 }
 
 /// 按 ptr 升序合并物理相邻区间（next.ptr == prev_end）。
@@ -44,12 +69,13 @@ fn merge_adjacent_free_intervals(mut intervals: Vec<(usize, usize)>) -> Vec<(usi
     merged
 }
 
-pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
-    let obj_table_ptr = ctx.obj_table_ptr();
+fn collect_sorted_blocks(
+    collector: &MarkSweepCollector,
+    ctx: &mut GcContext,
+    obj_table_ptr: usize,
+) -> Vec<BlockInfo> {
     let count = ctx.obj_table_count();
-
-    // 1. 收集所有块信息（含已死）
-    let blocks: Vec<BlockInfo> = ctx.with_memory(|data| {
+    let mut blocks: Vec<BlockInfo> = ctx.with_memory(|data| {
         let mut out = Vec::new();
         for h in 0..(count as u32) {
             let addr = obj_table_ptr + h as usize * 4;
@@ -65,60 +91,66 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
             let Some(size) = object_size_from_memory(data, ptr) else {
                 continue;
             };
-            let marked = collector.mark_bits.is_marked(h);
             out.push(BlockInfo {
                 ptr,
                 size,
                 handle: h,
-                marked,
+                marked: collector.mark_bits.is_marked(h),
             });
         }
         out
     });
-
-    // 2. sort by ptr（IMPL-7）
-    let mut blocks = blocks;
     blocks.sort_by_key(|b| b.ptr);
+    blocks
+}
 
-    // 3. 线性扫描合并相邻 unmarked 块（暂不写入 free list，步骤 5 与 abandoned 一并邻接合并）
-    let mut sweep_free_runs: Vec<(usize, usize)> = Vec::new();
-    let mut i = 0;
-    while i < blocks.len() {
-        if blocks[i].marked {
-            i += 1;
-            continue;
-        }
-        // 开始一个 unmarked run
-        let run_ptr = blocks[i].ptr;
-        let mut run_end = blocks[i].ptr + blocks[i].size;
-        i += 1;
-        // 合并后续**物理相邻**（next.ptr == run_end）的 unmarked 块。
-        // 由于按 ptr 升序且无重叠（INV-A），相邻 = next.ptr == run_end。
-        // 若 next.ptr > run_end（中间有活对象 gap），停止合并；该 next 块由外层循环重新作为新 run。
-        while i < blocks.len() && !blocks[i].marked && blocks[i].ptr == run_end {
-            run_end = blocks[i].ptr + blocks[i].size;
-            i += 1;
-        }
-        sweep_free_runs.push((run_ptr, run_end - run_ptr));
+fn flush_pending_free_run(
+    pending_free_run: &mut Option<(usize, usize)>,
+    free_runs: &mut Vec<(usize, usize)>,
+) {
+    if let Some(run) = pending_free_run.take() {
+        free_runs.push(run);
     }
+}
 
-    // 4. 清空 unmarked handle 槽 + 推入 freed_handles
-    let mut freed = Vec::new();
-    ctx.with_memory_mut(|data| {
-        for b in &blocks {
-            if !b.marked {
-                let addr = obj_table_ptr + b.handle as usize * 4;
-                if addr + 4 <= data.len() {
-                    data[addr..addr + 4].copy_from_slice(&0u32.to_le_bytes());
-                }
-                freed.push(b.handle);
-            }
+fn record_free_run(
+    pending_free_run: &mut Option<(usize, usize)>,
+    free_runs: &mut Vec<(usize, usize)>,
+    ptr: usize,
+    size: usize,
+) {
+    let end = ptr.saturating_add(size);
+    match pending_free_run {
+        Some((run_ptr, run_size)) if run_ptr.saturating_add(*run_size) == ptr => {
+            *run_size = end - *run_ptr;
         }
-    });
+        Some(_) => {
+            flush_pending_free_run(pending_free_run, free_runs);
+            *pending_free_run = Some((ptr, size));
+        }
+        None => {
+            *pending_free_run = Some((ptr, size));
+        }
+    }
+}
 
-    // 5. 回收 resize-abandoned 区域（P4-blocker #1，INV-B），并与 sweep 空闲区按 ptr 邻接合并（#116）。
-    //    grow_array/grow_object 重写 obj_table 槽到新 ptr 后，旧 ptr 区域不再被
-    //    obj_table 索引，步骤 1-3 的块扫描看不到 → 单独注册到 abandoned_regions。
+fn clear_unmarked_handle_slot(data: &mut [u8], obj_table_ptr: usize, handle: u32) {
+    let addr = obj_table_ptr + handle as usize * 4;
+    if addr + 4 <= data.len() {
+        data[addr..addr + 4].copy_from_slice(&0u32.to_le_bytes());
+    }
+}
+
+fn finalize_free_regions(
+    collector: &mut MarkSweepCollector,
+    ctx: &mut GcContext,
+    sweep_free_runs: Vec<(usize, usize)>,
+    swept: usize,
+    freed_bytes: usize,
+) {
+    // 回收 resize-abandoned 区域（P4-blocker #1，INV-B），并与 sweep 空闲区按 ptr 邻接合并（#116）。
+    // grow_array/grow_object 重写 obj_table 槽到新 ptr 后，旧 ptr 区域不再被
+    // obj_table 索引，块扫描看不到 → 单独注册到 abandoned_regions。
     let abandoned: Vec<(usize, usize)> = ctx.with_state(|st| {
         st.abandoned_regions_for_gc()
             .map(|mut g| std::mem::take(&mut *g))
@@ -128,12 +160,12 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
     all_free.extend(abandoned);
     let coalesced = merge_adjacent_free_intervals(all_free);
 
-    // 6. 尾部空间回收（issue #332）：sweep 后若堆顶存在连续空闲区，
-    //    回退 heap_ptr → 减少 linear memory 占用。不移动任何对象（INV-C 安全）。
+    // 尾部空间回收（issue #332）：sweep 后若堆顶存在连续空闲区，
+    // 回退 heap_ptr → 减少 linear memory 占用。不移动任何对象（INV-C 安全）。
     let tail_result =
         crate::runtime_gc::heap_governance::reclaim_trailing_free_space(ctx, &coalesced);
 
-    // 7. 从 free list 移除已被尾部回收的区间（ptr >= new_heap_ptr），再重建。
+    // 从 free list 移除已被尾部回收的区间（ptr >= new_heap_ptr），再重建。
     let surviving: Vec<(usize, usize)> = coalesced
         .iter()
         .filter(|(ptr, _)| *ptr < tail_result.new_heap_ptr)
@@ -143,7 +175,7 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
         .free_list
         .rebuild_from_coalesced_regions(&surviving);
 
-    // 8. 碎片指标（issue #332）。
+    // 碎片指标（issue #332）。
     let heap_used_bytes = ctx.heap_used();
     let metrics = crate::runtime_gc::heap_governance::compute_metrics(&surviving);
     ctx.stats.free_block_count = metrics.free_block_count;
@@ -152,11 +184,142 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
     ctx.stats.external_fragmentation = metrics.external_fragmentation;
     ctx.stats.tail_reclaimed_bytes = tail_result.reclaimed_bytes;
     ctx.stats.heap_used_bytes = heap_used_bytes;
-
-    ctx.stats.swept = freed.len();
-    let freed_bytes: usize = blocks.iter().filter(|b| !b.marked).map(|b| b.size).sum();
+    ctx.stats.swept = swept;
     ctx.stats.freed_bytes = freed_bytes;
+}
+
+pub(crate) fn prepare_lazy_sweep(
+    collector: &MarkSweepCollector,
+    ctx: &mut GcContext,
+    started_at: std::time::Instant,
+) -> LazySweepState {
+    let obj_table_ptr = ctx.obj_table_ptr();
+    let blocks = collect_sorted_blocks(collector, ctx, obj_table_ptr);
+    let remaining_bytes = blocks.iter().map(|b| b.size).sum();
+    LazySweepState {
+        obj_table_ptr,
+        blocks,
+        next_block: 0,
+        pending_free_run: None,
+        free_runs: Vec::new(),
+        swept: 0,
+        freed_bytes: 0,
+        remaining_bytes,
+        started_at,
+    }
+}
+
+fn sweep_one_block(
+    collector: &mut MarkSweepCollector,
+    ctx: &mut GcContext,
+    state: &mut LazySweepState,
+    block: BlockInfo,
+) {
+    if block.marked {
+        flush_pending_free_run(&mut state.pending_free_run, &mut state.free_runs);
+        return;
+    }
+
+    record_free_run(
+        &mut state.pending_free_run,
+        &mut state.free_runs,
+        block.ptr,
+        block.size,
+    );
+    ctx.with_memory_mut(|data| clear_unmarked_handle_slot(data, state.obj_table_ptr, block.handle));
+    collector.freed_handles.push(block.handle);
+    state.swept += 1;
+    state.freed_bytes += block.size;
+}
+
+fn complete_lazy_sweep(
+    collector: &mut MarkSweepCollector,
+    ctx: &mut GcContext,
+    state: &mut LazySweepState,
+) {
+    while state.next_block < state.blocks.len() {
+        let block = state.blocks[state.next_block];
+        state.next_block += 1;
+        state.remaining_bytes = state.remaining_bytes.saturating_sub(block.size);
+        sweep_one_block(collector, ctx, state, block);
+    }
+    flush_pending_free_run(&mut state.pending_free_run, &mut state.free_runs);
+    let free_runs = std::mem::take(&mut state.free_runs);
+    finalize_free_regions(collector, ctx, free_runs, state.swept, state.freed_bytes);
+}
+
+pub(crate) fn sweep_lazy_step(
+    collector: &mut MarkSweepCollector,
+    ctx: &mut GcContext,
+    state: &mut LazySweepState,
+    budget_bytes: usize,
+    deadline: std::time::Instant,
+) -> LazySweepStep {
+    let target_bytes = budget_bytes.max(1);
+    let mut processed_bytes = 0usize;
+    while state.next_block < state.blocks.len()
+        && (processed_bytes < target_bytes || processed_bytes == 0)
+    {
+        if processed_bytes > 0 && std::time::Instant::now() >= deadline {
+            break;
+        }
+        let block = state.blocks[state.next_block];
+        state.next_block += 1;
+        state.remaining_bytes = state.remaining_bytes.saturating_sub(block.size);
+        processed_bytes = processed_bytes.saturating_add(block.size.max(1));
+        sweep_one_block(collector, ctx, state, block);
+    }
+
+    if state.next_block == state.blocks.len() {
+        flush_pending_free_run(&mut state.pending_free_run, &mut state.free_runs);
+        let free_runs = std::mem::take(&mut state.free_runs);
+        finalize_free_regions(collector, ctx, free_runs, state.swept, state.freed_bytes);
+        LazySweepStep::Complete
+    } else {
+        LazySweepStep::Progress {
+            remaining_estimate: state.remaining_bytes,
+        }
+    }
+}
+
+pub(crate) fn sweep_lazy_to_completion(
+    collector: &mut MarkSweepCollector,
+    ctx: &mut GcContext,
+    state: &mut LazySweepState,
+) {
+    complete_lazy_sweep(collector, ctx, state);
+}
+
+pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
+    let obj_table_ptr = ctx.obj_table_ptr();
+    let blocks = collect_sorted_blocks(collector, ctx, obj_table_ptr);
+    let mut pending_free_run = None;
+    let mut sweep_free_runs: Vec<(usize, usize)> = Vec::new();
+    let mut freed = Vec::new();
+    let mut swept = 0usize;
+    let mut freed_bytes = 0usize;
+
+    ctx.with_memory_mut(|data| {
+        for block in &blocks {
+            if block.marked {
+                flush_pending_free_run(&mut pending_free_run, &mut sweep_free_runs);
+                continue;
+            }
+            record_free_run(
+                &mut pending_free_run,
+                &mut sweep_free_runs,
+                block.ptr,
+                block.size,
+            );
+            clear_unmarked_handle_slot(data, obj_table_ptr, block.handle);
+            freed.push(block.handle);
+            swept += 1;
+            freed_bytes += block.size;
+        }
+    });
+    flush_pending_free_run(&mut pending_free_run, &mut sweep_free_runs);
     collector.freed_handles.extend(freed);
+    finalize_free_regions(collector, ctx, sweep_free_runs, swept, freed_bytes);
 }
 
 #[cfg(test)]
