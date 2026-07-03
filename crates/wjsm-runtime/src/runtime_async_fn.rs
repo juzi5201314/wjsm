@@ -435,7 +435,9 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
             }
         }
         Err(trap) => {
-            if store
+            if crate::runtime_process::pending_process_exit_signal(store.data()).is_some() {
+                false
+            } else if store
                 .data()
                 .runtime_error
                 .lock()
@@ -471,28 +473,38 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
         }
     };
 
+    let mut process_exit_signal = None;
+
     // ── Drain microtasks after main() ────────────────────────────────────
     // Phase 1-4 solid gate: async 主路径接线到 drain_microtasks_async 等自有 helpers
     if main_ok {
         drain_microtasks_async(&mut store, &wasm_env).await;
+        process_exit_signal = crate::runtime_process::take_process_exit_signal(store.data());
     }
 
     // ── Post-main scheduler（Phase 5 委托给 scheduler.rs，Phase 6 传入 rx） ─────────────────────────
     // 仅 async 路径；sync 路径的阻塞 loop 保持 100% 不动。
     // 初始 drain 已在上方完成；scheduler 内部负责后续 timer fire + per-callback drain + completion 处理。
-    if main_ok {
+    if main_ok && process_exit_signal.is_none() {
         crate::scheduler::run_post_main_scheduler_async(&mut store, &wasm_env, completion_rx)
             .await?;
+        process_exit_signal = crate::runtime_process::take_process_exit_signal(store.data());
     }
     let bytes = output.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let diag_bytes = diagnostics
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
+    if process_exit_signal.is_none() {
+        process_exit_signal = crate::runtime_process::take_process_exit_signal(store.data());
+    }
     drop(store);
 
     let mut writer = writer;
     writer.write_all(&bytes)?;
+    if let Some(signal) = process_exit_signal {
+        return Err(anyhow::Error::new(signal.with_diagnostics(diag_bytes)));
+    }
 
     // ── Check errors ─────────────────────────────────────────────────────
     if let Some(message) = runtime_error

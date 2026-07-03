@@ -1963,6 +1963,7 @@ pub(crate) fn define_collections_buffers(
             }
 
             let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);
+            let _ = install_process_global_from_caller(&mut caller, obj);
 
             // test262 harness: global `$262` with `.agent` methods
             let agent_obj = {

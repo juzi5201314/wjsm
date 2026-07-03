@@ -1,0 +1,10 @@
+console.log(process.version);
+console.log(process.versions.node, typeof process.versions.wjsm);
+console.log(typeof process.cwd, typeof process.nextTick, typeof process.stdout.write);
+process.stdout.write("out");
+process.stderr.write("err");
+process.stdout.write("-");
+console.log("line");
+process.nextTick(() => console.log("nt"));
+queueMicrotask(() => console.log("qm"));
+console.log("sync");

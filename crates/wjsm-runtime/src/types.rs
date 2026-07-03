@@ -595,6 +595,15 @@ pub(crate) enum NativeCallable {
     ProxyRevoker {
         proxy_handle: u32,
     },
+    ProcessCwd,
+    ProcessExit,
+    ProcessNextTick,
+    ProcessStreamWrite {
+        kind: crate::runtime_process::ProcessStreamKind,
+    },
+    ProcessEnvTrap {
+        kind: crate::runtime_process::ProcessEnvTrapKind,
+    },
     /// GcCollect: trigger mark-sweep GC collection
     GcCollect,
     StubGlobal(()),

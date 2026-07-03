@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{ffi::OsString, path::PathBuf};
 
 pub(crate) fn parse_heap_size(raw: &str) -> Result<usize, String> {
     let trimmed = raw.trim();
@@ -178,6 +178,10 @@ pub(crate) enum Commands {
         /// Evaluate inline code string instead of a file
         #[arg(short, long = "eval")]
         eval: Option<String>,
+
+        /// 暴露为 process.argv 中脚本路径或 inline 哨兵之后的用户参数
+        #[arg(last = true)]
+        args: Vec<OsString>,
     },
 
     /// Run JS/TS test files or an inline test snippet

@@ -7,7 +7,6 @@ impl Compiler {
         // 收集源文件路径和函数源码位置映射（供运行时错误堆栈映射）。
         self.source_file = module.source_file().map(|s| s.to_string());
 
-
         // Pass 1: Register all IR functions as WASM functions.
         let mut main_wasm_idx: Option<u32> = None;
         for (i, function) in module.functions().iter().enumerate() {
@@ -43,7 +42,8 @@ impl Compiler {
             self.push_func_table(wasm_idx);
             self.function_id_to_wasm_idx.insert(i as u32, wasm_idx);
             if let Some(span) = function.source_span() {
-                self.source_map_entries.push((wasm_idx, span.line, span.col));
+                self.source_map_entries
+                    .push((wasm_idx, span.line, span.col));
             }
             self._next_import_func += 1;
         }

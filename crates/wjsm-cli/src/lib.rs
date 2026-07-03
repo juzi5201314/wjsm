@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::CommandFactory;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -43,9 +43,98 @@ const EXIT_USAGE_ERROR: u8 = 3;
 // Runtime bridge (sync CLI -> async Store)
 // ============================================================================
 
-fn runtime_options(cli: &Cli) -> runtime::RuntimeOptions {
+fn runtime_options_for_file(
+    cli: &Cli,
+    input: &Path,
+    script_args: &[OsString],
+) -> Result<runtime::RuntimeOptions> {
+    let script = if path_is_stdin(input) {
+        "[stdin]".to_string()
+    } else {
+        input
+            .canonicalize()
+            .with_context(|| {
+                format!(
+                    "failed to canonicalize '{}' for process.argv",
+                    input.display()
+                )
+            })?
+            .to_string_lossy()
+            .into_owned()
+    };
+    Ok(runtime_options_with_script(cli, script, script_args))
+}
+
+fn runtime_options_for_inline(
+    cli: &Cli,
+    mode_tag: &str,
+    script_args: &[OsString],
+) -> runtime::RuntimeOptions {
+    runtime_options_with_script(cli, mode_tag.to_string(), script_args)
+}
+
+fn runtime_options_with_script(
+    cli: &Cli,
+    script: String,
+    script_args: &[OsString],
+) -> runtime::RuntimeOptions {
+    let mut argv = Vec::with_capacity(script_args.len() + 2);
+    argv.push(wjsm_argv0());
+    argv.push(script);
+    argv.extend(script_args.iter().map(|arg| os_string_lossy(arg)));
+    runtime_options_with_argv(cli, argv)
+}
+
+fn runtime_options_with_argv(cli: &Cli, argv: Vec<String>) -> runtime::RuntimeOptions {
     runtime::RuntimeOptions {
         max_heap_size: cli.max_heap_size,
+        argv,
+        cwd: runtime_cwd_string(),
+        env: runtime_env_snapshot(),
+        pid: std::process::id(),
+        platform: node_platform(),
+        arch: node_arch(),
+        ..runtime::RuntimeOptions::default()
+    }
+}
+
+fn wjsm_argv0() -> String {
+    std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "wjsm".to_string())
+}
+
+fn os_string_lossy(value: &OsStr) -> String {
+    value.to_string_lossy().into_owned()
+}
+
+fn runtime_cwd_string() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.to_string_lossy().into_owned())
+}
+
+fn runtime_env_snapshot() -> Vec<(String, String)> {
+    std::env::vars_os()
+        .map(|(key, value)| (os_string_lossy(&key), os_string_lossy(&value)))
+        .collect()
+}
+
+fn node_platform() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        other => other,
+    }
+}
+
+fn node_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "x86" => "ia32",
+        "aarch64" => "arm64",
+        other => other,
     }
 }
 
@@ -55,6 +144,10 @@ fn block_on_wasm_execute(wasm: &[u8], options: runtime::RuntimeOptions) -> Resul
         .build()
         .context("failed to create Tokio runtime for WASM execution")?
         .block_on(runtime::execute_with_options(wasm, options))
+}
+
+fn process_exit_code_from_error(error: &anyhow::Error) -> Option<ExitCode> {
+    runtime::process_exit_code(error).map(|code| ExitCode::from(code as u8))
 }
 
 // ============================================================================
@@ -162,14 +255,15 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             watch,
             script,
             ref eval,
+            ref args,
         } => {
             if let Some(code) = eval {
-                cmd_run_eval(&cli, code, script)
+                cmd_run_eval(&cli, code, script, "[run-eval]", args)
             } else if let Some(input) = input {
                 if watch {
-                    cmd_run_watch(&cli, input, root.as_deref(), script)
+                    cmd_run_watch(&cli, input, root.as_deref(), script, args)
                 } else {
-                    cmd_run(&cli, input, root.as_deref(), script)
+                    cmd_run(&cli, input, root.as_deref(), script, args)
                 }
             } else {
                 bail!("Either an input file or -e <code> is required");
@@ -412,35 +506,44 @@ fn cmd_build(
                 );
             }
 
-            let result = match resolve_input(input, eval)? {
-                InputSource::Inline(code) => compile_source_to_pipeline_result(
-                    &code,
-                    None,
-                    cli.target,
-                    script,
-                    cli.verbose_enabled(1),
-                    cli.should_verify_ir(),
-                )?,
+            let (result, options) = match resolve_input(input, eval)? {
+                InputSource::Inline(code) => (
+                    compile_source_to_pipeline_result(
+                        &code,
+                        None,
+                        cli.target,
+                        script,
+                        cli.verbose_enabled(1),
+                        cli.should_verify_ir(),
+                    )?,
+                    runtime_options_for_inline(cli, "[run-eval]", &[]),
+                ),
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
-                        compile_source_to_pipeline_result(
-                            &source,
-                            None,
-                            cli.target,
-                            script,
-                            cli.verbose_enabled(1),
-                            cli.should_verify_ir(),
-                        )?
+                        (
+                            compile_source_to_pipeline_result(
+                                &source,
+                                None,
+                                cli.target,
+                                script,
+                                cli.verbose_enabled(1),
+                                cli.should_verify_ir(),
+                            )?,
+                            runtime_options_for_file(cli, &path, &[])?,
+                        )
                     } else {
-                        compile_file_input_to_pipeline_result(
-                            &path,
-                            root,
-                            cli.target,
-                            script,
-                            cli.verbose_enabled(1),
-                            cli.should_verify_ir(),
-                        )?
+                        (
+                            compile_file_input_to_pipeline_result(
+                                &path,
+                                root,
+                                cli.target,
+                                script,
+                                cli.verbose_enabled(1),
+                                cli.should_verify_ir(),
+                            )?,
+                            runtime_options_for_file(cli, &path, &[])?,
+                        )
                     }
                 }
             };
@@ -459,14 +562,20 @@ fn cmd_build(
                 }
             }
 
-            return run_compile_then_execute(cli, result);
+            return run_compile_then_execute(cli, result, options);
         }
     }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_run(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result<ExitCode> {
+fn cmd_run(
+    cli: &Cli,
+    input: &Path,
+    root: Option<&Path>,
+    script: bool,
+    script_args: &[OsString],
+) -> Result<ExitCode> {
     let verbose_compile = cli.verbose_enabled(1);
     let result = if path_is_stdin(input) {
         let mut source = String::new();
@@ -489,11 +598,18 @@ fn cmd_run(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result
             cli.should_verify_ir(),
         )?
     };
+    let options = runtime_options_for_file(cli, input, script_args)?;
 
-    run_compile_then_execute(cli, result)
+    run_compile_then_execute(cli, result, options)
 }
 
-fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
+fn cmd_run_eval(
+    cli: &Cli,
+    code: &str,
+    script: bool,
+    mode_tag: &str,
+    script_args: &[OsString],
+) -> Result<ExitCode> {
     let result = compile_source_to_pipeline_result(
         code,
         None,
@@ -502,7 +618,8 @@ fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
         cli.verbose_enabled(1),
         cli.should_verify_ir(),
     )?;
-    run_compile_then_execute(cli, result)
+    let options = runtime_options_for_inline(cli, mode_tag, script_args);
+    run_compile_then_execute(cli, result, options)
 }
 
 fn cmd_test(
@@ -513,7 +630,7 @@ fn cmd_test(
     script: bool,
 ) -> Result<ExitCode> {
     if let Some(code) = eval {
-        return cmd_run_eval(cli, code, script);
+        return cmd_run_eval(cli, code, script, "[run-eval]", &[]);
     }
 
     let input = input.as_deref().unwrap_or_else(|| Path::new("."));
@@ -532,7 +649,7 @@ fn cmd_test(
         if cli.verbose_enabled(1) {
             eprintln!("test {}", file.display());
         }
-        match cmd_run(cli, file, root, script) {
+        match cmd_run(cli, file, root, script, &[]) {
             Ok(code) if code == ExitCode::from(EXIT_SUCCESS) => {
                 if cli.verbose_enabled(1) {
                     eprintln!("ok {}", file.display());
@@ -637,7 +754,7 @@ fn cmd_lint(
 fn cmd_repl(cli: &Cli, eval: Option<&str>, script: bool) -> Result<ExitCode> {
     if let Some(code) = eval {
         return if script {
-            cmd_run_eval(cli, code, true)
+            cmd_run_eval(cli, code, true, "[repl]", &[])
         } else {
             cmd_eval(cli, code)
         };
@@ -661,7 +778,7 @@ fn cmd_repl(cli: &Cli, eval: Option<&str>, script: bool) -> Result<ExitCode> {
             break;
         }
         let result = if script {
-            cmd_run_eval(cli, source, true)
+            cmd_run_eval(cli, source, true, "[repl]", &[])
         } else {
             cmd_eval(cli, source)
         };
@@ -672,7 +789,13 @@ fn cmd_repl(cli: &Cli, eval: Option<&str>, script: bool) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_run_watch(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> Result<ExitCode> {
+fn cmd_run_watch(
+    cli: &Cli,
+    input: &Path,
+    root: Option<&Path>,
+    script: bool,
+    script_args: &[OsString],
+) -> Result<ExitCode> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
     use std::sync::mpsc::{RecvTimeoutError, channel};
     use std::time::{Duration, Instant};
@@ -701,7 +824,7 @@ fn cmd_run_watch(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> 
         RecursiveMode::NonRecursive
     };
     eprintln!("Watching {} for changes...", watch_target.display());
-    let mut last_exit = match cmd_run(cli, input, root, script) {
+    let mut last_exit = match cmd_run(cli, input, root, script, script_args) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Initial run failed: {:#}", e);
@@ -740,7 +863,7 @@ fn cmd_run_watch(cli: &Cli, input: &Path, root: Option<&Path>, script: bool) -> 
             Err(RecvTimeoutError::Timeout) => {
                 if pending_rebuild {
                     eprintln!("\n--- File changed, re-running ---");
-                    last_exit = match cmd_run(cli, input, root, script) {
+                    last_exit = match cmd_run(cli, input, root, script, script_args) {
                         Ok(code) => code,
                         Err(e) => {
                             eprintln!("Error: {:#}", e);
@@ -808,7 +931,7 @@ fn cmd_check(
 
 fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
     let wrapped = format!("console.log(({code}))");
-    cmd_run_eval(cli, &wrapped, false)
+    cmd_run_eval(cli, &wrapped, false, "[eval]", &[])
 }
 
 fn cmd_dump_ir(
@@ -1599,7 +1722,11 @@ fn bundle_plan_from_root(input: &Path, root: &Path) -> Result<CompilePlan> {
     })
 }
 
-fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<ExitCode> {
+fn run_compile_then_execute(
+    cli: &Cli,
+    mut result: PipelineResult,
+    options: runtime::RuntimeOptions,
+) -> Result<ExitCode> {
     let wasm = result
         .wasm
         .as_ref()
@@ -1610,7 +1737,7 @@ fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<Exi
     }
 
     let start = Instant::now();
-    let exec_result = block_on_wasm_execute(wasm, runtime_options(cli));
+    let exec_result = block_on_wasm_execute(wasm, options);
     result.timings.execute_us = start.elapsed().as_micros() as u64;
 
     if cli.time {
@@ -1618,6 +1745,9 @@ fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<Exi
     }
 
     if let Err(e) = exec_result {
+        if let Some(code) = process_exit_code_from_error(&e) {
+            return Ok(code);
+        }
         eprintln!("Runtime error: {:#}", e);
         return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
     }
@@ -1786,6 +1916,15 @@ fn compile_bundle(entry: &Path, root: &Path, target: Target, verify_ir: bool) ->
 /// 偏离 CLI 的唯一点：stdout 写入返回的 buffer 而非真实 fd（测试需捕获）。
 /// 与 CLI 默认对齐：target=Wasm、script=false、root 由文件路径推断。
 pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
+    run_file_in_process_with_options(input, &[], &[], None)
+}
+
+pub fn run_file_in_process_with_options(
+    input: &Path,
+    script_args: &[&str],
+    env_overrides: &[(&str, &str)],
+    cwd_override: Option<&Path>,
+) -> (i32, Vec<u8>, Vec<u8>) {
     // 与 main_entry 一致：安装 embedded snapshot + support cwasm（OnceLock，幂等）。
     if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
         wjsm_runtime::install_embedded_startup_snapshot(bytes);
@@ -1819,13 +1958,62 @@ pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
         }
     };
 
+    let options = runtime_options_for_in_process(input, script_args, env_overrides, cwd_override);
     let mut stdout: Vec<u8> = Vec::new();
-    match rt.block_on(runtime::execute_with_writer(&wasm, &mut stdout)) {
+    match rt.block_on(runtime::execute_with_writer_with_options(
+        &wasm,
+        &mut stdout,
+        options,
+    )) {
         Ok((_, diagnostics)) => (EXIT_SUCCESS as i32, stdout, diagnostics),
-        Err(e) => (
-            EXIT_RUNTIME_ERROR as i32,
-            stdout,
-            format!("Runtime error: {e:#}\n").into_bytes(),
-        ),
+        Err(e) => {
+            if let Some(code) = runtime::process_exit_code(&e) {
+                let diagnostics = runtime::process_exit_diagnostics(&e)
+                    .map(|bytes| bytes.to_vec())
+                    .unwrap_or_default();
+                return (code, stdout, diagnostics);
+            }
+            (
+                EXIT_RUNTIME_ERROR as i32,
+                stdout,
+                format!("Runtime error: {e:#}\n").into_bytes(),
+            )
+        }
+    }
+}
+
+fn runtime_options_for_in_process(
+    input: &Path,
+    script_args: &[&str],
+    env_overrides: &[(&str, &str)],
+    cwd_override: Option<&Path>,
+) -> runtime::RuntimeOptions {
+    let script = input
+        .canonicalize()
+        .unwrap_or_else(|_| input.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let mut argv = Vec::with_capacity(script_args.len() + 2);
+    argv.push(wjsm_argv0());
+    argv.push(script);
+    argv.extend(script_args.iter().map(|arg| (*arg).to_string()));
+
+    let mut env = runtime_env_snapshot();
+    for (key, value) in env_overrides {
+        env.retain(|(existing, _)| existing != key);
+        env.push(((*key).to_string(), (*value).to_string()));
+    }
+
+    runtime::RuntimeOptions {
+        max_heap_size: None,
+        argv,
+        cwd: cwd_override
+            .map(|cwd| cwd.to_string_lossy().into_owned())
+            .or_else(runtime_cwd_string),
+        env,
+        pid: std::process::id(),
+        platform: node_platform(),
+        arch: node_arch(),
+        ..runtime::RuntimeOptions::default()
     }
 }

@@ -73,12 +73,12 @@
 //! 详细设计见 plan.md。
 pub mod api;
 pub mod context;
+pub mod heap_governance;
 pub mod mark_bitmap;
 pub mod mark_sweep;
 pub mod native_callable_refs;
 pub mod roots;
 pub mod side_table_refs;
-pub mod heap_governance;
 pub mod weak_refs;
 
 pub use api::{GcAlgorithm, GcContext};

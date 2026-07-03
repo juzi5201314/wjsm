@@ -225,6 +225,100 @@ fn added_cli_commands_have_observable_contracts() -> Result<()> {
 }
 
 #[test]
+fn process_argv_receives_script_args_after_separator() -> Result<()> {
+    let root = unique_temp_dir("wjsm_process_argv");
+    fs::create_dir_all(&root)?;
+    let entry = root.join("main.js");
+    fs::write(
+        &entry,
+        "console.log(process.argv[2] + ',' + process.argv[3]);\n",
+    )?;
+
+    let output = Command::new(resolve_binary_path())
+        .arg("run")
+        .arg(&entry)
+        .arg("--")
+        .args(["alpha", "beta"])
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert_eq!(stdout, "alpha,beta\n");
+    assert!(stderr.is_empty());
+    Ok(())
+}
+
+#[test]
+fn process_env_reads_command_environment() -> Result<()> {
+    let output = Command::new(resolve_binary_path())
+        .env("WJSM_PROCESS_TEST", "1")
+        .args(["run", "-e", "console.log(process.env.WJSM_PROCESS_TEST);"])
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert_eq!(stdout, "1\n");
+    assert!(stderr.is_empty());
+    Ok(())
+}
+
+#[test]
+fn process_cwd_uses_command_current_dir() -> Result<()> {
+    let root = unique_temp_dir("wjsm_process_cwd");
+    fs::create_dir_all(&root)?;
+    let expected = root.canonicalize()?.to_string_lossy().into_owned();
+    let output = Command::new(resolve_binary_path())
+        .current_dir(&root)
+        .args(["run", "-e", "console.log(process.cwd());"])
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert_eq!(stdout, format!("{expected}\n"));
+    assert!(stderr.is_empty());
+    Ok(())
+}
+
+#[test]
+fn process_exit_returns_requested_code_without_runtime_error() -> Result<()> {
+    let output = Command::new(resolve_binary_path())
+        .args([
+            "run",
+            "-e",
+            "console.log('before'); process.exit(7); console.log('after');",
+        ])
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(stdout, "before\n");
+    assert!(stderr.is_empty());
+    Ok(())
+}
+
+#[test]
+fn process_exit_from_next_tick_skips_timer_and_preserves_stderr() -> Result<()> {
+    let output = Command::new(resolve_binary_path())
+        .args([
+            "run",
+            "-e",
+            "setTimeout(() => console.log('timer'), 0); process.nextTick(() => { process.stderr.write('err'); process.exit(7); });",
+        ])
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+    assert_eq!(output.status.code(), Some(7));
+    assert!(stdout.is_empty());
+    assert_eq!(stderr, "err");
+    Ok(())
+}
+
+#[test]
 fn backend_control_flow_compiles_loop_and_if_without_region_tree() -> Result<()> {
     let output = Command::new(resolve_binary_path())
         .args([

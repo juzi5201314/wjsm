@@ -30,6 +30,33 @@ pub(crate) async fn drain_microtasks_async<
     env: &WasmEnv,
 ) {
     loop {
+        loop {
+            let next_tick = {
+                let mut queue = ctx
+                    .state_mut()
+                    .next_tick_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                queue.pop_front()
+            };
+            let Some(next_tick) = next_tick else {
+                break;
+            };
+            if is_callable_with_env(ctx, env, next_tick.callback) {
+                let _ = call_host_function_with_args_async(
+                    ctx,
+                    env,
+                    next_tick.callback,
+                    value::encode_undefined(),
+                    &next_tick.args,
+                )
+                .await;
+            }
+            if crate::runtime_process::pending_process_exit_signal(ctx.state_mut()).is_some() {
+                return;
+            }
+        }
+
         let task = {
             let mut queue = ctx
                 .state_mut()
@@ -386,6 +413,9 @@ pub(crate) async fn drain_microtasks_async<
                 }
             }
             None => break,
+        }
+        if crate::runtime_process::pending_process_exit_signal(ctx.state_mut()).is_some() {
+            return;
         }
     }
     crate::runtime_async_fn::recycle_completed_continuations(ctx.state_mut());

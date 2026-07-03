@@ -17,20 +17,17 @@ impl Lowerer {
         }
 
         // 命名类表达式：仅在类体内绑定名称（块作用域）。
-        let class_body_name_scope = if let Some(ref name) = class_expr
-            .ident
-            .as_ref()
-            .map(|id| id.sym.to_string())
-        {
-            self.scopes.push_scope(ScopeKind::Block);
-            let scope_id = self
-                .scopes
-                .declare(name, VarKind::Const, false)
-                .map_err(|msg| self.error(class_expr.span(), msg))?;
-            Some((name.clone(), scope_id))
-        } else {
-            None
-        };
+        let class_body_name_scope =
+            if let Some(ref name) = class_expr.ident.as_ref().map(|id| id.sym.to_string()) {
+                self.scopes.push_scope(ScopeKind::Block);
+                let scope_id = self
+                    .scopes
+                    .declare(name, VarKind::Const, false)
+                    .map_err(|msg| self.error(class_expr.span(), msg))?;
+                Some((name.clone(), scope_id))
+            } else {
+                None
+            };
 
         let decorator_name = class_expr.ident.as_ref().map(|id| id.sym.as_ref());
 

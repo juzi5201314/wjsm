@@ -603,6 +603,13 @@ fn collect_host_table_values(
             }
         }
 
+        if let Ok(next_ticks) = st.next_tick_queue.lock() {
+            for task in next_ticks.iter() {
+                out.push(task.callback);
+                out.extend(task.args.iter().copied());
+            }
+        }
+
         // promise_table：只有已可达 Promise 对象的 state value + reactions 才是 child edge。
         if let Ok(promises) = st.promise_table.lock() {
             for (handle, entry) in promises.iter().enumerate() {

@@ -115,6 +115,10 @@ pub(crate) async fn run_post_main_scheduler_async(
         }
     }
 
+    fn process_exit_pending(store: &Store<RuntimeState>) -> bool {
+        crate::runtime_process::pending_process_exit_signal(store.data()).is_some()
+    }
+
     loop {
         timer_iterations += 1;
         if timer_iterations > MAX_TIMER_ITERATIONS {
@@ -138,6 +142,9 @@ pub(crate) async fn run_post_main_scheduler_async(
         }
         if processed_any {
             drain_microtasks_async(store, env).await;
+            if process_exit_pending(store) {
+                return Ok(());
+            }
         }
 
         // 提前检查退出（空 timers + counter==0）
@@ -161,6 +168,9 @@ pub(crate) async fn run_post_main_scheduler_async(
                 }
                 if drained {
                     drain_microtasks_async(store, env).await;
+                    if process_exit_pending(store) {
+                        return Ok(());
+                    }
                 }
                 // 收尾：同步 promise fulfill（Promise.resolve / BYOB ServeBuffer 等）可能在上面
                 // 那次 drain 里又入队了新的 microtasks。此处确保全部跑完后再退出，
@@ -171,6 +181,9 @@ pub(crate) async fn run_post_main_scheduler_async(
                         process_one_completion(store, env, completion);
                     }
                     drain_microtasks_async(store, env).await;
+                    if process_exit_pending(store) {
+                        return Ok(());
+                    }
                     // 新的 completion 可能在 drain 期间到达
                     while let Ok(completion) = completion_rx.try_recv() {
                         process_one_completion(store, env, completion);
@@ -197,6 +210,9 @@ pub(crate) async fn run_post_main_scheduler_async(
                     if !has_pending && count > 0 {
                         if let Some(completion) = completion_rx.recv().await {
                             process_one_completion(store, env, completion);
+                            if process_exit_pending(store) {
+                                return Ok(());
+                            }
                             continue;
                         } else {
                             break;
@@ -210,6 +226,9 @@ pub(crate) async fn run_post_main_scheduler_async(
                 if let Some(completion) = completion_rx.recv().await {
                     process_one_completion(store, env, completion);
                     drain_microtasks_async(store, env).await;
+                    if process_exit_pending(store) {
+                        return Ok(());
+                    }
                 } else {
                     break;
                 }
@@ -263,6 +282,9 @@ pub(crate) async fn run_post_main_scheduler_async(
                 &[],
             )
             .await;
+            if process_exit_pending(store) {
+                return Ok(());
+            }
 
             // 未捕获异常：timer 回调抛出的异常打印到 stdout 但不中断事件循环。
             // 浏览器语义：setTimeout 回调中的 throw 不阻止后续 timer/microtask 执行。
@@ -296,6 +318,9 @@ pub(crate) async fn run_post_main_scheduler_async(
             }
             // Drain microtasks after timer callback（严格 per-callback，不 batch）
             drain_microtasks_async(store, env).await;
+            if process_exit_pending(store) {
+                return Ok(());
+            }
 
             // Re-schedule if repeating
             if repeating {

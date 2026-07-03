@@ -57,6 +57,7 @@ pub(crate) const BUILTIN_GLOBALS: &[&str] = &[
     "Atomics",
     "FinalizationRegistry",
     "WeakRef",
+    "process",
     "Headers",
     "Request",
     "Response",

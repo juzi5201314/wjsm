@@ -290,7 +290,10 @@ fn check_negative_result(exit_code: i32, stderr: &str, negative: &Negative) -> T
             Phase::Runtime => 2,
         };
         return TestResult::Failed {
-            expected: format!("{} at {:?} (expect exit {})", expected_type, negative.phase, expected_exit),
+            expected: format!(
+                "{} at {:?} (expect exit {})",
+                expected_type, negative.phase, expected_exit
+            ),
             actual: format!("exit_code={}, stderr={}", exit_code, stderr.trim()),
         };
     }
@@ -298,7 +301,10 @@ fn check_negative_result(exit_code: i32, stderr: &str, negative: &Negative) -> T
     // 编译期错误（Parse/Early）：wjsm 错误消息格式为 `Error: error: <msg>`，
     // 不含错误类型名，因此只要退出码匹配即可通过。
     // Resolution 阶段同理——可能是编译期或运行时，退出码已匹配即可。
-    if matches!(negative.phase, Phase::Parse | Phase::Early | Phase::Resolution) {
+    if matches!(
+        negative.phase,
+        Phase::Parse | Phase::Early | Phase::Resolution
+    ) {
         return TestResult::Passed;
     }
 

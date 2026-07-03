@@ -788,6 +788,6 @@ impl Lowerer {
     }
 }
 
-mod decl;
 mod class_body;
+mod decl;
 mod expr;

@@ -115,19 +115,13 @@ pub(crate) async fn proxy_trap_internal_set_async(
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "set") {
         let prop = proxy_trap_property_key_value(caller, name_id);
-        let result = proxy_trap_call_trap_with_args_async(
+        let _ = proxy_trap_call_trap_with_args_async(
             caller,
             trap,
             handler,
             &[target, prop, val, proxy],
         )
         .await;
-        if !nanbox_to_bool(result) {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Proxy set trap returned falsy".to_string(),
-            );
-        }
         return;
     }
     let _ = Box::pin(proxy_trap_ordinary_set_by_name_id_async(

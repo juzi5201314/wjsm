@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use std::sync::atomic::Ordering;
-use wasmtime::{Caller, Linker, Store};
+use wasmtime::{Caller, FuncType, Linker, Store, Val, ValType};
 
 use crate::*;
 
@@ -186,20 +186,36 @@ pub(crate) fn define_misc_async(
         },
     )?;
 
-    linker.func_wrap_async(
+    let native_call_ty = FuncType::new(
+        _store.engine(),
+        [ValType::I64, ValType::I64, ValType::I32, ValType::I32],
+        [ValType::I64],
+    );
+    linker.func_new_async(
         "env",
         "native_call",
-        |mut caller: Caller<'_, RuntimeState>,
-         (callable, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+        native_call_ty,
+        |mut caller: Caller<'_, RuntimeState>, params: &[Val], results: &mut [Val]| {
             Box::new(async move {
-                native_call_from_caller_async(
+                let callable = params[0].unwrap_i64();
+                let this_val = params[1].unwrap_i64();
+                let args_base = params[2].unwrap_i32();
+                let args_count = params[3].unwrap_i32();
+                let result = native_call_from_caller_async(
                     &mut caller,
                     callable,
                     this_val,
                     args_base,
                     args_count,
                 )
-                .await
+                .await;
+                if let Some(signal) =
+                    crate::runtime_process::pending_process_exit_signal(caller.data())
+                {
+                    return Err(wasmtime::Error::new(signal));
+                }
+                results[0] = Val::I64(result);
+                Ok(())
             })
         },
     )?;

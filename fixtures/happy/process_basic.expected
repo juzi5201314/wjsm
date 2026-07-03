@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+v22.0.0
+22.0.0 string
+function function function
+out-line
+sync
+nt
+qm
+--- stderr ---
+err

@@ -1031,7 +1031,10 @@ impl Lowerer {
 
     /// 将 SWC 字节偏移（BytePos，1-indexed）转换为 1-indexed 行号和列号。
     /// 无源码上下文时返回 None。
-    pub(crate) fn byte_pos_to_source_span(&self, pos: swc_core::common::BytePos) -> Option<SourceSpan> {
+    pub(crate) fn byte_pos_to_source_span(
+        &self,
+        pos: swc_core::common::BytePos,
+    ) -> Option<SourceSpan> {
         let source = self.diagnostic_source.as_ref()?;
         let bytes = source.as_bytes();
         // BytePos 是 1-indexed，0 通常表示 DUMMY_SP。

@@ -190,6 +190,11 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::FinalizationRegistryRegisterMethod
             | NativeCallable::FinalizationRegistryUnregisterMethod
             | NativeCallable::ProxyRevoker { .. }
+            | NativeCallable::ProcessCwd
+            | NativeCallable::ProcessExit
+            | NativeCallable::ProcessNextTick
+            | NativeCallable::ProcessStreamWrite { .. }
+            | NativeCallable::ProcessEnvTrap { .. }
             | NativeCallable::PromiseFinallyAwait { .. }
             | NativeCallable::HeadersMethod { .. }
             | NativeCallable::ResponseMethod { .. }

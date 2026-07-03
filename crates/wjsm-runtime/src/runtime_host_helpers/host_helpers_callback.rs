@@ -271,8 +271,14 @@ async fn dispatch_callback_target_async<
     match target {
         CallbackTarget::Native(resolved) => {
             restore_shadow_sp(ctx, env, shadow_sp);
-            dispatch_native_callable_with_env(ctx, env, resolved, this_val, args)
-                .ok_or_else(|| anyhow::anyhow!("native callable not supported in this context"))
+            let result = dispatch_native_callable_with_env(ctx, env, resolved, this_val, args)
+                .ok_or_else(|| anyhow::anyhow!("native callable not supported in this context"))?;
+            if let Some(signal) =
+                crate::runtime_process::pending_process_exit_signal(ctx.state_mut())
+            {
+                return Err(anyhow::Error::new(signal));
+            }
+            Ok(result)
         }
         CallbackTarget::ApplyTrap {
             trap,
@@ -381,10 +387,12 @@ pub(crate) async fn invoke_resolved_callback_async_option<
     match invoke_resolved_callback_async(ctx, env, func_val, this_val, args).await {
         Ok(v) => Some(v),
         Err(err) => {
-            set_runtime_error(
-                ctx.state_mut(),
-                format!("host function callback error: {err}"),
-            );
+            if crate::runtime_process::process_exit_code(&err).is_none() {
+                set_runtime_error(
+                    ctx.state_mut(),
+                    format!("host function callback error: {err}"),
+                );
+            }
             None
         }
     }
@@ -416,14 +424,19 @@ async fn dispatch_callback_target_caller_async(
     match target {
         CallbackTarget::Native(resolved) => {
             let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-            Box::pin(call_native_callable_with_args_from_caller_async(
+            let result = Box::pin(call_native_callable_with_args_from_caller_async(
                 caller,
                 resolved,
                 this_val,
                 args.to_vec(),
             ))
             .await
-            .ok_or_else(|| anyhow::anyhow!("native callable returned None"))
+            .ok_or_else(|| anyhow::anyhow!("native callable returned None"))?;
+            if let Some(signal) = crate::runtime_process::pending_process_exit_signal(caller.data())
+            {
+                return Err(anyhow::Error::new(signal));
+            }
+            Ok(result)
         }
         CallbackTarget::ApplyTrap {
             trap,

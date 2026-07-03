@@ -19,8 +19,7 @@ impl Lowerer {
         });
 
         self.push_class_private_name_scope(&class.body);
-        let private_members =
-            self.collect_class_private_members(class_name, &class.body)?;
+        let private_members = self.collect_class_private_members(class_name, &class.body)?;
 
         // ── 构造器 IR 函数 ──
         let ctor_name = format!("{}.constructor", class_name);
@@ -190,8 +189,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
-        if let Some(span) = self
-            .span_to_source_span(constructor.map(|c| c.span()).unwrap_or_else(|| class_span))
+        if let Some(span) =
+            self.span_to_source_span(constructor.map(|c| c.span()).unwrap_or_else(|| class_span))
         {
             ir_function.set_source_span(span);
         }
@@ -347,12 +346,8 @@ impl Lowerer {
             },
         );
 
-        let (block, ctor_dest) = self.emit_apply_class_decorators(
-            block,
-            ctor_dest,
-            &class.decorators,
-            decorator_name,
-        )?;
+        let (block, ctor_dest) =
+            self.emit_apply_class_decorators(block, ctor_dest, &class.decorators, decorator_name)?;
 
         self.pop_class_private_name_scope();
         Ok((block, ctor_dest))
@@ -558,8 +553,8 @@ impl Lowerer {
         self.arguments_param_count = Self::count_regular_params(&function.params);
         let m_entry =
             self.emit_arguments_init(m_entry, Self::function_needs_arguments_object(function))?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&function.params) || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&function.params)
+            || self.scopes.lookup("arguments").is_ok();
 
         let mut m_flow = StmtFlow::Open(m_entry);
         if let Some(body) = &function.body {
@@ -675,9 +670,7 @@ impl Lowerer {
 
     /// 物化 FunctionRef 常量为运行时值。
     fn emit_function_ref(&mut self, block: BasicBlockId, function_id: FunctionId) -> ValueId {
-        let ref_const = self
-            .module
-            .add_constant(Constant::FunctionRef(function_id));
+        let ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             block,

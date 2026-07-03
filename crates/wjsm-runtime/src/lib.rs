@@ -35,6 +35,7 @@ pub(crate) use host_side_table::HostSideTable;
 mod runtime_json;
 mod runtime_linker;
 mod runtime_microtask;
+mod runtime_process;
 mod runtime_promises;
 mod runtime_regexp;
 mod runtime_source_map;
@@ -79,6 +80,7 @@ fn builtin_js_bundle_hash() -> u64 {
 mod startup_snapshot_native_bridge;
 mod symbol_well_known;
 mod types;
+pub use runtime_process::{process_exit_code, process_exit_diagnostics};
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
 
@@ -102,6 +104,7 @@ use runtime_heap::*;
 use runtime_host_helpers::*;
 use runtime_json::*;
 use runtime_microtask::*;
+use runtime_process::*;
 use runtime_promises::*;
 use runtime_regexp::*;
 use runtime_render::*;
@@ -109,15 +112,40 @@ use runtime_typedarray::*;
 use runtime_values::*;
 use types::*;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RuntimeOptions {
     pub max_heap_size: Option<usize>,
+    pub argv: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: Vec<(String, String)>,
+    pub pid: u32,
+    pub platform: &'static str,
+    pub arch: &'static str,
+    pub version: &'static str,
+    pub versions: &'static [(&'static str, &'static str)],
+}
+
+impl Default for RuntimeOptions {
+    fn default() -> Self {
+        Self {
+            max_heap_size: None,
+            argv: Vec::new(),
+            cwd: None,
+            env: Vec::new(),
+            pid: std::process::id(),
+            platform: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            version: PROCESS_NODE_VERSION,
+            versions: PROCESS_VERSIONS,
+        }
+    }
 }
 
 impl RuntimeOptions {
     pub fn with_max_heap_size(max_heap_size: usize) -> Self {
         Self {
             max_heap_size: Some(max_heap_size),
+            ..Self::default()
         }
     }
 }
@@ -128,12 +156,22 @@ pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
 
 pub async fn execute_with_options(wasm_bytes: &[u8], options: RuntimeOptions) -> Result<()> {
     let stdout = io::stdout();
-    let (_, diagnostics) =
-        execute_with_writer_with_options(wasm_bytes, stdout.lock(), options).await?;
-    if !diagnostics.is_empty() {
-        let _ = io::stderr().write_all(&diagnostics);
+    match execute_with_writer_with_options(wasm_bytes, stdout.lock(), options).await {
+        Ok((_, diagnostics)) => {
+            if !diagnostics.is_empty() {
+                let _ = io::stderr().write_all(&diagnostics);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if let Some(diagnostics) = runtime_process::process_exit_diagnostics(&error) {
+                if !diagnostics.is_empty() {
+                    let _ = io::stderr().write_all(diagnostics);
+                }
+            }
+            Err(error)
+        }
     }
-    Ok(())
 }
 
 pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<(W, Vec<u8>)> {
@@ -529,7 +567,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
         &module,
         shared_state.clone(),
         use_epoch_async_yield,
-        options,
+        options.clone(),
     )
     .await?;
     bundle.store.data_mut().source_map = source_map.clone();
@@ -577,6 +615,9 @@ impl Clone for RuntimeState {
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
+            process: self.process.clone(),
+            next_tick_queue: self.next_tick_queue.clone(),
+            process_exit_signal: self.process_exit_signal.clone(),
             gc_mark_bits: self.gc_mark_bits.clone(),
             alloc_counter: self.alloc_counter.clone(),
             gc_threshold: self.gc_threshold.clone(),
@@ -664,6 +705,12 @@ struct RuntimeState {
     runtime_error: Arc<Mutex<Option<String>>>,
     /// 用户配置的 JS 堆预算（字节）。None 表示只受 wasm32 地址空间和宿主内存约束。
     max_heap_size: Option<usize>,
+    /// 注入的 Node `process` 宿主快照。
+    process: ProcessState,
+    /// Node next tick queue；drain 时优先级高于普通 microtask queue。
+    next_tick_queue: ProcessNextTickQueue,
+    /// `process.exit(code)` 设置的正常退出信号。
+    process_exit_signal: Arc<Mutex<Option<ProcessExitSignal>>>,
     /// GC 标记位图：每个 handle 对应 1 bit，用于标记-清除 GC。
     gc_mark_bits: Arc<Mutex<Vec<u64>>>,
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
@@ -868,6 +915,7 @@ impl RuntimeState {
         let mut state = Self::new();
         state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
         state.max_heap_size = options.max_heap_size;
+        state.process = ProcessState::from_options(&options);
         state
     }
 
@@ -948,6 +996,9 @@ impl RuntimeState {
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
             max_heap_size: None,
+            process: ProcessState::from_options(&RuntimeOptions::default()),
+            next_tick_queue: Arc::new(Mutex::new(VecDeque::new())),
+            process_exit_signal: Arc::new(Mutex::new(None)),
             gc_mark_bits: Arc::new(Mutex::new(Vec::new())),
             alloc_counter: Arc::new(Mutex::new(0)),
             gc_threshold: Arc::new(Mutex::new(Self::GC_MIN_THRESHOLD)),
@@ -960,9 +1011,7 @@ impl RuntimeState {
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
             handle_free_list: Arc::new(Mutex::new(Vec::new())),
             abandoned_regions: Arc::new(Mutex::new(Vec::new())),
-            last_gc_stats: Arc::new(Mutex::new(
-                crate::runtime_gc::api::GcStats::default(),
-            )),
+            last_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
             gc_algorithm: Arc::new(Mutex::new(Box::new(
                 crate::runtime_gc::MarkSweepCollector::new(),
             ))),
@@ -1543,6 +1592,31 @@ mod tests {
         }
         drop(_guard);
         assert_eq!(counter.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn process_env_proxy_reads_keys_and_rejects_writes() -> Result<()> {
+        let rt = Runtime::new()?;
+        let wasm_bytes = compile_source(
+            r#"
+console.log(process.env.A);
+console.log(Object.keys(process.env).join(","));
+process.env.A = "9";
+console.log(process.env.A);
+console.log("B" in process.env);
+console.log(Reflect.set(process.env, "B", "9"));
+"#,
+        )?;
+        let options = RuntimeOptions {
+            env: vec![("A".into(), "1".into()), ("B".into(), "2".into())],
+            ..RuntimeOptions::default()
+        };
+        let (output, diagnostics) = rt.block_on(async {
+            execute_with_writer_with_options(&wasm_bytes, Vec::new(), options).await
+        })?;
+        assert!(diagnostics.is_empty());
+        assert_eq!(String::from_utf8(output)?, "1\nA,B\n1\ntrue\nfalse\n");
         Ok(())
     }
 

@@ -139,7 +139,9 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
         .filter(|(ptr, _)| *ptr < tail_result.new_heap_ptr)
         .copied()
         .collect();
-    collector.free_list.rebuild_from_coalesced_regions(&surviving);
+    collector
+        .free_list
+        .rebuild_from_coalesced_regions(&surviving);
 
     // 8. 碎片指标（issue #332）。
     let heap_used_bytes = ctx.heap_used();

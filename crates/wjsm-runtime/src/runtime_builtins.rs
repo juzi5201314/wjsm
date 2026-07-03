@@ -784,6 +784,19 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::WeakSetMethod { kind } => Some(call_weakset_method_from_caller(
             caller, this_val, kind, args,
         )),
+        NativeCallable::ProcessCwd => Some(crate::runtime_process::call_process_cwd(caller)),
+        NativeCallable::ProcessExit => {
+            Some(crate::runtime_process::call_process_exit(caller, &args))
+        }
+        NativeCallable::ProcessNextTick => Some(crate::runtime_process::call_process_next_tick(
+            caller, &args,
+        )),
+        NativeCallable::ProcessStreamWrite { kind } => Some(
+            crate::runtime_process::call_process_stream_write(caller, kind, &args),
+        ),
+        NativeCallable::ProcessEnvTrap { kind } => Some(
+            crate::runtime_process::call_process_env_trap(caller, kind, &args),
+        ),
         NativeCallable::ArrayConstructor => {
             if value::is_object(this_val) {
                 Some(this_val)
