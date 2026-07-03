@@ -78,6 +78,7 @@ pub mod mark_sweep;
 pub mod native_callable_refs;
 pub mod roots;
 pub mod side_table_refs;
+pub mod heap_governance;
 pub mod weak_refs;
 
 pub use api::{GcAlgorithm, GcContext};

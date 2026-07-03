@@ -204,4 +204,17 @@ pub struct GcStats {
     pub swept: usize,
     pub freed_bytes: usize,
     pub elapsed: std::time::Duration,
+    // ── 碎片治理指标（issue #332）──
+    /// 空闲块总数（sweep 后）。
+    pub free_block_count: usize,
+    /// 总空闲字节数（sweep 后）。
+    pub total_free_bytes: usize,
+    /// 最大连续空闲块字节数。
+    pub largest_free_block: usize,
+    /// 外部碎片率：1 - (largest_free_block / total_free_bytes)。
+    pub external_fragmentation: f64,
+    /// 本次 sweep 尾部空间回收的字节数（heap_ptr 降低量）。
+    pub tail_reclaimed_bytes: usize,
+    /// 堆已用字节（heap_ptr - heap_start，sweep 后）。
+    pub heap_used_bytes: usize,
 }

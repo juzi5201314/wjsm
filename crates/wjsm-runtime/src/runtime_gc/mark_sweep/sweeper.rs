@@ -127,9 +127,29 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
     let mut all_free = sweep_free_runs;
     all_free.extend(abandoned);
     let coalesced = merge_adjacent_free_intervals(all_free);
-    collector
-        .free_list
-        .rebuild_from_coalesced_regions(&coalesced);
+
+    // 6. 尾部空间回收（issue #332）：sweep 后若堆顶存在连续空闲区，
+    //    回退 heap_ptr → 减少 linear memory 占用。不移动任何对象（INV-C 安全）。
+    let tail_result =
+        crate::runtime_gc::heap_governance::reclaim_trailing_free_space(ctx, &coalesced);
+
+    // 7. 从 free list 移除已被尾部回收的区间（ptr >= new_heap_ptr），再重建。
+    let surviving: Vec<(usize, usize)> = coalesced
+        .iter()
+        .filter(|(ptr, _)| *ptr < tail_result.new_heap_ptr)
+        .copied()
+        .collect();
+    collector.free_list.rebuild_from_coalesced_regions(&surviving);
+
+    // 8. 碎片指标（issue #332）。
+    let heap_used_bytes = ctx.heap_used();
+    let metrics = crate::runtime_gc::heap_governance::compute_metrics(&surviving);
+    ctx.stats.free_block_count = metrics.free_block_count;
+    ctx.stats.total_free_bytes = metrics.total_free_bytes;
+    ctx.stats.largest_free_block = metrics.largest_free_block;
+    ctx.stats.external_fragmentation = metrics.external_fragmentation;
+    ctx.stats.tail_reclaimed_bytes = tail_result.reclaimed_bytes;
+    ctx.stats.heap_used_bytes = heap_used_bytes;
 
     ctx.stats.swept = freed.len();
     let freed_bytes: usize = blocks.iter().filter(|b| !b.marked).map(|b| b.size).sum();

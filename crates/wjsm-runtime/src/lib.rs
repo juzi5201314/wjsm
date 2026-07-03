@@ -585,6 +585,7 @@ impl Clone for RuntimeState {
             handle_free_list: self.handle_free_list.clone(),
             abandoned_regions: self.abandoned_regions.clone(),
             gc_algorithm: self.gc_algorithm.clone(),
+            last_gc_stats: self.last_gc_stats.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -689,6 +690,9 @@ struct RuntimeState {
     /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports gc_alloc_slow/
     /// gc_maybe_collect 经此驱动（P4）。Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
     gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
+    /// 最近一次 GC 统计（含碎片治理指标，issue #332）。
+    /// 每次 collect_with_provider 后由 host 更新，供可观测性 API 查询。
+    last_gc_stats: Arc<Mutex<crate::runtime_gc::api::GcStats>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -838,6 +842,12 @@ impl RuntimeState {
         *threshold = next_threshold;
     }
 
+    /// 记录最近一次 GC 统计（含碎片治理指标，issue #332）。
+    pub(crate) fn store_last_gc_stats(&self, stats: crate::runtime_gc::api::GcStats) {
+        let mut slot = self.last_gc_stats.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = stats;
+    }
+
     #[cfg(test)]
     fn new_with_shared(shared_state: Option<Arc<SharedRuntimeState>>) -> Self {
         Self::new_with_shared_and_options(shared_state, RuntimeOptions::default())
@@ -942,6 +952,9 @@ impl RuntimeState {
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
             handle_free_list: Arc::new(Mutex::new(Vec::new())),
             abandoned_regions: Arc::new(Mutex::new(Vec::new())),
+            last_gc_stats: Arc::new(Mutex::new(
+                crate::runtime_gc::api::GcStats::default(),
+            )),
             gc_algorithm: Arc::new(Mutex::new(Box::new(
                 crate::runtime_gc::MarkSweepCollector::new(),
             ))),

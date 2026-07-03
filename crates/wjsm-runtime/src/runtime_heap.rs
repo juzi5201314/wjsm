@@ -152,6 +152,7 @@ fn collect_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env
     };
     let state = ctx.as_context().data();
     state.update_gc_threshold_after_collection(stats.marked);
+    state.store_last_gc_stats(stats.clone());
     state.reset_alloc_counter_after_gc();
 }
 

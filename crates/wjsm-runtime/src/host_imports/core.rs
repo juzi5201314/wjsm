@@ -1509,6 +1509,7 @@ pub(crate) fn define_core(
             caller
                 .data()
                 .update_gc_threshold_after_collection(stats.marked);
+            caller.data().store_last_gc_stats(stats.clone());
             caller.data().reset_alloc_counter_after_gc();
             {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
@@ -1565,6 +1566,7 @@ pub(crate) fn define_core(
         caller
             .data()
             .update_gc_threshold_after_collection(stats.marked);
+        caller.data().store_last_gc_stats(stats.clone());
         caller.data().reset_alloc_counter_after_gc();
     });
     linker.define(&mut store, "env", "gc_maybe_collect", f)?;
