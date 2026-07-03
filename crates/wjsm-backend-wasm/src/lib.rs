@@ -225,6 +225,12 @@ struct Compiler {
     /// P2.2: Normal mode 下 globals 的编译期初始值，用于 main prologue 的 global.set 初始化。
     /// Eval mode 下为 None（globals 由父模块初始化）。
     normal_init_values: Option<NormalGlobalsInit>,
+    // ── 源码映射 ──
+    /// IR Module 的源文件路径（来自 Module::source_file）。
+    source_file: Option<String>,
+    /// 函数源码位置映射：(WASM 函数索引, line, col)。
+    /// compile_module 收集，finish() 编码到 "wjsm_sourcemap" custom section。
+    source_map_entries: Vec<(u32, u32, u32)>,
 }
 
 /// Normal mode 下需要初始化的 globals 编译期值。

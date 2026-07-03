@@ -689,6 +689,9 @@ impl Lowerer {
             let m_blocks = m_old_fn.into_blocks();
             let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
             m_ir_function.set_has_eval(m_has_eval);
+            if let Some(span) = self.span_to_source_span(pm.span()) {
+                m_ir_function.set_source_span(span);
+            }
             m_ir_function.set_params(param_ir_names);
             let m_captured = self.captured_names_stack.last().unwrap().clone();
             m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));

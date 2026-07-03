@@ -211,3 +211,26 @@ impl fmt::Display for PhiSource {
         write!(formatter, "({}, {})", self.predecessor, self.value)
     }
 }
+
+// ── 源码位置 ──────────────────────────────────────────────────────────
+
+/// JS 源码位置（1-indexed line 和 column）。用于运行时错误映射。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SourceSpan {
+    /// 1-indexed 行号。
+    pub line: u32,
+    /// 1-indexed 列号（UTF-8 字节偏移，与 SWC span 列一致）。
+    pub col: u32,
+}
+
+impl SourceSpan {
+    pub fn new(line: u32, col: u32) -> Self {
+        Self { line, col }
+    }
+}
+
+impl fmt::Display for SourceSpan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}:{}", self.line, self.col)
+    }
+}

@@ -206,6 +206,13 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
+        if let Some(span) = self.span_to_source_span(
+            constructor
+                .map(|c| c.span())
+                .unwrap_or_else(|| class_decl.span()),
+        ) {
+            ir_function.set_source_span(span);
+        }
         ir_function.set_params(param_ir_names);
         let ctor_captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&ctor_captured));
@@ -456,6 +463,9 @@ impl Lowerer {
                             let m_blocks = m_old_fn.into_blocks();
                             let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
                             m_ir_function.set_has_eval(m_has_eval);
+                            if let Some(span) = self.span_to_source_span(method.span()) {
+                                m_ir_function.set_source_span(span);
+                            }
                             m_ir_function.set_params(method_param_ir_names);
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
                             m_ir_function
@@ -626,6 +636,9 @@ impl Lowerer {
                             let m_blocks = m_old_fn.into_blocks();
                             let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
                             m_ir_function.set_has_eval(m_has_eval);
+                            if let Some(span) = self.span_to_source_span(method.span()) {
+                                m_ir_function.set_source_span(span);
+                            }
                             m_ir_function.set_params(param_ir_names);
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
                             m_ir_function
@@ -738,6 +751,9 @@ impl Lowerer {
                     let m_blocks = m_old_fn.into_blocks();
                     let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
                     m_ir_function.set_has_eval(m_has_eval);
+                    if let Some(span) = self.span_to_source_span(static_block.span()) {
+                        m_ir_function.set_source_span(span);
+                    }
                     m_ir_function.set_params(param_ir_names);
                     let m_captured = self.captured_names_stack.last().unwrap().clone();
                     m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));

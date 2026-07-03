@@ -14,6 +14,8 @@ pub struct Module {
     constants: Vec<Constant>,
     functions: Vec<Function>,
     script_mode: bool,
+    /// 源文件路径（用于运行时错误堆栈映射）。
+    source_file: Option<String>,
 }
 
 pub type Program = Module;
@@ -49,6 +51,14 @@ impl Module {
 
     pub fn script_mode(&self) -> bool {
         self.script_mode
+    }
+
+    pub fn source_file(&self) -> Option<&str> {
+        self.source_file.as_deref()
+    }
+
+    pub fn set_source_file(&mut self, file: impl Into<String>) {
+        self.source_file = Some(file.into());
     }
 
     pub fn verify(&self) -> Result<(), IrVerificationError> {
@@ -147,6 +157,9 @@ pub struct Function {
     /// 方法的 [[HomeObject]]，用于实现 super 属性访问。
     /// 普通函数为 None；箭头函数可继承外层方法的 home object。
     pub home_object: Option<HomeObject>,
+    /// 函数声明的 JS 源码位置（1-indexed line:col）。
+    /// 语义层从 SWC span 填入，后端编码到 WASM custom section 供运行时错误映射。
+    source_span: Option<SourceSpan>,
 }
 
 impl Function {
@@ -160,6 +173,7 @@ impl Function {
             captured_names: Vec::new(),
             known_callee_vars: std::collections::HashMap::new(),
             home_object: None,
+            source_span: None,
         }
     }
 
@@ -189,6 +203,14 @@ impl Function {
 
     pub fn set_captured_names(&mut self, names: Vec<String>) {
         self.captured_names = names;
+    }
+
+    pub fn source_span(&self) -> Option<SourceSpan> {
+        self.source_span
+    }
+
+    pub fn set_source_span(&mut self, span: SourceSpan) {
+        self.source_span = Some(span);
     }
 
     /// 返回该函数调用的"已知函数声明"变量名→FunctionId 映射（Layer 3 callee 分析）。

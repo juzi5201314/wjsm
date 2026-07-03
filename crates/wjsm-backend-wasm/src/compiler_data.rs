@@ -382,6 +382,32 @@ impl Compiler {
             self.module.section(&names);
         }
 
+        // 发射 "wjsm_sourcemap" 自定义段（函数源码位置映射），供运行时错误堆栈映射。
+        // 格式：source_file_len(u32 LE) + source_file_bytes + num_entries(u32 LE)
+        //       + [func_idx(u32 LE), line(u32 LE), col(u32 LE)] * num_entries
+        if self.mode == CompileMode::Normal
+            && (self.source_file.is_some() || !self.source_map_entries.is_empty())
+        {
+            let mut data = Vec::new();
+            if let Some(ref file) = self.source_file {
+                let bytes = file.as_bytes();
+                data.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                data.extend_from_slice(bytes);
+            } else {
+                data.extend_from_slice(&0u32.to_le_bytes());
+            }
+            data.extend_from_slice(&(self.source_map_entries.len() as u32).to_le_bytes());
+            for &(func_idx, line, col) in &self.source_map_entries {
+                data.extend_from_slice(&func_idx.to_le_bytes());
+                data.extend_from_slice(&line.to_le_bytes());
+                data.extend_from_slice(&col.to_le_bytes());
+            }
+            self.module.section(&wasm_encoder::CustomSection {
+                name: "wjsm_sourcemap".into(),
+                data: data.into(),
+            });
+        }
+
         self.module.finish()
     }
 }

@@ -37,6 +37,7 @@ mod runtime_linker;
 mod runtime_microtask;
 mod runtime_promises;
 mod runtime_regexp;
+mod runtime_source_map;
 mod runtime_startup;
 mod runtime_string_to_number;
 mod runtime_typedarray;
@@ -515,6 +516,8 @@ async fn execute_with_writer_shared_inner<W: Write>(
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
 
     let module = compile_or_load_cached(&engine, wasm_bytes)?;
+    // 解析 "wjsm_sourcemap" custom section，供 trap backtrace 格式化。
+    let source_map = runtime_source_map::SourceMapInfo::parse_from_wasm(wasm_bytes);
     let snapshot_bytes = if startup_snapshot_enabled() {
         embedded_startup_snapshot_view()
     } else {
@@ -529,6 +532,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
         options,
     )
     .await?;
+    bundle.store.data_mut().source_map = source_map.clone();
 
     let mut snapshot_restored = false;
     if let Some(bytes) = snapshot_bytes {
@@ -543,6 +547,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
                 options,
             )
             .await?;
+            bundle.store.data_mut().source_map = source_map.clone();
         }
     }
 
@@ -645,6 +650,7 @@ impl Clone for RuntimeState {
             fetch_http_clients: self.fetch_http_clients.clone(),
             host_completion_tx: self.host_completion_tx.clone(),
             async_op_counter: self.async_op_counter.clone(),
+            source_map: self.source_map.clone(),
         }
     }
 }
@@ -817,6 +823,8 @@ struct RuntimeState {
         Option<tokio::sync::mpsc::UnboundedSender<crate::scheduler::AsyncHostCompletion>>,
     /// Phase 6: in-flight async op 计数器（用于 scheduler 安全退出条件）。
     async_op_counter: Option<crate::scheduler::AsyncOpCounter>,
+    /// WASM source map（从 "wjsm_sourcemap" custom section 解析），供 trap backtrace 格式化。
+    source_map: Option<runtime_source_map::SourceMapInfo>,
 }
 
 impl RuntimeState {
@@ -1079,6 +1087,7 @@ impl RuntimeState {
             new_target: AtomicI64::new(value::encode_undefined()),
             host_completion_tx: None,
             async_op_counter: None,
+            source_map: None,
         }
     }
 }

@@ -979,6 +979,10 @@ impl Lowerer {
             }
             self.module.push_function(function);
         }
+        // 设置源文件路径（供运行时错误堆栈映射）。
+        if !self.diagnostic_filename.is_empty() {
+            self.module.set_source_file(&self.diagnostic_filename);
+        }
         Ok(self.module)
     }
 }
@@ -1023,5 +1027,33 @@ impl Lowerer {
         } else {
             false
         }
+    }
+
+    /// 将 SWC 字节偏移（BytePos，1-indexed）转换为 1-indexed 行号和列号。
+    /// 无源码上下文时返回 None。
+    pub(crate) fn byte_pos_to_source_span(&self, pos: swc_core::common::BytePos) -> Option<SourceSpan> {
+        let source = self.diagnostic_source.as_ref()?;
+        let bytes = source.as_bytes();
+        // BytePos 是 1-indexed，0 通常表示 DUMMY_SP。
+        if pos.0 == 0 || pos.0 as usize > bytes.len() + 1 {
+            return None;
+        }
+        let target = (pos.0 - 1) as usize;
+        let mut line = 1u32;
+        let mut col = 1u32;
+        for &byte in &bytes[..target] {
+            if byte == b'\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        Some(SourceSpan::new(line, col))
+    }
+
+    /// 从 SWC Span 提取源码位置（取 span.lo 作为函数声明起始位置）。
+    pub(crate) fn span_to_source_span(&self, span: swc_core::common::Span) -> Option<SourceSpan> {
+        self.byte_pos_to_source_span(span.lo)
     }
 }

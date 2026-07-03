@@ -286,6 +286,8 @@ impl Compiler {
             current_emit_instr_idx: 0,
             gc_analysis: None,
             normal_init_values: None,
+            source_file: None,
+            source_map_entries: Vec::new(),
         }
     }
 }

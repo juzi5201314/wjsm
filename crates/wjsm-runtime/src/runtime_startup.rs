@@ -109,6 +109,9 @@ pub(super) fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
     if use_epoch_async_yield {
         config.epoch_interruption(true);
     }
+    // 启用 WASM backtrace 捕获，供运行时错误堆栈映射到 JS 函数名和源码位置。
+    config.wasm_backtrace_max_frames(std::num::NonZero::new(50));
+    config.generate_address_map(true);
     config.wasm_bulk_memory(true);
     config
 }

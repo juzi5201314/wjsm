@@ -78,6 +78,9 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
+        if let Some(span) = self.span_to_source_span(fn_decl.span()) {
+            ir_function.set_source_span(span);
+        }
         ir_function.set_params(param_ir_names);
         // 设置捕获变量列表（逃逸分析结果）
         let captured = self.captured_names_stack.last().unwrap().clone();

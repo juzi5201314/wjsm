@@ -96,6 +96,9 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
+        if let Some(span) = self.span_to_source_span(arrow.span()) {
+            ir_function.set_source_span(span);
+        }
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -510,6 +513,9 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&async_name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
+        if let Some(span) = self.span_to_source_span(arrow.span()) {
+            ir_function.set_source_span(span);
+        }
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -746,6 +752,9 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
         wrapper_ir_function.set_has_eval(has_eval);
+        if let Some(span) = self.span_to_source_span(arrow.span()) {
+            wrapper_ir_function.set_source_span(span);
+        }
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
         for b in blocks {

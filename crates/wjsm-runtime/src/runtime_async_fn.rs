@@ -399,11 +399,11 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
 ) -> anyhow::Result<(W, Vec<u8>)> {
     let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
     let main_result = main.call_async(&mut store, ()).await;
-    let main_ok = match main_result {
+    let main_ok = match &main_result {
         Ok(return_val) => {
-            if value::is_exception(return_val) {
+            if value::is_exception(*return_val) {
                 // 未捕获异常被抛出顶层：将异常信息写入输出并设置 runtime_error
-                let idx = value::decode_handle(return_val) as usize;
+                let idx = value::decode_handle(*return_val) as usize;
                 if let Some(entry) = store
                     .data()
                     .error_table
@@ -434,7 +434,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
                 true
             }
         }
-        Err(ref trap) => {
+        Err(trap) => {
             if store
                 .data()
                 .runtime_error
@@ -445,7 +445,28 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
                 // throw import 已经记录了 JS 层异常；先走统一输出/错误收集路径。
                 false
             } else {
-                return Err(anyhow::anyhow!("WASM trap: {:?}", trap));
+                // 从 trap error 提取 WasmBacktrace，格式化为 JS 堆栈跟踪。
+                let backtrace_str = trap
+                    .downcast_ref::<WasmBacktrace>()
+                    .map(|bt| {
+                        crate::runtime_source_map::format_backtrace(
+                            bt,
+                            store.data().source_map.as_ref(),
+                        )
+                    })
+                    .unwrap_or_default();
+                let trap_msg = if backtrace_str.is_empty() {
+                    format!("WASM trap: {:?}", trap)
+                } else {
+                    // 提取 trap 根因消息（不含 wasmtime 默认 backtrace，避免与 JS 堆栈重复）。
+                    let trap_brief = trap
+                        .chain()
+                        .last()
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "unknown trap".to_string());
+                    format!("Uncaught WASM trap: {trap_brief}\n{backtrace_str}")
+                };
+                return Err(anyhow::anyhow!(trap_msg));
             }
         }
     };
