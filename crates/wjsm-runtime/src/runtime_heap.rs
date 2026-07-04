@@ -948,6 +948,7 @@ pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     alloc_error_object_with_env(ctx, env, "TypeError", message, None)
 }
+
 pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
     if value::is_undefined(obj) {
         store_runtime_string(caller, "[object Undefined]".to_string())

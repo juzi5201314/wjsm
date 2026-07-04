@@ -67,3 +67,15 @@
 - Rule compliance fix during slice: runtime support default artifact uses `LazyLock` for fixed initializer and keeps `OnceLock` only for explicit runtime injection; CLI IR regex caches switched from `OnceLock::get_or_init` to `LazyLock`。
 - Variant boundary: `wjsm_backend_wasm::GcFlavor` now names MarkSweep/G1/Zgc, but only MarkSweep emits a support module in T1.5；G1/Zgc return an error and runtime-support exposes no fake `wjsm_support_g1/zgc.cwasm` artifacts until their later phases。
 - Artifact coverage: build.rs precompiles only `wjsm_support_mark_sweep.cwasm`；embedded tests deserialize mark-sweep and assert G1/Zgc artifacts are absent。
+
+## P1 T1.6 evidence
+
+- `cargo check -p wjsm-runtime -p wjsm-backend-wasm -p wjsm-runtime-support -p wjsm-cli` → passed。
+- `cargo nextest run -E 'test(happy__typedarray_simple) | test(happy__map_set_for_each) | test(happy__error_constructor_new_target) | test(happy__symbol_prototype_methods)'` → 4 passed。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__typedarray_simple) | test(happy__map_set_for_each)'` → 2 passed。
+- `cargo nextest run --workspace` → 1242 passed, 2 skipped。
+- `cargo build --workspace` → passed。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run --workspace` → 1240 passed, 2 failed, 2 skipped；失败项为 cold startup 下 `happy__error_constructor_new_target` 与 `happy__symbol_prototype_methods`。
+- T1.6 修复证据：fixture 验证暴露 host 侧直接 bump `__heap_ptr` 后没有同步 `__alloc_ptr`，导致后续 WASM `arr_new` fast-path 覆盖 host 分配的 property/string 区域；已在 `alloc_heap_c_string_global`、render string allocation、eval var map allocation 同步 `__alloc_ptr`。
+- T1.6 修复证据：support/user helper 的 `gc_safepoint_poll` 现在同时要求 `__bootstrap_done` 与 `__function_props_done`，避免 bootstrap/function-props 构造期在没有普通 IR spill 的路径触发 GC。
+- Blocking residual：cold full-suite 仍有 2 个既有 startup builtins parity 缺口（Error constructor prototype / Symbol.prototype `[Symbol.toStringTag]`），未进入 P2；当前按用户要求停止在 P1/T1.6 收尾点。

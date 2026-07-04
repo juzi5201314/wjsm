@@ -316,5 +316,8 @@ pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>
         data[end..aligned_end].fill(0);
     }
     let _ = env.heap_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
+    if let Some(alloc_ptr) = env.alloc_ptr {
+        let _ = alloc_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
+    }
     Some(heap_ptr as u32)
 }

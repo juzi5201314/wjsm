@@ -139,11 +139,23 @@ impl Compiler {
         func: &mut Function,
         gc_alloc_bytes_global: u32,
         gc_trigger_bytes_global: u32,
+        bootstrap_done_global: u32,
+        function_props_done_global: u32,
         gc_safepoint_poll_idx: u32,
     ) {
+        // 启动 bootstrap / function props 构造期没有普通 IR safepoint spill，不能触发 GC。
+        // 用户代码路径在调用本 helper 前已经由 IR safepoint prologue 暴露 live handles。
+        func.instruction(&WasmInstruction::GlobalGet(bootstrap_done_global));
+        func.instruction(&WasmInstruction::I32Const(0));
+        func.instruction(&WasmInstruction::I32Ne);
+        func.instruction(&WasmInstruction::GlobalGet(function_props_done_global));
+        func.instruction(&WasmInstruction::I32Const(0));
+        func.instruction(&WasmInstruction::I32Ne);
+        func.instruction(&WasmInstruction::I32And);
         func.instruction(&WasmInstruction::GlobalGet(gc_alloc_bytes_global));
         func.instruction(&WasmInstruction::GlobalGet(gc_trigger_bytes_global));
         func.instruction(&WasmInstruction::I32GeU);
+        func.instruction(&WasmInstruction::I32And);
         func.instruction(&WasmInstruction::If(BlockType::Empty));
         func.instruction(&WasmInstruction::Call(gc_safepoint_poll_idx));
         func.instruction(&WasmInstruction::End);

@@ -523,9 +523,19 @@ fn emit_heap_bump_for_object_resize_support(
 }
 
 fn emit_gc_safepoint_poll_if_due_support(func: &mut Function) {
+    // support helper 可在 bootstrap/function-props 构造期被调用；这些路径没有普通 IR
+    // safepoint spill，因此必须等两段启动初始化完成后才允许增量 GC safepoint。
+    func.instruction(&WasmInstruction::GlobalGet(G_BOOTSTRAP_DONE));
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Ne);
+    func.instruction(&WasmInstruction::GlobalGet(G_FUNCTION_PROPS_DONE));
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Ne);
+    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::GlobalGet(G_GC_ALLOC_BYTES));
     func.instruction(&WasmInstruction::GlobalGet(G_GC_TRIGGER_BYTES));
     func.instruction(&WasmInstruction::I32GeU);
+    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::Call(HOST_GC_SAFEPOINT_POLL));
     func.instruction(&WasmInstruction::End);

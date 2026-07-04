@@ -159,6 +159,9 @@ pub(crate) fn reserve_eval_data_segment(
         anyhow::bail!(message);
     }
     heap_ptr.set(&mut *caller, Val::I32((base + reserve) as i32))?;
+    if let Some(alloc_ptr) = env.alloc_ptr {
+        alloc_ptr.set(&mut *caller, Val::I32((base + reserve) as i32))?;
+    }
     Ok(base)
 }
 

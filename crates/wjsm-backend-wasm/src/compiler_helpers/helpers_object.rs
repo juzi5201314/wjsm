@@ -7,6 +7,8 @@ impl Compiler {
         let alloc_end_global = self.alloc_end_global_idx;
         let gc_alloc_bytes_global = self.gc_alloc_bytes_global_idx;
         let gc_trigger_bytes_global = self.gc_trigger_bytes_global_idx;
+        let bootstrap_done_global = self.bootstrap_done_global_idx;
+        let function_props_done_global = self.function_props_done_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
         let shadow_stack_end_global = self.shadow_stack_end_global_idx;
@@ -30,6 +32,8 @@ impl Compiler {
                 &mut func,
                 gc_alloc_bytes_global,
                 gc_trigger_bytes_global,
+                bootstrap_done_global,
+                function_props_done_global,
                 gc_safepoint_poll_idx,
             );
 
@@ -1128,6 +1132,8 @@ impl Compiler {
                 &mut func,
                 gc_alloc_bytes_global,
                 gc_trigger_bytes_global,
+                bootstrap_done_global,
+                function_props_done_global,
                 gc_safepoint_poll_idx,
             );
             // 分配扩容后的新区域；fast-path 失败时由 gc_alloc_slow 负责 GC/grow/OOM。

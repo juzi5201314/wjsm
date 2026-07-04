@@ -729,13 +729,9 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
         ensure_no_startup_error(&bundle.store)?;
     }
     install_array_iterator_methods(&mut bundle.store, &bundle.wasm_env);
-    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
-    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
-    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_promise_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
-    ensure_no_startup_error(&bundle.store)?;
     crate::runtime_heap::ensure_regexp_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
     ensure_no_startup_error(&bundle.store)?;
     Ok(())
@@ -767,7 +763,8 @@ pub(super) async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) ->
         .i32()
         .unwrap_or(0)
         .max(0) as usize;
-    record_and_attach_gc_heap(&mut bundle.store, &bundle.wasm_env, immortal_objects_end)
+    record_and_attach_gc_heap(&mut bundle.store, &bundle.wasm_env, immortal_objects_end)?;
+    Ok(())
 }
 
 pub(super) async fn try_restore_snapshot(
