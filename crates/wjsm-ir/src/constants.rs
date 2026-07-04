@@ -189,6 +189,10 @@ pub const HANDLE_TABLE_ENTRY_SIZE: u32 = 4;
 pub const HANDLE_TABLE_MIN_ENTRIES: u32 = 8192;
 pub const HANDLE_TABLE_FUNCTION_ENTRY_FACTOR: u32 = 4;
 pub const HEAP_ALLOCATION_ALIGNMENT: u32 = 8;
+pub const GC_REGION_SIZE: u32 = 64 * 1024;
+pub const GC_CARD_SIZE: u32 = 512;
+pub const GC_BARRIER_EVENT_SIZE: u32 = 24;
+pub const GC_BARRIER_EVENT_BUFFER_SIZE: u32 = 24 * 1024;
 
 /// 返回所有会影响启动快照 object heap / handle table 兼容性的布局输入。
 /// 名称也参与 hash，避免两个常量值交换时 hash 不变。
@@ -222,6 +226,10 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         ("name_id_kind_mask", NAME_ID_KIND_MASK),
         ("name_id_index_mask", NAME_ID_INDEX_MASK),
         ("heap_allocation_alignment", HEAP_ALLOCATION_ALIGNMENT),
+        ("gc_region_size", GC_REGION_SIZE),
+        ("gc_card_size", GC_CARD_SIZE),
+        ("gc_barrier_event_size", GC_BARRIER_EVENT_SIZE),
+        ("gc_barrier_event_buffer_size", GC_BARRIER_EVENT_BUFFER_SIZE),
     ]
 }
 

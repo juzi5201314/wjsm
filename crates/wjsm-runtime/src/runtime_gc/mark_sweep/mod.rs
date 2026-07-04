@@ -40,6 +40,10 @@ impl MarkSweepCollector {
         }
     }
 
+    pub(crate) fn dynamic_start(&self) -> usize {
+        self.dynamic_start
+    }
+
     fn reclaim_owner_backed_side_tables(&self, ctx: &mut GcContext) {
         ctx.with_state(|st| {
             st.reclaim_unmarked_collection_entries(|h| self.mark_bits.is_marked(h));

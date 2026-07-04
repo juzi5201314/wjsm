@@ -309,11 +309,15 @@ impl Compiler {
         let handle_table_size = handle_table_entries * constants::HANDLE_TABLE_ENTRY_SIZE;
         let shadow_stack_base = heap_start + handle_table_size;
         let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
-        let object_heap_start = shadow_stack_end + SHADOW_STACK_HEAP_GUARD_SIZE;
+        let guard_start = shadow_stack_end;
+        let guard_end = guard_start + SHADOW_STACK_HEAP_GUARD_SIZE;
+        let barrier_event_buf_base = guard_end;
+        let barrier_event_buf_end =
+            barrier_event_buf_base + constants::GC_BARRIER_EVENT_BUFFER_SIZE;
+        let object_heap_start = (barrier_event_buf_end + (constants::GC_REGION_SIZE - 1))
+            & !(constants::GC_REGION_SIZE - 1);
         if self.mode == CompileMode::Normal {
-            let guard_start = shadow_stack_end;
-            let guard_end = object_heap_start;
-            let needed_len = guard_end as usize;
+            let needed_len = object_heap_start as usize;
             if self.string_data.len() < needed_len {
                 self.string_data.resize(needed_len, 0);
             }

@@ -13,16 +13,16 @@ use wjsm_ir::constants;
 use wjsm_ir::value;
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
-/// 格式版本：v7 runtime string section stores UTF-16 code units。
+/// 格式版本:v8 header 显式记录 immortal objects 相对末尾。
 /// 任何 wire 改动必须递增。
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 7;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 8;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
 /// 不会与合法 rel 值碰撞，并显式区分「rel == 0（heap 起点）」与「null 句柄」。
 pub const NULL_HANDLE_REL: u32 = u32::MAX;
 
-const HEADER_LEN: usize = 100;
+const HEADER_LEN: usize = 104;
 
 // ── snapshot data types ────────────────────────────────────────────
 
@@ -34,6 +34,7 @@ pub struct StartupSnapshotHeader {
     pub heap_used: u32,
     pub obj_table_count: u32,
     pub function_props_base: u32,
+    pub immortal_objects_end_rel: u32,
     pub object_proto_handle: u32,
     pub array_proto_handle: u32,
     pub arr_proto_table_base: u32,
@@ -319,6 +320,7 @@ fn build_header_bytes(header: &StartupSnapshotHeader) -> Vec<u8> {
     b.extend_from_slice(&header.async_iterator_prototype.to_le_bytes());
     b.extend_from_slice(&header.async_gen_prototype.to_le_bytes());
     b.extend_from_slice(&header.array_proto_values.to_le_bytes());
+    b.extend_from_slice(&header.immortal_objects_end_rel.to_le_bytes());
     b.extend_from_slice(&SECTION_COUNT.to_le_bytes());
     b
 }
@@ -406,8 +408,9 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     let async_iterator_prototype = i64::from_le_bytes(bytes[72..80].try_into()?);
     let async_gen_prototype = i64::from_le_bytes(bytes[80..88].try_into()?);
     let array_proto_values = i64::from_le_bytes(bytes[88..96].try_into()?);
+    let immortal_objects_end_rel = u32::from_le_bytes(bytes[96..100].try_into()?);
 
-    let section_count = u32::from_le_bytes(bytes[96..100].try_into()?) as usize;
+    let section_count = u32::from_le_bytes(bytes[100..104].try_into()?) as usize;
     if section_count > 16 {
         bail!("too many sections: {}", section_count);
     }
@@ -417,6 +420,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         format_version,
         abi_hash,
         heap_used,
+        immortal_objects_end_rel,
         obj_table_count,
         function_props_base,
         object_proto_handle,
@@ -572,6 +576,13 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         bail!(
             "object_bytes len {} != header.heap_used {}",
             object_bytes.len(),
+            heap_used
+        );
+    }
+    if immortal_objects_end_rel > heap_used {
+        bail!(
+            "header.immortal_objects_end_rel {} > heap_used {}",
+            immortal_objects_end_rel,
             heap_used
         );
     }
@@ -768,6 +779,7 @@ mod tests {
                 format_version: SNAPSHOT_FORMAT_VERSION,
                 abi_hash: abi_hash(),
                 heap_used: 0,
+                immortal_objects_end_rel: 0,
                 obj_table_count: 0,
                 function_props_base: 0,
                 object_proto_handle: 0,
@@ -790,8 +802,8 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_format_version_is_v7_utf16_runtime_strings() {
-        assert_eq!(SNAPSHOT_FORMAT_VERSION, 7);
+    fn snapshot_format_version_is_v8_immortal_boundary() {
+        assert_eq!(SNAPSHOT_FORMAT_VERSION, 8);
     }
 
     #[test]
@@ -805,6 +817,20 @@ mod tests {
             decoded.runtime_strings,
             vec![vec![0xD800], vec![0x0041, 0xDFFF]]
         );
+    }
+
+    #[test]
+    fn immortal_objects_end_header_roundtrips() {
+        let mut snapshot = snapshot_with_runtime_strings(Vec::new());
+        snapshot.header.heap_used = 16;
+        snapshot.header.immortal_objects_end_rel = 12;
+        snapshot.object_bytes = vec![0; 16];
+
+        let bytes = encode_snapshot(&snapshot);
+        let decoded = decode_snapshot(&bytes).expect("snapshot decodes");
+
+        assert_eq!(decoded.header.heap_used, 16);
+        assert_eq!(decoded.header.immortal_objects_end_rel, 12);
     }
 
     #[test]
@@ -827,6 +853,10 @@ mod tests {
             "handle_table_min_entries",
             "handle_table_function_entry_factor",
             "heap_allocation_alignment",
+            "gc_region_size",
+            "gc_card_size",
+            "gc_barrier_event_size",
+            "gc_barrier_event_buffer_size",
         ] {
             assert!(
                 inputs.iter().any(|(name, _)| *name == required),

@@ -635,6 +635,9 @@ impl Clone for RuntimeState {
             native_callable_free_slots: self.native_callable_free_slots.clone(),
             handle_free_list: self.handle_free_list.clone(),
             abandoned_regions: self.abandoned_regions.clone(),
+            immortal_objects_end: self.immortal_objects_end.clone(),
+            dynamic_heap_start: self.dynamic_heap_start.clone(),
+            barrier_event_buf_base: self.barrier_event_buf_base.clone(),
             gc_algorithm: self.gc_algorithm.clone(),
             gc_scheduler: self.gc_scheduler.clone(),
             last_gc_stats: self.last_gc_stats.clone(),
@@ -749,6 +752,12 @@ struct RuntimeState {
     /// sweep 单独遍历 obj_table 看不到它 → 永久泄漏（INV-B vs §8.2 矛盾，P4-blocker #1）。
     /// grow_array/grow_object 在重写前注册旧 (ptr, old_size)；sweep 读此并入 free list，sweep 结束清空。
     abandoned_regions: Arc<Mutex<Vec<(usize, usize)>>>,
+    /// 启动快照恢复后永生对象区末尾的绝对地址。
+    immortal_objects_end: Arc<Mutex<usize>>,
+    /// GC 算法接管的动态堆起点；当前等于 immortal_objects_end。
+    dynamic_heap_start: Arc<Mutex<usize>>,
+    /// WASM 写屏障事件缓冲区起点；padding 不属于可扫描对象区。
+    barrier_event_buf_base: Arc<Mutex<usize>>,
     /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports 经 v2 生命周期接口驱动。
     /// Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
     gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
@@ -914,6 +923,47 @@ impl RuntimeState {
         *slot = stats;
     }
 
+    /// 记录启动期 immortal/dynamic/barrier 三段边界，供 GC attach 与后续算法查询。
+    pub(crate) fn store_heap_layout_boundaries(
+        &self,
+        immortal_objects_end: usize,
+        dynamic_heap_start: usize,
+        barrier_event_buf_base: usize,
+    ) {
+        *self
+            .immortal_objects_end
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = immortal_objects_end;
+        *self
+            .dynamic_heap_start
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = dynamic_heap_start;
+        *self
+            .barrier_event_buf_base
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = barrier_event_buf_base;
+    }
+
+    pub(crate) fn heap_layout_boundaries(&self) -> (usize, usize, usize) {
+        let immortal_objects_end = *self
+            .immortal_objects_end
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dynamic_heap_start = *self
+            .dynamic_heap_start
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let barrier_event_buf_base = *self
+            .barrier_event_buf_base
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        (
+            immortal_objects_end,
+            dynamic_heap_start,
+            barrier_event_buf_base,
+        )
+    }
+
     #[cfg(test)]
     fn new_with_shared(shared_state: Option<Arc<SharedRuntimeState>>) -> Self {
         Self::new_with_shared_and_options(shared_state, RuntimeOptions::default())
@@ -1024,6 +1074,9 @@ impl RuntimeState {
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
             handle_free_list: Arc::new(Mutex::new(Vec::new())),
             abandoned_regions: Arc::new(Mutex::new(Vec::new())),
+            immortal_objects_end: Arc::new(Mutex::new(0)),
+            dynamic_heap_start: Arc::new(Mutex::new(0)),
+            barrier_event_buf_base: Arc::new(Mutex::new(0)),
             gc_algorithm: Arc::new(Mutex::new(
                 crate::runtime_gc::registry::create(crate::runtime_gc::GcAlgorithmKind::MarkSweep)
                     .expect("mark-sweep GC algorithm must be registered"),

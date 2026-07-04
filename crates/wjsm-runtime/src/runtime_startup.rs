@@ -463,15 +463,23 @@ pub(super) async fn instantiate_execute_bundle(
     })
 }
 
+fn heap_limit_base(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) -> usize {
+    let (_, dynamic_heap_start, _) = store.data().heap_layout_boundaries();
+    if dynamic_heap_start != 0 {
+        return dynamic_heap_start;
+    }
+    wasm_env
+        .object_heap_start
+        .and_then(|g| g.get(&mut *store).i32())
+        .unwrap_or(0)
+        .max(0) as usize
+}
+
 fn configured_heap_limit(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) -> Result<u32> {
     let Some(max_heap_size) = store.data().max_heap_size() else {
         return Ok(u32::MAX);
     };
-    let heap_start = wasm_env
-        .object_heap_start
-        .and_then(|g| g.get(&mut *store).i32())
-        .unwrap_or(0)
-        .max(0) as usize;
+    let heap_start = heap_limit_base(store, wasm_env);
     let limit = heap_start.checked_add(max_heap_size).ok_or_else(|| {
         anyhow::anyhow!("max heap size exceeds wasm32 heap address space: {max_heap_size} bytes")
     })?;
@@ -492,15 +500,59 @@ fn enforce_heap_limit(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) -> Re
     heap_limit.set(&mut *store, Val::I32(limit as i32))?;
     let heap_ptr = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
     if heap_ptr > limit as usize {
-        let heap_start = wasm_env
-            .object_heap_start
-            .and_then(|g| g.get(&mut *store).i32())
-            .unwrap_or(0)
-            .max(0) as usize;
+        let heap_start = heap_limit_base(store, wasm_env);
         let used = heap_ptr.saturating_sub(heap_start);
         store.data().set_heap_oom_error(used, 0);
         anyhow::bail!(store.data().heap_oom_message(used, 0));
     }
+    Ok(())
+}
+
+fn align_gc_region_start(value: usize) -> Result<usize> {
+    let align = wjsm_ir::constants::GC_REGION_SIZE as usize;
+    value
+        .checked_add(align - 1)
+        .map(|v| v & !(align - 1))
+        .ok_or_else(|| anyhow::anyhow!("GC dynamic heap start exceeds address space"))
+}
+
+fn record_and_attach_gc_heap(
+    store: &mut Store<RuntimeState>,
+    wasm_env: &WasmEnv,
+    immortal_objects_end: usize,
+) -> Result<()> {
+    let object_heap_start = wasm_env
+        .object_heap_start
+        .and_then(|g| g.get(&mut *store).i32())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let immortal_objects_end = immortal_objects_end.max(object_heap_start);
+    let dynamic_heap_start = align_gc_region_start(immortal_objects_end)?;
+    if dynamic_heap_start > i32::MAX as usize {
+        anyhow::bail!("GC dynamic heap start exceeds wasm32 signed global range");
+    }
+    wasm_env
+        .heap_ptr
+        .set(&mut *store, Val::I32(dynamic_heap_start as i32))?;
+    let shadow_stack_end = wasm_env
+        .shadow_stack_end
+        .and_then(|g| g.get(&mut *store).i32())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let barrier_event_buf_base = shadow_stack_end + wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE as usize;
+
+    store.data().store_heap_layout_boundaries(
+        immortal_objects_end,
+        dynamic_heap_start,
+        barrier_event_buf_base,
+    );
+    enforce_heap_limit(store, wasm_env)?;
+    let (_, attached_dynamic_heap_start, _) = store.data().heap_layout_boundaries();
+
+    let gc_arc = store.data().gc_algorithm.clone();
+    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+    let mut gc_ctx = crate::runtime_gc::GcContext::new(store, wasm_env, gc.name());
+    gc.attach_heap(&mut gc_ctx, attached_dynamic_heap_start);
     Ok(())
 }
 
@@ -784,9 +836,17 @@ pub(super) async fn run_init_globals_only(bundle: &mut ExecuteInstanceBundle) ->
     Ok(())
 }
 
-/// 执行 cold startup：只跑 bootstrap，不在客户机器上 capture/write snapshot。
+/// 执行 cold startup：跑 bootstrap 后划定 immortal/dynamic 边界，不在客户机器上 capture/write snapshot。
 pub(super) async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
-    run_bootstrap_only(bundle).await
+    run_bootstrap_only(bundle).await?;
+    let immortal_objects_end = bundle
+        .wasm_env
+        .heap_ptr
+        .get(&mut bundle.store)
+        .i32()
+        .unwrap_or(0)
+        .max(0) as usize;
+    record_and_attach_gc_heap(&mut bundle.store, &bundle.wasm_env, immortal_objects_end)
 }
 
 pub(super) async fn try_restore_snapshot(
@@ -802,9 +862,22 @@ pub(super) async fn try_restore_snapshot(
             return false;
         }
     };
+    let object_heap_start = bundle
+        .wasm_env
+        .object_heap_start
+        .and_then(|g| g.get(&mut bundle.store).i32())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let immortal_objects_end =
+        match object_heap_start.checked_add(view.header.immortal_objects_end_rel as usize) {
+            Some(end) => end,
+            None => return false,
+        };
     match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)
         .and_then(|()| enforce_heap_limit(&mut bundle.store, &bundle.wasm_env))
-    {
+        .and_then(|()| {
+            record_and_attach_gc_heap(&mut bundle.store, &bundle.wasm_env, immortal_objects_end)
+        }) {
         Ok(()) => true,
         Err(e) => {
             if startup_snapshot_debug_enabled() {

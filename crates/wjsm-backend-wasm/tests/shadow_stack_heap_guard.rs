@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use wasmparser::{Operator, Parser, Payload};
+use wjsm_ir::constants::{GC_BARRIER_EVENT_BUFFER_SIZE, GC_REGION_SIZE};
 use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_CANARY, SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_SIZE};
 
 #[test]
@@ -19,18 +20,24 @@ fn shadow_stack_heap_guard_layout_and_canary() {
         .get(&1)
         .expect("__heap_ptr (global 1) in __wjsm_init_globals");
 
+    let guard_start = shadow_stack_end as usize;
+    let guard_end = guard_start + SHADOW_STACK_HEAP_GUARD_SIZE as usize;
+    let barrier_event_buf_end = guard_end + GC_BARRIER_EVENT_BUFFER_SIZE as usize;
+
     assert_eq!(
-        object_heap_start - shadow_stack_end,
-        SHADOW_STACK_HEAP_GUARD_SIZE as i32,
-        "object heap must start after a fixed guard past shadow_stack_end"
+        object_heap_start % GC_REGION_SIZE as i32,
+        0,
+        "object heap must start at a GC region boundary"
+    );
+    assert!(
+        object_heap_start as usize >= barrier_event_buf_end,
+        "object heap must start after shadow-stack guard and barrier event buffer"
     );
     assert_eq!(
         heap_ptr, object_heap_start,
         "initial heap_ptr must equal object_heap_start"
     );
 
-    let guard_start = shadow_stack_end as usize;
-    let guard_end = object_heap_start as usize;
     assert!(
         guard_end <= data.len(),
         "data segment must cover guard region (len={}, guard_end={})",

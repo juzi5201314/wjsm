@@ -96,6 +96,9 @@ fn collect_sorted_blocks(
             if ptr == 0 {
                 continue; // 空槽（已回收的 handle）
             }
+            if ptr < collector.dynamic_start() {
+                continue;
+            }
             let Some(size) = object_size_from_memory(data, ptr) else {
                 continue;
             };

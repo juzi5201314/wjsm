@@ -158,6 +158,7 @@ pub(crate) fn capture_startup_snapshot(
         format_version: SNAPSHOT_FORMAT_VERSION,
         abi_hash: abi_hash(),
         heap_used,
+        immortal_objects_end_rel: heap_used,
         obj_table_count: obj_table_count as u32,
         function_props_base: function_props_base as u32,
         object_proto_handle,
