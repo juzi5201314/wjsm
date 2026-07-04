@@ -68,7 +68,6 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
-const HOST_GC_MAYBE_COLLECT: u32 = 0;
 const HOST_GC_ALLOC_SLOW: u32 = 1;
 const HOST_GC_TAKE_FREED_HANDLE: u32 = 2;
 const HOST_CLOSURE_GET_FUNC: u32 = 3;
@@ -149,7 +148,6 @@ const G_ARR_PROTO_TABLE_BASE: u32 = 15;
 const G_ARR_PROTO_TABLE_LEN: u32 = 16;
 #[allow(dead_code)]
 const G_ARR_PROTO_TABLE_HASH: u32 = 17;
-const G_HEAP_LIMIT: u32 = 18;
 #[allow(dead_code)]
 const G_ALLOC_PTR: u32 = 19;
 #[allow(dead_code)]
@@ -448,7 +446,7 @@ fn emit_resolve_callable_for_helper(
     func.instruction(&WasmInstruction::End);
 }
 
-/// 对象扩容 bump：fast-path 受 memory 与 heap_limit 双重约束；失败走 gc_alloc_slow。
+/// 对象扩容 bump：fast-path 使用 alloc window；失败走 gc_alloc_slow。
 fn emit_heap_bump_for_object_resize_support(
     func: &mut Function,
     capacity_local: u32,
@@ -463,27 +461,26 @@ fn emit_heap_bump_for_object_resize_support(
     func.instruction(&WasmInstruction::LocalSet(size_scratch_local));
 
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
     func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::MemorySize(0));
-    func.instruction(&WasmInstruction::I64ExtendI32U);
-    func.instruction(&WasmInstruction::I64Const(65536));
-    func.instruction(&WasmInstruction::I64Mul);
-    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_END));
     func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_LIMIT));
-    func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
     func.instruction(&WasmInstruction::LocalTee(new_ptr_local));
     func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
     func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::LocalTee(size_scratch_local));
+    func.instruction(&WasmInstruction::GlobalSet(G_ALLOC_PTR));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
     func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_GC_ALLOC_BYTES));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+    func.instruction(&WasmInstruction::LocalGet(new_ptr_local));
+    func.instruction(&WasmInstruction::I32Sub);
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_GC_ALLOC_BYTES));
     func.instruction(&WasmInstruction::Br(1));
     func.instruction(&WasmInstruction::End);
 
@@ -503,11 +500,8 @@ fn emit_heap_bump_for_object_resize_support(
 // ── obj_new (param $capacity i32) (result i32) — Type 0 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_new 段。
 fn emit_obj_new() -> Function {
-    // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
-    let mut func = Function::new(vec![(3, ValType::I32)]);
-
-    // proactive GC
-    func.instruction(&WasmInstruction::Call(HOST_GC_MAYBE_COLLECT));
+    // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
+    let mut func = Function::new(vec![(4, ValType::I32)]);
 
     // size = 16 + capacity * 32
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -532,29 +526,26 @@ fn emit_obj_new() -> Function {
     func.instruction(&WasmInstruction::GlobalSet(G_OBJ_TABLE_COUNT));
     func.instruction(&WasmInstruction::End);
 
-    // bump fast-path：heap_ptr + size <= min(mem_size, heap_limit)
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    // alloc window fast-path：alloc_ptr + size <= alloc_end
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::MemorySize(0));
-    func.instruction(&WasmInstruction::I64ExtendI32U);
-    func.instruction(&WasmInstruction::I64Const(65536));
-    func.instruction(&WasmInstruction::I64Mul);
-    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_END));
     func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_LIMIT));
-    func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
     // fast-path
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
     func.instruction(&WasmInstruction::LocalTee(2));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::LocalTee(4));
+    func.instruction(&WasmInstruction::GlobalSet(G_ALLOC_PTR));
+    func.instruction(&WasmInstruction::LocalGet(4));
     func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_GC_ALLOC_BYTES));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_GC_ALLOC_BYTES));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::Else);
     // slow-path：gc_alloc_slow(size, HEAP_TYPE_OBJECT, capacity)
@@ -798,11 +789,8 @@ fn emit_to_int32() -> Function {
 // 移植自 compiler_array_helpers.rs::compile_array_helpers arr_new 段。
 // 数组内存布局: [proto(4), type(1), pad(3), length(4), capacity(4), elements(capacity*8)]
 fn emit_arr_new() -> Function {
-    // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
-    let mut func = Function::new(vec![(3, ValType::I32)]);
-
-    // ── proactive GC ──
-    func.instruction(&WasmInstruction::Call(HOST_GC_MAYBE_COLLECT));
+    // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
+    let mut func = Function::new(vec![(4, ValType::I32)]);
 
     // size = 16 + capacity * 8
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -827,29 +815,26 @@ fn emit_arr_new() -> Function {
     func.instruction(&WasmInstruction::GlobalSet(G_OBJ_TABLE_COUNT));
     func.instruction(&WasmInstruction::End);
 
-    // ── bump fast-path ──
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    // ── alloc window fast-path ──
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::MemorySize(0));
-    func.instruction(&WasmInstruction::I64ExtendI32U);
-    func.instruction(&WasmInstruction::I64Const(65536));
-    func.instruction(&WasmInstruction::I64Mul);
-    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_END));
     func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_LIMIT));
-    func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::I32And);
     func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
     // fast-path
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
     func.instruction(&WasmInstruction::LocalTee(2));
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::LocalTee(4));
+    func.instruction(&WasmInstruction::GlobalSet(G_ALLOC_PTR));
+    func.instruction(&WasmInstruction::LocalGet(4));
     func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_GC_ALLOC_BYTES));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_GC_ALLOC_BYTES));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::Else);
     // slow-path：gc_alloc_slow(size, HEAP_TYPE_ARRAY, capacity)
@@ -872,41 +857,41 @@ fn emit_arr_new() -> Function {
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::GlobalGet(G_ARRAY_PROTO_HANDLE));
     func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 0,
+        offset: constants::HEAP_OBJECT_PROTO_OFFSET as u64,
         align: 2,
         memory_index: 0,
     }));
-    // type byte HEAP_TYPE_ARRAY (0x01) at offset 4
+    // type byte HEAP_TYPE_ARRAY at layout-defined offset
     func.instruction(&WasmInstruction::LocalGet(2));
-    func.instruction(&WasmInstruction::I32Const(1));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
     func.instruction(&WasmInstruction::I32Store8(MemArg {
-        offset: 4,
+        offset: constants::HEAP_OBJECT_TYPE_OFFSET as u64,
         align: 0,
         memory_index: 0,
     }));
-    // Zero pad at offsets 5-7
-    for off in [5u64, 6, 7] {
+    // Zero pad bytes
+    for off in constants::HEAP_OBJECT_HEADER_PAD_START..constants::HEAP_OBJECT_HEADER_PAD_END {
         func.instruction(&WasmInstruction::LocalGet(2));
         func.instruction(&WasmInstruction::I32Const(0));
         func.instruction(&WasmInstruction::I32Store8(MemArg {
-            offset: off,
+            offset: off as u64,
             align: 0,
             memory_index: 0,
         }));
     }
-    // length = 0 at offset 8
+    // length = 0
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I32Const(0));
     func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 8,
+        offset: constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
         align: 2,
         memory_index: 0,
     }));
-    // capacity = capacity (param 0) at offset 12
+    // capacity = capacity (param 0)
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 12,
+        offset: constants::HEAP_ARRAY_CAPACITY_OFFSET as u64,
         align: 2,
         memory_index: 0,
     }));

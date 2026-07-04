@@ -26,7 +26,11 @@ pub(crate) enum GcHeapLayout {
 pub(crate) fn gc_heap_layout(heap_type: u8) -> GcHeapLayout {
     match heap_type {
         wjsm_ir::HEAP_TYPE_ARRAY => GcHeapLayout::Array,
-        wjsm_ir::HEAP_TYPE_OBJECT | wjsm_ir::HEAP_TYPE_ARGUMENTS => GcHeapLayout::ObjectLike,
+        wjsm_ir::HEAP_TYPE_OBJECT
+        | wjsm_ir::HEAP_TYPE_PROMISE
+        | wjsm_ir::HEAP_TYPE_CONTINUATION
+        | wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR
+        | wjsm_ir::HEAP_TYPE_ARGUMENTS => GcHeapLayout::ObjectLike,
         tag => {
             debug_assert!(
                 false,
@@ -246,5 +250,23 @@ impl<'a> GcContext<'a> {
                 data[addr..addr + 4].copy_from_slice(&bytes);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gc_layout_treats_runtime_object_tags_as_object_like() {
+        for tag in [
+            wjsm_ir::HEAP_TYPE_OBJECT,
+            wjsm_ir::HEAP_TYPE_PROMISE,
+            wjsm_ir::HEAP_TYPE_CONTINUATION,
+            wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR,
+            wjsm_ir::HEAP_TYPE_ARGUMENTS,
+        ] {
+            assert_eq!(gc_heap_layout(tag), GcHeapLayout::ObjectLike);
+        }
     }
 }

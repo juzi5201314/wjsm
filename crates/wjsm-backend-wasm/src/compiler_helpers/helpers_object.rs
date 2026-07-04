@@ -3,7 +3,9 @@ use super::*;
 impl Compiler {
     pub(crate) fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
-        let heap_limit_global = self.heap_limit_global_idx;
+        let alloc_ptr_global = self.alloc_ptr_global_idx;
+        let alloc_end_global = self.alloc_end_global_idx;
+        let gc_alloc_bytes_global = self.gc_alloc_bytes_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
         let shadow_stack_end_global = self.shadow_stack_end_global_idx;
@@ -11,22 +13,16 @@ impl Compiler {
         let function_props_base_global = self.function_props_base_global_idx;
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
-        // P4 重写：bump fast-path + handle 复用 + proactive GC + gc_alloc_slow slow-path。
+        // v2：alloc_ptr/alloc_end 窗口 fast-path；失败走 gc_alloc_slow。
         //   属性槽格式: [name_id(4), flags(4), value(8), getter(8), setter(8)] = 32 字节
         //   对象布局: proto(4) type(1) pad(3) capacity(4) num_props(4) [cap*32 payload]
         {
-            // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
-            let mut func = Function::new(vec![(3, ValType::I32)]);
+            // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
+            let mut func = Function::new(vec![(4, ValType::I32)]);
             let gc_alloc_slow_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcAllocSlow];
-            let gc_maybe_collect_idx =
-                self.special_host_import_indices[&SpecialHostImport::GcMaybeCollect];
             let gc_take_freed_handle_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcTakeFreedHandle];
-
-            // ── proactive GC：在分配前调用（GC 完成后再分配，新对象不在 GC 视野，安全）──
-            // host 递增 alloc_counter，达 gc_threshold 时 collect，重置 counter。
-            func.instruction(&WasmInstruction::Call(gc_maybe_collect_idx));
 
             // size = header + capacity * property_slot_size
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -62,30 +58,27 @@ impl Compiler {
             func.instruction(&WasmInstruction::GlobalSet(obj_table_count_global));
             func.instruction(&WasmInstruction::End);
 
-            // ── bump fast-path 检查：heap_ptr + size <= min(mem_size, heap_limit) ──
-            // 若失败，走 gc_alloc_slow（free list → collect → grow/受控 OOM）。
-            func.instruction(&WasmInstruction::GlobalGet(heap_global));
+            // ── alloc window fast-path：alloc_ptr + size <= alloc_end ──
+            // fast-path 同步 heap_ptr，供 host / snapshot / slow-path 保持单一堆顶语义。
+            func.instruction(&WasmInstruction::GlobalGet(alloc_ptr_global));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::MemorySize(0));
-            func.instruction(&WasmInstruction::I64ExtendI32U);
-            func.instruction(&WasmInstruction::I64Const(65536));
-            func.instruction(&WasmInstruction::I64Mul);
-            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::GlobalGet(alloc_end_global));
             func.instruction(&WasmInstruction::I32LeU);
-            func.instruction(&WasmInstruction::GlobalGet(heap_global));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::GlobalGet(heap_limit_global));
-            func.instruction(&WasmInstruction::I32LeU);
-            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
-            // fast-path：ptr = heap_ptr; heap_ptr += size
-            func.instruction(&WasmInstruction::GlobalGet(heap_global));
+            // fast-path：ptr = alloc_ptr; alloc_ptr/heap_ptr = ptr + size; gc_alloc_bytes += size
+            func.instruction(&WasmInstruction::GlobalGet(alloc_ptr_global));
             func.instruction(&WasmInstruction::LocalTee(2));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalTee(4));
+            func.instruction(&WasmInstruction::GlobalSet(alloc_ptr_global));
+            func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
+            func.instruction(&WasmInstruction::GlobalGet(gc_alloc_bytes_global));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalSet(gc_alloc_bytes_global));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::Else);
             // slow-path：gc_alloc_slow(size, HEAP_TYPE_OBJECT, capacity)
@@ -1124,7 +1117,9 @@ impl Compiler {
             Self::emit_heap_bump_for_object_resize(
                 &mut func,
                 heap_global,
-                heap_limit_global,
+                alloc_ptr_global,
+                alloc_end_global,
+                gc_alloc_bytes_global,
                 7,
                 16,
                 8,
