@@ -2,7 +2,7 @@
 //!
 //! 算法以 v2 生命周期 trait 抽象（`GcAlgorithm`），默认实现
 //! `MarkSweepCollector`（non-moving + lazy sweep + segregated free list）。
-//! G1/ZGC 通过 registry 在后续阶段接入同一接口；旧 v1 mark/sweep 切片已退休。
+//! G1 已接入 region metadata 与 registry 骨架；ZGC 通过 registry 在后续阶段接入同一接口。
 //!
 //! 关键不变量见 v2 spec §22。
 //!
@@ -72,6 +72,7 @@
 //! 详细设计见 plan.md。
 pub mod api;
 pub mod context;
+pub mod g1;
 pub mod heap_access;
 pub mod heap_governance;
 pub mod mark_bitmap;

@@ -6,6 +6,7 @@
 use std::str::FromStr;
 
 use crate::runtime_gc::api::GcAlgorithm;
+use crate::runtime_gc::g1::G1Collector;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 
 const VALID_ALGORITHMS: &str = "mark-sweep, g1, zgc";
@@ -48,8 +49,9 @@ impl GcAlgorithmKind {
 pub fn create(kind: GcAlgorithmKind) -> Result<Box<dyn GcAlgorithm + Send + Sync>, String> {
     match kind {
         GcAlgorithmKind::MarkSweep => Ok(Box::new(MarkSweepCollector::new())),
-        GcAlgorithmKind::G1 | GcAlgorithmKind::Zgc => Err(format!(
-            "GC algorithm `{}` is registered but not implemented yet; currently available: mark-sweep",
+        GcAlgorithmKind::G1 => Ok(Box::new(G1Collector::new())),
+        GcAlgorithmKind::Zgc => Err(format!(
+            "GC algorithm `{}` is registered but not implemented yet; currently available: mark-sweep, g1",
             kind.as_str()
         )),
     }
@@ -95,21 +97,21 @@ mod tests {
     }
 
     #[test]
-    fn create_mark_sweep_succeeds() {
+    fn create_available_algorithms_succeeds() {
         assert!(create(GcAlgorithmKind::MarkSweep).is_ok());
+        assert!(create(GcAlgorithmKind::G1).is_ok());
     }
 
     #[test]
-    fn create_rejects_future_algorithms_clearly() {
-        for kind in [GcAlgorithmKind::G1, GcAlgorithmKind::Zgc] {
-            let err = match create(kind) {
-                Ok(_) => panic!("{} should be rejected before implementation", kind.as_str()),
-                Err(err) => err,
-            };
+    fn create_rejects_future_zgc_clearly() {
+        let err = match create(GcAlgorithmKind::Zgc) {
+            Ok(_) => panic!("zgc should be rejected before implementation"),
+            Err(err) => err,
+        };
 
-            assert!(err.contains(kind.as_str()));
-            assert!(err.contains("not implemented"));
-            assert!(err.contains("mark-sweep"));
-        }
+        assert!(err.contains("zgc"));
+        assert!(err.contains("not implemented"));
+        assert!(err.contains("mark-sweep"));
+        assert!(err.contains("g1"));
     }
 }

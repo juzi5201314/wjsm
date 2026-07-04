@@ -153,3 +153,13 @@
 - `cargo nextest run -p wjsm-runtime -E 'test(gc_algorithm_env)'` → 2 passed, 137 skipped。
 - `WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__hello)'` → 1 passed, 735 skipped。
 - `WJSM_TEST_GC=bogus cargo run -- run -e 'console.log(1)'` → exited 1 with `unknown GC algorithm \`bogus\`; expected one of: mark-sweep, g1, zgc`。
+
+## P3 T3.1 evidence
+
+- 新增 `runtime_gc::g1::{mod,region}`：`RegionSpace` 以 `object_heap_start` 为基准维护 host-side region metadata，支持 immortal/free/eden/humongous 显式状态、region/card index、grow 扩展与 metadata footprint 计算。
+- `G1Collector` 接入 v2 `GcAlgorithm` 生命周期：`attach_heap` 建立 region 域并安装首个 Eden 分配窗口；slow alloc/safepoint/full collect 暂时复用 mark-sweep 行为并同步 region metadata，不实现 RSet/barrier/young GC。
+- `registry::create(G1)` 改为创建 `G1Collector`；ZGC 保持显式未实现错误。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 4 passed, 139 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 735 skipped。
