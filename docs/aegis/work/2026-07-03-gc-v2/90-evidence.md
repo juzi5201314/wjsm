@@ -163,3 +163,14 @@
 - `cargo check -p wjsm-runtime` → passed（zero warnings）。
 - `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 4 passed, 139 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 735 skipped。
+
+## P3 T3.2 evidence
+
+- 新增 `runtime_gc::g1::rset`：`BarrierEvent` 固定 24B `{flags:u32, slot_addr:u32, old_value:i64, new_value:i64}` 编解码；SATB 记录旧槽位 NaN-boxed value 解出的 handle；dirty card 使用 sparse set，热点 card 升级为 precise-slot set。
+- `G1Collector::on_host_write` 经 `heap_access` hook 记录 host 写；按 target handle / slot_addr / new_value 解析 owner 与 young edge，使用 event 自带值而不是重读当前 slot。
+- `G1Collector::barrier_flush` 解码 `[barrier_base, __barrier_buf_ptr)` 的 24B event，通过 slot_addr 反查 owner 对象范围并记录 RSet/SATB，最后把 `__barrier_buf_ptr` 重置到 runtime 记录的 buffer base。
+- T3.2 范围内未修改 support emitter；WASM 侧 event 生成留给 T3.3。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 11 passed, 139 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 735 skipped。

@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T3.2 实现 G1 rset barrier`（in progress）。
-- Next: `T3.3 生成 G1 support 变体`。
+- Active: `T3.3 生成 G1 support 变体`（in progress）。
+- Next: `T3.4 实现 G1 young GC`。
 
 ## Completed todos
 
@@ -32,19 +32,20 @@
 - P3:
   - `T3.0 接入测试矩阵`
   - `T3.1 实现 G1 region`
+  - `T3.2 实现 G1 rset barrier`
 
 ## Active slice card
 
-- Goal: P3 T3.2，新增 G1 RSet/SATB host-side barrier 与 event buffer flush，确保 host 写与 WASM event 都进入统一脏卡/old-value 管线。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §8.2、§10.2、§13。
-- Files: 新建 `crates/wjsm-runtime/src/runtime_gc/g1/rset.rs`，更新 `g1/mod.rs`，必要时扩充 `GcContext` barrier buffer base/reset 辅助。
-- Boundary: 本 slice 实现 host hook、24B event 编解码、dirty-card sparse set 与 precise-slot 升级；不生成 WASM 侧 event 写入序列（T3.3），不执行 young GC（T3.4）。
-- Verification: RSet 单测覆盖 card 索引、sparse dirty 迭代、热点 precise-slot 升级、SATB value→handle、24B event 编码、flush 后 ptr 复位、满 24KB 边界 old→young 不漏、slot_addr 反查 owner region、host 写精确标 card。
-- Stop: T3.2 验证通过，checkpoint/evidence 更新，然后进入 T3.3。
+- Goal: P3 T3.3，生成 G1 support 变体并在 G1 flavor 的 `obj_set`/`elem_set` 等引用槽写入点插入 24B barrier event 序列。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §8.2、§10.2。
+- Files: `support_module.rs` / `support_object_helpers.rs`、`wjsm-runtime-support/build.rs`、runtime support install 路径与 eval flavor 传递。
+- Boundary: 本 slice 只生成/安装 G1 support module event 序列；young/concurrent/mixed GC 行为仍留给 T3.4+。
+- Verification: dump-wat/结构测试证明 G1 变体写入统一 barrier event 序列且无 `__card_table_base`/`__region_meta_base`；`WJSM_TEST_GC=g1` 跑 happy 子集冒烟。
+- Stop: T3.3 验证通过，checkpoint/evidence 更新，然后进入 T3.4。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1 已完成；T3.2 正在进行。
+详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2 已完成；T3.3 正在进行。
 
 ## Blocked-on items
 
@@ -54,16 +55,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T3.2 / spec §8.2。
-2. 继续 G1 RSet/SATB host barrier 与 barrier buffer flush；不要改 support emitter。
-3. 完成后运行 RSet 单测、`cargo check -p wjsm-runtime` 与 `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__hello)'`。
+1. 读取本文件、`90-evidence.md` 与父计划 T3.3 / spec §8.2。
+2. 继续 support emitter flavor 化与 G1 event 序列；不要实现 young GC。
+3. 完成后运行 support 结构测试、`cargo check -p wjsm-backend-wasm -p wjsm-runtime-support -p wjsm-runtime` 与 `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` 子集。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T3.1 已完成 G1 region/registry，当前进入 RSet/barrier。
-- Does current work still serve goal and stop condition? 是，T3.2 只交付 host-side barrier/flush，不提前生成 WASM G1 support。
-- Compatibility boundary: 默认 mark-sweep 行为保持；G1 barrier 数据仅在 `G1Collector` 内维护。
-- New owner/fallback/adapter/branch: `runtime_gc::g1::rset` 成为 dirty-card/SATB/event 解码 owner；`heap_access` 仍是 host 写入口 owner。
-- Retirement track: G1 registry 拒绝路径已退休；T3.2 开始退休“host 写无 barrier 记录”的假设。
-- Evidence sufficiency: T3.1 sufficient；T3.2 pending。
+- Does current work still serve original task intent? 是，T3.2 已完成 host-side barrier owner，当前进入 WASM support event 生成。
+- Does current work still serve goal and stop condition? 是，T3.3 只交付 support 变体与 barrier event 序列，不提前实现 young GC。
+- Compatibility boundary: 默认 mark-sweep support 保持；G1 support 只在 `WJSM_TEST_GC=g1` / runtime flavor 选择时安装。
+- New owner/fallback/adapter/branch: support emitter 按 GC flavor 成为 WASM 写屏障事件生成 owner；runtime `barrier_flush` 是唯一 event consumer。
+- Retirement track: host 写无 barrier 记录已退休；T3.3 开始退休单一 support cwasm 假设。
+- Evidence sufficiency: T3.2 sufficient；T3.3 pending。
 - Decision: continue。

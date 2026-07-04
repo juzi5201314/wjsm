@@ -83,6 +83,9 @@ impl RegionSpace {
     pub fn region(&self, idx: usize) -> Option<&RegionMeta> {
         self.meta.get(idx)
     }
+    pub fn kind(&self, idx: usize) -> Option<RegionKind> {
+        self.meta.get(idx).map(|region| region.kind)
+    }
 
     pub fn region_index(&self, addr: usize) -> Option<usize> {
         addr.checked_sub(self.object_heap_start)
