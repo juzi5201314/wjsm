@@ -1465,7 +1465,7 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "abstract_compare", f)?;
 
-    // ── P4 GC framework: gc_alloc_slow / gc_maybe_collect / gc_take_freed_handle ──
+    // ── P4 GC framework: gc_alloc_slow / gc_safepoint_poll / gc_barrier_flush / gc_take_freed_handle ──
 
     // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
     //   fast-path bump 失败后的 slow-path：free list → bump → GC → grow。
@@ -1512,22 +1512,28 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "gc_alloc_slow", f)?;
 
-    // gc_maybe_collect()：proactive GC safepoint 触发。
-    //   WASM fast-path 在每次 alloc 成功后调用。host 递增 alloc_counter，达 gc_threshold 时按调度器推进一次 step。
+    // gc_safepoint_poll()：WASM allocation debt 达阈值后调用的增量 GC safepoint。
+    // 先 flush barrier buffer，再清零 __gc_alloc_bytes，然后按 scheduler budget 推进一步。
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
-        let (should_collect, gc_arc, scheduler_arc) = {
-            let state = caller.data();
-            (
-                state.bump_alloc_counter_should_collect(),
-                state.gc_algorithm.clone(),
-                state.gc_scheduler.clone(),
-            )
-        };
-        if !should_collect {
-            return;
-        }
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
+        };
+        let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
+        if barrier_event_buf_base != 0 {
+            if let Some(global) = env.barrier_buf_ptr {
+                let _ = global.set(
+                    &mut caller,
+                    wasmtime::Val::I32(barrier_event_buf_base as i32),
+                );
+            }
+        }
+        if let Some(global) = env.gc_alloc_bytes {
+            let _ = global.set(&mut caller, wasmtime::Val::I32(0));
+        }
+
+        let (gc_arc, scheduler_arc) = {
+            let state = caller.data();
+            (state.gc_algorithm.clone(), state.gc_scheduler.clone())
         };
         let budget = {
             let scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
@@ -1548,22 +1554,39 @@ pub(crate) fn define_core(
             (outcome, stats, heap_limit)
         };
         let elapsed = started.elapsed();
-        {
+        let next_trigger = {
             let mut scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
             scheduler.after_step(&outcome, elapsed);
             if let Some(stats) = stats.as_ref() {
                 scheduler.after_cycle(stats.heap_used_bytes, 0, heap_limit);
             }
+            scheduler.trigger_bytes.min(i32::MAX as usize).max(1) as i32
+        };
+        if let Some(global) = env.gc_trigger_bytes {
+            let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
         }
         if let Some(stats) = stats {
-            caller
-                .data()
-                .update_gc_threshold_after_collection(stats.marked);
-            caller.data().store_last_gc_stats(stats.clone());
-            caller.data().reset_alloc_counter_after_gc();
+            caller.data().store_last_gc_stats(stats);
         }
     });
-    linker.define(&mut store, "env", "gc_maybe_collect", f)?;
+    linker.define(&mut store, "env", "gc_safepoint_poll", f)?;
+
+    // gc_barrier_flush()：只 drain 写屏障事件缓冲区，不触发 collect/grow/move。
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
+        let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
+            return;
+        };
+        let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
+        if barrier_event_buf_base != 0 {
+            if let Some(global) = env.barrier_buf_ptr {
+                let _ = global.set(
+                    &mut caller,
+                    wasmtime::Val::I32(barrier_event_buf_base as i32),
+                );
+            }
+        }
+    });
+    linker.define(&mut store, "env", "gc_barrier_flush", f)?;
 
     // gc_take_freed_handle() -> i32：从 host handle_free_list pop 复用（fast-path take_or_alloc）。
     //   返回 handle（≥0）或 -1（空，调用方走 count++ 分支）。

@@ -7,6 +7,7 @@ impl Compiler {
         let alloc_ptr_global = self.alloc_ptr_global_idx;
         let alloc_end_global = self.alloc_end_global_idx;
         let gc_alloc_bytes_global = self.gc_alloc_bytes_global_idx;
+        let gc_trigger_bytes_global = self.gc_trigger_bytes_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
         let shadow_stack_end_global = self.shadow_stack_end_global_idx;
@@ -23,6 +24,14 @@ impl Compiler {
                 self.special_host_import_indices[&SpecialHostImport::GcAllocSlow];
             let gc_take_freed_handle_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcTakeFreedHandle];
+            let gc_safepoint_poll_idx =
+                self.special_host_import_indices[&SpecialHostImport::GcSafepointPoll];
+            Self::emit_gc_safepoint_poll_if_due(
+                &mut func,
+                gc_alloc_bytes_global,
+                gc_trigger_bytes_global,
+                gc_safepoint_poll_idx,
+            );
 
             // size = header + capacity * element_size
             func.instruction(&WasmInstruction::LocalGet(0));

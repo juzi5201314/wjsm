@@ -49,6 +49,18 @@ pub(crate) fn heap_used_bytes<C: AsContextMut<Data = RuntimeState>>(
     heap_ptr.saturating_sub(heap_start)
 }
 
+fn collect_for_host_allocation_pressure<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
+    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+    let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.name());
+    let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+    let stats = gc.collect_full(&mut gc_ctx, &mut roots as _);
+    ctx.as_context().data().store_last_gc_stats(stats);
+}
+
 /// 线性内存不足时按页扩展，供 host 侧 bump / resize 使用；同时遵守 JS 堆预算。
 pub(crate) fn ensure_heap_allocation_bytes<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
@@ -63,7 +75,7 @@ pub(crate) fn ensure_heap_allocation_bytes<C: AsContextMut<Data = RuntimeState>>
     };
 
     if need_end > heap_limit_bytes(ctx, env) {
-        collect_for_host_alloc(ctx, env);
+        collect_for_host_allocation_pressure(ctx, env);
         if need_end > heap_limit_bytes(ctx, env) {
             let used = heap_used_bytes(ctx, env);
             ctx.as_context().data().set_heap_oom_error(used, size);
@@ -79,7 +91,7 @@ pub(crate) fn ensure_heap_allocation_bytes<C: AsContextMut<Data = RuntimeState>>
         }
     }
     if need_end > env.memory.data(&*ctx).len() {
-        collect_for_host_alloc(ctx, env);
+        collect_for_host_allocation_pressure(ctx, env);
         while env.memory.data(&*ctx).len() < need_end {
             let current = env.memory.data(&*ctx).len();
             let pages = (need_end - current).div_ceil(65536).max(1) as u64;
@@ -142,32 +154,6 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     value::encode_object_handle(obj_table_count)
 }
 
-fn collect_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env: &WasmEnv) {
-    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    let stats = {
-        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.name());
-        let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-        gc.collect_full(&mut gc_ctx, &mut roots as _)
-    };
-    let state = ctx.as_context().data();
-    state.update_gc_threshold_after_collection(stats.marked);
-    state.store_last_gc_stats(stats.clone());
-    state.reset_alloc_counter_after_gc();
-}
-
-/// host 端对象分配前的主动 GC 触发。
-pub(crate) fn try_gc_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    _size: usize,
-) {
-    let should_collect = ctx.as_context().data().bump_alloc_counter_should_collect();
-    if should_collect {
-        collect_for_host_alloc(ctx, env);
-    }
-}
-
 pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -175,7 +161,6 @@ pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
     heap_type: u8,
     capacity: u32,
 ) -> Option<usize> {
-    try_gc_for_host_alloc(ctx, env, size);
     let gc_arc = ctx.as_context().data().gc_algorithm.clone();
     {
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());

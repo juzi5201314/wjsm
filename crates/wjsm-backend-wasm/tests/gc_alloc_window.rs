@@ -86,15 +86,24 @@ fn imported_func_index(info: &SupportModuleInfo, name: &str) -> u32 {
 }
 
 #[test]
-fn support_alloc_helpers_use_alloc_window_not_gc_maybe_collect() {
+fn support_alloc_helpers_use_alloc_window_and_safepoint_poll() {
     const G_HEAP_PTR: u32 = 1;
     const G_ALLOC_PTR: u32 = 19;
     const G_ALLOC_END: u32 = 20;
     const G_GC_ALLOC_BYTES: u32 = 21;
+    const G_GC_TRIGGER_BYTES: u32 = 22;
 
     let info = parse_support_module();
     let gc_alloc_slow_idx = imported_func_index(&info, "gc_alloc_slow");
-    let gc_maybe_collect_idx = imported_func_index(&info, "gc_maybe_collect");
+    let gc_safepoint_poll_idx = imported_func_index(&info, "gc_safepoint_poll");
+    let retired_import_name = ["gc", "maybe", "collect"].join("_");
+    assert!(
+        !info
+            .imported_funcs
+            .iter()
+            .any(|name| name == &retired_import_name),
+        "support module must retire old proactive GC import"
+    );
 
     for export in ["obj_new", "arr_new"] {
         let body = exported_body(&info, export);
@@ -107,6 +116,8 @@ fn support_alloc_helpers_use_alloc_window_not_gc_maybe_collect() {
             OwnedOperator::GlobalSet(G_HEAP_PTR),
             OwnedOperator::GlobalGet(G_GC_ALLOC_BYTES),
             OwnedOperator::GlobalSet(G_GC_ALLOC_BYTES),
+            OwnedOperator::GlobalGet(G_GC_TRIGGER_BYTES),
+            OwnedOperator::Call(gc_safepoint_poll_idx),
             OwnedOperator::Call(gc_alloc_slow_idx),
         ] {
             assert!(
@@ -114,10 +125,5 @@ fn support_alloc_helpers_use_alloc_window_not_gc_maybe_collect() {
                 "support `{export}` body missing alloc-window operator {required:?}"
             );
         }
-
-        assert!(
-            !ops.contains(&OwnedOperator::Call(gc_maybe_collect_idx)),
-            "support `{export}` must not call gc_maybe_collect on allocation fast-path"
-        );
     }
 }

@@ -40,7 +40,7 @@ const TY_CALL_INDIRECT: u32 = crate::shared_types::JS_FUNC_TYPE_INDEX; // (i64, 
 // wasmtime Linker 已为所有 `env.*` host 函数注册实现。
 // 顺序决定 function import 索引（0..N-1），defined functions 从 N 开始。
 const HOST_IMPORTS: &[(&str, u32)] = &[
-    ("gc_maybe_collect", 1),              // () -> ()
+    ("gc_safepoint_poll", 1),             // () -> ()
     ("gc_alloc_slow", 35),                // (i32, i32, i32) -> i32
     ("gc_take_freed_handle", 36),         // () -> i32
     ("closure_get_func", 14),             // (i32) -> i32
@@ -65,9 +65,11 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("obj_get_runtime_key", 8),           // (i64, i32) -> i64
     ("obj_set_runtime_key", 9),           // (i64, i32, i64) -> ()
     ("obj_delete_runtime_key", 8),        // (i64, i32) -> i64
+    ("gc_barrier_flush", 1),              // () -> ()
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
+const HOST_GC_SAFEPOINT_POLL: u32 = 0;
 const HOST_GC_ALLOC_SLOW: u32 = 1;
 const HOST_GC_TAKE_FREED_HANDLE: u32 = 2;
 const HOST_CLOSURE_GET_FUNC: u32 = 3;
@@ -93,7 +95,7 @@ const HOST_OBJ_GET_RUNTIME_KEY: u32 = 22;
 const HOST_OBJ_SET_RUNTIME_KEY: u32 = 23;
 const HOST_OBJ_DELETE_RUNTIME_KEY: u32 = 24;
 
-const NUM_HOST_IMPORTS: u32 = 25;
+const NUM_HOST_IMPORTS: u32 = 26;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -497,11 +499,21 @@ fn emit_heap_bump_for_object_resize_support(
     func.instruction(&WasmInstruction::End);
 }
 
+fn emit_gc_safepoint_poll_if_due_support(func: &mut Function) {
+    func.instruction(&WasmInstruction::GlobalGet(G_GC_ALLOC_BYTES));
+    func.instruction(&WasmInstruction::GlobalGet(G_GC_TRIGGER_BYTES));
+    func.instruction(&WasmInstruction::I32GeU);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::Call(HOST_GC_SAFEPOINT_POLL));
+    func.instruction(&WasmInstruction::End);
+}
+
 // ── obj_new (param $capacity i32) (result i32) — Type 0 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_new 段。
 fn emit_obj_new() -> Function {
     // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
     let mut func = Function::new(vec![(4, ValType::I32)]);
+    emit_gc_safepoint_poll_if_due_support(&mut func);
 
     // size = 16 + capacity * 32
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -791,6 +803,7 @@ fn emit_to_int32() -> Function {
 fn emit_arr_new() -> Function {
     // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
     let mut func = Function::new(vec![(4, ValType::I32)]);
+    emit_gc_safepoint_poll_if_due_support(&mut func);
 
     // size = 16 + capacity * 8
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -1190,6 +1203,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 25);
+        assert_eq!(HOST_IMPORTS.len(), 26);
     }
 }

@@ -134,4 +134,18 @@ impl Compiler {
         func.instruction(&WasmInstruction::End);
         func.instruction(&WasmInstruction::End);
     }
+
+    pub(crate) fn emit_gc_safepoint_poll_if_due(
+        func: &mut Function,
+        gc_alloc_bytes_global: u32,
+        gc_trigger_bytes_global: u32,
+        gc_safepoint_poll_idx: u32,
+    ) {
+        func.instruction(&WasmInstruction::GlobalGet(gc_alloc_bytes_global));
+        func.instruction(&WasmInstruction::GlobalGet(gc_trigger_bytes_global));
+        func.instruction(&WasmInstruction::I32GeU);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        func.instruction(&WasmInstruction::Call(gc_safepoint_poll_idx));
+        func.instruction(&WasmInstruction::End);
+    }
 }

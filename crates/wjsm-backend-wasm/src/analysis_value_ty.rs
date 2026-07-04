@@ -140,7 +140,7 @@ pub fn infer_value_and_var_ty(
 ///
 /// 列入此白名单的前提（逐个审计 host 实现确认）：
 /// ①返回值类型静态确定为 number/bool/undefined（非 string/object/array/handle）；
-/// ②host 实现不分配堆对象（无 alloc_host_object/obj_new/arr_new/gc_maybe_collect）；
+/// ②host 实现不分配堆对象（无 alloc_host_object/obj_new/arr_new/GC safepoint poll）；
 /// ③host 实现不 reentrant 回用户 JS（无 native_call/ProxyTrap/callback 调用）。
 ///
 /// **GC 正确性红线**：误判（把会分配/reentrant 的 builtin 当标量）→ GC 漏 root

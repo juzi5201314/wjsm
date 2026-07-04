@@ -698,7 +698,7 @@ impl Compiler {
             }
             Instruction::CollectRestArgs { dest, skip } => {
                 // P4-b4 safepoint：arr_new 在此 handler 内调用（alloc，可能触发 GC）。
-                // 循环内 ArrayPush 经 grow_array 分配但不主动触发 GC（无 gc_maybe_collect），
+                // 循环内 ArrayPush 经 grow_array 分配但不主动触发 GC safepoint，
                 // 故顶层 spill 覆盖 arr_new 处的 live handle locals 即可。
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);

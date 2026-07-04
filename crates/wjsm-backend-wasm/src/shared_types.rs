@@ -15,7 +15,7 @@ pub fn build_shared_type_section() -> TypeSection {
     let mut types = TypeSection::new();
     // Type 0: (i64) -> ()  — console_log
     types.ty().function(vec![ValType::I64], vec![]);
-    // Type 1: () -> ()  — main / gc_maybe_collect
+    // Type 1: () -> ()  — main / gc_safepoint_poll / gc_barrier_flush
     types.ty().function(vec![], vec![]);
     // Type 2: (i64, i64) -> (i64)  — f64_mod, f64_pow
     types

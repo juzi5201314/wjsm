@@ -143,7 +143,6 @@ pub(crate) fn reserve_eval_data_segment(
     let reserve = (constants::USER_STRING_START + code_len + 4096 + 7) & !7;
     let env = WasmEnv::from_caller(caller)
         .ok_or_else(|| anyhow::anyhow!("eval parent missing runtime environment"))?;
-    crate::runtime_heap::try_gc_for_host_alloc(caller, &env, reserve as usize);
     if !crate::runtime_heap::ensure_heap_allocation_bytes(
         caller,
         &env,

@@ -6,6 +6,7 @@ impl Compiler {
         let alloc_ptr_global = self.alloc_ptr_global_idx;
         let alloc_end_global = self.alloc_end_global_idx;
         let gc_alloc_bytes_global = self.gc_alloc_bytes_global_idx;
+        let gc_trigger_bytes_global = self.gc_trigger_bytes_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
         let shadow_stack_end_global = self.shadow_stack_end_global_idx;
@@ -23,6 +24,14 @@ impl Compiler {
                 self.special_host_import_indices[&SpecialHostImport::GcAllocSlow];
             let gc_take_freed_handle_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcTakeFreedHandle];
+            let gc_safepoint_poll_idx =
+                self.special_host_import_indices[&SpecialHostImport::GcSafepointPoll];
+            Self::emit_gc_safepoint_poll_if_due(
+                &mut func,
+                gc_alloc_bytes_global,
+                gc_trigger_bytes_global,
+                gc_safepoint_poll_idx,
+            );
 
             // size = header + capacity * property_slot_size
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -616,6 +625,8 @@ impl Compiler {
             ]);
             let gc_alloc_slow_idx =
                 self.special_host_import_indices[&SpecialHostImport::GcAllocSlow];
+            let gc_safepoint_poll_idx =
+                self.special_host_import_indices[&SpecialHostImport::GcSafepointPoll];
 
             // ── 通过 handle 表解析 ptr（支持 TAG_OBJECT 和 TAG_FUNCTION）──
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
@@ -1113,6 +1124,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalSet(7));
             func.instruction(&WasmInstruction::End);
 
+            Self::emit_gc_safepoint_poll_if_due(
+                &mut func,
+                gc_alloc_bytes_global,
+                gc_trigger_bytes_global,
+                gc_safepoint_poll_idx,
+            );
             // 分配扩容后的新区域；fast-path 失败时由 gc_alloc_slow 负责 GC/grow/OOM。
             Self::emit_heap_bump_for_object_resize(
                 &mut func,

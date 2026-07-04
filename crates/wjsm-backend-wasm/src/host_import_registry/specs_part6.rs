@@ -471,9 +471,15 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
-        name: "gc_maybe_collect",
+        name: "gc_safepoint_poll",
         type_idx: 1,
-        key: Some(HostImportKey::Special(SpecialHostImport::GcMaybeCollect)),
+        key: Some(HostImportKey::Special(SpecialHostImport::GcSafepointPoll)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "gc_barrier_flush",
+        type_idx: 1,
+        key: Some(HostImportKey::Special(SpecialHostImport::GcBarrierFlush)),
         group: None,
     },
     HostImportSpec {
