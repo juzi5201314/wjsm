@@ -258,17 +258,28 @@ impl Compiler {
         self.obj_table_count_global_idx = 3;
         self.num_ir_functions = module.functions().len() as u32;
         self.shadow_sp_global_idx = 4;
-        self.alloc_counter_global_idx = 5;
-        self.array_proto_handle_global_idx = 9;
-        self.object_proto_handle_global_idx = 10;
-        self.eval_var_map_ptr_global_idx = 11;
-        self.eval_var_map_count_global_idx = 12;
-        self.bootstrap_done_global_idx = 13;
-        self.function_props_done_global_idx = 14;
-        self.function_props_base_global_idx = 15;
-        self.arr_proto_table_base_global_idx = 16;
-        self.arr_proto_table_len_global_idx = 17;
-        self.arr_proto_table_hash_global_idx = 18;
+        self.object_heap_start_global_idx = 5;
+        self.num_ir_functions_global_idx = 6;
+        self.shadow_stack_end_global_idx = 7;
+        self.array_proto_handle_global_idx = 8;
+        self.object_proto_handle_global_idx = 9;
+        self.eval_var_map_ptr_global_idx = 10;
+        self.eval_var_map_count_global_idx = 11;
+        self.bootstrap_done_global_idx = 12;
+        self.function_props_done_global_idx = 13;
+        self.function_props_base_global_idx = 14;
+        self.arr_proto_table_base_global_idx = 15;
+        self.arr_proto_table_len_global_idx = 16;
+        self.arr_proto_table_hash_global_idx = 17;
+        self.heap_limit_global_idx = 18;
+        self.alloc_ptr_global_idx = 19;
+        self.alloc_end_global_idx = 20;
+        self.gc_alloc_bytes_global_idx = 21;
+        self.gc_trigger_bytes_global_idx = 22;
+        self.gc_phase_global_idx = 23;
+        self.good_color_global_idx = 24;
+        self.barrier_buf_ptr_global_idx = 25;
+        self.barrier_buf_end_global_idx = 26;
 
         // Record user function base index (after all imports + helpers)
         self.user_func_base_idx = self._next_import_func;
@@ -338,6 +349,14 @@ impl Compiler {
                 arr_proto_table_base: self.arr_proto_table_base as i32,
                 arr_proto_table_len: array_proto_table_len() as i32,
                 arr_proto_table_hash: array_proto_table_hash() as i64,
+                alloc_ptr: object_heap_start as i32,
+                alloc_end: object_heap_start as i32,
+                gc_alloc_bytes: 0,
+                gc_trigger_bytes: 256 * 1024,
+                gc_phase: 0,
+                good_color: 0,
+                barrier_buf_ptr: barrier_event_buf_base as i32,
+                barrier_buf_end: barrier_event_buf_end as i32,
             });
         }
 
@@ -371,7 +390,7 @@ impl Compiler {
                 Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
             );
         } else {
-            // Normal mode (P2.2): table 是 import 的（env.__table）。
+            // Normal mode: table 是 import 的（env.__table）。
             // element section 从 table[0] 开始填充。support module 不使用 element section，
             // 所以 table 完全由 user wasm 使用。
             self.elements.active(
@@ -382,70 +401,44 @@ impl Compiler {
         }
 
         if self.mode == CompileMode::Eval {
-            self.exports.export("__func_props", ExportKind::Global, 0);
-            self.exports.export("__heap_ptr", ExportKind::Global, 1);
-            self.exports
-                .export("__obj_table_ptr", ExportKind::Global, 2);
-            self.exports
-                .export("__obj_table_count", ExportKind::Global, 3);
-            self.exports.export("__shadow_sp", ExportKind::Global, 4);
-            self.exports
-                .export("__alloc_counter", ExportKind::Global, 5);
-            self.exports
-                .export("__object_heap_start", ExportKind::Global, 6);
-            self.exports
-                .export("__num_ir_functions", ExportKind::Global, 7);
-            self.exports
-                .export("__shadow_stack_end", ExportKind::Global, 8);
-            self.exports
-                .export("__array_proto_handle", ExportKind::Global, 9);
-            self.exports
-                .export("__object_proto_handle", ExportKind::Global, 10);
-            self.exports.export(
-                "__eval_var_map_ptr",
-                ExportKind::Global,
-                self.eval_var_map_ptr_global_idx,
-            );
-            self.exports.export(
-                "__eval_var_map_count",
-                ExportKind::Global,
-                self.eval_var_map_count_global_idx,
-            );
-            self.exports.export(
-                "__bootstrap_done",
-                ExportKind::Global,
-                self.bootstrap_done_global_idx,
-            );
-            self.exports.export(
-                "__function_props_done",
-                ExportKind::Global,
-                self.function_props_done_global_idx,
-            );
-            self.exports.export(
-                "__function_props_base",
-                ExportKind::Global,
-                self.function_props_base_global_idx,
-            );
-            self.exports.export(
-                "__arr_proto_table_base",
-                ExportKind::Global,
-                self.arr_proto_table_base_global_idx,
-            );
-            self.exports.export(
-                "__arr_proto_table_len",
-                ExportKind::Global,
-                self.arr_proto_table_len_global_idx,
-            );
-            self.exports.export(
-                "__arr_proto_table_hash",
-                ExportKind::Global,
-                self.arr_proto_table_hash_global_idx,
-            );
-            self.exports.export(
-                "__heap_limit",
-                ExportKind::Global,
-                self.heap_limit_global_idx,
-            );
+            let globals = [
+                ("__func_props", self.func_props_global_idx),
+                ("__heap_ptr", self.heap_ptr_global_idx),
+                ("__obj_table_ptr", self.obj_table_global_idx),
+                ("__obj_table_count", self.obj_table_count_global_idx),
+                ("__shadow_sp", self.shadow_sp_global_idx),
+                ("__object_heap_start", self.object_heap_start_global_idx),
+                ("__num_ir_functions", self.num_ir_functions_global_idx),
+                ("__shadow_stack_end", self.shadow_stack_end_global_idx),
+                ("__array_proto_handle", self.array_proto_handle_global_idx),
+                ("__object_proto_handle", self.object_proto_handle_global_idx),
+                ("__eval_var_map_ptr", self.eval_var_map_ptr_global_idx),
+                ("__eval_var_map_count", self.eval_var_map_count_global_idx),
+                ("__bootstrap_done", self.bootstrap_done_global_idx),
+                ("__function_props_done", self.function_props_done_global_idx),
+                ("__function_props_base", self.function_props_base_global_idx),
+                (
+                    "__arr_proto_table_base",
+                    self.arr_proto_table_base_global_idx,
+                ),
+                ("__arr_proto_table_len", self.arr_proto_table_len_global_idx),
+                (
+                    "__arr_proto_table_hash",
+                    self.arr_proto_table_hash_global_idx,
+                ),
+                ("__heap_limit", self.heap_limit_global_idx),
+                ("__alloc_ptr", self.alloc_ptr_global_idx),
+                ("__alloc_end", self.alloc_end_global_idx),
+                ("__gc_alloc_bytes", self.gc_alloc_bytes_global_idx),
+                ("__gc_trigger_bytes", self.gc_trigger_bytes_global_idx),
+                ("__gc_phase", self.gc_phase_global_idx),
+                ("__good_color", self.good_color_global_idx),
+                ("__barrier_buf_ptr", self.barrier_buf_ptr_global_idx),
+                ("__barrier_buf_end", self.barrier_buf_end_global_idx),
+            ];
+            for (name, index) in globals {
+                self.exports.export(name, ExportKind::Global, index);
+            }
         }
         if !self.string_data.is_empty() {
             self.data.active(
@@ -480,51 +473,72 @@ impl Compiler {
         // global 4: __shadow_sp
         self.emit(WasmInstruction::I32Const(init.shadow_sp));
         self.emit(WasmInstruction::GlobalSet(4));
-        // global 5: __alloc_counter = 0
-        self.emit(WasmInstruction::I32Const(0));
-        self.emit(WasmInstruction::GlobalSet(5));
-        // global 6: __object_heap_start
+        // global 5: __object_heap_start
         self.emit(WasmInstruction::I32Const(init.object_heap_start));
-        self.emit(WasmInstruction::GlobalSet(6));
-        // global 7: __num_ir_functions
+        self.emit(WasmInstruction::GlobalSet(5));
+        // global 6: __num_ir_functions
         self.emit(WasmInstruction::I32Const(init.num_ir_functions));
-        self.emit(WasmInstruction::GlobalSet(7));
-        // global 8: __shadow_stack_end
+        self.emit(WasmInstruction::GlobalSet(6));
+        // global 7: __shadow_stack_end
         self.emit(WasmInstruction::I32Const(init.shadow_stack_end));
+        self.emit(WasmInstruction::GlobalSet(7));
+        // global 8: __array_proto_handle = -1 (uninitialized)
+        self.emit(WasmInstruction::I32Const(-1));
         self.emit(WasmInstruction::GlobalSet(8));
-        // global 9: __array_proto_handle = -1 (uninitialized)
+        // global 9: __object_proto_handle = -1 (uninitialized)
         self.emit(WasmInstruction::I32Const(-1));
         self.emit(WasmInstruction::GlobalSet(9));
-        // global 10: __object_proto_handle = -1 (uninitialized)
-        self.emit(WasmInstruction::I32Const(-1));
-        self.emit(WasmInstruction::GlobalSet(10));
-        // global 11: __eval_var_map_ptr
+        // global 10: __eval_var_map_ptr
         self.emit(WasmInstruction::I32Const(init.eval_var_map_ptr));
-        self.emit(WasmInstruction::GlobalSet(11));
-        // global 12: __eval_var_map_count
+        self.emit(WasmInstruction::GlobalSet(10));
+        // global 11: __eval_var_map_count
         self.emit(WasmInstruction::I32Const(init.eval_var_map_count));
+        self.emit(WasmInstruction::GlobalSet(11));
+        // global 12: __bootstrap_done = 0
+        self.emit(WasmInstruction::I32Const(0));
         self.emit(WasmInstruction::GlobalSet(12));
-        // global 13: __bootstrap_done = 0
+        // global 13: __function_props_done = 0
         self.emit(WasmInstruction::I32Const(0));
         self.emit(WasmInstruction::GlobalSet(13));
-        // global 14: __function_props_done = 0
+        // global 14: __function_props_base = 0
         self.emit(WasmInstruction::I32Const(0));
         self.emit(WasmInstruction::GlobalSet(14));
-        // global 15: __function_props_base = 0
-        self.emit(WasmInstruction::I32Const(0));
-        self.emit(WasmInstruction::GlobalSet(15));
-        // global 16: __arr_proto_table_base
+        // global 15: __arr_proto_table_base
         self.emit(WasmInstruction::I32Const(init.arr_proto_table_base));
-        self.emit(WasmInstruction::GlobalSet(16));
-        // global 17: __arr_proto_table_len
+        self.emit(WasmInstruction::GlobalSet(15));
+        // global 16: __arr_proto_table_len
         self.emit(WasmInstruction::I32Const(init.arr_proto_table_len));
-        self.emit(WasmInstruction::GlobalSet(17));
-        // global 18: __arr_proto_table_hash
+        self.emit(WasmInstruction::GlobalSet(16));
+        // global 17: __arr_proto_table_hash
         self.emit(WasmInstruction::I64Const(init.arr_proto_table_hash));
-        self.emit(WasmInstruction::GlobalSet(18));
-        // global 19: __heap_limit = u32::MAX (runtime overrides when max_heap_size is configured)
+        self.emit(WasmInstruction::GlobalSet(17));
+        // global 18: __heap_limit = u32::MAX (runtime overrides when max_heap_size is configured)
         self.emit(WasmInstruction::I32Const(-1));
+        self.emit(WasmInstruction::GlobalSet(18));
+        // global 19: __alloc_ptr
+        self.emit(WasmInstruction::I32Const(init.alloc_ptr));
         self.emit(WasmInstruction::GlobalSet(19));
+        // global 20: __alloc_end
+        self.emit(WasmInstruction::I32Const(init.alloc_end));
+        self.emit(WasmInstruction::GlobalSet(20));
+        // global 21: __gc_alloc_bytes
+        self.emit(WasmInstruction::I32Const(init.gc_alloc_bytes));
+        self.emit(WasmInstruction::GlobalSet(21));
+        // global 22: __gc_trigger_bytes
+        self.emit(WasmInstruction::I32Const(init.gc_trigger_bytes));
+        self.emit(WasmInstruction::GlobalSet(22));
+        // global 23: __gc_phase
+        self.emit(WasmInstruction::I32Const(init.gc_phase));
+        self.emit(WasmInstruction::GlobalSet(23));
+        // global 24: __good_color
+        self.emit(WasmInstruction::I32Const(init.good_color));
+        self.emit(WasmInstruction::GlobalSet(24));
+        // global 25: __barrier_buf_ptr
+        self.emit(WasmInstruction::I32Const(init.barrier_buf_ptr));
+        self.emit(WasmInstruction::GlobalSet(25));
+        // global 26: __barrier_buf_end
+        self.emit(WasmInstruction::I32Const(init.barrier_buf_end));
+        self.emit(WasmInstruction::GlobalSet(26));
     }
 
     fn compile_init_globals_function(&mut self) {

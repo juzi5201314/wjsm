@@ -26,6 +26,12 @@ pub(crate) struct WasmEnv {
     pub heap_limit: Option<Global>,
     pub alloc_ptr: Option<Global>,
     pub alloc_end: Option<Global>,
+    pub gc_alloc_bytes: Option<Global>,
+    pub gc_trigger_bytes: Option<Global>,
+    pub gc_phase: Option<Global>,
+    pub good_color: Option<Global>,
+    pub barrier_buf_ptr: Option<Global>,
+    pub barrier_buf_end: Option<Global>,
 }
 
 impl WasmEnv {
@@ -75,6 +81,24 @@ impl WasmEnv {
                 .and_then(Extern::into_global),
             alloc_end: caller
                 .get_export("__alloc_end")
+                .and_then(Extern::into_global),
+            gc_alloc_bytes: caller
+                .get_export("__gc_alloc_bytes")
+                .and_then(Extern::into_global),
+            gc_trigger_bytes: caller
+                .get_export("__gc_trigger_bytes")
+                .and_then(Extern::into_global),
+            gc_phase: caller
+                .get_export("__gc_phase")
+                .and_then(Extern::into_global),
+            good_color: caller
+                .get_export("__good_color")
+                .and_then(Extern::into_global),
+            barrier_buf_ptr: caller
+                .get_export("__barrier_buf_ptr")
+                .and_then(Extern::into_global),
+            barrier_buf_end: caller
+                .get_export("__barrier_buf_end")
                 .and_then(Extern::into_global),
         })
     }

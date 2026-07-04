@@ -11,11 +11,11 @@ fn shadow_stack_heap_guard_layout_and_canary() {
     let data = extract_active_data_bytes(&wasm);
 
     let shadow_stack_end = *globals
-        .get(&8)
-        .expect("__shadow_stack_end (global 8) in __wjsm_init_globals");
+        .get(&7)
+        .expect("__shadow_stack_end (global 7) in __wjsm_init_globals");
     let object_heap_start = *globals
-        .get(&6)
-        .expect("__object_heap_start (global 6) in __wjsm_init_globals");
+        .get(&5)
+        .expect("__object_heap_start (global 5) in __wjsm_init_globals");
     let heap_ptr = *globals
         .get(&1)
         .expect("__heap_ptr (global 1) in __wjsm_init_globals");
@@ -145,8 +145,11 @@ fn extract_init_globals_i32_sets(wasm: &[u8]) -> HashMap<u32, i32> {
         }
     }
     assert!(
-        out.contains_key(&8) && out.contains_key(&6) && out.contains_key(&1),
-        "init_globals did not set expected layout globals: {out:?}"
+        out.contains_key(&7)
+            && out.contains_key(&5)
+            && out.contains_key(&1)
+            && out.contains_key(&26),
+        "init_globals did not set expected v2 layout globals: {out:?}"
     );
     out
 }

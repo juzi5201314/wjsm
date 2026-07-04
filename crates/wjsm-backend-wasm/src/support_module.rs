@@ -9,7 +9,7 @@
 //! - `arr_new`/`elem_get`/`elem_set`/`get_proto_from_ctor`：✅ 真实 body（P2.4+P2.5 完成）
 //! - `wjsm_bootstrap_once`/`wjsm_init_function_props`：占位 `unreachable`，待 P2.6 迁移
 //!
-//! support module 的 global 索引与 user wasm 完全对齐（0..19），
+//! support module 的 global 索引与 user wasm 完全对齐（0..26），
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
 
 use crate::shared_types::build_shared_type_section;
@@ -120,7 +120,7 @@ const FN_BOOTSTRAP: u32 = NUM_HOST_IMPORTS + 10;
 #[allow(dead_code)]
 const FN_INIT_FUNC_PROPS: u32 = NUM_HOST_IMPORTS + 11;
 
-// ── Global indices (与 user wasm 0..19 对齐) ──────────────────────────
+// ── Global indices (与 user wasm 0..26 对齐) ──────────────────────────
 #[allow(dead_code)]
 const G_FUNC_PROPS: u32 = 0;
 const G_HEAP_PTR: u32 = 1;
@@ -128,39 +128,52 @@ const G_OBJ_TABLE_PTR: u32 = 2;
 const G_OBJ_TABLE_COUNT: u32 = 3;
 const G_SHADOW_SP: u32 = 4;
 #[allow(dead_code)]
-const G_ALLOC_COUNTER: u32 = 5;
+const G_OBJECT_HEAP_START: u32 = 5;
+const G_NUM_IR_FUNCTIONS: u32 = 6;
 #[allow(dead_code)]
-const G_OBJECT_HEAP_START: u32 = 6;
-const G_NUM_IR_FUNCTIONS: u32 = 7;
+const G_SHADOW_STACK_END: u32 = 7;
+const G_ARRAY_PROTO_HANDLE: u32 = 8;
+const G_OBJECT_PROTO_HANDLE: u32 = 9;
 #[allow(dead_code)]
-const G_SHADOW_STACK_END: u32 = 8;
-const G_ARRAY_PROTO_HANDLE: u32 = 9;
-const G_OBJECT_PROTO_HANDLE: u32 = 10;
+const G_EVAL_VAR_MAP_PTR: u32 = 10;
 #[allow(dead_code)]
-const G_EVAL_VAR_MAP_PTR: u32 = 11;
+const G_EVAL_VAR_MAP_COUNT: u32 = 11;
 #[allow(dead_code)]
-const G_EVAL_VAR_MAP_COUNT: u32 = 12;
+const G_BOOTSTRAP_DONE: u32 = 12;
 #[allow(dead_code)]
-const G_BOOTSTRAP_DONE: u32 = 13;
+const G_FUNCTION_PROPS_DONE: u32 = 13;
+const G_FUNCTION_PROPS_BASE: u32 = 14;
 #[allow(dead_code)]
-const G_FUNCTION_PROPS_DONE: u32 = 14;
-const G_FUNCTION_PROPS_BASE: u32 = 15;
+const G_ARR_PROTO_TABLE_BASE: u32 = 15;
 #[allow(dead_code)]
-const G_ARR_PROTO_TABLE_BASE: u32 = 16;
+const G_ARR_PROTO_TABLE_LEN: u32 = 16;
 #[allow(dead_code)]
-const G_ARR_PROTO_TABLE_LEN: u32 = 17;
+const G_ARR_PROTO_TABLE_HASH: u32 = 17;
+const G_HEAP_LIMIT: u32 = 18;
 #[allow(dead_code)]
-const G_ARR_PROTO_TABLE_HASH: u32 = 18;
-const G_HEAP_LIMIT: u32 = 19;
+const G_ALLOC_PTR: u32 = 19;
+#[allow(dead_code)]
+const G_ALLOC_END: u32 = 20;
+#[allow(dead_code)]
+const G_GC_ALLOC_BYTES: u32 = 21;
+#[allow(dead_code)]
+const G_GC_TRIGGER_BYTES: u32 = 22;
+#[allow(dead_code)]
+const G_GC_PHASE: u32 = 23;
+#[allow(dead_code)]
+const G_GOOD_COLOR: u32 = 24;
+#[allow(dead_code)]
+const G_BARRIER_BUF_PTR: u32 = 25;
+#[allow(dead_code)]
+const G_BARRIER_BUF_END: u32 = 26;
 
-// Imported env globals — 与 abi::ENV_GLOBALS 同步：20 项。
+// Imported env globals — 与 abi::ENV_GLOBALS 同步：27 项。
 const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     ("__func_props", ValType::I32, true),
     ("__heap_ptr", ValType::I32, true),
     ("__obj_table_ptr", ValType::I32, true),
     ("__obj_table_count", ValType::I32, true),
     ("__shadow_sp", ValType::I32, true),
-    ("__alloc_counter", ValType::I32, true),
     ("__object_heap_start", ValType::I32, true),
     ("__num_ir_functions", ValType::I32, true),
     ("__shadow_stack_end", ValType::I32, true),
@@ -175,6 +188,14 @@ const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     ("__arr_proto_table_len", ValType::I32, true),
     ("__arr_proto_table_hash", ValType::I64, true),
     ("__heap_limit", ValType::I32, true),
+    ("__alloc_ptr", ValType::I32, true),
+    ("__alloc_end", ValType::I32, true),
+    ("__gc_alloc_bytes", ValType::I32, true),
+    ("__gc_trigger_bytes", ValType::I32, true),
+    ("__gc_phase", ValType::I32, true),
+    ("__good_color", ValType::I32, true),
+    ("__barrier_buf_ptr", ValType::I32, true),
+    ("__barrier_buf_end", ValType::I32, true),
 ];
 
 /// 必须与 `wjsm-runtime-support::abi::SUPPORT_TABLE_RESERVED_LEN` 一致。
@@ -247,7 +268,7 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
             shared: false,
         }),
     );
-    // 20 env globals
+    // 27 env globals
     for (name, ty, mutable) in ENV_GLOBAL_IMPORTS {
         imports.import(
             "env",
@@ -617,7 +638,7 @@ fn emit_obj_new() -> Function {
 // 避免单文件过长。以下 include! 将它们的 Function 返回值直接嵌入。
 //
 // 这些函数移植自 compiler_helpers.rs，所有 GlobalGet/GlobalSet 索引不变
-// （与 user wasm 0..19 对齐），所有 host Call 替换为 support module 的
+// （与 user wasm 0..26 对齐），所有 host Call 替换为 support module 的
 // host import 索引，string_eq Call 替换为 FN_STRING_EQ。
 
 include!("support_object_helpers.rs");
@@ -1179,7 +1200,7 @@ mod tests {
 
     #[test]
     fn env_global_imports_count_locked() {
-        assert_eq!(ENV_GLOBAL_IMPORTS.len(), 20);
+        assert_eq!(ENV_GLOBAL_IMPORTS.len(), 27);
     }
 
     #[test]

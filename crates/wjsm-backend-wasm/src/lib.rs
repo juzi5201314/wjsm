@@ -146,8 +146,6 @@ struct Compiler {
     computed_idx_scratch_idx: u32,
     /// WASM local index for the base address of eval-visible variable storage.
     eval_var_base_local_idx: u32,
-    /// WASM global index for alloc_counter (GC heuristic).
-    alloc_counter_global_idx: u32,
     /// WASM global index for __object_heap_start (runtime GC heap base).
     #[allow(dead_code)]
     object_heap_start_global_idx: u32,
@@ -160,6 +158,22 @@ struct Compiler {
     arr_proto_table_base: u32,
     /// WASM global index for __heap_limit (controlled JS heap budget end).
     heap_limit_global_idx: u32,
+    /// WASM global index for the active allocation window pointer.
+    alloc_ptr_global_idx: u32,
+    /// WASM global index for the active allocation window end.
+    alloc_end_global_idx: u32,
+    /// WASM global index for bytes allocated since the last GC safepoint.
+    gc_alloc_bytes_global_idx: u32,
+    /// WASM global index for the next GC safepoint allocation threshold.
+    gc_trigger_bytes_global_idx: u32,
+    /// WASM global index for the current GC phase.
+    gc_phase_global_idx: u32,
+    /// WASM global index for ZGC good color bits.
+    good_color_global_idx: u32,
+    /// WASM global index for the write-barrier event buffer pointer.
+    barrier_buf_ptr_global_idx: u32,
+    /// WASM global index for the write-barrier event buffer end.
+    barrier_buf_end_global_idx: u32,
     /// WASM global index for Array.prototype method table base.
     arr_proto_table_base_global_idx: u32,
     /// WASM global index for Array.prototype method table length.
@@ -249,6 +263,14 @@ struct NormalGlobalsInit {
     arr_proto_table_base: i32,
     arr_proto_table_len: i32,
     arr_proto_table_hash: i64,
+    alloc_ptr: i32,
+    alloc_end: i32,
+    gc_alloc_bytes: i32,
+    gc_trigger_bytes: i32,
+    gc_phase: i32,
+    good_color: i32,
+    barrier_buf_ptr: i32,
+    barrier_buf_end: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

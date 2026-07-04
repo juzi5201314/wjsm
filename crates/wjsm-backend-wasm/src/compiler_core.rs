@@ -1,7 +1,7 @@
 use super::*;
 use crate::host_import_registry::{HostImportKey, host_import_specs};
 
-/// 20 个 env global 的 export 名称，与 support module abi::ENV_GLOBALS 对齐。
+/// 27 个 env global 的 export 名称，与 support module abi::ENV_GLOBALS 对齐。
 /// 用于 Normal mode user wasm re-export imported globals。
 const ENV_GLOBAL_EXPORT_NAMES: &[&str] = &[
     "__func_props",
@@ -9,7 +9,6 @@ const ENV_GLOBAL_EXPORT_NAMES: &[&str] = &[
     "__obj_table_ptr",
     "__obj_table_count",
     "__shadow_sp",
-    "__alloc_counter",
     "__object_heap_start",
     "__num_ir_functions",
     "__shadow_stack_end",
@@ -24,6 +23,14 @@ const ENV_GLOBAL_EXPORT_NAMES: &[&str] = &[
     "__arr_proto_table_len",
     "__arr_proto_table_hash",
     "__heap_limit",
+    "__alloc_ptr",
+    "__alloc_end",
+    "__gc_alloc_bytes",
+    "__gc_trigger_bytes",
+    "__gc_phase",
+    "__good_color",
+    "__barrier_buf_ptr",
+    "__barrier_buf_end",
 ];
 
 impl Compiler {
@@ -63,7 +70,6 @@ impl Compiler {
             import_eval_global(&mut imports, "__obj_table_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__obj_table_count", ValType::I32, true);
             import_eval_global(&mut imports, "__shadow_sp", ValType::I32, true);
-            import_eval_global(&mut imports, "__alloc_counter", ValType::I32, true);
             import_eval_global(&mut imports, "__object_heap_start", ValType::I32, true);
             import_eval_global(&mut imports, "__num_ir_functions", ValType::I32, true);
             import_eval_global(&mut imports, "__shadow_stack_end", ValType::I32, true);
@@ -78,8 +84,16 @@ impl Compiler {
             import_eval_global(&mut imports, "__arr_proto_table_len", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_hash", ValType::I64, true);
             import_eval_global(&mut imports, "__heap_limit", ValType::I32, true);
+            import_eval_global(&mut imports, "__alloc_ptr", ValType::I32, true);
+            import_eval_global(&mut imports, "__alloc_end", ValType::I32, true);
+            import_eval_global(&mut imports, "__gc_alloc_bytes", ValType::I32, true);
+            import_eval_global(&mut imports, "__gc_trigger_bytes", ValType::I32, true);
+            import_eval_global(&mut imports, "__gc_phase", ValType::I32, true);
+            import_eval_global(&mut imports, "__good_color", ValType::I32, true);
+            import_eval_global(&mut imports, "__barrier_buf_ptr", ValType::I32, true);
+            import_eval_global(&mut imports, "__barrier_buf_end", ValType::I32, true);
         } else {
-            // Normal mode (P2.2): import memory + table + 20 globals from env，
+            // Normal mode: import memory + table + 27 globals from env，
             // 与 support module 共享同一份运行时状态。runtime 在 instantiate 前创建
             // memory/table/globals 并通过 Linker 注册到 env namespace。
             imports.import(
@@ -104,14 +118,13 @@ impl Compiler {
                     shared: false,
                 }),
             );
-            // 20 个 env globals — 与 support module 的 abi::ENV_GLOBALS 完全对齐。
-            // 全部 mutable：P2.2 后 user wasm 在 bootstrap 中用 global.set 初始化。
+            // 27 个 env globals — 与 support module 的 abi::ENV_GLOBALS 完全对齐。
+            // 全部 mutable：user wasm 在 bootstrap 中用 global.set 初始化。
             import_eval_global(&mut imports, "__func_props", ValType::I32, true);
             import_eval_global(&mut imports, "__heap_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__obj_table_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__obj_table_count", ValType::I32, true);
             import_eval_global(&mut imports, "__shadow_sp", ValType::I32, true);
-            import_eval_global(&mut imports, "__alloc_counter", ValType::I32, true);
             import_eval_global(&mut imports, "__object_heap_start", ValType::I32, true);
             import_eval_global(&mut imports, "__num_ir_functions", ValType::I32, true);
             import_eval_global(&mut imports, "__shadow_stack_end", ValType::I32, true);
@@ -126,6 +139,14 @@ impl Compiler {
             import_eval_global(&mut imports, "__arr_proto_table_len", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_hash", ValType::I64, true);
             import_eval_global(&mut imports, "__heap_limit", ValType::I32, true);
+            import_eval_global(&mut imports, "__alloc_ptr", ValType::I32, true);
+            import_eval_global(&mut imports, "__alloc_end", ValType::I32, true);
+            import_eval_global(&mut imports, "__gc_alloc_bytes", ValType::I32, true);
+            import_eval_global(&mut imports, "__gc_trigger_bytes", ValType::I32, true);
+            import_eval_global(&mut imports, "__gc_phase", ValType::I32, true);
+            import_eval_global(&mut imports, "__good_color", ValType::I32, true);
+            import_eval_global(&mut imports, "__barrier_buf_ptr", ValType::I32, true);
+            import_eval_global(&mut imports, "__barrier_buf_end", ValType::I32, true);
 
             // P2.5+: import obj_*/arr_*/elem_*/string_eq/to_int32/get_proto_from_ctor from wjsm_support。
             // 10 个 helper imports 替代原来的 inline 函数定义。
@@ -171,7 +192,7 @@ impl Compiler {
             }
         } else {
             // Normal mode (P2.2)：re-export imported memory (idx 0) + table (idx 0) +
-            // 20 globals (idx 0..19)，使 WasmEnv::from_caller 仍能从 user instance
+            // 27 globals (idx 0..26)，使 WasmEnv::from_caller 仍能从 user instance
             // 的 exports 获取它们（零改动 host 函数）。
             exports.export("memory", ExportKind::Memory, 0);
             exports.export("__table", ExportKind::Table, 0);
@@ -246,28 +267,35 @@ impl Compiler {
             safepoint_sp_saved_idx: 0,
             computed_idx_scratch_idx: 0,
             eval_var_base_local_idx: 0,
-            alloc_counter_global_idx: 0,
-            object_heap_start_global_idx: 6,
-            num_ir_functions_global_idx: 7,
-            shadow_stack_end_global_idx: 8,
-            array_proto_handle_global_idx: 0,
+            object_heap_start_global_idx: 5,
+            num_ir_functions_global_idx: 6,
+            shadow_stack_end_global_idx: 7,
+            array_proto_handle_global_idx: 8,
             arr_proto_table_base: 0,
-            arr_proto_table_base_global_idx: 16,
-            arr_proto_table_len_global_idx: 17,
-            arr_proto_table_hash_global_idx: 18,
-            heap_limit_global_idx: 19,
+            arr_proto_table_base_global_idx: 15,
+            arr_proto_table_len_global_idx: 16,
+            arr_proto_table_hash_global_idx: 17,
+            heap_limit_global_idx: 18,
+            alloc_ptr_global_idx: 19,
+            alloc_end_global_idx: 20,
+            gc_alloc_bytes_global_idx: 21,
+            gc_trigger_bytes_global_idx: 22,
+            gc_phase_global_idx: 23,
+            good_color_global_idx: 24,
+            barrier_buf_ptr_global_idx: 25,
+            barrier_buf_end_global_idx: 26,
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             function_id_to_wasm_idx: HashMap::new(),
-            object_proto_handle_global_idx: 0,
-            bootstrap_done_global_idx: 13,
-            function_props_done_global_idx: 14,
-            function_props_base_global_idx: 15,
+            object_proto_handle_global_idx: 9,
+            bootstrap_done_global_idx: 12,
+            function_props_done_global_idx: 13,
+            function_props_base_global_idx: 14,
             init_globals_func_idx: 0,
             bootstrap_func_idx: 0,
             init_function_props_func_idx: 0,
-            eval_var_map_ptr_global_idx: 11,
-            eval_var_map_count_global_idx: 12,
+            eval_var_map_ptr_global_idx: 10,
+            eval_var_map_count_global_idx: 11,
             eval_var_map_records: Vec::new(),
             eval_var_map_ptr: 0,
             eval_var_map_count: 0,

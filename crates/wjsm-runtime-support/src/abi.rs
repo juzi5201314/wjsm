@@ -5,7 +5,7 @@
 //!   wjsm_bootstrap_once/wjsm_init_function_props）
 //! - support module 重新 export imported memory/table/globals，让从 support module
 //!   发起的 host callback 仍能通过 `Caller::get_export` 读取同一份 WasmEnv
-//! - 20 个 imported env globals：与 user wasm 的 20 个 global（索引 0..19）完全对齐，
+//! - 27 个 imported env globals：与 user wasm 的 27 个 global（索引 0..26）完全对齐，
 //!   使 support module 的 global 索引与 user wasm 一致——helper body 移植时无需改索引
 //! - support module 额外 import 它需要的 host 函数（gc_*/proxy_trap_*/native_call 等），
 //!   通过 `env` namespace 引入，wasmtime Linker 已注册全部 host 函数实现
@@ -44,128 +44,143 @@ pub struct EnvGlobal {
     pub mutable: bool,
 }
 
-/// 20 个 env globals：与 user wasm 的全局索引 0..19 完全对齐。
+/// 27 个 env globals：与 user wasm 的全局索引 0..26 完全对齐。
 /// 顺序与 user wasm compiler_module.rs 中的 global 定义顺序一致，
 /// 使 support module import 的 global index 与 user wasm 一致。
-/// 全部 mutable：P2.2 后 user wasm 在 bootstrap 中用 global.set 初始化。
+/// 全部 mutable：user wasm 在 bootstrap 中用 global.set 初始化。
 pub const ENV_GLOBALS: &[EnvGlobal] = &[
-    // idx 0: __func_props（已弃用，恒为 0；保留以对齐索引）
     EnvGlobal {
         name: "__func_props",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 1
     EnvGlobal {
         name: "__heap_ptr",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 2
     EnvGlobal {
         name: "__obj_table_ptr",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 3
     EnvGlobal {
         name: "__obj_table_count",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 4
     EnvGlobal {
         name: "__shadow_sp",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 5
-    EnvGlobal {
-        name: "__alloc_counter",
-        ty: GlobalValTy::I32,
-        mutable: true,
-    },
-    // idx 6
     EnvGlobal {
         name: "__object_heap_start",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 7
     EnvGlobal {
         name: "__num_ir_functions",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 8
     EnvGlobal {
         name: "__shadow_stack_end",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 9
     EnvGlobal {
         name: "__array_proto_handle",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 10
     EnvGlobal {
         name: "__object_proto_handle",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 11
     EnvGlobal {
         name: "__eval_var_map_ptr",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 12
     EnvGlobal {
         name: "__eval_var_map_count",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 13
     EnvGlobal {
         name: "__bootstrap_done",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 14
     EnvGlobal {
         name: "__function_props_done",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 15
     EnvGlobal {
         name: "__function_props_base",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 16
     EnvGlobal {
         name: "__arr_proto_table_base",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 17
     EnvGlobal {
         name: "__arr_proto_table_len",
         ty: GlobalValTy::I32,
         mutable: true,
     },
-    // idx 18
     EnvGlobal {
         name: "__arr_proto_table_hash",
         ty: GlobalValTy::I64,
         mutable: true,
     },
-    // idx 19
     EnvGlobal {
         name: "__heap_limit",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__alloc_ptr",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__alloc_end",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__gc_alloc_bytes",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__gc_trigger_bytes",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__gc_phase",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__good_color",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__barrier_buf_ptr",
+        ty: GlobalValTy::I32,
+        mutable: true,
+    },
+    EnvGlobal {
+        name: "__barrier_buf_end",
         ty: GlobalValTy::I32,
         mutable: true,
     },
@@ -225,12 +240,12 @@ mod tests {
         );
     }
 
-    /// 20 env globals 数量锁死（与 user wasm 全局索引 0..19 对齐）。
+    /// 27 env globals 数量锁死（与 user wasm 全局索引 0..26 对齐）。
     #[test]
     fn env_globals_count_locked() {
         assert_eq!(
             ENV_GLOBALS.len(),
-            20,
+            27,
             "ENV_GLOBALS 数量改变必须同步更新 ABI 测试"
         );
     }

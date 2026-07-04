@@ -228,6 +228,24 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
         alloc_end: instance
             .get_export(&mut *store, "__alloc_end")
             .and_then(|e| e.into_global()),
+        gc_alloc_bytes: instance
+            .get_export(&mut *store, "__gc_alloc_bytes")
+            .and_then(|e| e.into_global()),
+        gc_trigger_bytes: instance
+            .get_export(&mut *store, "__gc_trigger_bytes")
+            .and_then(|e| e.into_global()),
+        gc_phase: instance
+            .get_export(&mut *store, "__gc_phase")
+            .and_then(|e| e.into_global()),
+        good_color: instance
+            .get_export(&mut *store, "__good_color")
+            .and_then(|e| e.into_global()),
+        barrier_buf_ptr: instance
+            .get_export(&mut *store, "__barrier_buf_ptr")
+            .and_then(|e| e.into_global()),
+        barrier_buf_end: instance
+            .get_export(&mut *store, "__barrier_buf_end")
+            .and_then(|e| e.into_global()),
     }
 }
 
@@ -540,6 +558,26 @@ fn record_and_attach_gc_heap(
         .unwrap_or(0)
         .max(0) as usize;
     let barrier_event_buf_base = shadow_stack_end + wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE as usize;
+    let barrier_event_buf_end =
+        barrier_event_buf_base + wjsm_ir::constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize;
+    if barrier_event_buf_end > i32::MAX as usize {
+        anyhow::bail!("GC barrier buffer end exceeds wasm32 signed global range");
+    }
+    if let Some(global) = wasm_env.gc_alloc_bytes {
+        global.set(&mut *store, Val::I32(0))?;
+    }
+    if let Some(global) = wasm_env.gc_phase {
+        global.set(&mut *store, Val::I32(0))?;
+    }
+    if let Some(global) = wasm_env.good_color {
+        global.set(&mut *store, Val::I32(0))?;
+    }
+    if let Some(global) = wasm_env.barrier_buf_ptr {
+        global.set(&mut *store, Val::I32(barrier_event_buf_base as i32))?;
+    }
+    if let Some(global) = wasm_env.barrier_buf_end {
+        global.set(&mut *store, Val::I32(barrier_event_buf_end as i32))?;
+    }
 
     store.data().store_heap_layout_boundaries(
         immortal_objects_end,
@@ -548,6 +586,9 @@ fn record_and_attach_gc_heap(
     );
     enforce_heap_limit(store, wasm_env)?;
     let (_, attached_dynamic_heap_start, _) = store.data().heap_layout_boundaries();
+    if let Some(global) = wasm_env.gc_trigger_bytes {
+        global.set(&mut *store, Val::I32(256 * 1024))?;
+    }
 
     let gc_arc = store.data().gc_algorithm.clone();
     let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
@@ -575,161 +616,39 @@ pub(super) async fn setup_shared_env_and_support(
     )?;
     linker.define(&*store, "env", "__table", table)?;
 
-    // 创建 20 个 shared globals（全部 mutable，user bootstrap 中用 global.set 初始化）
+    // 创建 27 个 shared globals（全部 mutable，user bootstrap 中用 global.set 初始化）
     // 顺序与 abi::ENV_GLOBALS 和 compiler_core.rs::ENV_GLOBAL_EXPORT_NAMES 对齐。
-    define_env_global(
-        linker,
-        store,
-        "__func_props",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(linker, store, "__heap_ptr", ValType::I32, true, Val::I32(0));
-    define_env_global(
-        linker,
-        store,
-        "__obj_table_ptr",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__obj_table_count",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__shadow_sp",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__alloc_counter",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__object_heap_start",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__num_ir_functions",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__shadow_stack_end",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__array_proto_handle",
-        ValType::I32,
-        true,
-        Val::I32(-1),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__object_proto_handle",
-        ValType::I32,
-        true,
-        Val::I32(-1),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__eval_var_map_ptr",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__eval_var_map_count",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__bootstrap_done",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__function_props_done",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__function_props_base",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__arr_proto_table_base",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__arr_proto_table_len",
-        ValType::I32,
-        true,
-        Val::I32(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__arr_proto_table_hash",
-        ValType::I64,
-        true,
-        Val::I64(0),
-    );
-    define_env_global(
-        linker,
-        store,
-        "__heap_limit",
-        ValType::I32,
-        true,
-        Val::I32(-1),
-    );
+    for (name, ty, init) in [
+        ("__func_props", ValType::I32, Val::I32(0)),
+        ("__heap_ptr", ValType::I32, Val::I32(0)),
+        ("__obj_table_ptr", ValType::I32, Val::I32(0)),
+        ("__obj_table_count", ValType::I32, Val::I32(0)),
+        ("__shadow_sp", ValType::I32, Val::I32(0)),
+        ("__object_heap_start", ValType::I32, Val::I32(0)),
+        ("__num_ir_functions", ValType::I32, Val::I32(0)),
+        ("__shadow_stack_end", ValType::I32, Val::I32(0)),
+        ("__array_proto_handle", ValType::I32, Val::I32(-1)),
+        ("__object_proto_handle", ValType::I32, Val::I32(-1)),
+        ("__eval_var_map_ptr", ValType::I32, Val::I32(0)),
+        ("__eval_var_map_count", ValType::I32, Val::I32(0)),
+        ("__bootstrap_done", ValType::I32, Val::I32(0)),
+        ("__function_props_done", ValType::I32, Val::I32(0)),
+        ("__function_props_base", ValType::I32, Val::I32(0)),
+        ("__arr_proto_table_base", ValType::I32, Val::I32(0)),
+        ("__arr_proto_table_len", ValType::I32, Val::I32(0)),
+        ("__arr_proto_table_hash", ValType::I64, Val::I64(0)),
+        ("__heap_limit", ValType::I32, Val::I32(-1)),
+        ("__alloc_ptr", ValType::I32, Val::I32(0)),
+        ("__alloc_end", ValType::I32, Val::I32(0)),
+        ("__gc_alloc_bytes", ValType::I32, Val::I32(0)),
+        ("__gc_trigger_bytes", ValType::I32, Val::I32(256 * 1024)),
+        ("__gc_phase", ValType::I32, Val::I32(0)),
+        ("__good_color", ValType::I32, Val::I32(0)),
+        ("__barrier_buf_ptr", ValType::I32, Val::I32(0)),
+        ("__barrier_buf_end", ValType::I32, Val::I32(0)),
+    ] {
+        define_env_global(linker, store, name, ty, true, init);
+    }
 
     // 获取 support module：优先从 embedded cwasm deserialize，否则从 emit_support_module 编译。
     // cwasm 的 precompile 配置必须与运行时 engine 配置匹配（epoch interruption 等），
