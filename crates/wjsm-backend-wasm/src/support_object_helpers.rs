@@ -960,6 +960,18 @@ fn emit_obj_set(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::End);
     // 分配扩容后的新区域；fast-path 失败时由 gc_alloc_slow 负责 GC/grow/OOM。
     emit_heap_bump_for_object_resize_support(&mut func, 7, 16, 8);
+    // GC slow-path 可能移动正在扩容的对象；拷贝前必须用 handle 重新解析 old_ptr。
+    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
+    func.instruction(&WasmInstruction::LocalGet(9));
+    func.instruction(&WasmInstruction::I32Const(4));
+    func.instruction(&WasmInstruction::I32Mul);
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    func.instruction(&WasmInstruction::LocalSet(6));
 
     // 拷贝旧数据到新内存：memory.copy(dst=new_ptr, src=old_ptr, len=16+num_props*32)
     func.instruction(&WasmInstruction::LocalGet(8));

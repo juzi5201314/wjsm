@@ -1148,6 +1148,18 @@ impl Compiler {
                 8,
                 gc_alloc_slow_idx,
             );
+            // GC slow-path 可能移动正在扩容的对象；拷贝前必须用 handle 重新解析 old_ptr。
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::LocalGet(9));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(6));
 
             // 拷贝旧数据到新内存：memory.copy(dst=new_ptr, src=old_ptr, len=16+num_props*32)
             func.instruction(&WasmInstruction::LocalGet(8));

@@ -13,16 +13,14 @@ pub(crate) fn define_generator(
         |mut caller: Caller<'_, RuntimeState>, continuation: i64| -> i64 {
             let generator = alloc_object(&mut caller, 4);
             let generator_proto = caller.data().generator_prototype;
-            if !value::is_undefined(generator_proto)
-                && let Some(ptr) = resolve_handle(&mut caller, generator)
-            {
-                let memory = caller
-                    .get_export("memory")
-                    .and_then(|e| e.into_memory())
-                    .expect("memory");
-                let data = memory.data_mut(&mut caller);
-                data[ptr..ptr + 4]
-                    .copy_from_slice(&value::decode_object_handle(generator_proto).to_le_bytes());
+            if !value::is_undefined(generator_proto) {
+                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                crate::runtime_heap::set_object_proto_header(
+                    &mut caller,
+                    &env,
+                    generator,
+                    generator_proto,
+                );
             }
             if !value::is_object(generator) {
                 return value::encode_undefined();

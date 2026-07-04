@@ -53,27 +53,56 @@ pub(crate) fn define_host_data_property_by_name_id_with_env<
     if let Some((slot_offset, _, _)) =
         find_property_slot_by_name_id_with_env(ctx, env, obj_ptr, name_id)
     {
-        let data = env.memory.data_mut(&mut *ctx);
-        if slot_offset + 16 > data.len() {
-            return None;
-        }
-        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
+        crate::runtime_gc::heap_access::write_property_slot(
+            ctx,
+            env,
+            value::decode_object_handle(obj),
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Value,
+            val,
+        )?;
         return Some(());
     }
     if num_props >= capacity {
         return None;
     }
-    let data = env.memory.data_mut(&mut *ctx);
-    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
-    if slot_offset + 32 > data.len() {
-        return None;
+    let slot_idx = num_props as usize;
+    let slot_offset = obj_ptr + 16 + slot_idx * 32;
+    {
+        let data = env.memory.data_mut(&mut *ctx);
+        if slot_offset + 32 > data.len() {
+            return None;
+        }
+        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
     }
     let undef = value::encode_undefined();
-    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
-    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+    crate::runtime_gc::heap_access::write_property_slot(
+        ctx,
+        env,
+        value::decode_object_handle(obj),
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Value,
+        val,
+    )?;
+    crate::runtime_gc::heap_access::write_property_slot(
+        ctx,
+        env,
+        value::decode_object_handle(obj),
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Getter,
+        undef,
+    )?;
+    crate::runtime_gc::heap_access::write_property_slot(
+        ctx,
+        env,
+        value::decode_object_handle(obj),
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Setter,
+        undef,
+    )?;
+    let data = env.memory.data_mut(&mut *ctx);
     data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
     Some(())
 }
@@ -114,22 +143,45 @@ pub(crate) fn define_host_accessor_property_with_env<C: AsContextMut<Data = Runt
     if num_props >= capacity {
         return None;
     }
-    let actual_ptr = obj_ptr;
-    let data = env.memory.data_mut(&mut *ctx);
-    let slot_offset = actual_ptr + 16 + num_props as usize * 32;
-    if slot_offset + 32 > data.len() {
-        return None;
-    }
-    // 访问器属性：CONFIGURABLE | ENUMERABLE | IS_ACCESSOR（不含 WRITABLE）
     let flags =
         constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_IS_ACCESSOR;
+    let slot_idx = num_props as usize;
+    let slot_offset = obj_ptr + 16 + slot_idx * 32;
+    {
+        let data = env.memory.data_mut(&mut *ctx);
+        if slot_offset + 32 > data.len() {
+            return None;
+        }
+        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    }
     let undef = value::encode_undefined();
-    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
-    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
-    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
-    data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    crate::runtime_gc::heap_access::write_property_slot(
+        ctx,
+        env,
+        value::decode_object_handle(obj),
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Value,
+        undef,
+    )?;
+    crate::runtime_gc::heap_access::write_property_slot(
+        ctx,
+        env,
+        value::decode_object_handle(obj),
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Getter,
+        getter,
+    )?;
+    crate::runtime_gc::heap_access::write_property_slot(
+        ctx,
+        env,
+        value::decode_object_handle(obj),
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Setter,
+        setter,
+    )?;
+    let data = env.memory.data_mut(&mut *ctx);
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
     Some(())
 }
 

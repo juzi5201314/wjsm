@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T1.6 验证布局阶段`（completed）
-- Next: 按用户要求停止；下次会话从 P2 `T2.1 新增 heap_access 断言` 开始。
+- Active: `T3.0 接入测试矩阵`（next）。
+- Next: `T3.1 实现 G1 region`。
 
 ## Completed todos
 
@@ -21,19 +21,27 @@
   - `T1.4 换代 host imports`
   - `T1.5 参数化 support emitter`
   - `T1.6 验证布局阶段`
+- P2:
+  - `T2.1 新增 heap_access 断言`
+  - `T2.2 建立裸写审计清单`
+  - `T2.3 替换核心裸写点`
+  - `T2.4 替换对象集合裸写点`
+  - `T2.5 替换其余裸写点`
+  - `T2.6 修复 WASM resize re-resolve`
+  - `T2.7 验证 P2 阶段`
 
 ## Active slice card
 
-- Goal: P1 T1.6，验证布局阶段：确认 T1.1–T1.5 的 layout/global/support/host-import 切换在 cold/hot startup、backend support、runtime package 下可运行。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §7/§8/§22。
-- Files: 不预期继续编辑实现文件；若验证暴露缺陷，回到对应 owner 修复。
-- Boundary: 只验证 P1；不进入 P2 host 读写层。
-- Verification: 父计划 T1.6 命令、`cargo nextest` affected package、startup snapshot 双路 smoke。
-- Stop: P1 验证通过并提交 T1.6 evidence/checkpoint，或定位到具体前置任务缺陷并修复。
+- Goal: P3 T3.0，接入 `WJSM_TEST_GC` 测试矩阵入口，为 mark-sweep / g1 / zgc 分层验证提供统一选择路径。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §6、§21、§22。
+- Files: 预期涉及测试 harness / CLI runtime 选择路径；先沿现有 GC flavor registry 与 fixture runner 查证后改动。
+- Boundary: 本 slice 只建立测试矩阵选择与非法值诊断；不实现 G1 region/card/young 行为。
+- Verification: `WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__hello)'` 绿；`WJSM_TEST_GC=bogus` 报错列合法值。
+- Stop: T3.0 验证通过，checkpoint/evidence 更新，然后进入 T3.1。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。T1.6 已完成 normal workspace、cold workspace、targeted fixtures 与 build 验证。
+详见 `90-evidence.md`。P0/P1/P2 已完成；T3.0 尚未产生实现后证据。
 
 ## Blocked-on items
 
@@ -43,17 +51,16 @@
 
 恢复时先执行：
 
-1. `git status --short` 确认当前切片文件。
-2. 阅读本文件与 `90-evidence.md`。
-3. 下次从 P2 `T2.1 新增 heap_access 断言` 开始；不要重复 P1，除非验证回归。
-4. 开始 P2 前重新读取父计划 P2 与 v2 spec host read/write layer 小节。
+1. 读取本文件、`90-evidence.md` 与父计划 P3。
+2. 从 T3.0 测试矩阵入口开始，先定位现有 `GcFlavor` / fixture runner / CLI 选择路径。
+3. 每个 P3 slice 后更新证据与 drift check；G1 行为实现前只允许 mark-sweep 矩阵冒烟通过。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，P1/T1.6 收尾验证已完成，未进入 P2。
-- Does current work still serve goal and stop condition? 是，normal workspace 与 cold workspace 均通过。
-- Compatibility boundary: support ABI canonical hash 已切到 `support_abi_union_hash`；当前 union 仅含 MarkSweep。
-- New owner/fallback/adapter/branch: 未新增 fallback；T1.6 修复同步了 host 直接 bump 与 alloc window 的单一堆顶语义，并明确 startup no-GC 分配边界。
-- Retirement track: 单一无参数 support emitter 与旧 `support_module_layout_hash` API 已退役；P2 未开始。
-- Evidence sufficiency: T1.6 足够；按用户要求停止在 P1 末尾。
-- Decision: continue-next-session-from-P2。
+- Does current work still serve original task intent? 是，P2 已完成并进入 P3 G1 前置矩阵。
+- Does current work still serve goal and stop condition? 是，T3.0 只建立算法选择测试入口，不伪造 G1 行为。
+- Compatibility boundary: 默认 mark-sweep 行为保持；非法 `WJSM_TEST_GC` 必须显式报错并列合法值。
+- New owner/fallback/adapter/branch: P2 新 owner `runtime_gc::heap_access` 已接管 host 引用槽写；P3 将继续通过 registry 接入算法实现，不新增 fallback。
+- Retirement track: P2 host 裸写点已勾销；P3 开始退休单算法测试假设。
+- Evidence sufficiency: P2 sufficient；T3.0 pending。
+- Decision: continue。

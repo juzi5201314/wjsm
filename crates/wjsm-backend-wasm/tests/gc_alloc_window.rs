@@ -15,6 +15,13 @@ enum OwnedOperator {
     Call(u32),
     GlobalGet(u32),
     GlobalSet(u32),
+    LocalGet(u32),
+    LocalSet(u32),
+    I32Const(i32),
+    I32Add,
+    I32Mul,
+    I32Load,
+    MemoryCopy,
 }
 
 fn parse_support_module() -> SupportModuleInfo {
@@ -53,6 +60,27 @@ fn parse_support_module() -> SupportModuleInfo {
                         Operator::GlobalSet { global_index } => {
                             ops.push(OwnedOperator::GlobalSet(global_index));
                         }
+                        Operator::LocalGet { local_index } => {
+                            ops.push(OwnedOperator::LocalGet(local_index));
+                        }
+                        Operator::LocalSet { local_index } => {
+                            ops.push(OwnedOperator::LocalSet(local_index));
+                        }
+                        Operator::I32Const { value } => {
+                            ops.push(OwnedOperator::I32Const(value));
+                        }
+                        Operator::I32Add => {
+                            ops.push(OwnedOperator::I32Add);
+                        }
+                        Operator::I32Mul => {
+                            ops.push(OwnedOperator::I32Mul);
+                        }
+                        Operator::I32Load { .. } => {
+                            ops.push(OwnedOperator::I32Load);
+                        }
+                        Operator::MemoryCopy { .. } => {
+                            ops.push(OwnedOperator::MemoryCopy);
+                        }
                         _ => {}
                     }
                 }
@@ -83,6 +111,10 @@ fn imported_func_index(info: &SupportModuleInfo, name: &str) -> u32 {
         .iter()
         .position(|import_name| import_name == name)
         .unwrap_or_else(|| panic!("missing imported function `{name}`")) as u32
+}
+
+fn contains_subsequence(body: &[OwnedOperator], needle: &[OwnedOperator]) -> bool {
+    body.windows(needle.len()).any(|window| window == needle)
 }
 
 #[test]
@@ -126,4 +158,34 @@ fn support_alloc_helpers_use_alloc_window_and_safepoint_poll() {
             );
         }
     }
+}
+
+#[test]
+fn support_obj_set_re_resolves_old_ptr_before_resize_copy() {
+    const G_OBJ_TABLE_PTR: u32 = 2;
+
+    let info = parse_support_module();
+    let body = exported_body(&info, "obj_set");
+
+    let re_resolve_old_ptr = [
+        OwnedOperator::GlobalGet(G_OBJ_TABLE_PTR),
+        OwnedOperator::LocalGet(9),
+        OwnedOperator::I32Const(4),
+        OwnedOperator::I32Mul,
+        OwnedOperator::I32Add,
+        OwnedOperator::I32Load,
+        OwnedOperator::LocalSet(6),
+        OwnedOperator::LocalGet(8),
+        OwnedOperator::LocalGet(6),
+        OwnedOperator::LocalGet(4),
+        OwnedOperator::I32Const(32),
+        OwnedOperator::I32Mul,
+        OwnedOperator::I32Const(16),
+        OwnedOperator::I32Add,
+        OwnedOperator::MemoryCopy,
+    ];
+    assert!(
+        contains_subsequence(body, &re_resolve_old_ptr),
+        "support obj_set must reload old_ptr from obj_table immediately before resize memory.copy"
+    );
 }

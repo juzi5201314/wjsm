@@ -353,10 +353,10 @@ pub(crate) fn delete_property_by_name_id(
     if (flags & constants::FLAG_CONFIGURABLE) == 0 {
         return value::encode_bool(false);
     }
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+    let Some(env) = WasmEnv::from_caller(caller) else {
         return value::encode_bool(false);
     };
-    let data = memory.data_mut(&mut *caller);
+    let data = env.memory.data(&*caller);
     if ptr + 16 > data.len() || slot_offset + 32 > data.len() {
         return value::encode_bool(false);
     }
@@ -369,15 +369,57 @@ pub(crate) fn delete_property_by_name_id(
     if num_props == 0 {
         return value::encode_bool(true);
     }
-    data[ptr + 12..ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
+    {
+        let data = env.memory.data_mut(&mut *caller);
+        data[ptr + 12..ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
+    }
+    let target_handle = handle_index_of(caller, target) as u32;
     let prop_idx = (slot_offset - (ptr + 16)) / 32;
     for i in prop_idx..num_props - 1 {
         let src = ptr + 16 + (i + 1) * 32;
         let dst = ptr + 16 + i * 32;
-        if src + 32 > data.len() || dst + 32 > data.len() {
-            break;
+        let (name, shifted_flags, val, getter, setter) = {
+            let data = env.memory.data(&*caller);
+            if src + 32 > data.len() || dst + 32 > data.len() {
+                break;
+            }
+            (
+                u32::from_le_bytes(data[src..src + 4].try_into().unwrap()),
+                i32::from_le_bytes(data[src + 4..src + 8].try_into().unwrap()),
+                i64::from_le_bytes(data[src + 8..src + 16].try_into().unwrap()),
+                i64::from_le_bytes(data[src + 16..src + 24].try_into().unwrap()),
+                i64::from_le_bytes(data[src + 24..src + 32].try_into().unwrap()),
+            )
+        };
+        {
+            let data = env.memory.data_mut(&mut *caller);
+            data[dst..dst + 4].copy_from_slice(&name.to_le_bytes());
+            data[dst + 4..dst + 8].copy_from_slice(&shifted_flags.to_le_bytes());
         }
-        data.copy_within(src..src + 32, dst);
+        let _ = crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            target_handle,
+            i,
+            crate::runtime_gc::heap_access::SlotPart::Value,
+            val,
+        );
+        let _ = crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            target_handle,
+            i,
+            crate::runtime_gc::heap_access::SlotPart::Getter,
+            getter,
+        );
+        let _ = crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            target_handle,
+            i,
+            crate::runtime_gc::heap_access::SlotPart::Setter,
+            setter,
+        );
     }
     value::encode_bool(true)
 }
@@ -668,13 +710,6 @@ pub(crate) async fn reflect_set_prototype_of_fn_impl(
     if is_prototype_circular_chain(caller, target, proto).await {
         return value::encode_bool(false);
     }
-    let Some(ptr) = resolve_handle(caller, target) else {
-        return value::encode_bool(false);
-    };
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return value::encode_bool(false);
-    };
-
     let proto_handle = if value::is_null(proto) {
         0xFFFF_FFFF
     } else if value::is_object(proto) {
@@ -709,13 +744,14 @@ pub(crate) async fn reflect_set_prototype_of_fn_impl(
     } else {
         0xFFFF_FFFF
     };
-
-    let data = memory.data_mut(&mut *caller);
-    if ptr + 4 > data.len() {
+    let Some(env) = WasmEnv::from_caller(caller) else {
         return value::encode_bool(false);
-    }
-    data[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
-    value::encode_bool(true)
+    };
+    let target_handle = handle_index_of(caller, target) as u32;
+    value::encode_bool(
+        crate::runtime_gc::heap_access::write_proto(caller, &env, target_handle, proto_handle)
+            .is_some(),
+    )
 }
 
 fn alloc_data_property_descriptor(

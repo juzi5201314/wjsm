@@ -158,18 +158,11 @@ fn object_write_proto_handle(
     obj: i64,
     proto_handle: u32,
 ) -> bool {
-    let Some(ptr) = resolve_handle(caller, obj) else {
+    let handle = handle_index_of(caller, obj) as u32;
+    let Some(env) = WasmEnv::from_caller(caller) else {
         return false;
     };
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return false;
-    };
-    let data = mem.data_mut(caller);
-    if ptr + 4 > data.len() {
-        return false;
-    }
-    data[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
-    true
+    crate::runtime_gc::heap_access::write_proto(caller, &env, handle, proto_handle).is_some()
 }
 
 fn object_define_property_or_throw(
@@ -315,11 +308,39 @@ fn define_property_on_normal_object_for_create(
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return Ok(false);
         };
-        let data = memory.data_mut(caller);
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-        data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
-        data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
+        {
+            let data = memory.data_mut(&mut *caller);
+            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        }
+        let handle = handle_index_of(caller, target) as u32;
+        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
+        let Some(env) = WasmEnv::from_caller(caller) else {
+            return Ok(false);
+        };
+        let _ = crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle,
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Value,
+            val,
+        );
+        let _ = crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle,
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Getter,
+            getter,
+        );
+        let _ = crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle,
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Setter,
+            setter,
+        );
         Ok(true)
     } else {
         if !is_extensible_impl(caller, target) {

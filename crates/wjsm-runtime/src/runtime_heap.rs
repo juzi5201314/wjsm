@@ -130,11 +130,11 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     let ptr = heap_ptr as usize;
     let slot_addr = obj_table_ptr as usize
         + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+    if crate::runtime_gc::heap_access::init_proto_at_ptr(ctx, env, ptr, proto).is_none() {
+        return value::encode_undefined();
+    }
     {
         let data = env.memory.data_mut(&mut *ctx);
-        data[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
-            ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
-            .copy_from_slice(&proto.to_le_bytes());
         data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
         data[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
             ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
@@ -279,9 +279,7 @@ pub(crate) fn set_object_proto_header<C: AsContextMut<Data = RuntimeState>>(
     obj: i64,
     proto: i64,
 ) {
-    let Some(obj_ptr) =
-        resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)
-    else {
+    let Some(handle) = value::is_js_object(obj).then(|| value::decode_object_handle(obj)) else {
         return;
     };
     let proto_handle = if value::is_null(proto) {
@@ -291,11 +289,7 @@ pub(crate) fn set_object_proto_header<C: AsContextMut<Data = RuntimeState>>(
     } else {
         return;
     };
-    let data = env.memory.data_mut(ctx);
-    if obj_ptr + 4 > data.len() {
-        return;
-    }
-    data[obj_ptr..obj_ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
+    let _ = crate::runtime_gc::heap_access::write_proto(ctx, env, handle, proto_handle);
 }
 
 /// ECMAScript §20.5.3.4 Error.prototype.toString

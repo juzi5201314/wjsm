@@ -160,10 +160,10 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     let ptr = heap_ptr as usize;
     let slot_addr = obj_table_ptr as usize
         + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+    if crate::runtime_gc::heap_access::init_proto_at_ptr(ctx, env, ptr, proto as u32).is_none() {
+        return value::encode_undefined();
+    }
     let d = env.memory.data_mut(&mut *ctx);
-    d[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
-        ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
-        .copy_from_slice(&proto.to_le_bytes());
     d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_ARRAY;
     d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
         ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
@@ -194,21 +194,16 @@ pub(crate) fn set_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     if !value::is_array(arr_val) {
         return;
     }
-    let handle = value::decode_handle(arr_val) as usize;
-    let Some(ptr) = resolve_handle_idx_with_env(ctx, env, handle) else {
+    let handle = value::decode_handle(arr_val) as u32;
+    let _ = crate::runtime_gc::heap_access::write_element(ctx, env, handle, index as usize, val);
+    let Some(ptr) = resolve_handle_idx_with_env(ctx, env, handle as usize) else {
         return;
     };
     let data = env.memory.data_mut(&mut *ctx);
-    let slot_offset = ptr
-        + constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + index as usize * constants::HEAP_ARRAY_ELEMENT_SIZE as usize;
-    if slot_offset + constants::HEAP_ARRAY_ELEMENT_SIZE as usize > data.len() {
+    let length_offset = ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize;
+    if length_offset + 4 > data.len() {
         return;
     }
-    data[slot_offset..slot_offset + constants::HEAP_ARRAY_ELEMENT_SIZE as usize]
-        .copy_from_slice(&val.to_le_bytes());
-    // Update length to max(length, index+1)
-    let length_offset = ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize;
     let old_len = u32::from_le_bytes(
         data[length_offset..length_offset + 4]
             .try_into()
@@ -241,11 +236,11 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     let ptr = heap_ptr as usize;
     let slot_addr = obj_table_ptr as usize
         + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+    if crate::runtime_gc::heap_access::init_proto_at_ptr(ctx, env, ptr, 0u32).is_none() {
+        return value::encode_undefined();
+    }
     {
         let d = env.memory.data_mut(&mut *ctx);
-        d[ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize
-            ..ptr + constants::HEAP_OBJECT_PROTO_OFFSET as usize + 4]
-            .copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
         d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
         d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
             ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]

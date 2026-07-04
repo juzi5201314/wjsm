@@ -325,12 +325,13 @@ pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     index: u32,
     val: i64,
 ) {
-    let d = env.memory.data_mut(&mut *ctx);
-    let elem_offset = ptr + 16 + (index as usize) * 8;
-    if elem_offset + 8 > d.len() {
-        return;
-    }
-    d[elem_offset..elem_offset + 8].copy_from_slice(&val.to_le_bytes());
+    let _ = crate::runtime_gc::heap_access::write_element_at_ptr(
+        ctx,
+        env,
+        ptr,
+        index as usize,
+        val,
+    );
 }
 
 pub(crate) fn write_array_hole_with_env<C: AsContextMut<Data = RuntimeState>>(
@@ -364,6 +365,7 @@ pub(crate) fn grow_array(
         wjsm_ir::HEAP_TYPE_ARRAY,
         new_cap,
     )?;
+    let ptr = resolve_handle_idx_with_env(caller, &env, handle_idx)?;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
     let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
@@ -407,6 +409,7 @@ pub(crate) fn grow_object(
         wjsm_ir::HEAP_TYPE_OBJECT,
         new_cap,
     )?;
+    let ptr = resolve_handle_idx_with_env(caller, &env, handle_idx)?;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
     let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
@@ -727,71 +730,89 @@ pub(crate) fn write_object_property_by_name_id(
     flags: i32,
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let handle = handle_index_of(caller, obj_handle) as u32;
     let found = find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id);
     if let Some((slot_offset, _, _)) = found {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return;
-        };
-        let data = memory.data_mut(&mut *caller);
-        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
+        let _ = crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle,
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Value,
+            val,
+        );
         let _ = flags;
-    } else {
-        let (num_props, capacity) = {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return;
-            };
-            let data = memory.data(&*caller);
-            if obj_ptr + 16 > data.len() {
-                return;
-            }
-            let cap = u32::from_le_bytes([
-                data[obj_ptr + 8],
-                data[obj_ptr + 9],
-                data[obj_ptr + 10],
-                data[obj_ptr + 11],
-            ]) as usize;
-            let num = u32::from_le_bytes([
-                data[obj_ptr + 12],
-                data[obj_ptr + 13],
-                data[obj_ptr + 14],
-                data[obj_ptr + 15],
-            ]) as usize;
-            (num, cap)
-        };
-        if num_props >= capacity {
-            let Some(new_cap) = grown_object_capacity(capacity, 4) else {
-                return;
-            };
-            let _ = grow_object(caller, obj_ptr, obj_handle, new_cap);
-        }
-        let num_props = {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return;
-            };
-            let data = memory.data(&*caller);
-            if obj_ptr + 16 > data.len() {
-                return;
-            }
-            u32::from_le_bytes([
-                data[obj_ptr + 12],
-                data[obj_ptr + 13],
-                data[obj_ptr + 14],
-                data[obj_ptr + 15],
-            ]) as usize
-        };
-        let new_count = num_props + 1;
-        let slot_offset = obj_ptr + 16 + num_props * 32;
+        return;
+    }
+
+    let (num_props, capacity) = {
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return;
         };
-        let data = memory.data_mut(&mut *caller);
+        let data = memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return;
+        }
+        let cap = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]) as usize;
+        let num = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]) as usize;
+        (num, cap)
+    };
+    if num_props >= capacity {
+        let Some(new_cap) = grown_object_capacity(capacity, 4) else {
+            return;
+        };
+        if grow_object(caller, obj_ptr, obj_handle, new_cap).is_none() {
+            return;
+        }
+    }
+    let Some(actual_ptr) = resolve_handle_idx_with_env(caller, &env, handle as usize) else {
+        return;
+    };
+    let num_props = {
+        let data = env.memory.data(&*caller);
+        if actual_ptr + 16 > data.len() {
+            return;
+        }
+        u32::from_le_bytes([
+            data[actual_ptr + 12],
+            data[actual_ptr + 13],
+            data[actual_ptr + 14],
+            data[actual_ptr + 15],
+        ]) as usize
+    };
+    let new_count = num_props + 1;
+    let slot_idx = num_props;
+    let slot_offset = actual_ptr + 16 + slot_idx * 32;
+    {
+        let data = env.memory.data_mut(&mut *caller);
         if slot_offset + 32 > data.len() {
             return;
         }
         data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
         data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-        data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(new_count as u32).to_le_bytes());
+    }
+    let _ = crate::runtime_gc::heap_access::write_property_slot(
+        caller,
+        &env,
+        handle,
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Value,
+        val,
+    );
+    let data = env.memory.data_mut(&mut *caller);
+    if actual_ptr + 16 <= data.len() {
+        data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(new_count as u32).to_le_bytes());
     }
 }
 
@@ -805,33 +826,74 @@ pub(crate) fn write_private_accessor_slot(
     setter: i64,
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let handle = handle_index_of(caller, obj_handle) as u32;
     let undef = value::encode_undefined();
     let accessor_flags = constants::FLAG_PRIVATE | constants::FLAG_IS_ACCESSOR;
     if let Some((slot_offset, flags, _)) =
         find_private_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return;
-        };
-        let data = memory.data_mut(&mut *caller);
-        if slot_offset + 32 > data.len() {
-            return;
-        }
+        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
         if (flags & constants::FLAG_IS_ACCESSOR) != 0 {
             if !value::is_undefined(getter) {
-                data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
+                let _ = crate::runtime_gc::heap_access::write_property_slot(
+                    caller,
+                    &env,
+                    handle,
+                    slot_idx,
+                    crate::runtime_gc::heap_access::SlotPart::Getter,
+                    getter,
+                );
             }
             if !value::is_undefined(setter) {
-                data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
+                let _ = crate::runtime_gc::heap_access::write_property_slot(
+                    caller,
+                    &env,
+                    handle,
+                    slot_idx,
+                    crate::runtime_gc::heap_access::SlotPart::Setter,
+                    setter,
+                );
             }
         } else {
-            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
-            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
-            data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
-            data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
+            {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return;
+                };
+                let data = memory.data_mut(&mut *caller);
+                if slot_offset + 32 > data.len() {
+                    return;
+                }
+                data[slot_offset + 4..slot_offset + 8]
+                    .copy_from_slice(&accessor_flags.to_le_bytes());
+            }
+            let _ = crate::runtime_gc::heap_access::write_property_slot(
+                caller,
+                &env,
+                handle,
+                slot_idx,
+                crate::runtime_gc::heap_access::SlotPart::Value,
+                undef,
+            );
+            let _ = crate::runtime_gc::heap_access::write_property_slot(
+                caller,
+                &env,
+                handle,
+                slot_idx,
+                crate::runtime_gc::heap_access::SlotPart::Getter,
+                getter,
+            );
+            let _ = crate::runtime_gc::heap_access::write_property_slot(
+                caller,
+                &env,
+                handle,
+                slot_idx,
+                crate::runtime_gc::heap_access::SlotPart::Setter,
+                setter,
+            );
         }
         return;
     }
+
     let (capacity, num_props) = {
         let data = env.memory.data(&*caller);
         if obj_ptr + 16 > data.len() {
@@ -855,47 +917,66 @@ pub(crate) fn write_private_accessor_slot(
         let Some(new_cap) = grown_object_capacity(capacity, 4) else {
             return;
         };
-        let _ = grow_object(caller, obj_ptr, obj_handle, new_cap);
-    }
-    let num_props = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        if grow_object(caller, obj_ptr, obj_handle, new_cap).is_none() {
             return;
-        };
-        let data = memory.data(&*caller);
-        if obj_ptr + 16 > data.len() {
+        }
+    }
+    let Some(actual_ptr) = resolve_handle_idx_with_env(caller, &env, handle as usize) else {
+        return;
+    };
+    let num_props = {
+        let data = env.memory.data(&*caller);
+        if actual_ptr + 16 > data.len() {
             return;
         }
         u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
+            data[actual_ptr + 12],
+            data[actual_ptr + 13],
+            data[actual_ptr + 14],
+            data[actual_ptr + 15],
         ]) as usize
     };
-    let slot_offset = obj_ptr + 16 + num_props * 32;
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return;
-    };
-    let data = memory.data_mut(&mut *caller);
-    if slot_offset + 32 > data.len() {
-        return;
+    let slot_idx = num_props;
+    let slot_offset = actual_ptr + 16 + slot_idx * 32;
+    let g = if value::is_undefined(getter) { undef } else { getter };
+    let s = if value::is_undefined(setter) { undef } else { setter };
+    {
+        let data = env.memory.data_mut(&mut *caller);
+        if slot_offset + 32 > data.len() {
+            return;
+        }
+        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
     }
-    let g = if value::is_undefined(getter) {
-        undef
-    } else {
-        getter
-    };
-    let s = if value::is_undefined(setter) {
-        undef
-    } else {
-        setter
-    };
-    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
-    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
-    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&g.to_le_bytes());
-    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&s.to_le_bytes());
-    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&((num_props + 1) as u32).to_le_bytes());
+    let _ = crate::runtime_gc::heap_access::write_property_slot(
+        caller,
+        &env,
+        handle,
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Value,
+        undef,
+    );
+    let _ = crate::runtime_gc::heap_access::write_property_slot(
+        caller,
+        &env,
+        handle,
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Getter,
+        g,
+    );
+    let _ = crate::runtime_gc::heap_access::write_property_slot(
+        caller,
+        &env,
+        handle,
+        slot_idx,
+        crate::runtime_gc::heap_access::SlotPart::Setter,
+        s,
+    );
+    let data = env.memory.data_mut(&mut *caller);
+    if actual_ptr + 16 <= data.len() {
+        data[actual_ptr + 12..actual_ptr + 16]
+            .copy_from_slice(&((num_props + 1) as u32).to_le_bytes());
+    }
 }
 
 /// 读取对象/函数的所有属性名，用于 for...in 枚举
@@ -995,11 +1076,12 @@ pub(crate) fn allocate_descriptor_object(
         wjsm_ir::HEAP_TYPE_OBJECT,
         4,
     )?;
+    crate::runtime_gc::heap_access::init_proto_at_ptr(caller, &env, heap_ptr, 0u32)?;
     {
         let data = env.memory.data_mut(&mut *caller);
 
         // 初始化 header: proto=0, type=OBJECT, pad=0, capacity=4, num_props=0
-        data[heap_ptr..heap_ptr + 4].copy_from_slice(&0u32.to_le_bytes()); // proto
+        // proto initialized through heap_access owner
         data[heap_ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT; // type byte
         data[heap_ptr + 5..heap_ptr + 8].fill(0); // pad bytes
         data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&4u32.to_le_bytes()); // capacity
@@ -1024,29 +1106,50 @@ pub(crate) fn allocate_descriptor_object(
 
     // 写入属性的辅助闭包
     let mut write_property = |name_id: u32, val: i64, flags: i32| -> Option<()> {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
+        let num_props = {
+            let data = env.memory.data(&*caller);
+            u32::from_le_bytes([
+                data[desc_ptr + 12],
+                data[desc_ptr + 13],
+                data[desc_ptr + 14],
+                data[desc_ptr + 15],
+            ]) as usize
         };
-        let data = memory.data_mut(&mut *caller);
-        // 读取当前 num_props
-        let num_props = u32::from_le_bytes([
-            data[desc_ptr + 12],
-            data[desc_ptr + 13],
-            data[desc_ptr + 14],
-            data[desc_ptr + 15],
-        ]) as usize;
         let slot_offset = desc_ptr + 16 + num_props * 32;
-        if slot_offset + 32 > data.len() {
-            return None;
+        {
+            let data = env.memory.data_mut(&mut *caller);
+            if slot_offset + 32 > data.len() {
+                return None;
+            }
+            data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
         }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-        // getter 和 setter 为 undefined
         let undef = value::encode_undefined();
-        data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
-        data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
-        // 更新 num_props
+        crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle_idx as u32,
+            num_props,
+            crate::runtime_gc::heap_access::SlotPart::Value,
+            val,
+        )?;
+        crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle_idx as u32,
+            num_props,
+            crate::runtime_gc::heap_access::SlotPart::Getter,
+            undef,
+        )?;
+        crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle_idx as u32,
+            num_props,
+            crate::runtime_gc::heap_access::SlotPart::Setter,
+            undef,
+        )?;
+        let data = env.memory.data_mut(&mut *caller);
         let new_num_props = (num_props + 1) as u32;
         data[desc_ptr + 12..desc_ptr + 16].copy_from_slice(&new_num_props.to_le_bytes());
         Some(())
@@ -1917,24 +2020,10 @@ pub(crate) fn object_rest_impl(
     let Some(result_ptr) = resolve_handle(caller, result) else {
         return result;
     };
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return result;
-    };
-    let data = mem.data_mut(&mut *caller);
-    if result_ptr + 16 + source_props.len() * 32 > data.len() {
-        return result;
-    }
     let flags =
         constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
-    let undef = value::encode_undefined();
-    for (i, (name_id, val)) in source_props.into_iter().enumerate() {
-        let slot_offset = result_ptr + 16 + i * 32;
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-        data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
-        data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
-        data[result_ptr + 12..result_ptr + 16].copy_from_slice(&((i + 1) as u32).to_le_bytes());
+    for (name_id, val) in source_props {
+        write_object_property_by_name_id(caller, result_ptr, result, name_id, val, flags);
     }
     result
 }
@@ -2040,44 +2129,37 @@ pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, 
 
     let flags =
         constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    let Some(env) = WasmEnv::from_caller(caller) else {
+        return;
+    };
+    let dest_handle = handle_index_of(caller, dest) as u32;
     for (name_id, val) in source_props {
         if let Some((slot_offset, _, _)) = find_property_slot_by_name_id(caller, dest_ptr, name_id)
         {
             let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
                 return;
             };
-            let data = mem.data_mut(&mut *caller);
-            if slot_offset + 16 > data.len() {
-                return;
+            {
+                let data = mem.data_mut(&mut *caller);
+                if slot_offset + 16 > data.len() {
+                    return;
+                }
+                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
             }
-            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+            let slot_idx = (slot_offset - (dest_ptr + 16)) / 32;
+            let _ = crate::runtime_gc::heap_access::write_property_slot(
+                caller,
+                &env,
+                dest_handle,
+                slot_idx,
+                crate::runtime_gc::heap_access::SlotPart::Value,
+                val,
+            );
         } else {
-            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                return;
-            };
-            let data = mem.data_mut(&mut *caller);
-            if dest_ptr + 16 > data.len() {
-                return;
+            write_object_property_by_name_id(caller, dest_ptr, dest, name_id, val, flags);
+            if let Some(new_ptr) = resolve_handle(caller, dest) {
+                dest_ptr = new_ptr;
             }
-            let num_props = u32::from_le_bytes([
-                data[dest_ptr + 12],
-                data[dest_ptr + 13],
-                data[dest_ptr + 14],
-                data[dest_ptr + 15],
-            ]) as usize;
-            let slot_offset = dest_ptr + 16 + num_props * 32;
-            if slot_offset + 32 > data.len() {
-                return;
-            }
-            let undef = value::encode_undefined();
-            data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-            data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
-            data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
-            data[dest_ptr + 12..dest_ptr + 16]
-                .copy_from_slice(&((num_props + 1) as u32).to_le_bytes());
         }
     }
 }

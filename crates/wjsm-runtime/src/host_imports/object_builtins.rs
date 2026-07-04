@@ -38,15 +38,13 @@ pub(crate) fn define_object_builtins(
             } else {
                 let o = alloc_host_object(&mut caller, &env, 0);
                 let proto_handle = proto_handle_from_value(&mut caller, proto);
-                if let Some(ptr) = resolve_handle(&mut caller, o) {
-                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                        return o;
-                    };
-                    let data = memory.data_mut(&mut caller);
-                    if ptr + 4 <= data.len() {
-                        data[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
-                    }
-                }
+                let handle = handle_index_of(&mut caller, o) as u32;
+                let _ = crate::runtime_gc::heap_access::write_proto(
+                    &mut caller,
+                    &env,
+                    handle,
+                    proto_handle,
+                );
                 o
             }
         },
@@ -241,10 +239,14 @@ pub(crate) fn define_object_builtins(
                     depth += 1;
                 }
             }
-            let data = memory.data_mut(&mut caller);
-            if ptr + 4 <= data.len() {
-                data[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
-            }
+            let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+            let handle = handle_index_of(&mut caller, obj) as u32;
+            let _ = crate::runtime_gc::heap_access::write_proto(
+                &mut caller,
+                &env,
+                handle,
+                proto_handle,
+            );
             obj
         },
     );

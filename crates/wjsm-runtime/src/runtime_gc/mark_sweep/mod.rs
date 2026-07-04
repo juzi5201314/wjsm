@@ -132,6 +132,7 @@ impl MarkSweepCollector {
             }
         });
 
+        ctx.increment_gc_epoch();
         ctx.stats.marked = self.mark_bits.popcount();
         ctx.stats.elapsed = started_at.elapsed();
         let stats = ctx.stats.clone();
@@ -168,6 +169,7 @@ impl MarkSweepCollector {
         let started_at = state.started_at();
         match sweeper::sweep_lazy_step(self, ctx, &mut state, work_bytes, deadline) {
             sweeper::LazySweepStep::Progress { remaining_estimate } => {
+                ctx.increment_gc_epoch();
                 self.lazy_sweep = Some(state);
                 StepOutcome::Progress { remaining_estimate }
             }

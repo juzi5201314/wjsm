@@ -2597,11 +2597,19 @@ pub(crate) fn define_collections_buffers(
                     );
                     return invoke_private_accessor_set(&mut caller, setter, obj, val);
                 }
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                let Some(env) = WasmEnv::from_caller(&mut caller) else {
                     return value::encode_undefined();
                 };
-                let data = memory.data_mut(&mut caller);
-                data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+                let slot_idx = (slot_offset - (ptr + 16)) / 32;
+                let handle = handle_index_of(&mut caller, obj) as u32;
+                let _ = crate::runtime_gc::heap_access::write_property_slot(
+                    &mut caller,
+                    &env,
+                    handle,
+                    slot_idx,
+                    crate::runtime_gc::heap_access::SlotPart::Value,
+                    val,
+                );
                 val
             } else {
                 write_object_property_by_name_id(

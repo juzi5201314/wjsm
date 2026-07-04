@@ -191,6 +191,15 @@ impl<'a> GcContext<'a> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// 递增 GC epoch。任何可能改变 `obj_table` 指针或色位的 GC 点完成后调用。
+    pub fn increment_gc_epoch(&mut self) -> u64 {
+        self.store
+            .data()
+            .gc_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
+    }
+
     /// 设置 v2 分配窗口。P1 前这些 globals 不存在，因此按 Option 容错。
     pub fn alloc_window_set(&mut self, ptr: usize, end: usize) {
         if let Some(global) = self.env.alloc_ptr {

@@ -73,6 +73,7 @@
 pub mod api;
 pub mod context;
 pub mod heap_governance;
+pub mod heap_access;
 pub mod mark_bitmap;
 pub mod mark_sweep;
 pub mod native_callable_refs;

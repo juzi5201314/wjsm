@@ -83,3 +83,62 @@
 - T1.6 修复证据：cold startup 期在 GC attach 前没有可靠 roots，`gc_alloc_slow` 与 host allocation 在 `dynamic_heap_start == 0` 时改为 no-GC bump/grow，避免 bootstrap/host primordial 被过早 sweep/reuse。
 - T1.6 修复证据：cold startup 在 host prototype 初始化前显式执行 `__wjsm_init_function_props`，避免 main 入口首次执行时把 `obj_table_count` 回退到 `function_props_base` 并覆盖 Error/Symbol prototypes。
 - T1.6 修复证据：Error constructor 使用已有 receiver 时只在 receiver 当前原型仍是 `Object.prototype` 时补设对应 Error prototype，保留 `extends TypeError` / `Reflect.construct(..., newTarget)` 已建立的自定义 receiver prototype。
+
+## P2 T2.1 evidence
+
+- 新增 `crates/wjsm-runtime/src/runtime_gc/heap_access.rs`：`HeapPtr` debug epoch、`SlotPart`、`resolve`、`write_property_slot`、`write_element`、`write_proto`，并在 `runtime_gc/mod.rs` 挂载。
+- `GcContext::increment_gc_epoch()` 已加入；mark-sweep 完整 sweep 与 lazy sweep progress/complete 路径递增 epoch，保证 host `HeapPtr` debug 断言能发现跨 GC 点 raw ptr。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime` → 135 passed, 2 skipped。
+
+## P2 T2.2 evidence
+
+- 新增 `docs/aegis/work/2026-07-03-gc-v2/bare-write-audit.md`。
+- `grep` pattern `HEAP_OBJECT_PROPERTY|HEAP_ARRAY_ELEMENT|HEAP_OBJECT_PROTO_OFFSET` over `crates/wjsm-runtime/src` → 已归类到主 offset 清单。
+- `grep` pattern `copy_from_slice(&proto|copy_from_slice(&proto_handle|ptr..ptr + 4|PROTO_OFFSET` over `crates/wjsm-runtime/src` → 已归类到 proto header 交叉清单。
+- `grep` pattern `setPrototypeOf|Object.create|Reflect.setPrototypeOf|__proto__|prototype` over runtime host paths → 已归类 prototype API 入口与只读原型链遍历。
+- 清单明确区分待替换写点、只读短窗口、对象初始化/元数据写、非 JS 对象堆写入。
+
+## P2 T2.3 evidence
+
+- `runtime_heap.rs`: `set_object_proto_header` 改经 `heap_access::write_proto`；host object 初始化 proto 改经 `heap_access::init_proto_at_ptr`（对象发布前无 barrier）。
+- `runtime_values.rs`: `write_array_elem_with_env` 改经 `heap_access::write_element_at_ptr`；`write_object_property_by_name_id` 与 `write_private_accessor_slot` 的 value/getter/setter 子槽改经 `heap_access::write_property_slot`，并在 grow 后重新 resolve 当前 object ptr。
+- `runtime_builtins.rs` / `host_imports/core.rs` 本批审计无对象槽裸写替换点。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime` → 135 passed, 2 skipped。
+- `cargo nextest run --workspace` → 1244 passed, 2 skipped。
+
+## P2 T2.4 evidence
+
+- `host_imports/array_object.rs`: `object_write_proto_handle` 改经 `heap_access::write_proto`；DefineProperty existing-slot 的 value/getter/setter 改经 `heap_access::write_property_slot`，flags 保持元数据写。
+- `host_imports/collections_buffers.rs`: private existing-slot value 写改经 `heap_access::write_property_slot`。
+- typedarray/streams 审计命中为 backing store、ArrayBufferEntry 或 RuntimeState 侧表写，不属于 JS 对象 heap slot。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run --workspace` → 1244 passed, 2 skipped。
+
+## P2 T2.5 evidence
+
+- `runtime_host_helpers/host_helpers_alloc.rs`: array/object 初始化 proto 改经 `heap_access::init_proto_at_ptr`；`set_array_elem_with_env` 改经 `heap_access::write_element`。
+- `host_imports/generator.rs` / `async_generator.rs` / `object_builtins.rs` / `proxy_reflect.rs`: proto header 写改经 `heap_access::write_proto` 或 `set_object_proto_header`。
+- `runtime_host_helpers/host_helpers_property.rs` / `host_helpers_proxy.rs`: data/accessor 属性 value/getter/setter 写改经 `heap_access::write_property_slot`。
+- `runtime_values.rs`: descriptor object、object rest/spread 的引用槽写改经 `heap_access::write_property_slot` 或复用 `write_object_property_by_name_id`。
+- 剩余 slot/proto grep 命中为只读访问、`heap_access` 内部、测试 buffer 构造或 resize/obj_table 更新（T2.6）。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run --workspace` → 1244 passed, 2 skipped。
+
+## P2 T2.6 evidence
+
+- `compiler_helpers/helpers_object.rs` / `support_object_helpers.rs`: object resize 在 allocation helper 返回后、`memory.copy` 前，从 `obj_table[handle]` 重新读取 old_ptr，避免 slow-path GC/move 后复用旧 raw ptr。
+- `runtime_values.rs`: `grow_array` / `grow_object` 在 `alloc_heap_region_for_host` 后通过 handle 重新解析旧 ptr，并用重新解析的 ptr 执行 copy/abandon。
+- `runtime_host_helpers/host_helpers_proxy.rs`: proxy grow object 在 host allocation 后通过 handle 重新解析旧 ptr，再 copy/update obj_table。
+- `crates/wjsm-backend-wasm/tests/gc_alloc_window.rs`: 新增 support `obj_set` 结构测试，断言 resize `memory.copy` 前存在 obj_table re-resolve 序列。
+- `cargo check -p wjsm-runtime -p wjsm-backend-wasm` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-backend-wasm` → 56 passed。
+- `cargo nextest run -p wjsm-runtime` → 135 passed, 2 skipped。
+
+## P2 T2.7 evidence
+
+- P2 scope closed: `bare-write-audit.md` 已勾销 host 引用槽裸写迁移与 resize re-resolve 项，剩余裸写分类为 `heap_access` owner 内部、初始化/元数据写、只读短窗口或非 JS 对象堆写入。
+- `cargo nextest run --workspace` → 1245 passed, 2 skipped。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__)'` → 588 passed, 148 skipped。
+- `cargo build` → passed（zero warnings）。
