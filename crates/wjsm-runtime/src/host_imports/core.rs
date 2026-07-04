@@ -1512,14 +1512,15 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "gc_alloc_slow", f)?;
 
-    // gc_maybe_collect()：proactive GC 触发。
-    //   WASM fast-path 在每次 alloc 成功后调用。host 递增 alloc_counter，达 gc_threshold 时 collect。
+    // gc_maybe_collect()：proactive GC safepoint 触发。
+    //   WASM fast-path 在每次 alloc 成功后调用。host 递增 alloc_counter，达 gc_threshold 时按调度器推进一次 step。
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
-        let (should_collect, gc_arc) = {
+        let (should_collect, gc_arc, scheduler_arc) = {
             let state = caller.data();
             (
                 state.bump_alloc_counter_should_collect(),
                 state.gc_algorithm.clone(),
+                state.gc_scheduler.clone(),
             )
         };
         if !should_collect {
@@ -1528,17 +1529,39 @@ pub(crate) fn define_core(
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
         };
-        let stats = {
+        let budget = {
+            let scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
+            scheduler.budget()
+        };
+        let started = std::time::Instant::now();
+        let (outcome, stats, heap_limit) = {
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
             let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-            gc.collect_full(&mut ctx, &mut roots as _)
+            let outcome = gc.safepoint_step(&mut ctx, &mut roots as _, budget);
+            let heap_limit = ctx.heap_limit();
+            let stats = if matches!(outcome, crate::runtime_gc::api::StepOutcome::CycleComplete) {
+                Some(gc.last_stats().clone())
+            } else {
+                None
+            };
+            (outcome, stats, heap_limit)
         };
-        caller
-            .data()
-            .update_gc_threshold_after_collection(stats.marked);
-        caller.data().store_last_gc_stats(stats.clone());
-        caller.data().reset_alloc_counter_after_gc();
+        let elapsed = started.elapsed();
+        {
+            let mut scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
+            scheduler.after_step(&outcome, elapsed);
+            if let Some(stats) = stats.as_ref() {
+                scheduler.after_cycle(stats.heap_used_bytes, 0, heap_limit);
+            }
+        }
+        if let Some(stats) = stats {
+            caller
+                .data()
+                .update_gc_threshold_after_collection(stats.marked);
+            caller.data().store_last_gc_stats(stats.clone());
+            caller.data().reset_alloc_counter_after_gc();
+        }
     });
     linker.define(&mut store, "env", "gc_maybe_collect", f)?;
 

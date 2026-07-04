@@ -636,6 +636,7 @@ impl Clone for RuntimeState {
             handle_free_list: self.handle_free_list.clone(),
             abandoned_regions: self.abandoned_regions.clone(),
             gc_algorithm: self.gc_algorithm.clone(),
+            gc_scheduler: self.gc_scheduler.clone(),
             last_gc_stats: self.last_gc_stats.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
@@ -751,6 +752,8 @@ struct RuntimeState {
     /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports 经 v2 生命周期接口驱动。
     /// Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
     gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
+    /// GC safepoint 调度器：根据 pause target 调整单步预算，完整周期后更新字节触发目标。
+    gc_scheduler: Arc<Mutex<crate::runtime_gc::scheduler::GcScheduler>>,
     /// 最近一次 GC 统计（含碎片治理指标，issue #332）。
     /// 每次完整 collection 后由 host 更新，供可观测性 API 查询。
     last_gc_stats: Arc<Mutex<crate::runtime_gc::api::GcStats>>,
@@ -1021,11 +1024,14 @@ impl RuntimeState {
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
             handle_free_list: Arc::new(Mutex::new(Vec::new())),
             abandoned_regions: Arc::new(Mutex::new(Vec::new())),
-            last_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
             gc_algorithm: Arc::new(Mutex::new(
                 crate::runtime_gc::registry::create(crate::runtime_gc::GcAlgorithmKind::MarkSweep)
                     .expect("mark-sweep GC algorithm must be registered"),
             )),
+            gc_scheduler: Arc::new(Mutex::new(
+                crate::runtime_gc::scheduler::GcScheduler::default(),
+            )),
+            last_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),

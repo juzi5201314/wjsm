@@ -78,6 +78,7 @@ pub mod mark_sweep;
 pub mod native_callable_refs;
 pub mod registry;
 pub mod roots;
+pub mod scheduler;
 pub mod side_table_refs;
 pub mod weak_refs;
 
