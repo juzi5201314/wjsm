@@ -62,14 +62,14 @@ fn runtime_options_for_file(
             .to_string_lossy()
             .into_owned()
     };
-    Ok(runtime_options_with_script(cli, script, script_args))
+    runtime_options_with_script(cli, script, script_args)
 }
 
 fn runtime_options_for_inline(
     cli: &Cli,
     mode_tag: &str,
     script_args: &[OsString],
-) -> runtime::RuntimeOptions {
+) -> Result<runtime::RuntimeOptions> {
     runtime_options_with_script(cli, mode_tag.to_string(), script_args)
 }
 
@@ -77,7 +77,7 @@ fn runtime_options_with_script(
     cli: &Cli,
     script: String,
     script_args: &[OsString],
-) -> runtime::RuntimeOptions {
+) -> Result<runtime::RuntimeOptions> {
     let mut argv = Vec::with_capacity(script_args.len() + 2);
     argv.push(wjsm_argv0());
     argv.push(script);
@@ -85,18 +85,21 @@ fn runtime_options_with_script(
     runtime_options_with_argv(cli, argv)
 }
 
-fn runtime_options_with_argv(cli: &Cli, argv: Vec<String>) -> runtime::RuntimeOptions {
-    runtime::RuntimeOptions {
+fn runtime_options_with_argv(cli: &Cli, argv: Vec<String>) -> Result<runtime::RuntimeOptions> {
+    let env = runtime_env_snapshot();
+    let gc_algorithm = runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?;
+    Ok(runtime::RuntimeOptions {
         max_heap_size: cli.max_heap_size,
         wasmtime_memory_reservation: cli.wasmtime_memory_reservation.map(|value| value as u64),
+        gc_algorithm,
         argv,
         cwd: runtime_cwd_string(),
-        env: runtime_env_snapshot(),
+        env,
         pid: std::process::id(),
         platform: node_platform(),
         arch: node_arch(),
         ..runtime::RuntimeOptions::default()
-    }
+    })
 }
 
 fn wjsm_argv0() -> String {
@@ -519,7 +522,7 @@ fn cmd_build(
                         cli.verbose_enabled(1),
                         cli.should_verify_ir(),
                     )?,
-                    runtime_options_for_inline(cli, "[run-eval]", &[]),
+                    runtime_options_for_inline(cli, "[run-eval]", &[])?,
                 ),
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
@@ -621,7 +624,7 @@ fn cmd_run_eval(
         cli.verbose_enabled(1),
         cli.should_verify_ir(),
     )?;
-    let options = runtime_options_for_inline(cli, mode_tag, script_args);
+    let options = runtime_options_for_inline(cli, mode_tag, script_args)?;
     run_compile_then_execute(cli, result, options)
 }
 
@@ -1963,7 +1966,17 @@ pub fn run_file_in_process_with_options(
         }
     };
 
-    let options = runtime_options_for_in_process(input, script_args, env_overrides, cwd_override);
+    let options =
+        match runtime_options_for_in_process(input, script_args, env_overrides, cwd_override) {
+            Ok(options) => options,
+            Err(e) => {
+                return (
+                    EXIT_RUNTIME_ERROR as i32,
+                    Vec::new(),
+                    format!("Runtime error: {e:#}\n").into_bytes(),
+                );
+            }
+        };
     let mut stdout: Vec<u8> = Vec::new();
     match rt.block_on(runtime::execute_with_writer_with_options(
         &wasm,
@@ -1992,7 +2005,7 @@ fn runtime_options_for_in_process(
     script_args: &[&str],
     env_overrides: &[(&str, &str)],
     cwd_override: Option<&Path>,
-) -> runtime::RuntimeOptions {
+) -> Result<runtime::RuntimeOptions> {
     let script = input
         .canonicalize()
         .unwrap_or_else(|_| input.to_path_buf())
@@ -2009,8 +2022,11 @@ fn runtime_options_for_in_process(
         env.push(((*key).to_string(), (*value).to_string()));
     }
 
-    runtime::RuntimeOptions {
+    let gc_algorithm = runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?;
+
+    Ok(runtime::RuntimeOptions {
         max_heap_size: None,
+        gc_algorithm,
         argv,
         cwd: cwd_override
             .map(|cwd| cwd.to_string_lossy().into_owned())
@@ -2020,5 +2036,5 @@ fn runtime_options_for_in_process(
         platform: node_platform(),
         arch: node_arch(),
         ..runtime::RuntimeOptions::default()
-    }
+    })
 }

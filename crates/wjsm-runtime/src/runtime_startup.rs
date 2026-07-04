@@ -441,7 +441,7 @@ pub(super) async fn instantiate_execute_bundle(
 ) -> Result<ExecuteInstanceBundle> {
     let mut store = Store::new(
         engine,
-        RuntimeState::new_with_shared_and_options(shared_state, options),
+        RuntimeState::new_with_shared_and_options(shared_state, options)?,
     );
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);

@@ -142,3 +142,14 @@
 - `cargo nextest run --workspace` → 1245 passed, 2 skipped。
 - `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__)'` → 588 passed, 148 skipped。
 - `cargo build` → passed（zero warnings）。
+
+## P3 T3.0 evidence
+
+- `RuntimeOptions` 新增 `gc_algorithm`，默认 `mark-sweep`；`gc_algorithm_from_env` 读取 `WJSM_TEST_GC`，未知值复用 registry 错误并列出 `mark-sweep, g1, zgc`。
+- `RuntimeState::new_with_shared_and_options` 按 `RuntimeOptions.gc_algorithm` 创建 registry 算法；未实现的 `g1`/`zgc` 仍由 registry 显式拒绝，不提供行为 stub。
+- CLI 与 in-process fixture runner 均从运行时 env snapshot/overrides 写入 `RuntimeOptions.gc_algorithm`。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-cli -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(gc_algorithm_env)'` → 2 passed, 137 skipped。
+- `WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__hello)'` → 1 passed, 735 skipped。
+- `WJSM_TEST_GC=bogus cargo run -- run -e 'console.log(1)'` → exited 1 with `unknown GC algorithm \`bogus\`; expected one of: mark-sweep, g1, zgc`。

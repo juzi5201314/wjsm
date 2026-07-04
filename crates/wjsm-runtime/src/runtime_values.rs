@@ -325,13 +325,8 @@ pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     index: u32,
     val: i64,
 ) {
-    let _ = crate::runtime_gc::heap_access::write_element_at_ptr(
-        ctx,
-        env,
-        ptr,
-        index as usize,
-        val,
-    );
+    let _ =
+        crate::runtime_gc::heap_access::write_element_at_ptr(ctx, env, ptr, index as usize, val);
 }
 
 pub(crate) fn write_array_hole_with_env<C: AsContextMut<Data = RuntimeState>>(
@@ -938,8 +933,16 @@ pub(crate) fn write_private_accessor_slot(
     };
     let slot_idx = num_props;
     let slot_offset = actual_ptr + 16 + slot_idx * 32;
-    let g = if value::is_undefined(getter) { undef } else { getter };
-    let s = if value::is_undefined(setter) { undef } else { setter };
+    let g = if value::is_undefined(getter) {
+        undef
+    } else {
+        getter
+    };
+    let s = if value::is_undefined(setter) {
+        undef
+    } else {
+        setter
+    };
     {
         let data = env.memory.data_mut(&mut *caller);
         if slot_offset + 32 > data.len() {

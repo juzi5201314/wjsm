@@ -235,7 +235,6 @@ pub(crate) fn write_new_property_to_memory(
     let handle_idx = crate::runtime_values::handle_index_of(caller, target) as u32;
 
     if num_props >= capacity {
-
         let Some(new_capacity) = capacity.max(1).checked_mul(2) else {
             return;
         };
@@ -255,11 +254,9 @@ pub(crate) fn write_new_property_to_memory(
         ) else {
             return;
         };
-        let Some(current_obj_ptr) = crate::runtime_values::resolve_handle_idx_with_env(
-            caller,
-            &env,
-            handle_idx as usize,
-        ) else {
+        let Some(current_obj_ptr) =
+            crate::runtime_values::resolve_handle_idx_with_env(caller, &env, handle_idx as usize)
+        else {
             return;
         };
         actual_obj_ptr = current_obj_ptr;

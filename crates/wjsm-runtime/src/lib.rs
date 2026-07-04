@@ -28,6 +28,7 @@ mod runtime_combinators;
 mod runtime_date;
 mod runtime_eval;
 mod runtime_gc;
+pub use runtime_gc::registry::GcAlgorithmKind;
 mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;
@@ -117,6 +118,7 @@ use types::*;
 pub struct RuntimeOptions {
     pub max_heap_size: Option<usize>,
     pub wasmtime_memory_reservation: Option<u64>,
+    pub gc_algorithm: GcAlgorithmKind,
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
@@ -132,6 +134,7 @@ impl Default for RuntimeOptions {
         Self {
             max_heap_size: None,
             wasmtime_memory_reservation: None,
+            gc_algorithm: GcAlgorithmKind::MarkSweep,
             argv: Vec::new(),
             cwd: None,
             env: Vec::new(),
@@ -150,6 +153,15 @@ impl RuntimeOptions {
             max_heap_size: Some(max_heap_size),
             ..Self::default()
         }
+    }
+}
+
+pub fn gc_algorithm_from_env(
+    env: &[(String, String)],
+) -> std::result::Result<GcAlgorithmKind, String> {
+    match env.iter().rev().find(|(key, _)| key == "WJSM_TEST_GC") {
+        Some((_, value)) if !value.is_empty() => value.parse(),
+        _ => Ok(GcAlgorithmKind::MarkSweep),
     }
 }
 
@@ -941,17 +953,22 @@ impl RuntimeState {
     #[cfg(test)]
     fn new_with_shared(shared_state: Option<Arc<SharedRuntimeState>>) -> Self {
         Self::new_with_shared_and_options(shared_state, RuntimeOptions::default())
+            .expect("default runtime options must create RuntimeState")
     }
 
     fn new_with_shared_and_options(
         shared_state: Option<Arc<SharedRuntimeState>>,
         options: RuntimeOptions,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut state = Self::new();
         state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
         state.max_heap_size = options.max_heap_size;
         state.process = ProcessState::from_options(&options);
-        state
+        state.gc_algorithm = Arc::new(Mutex::new(
+            crate::runtime_gc::registry::create(options.gc_algorithm)
+                .map_err(anyhow::Error::msg)?,
+        ));
+        Ok(state)
     }
 
     pub(crate) fn max_heap_size(&self) -> Option<usize> {
@@ -1185,7 +1202,10 @@ impl RuntimeState {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeOptions, execute_with_writer, execute_with_writer_with_options};
+    use super::{
+        GcAlgorithmKind, RuntimeOptions, execute_with_writer, execute_with_writer_with_options,
+        gc_algorithm_from_env,
+    };
     use anyhow::Result;
     use tokio::runtime::Runtime;
     // Phase 5 TDD 回归标记（严格按主代理 2026-06-01 授权方案）：
@@ -1197,6 +1217,22 @@ mod tests {
     //   （注意：当前 execute 测试因 wiring 期 pre-existing 缺失 define_get_builtin_global 无法 runtime 跑 timer fixture，此为非 Phase 5 问题，不在此 slice 修复）
     fn compile_source(source: &str) -> Result<Vec<u8>> {
         super::compile_source(source)
+    }
+
+    #[test]
+    fn gc_algorithm_env_defaults_to_mark_sweep() {
+        assert_eq!(gc_algorithm_from_env(&[]), Ok(GcAlgorithmKind::MarkSweep));
+    }
+
+    #[test]
+    fn gc_algorithm_env_rejects_unknown_value_with_legal_names() {
+        let env = [("WJSM_TEST_GC".to_string(), "bogus".to_string())];
+        let err = gc_algorithm_from_env(&env).expect_err("bogus GC flavor should be rejected");
+
+        assert!(err.contains("bogus"));
+        assert!(err.contains("mark-sweep"));
+        assert!(err.contains("g1"));
+        assert!(err.contains("zgc"));
     }
 
     #[test]

@@ -2,10 +2,6 @@
 //!
 //! 本模块只负责把装配层选择解析为具体算法实例；尚未落地的算法在这里显式拒绝，
 //! 不提供行为 stub。
-#![expect(
-    dead_code,
-    reason = "T0.3 wires registry into RuntimeState after v2 switch"
-)]
 
 use std::str::FromStr;
 
