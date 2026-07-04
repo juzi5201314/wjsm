@@ -154,6 +154,39 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     value::encode_object_handle(obj_table_count)
 }
 
+pub(crate) fn alloc_heap_region_without_gc<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    size: usize,
+) -> Option<usize> {
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
+    {
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, "startup-no-gc");
+        if !matches!(gc_ctx.grow_to_fit_heap_allocation(size), Ok(true)) {
+            let used = gc_ctx.heap_used();
+            ctx.as_context().data().set_heap_oom_error(used, size);
+            return None;
+        }
+    }
+    let end = heap_ptr.checked_add(size)?;
+    let align = constants::HEAP_ALLOCATION_ALIGNMENT as usize;
+    let aligned_end = end.checked_add(align - 1).map(|v| v & !(align - 1))?;
+    if aligned_end > i32::MAX as usize {
+        ctx.as_context().data().set_heap_oom_error(heap_ptr, size);
+        return None;
+    }
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
+    if let Some(alloc_ptr) = env.alloc_ptr {
+        let _ = alloc_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
+    }
+    if let Some(gc_alloc_bytes) = env.gc_alloc_bytes {
+        let current = gc_alloc_bytes.get(&mut *ctx).i32().unwrap_or(0).max(0);
+        let added = aligned_end.saturating_sub(heap_ptr).min(i32::MAX as usize) as i32;
+        let _ = gc_alloc_bytes.set(&mut *ctx, Val::I32(current.saturating_add(added)));
+    }
+    Some(heap_ptr)
+}
+
 pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -161,6 +194,9 @@ pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
     heap_type: u8,
     capacity: u32,
 ) -> Option<usize> {
+    if ctx.as_context().data().heap_layout_boundaries().1 == 0 {
+        return alloc_heap_region_without_gc(ctx, env, size);
+    }
     let gc_arc = ctx.as_context().data().gc_algorithm.clone();
     {
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
@@ -933,6 +969,30 @@ pub(crate) fn create_error_object_with_receiver(
     ensure_error_prototypes_initialized(caller, &env);
     let cause = extract_cause_from_options(caller, &env, options);
     if value::is_js_object(receiver) {
+        let current_proto_handle = resolve_handle_idx_with_env(
+            caller,
+            &env,
+            value::decode_object_handle(receiver) as usize,
+        )
+        .and_then(|ptr| {
+            let data = env.memory.data(&*caller);
+            (ptr + 4 <= data.len()).then(|| {
+                u32::from_le_bytes(data[ptr..ptr + 4].try_into().expect("proto handle bytes"))
+            })
+        });
+        let object_proto_handle = env
+            .object_proto_handle
+            .get(&mut *caller)
+            .i32()
+            .unwrap_or(-1);
+        if current_proto_handle == (object_proto_handle >= 0).then_some(object_proto_handle as u32)
+            && let Some(proto) = {
+                let state = caller.data();
+                state.error_prototypes.proto_for_error_name(error_name)
+            }
+        {
+            set_object_proto_header(caller, &env, receiver, proto);
+        }
         let stack = capture_stack_trace(caller, error_name, &message);
         define_error_properties_with_env(caller, &env, receiver, error_name, message, cause, stack);
         receiver

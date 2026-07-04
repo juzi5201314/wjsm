@@ -1483,6 +1483,14 @@ pub(crate) fn define_core(
             let size = size.max(0) as usize;
             let heap_type = heap_type.clamp(0, 255) as u8;
             let capacity = capacity.max(0) as u32;
+            if caller.data().heap_layout_boundaries().1 == 0 {
+                if let Some(ptr) =
+                    crate::runtime_heap::alloc_heap_region_without_gc(&mut caller, &env, size)
+                {
+                    return Ok(ptr as i32);
+                }
+                return Err(wasmtime::Trap::AllocationTooLarge.into());
+            }
             // 算法持有在 RuntimeState.gc_algorithm（Arc<Mutex>），经 GcContext 调用。
             // v2 alloc_slow 自行处理 free list、collection assist、grow 与最终 OOM 判定。
             let gc_arc = caller.data().gc_algorithm.clone();

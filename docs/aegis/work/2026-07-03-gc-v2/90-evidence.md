@@ -72,10 +72,14 @@
 
 - `cargo check -p wjsm-runtime -p wjsm-backend-wasm -p wjsm-runtime-support -p wjsm-cli` → passed。
 - `cargo nextest run -E 'test(happy__typedarray_simple) | test(happy__map_set_for_each) | test(happy__error_constructor_new_target) | test(happy__symbol_prototype_methods)'` → 4 passed。
-- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__typedarray_simple) | test(happy__map_set_for_each)'` → 2 passed。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__error_constructor_new_target)'` → passed。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__symbol_prototype_methods)'` → passed。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__typedarray_simple)'` → passed。
 - `cargo nextest run --workspace` → 1242 passed, 2 skipped。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run --workspace` → 1242 passed, 2 skipped。
 - `cargo build --workspace` → passed。
-- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run --workspace` → 1240 passed, 2 failed, 2 skipped；失败项为 cold startup 下 `happy__error_constructor_new_target` 与 `happy__symbol_prototype_methods`。
 - T1.6 修复证据：fixture 验证暴露 host 侧直接 bump `__heap_ptr` 后没有同步 `__alloc_ptr`，导致后续 WASM `arr_new` fast-path 覆盖 host 分配的 property/string 区域；已在 `alloc_heap_c_string_global`、render string allocation、eval var map allocation 同步 `__alloc_ptr`。
 - T1.6 修复证据：support/user helper 的 `gc_safepoint_poll` 现在同时要求 `__bootstrap_done` 与 `__function_props_done`，避免 bootstrap/function-props 构造期在没有普通 IR spill 的路径触发 GC。
-- Blocking residual：cold full-suite 仍有 2 个既有 startup builtins parity 缺口（Error constructor prototype / Symbol.prototype `[Symbol.toStringTag]`），未进入 P2；当前按用户要求停止在 P1/T1.6 收尾点。
+- T1.6 修复证据：cold startup 期在 GC attach 前没有可靠 roots，`gc_alloc_slow` 与 host allocation 在 `dynamic_heap_start == 0` 时改为 no-GC bump/grow，避免 bootstrap/host primordial 被过早 sweep/reuse。
+- T1.6 修复证据：cold startup 在 host prototype 初始化前显式执行 `__wjsm_init_function_props`，避免 main 入口首次执行时把 `obj_table_count` 回退到 `function_props_base` 并覆盖 Error/Symbol prototypes。
+- T1.6 修复证据：Error constructor 使用已有 receiver 时只在 receiver 当前原型仍是 `Object.prototype` 时补设对应 Error prototype，保留 `extends TypeError` / `Reflect.construct(..., newTarget)` 已建立的自定义 receiver prototype。

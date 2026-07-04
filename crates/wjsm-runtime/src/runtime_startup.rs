@@ -728,6 +728,18 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
         }
         ensure_no_startup_error(&bundle.store)?;
     }
+    if let Ok(function_props_fn) = bundle
+        .instance
+        .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_init_function_props")
+    {
+        if let Err(error) = function_props_fn.call_async(&mut bundle.store, ()).await {
+            if let Some(message) = startup_runtime_error(&bundle.store) {
+                anyhow::bail!(message);
+            }
+            anyhow::bail!("init_function_props failed: {error:?}");
+        }
+        ensure_no_startup_error(&bundle.store)?;
+    }
     install_array_iterator_methods(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);

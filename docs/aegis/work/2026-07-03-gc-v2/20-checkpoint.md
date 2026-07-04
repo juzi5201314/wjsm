@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T1.6 验证布局阶段`（needs-verification：cold full-suite 仍有 2 个 startup builtins parity 缺口）
-- Next: 下次会话先处理 `WJSM_STARTUP_SNAPSHOT=0` 下 `happy__error_constructor_new_target` 与 `happy__symbol_prototype_methods`，通过后再进入 P2。
+- Active: `T1.6 验证布局阶段`（completed）
+- Next: 按用户要求停止；下次会话从 P2 `T2.1 新增 heap_access 断言` 开始。
 
 ## Completed todos
 
@@ -20,6 +20,7 @@
   - `T1.3 重构分配 fast-path`
   - `T1.4 换代 host imports`
   - `T1.5 参数化 support emitter`
+  - `T1.6 验证布局阶段`
 
 ## Active slice card
 
@@ -32,11 +33,11 @@
 
 ## Evidence refs
 
-详见 `90-evidence.md`。T1.6 已完成 normal workspace、targeted cold smoke、build 验证；cold full-suite 仍有 2 个失败项，不能标记完成。
+详见 `90-evidence.md`。T1.6 已完成 normal workspace、cold workspace、targeted fixtures 与 build 验证。
 
 ## Blocked-on items
 
-- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run --workspace` 仍失败 2 项：`happy__error_constructor_new_target`、`happy__symbol_prototype_methods`。
+无。
 
 ## ResumeStateHint
 
@@ -44,15 +45,15 @@
 
 1. `git status --short` 确认当前切片文件。
 2. 阅读本文件与 `90-evidence.md`。
-3. 先修复 cold startup builtins parity：Error constructor prototype 链、Symbol.prototype `[Symbol.toStringTag]`。
-4. 重新运行 `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run --workspace`；通过后标记 T1.6 done，再开始 P2。
+3. 下次从 P2 `T2.1 新增 heap_access 断言` 开始；不要重复 P1，除非验证回归。
+4. 开始 P2 前重新读取父计划 P2 与 v2 spec host read/write layer 小节。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，仍停在 P1/T1.6 收尾验证。
-- Does current work still serve goal and stop condition? 部分满足：normal workspace 与 targeted cold smoke 通过；cold full-suite 未通过。
+- Does current work still serve original task intent? 是，P1/T1.6 收尾验证已完成，未进入 P2。
+- Does current work still serve goal and stop condition? 是，normal workspace 与 cold workspace 均通过。
 - Compatibility boundary: support ABI canonical hash 已切到 `support_abi_union_hash`；当前 union 仅含 MarkSweep。
-- New owner/fallback/adapter/branch: 未新增 fallback；T1.6 修复同步了 host 直接 bump 与 alloc window 的单一堆顶语义。
+- New owner/fallback/adapter/branch: 未新增 fallback；T1.6 修复同步了 host 直接 bump 与 alloc window 的单一堆顶语义，并明确 startup no-GC 分配边界。
 - Retirement track: 单一无参数 support emitter 与旧 `support_module_layout_hash` API 已退役；P2 未开始。
-- Evidence sufficiency: normal/hot 路径足够；cold full-suite 证据不足，T1.6 不标记完成。
-- Decision: blocked。
+- Evidence sufficiency: T1.6 足够；按用户要求停止在 P1 末尾。
+- Decision: continue-next-session-from-P2。
