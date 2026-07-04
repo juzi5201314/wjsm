@@ -53,3 +53,17 @@
 - `cargo build --workspace` → passed。
 - `grep` over `crates` for `gc_maybe_collect|GcMaybeCollect|alloc_counter|gc_threshold|bump_alloc_counter|reset_alloc_counter|update_gc_threshold` → no matches。
 - Runtime residual during slice: first T1.4 poll placement caused `fragmentation_churn_survivors_intact` out-of-bounds. Root cause was polling after `obj_new`/`arr_new` registered a fresh object but before the returned handle reached caller-visible roots. Fixed by polling at helper entry (debt from previous allocations) and before object resize allocation, not after fresh allocation.
+
+## P1 T1.5 evidence
+
+- `cargo check -p wjsm-backend-wasm -p wjsm-runtime-support -p wjsm-runtime -p wjsm-cli` → passed。
+- `cargo nextest run -p wjsm-runtime-support --features embedded` → 9 passed。
+- `cargo nextest run -p wjsm-backend-wasm -E 'test(support_alloc_helpers_use_alloc_window_and_safepoint_poll)'` → 1 passed。
+- `cargo nextest run -p wjsm-backend-wasm` → 55 passed。
+- `cargo nextest run -p wjsm-runtime` → 133 passed, 2 skipped。
+- `cargo nextest run -p wjsm-cli --no-tests warn` → 3 passed, 52 skipped。
+- `cargo build --workspace` → passed。
+- `grep` over `crates` for `support_module_layout_hash|wjsm_support_g1|wjsm_support_zgc|EMBEDDED_G1|EMBEDDED_ZGC|emit_support_module\(\)|OnceLock<regex` → no matches。
+- Rule compliance fix during slice: runtime support default artifact uses `LazyLock` for fixed initializer and keeps `OnceLock` only for explicit runtime injection; CLI IR regex caches switched from `OnceLock::get_or_init` to `LazyLock`。
+- Variant boundary: `wjsm_backend_wasm::GcFlavor` now names MarkSweep/G1/Zgc, but only MarkSweep emits a support module in T1.5；G1/Zgc return an error and runtime-support exposes no fake `wjsm_support_g1/zgc.cwasm` artifacts until their later phases。
+- Artifact coverage: build.rs precompiles only `wjsm_support_mark_sweep.cwasm`；embedded tests deserialize mark-sweep and assert G1/Zgc artifacts are absent。

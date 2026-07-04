@@ -13,7 +13,7 @@
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
 
 use crate::shared_types::build_shared_type_section;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use wasm_encoder::{
     BlockType, CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
     GlobalType, ImportSection, Instruction as WasmInstruction, MemArg, MemoryType, Module, RefType,
@@ -21,6 +21,23 @@ use wasm_encoder::{
 };
 use wjsm_ir::constants;
 use wjsm_ir::value;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GcFlavor {
+    MarkSweep,
+    G1,
+    Zgc,
+}
+
+impl GcFlavor {
+    pub fn artifact_suffix(self) -> &'static str {
+        match self {
+            Self::MarkSweep => "mark_sweep",
+            Self::G1 => "g1",
+            Self::Zgc => "zgc",
+        }
+    }
+}
 
 // ── Type indices（与 user wasm compiler_core.rs 的 type section 完全一致）──
 // support module 必须使用与 user wasm 相同的 type index，否则 wasmtime 的
@@ -232,8 +249,11 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
     "wjsm_init_function_props",
 ];
 
-/// 生成 support module 的 wasm bytes。
-pub fn emit_support_module() -> Result<Vec<u8>> {
+/// 生成指定 GC flavor 的 support module wasm bytes。
+pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
+    if flavor != GcFlavor::MarkSweep {
+        bail!("support module for {flavor:?} is not implemented yet");
+    }
     let mut module = Module::new();
 
     // ── Type section ──
@@ -244,7 +264,6 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
 
     // ── Import section ──
     let mut imports = ImportSection::new();
-    // memory
     imports.import(
         "env",
         "memory",
@@ -256,7 +275,6 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
             page_size_log2: None,
         }),
     );
-    // table
     imports.import(
         "env",
         "__table",
@@ -280,7 +298,7 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
             }),
         );
     }
-    // 14 host function imports
+    // 26 host function imports
     for (name, type_idx) in HOST_IMPORTS {
         imports.import("env", name, EntityType::Function(*type_idx));
     }
@@ -313,19 +331,24 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
     // 这些 getter/setter 是 user wasm 的 JS 函数，在 table[64+] 中由 user wasm 的 element section 填充。
 
     // ── Code section ──
+    let helper_bodies = vec![
+        emit_obj_new(flavor),
+        emit_obj_get(flavor),
+        emit_obj_set(flavor),
+        emit_obj_delete(flavor),
+        emit_arr_new(flavor),
+        emit_elem_get(flavor),
+        emit_elem_set(flavor),
+        emit_string_eq(flavor),
+        emit_to_int32(flavor),
+        emit_get_proto_from_ctor(flavor),
+        emit_stub_unreachable(flavor), // wjsm_bootstrap_once
+        emit_stub_unreachable(flavor), // wjsm_init_function_props
+    ];
     let mut codes = CodeSection::new();
-    codes.function(&emit_obj_new());
-    codes.function(&emit_obj_get());
-    codes.function(&emit_obj_set());
-    codes.function(&emit_obj_delete());
-    codes.function(&emit_arr_new());
-    codes.function(&emit_elem_get());
-    codes.function(&emit_elem_set());
-    codes.function(&emit_string_eq());
-    codes.function(&emit_to_int32());
-    codes.function(&emit_get_proto_from_ctor());
-    codes.function(&emit_stub_unreachable()); // wjsm_bootstrap_once
-    codes.function(&emit_stub_unreachable()); // wjsm_init_function_props
+    for body in &helper_bodies {
+        codes.function(body);
+    }
     module.section(&codes);
 
     Ok(module.finish())
@@ -333,7 +356,7 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
 
 // ── Helper body emitters ──────────────────────────────────────────────
 
-fn emit_stub_unreachable() -> Function {
+fn emit_stub_unreachable(_flavor: GcFlavor) -> Function {
     let mut func = Function::new(std::iter::empty::<(u32, ValType)>());
     func.instruction(&WasmInstruction::Unreachable);
     func.instruction(&WasmInstruction::End);
@@ -510,7 +533,7 @@ fn emit_gc_safepoint_poll_if_due_support(func: &mut Function) {
 
 // ── obj_new (param $capacity i32) (result i32) — Type 0 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_new 段。
-fn emit_obj_new() -> Function {
+fn emit_obj_new(_flavor: GcFlavor) -> Function {
     // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
     let mut func = Function::new(vec![(4, ValType::I32)]);
     emit_gc_safepoint_poll_if_due_support(&mut func);
@@ -648,7 +671,7 @@ include!("support_object_helpers.rs");
 
 // ── string_eq (param $a i32) (param $b i32) (result i32) — Type 3 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers str_eq 段。
-fn emit_string_eq() -> Function {
+fn emit_string_eq(_flavor: GcFlavor) -> Function {
     // local 0 = a, local 1 = b, local 2 = byte_a, local 3 = byte_b
     let mut func = Function::new(vec![(2, ValType::I32)]);
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
@@ -700,7 +723,7 @@ fn emit_string_eq() -> Function {
 
 // ── to_int32 (param $val i64) (result i32) — Type 4 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers to_int32 段。
-fn emit_to_int32() -> Function {
+fn emit_to_int32(_flavor: GcFlavor) -> Function {
     // local 0 = $val (i64, input), local 1 = f64 scratch
     let mut func = Function::new(vec![(1, ValType::F64)]);
 
@@ -800,7 +823,7 @@ fn emit_to_int32() -> Function {
 // ── arr_new (param $capacity i32) (result i32) — Type 7 ──
 // 移植自 compiler_array_helpers.rs::compile_array_helpers arr_new 段。
 // 数组内存布局: [proto(4), type(1), pad(3), length(4), capacity(4), elements(capacity*8)]
-fn emit_arr_new() -> Function {
+fn emit_arr_new(_flavor: GcFlavor) -> Function {
     // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
     let mut func = Function::new(vec![(4, ValType::I32)]);
     emit_gc_safepoint_poll_if_due_support(&mut func);
@@ -930,7 +953,7 @@ fn emit_arr_new() -> Function {
 
 // ── elem_get (param $boxed i64) (param $index i32) (result i64) — Type 8 ──
 // 移植自 compiler_array_helpers.rs::compile_array_helpers elem_get 段。
-fn emit_elem_get() -> Function {
+fn emit_elem_get(_flavor: GcFlavor) -> Function {
     let mut func = Function::new(vec![(2, ValType::I32)]);
     // 检查是否为 TAG_ARRAY
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -1000,7 +1023,7 @@ fn emit_elem_get() -> Function {
 
 // ── elem_set (param $boxed i64) (param $index i32) (param $value i64) — Type 9 ──
 // 移植自 compiler_array_helpers.rs::compile_array_helpers elem_set 段。
-fn emit_elem_set() -> Function {
+fn emit_elem_set(_flavor: GcFlavor) -> Function {
     let mut func = Function::new(vec![(2, ValType::I32)]);
     // 检查 TAG_ARRAY
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -1092,7 +1115,7 @@ fn emit_elem_set() -> Function {
 
 // ── get_proto_from_ctor (param $ctor i64) (result i64) — Type 3 ──
 // GetPrototypeFromConstructor(F): 读取 F.prototype，若非 Object 类型则回退到 Object.prototype
-fn emit_get_proto_from_ctor() -> Function {
+fn emit_get_proto_from_ctor(_flavor: GcFlavor) -> Function {
     // local 0 = $ctor (i64), local 1 = $proto (i64)
     let mut func = Function::new(vec![(1, ValType::I64)]);
     // 调用 obj_get(ctor, "prototype") — "prototype" 的 name_id 在 support module
@@ -1178,16 +1201,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn emit_support_module_produces_valid_wasm() {
-        let bytes = emit_support_module().expect("emit");
+    fn emit_mark_sweep_support_module_produces_valid_wasm() {
+        let bytes = emit_support_module(GcFlavor::MarkSweep).expect("emit");
         assert_eq!(&bytes[0..4], b"\0asm");
         assert_eq!(&bytes[4..8], &[0x01, 0x00, 0x00, 0x00]);
     }
 
     #[test]
-    fn emit_support_module_passes_wasmparser_validation() {
-        let bytes = emit_support_module().expect("emit");
+    fn emit_mark_sweep_support_module_passes_wasmparser_validation() {
+        let bytes = emit_support_module(GcFlavor::MarkSweep).expect("emit");
         wasmparser::validate(&bytes).expect("support.wasm must validate");
+    }
+
+    #[test]
+    fn unsupported_support_flavors_do_not_emit_fake_modules() {
+        for flavor in [GcFlavor::G1, GcFlavor::Zgc] {
+            assert!(emit_support_module(flavor).is_err());
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use wasmparser::{ExternalKind, Operator, Parser, Payload, TypeRef};
-use wjsm_backend_wasm::emit_support_module;
+use wjsm_backend_wasm::{GcFlavor, emit_support_module};
 
 #[derive(Default)]
 struct SupportModuleInfo {
@@ -18,7 +18,7 @@ enum OwnedOperator {
 }
 
 fn parse_support_module() -> SupportModuleInfo {
-    let wasm = emit_support_module().expect("emit support module");
+    let wasm = emit_support_module(GcFlavor::MarkSweep).expect("emit support module");
     let mut info = SupportModuleInfo::default();
 
     for payload in Parser::new(0).parse_all(&wasm) {

@@ -19,7 +19,7 @@ use wjsm_ir::{
 pub mod host_import_registry;
 mod shared_types;
 pub mod support_module;
-pub use support_module::emit_support_module;
+pub use support_module::{GcFlavor, emit_support_module};
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_CANARY, SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_SIZE};

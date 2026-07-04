@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use colored::Colorize;
 use std::fmt::Write;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use wjsm_ir::Program;
 
 use super::PipelineResult;
@@ -104,9 +104,11 @@ where
 }
 
 fn colorize_ir_line(line: &str) -> String {
-    static VALUE_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static SCOPE_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static CONST_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static VALUE_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"%\d+").unwrap());
+    static SCOPE_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\$\d+\.\w+").unwrap());
+    static CONST_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\bc\d+").unwrap());
 
     // Keywords in blue
     let keywords = [
@@ -134,7 +136,7 @@ fn colorize_ir_line(line: &str) -> String {
 
     // Color values (like %0, $0.x) in cyan
     if result.contains('%') {
-        let re = VALUE_RE.get_or_init(|| regex::Regex::new(r"%\d+").unwrap());
+        let re = &*VALUE_RE;
         result = re
             .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
             .to_string();
@@ -142,7 +144,7 @@ fn colorize_ir_line(line: &str) -> String {
 
     // Color scope-qualified names like $0.x in cyan
     if result.contains('$') {
-        let re = SCOPE_RE.get_or_init(|| regex::Regex::new(r"\$\d+\.\w+").unwrap());
+        let re = &*SCOPE_RE;
         result = re
             .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
             .to_string();
@@ -150,7 +152,7 @@ fn colorize_ir_line(line: &str) -> String {
 
     // Color constants like c0, c1 in yellow
     if result.contains(" c") || result.starts_with('c') {
-        let re = CONST_RE.get_or_init(|| regex::Regex::new(r"\bc\d+").unwrap());
+        let re = &*CONST_RE;
         result = re
             .replace_all(&result, |caps: &regex::Captures| {
                 caps[0].yellow().to_string()

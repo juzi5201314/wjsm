@@ -1,7 +1,7 @@
 // obj_get / obj_set bodies — included from support_module.rs
 // 移植自 compiler_helpers.rs::compile_object_helpers
 
-fn emit_obj_get() -> Function {
+fn emit_obj_get(_flavor: GcFlavor) -> Function {
     // local 0 = $boxed (i64), local 1 = $name_id (i32)
     // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
     // local 5 = resolved ptr (i32), local 6 = flags (i32), local 7 = getter (i64)
@@ -442,7 +442,7 @@ fn emit_obj_get() -> Function {
     func
 }
 
-fn emit_obj_set() -> Function {
+fn emit_obj_set(_flavor: GcFlavor) -> Function {
     // local 0 = $boxed (i64), local 1 = $name_id (i32), local 2 = $value (i64)
     // local 3 = proto_handle (i32, reused from unused pad)
     // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
@@ -1072,7 +1072,7 @@ fn emit_obj_set() -> Function {
 // ── obj_delete (param $boxed i64) (param $name_id i32) (result i64) — Type 1 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_delete 段。
 // 返回 NaN-boxed bool。
-fn emit_obj_delete() -> Function {
+fn emit_obj_delete(_flavor: GcFlavor) -> Function {
     // local 0 = $boxed (i64), local 1 = $name_id (i32)
     // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
     // local 5 = resolved ptr (i32), local 6 = last_slot_addr (i32)

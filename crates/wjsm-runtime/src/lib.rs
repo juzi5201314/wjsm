@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
 use tokio::time::Instant;
@@ -318,27 +318,29 @@ pub(crate) fn embedded_startup_snapshot_view() -> Option<&'static [u8]> {
 
 // ── Embedded support cwasm ────────────────────────────────────────────
 //
-// 运行时持有 build-time 预编译的 support cwasm 字节。首次访问时自动
-// 从 wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM 初始化；CLI 侧亦可
-// 通过 install_embedded_support_cwasm 显式注入（优先）。
+// 运行时可显式注入 build-time 预编译的 support cwasm；未注入时使用静态
+// mark-sweep 默认 artifact。显式注入需要运行时输入，因此保留 OnceLock；默认
+// artifact 初始化在声明处固定，使用 LazyLock。
 
-static EMBEDDED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
+static INSTALLED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
+static DEFAULT_MARK_SWEEP_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
+    wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::MarkSweep)
+});
 
 /// 安装编译时嵌入的 support cwasm；进程内只需调用一次（重复 set 静默忽略）。
-/// 未显式调用时，`embedded_support_cwasm()` 自动从 build-time artifact 初始化。
+/// 未显式调用时，`embedded_support_cwasm()` 使用 build-time 默认 artifact。
 pub fn install_embedded_support_cwasm(cwasm_bytes: &'static [u8]) {
-    let _ = EMBEDDED_SUPPORT_CWASM.set(cwasm_bytes);
+    let _ = INSTALLED_SUPPORT_CWASM.set(cwasm_bytes);
 }
 
 /// 返回已安装的 embedded support cwasm 字节。
-/// 首次调用时若尚未通过 `install_embedded_support_cwasm` 显式注入，
-/// 自动从 wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM 初始化。
+/// 未通过 `install_embedded_support_cwasm` 显式注入时，使用 mark-sweep 默认 artifact。
 /// 返回 None 仅当 embedded feature 未启用（build-time artifact 为空）。
 pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
-    EMBEDDED_SUPPORT_CWASM
-        .get_or_init(|| wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM.unwrap_or(&[]));
-    let bytes = EMBEDDED_SUPPORT_CWASM.get().copied()?;
-    if bytes.is_empty() { None } else { Some(bytes) }
+    INSTALLED_SUPPORT_CWASM
+        .get()
+        .copied()
+        .or(*DEFAULT_MARK_SWEEP_SUPPORT_CWASM)
 }
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     wasm_bytes: &[u8],

@@ -209,7 +209,9 @@ pub fn main_entry() -> ExitCode {
     if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
         wjsm_runtime::install_embedded_startup_snapshot(bytes);
     }
-    if let Some(bytes) = wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM {
+    if let Some(bytes) = wjsm_runtime_support::embedded_support_cwasm(
+        wjsm_runtime_support::SupportGcFlavor::MarkSweep,
+    ) {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }
 
@@ -1930,7 +1932,9 @@ pub fn run_file_in_process_with_options(
     if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
         wjsm_runtime::install_embedded_startup_snapshot(bytes);
     }
-    if let Some(bytes) = wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM {
+    if let Some(bytes) = wjsm_runtime_support::embedded_support_cwasm(
+        wjsm_runtime_support::SupportGcFlavor::MarkSweep,
+    ) {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }
 

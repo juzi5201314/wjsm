@@ -22,11 +22,22 @@ pub const TABLE_IMPORT_NAME: &str = "__table";
 pub const MEMORY_IMPORT_NAME: &str = "memory";
 
 /// Support module ABI 版本；任何不兼容改动必须 +1。
-pub const SUPPORT_VERSION: u32 = 5;
+pub const SUPPORT_VERSION: u32 = 6;
 
 /// Support module 在共享 table 起始保留的 slot 数：
 /// 12 helper exports + 约 30 个 Array.prototype 方法 + 22 个 headroom = 64。
 pub const SUPPORT_TABLE_RESERVED_LEN: u32 = 64;
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum SupportGcFlavor {
+    MarkSweep,
+    G1,
+    Zgc,
+}
+
+/// 当前随 build-time artifact 发布的 support flavor。G1/ZGC 变体入口已命名，
+/// 但在对应阶段实现前不得进入 ABI union。
+pub const AVAILABLE_SUPPORT_GC_FLAVORS: &[SupportGcFlavor] = &[SupportGcFlavor::MarkSweep];
 
 /// Imported env global 的值类型。
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -203,12 +214,15 @@ pub const SUPPORT_EXPORTS: &[&str] = &[
     "wjsm_init_function_props",
 ];
 
-/// 计算 support module layout 的稳定 hash；任一 ABI 输入变化都会使之变化。
-/// 输入：SUPPORT_VERSION + SUPPORT_TABLE_RESERVED_LEN + ENV_GLOBALS + SUPPORT_EXPORTS。
-pub fn support_module_layout_hash() -> u64 {
+/// 计算 support ABI union 的稳定 hash；任一已发布 flavor 的 ABI 输入变化都会使之变化。
+/// 输入：SUPPORT_VERSION + SUPPORT_TABLE_RESERVED_LEN + AVAILABLE_SUPPORT_GC_FLAVORS + ENV_GLOBALS + SUPPORT_EXPORTS。
+pub fn support_abi_union_hash() -> u64 {
     let mut h = DefaultHasher::new();
     SUPPORT_VERSION.hash(&mut h);
     SUPPORT_TABLE_RESERVED_LEN.hash(&mut h);
+    for flavor in AVAILABLE_SUPPORT_GC_FLAVORS {
+        flavor.hash(&mut h);
+    }
     for g in ENV_GLOBALS {
         g.hash(&mut h);
     }
@@ -224,10 +238,10 @@ mod tests {
 
     /// hash 必须确定性：同一份 ABI 定义下 hash 不变。
     #[test]
-    fn support_module_layout_hash_is_deterministic() {
-        let a = support_module_layout_hash();
-        let b = support_module_layout_hash();
-        assert_eq!(a, b, "support_module_layout_hash 必须是确定性的");
+    fn support_abi_union_hash_is_deterministic() {
+        let a = support_abi_union_hash();
+        let b = support_abi_union_hash();
+        assert_eq!(a, b, "support_abi_union_hash 必须是确定性的");
     }
 
     /// 12 helper exports 数量锁死；增删 export 必须显式更新此处。
@@ -268,5 +282,10 @@ mod tests {
             wjsm_backend_wasm::support_module::SUPPORT_TABLE_RESERVED_LEN,
             "abi::SUPPORT_TABLE_RESERVED_LEN 与 backend support_module::SUPPORT_TABLE_RESERVED_LEN 不一致"
         );
+    }
+
+    #[test]
+    fn available_support_gc_flavors_count_locked() {
+        assert_eq!(AVAILABLE_SUPPORT_GC_FLAVORS, &[SupportGcFlavor::MarkSweep]);
     }
 }

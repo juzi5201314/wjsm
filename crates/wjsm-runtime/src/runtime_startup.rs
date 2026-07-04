@@ -20,7 +20,7 @@ pub(super) fn combined_abi_external_input() -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
-    wjsm_runtime_support::support_module_layout_hash().hash(&mut h);
+    wjsm_runtime_support::support_abi_union_hash().hash(&mut h);
     builtin_js_bundle_hash().hash(&mut h);
     h.finish()
 }
@@ -658,14 +658,16 @@ pub(super) async fn setup_shared_env_and_support(
             Ok(m) => m,
             Err(_) => {
                 // cwasm 配置不匹配（如 epoch interruption），fallback 到从 wasm bytes 编译
-                let support_wasm = wjsm_backend_wasm::emit_support_module()?;
+                let support_wasm =
+                    wjsm_backend_wasm::emit_support_module(wjsm_backend_wasm::GcFlavor::MarkSweep)?;
                 Module::new(engine, &support_wasm)
                     .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
             }
         }
     } else {
         // build-time snapshot 生成路径：没有 embedded cwasm，直接从 emit_support_module 编译。
-        let support_wasm = wjsm_backend_wasm::emit_support_module()?;
+        let support_wasm =
+            wjsm_backend_wasm::emit_support_module(wjsm_backend_wasm::GcFlavor::MarkSweep)?;
         Module::new(engine, &support_wasm)
             .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
     };
