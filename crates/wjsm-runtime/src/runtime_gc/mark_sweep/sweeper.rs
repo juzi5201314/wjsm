@@ -1,12 +1,12 @@
 //! Sweep phase（spec §8.2，IMPL-7 按 ptr sort 必需）。
 //!
-//! 核心：**不改活动对象布局**（INV-D）。用 obj_table + marked bits 按 ptr 顺序重建 free list。
+//! 核心：**mark-sweep 不移动活动对象**（v2 INV-C1/C2）。用 obj_table + marked bits 按 ptr 顺序重建 free list。
 //!
 //! 算法：
 //! 1. 收集所有已分配块信息（含已死）。依赖 INV-A（obj_table 完整索引）。
 //! 2. sort_by_ptr（resize INV-B 破坏 handle→ptr 单调性，sort 必需）。
-//! 3. 线性扫描合并相邻 unmarked 块（暂存）；步骤 5 与 abandoned 一并邻接合并后写入 free list。
-//! 4. 清空 unmarked handle 的 obj_table 槽（置 0），推入 freed_handles（IMPL-10/#7 复用）。
+//! 3. 线性扫描合并相邻 unmarked 块（暂存）。
+//! 4. 完整 sweep 游标结束后才合并 abandoned、回收尾部、重建 free list、发布 freed handles。
 use crate::runtime_gc::api::GcContext;
 use crate::runtime_gc::context::object_size_from_memory;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
@@ -25,7 +25,9 @@ pub(crate) struct LazySweepState {
     obj_table_ptr: usize,
     blocks: Vec<BlockInfo>,
     next_block: usize,
+    /// 尚未封口的连续 dead run；lazy progress 期间只暂存，不进入 free list/governance。
     pending_free_run: Option<(usize, usize)>,
+    /// 已封口的 dead runs；完整游标结束前不得发布为最终 free regions。
     free_runs: Vec<(usize, usize)>,
     swept: usize,
     freed_bytes: usize,
@@ -42,6 +44,12 @@ impl LazySweepState {
 pub(crate) enum LazySweepStep {
     Progress { remaining_estimate: usize },
     Complete,
+}
+
+struct LazySweepCompletion {
+    free_runs: Vec<(usize, usize)>,
+    swept: usize,
+    freed_bytes: usize,
 }
 
 /// 按 ptr 升序合并物理相邻区间（next.ptr == prev_end）。
@@ -160,8 +168,8 @@ fn finalize_free_regions(
     all_free.extend(abandoned);
     let coalesced = merge_adjacent_free_intervals(all_free);
 
-    // 尾部空间回收（issue #332）：sweep 后若堆顶存在连续空闲区，
-    // 回退 heap_ptr → 减少 linear memory 占用。不移动任何对象（INV-C 安全）。
+    // 尾部空间回收（issue #332）：仅在完整 sweep 游标结束后执行；
+    // 回退 heap_ptr → 减少 linear memory 占用。不移动任何对象（v2 INV-C1/C2 安全）。
     let tail_result =
         crate::runtime_gc::heap_governance::reclaim_trailing_free_space(ctx, &coalesced);
 
@@ -175,7 +183,7 @@ fn finalize_free_regions(
         .free_list
         .rebuild_from_coalesced_regions(&surviving);
 
-    // 碎片指标（issue #332）。
+    // 碎片指标（issue #332）：完整 sweep 后基于 surviving regions 写入 GcStats。
     let heap_used_bytes = ctx.heap_used();
     let metrics = crate::runtime_gc::heap_governance::compute_metrics(&surviving);
     ctx.stats.free_block_count = metrics.free_block_count;
@@ -232,6 +240,19 @@ fn sweep_one_block(
     state.freed_bytes += block.size;
 }
 
+fn take_lazy_sweep_completion(state: &mut LazySweepState) -> Option<LazySweepCompletion> {
+    if state.next_block != state.blocks.len() {
+        return None;
+    }
+
+    flush_pending_free_run(&mut state.pending_free_run, &mut state.free_runs);
+    Some(LazySweepCompletion {
+        free_runs: std::mem::take(&mut state.free_runs),
+        swept: state.swept,
+        freed_bytes: state.freed_bytes,
+    })
+}
+
 fn complete_lazy_sweep(
     collector: &mut MarkSweepCollector,
     ctx: &mut GcContext,
@@ -243,9 +264,15 @@ fn complete_lazy_sweep(
         state.remaining_bytes = state.remaining_bytes.saturating_sub(block.size);
         sweep_one_block(collector, ctx, state, block);
     }
-    flush_pending_free_run(&mut state.pending_free_run, &mut state.free_runs);
-    let free_runs = std::mem::take(&mut state.free_runs);
-    finalize_free_regions(collector, ctx, free_runs, state.swept, state.freed_bytes);
+    let completion = take_lazy_sweep_completion(state)
+        .expect("lazy sweep cursor must be exhausted before finalization");
+    finalize_free_regions(
+        collector,
+        ctx,
+        completion.free_runs,
+        completion.swept,
+        completion.freed_bytes,
+    );
 }
 
 pub(crate) fn sweep_lazy_step(
@@ -270,10 +297,14 @@ pub(crate) fn sweep_lazy_step(
         sweep_one_block(collector, ctx, state, block);
     }
 
-    if state.next_block == state.blocks.len() {
-        flush_pending_free_run(&mut state.pending_free_run, &mut state.free_runs);
-        let free_runs = std::mem::take(&mut state.free_runs);
-        finalize_free_regions(collector, ctx, free_runs, state.swept, state.freed_bytes);
+    if let Some(completion) = take_lazy_sweep_completion(state) {
+        finalize_free_regions(
+            collector,
+            ctx,
+            completion.free_runs,
+            completion.swept,
+            completion.freed_bytes,
+        );
         LazySweepStep::Complete
     } else {
         LazySweepStep::Progress {
@@ -324,17 +355,83 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_adjacent_free_intervals;
+    use super::{
+        BlockInfo, LazySweepState, merge_adjacent_free_intervals, take_lazy_sweep_completion,
+    };
     use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 
-    /// P4-blocker #1：验证 resize-abandoned 区域经 sweeper 步骤 5 路径进入 free list。
+    #[test]
+    fn incomplete_lazy_sweep_keeps_final_free_regions_unpublished() {
+        let mut state = LazySweepState {
+            obj_table_ptr: 0,
+            blocks: vec![
+                BlockInfo {
+                    ptr: 1000,
+                    size: 32,
+                    handle: 1,
+                    marked: false,
+                },
+                BlockInfo {
+                    ptr: 1032,
+                    size: 32,
+                    handle: 2,
+                    marked: false,
+                },
+            ],
+            next_block: 1,
+            pending_free_run: Some((1000, 32)),
+            free_runs: vec![(900, 16)],
+            swept: 1,
+            freed_bytes: 32,
+            remaining_bytes: 32,
+            started_at: std::time::Instant::now(),
+        };
+
+        // take_lazy_sweep_completion 是 tail reclaim / free-list rebuild / metrics 的唯一入口；
+        // cursor 未完成时必须不给调用方任何最终 free regions。
+        assert!(take_lazy_sweep_completion(&mut state).is_none());
+        assert_eq!(state.pending_free_run, Some((1000, 32)));
+        assert_eq!(state.free_runs, vec![(900, 16)]);
+        assert_eq!(state.swept, 1);
+        assert_eq!(state.freed_bytes, 32);
+    }
+
+    #[test]
+    fn completed_lazy_sweep_returns_staged_free_regions_for_finalization() {
+        let mut state = LazySweepState {
+            obj_table_ptr: 0,
+            blocks: vec![BlockInfo {
+                ptr: 1000,
+                size: 32,
+                handle: 1,
+                marked: false,
+            }],
+            next_block: 1,
+            pending_free_run: Some((1000, 32)),
+            free_runs: vec![(900, 16)],
+            swept: 1,
+            freed_bytes: 32,
+            remaining_bytes: 0,
+            started_at: std::time::Instant::now(),
+        };
+
+        let completion = take_lazy_sweep_completion(&mut state).expect("cursor complete");
+
+        assert_eq!(completion.free_runs, vec![(900, 16), (1000, 32)]);
+        assert_eq!(completion.swept, 1);
+        assert_eq!(completion.freed_bytes, 32);
+        assert!(state.pending_free_run.is_none());
+        assert!(state.free_runs.is_empty());
+    }
+
+    /// P4-blocker #1：验证 resize-abandoned 区域经 sweeper 收尾路径进入 free list。
     /// grow_array/grow_object 重写 obj_table 槽后旧 ptr 不可达；这里单独验证
     /// "abandoned (ptr, size) → free_list.add_free_region → alloc 可复用" 的回收链路。
     #[test]
     fn abandoned_region_recovers_into_free_list() {
         let mut collector = MarkSweepCollector::new();
         // 模拟一次 array resize：旧区域 ptr=2000, size=80（16 + 8*8），新区域在更高地址。
-        // 块扫描（步骤 1-3）只看到新区域，旧区域经 abandoned 注入步骤 5。
+        // 块扫描只看到新区域，旧区域经 abandoned 注入 sweep 收尾。
         collector.free_list.add_free_region(2000, 80);
         // 该区域应可被 alloc 复用（best-fit：80 进 class 80，alloc(80) 精确命中）。
         assert_eq!(collector.free_list.alloc(80), Some(2000));

@@ -8,10 +8,10 @@
 //!
 //! ## 约束
 //!
-//! **INV-C（non-moving）**：对象在线性内存中的地址永不变。编译后的 WASM 代码
-//! （support module 的 obj_get/obj_set 等辅助函数）会在 WASM local 中缓存 raw ptr，
-//! 跨 host call 使用（host call 可能触发 GC）。移动对象会使这些缓存失效 → use-after-free。
-//! 故本模块**不移动对象**。
+//! **mark-sweep 局部 non-moving**：当前治理只服务 mark-sweep，遵守 v2
+//! **INV-C1/C2**——对象地址在本算法生命周期内不被本模块移动；潜在 GC 点
+//! 之后 raw ptr 必须重新 resolve，不能把尾部回收等同于对象搬迁。
+//! 故本模块只降低全空闲尾部的 heap_ptr，**不移动对象**。
 //!
 //! ## 策略
 //!
@@ -32,9 +32,9 @@
 //!
 //! ## 不变量
 //!
-//! - **TRAIL-1**：heap_ptr 只能在 sweep 后、且尾部全空闲时降低。
-//! - **TRAIL-2**：降低 heap_ptr 前，必须从 free list 移除所有 ptr >= new_heap_ptr 的条目。
-//! - **TRAIL-3**：abandoned_regions 中 ptr >= new_heap_ptr 的条目也必须丢弃。
+//! - **TRAIL-1**：heap_ptr 只能在完整 sweep 游标结束后、且尾部全空闲时降低。
+//! - **TRAIL-2**：降低 heap_ptr 前，调用方必须丢弃所有 ptr >= new_heap_ptr 的空闲区间。
+//! - **TRAIL-3**：abandoned_regions 只在 sweep 完成收尾时 drain，lazy progress 不发布最终 free regions。
 //! - **TRAIL-4**：heap_ptr 不得低于 object_heap_start（堆基址）。
 
 use crate::runtime_gc::api::GcContext;
@@ -51,11 +51,10 @@ pub struct TailReclaimResult {
 /// sweep 后执行尾部空间回收。
 ///
 /// 算法：
-/// 1. 收集所有空闲区间（free list + abandoned，已由 sweeper 合并）。
+/// 1. 接收 sweeper 在完整 sweep 结束后合并的空闲区间（sweep + abandoned）。
 /// 2. 找到最高地址的连续空闲区间末尾。
 /// 3. 若该末尾 == heap_ptr，则 heap_ptr 回退到该区间起始。
-/// 4. 从 free list 移除 ptr >= new_heap_ptr 的条目。
-///
+/// 4. 返回 new_heap_ptr；调用方据此过滤 free list 与碎片指标输入。
 /// 安全性：
 /// - 只回收**物理上连续到 heap_ptr**的尾部空闲区——中间有活对象则不回退。
 /// - 不移动任何对象，不修改 obj_table。

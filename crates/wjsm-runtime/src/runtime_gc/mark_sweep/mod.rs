@@ -18,7 +18,7 @@ use allocator::SegregatedFreeList;
 pub struct MarkSweepCollector {
     pub(crate) free_list: SegregatedFreeList,
     pub(crate) mark_bits: MarkBitmap,
-    /// sweep 回收的 handle 槽（供 fast-path 复用，IMPL-10/#7）。
+    /// 本周期 sweep 回收的 handle 暂存；finalize_sweep_cycle 才发布给 fast-path 复用。
     pub(crate) freed_handles: Vec<Handle>,
     /// v2 接管的动态堆起点；MarkSweep 的动态域仍是连续 bump 区间。
     dynamic_start: usize,
