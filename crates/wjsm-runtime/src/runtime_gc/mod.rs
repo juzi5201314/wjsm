@@ -1,11 +1,10 @@
 //! 可插拔 GC 框架（spec §6）。单一 canonical owner: 本模块组。
 //!
-//! 算法以 trait 抽象（`GcAlgorithm: Allocator + Marker + Sweeper`），
-//! 默认实现 `MarkSweepCollector`（non-moving + segregated free list）。
-//! 预留 generational/incremental/parallel 接入点（WriteBarrier/ReadBarrier/
-//! HeapRegionManager/mark_step/sweep_step，默认 no-op）。
+//! 算法以 v2 生命周期 trait 抽象（`GcAlgorithm`），默认实现
+//! `MarkSweepCollector`（non-moving + lazy sweep + segregated free list）。
+//! G1/ZGC 通过 registry 在后续阶段接入同一接口；旧 v1 mark/sweep 切片已退休。
 //!
-//! 稳定性承诺见 spec 附录 D。关键不变量见 spec §18。
+//! 关键不变量见 v2 spec §22。
 //!
 //! # GC Safepoint 优化策略
 //!
@@ -83,9 +82,4 @@ pub mod side_table_refs;
 pub mod weak_refs;
 
 pub use api::{GcAlgorithm, GcContext};
-pub use mark_sweep::MarkSweepCollector;
-#[expect(
-    unused_imports,
-    reason = "T0.3 wires registry into RuntimeState after v2 switch"
-)]
 pub use registry::GcAlgorithmKind;

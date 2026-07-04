@@ -9,7 +9,7 @@
 
 use std::str::FromStr;
 
-use crate::runtime_gc::api::GcAlgorithmV2;
+use crate::runtime_gc::api::GcAlgorithm;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 
 const VALID_ALGORITHMS: &str = "mark-sweep, g1, zgc";
@@ -49,7 +49,7 @@ impl GcAlgorithmKind {
 }
 
 /// 按种类创建 GC 算法实例。
-pub fn create(kind: GcAlgorithmKind) -> Result<Box<dyn GcAlgorithmV2 + Send + Sync>, String> {
+pub fn create(kind: GcAlgorithmKind) -> Result<Box<dyn GcAlgorithm + Send + Sync>, String> {
     match kind {
         GcAlgorithmKind::MarkSweep => Ok(Box::new(MarkSweepCollector::new())),
         GcAlgorithmKind::G1 | GcAlgorithmKind::Zgc => Err(format!(

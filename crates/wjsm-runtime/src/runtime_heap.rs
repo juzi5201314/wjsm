@@ -146,9 +146,9 @@ fn collect_for_host_alloc<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env
     let gc_arc = ctx.as_context().data().gc_algorithm.clone();
     let stats = {
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.name());
         let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-        gc.collect_with_provider(&mut gc_ctx, &mut roots as _)
+        gc.collect_full(&mut gc_ctx, &mut roots as _)
     };
     let state = ctx.as_context().data();
     state.update_gc_threshold_after_collection(stats.marked);
@@ -179,25 +179,14 @@ pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
     let gc_arc = ctx.as_context().data().gc_algorithm.clone();
     {
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
-        if let Some(ptr) = gc.alloc_slow(&mut gc_ctx, size, heap_type, capacity) {
-            return Some(ptr);
-        }
-    }
-    collect_for_host_alloc(ctx, env);
-    {
-        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
-        if let Some(ptr) = gc.alloc_slow(&mut gc_ctx, size, heap_type, capacity) {
-            return Some(ptr);
-        }
-    }
-    {
-        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.algorithm_name());
-        if matches!(gc_ctx.grow_to_fit_heap_allocation(size), Ok(true))
-            && let Some(ptr) = gc.alloc_slow(&mut gc_ctx, size, heap_type, capacity)
-        {
+        let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.name());
+        let req = crate::runtime_gc::api::AllocRequest {
+            size,
+            heap_type,
+            capacity,
+        };
+        if let Some(ptr) = gc.alloc_slow(&mut gc_ctx, &mut roots as _, req) {
             return Some(ptr);
         }
     }

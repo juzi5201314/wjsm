@@ -1,8 +1,7 @@
 //! GC trait 框架（spec §6）。
 //!
-//! 当前文件在 P0 期间同时承载 v1 组合 trait 与 v2 生命周期 trait。
-//! `GcAlgorithmV2` 是后续 G1/ZGC 接入边界；T0.3 会删除 v1 trait 并将其更名为
-//! `GcAlgorithm`。
+//! `GcAlgorithm` 是 v2 生命周期接口：算法接管动态堆域、处理 slow-path 分配、
+//! safepoint 步进、完整回收，以及 G1/ZGC 所需的 barrier/load hook。
 //!
 //! **关键不变量**（v2 spec §22）：
 //! - INV-C1：JS 值层引用是 handle；`obj_table[h]` 是唯一 ptr truth。
@@ -54,26 +53,6 @@ pub trait HeapObjectQuery {
     fn heap_type(&self, h: Handle) -> u8;
 }
 
-// ── 分配器：fast-path 固定烧进 WASM，slow-path 走 trait ──
-pub trait Allocator {
-    /// fast-path bump 失败后调用。策略决定：free list / GC / grow。
-    /// 返回分配到的**线性内存 ptr**（仅地址，不含 handle 注册——调用方自己 take_or_alloc_handle）；
-    /// None 表示真 OOM（`gc_alloc_slow` host import 返回 Err → trap，#117）。
-    fn alloc_slow(
-        &mut self,
-        ctx: &mut GcContext,
-        size: usize,
-        heap_type: u8,
-        capacity: u32,
-    ) -> Option<usize>;
-    /// 接收被 sweep 释放的空闲区（MarkSweep 用）。
-    fn add_free_region(&mut self, ptr: usize, size: usize);
-    /// 预留：未来 TLAB / region-local 分配。默认 None。
-    fn alloc_thread_local(&mut self, _ctx: &mut GcContext, _size: usize) -> Option<usize> {
-        None
-    }
-}
-
 // ── Root 发现（回调式，#6，避免每次 GC clone 整个 shadow stack）──
 pub trait RootProvider {
     /// 扫描 shadow stack，对每个 root handle 调 visit。
@@ -90,82 +69,9 @@ pub trait RootProvider {
     fn for_each_wasm_local_root(&mut self, _ctx: &mut GcContext, _visit: &mut dyn FnMut(Handle)) {}
 }
 
-// ── Mark 策略 ──
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MarkProgress {
-    /// mark 完成。
-    Complete,
-    /// incremental：剩余 work 估算。
-    Pending(usize),
-}
-
-pub trait Marker {
-    /// 一次性 mark：seed roots → drain worklist（IMPL-6 显式 worklist，不递归）。
-    fn mark(&mut self, ctx: &mut GcContext, roots: &mut dyn Iterator<Item = Handle>);
-    fn is_marked(&self, h: Handle) -> bool;
-    /// 预留：incremental mark 步进接口。默认一次性完成（non-incremental）。
-    fn mark_step(&mut self, _ctx: &mut GcContext, _budget: usize) -> MarkProgress {
-        MarkProgress::Complete
-    }
-}
-
-// ── Sweep 策略 ──
-pub trait Sweeper {
-    /// 一次性 sweep：按 ptr sort → 合并 unmarked → 与 abandoned 邻接合并 → 重建 free list
-    /// → 清空 unmarked handle 槽 → process weak refs（IMPL-7 sort 必需）。
-    fn sweep(&mut self, ctx: &mut GcContext);
-    /// 预留：concurrent sweep 步进。默认一次性完成。
-    fn sweep_step(&mut self, ctx: &mut GcContext, _budget: usize) -> usize {
-        self.sweep(ctx);
-        0
-    }
-}
-
-// ── 预留 hook：region / card-table / barrier（generational/G1 用） ──
-/// 预留 region 管理（generational/G1）。MarkSweep 不实现此 trait。
-pub trait HeapRegionManager {
-    type Region;
-    type Card;
-    fn regions(&self) -> std::slice::Iter<'_, Self::Region>;
-    fn card_for(&self, ptr: usize) -> Self::Card;
-}
-
-/// 写屏障。non-moving MarkSweep 默认 no-op（无消费者，spec §12.2 defer 到 generational）。
-pub trait WriteBarrier {
-    fn on_write(&mut self, _ctx: &mut GcContext, _target: Handle, _field: usize, _val: Value) {}
-}
-
-/// 读屏障。默认 no-op。
-pub trait ReadBarrier {
-    fn on_read(&mut self, _ctx: &mut GcContext, _target: Handle, _field: usize) {}
-}
-
-// ── 顶层算法：组装 Allocator + Marker + Sweeper ──
-pub trait GcAlgorithm: Allocator + Marker + Sweeper {
-    /// 完整 GC 周期：reset mark → mark roots（经 RootProvider 回调）→ fixed-point → sweep → weak refs。
-    fn collect(&mut self, ctx: &mut GcContext) -> GcStats;
-    fn algorithm_name(&self) -> &'static str;
-
-    /// 带 RootProvider 的完整 collect（fixed-point host-table root 追踪，IMPL-9，spec §10）。
-    /// 默认实现回退到 collect（无 fixed-point）；MarkSweepCollector 覆盖为真正的 fixed-point。
-    fn collect_with_provider(
-        &mut self,
-        _ctx: &mut GcContext,
-        _roots: &mut dyn RootProvider,
-    ) -> GcStats {
-        // 默认：无 RootProvider 信息，回退到 collect（不应被 P4 集成调用）。
-        let empty: std::iter::Empty<Handle> = std::iter::empty();
-        self.mark(_ctx, &mut Box::new(empty) as _);
-        self.sweep(_ctx);
-        _ctx.stats.clone()
-    }
-}
-
 /// v2 算法接口：用完整生命周期方法取代 v1 `Allocator + Marker + Sweeper` 切片。
-///
-/// 本 trait 先以 `GcAlgorithmV2` 与 v1 共存；T0.3 迁移调用方后更名为
-/// `GcAlgorithm`。默认 hook 只用于非对应算法的不可达路径，不提供行为兜底。
-pub trait GcAlgorithmV2: Send + Sync {
+/// 默认 hook 只用于非对应算法的不可达路径，不提供行为兜底。
+pub trait GcAlgorithm: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// 实例化后一次性接管动态堆域 `[dynamic_start, heap_limit)`。

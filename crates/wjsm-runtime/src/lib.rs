@@ -748,11 +748,11 @@ struct RuntimeState {
     /// sweep 单独遍历 obj_table 看不到它 → 永久泄漏（INV-B vs §8.2 矛盾，P4-blocker #1）。
     /// grow_array/grow_object 在重写前注册旧 (ptr, old_size)；sweep 读此并入 free list，sweep 结束清空。
     abandoned_regions: Arc<Mutex<Vec<(usize, usize)>>>,
-    /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports gc_alloc_slow/
-    /// gc_maybe_collect 经此驱动（P4）。Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
+    /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports 经 v2 生命周期接口驱动。
+    /// Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
     gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
     /// 最近一次 GC 统计（含碎片治理指标，issue #332）。
-    /// 每次 collect_with_provider 后由 host 更新，供可观测性 API 查询。
+    /// 每次完整 collection 后由 host 更新，供可观测性 API 查询。
     last_gc_stats: Arc<Mutex<crate::runtime_gc::api::GcStats>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
@@ -1022,9 +1022,10 @@ impl RuntimeState {
             handle_free_list: Arc::new(Mutex::new(Vec::new())),
             abandoned_regions: Arc::new(Mutex::new(Vec::new())),
             last_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
-            gc_algorithm: Arc::new(Mutex::new(Box::new(
-                crate::runtime_gc::MarkSweepCollector::new(),
-            ))),
+            gc_algorithm: Arc::new(Mutex::new(
+                crate::runtime_gc::registry::create(crate::runtime_gc::GcAlgorithmKind::MarkSweep)
+                    .expect("mark-sweep GC algorithm must be registered"),
+            )),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),

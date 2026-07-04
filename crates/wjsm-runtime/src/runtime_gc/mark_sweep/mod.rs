@@ -8,8 +8,7 @@ pub mod marker;
 pub mod sweeper;
 
 use crate::runtime_gc::api::{
-    AllocRequest, Allocator, GcAlgorithm, GcAlgorithmV2, GcContext, GcStats, Handle, Marker,
-    RootProvider, StepBudget, StepOutcome, Sweeper,
+    AllocRequest, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget, StepOutcome,
 };
 use crate::runtime_gc::mark_bitmap::MarkBitmap;
 use crate::runtime_gc::weak_refs;
@@ -96,7 +95,7 @@ impl MarkSweepCollector {
             roots.for_each_shadow_stack_root(ctx, &mut |h| acc.push(h));
             acc
         };
-        self.mark(ctx, &mut shadow_roots.into_iter());
+        marker::mark_roots_and_drain(self, ctx, &mut shadow_roots.into_iter());
 
         // 2. fixed-point：host-table roots 多轮注入 until popcount 不变。
         loop {
@@ -107,7 +106,7 @@ impl MarkSweepCollector {
                 roots.for_each_host_table_root(ctx, &mut is_marked, &mut |h| acc.push(h));
                 acc
             };
-            self.mark(ctx, &mut host_roots.into_iter());
+            marker::mark_roots_and_drain(self, ctx, &mut host_roots.into_iter());
             let after = self.mark_bits.popcount();
             if after == before {
                 break;
@@ -142,7 +141,7 @@ impl MarkSweepCollector {
         ctx: &mut GcContext,
         started_at: std::time::Instant,
     ) -> GcStats {
-        self.sweep(ctx);
+        sweeper::sweep(self, ctx);
         self.finalize_sweep_cycle(ctx, started_at)
     }
 
@@ -182,76 +181,7 @@ impl Default for MarkSweepCollector {
     }
 }
 
-impl Allocator for MarkSweepCollector {
-    fn alloc_slow(
-        &mut self,
-        ctx: &mut GcContext,
-        size: usize,
-        _heap_type: u8,
-        _capacity: u32,
-    ) -> Option<usize> {
-        if let Some(ptr) = self.alloc_from_free_list(size) {
-            return Some(ptr);
-        }
-        self.alloc_from_bump_window(ctx, size)
-    }
-
-    fn add_free_region(&mut self, ptr: usize, size: usize) {
-        self.free_list.add_free_region(ptr, size);
-    }
-}
-
-impl Marker for MarkSweepCollector {
-    fn mark(&mut self, ctx: &mut GcContext, roots: &mut dyn Iterator<Item = Handle>) {
-        marker::mark_roots_and_drain(self, ctx, roots);
-    }
-
-    fn is_marked(&self, h: Handle) -> bool {
-        self.mark_bits.is_marked(h)
-    }
-}
-
-impl Sweeper for MarkSweepCollector {
-    fn sweep(&mut self, ctx: &mut GcContext) {
-        sweeper::sweep(self, ctx);
-    }
-}
-
 impl GcAlgorithm for MarkSweepCollector {
-    fn collect(&mut self, ctx: &mut GcContext) -> GcStats {
-        let _ = self.finish_pending_lazy_sweep(ctx);
-        let started_at = std::time::Instant::now();
-        self.begin_mark_cycle(ctx);
-        let mut empty = std::iter::empty();
-        self.mark(ctx, &mut empty);
-        self.sweep_and_finalize(ctx, started_at)
-    }
-
-    fn algorithm_name(&self) -> &'static str {
-        "mark-sweep"
-    }
-
-    /// 带 RootProvider 的完整 collect，含 fixed-point host-table root 追踪（IMPL-9，spec §10）。
-    ///
-    /// 流程：
-    /// 1. mark shadow stack + function property roots → drain
-    /// 2. loop：mark host-table roots（microtask/promise/continuation/streams/...）→ drain
-    ///    → 若 popcount 增长则重复（promise reactions 引用经 mark 可达后，reaction target 需再标）
-    ///    → until popcount 不变（fixed-point 收敛，受 host 表大小约束）
-    /// 3. sweep → free list + abandoned regions + handle 复用
-    fn collect_with_provider(
-        &mut self,
-        ctx: &mut GcContext,
-        roots: &mut dyn RootProvider,
-    ) -> GcStats {
-        let _ = self.finish_pending_lazy_sweep(ctx);
-        let started_at = std::time::Instant::now();
-        self.mark_provider_fixed_point(ctx, roots);
-        self.sweep_and_finalize(ctx, started_at)
-    }
-}
-
-impl GcAlgorithmV2 for MarkSweepCollector {
     fn name(&self) -> &'static str {
         "mark-sweep"
     }
@@ -335,8 +265,7 @@ impl MarkSweepCollector {
     ) -> GcStats {
         let _ = self.finish_pending_lazy_sweep(ctx);
         let started_at = std::time::Instant::now();
-        self.begin_mark_cycle(ctx);
-        self.mark(ctx, roots);
+        marker::mark_roots_and_drain(self, ctx, roots);
         self.sweep_and_finalize(ctx, started_at)
     }
 }

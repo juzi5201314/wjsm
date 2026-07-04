@@ -1484,46 +1484,20 @@ pub(crate) fn define_core(
             let heap_type = heap_type.clamp(0, 255) as u8;
             let capacity = capacity.max(0) as u32;
             // 算法持有在 RuntimeState.gc_algorithm（Arc<Mutex>），经 GcContext 调用。
-            // 先 clone Arc 释放 caller 不可变借用，再 lock，避免借用冲突。
+            // v2 alloc_slow 自行处理 free list、collection assist、grow 与最终 OOM 判定。
             let gc_arc = caller.data().gc_algorithm.clone();
-            // 1. alloc_slow（free list + bump）
             {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
-                if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                    return Ok(ptr as i32);
-                }
-            }
-            // 2. collect 后重试
-            let stats = {
-                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                gc.collect_with_provider(&mut ctx, &mut roots as _)
-            };
-            caller
-                .data()
-                .update_gc_threshold_after_collection(stats.marked);
-            caller.data().store_last_gc_stats(stats.clone());
-            caller.data().reset_alloc_counter_after_gc();
-            {
-                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
-                if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                    return Ok(ptr as i32);
-                }
-            }
-            // 3. grow 到本次分配刚好够用（仍受 heap_limit 约束）后重试。
-            {
-                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx =
-                    crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
-                if matches!(ctx.grow_to_fit_heap_allocation(size), Ok(true))
-                    && let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity)
-                {
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
+                let req = crate::runtime_gc::api::AllocRequest {
+                    size,
+                    heap_type,
+                    capacity,
+                };
+                if let Some(ptr) = gc.alloc_slow(&mut ctx, &mut roots as _, req) {
+                    let stats = gc.last_stats().clone();
+                    caller.data().store_last_gc_stats(stats);
                     return Ok(ptr as i32);
                 }
             }
@@ -1556,9 +1530,9 @@ pub(crate) fn define_core(
         };
         let stats = {
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.algorithm_name());
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-            gc.collect_with_provider(&mut ctx, &mut roots as _)
+            gc.collect_full(&mut ctx, &mut roots as _)
         };
         caller
             .data()
