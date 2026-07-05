@@ -512,6 +512,9 @@ impl Compiler {
                     align: 2,
                     memory_index: 0,
                 }));
+                // ZGC 在 obj_table entry 低 2 bit 存 color；普通指针路径必须先去色。
+                self.emit(WasmInstruction::I32Const(!0x3));
+                self.emit(WasmInstruction::I32And);
                 // value 为函数时同样把函数表索引重定位到函数属性 handle。
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));

@@ -8,6 +8,7 @@ use std::str::FromStr;
 use crate::runtime_gc::api::GcAlgorithm;
 use crate::runtime_gc::g1::G1Collector;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
+use crate::runtime_gc::zgc::ZgcCollector;
 
 const VALID_ALGORITHMS: &str = "mark-sweep, g1, zgc";
 
@@ -50,10 +51,7 @@ pub fn create(kind: GcAlgorithmKind) -> Result<Box<dyn GcAlgorithm + Send + Sync
     match kind {
         GcAlgorithmKind::MarkSweep => Ok(Box::new(MarkSweepCollector::new())),
         GcAlgorithmKind::G1 => Ok(Box::new(G1Collector::new())),
-        GcAlgorithmKind::Zgc => Err(format!(
-            "GC algorithm `{}` is registered but not implemented yet; currently available: mark-sweep, g1",
-            kind.as_str()
-        )),
+        GcAlgorithmKind::Zgc => Ok(Box::new(ZgcCollector::new())),
     }
 }
 
@@ -100,18 +98,17 @@ mod tests {
     fn create_available_algorithms_succeeds() {
         assert!(create(GcAlgorithmKind::MarkSweep).is_ok());
         assert!(create(GcAlgorithmKind::G1).is_ok());
+        assert!(create(GcAlgorithmKind::Zgc).is_ok());
     }
 
     #[test]
-    fn create_rejects_future_zgc_clearly() {
-        let err = match create(GcAlgorithmKind::Zgc) {
-            Ok(_) => panic!("zgc should be rejected before implementation"),
-            Err(err) => err,
-        };
-
-        assert!(err.contains("zgc"));
-        assert!(err.contains("not implemented"));
-        assert!(err.contains("mark-sweep"));
-        assert!(err.contains("g1"));
+    fn create_all_known_algorithms_succeeds() {
+        for kind in [
+            GcAlgorithmKind::MarkSweep,
+            GcAlgorithmKind::G1,
+            GcAlgorithmKind::Zgc,
+        ] {
+            assert!(create(kind).is_ok(), "{kind:?} must be registered");
+        }
     }
 }

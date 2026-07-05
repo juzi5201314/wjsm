@@ -266,3 +266,23 @@
 - `cargo check -p wjsm-runtime` → passed（zero warnings）。
 - `cargo nextest run -p wjsm-runtime -E 'test(zgc)'` → 11 passed, 164 skipped。
 - `cargo nextest run -p wjsm-runtime` → 173 passed, 2 skipped。
+
+## P4 T4.2 evidence
+
+- `emit_support_module(GcFlavor::Zgc)` 已生成 ZGC support；`wjsm-runtime-support` 现在产出并暴露 `wjsm_support_zgc.cwasm`，ABI 可用 flavor 为 `mark-sweep,g1,zgc`。
+- ZGC support helper 的 handle 解引用经统一 load barrier 序列：检查 low-bit color、必要时调用 `gc_load_barrier_slow`，并在 helper 内去除 low 2 bit 后作为真实 ptr 使用。
+- `obj_set` / `elem_set` 在 ZGC flavor 下复用统一 24B barrier buffer 记录 SATB event；结构测试证明无独立 `__satb_ptr`。
+- `obj_new` / `arr_new` 在 ZGC support 下写入 `ptr | __good_color`，runtime `gc_load_barrier_slow` 和 `runtime_values::resolve_handle_idx_with_env` 使用 `heap_access::resolve` 修复 host colored ptr。
+- `registry::create(Zgc)` 已打开，runtime startup 按当前 GC flavor 选择 mark-sweep / G1 / ZGC embedded support artifact。
+- 调试修复：`WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` 首次暴露 class/new 与 eval 失败；根因是 compiler inline/eval helper 仍直接使用 colored obj_table ptr。已在 `SetProto`、inline array helpers、inline object helpers中对 obj_table entry 去色，保持 eval mode 可运行。
+- 调试修复：support flavor 改变导致 stack-overflow synthetic wasm frame source-map 行号随 flavor 漂移；测试 harness 现在仅归一化无列号的 generated anonymous wasm frame，保留真实 JS frame（如 `recurse:2:1`）。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-backend-wasm -p wjsm-runtime-support -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-backend-wasm -E 'test(support)'` → 14 passed, 49 skipped。
+- `cargo nextest run -p wjsm-runtime-support --features embedded` → 9 passed。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo nextest run --workspace` → 1292 passed, 2 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1292 passed, 2 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo build` → passed（zero warnings）。

@@ -13,7 +13,7 @@
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
 
 use crate::shared_types::build_shared_type_section;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use wasm_encoder::{
     BlockType, CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
     GlobalType, ImportSection, Instruction as WasmInstruction, MemArg, MemoryType, Module, RefType,
@@ -83,6 +83,7 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("obj_set_runtime_key", 9),           // (i64, i32, i64) -> ()
     ("obj_delete_runtime_key", 8),        // (i64, i32) -> i64
     ("gc_barrier_flush", 1),              // () -> ()
+    ("gc_load_barrier_slow", 14),         // (i32) -> i32
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
@@ -113,7 +114,8 @@ const HOST_OBJ_SET_RUNTIME_KEY: u32 = 23;
 const HOST_OBJ_DELETE_RUNTIME_KEY: u32 = 24;
 
 const HOST_GC_BARRIER_FLUSH: u32 = 25;
-const NUM_HOST_IMPORTS: u32 = 26;
+const HOST_GC_LOAD_BARRIER_SLOW: u32 = 26;
+const NUM_HOST_IMPORTS: u32 = 27;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -185,15 +187,23 @@ const G_BARRIER_BUF_PTR: u32 = 25;
 #[allow(dead_code)]
 const G_BARRIER_BUF_END: u32 = 26;
 
-fn emit_g1_barrier_event(
+fn emit_reference_barrier_event(
     func: &mut Function,
     flavor: GcFlavor,
     slot_addr_local: u32,
     slot_offset: u64,
     new_value_local: u32,
 ) {
-    if flavor != GcFlavor::G1 {
+    if !matches!(flavor, GcFlavor::G1 | GcFlavor::Zgc) {
         return;
+    }
+
+    if flavor == GcFlavor::Zgc {
+        // ZGC 只需要 mark 期 SATB；idle/relocate 期不记录写屏障事件。
+        func.instruction(&WasmInstruction::GlobalGet(G_GC_PHASE));
+        func.instruction(&WasmInstruction::I32Const(1));
+        func.instruction(&WasmInstruction::I32Eq);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
     }
 
     // 缓冲区剩余不足 24B 时先 flush；flush 只 drain event，不触发 GC/move。
@@ -208,9 +218,13 @@ fn emit_g1_barrier_event(
     func.instruction(&WasmInstruction::Call(HOST_GC_BARRIER_FLUSH));
     func.instruction(&WasmInstruction::End);
 
-    // flags:u32 = 0。
+    // flags:u32。G1 当前由 host 侧按 old/new 值精化；ZGC 标明 SATB old-value。
     func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
-    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Const(if flavor == GcFlavor::Zgc {
+        1
+    } else {
+        0
+    }));
     func.instruction(&WasmInstruction::I32Store(MemArg {
         offset: 0,
         align: 2,
@@ -255,6 +269,54 @@ fn emit_g1_barrier_event(
     ));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::GlobalSet(G_BARRIER_BUF_PTR));
+
+    if flavor == GcFlavor::Zgc {
+        func.instruction(&WasmInstruction::End);
+    }
+}
+
+fn emit_resolve_handle_ptr(
+    func: &mut Function,
+    flavor: GcFlavor,
+    handle_local: u32,
+    ptr_local: u32,
+) {
+    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
+    func.instruction(&WasmInstruction::LocalGet(handle_local));
+    func.instruction(&WasmInstruction::I32Const(4));
+    func.instruction(&WasmInstruction::I32Mul);
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    if flavor == GcFlavor::Zgc {
+        func.instruction(&WasmInstruction::LocalTee(ptr_local));
+        func.instruction(&WasmInstruction::I32Const(3));
+        func.instruction(&WasmInstruction::I32And);
+        func.instruction(&WasmInstruction::GlobalGet(G_GOOD_COLOR));
+        func.instruction(&WasmInstruction::I32Ne);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        func.instruction(&WasmInstruction::LocalGet(handle_local));
+        func.instruction(&WasmInstruction::Call(HOST_GC_LOAD_BARRIER_SLOW));
+        func.instruction(&WasmInstruction::LocalSet(ptr_local));
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::LocalGet(ptr_local));
+        func.instruction(&WasmInstruction::I32Const(-4));
+        func.instruction(&WasmInstruction::I32And);
+        func.instruction(&WasmInstruction::LocalSet(ptr_local));
+    } else {
+        func.instruction(&WasmInstruction::LocalSet(ptr_local));
+    }
+}
+
+fn emit_obj_table_entry_value(func: &mut Function, flavor: GcFlavor, ptr_local: u32) {
+    func.instruction(&WasmInstruction::LocalGet(ptr_local));
+    if flavor == GcFlavor::Zgc {
+        func.instruction(&WasmInstruction::GlobalGet(G_GOOD_COLOR));
+        func.instruction(&WasmInstruction::I32Or);
+    }
 }
 
 // Imported env globals — 与 abi::ENV_GLOBALS 同步：27 项。
@@ -324,9 +386,6 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
 
 /// 生成指定 GC flavor 的 support module wasm bytes。
 pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
-    if flavor == GcFlavor::Zgc {
-        bail!("support module for {flavor:?} is not implemented yet");
-    }
     let mut module = Module::new();
 
     // ── Type section ──
@@ -616,7 +675,7 @@ fn emit_gc_safepoint_poll_if_due_support(func: &mut Function) {
 
 // ── obj_new (param $capacity i32) (result i32) — Type 0 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_new 段。
-fn emit_obj_new(_flavor: GcFlavor) -> Function {
+fn emit_obj_new(flavor: GcFlavor) -> Function {
     // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
     let mut func = Function::new(vec![(4, ValType::I32)]);
     emit_gc_safepoint_poll_if_due_support(&mut func);
@@ -730,7 +789,7 @@ fn emit_obj_new(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::LocalGet(2));
+    emit_obj_table_entry_value(&mut func, flavor, 2);
     func.instruction(&WasmInstruction::I32Store(MemArg {
         offset: 0,
         align: 2,
@@ -906,7 +965,7 @@ fn emit_to_int32(_flavor: GcFlavor) -> Function {
 // ── arr_new (param $capacity i32) (result i32) — Type 7 ──
 // 移植自 compiler_array_helpers.rs::compile_array_helpers arr_new 段。
 // 数组内存布局: [proto(4), type(1), pad(3), length(4), capacity(4), elements(capacity*8)]
-fn emit_arr_new(_flavor: GcFlavor) -> Function {
+fn emit_arr_new(flavor: GcFlavor) -> Function {
     // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
     let mut func = Function::new(vec![(4, ValType::I32)]);
     emit_gc_safepoint_poll_if_due_support(&mut func);
@@ -1021,7 +1080,7 @@ fn emit_arr_new(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::LocalGet(2));
+    emit_obj_table_entry_value(&mut func, flavor, 2);
     func.instruction(&WasmInstruction::I32Store(MemArg {
         offset: 0,
         align: 2,
@@ -1036,7 +1095,7 @@ fn emit_arr_new(_flavor: GcFlavor) -> Function {
 
 // ── elem_get (param $boxed i64) (param $index i32) (result i64) — Type 8 ──
 // 移植自 compiler_array_helpers.rs::compile_array_helpers elem_get 段。
-fn emit_elem_get(_flavor: GcFlavor) -> Function {
+fn emit_elem_get(flavor: GcFlavor) -> Function {
     let mut func = Function::new(vec![(2, ValType::I32)]);
     // 检查是否为 TAG_ARRAY
     func.instruction(&WasmInstruction::LocalGet(0));
@@ -1050,16 +1109,9 @@ fn emit_elem_get(_flavor: GcFlavor) -> Function {
     // Array path: resolve handle → ptr
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I32WrapI64);
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalTee(2));
+    func.instruction(&WasmInstruction::LocalSet(3));
+    emit_resolve_handle_ptr(&mut func, flavor, 3, 2);
+    func.instruction(&WasmInstruction::LocalGet(2));
     // ptr == 0 → return undefined
     func.instruction(&WasmInstruction::I32Eqz);
     func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
@@ -1120,16 +1172,9 @@ fn emit_elem_set(flavor: GcFlavor) -> Function {
     // Array path: resolve handle → ptr
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I32WrapI64);
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalTee(3));
+    func.instruction(&WasmInstruction::LocalSet(4));
+    emit_resolve_handle_ptr(&mut func, flavor, 4, 3);
+    func.instruction(&WasmInstruction::LocalGet(3));
     // ptr == 0 → no-op
     func.instruction(&WasmInstruction::I32Eqz);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
@@ -1152,7 +1197,7 @@ fn emit_elem_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalSet(5));
-    emit_g1_barrier_event(&mut func, flavor, 5, 0, 2);
+    emit_reference_barrier_event(&mut func, flavor, 5, 0, 2);
     func.instruction(&WasmInstruction::LocalGet(5));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I64Store(MemArg {
@@ -1306,8 +1351,9 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_support_flavors_do_not_emit_fake_modules() {
-        assert!(emit_support_module(GcFlavor::Zgc).is_err());
+    fn zgc_support_module_passes_wasmparser_validation() {
+        let bytes = emit_support_module(GcFlavor::Zgc).expect("emit");
+        wasmparser::validate(&bytes).expect("zgc support.wasm must validate");
     }
 
     #[test]
@@ -1323,6 +1369,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 26);
+        assert_eq!(HOST_IMPORTS.len(), 27);
     }
 }

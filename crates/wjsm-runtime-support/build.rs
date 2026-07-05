@@ -26,6 +26,7 @@ fn main() -> anyhow::Result<()> {
     for flavor in [
         wjsm_backend_wasm::GcFlavor::MarkSweep,
         wjsm_backend_wasm::GcFlavor::G1,
+        wjsm_backend_wasm::GcFlavor::Zgc,
     ] {
         let suffix = flavor.artifact_suffix();
         let wasm = wjsm_backend_wasm::emit_support_module(flavor)?;

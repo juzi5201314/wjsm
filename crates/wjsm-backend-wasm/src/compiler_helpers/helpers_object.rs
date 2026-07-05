@@ -233,6 +233,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(5));
             func.instruction(&WasmInstruction::Br(2));
             func.instruction(&WasmInstruction::End);
@@ -369,6 +372,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(5));
             func.instruction(&WasmInstruction::End);
 
@@ -600,6 +606,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(5)); // 更新 ptr 为 proto_ptr
             func.instruction(&WasmInstruction::Br(0));
             func.instruction(&WasmInstruction::End);
@@ -689,6 +698,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(8));
             func.instruction(&WasmInstruction::Br(2));
             func.instruction(&WasmInstruction::End);
@@ -707,6 +719,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(8));
             func.instruction(&WasmInstruction::End);
 
@@ -906,6 +921,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(14)); // proto_ptr
             func.instruction(&WasmInstruction::Loop(BlockType::Empty)); // proto_chain_loop
             // 搜索 proto 对象的 own properties
@@ -1085,6 +1103,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(14)); // proto_ptr
             func.instruction(&WasmInstruction::Br(0)); // continue proto_chain_loop
             func.instruction(&WasmInstruction::End); // end proto_chain_loop
@@ -1318,6 +1339,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(5));
             func.instruction(&WasmInstruction::Br(2));
             func.instruction(&WasmInstruction::End);
@@ -1342,6 +1366,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalSet(5));
             func.instruction(&WasmInstruction::End);
 

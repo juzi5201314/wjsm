@@ -1,7 +1,7 @@
 // obj_get / obj_set bodies — included from support_module.rs
 // 移植自 compiler_helpers.rs::compile_object_helpers
 
-fn emit_obj_get(_flavor: GcFlavor) -> Function {
+fn emit_obj_get(flavor: GcFlavor) -> Function {
     // local 0 = $boxed (i64), local 1 = $name_id (i32)
     // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
     // local 5 = resolved ptr (i32), local 6 = flags (i32), local 7 = getter (i64)
@@ -44,16 +44,8 @@ fn emit_obj_get(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::GlobalGet(G_FUNCTION_PROPS_BASE));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(5));
+    func.instruction(&WasmInstruction::LocalSet(4));
+    emit_resolve_handle_ptr(&mut func, flavor, 4, 5);
     func.instruction(&WasmInstruction::Br(2));
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
@@ -170,21 +162,9 @@ fn emit_obj_get(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::LocalTee(4));
-    emit_handle_bounds_check(
-                    &mut func,
-        4,
-        Some(value::encode_undefined()),
-    );
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(5));
+    emit_handle_bounds_check(&mut func, 4, Some(value::encode_undefined()));
+    func.instruction(&WasmInstruction::Drop);
+    emit_resolve_handle_ptr(&mut func, flavor, 4, 5);
     func.instruction(&WasmInstruction::End);
     // ptr == 0 → return undefined
     func.instruction(&WasmInstruction::LocalGet(5));
@@ -422,17 +402,7 @@ fn emit_obj_get(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::Call(HOST_PROXY_TRAP_GET));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::LocalGet(3));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(5)); // 更新 ptr 为 proto_ptr
+    emit_resolve_handle_ptr(&mut func, flavor, 3, 5);
     func.instruction(&WasmInstruction::Br(0));
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
@@ -503,17 +473,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::GlobalGet(G_FUNCTION_PROPS_BASE));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::LocalSet(9));
-    func.instruction(&WasmInstruction::LocalGet(9));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(8));
+    emit_resolve_handle_ptr(&mut func, flavor, 9, 8);
     func.instruction(&WasmInstruction::Br(2));
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::Return);
@@ -522,16 +482,8 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::LocalTee(9));
     emit_handle_bounds_check(&mut func, 9, None);
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(8));
+    func.instruction(&WasmInstruction::Drop);
+    emit_resolve_handle_ptr(&mut func, flavor, 9, 8);
     func.instruction(&WasmInstruction::End);
     // 数组 length 赋值：ECMAScript §23.1.3.2 ArraySetLength
     func.instruction(&WasmInstruction::LocalGet(8));
@@ -694,7 +646,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
     // 可写，更新 value (offset 8)
-    emit_g1_barrier_event(&mut func, flavor, 6, 8, 2);
+    emit_reference_barrier_event(&mut func, flavor, 6, 8, 2);
     func.instruction(&WasmInstruction::LocalGet(6));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I64Store(MemArg {
@@ -730,18 +682,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32Eq);
     func.instruction(&WasmInstruction::I32Or);
     func.instruction(&WasmInstruction::BrIf(0)); // 跳出 proto_chain_done → fall through
-    // 通过 handle 表解析 proto_handle → proto_ptr
-    func.instruction(&WasmInstruction::LocalGet(3));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(14)); // proto_ptr
+    emit_resolve_handle_ptr(&mut func, flavor, 3, 14);
     func.instruction(&WasmInstruction::Loop(BlockType::Empty)); // proto_chain_loop
     // 搜索 proto 对象的 own properties
     func.instruction(&WasmInstruction::LocalGet(14));
@@ -910,17 +851,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32Or);
     func.instruction(&WasmInstruction::BrIf(1)); // 跳出 proto_chain_done
     // 解析下一个 proto_handle → proto_ptr
-    func.instruction(&WasmInstruction::LocalGet(3));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(14)); // proto_ptr
+    emit_resolve_handle_ptr(&mut func, flavor, 3, 14);
     func.instruction(&WasmInstruction::Br(0)); // continue proto_chain_loop
     func.instruction(&WasmInstruction::End); // end proto_chain_loop
     func.instruction(&WasmInstruction::End); // end proto_chain_done
@@ -962,17 +893,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     // 分配扩容后的新区域；fast-path 失败时由 gc_alloc_slow 负责 GC/grow/OOM。
     emit_heap_bump_for_object_resize_support(&mut func, 7, 16, 8);
     // GC slow-path 可能移动正在扩容的对象；拷贝前必须用 handle 重新解析 old_ptr。
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::LocalGet(9));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(6));
+    emit_resolve_handle_ptr(&mut func, flavor, 9, 6);
 
     // 拷贝旧数据到新内存：memory.copy(dst=new_ptr, src=old_ptr, len=16+num_props*32)
     func.instruction(&WasmInstruction::LocalGet(8));
@@ -992,7 +913,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::LocalGet(8));
+    emit_obj_table_entry_value(&mut func, flavor, 8);
     func.instruction(&WasmInstruction::I32Store(MemArg {
         offset: 0,
         align: 2,
@@ -1046,6 +967,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
         align: 2,
         memory_index: 0,
     }));
+    emit_reference_barrier_event(&mut func, flavor, 6, 8, 2);
     func.instruction(&WasmInstruction::LocalGet(6));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I64Store(MemArg {
@@ -1085,7 +1007,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
 // ── obj_delete (param $boxed i64) (param $name_id i32) (result i64) — Type 1 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_delete 段。
 // 返回 NaN-boxed bool。
-fn emit_obj_delete(_flavor: GcFlavor) -> Function {
+fn emit_obj_delete(flavor: GcFlavor) -> Function {
     // local 0 = $boxed (i64), local 1 = $name_id (i32)
     // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
     // local 5 = resolved ptr (i32), local 6 = last_slot_addr (i32)
@@ -1128,16 +1050,8 @@ fn emit_obj_delete(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::GlobalGet(G_FUNCTION_PROPS_BASE));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(5));
+    func.instruction(&WasmInstruction::LocalSet(4));
+    emit_resolve_handle_ptr(&mut func, flavor, 4, 5);
     func.instruction(&WasmInstruction::Br(2));
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
@@ -1147,16 +1061,8 @@ fn emit_obj_delete(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32WrapI64);
     func.instruction(&WasmInstruction::LocalTee(4));
     emit_handle_bounds_check(&mut func, 4, Some(value::encode_bool(false)));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::LocalSet(5));
+    func.instruction(&WasmInstruction::Drop);
+    emit_resolve_handle_ptr(&mut func, flavor, 4, 5);
     func.instruction(&WasmInstruction::End);
 
     // ptr == 0 → return false

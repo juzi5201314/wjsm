@@ -19,9 +19,14 @@ enum OwnedOperator {
     LocalGet(u32),
     LocalSet(u32),
     I32Const(i32),
+    I32And,
+    I32Or,
+    I32Ne,
     I32Add,
     I32Mul,
     I32Load,
+    I32Store,
+    I64Store,
     MemoryCopy,
 }
 
@@ -71,6 +76,15 @@ fn parse_support_module_with(flavor: GcFlavor) -> SupportModuleInfo {
                         Operator::I32Const { value } => {
                             ops.push(OwnedOperator::I32Const(value));
                         }
+                        Operator::I32And => {
+                            ops.push(OwnedOperator::I32And);
+                        }
+                        Operator::I32Or => {
+                            ops.push(OwnedOperator::I32Or);
+                        }
+                        Operator::I32Ne => {
+                            ops.push(OwnedOperator::I32Ne);
+                        }
                         Operator::I32Add => {
                             ops.push(OwnedOperator::I32Add);
                         }
@@ -79,6 +93,12 @@ fn parse_support_module_with(flavor: GcFlavor) -> SupportModuleInfo {
                         }
                         Operator::I32Load { .. } => {
                             ops.push(OwnedOperator::I32Load);
+                        }
+                        Operator::I32Store { .. } => {
+                            ops.push(OwnedOperator::I32Store);
+                        }
+                        Operator::I64Store { .. } => {
+                            ops.push(OwnedOperator::I64Store);
                         }
                         Operator::MemoryCopy { .. } => {
                             ops.push(OwnedOperator::MemoryCopy);
@@ -220,6 +240,107 @@ fn g1_support_write_helpers_emit_barrier_events() {
                 "g1 support `{export}` body missing barrier event operator {required:?}"
             );
         }
+    }
+}
+
+#[test]
+fn zgc_support_read_helpers_emit_load_barriers() {
+    const G_GOOD_COLOR: u32 = 24;
+
+    let info = parse_support_module_with(GcFlavor::Zgc);
+    let load_barrier_idx = imported_func_index(&info, "gc_load_barrier_slow");
+
+    for export in ["obj_get", "obj_set", "obj_delete", "elem_get", "elem_set"] {
+        let body = exported_body(&info, export);
+        let ops: HashSet<_> = body.iter().copied().collect();
+        for required in [
+            OwnedOperator::GlobalGet(G_GOOD_COLOR),
+            OwnedOperator::I32Const(3),
+            OwnedOperator::I32Const(-4),
+            OwnedOperator::I32And,
+            OwnedOperator::I32Ne,
+            OwnedOperator::Call(load_barrier_idx),
+        ] {
+            assert!(
+                ops.contains(&required),
+                "zgc support `{export}` body missing load-barrier operator {required:?}"
+            );
+        }
+        assert!(
+            contains_subsequence(
+                body,
+                &[
+                    OwnedOperator::I32Const(3),
+                    OwnedOperator::I32And,
+                    OwnedOperator::GlobalGet(G_GOOD_COLOR),
+                    OwnedOperator::I32Ne,
+                ],
+            ),
+            "zgc support `{export}` must compare entry color against __good_color"
+        );
+    }
+}
+
+#[test]
+fn zgc_support_write_helpers_emit_satb_events_without_satb_ptr() {
+    const G_GC_PHASE: u32 = 23;
+    const G_BARRIER_BUF_PTR: u32 = 25;
+    const G_BARRIER_BUF_END: u32 = 26;
+    const EVENT_SIZE: i32 = 24;
+
+    let info = parse_support_module_with(GcFlavor::Zgc);
+    let barrier_flush_idx = imported_func_index(&info, "gc_barrier_flush");
+
+    assert!(
+        !info.imported_names.iter().any(|name| name == "__satb_ptr"),
+        "zgc support must reuse the unified barrier buffer, not import __satb_ptr"
+    );
+
+    for export in ["obj_set", "elem_set"] {
+        let body = exported_body(&info, export);
+        let ops: HashSet<_> = body.iter().copied().collect();
+        for required in [
+            OwnedOperator::GlobalGet(G_GC_PHASE),
+            OwnedOperator::GlobalGet(G_BARRIER_BUF_PTR),
+            OwnedOperator::GlobalGet(G_BARRIER_BUF_END),
+            OwnedOperator::GlobalSet(G_BARRIER_BUF_PTR),
+            OwnedOperator::I32Const(1),
+            OwnedOperator::I32Const(EVENT_SIZE),
+            OwnedOperator::I32Store,
+            OwnedOperator::I64Store,
+            OwnedOperator::Call(barrier_flush_idx),
+        ] {
+            assert!(
+                ops.contains(&required),
+                "zgc support `{export}` body missing SATB event operator {required:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn zgc_alloc_helpers_store_current_good_color_in_obj_table_entries() {
+    const G_OBJ_TABLE_PTR: u32 = 2;
+    const G_GOOD_COLOR: u32 = 24;
+
+    let info = parse_support_module_with(GcFlavor::Zgc);
+
+    for export in ["obj_new", "arr_new"] {
+        let body = exported_body(&info, export);
+        assert!(
+            contains_subsequence(
+                body,
+                &[
+                    OwnedOperator::GlobalGet(G_OBJ_TABLE_PTR),
+                    OwnedOperator::I32Add,
+                    OwnedOperator::LocalGet(2),
+                    OwnedOperator::GlobalGet(G_GOOD_COLOR),
+                    OwnedOperator::I32Or,
+                    OwnedOperator::I32Store,
+                ],
+            ),
+            "zgc support `{export}` must write ptr | __good_color to obj_table"
+        );
     }
 }
 

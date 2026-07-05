@@ -1,8 +1,8 @@
-//! T3.3 验证：当前发布 mark-sweep 与 G1 embedded support cwasm。
+//! T4.2 验证：当前发布 mark-sweep、G1 与 ZGC embedded support cwasm。
 //!
 //! 这条测试锁住 support emitter GC flavor 参数化后的核心验收：可用 flavor cwasm
 //! 字节有效、wasmtime 可还原、export 集合与 `wjsm-runtime-support::abi::SUPPORT_EXPORTS`
-//! 完全一致；ZGC 在对应阶段前不得产出伪 artifact。
+//! 完全一致。
 
 #![cfg(feature = "embedded")]
 
@@ -10,7 +10,11 @@ use wjsm_runtime_support::{SupportGcFlavor, abi, embedded_support_cwasm};
 
 #[test]
 fn embedded_available_support_cwasm_is_present_and_nonempty() {
-    for flavor in [SupportGcFlavor::MarkSweep, SupportGcFlavor::G1] {
+    for flavor in [
+        SupportGcFlavor::MarkSweep,
+        SupportGcFlavor::G1,
+        SupportGcFlavor::Zgc,
+    ] {
         let bytes = embedded_support_cwasm(flavor).expect("available cwasm bytes present");
         assert!(
             bytes.len() > 100,
@@ -21,8 +25,15 @@ fn embedded_available_support_cwasm_is_present_and_nonempty() {
 }
 
 #[test]
-fn unsupported_embedded_support_flavors_are_absent() {
-    assert!(embedded_support_cwasm(SupportGcFlavor::Zgc).is_none());
+fn embedded_available_support_flavors_match_abi() {
+    assert_eq!(
+        abi::AVAILABLE_SUPPORT_GC_FLAVORS,
+        &[
+            SupportGcFlavor::MarkSweep,
+            SupportGcFlavor::G1,
+            SupportGcFlavor::Zgc,
+        ]
+    );
 }
 
 #[test]
@@ -34,7 +45,11 @@ fn embedded_available_support_cwasm_deserializes() {
     cfg.wasm_bulk_memory(true);
     let engine = wasmtime::Engine::new(&cfg).expect("engine");
 
-    for flavor in [SupportGcFlavor::MarkSweep, SupportGcFlavor::G1] {
+    for flavor in [
+        SupportGcFlavor::MarkSweep,
+        SupportGcFlavor::G1,
+        SupportGcFlavor::Zgc,
+    ] {
         let bytes = embedded_support_cwasm(flavor).expect("embedded cwasm");
         let module = unsafe { wasmtime::Module::deserialize(&engine, bytes) }
             .unwrap_or_else(|e| panic!("deserialize {flavor:?} cwasm: {e}"));

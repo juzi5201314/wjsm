@@ -204,6 +204,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalTee(2));
 
             // ptr == 0 → return undefined
@@ -284,6 +287,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+            func.instruction(&WasmInstruction::I32Const(!0x3));
+            func.instruction(&WasmInstruction::I32And);
             func.instruction(&WasmInstruction::LocalTee(3));
 
             // ptr == 0 → no-op

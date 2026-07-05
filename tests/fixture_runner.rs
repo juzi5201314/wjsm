@@ -378,7 +378,42 @@ fn normalize_wasm_backtrace(text: &str) -> String {
         }
         s.replace_range(start..start + digit_len, "<idx>");
     }
-    s
+    normalize_generated_anonymous_frames(&s)
+}
+
+fn normalize_generated_anonymous_frames(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut rest = text;
+    let needle = "at <anonymous> (";
+
+    while let Some(idx) = rest.find(needle) {
+        let frame_start = idx + needle.len();
+        normalized.push_str(&rest[..frame_start]);
+        rest = &rest[frame_start..];
+
+        let Some(close_idx) = rest.find(')') else {
+            normalized.push_str(rest);
+            return normalized;
+        };
+        let frame = &rest[..close_idx];
+        normalized.push_str(&normalize_generated_anonymous_frame(frame));
+        normalized.push(')');
+        rest = &rest[close_idx + 1..];
+    }
+
+    normalized.push_str(rest);
+    normalized
+}
+
+fn normalize_generated_anonymous_frame(frame: &str) -> String {
+    let Some((path, line)) = frame.rsplit_once(':') else {
+        return frame.to_string();
+    };
+    if path.ends_with(".js") && line.chars().all(|c| c.is_ascii_digit()) && line != "0" {
+        format!("{path}:<generated>")
+    } else {
+        frame.to_string()
+    }
 }
 
 /// 归一化绝对路径为相对路径（去除 /fixtures/ 前缀）

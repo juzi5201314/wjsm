@@ -1465,7 +1465,7 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "abstract_compare", f)?;
 
-    // ── P4 GC framework: gc_alloc_slow / gc_safepoint_poll / gc_barrier_flush / gc_take_freed_handle ──
+    // ── P4 GC framework: gc_alloc_slow / gc_safepoint_poll / gc_barrier_flush / gc_load_barrier_slow / gc_take_freed_handle ──
 
     // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
     //   fast-path bump 失败后的 slow-path：free list → bump → GC → grow。
@@ -1526,6 +1526,15 @@ pub(crate) fn define_core(
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
         };
+        let (gc_arc, scheduler_arc) = {
+            let state = caller.data();
+            (state.gc_algorithm.clone(), state.gc_scheduler.clone())
+        };
+        {
+            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
+            gc.barrier_flush(&mut ctx);
+        }
         let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
         if barrier_event_buf_base != 0 {
             if let Some(global) = env.barrier_buf_ptr {
@@ -1538,11 +1547,6 @@ pub(crate) fn define_core(
         if let Some(global) = env.gc_alloc_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(0));
         }
-
-        let (gc_arc, scheduler_arc) = {
-            let state = caller.data();
-            (state.gc_algorithm.clone(), state.gc_scheduler.clone())
-        };
         let budget = {
             let scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
             scheduler.budget()
@@ -1584,6 +1588,12 @@ pub(crate) fn define_core(
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
         };
+        let gc_arc = caller.data().gc_algorithm.clone();
+        {
+            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
+            gc.barrier_flush(&mut ctx);
+        }
         let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
         if barrier_event_buf_base != 0 {
             if let Some(global) = env.barrier_buf_ptr {
@@ -1595,6 +1605,24 @@ pub(crate) fn define_core(
         }
     });
     linker.define(&mut store, "env", "gc_barrier_flush", f)?;
+
+    // gc_load_barrier_slow(handle) -> colored obj_table entry：ZGC bad-color repair。
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, handle: i32| -> i32 {
+            if handle < 0 {
+                return 0;
+            }
+            let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
+                return 0;
+            };
+            let gc_arc = caller.data().gc_algorithm.clone();
+            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
+            gc.load_barrier_slow(&mut ctx, handle as u32) as i32
+        },
+    );
+    linker.define(&mut store, "env", "gc_load_barrier_slow", f)?;
 
     // gc_take_freed_handle() -> i32：从 host handle_free_list pop 复用（fast-path take_or_alloc）。
     //   返回 handle（≥0）或 -1（空，调用方走 count++ 分支）。

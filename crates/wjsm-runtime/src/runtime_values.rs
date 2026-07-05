@@ -182,27 +182,16 @@ pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64)
 }
 
 /// 通过 handle_idx 解析真实对象指针。
+///
+/// ZGC 会在 `obj_table` entry 低位保存颜色，host 侧解引用必须复用
+/// `heap_access` 的统一 load-barrier 入口，避免把带色指针当作线性内存地址。
 pub(crate) fn resolve_handle_idx_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     handle_idx: usize,
 ) -> Option<usize> {
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
-    let slot_addr = obj_table_ptr + handle_idx * 4;
-    let d = env.memory.data(&*ctx);
-    if slot_addr + 4 > d.len() {
-        return None;
-    }
-    let ptr = u32::from_le_bytes([
-        d[slot_addr],
-        d[slot_addr + 1],
-        d[slot_addr + 2],
-        d[slot_addr + 3],
-    ]) as usize;
-    if ptr == 0 {
-        return None;
-    }
-    Some(ptr)
+    let handle = u32::try_from(handle_idx).ok()?;
+    Some(crate::runtime_gc::heap_access::resolve(ctx, env, handle)?.ptr)
 }
 
 // ── Array helpers ──────────────────────────────────────────────────────
