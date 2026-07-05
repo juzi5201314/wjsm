@@ -82,6 +82,10 @@ pub struct Cli {
     /// 覆盖 Wasmtime 线性内存虚拟地址预留（字节，或 K/M/G 后缀）
     #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
     pub(crate) wasmtime_memory_reservation: Option<usize>,
+
+    /// Select JavaScript GC algorithm (mark-sweep, g1, or zgc). Overrides WJSM_GC/WJSM_TEST_GC.
+    #[arg(long, value_name = "GC", global = true)]
+    pub(crate) gc: Option<String>,
 }
 
 impl Cli {

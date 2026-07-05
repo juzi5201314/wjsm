@@ -154,15 +154,30 @@ impl RuntimeOptions {
             ..Self::default()
         }
     }
+
+    pub fn with_gc_algorithm(gc_algorithm: GcAlgorithmKind) -> Self {
+        Self {
+            gc_algorithm,
+            ..Self::default()
+        }
+    }
+
+    pub fn set_gc_algorithm(&mut self, gc_algorithm: GcAlgorithmKind) {
+        self.gc_algorithm = gc_algorithm;
+    }
 }
 
 pub fn gc_algorithm_from_env(
     env: &[(String, String)],
 ) -> std::result::Result<GcAlgorithmKind, String> {
-    match env.iter().rev().find(|(key, _)| key == "WJSM_TEST_GC") {
-        Some((_, value)) if !value.is_empty() => value.parse(),
-        _ => Ok(GcAlgorithmKind::MarkSweep),
+    for key in ["WJSM_TEST_GC", "WJSM_GC"] {
+        if let Some((_, value)) = env.iter().rev().find(|(env_key, _)| env_key == key)
+            && !value.is_empty()
+        {
+            return value.parse();
+        }
     }
+    Ok(GcAlgorithmKind::MarkSweep)
 }
 
 pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
@@ -1247,6 +1262,32 @@ mod tests {
         assert!(err.contains("mark-sweep"));
         assert!(err.contains("g1"));
         assert!(err.contains("zgc"));
+    }
+
+    #[test]
+    fn gc_algorithm_env_uses_public_wjsm_gc() {
+        let env = [("WJSM_GC".to_string(), "zgc".to_string())];
+
+        assert_eq!(gc_algorithm_from_env(&env), Ok(GcAlgorithmKind::Zgc));
+    }
+
+    #[test]
+    fn gc_algorithm_test_env_overrides_public_env() {
+        let env = [
+            ("WJSM_GC".to_string(), "mark-sweep".to_string()),
+            ("WJSM_TEST_GC".to_string(), "g1".to_string()),
+        ];
+
+        assert_eq!(gc_algorithm_from_env(&env), Ok(GcAlgorithmKind::G1));
+    }
+
+    #[test]
+    fn runtime_options_builder_sets_gc_algorithm() {
+        let mut options = RuntimeOptions::with_gc_algorithm(GcAlgorithmKind::G1);
+        assert_eq!(options.gc_algorithm, GcAlgorithmKind::G1);
+
+        options.set_gc_algorithm(GcAlgorithmKind::Zgc);
+        assert_eq!(options.gc_algorithm, GcAlgorithmKind::Zgc);
     }
 
     #[test]

@@ -343,3 +343,20 @@
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `cargo build` → passed（zero warnings）。
 - DriftCheckDraft：Scope=P4 ZGC；Compatibility=默认 mark-sweep、G1 happy、ZGC workspace 全绿；Retirement=ZGC registry 拒绝路径、无 support 变体、无 mark、无 relocate/heal 的临时限制均已退休；Decision=continue to P5。
+
+## P5 T5.1 evidence
+
+- `RuntimeOptions` 新增 `with_gc_algorithm` 与 `set_gc_algorithm` builder/mutator；`RuntimeOptions.gc_algorithm` 继续作为 runtime 选择 source of truth。
+- env 选择链改为 `WJSM_TEST_GC`（测试矩阵兼容）→ `WJSM_GC` → 默认 `mark-sweep`。
+- CLI 新增全局 `--gc <mark-sweep|g1|zgc>`，运行时优先级为 CLI `--gc` > `WJSM_TEST_GC`/`WJSM_GC` > 默认。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-cli -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(gc_algorithm)'` → 5 passed, 185 skipped。
+- `cargo run -- --gc g1 run -e 'console.log(1)'` → stdout `1`。
+- `WJSM_GC=zgc cargo run -- run -e 'console.log(2)'` → stdout `2`。
+- `WJSM_GC=bogus cargo run -- --gc mark-sweep run -e 'console.log(3)'` → stdout `3`，证明 CLI 覆盖 env。
+- `WJSM_TEST_GC=bogus cargo run -- --gc zgc run -e 'console.log(5)'` → stdout `5`，证明 CLI 覆盖测试 env。
+- `WJSM_GC=bogus cargo run -- run -e 'console.log(4)'` → exit 1 with `unknown GC algorithm \`bogus\`; expected one of: mark-sweep, g1, zgc`。
+- `WJSM_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。
+- `WJSM_GC=zgc cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。
+- `WJSM_GC=bogus WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。

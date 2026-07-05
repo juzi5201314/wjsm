@@ -87,7 +87,10 @@ fn runtime_options_with_script(
 
 fn runtime_options_with_argv(cli: &Cli, argv: Vec<String>) -> Result<runtime::RuntimeOptions> {
     let env = runtime_env_snapshot();
-    let gc_algorithm = runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?;
+    let gc_algorithm = match cli.gc.as_deref() {
+        Some(raw) if !raw.is_empty() => raw.parse().map_err(anyhow::Error::msg)?,
+        _ => runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?,
+    };
     Ok(runtime::RuntimeOptions {
         max_heap_size: cli.max_heap_size,
         wasmtime_memory_reservation: cli.wasmtime_memory_reservation.map(|value| value as u64),

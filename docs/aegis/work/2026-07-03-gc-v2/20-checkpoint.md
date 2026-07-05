@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T5.1 实现三入口选择`（in progress）。
-- Next: `T5.2 完善 GcStats v2`。
+- Active: `T5.2 完善 GcStats v2`（in progress）。
+- Next: `T5.3 添加 pause benchmark`。
 
 ## Completed todos
 
@@ -46,18 +46,21 @@
   - `T4.4 实现 ZGC relocate`
   - `T4.5 组装 ZGC registry`
   - `T4.6 验证 P4 阶段`
+- P5:
+  - `T5.1 实现三入口选择`
+
 ## Active slice card
 
-- Goal: P5 T5.1，实现三入口 GC 算法选择：`RuntimeOptions::with_gc_algorithm`、env `WJSM_GC` 默认链、CLI `--gc <mark-sweep|g1|zgc>`，优先级 CLI > env > 默认。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T5.1。
-- Files: `crates/wjsm-runtime/src/lib.rs`、`crates/wjsm-cli/src/lib.rs`、CLI/in-process tests。
-- Boundary: 本 slice 只实现选择机制；GcStats v2、pause hist、benchmark 留给 T5.2+。
-- Verification: CLI 集成测试覆盖三入口优先级与非法值列合法值；手验/测试 `wjsm run --gc g1 fixtures/happy/hello.js`。
-- Stop: T5.1 验证通过，checkpoint/evidence 更新，然后进入 T5.2。
+- Goal: P5 T5.2，补全 `GcStats` v2 字段与 pause 直方图：字段覆盖 spec §17，runtime 记录最近 256 次 pause，`WJSM_GC_LOG=1` 输出周期摘要。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T5.2；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §17。
+- Files: `runtime_gc/api.rs`、`runtime_gc/*` 各算法填充点、`lib.rs` runtime state pause hist、必要 tests。
+- Boundary: 本 slice 只实现统计字段/直方图/log；pause benchmark 与定量达标调参留给 T5.3+。
+- Verification: 单测覆盖直方图环形语义；`WJSM_GC_LOG=1` 三算法各跑 churn/hello，摘要字段存在且 mark/relocate load barrier hits 可区分。
+- Stop: T5.2 验证通过，checkpoint/evidence 更新，然后进入 T5.3。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2/P3/P4 已完成；T5.1 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3/P4 与 T5.1 已完成；T5.2 正在进行。
 
 ## Blocked-on items
 
@@ -67,16 +70,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T5.1。
-2. 实现 RuntimeOptions builder、`WJSM_GC` 解析、CLI `--gc` 与优先级测试。
-3. 完成后运行 CLI/runtime 相关测试、三算法 hello 冒烟与必要 build/check。
+1. 读取本文件、`90-evidence.md` 与父计划 T5.2 / spec §17。
+2. 补全 `GcStats` 字段、pause hist ring buffer、`WJSM_GC_LOG=1` 摘要。
+3. 完成后运行 runtime stats 单测、三算法 log 冒烟与必要 workspace/build。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，P4 已完成并验证，当前进入 P5 选择机制与可观测性。
-- Does current work still serve goal and stop condition? 是，T5.1 只交付三入口选择，不提前实现 stats/bench。
-- Compatibility boundary: 现有 `WJSM_TEST_GC` 测试矩阵入口保持；新增 `WJSM_GC` 与 CLI `--gc` 对用户路径生效。
-- New owner/fallback/adapter/branch: `RuntimeOptions` 成为算法选择 source of truth；CLI/env 只负责填充 options。
-- Retirement track: 测试专用 `WJSM_TEST_GC` 单入口假设开始退休，后续保留为测试覆盖入口或并入默认链。
-- Evidence sufficiency: T4.6 sufficient；T5.1 pending。
+- Does current work still serve original task intent? 是，T5.1 已完成三入口选择，当前进入 stats/可观测性。
+- Does current work still serve goal and stop condition? 是，T5.2 只交付 stats/log，不提前做 benchmark。
+- Compatibility boundary: 三算法选择路径保持；新增 log 只在 `WJSM_GC_LOG=1` 时输出。
+- New owner/fallback/adapter/branch: `GcStats` + runtime pause hist 成为 GC 可观测性 source of truth。
+- Retirement track: 统计字段不完整限制开始退休；后续 T5.3 benchmark 消费这些字段。
+- Evidence sufficiency: T5.1 sufficient；T5.2 pending。
 - Decision: continue。
