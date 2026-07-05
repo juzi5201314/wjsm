@@ -192,6 +192,33 @@ impl ZPageSpace {
             remaining -= chunk;
         }
     }
+    pub fn subtract_live_bytes_range(&mut self, ptr: usize, size: usize) -> Vec<usize> {
+        let mut emptied = Vec::new();
+        let mut cursor = ptr;
+        let mut remaining = size;
+        while remaining != 0 {
+            let Some(idx) = self.page_index(cursor) else {
+                break;
+            };
+            let Some(start) = self.page_start(idx) else {
+                break;
+            };
+            let page_end = start.saturating_add(ZPAGE_SIZE);
+            let chunk = remaining.min(page_end.saturating_sub(cursor));
+            if chunk == 0 {
+                break;
+            }
+            if let Some(page) = self.pages.get_mut(idx) {
+                page.live_bytes = page.live_bytes.saturating_sub(chunk);
+                if page.live_bytes == 0 {
+                    emptied.push(idx);
+                }
+            }
+            cursor = cursor.saturating_add(chunk);
+            remaining -= chunk;
+        }
+        emptied
+    }
 
     pub fn mark_relocation_set(&mut self, idx: usize) -> bool {
         let Some(page) = self.pages.get_mut(idx) else {

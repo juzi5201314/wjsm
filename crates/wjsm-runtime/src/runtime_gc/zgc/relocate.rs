@@ -374,7 +374,7 @@ fn relocate_candidate(
     );
     pages.add_live_bytes_range(dest, candidate.size);
     ctx.increment_gc_epoch();
-    let released_pages = release_empty_source_pages(ctx, pages, candidate.ptr, candidate.size);
+    let released_pages = release_empty_source_pages(pages, candidate.ptr, candidate.size);
     Some(RelocateResult {
         relocated_objects: 1,
         relocated_bytes: candidate.size,
@@ -453,54 +453,15 @@ fn copy_raw_object(
     true
 }
 
-fn release_empty_source_pages(
-    ctx: &mut GcContext<'_>,
-    pages: &mut ZPageSpace,
-    ptr: usize,
-    size: usize,
-) -> usize {
-    let Some(first) = pages.page_index(ptr) else {
-        return 0;
-    };
-    let last_addr = ptr.saturating_add(size.saturating_sub(1));
-    let last = pages.page_index(last_addr).unwrap_or(first);
+fn release_empty_source_pages(pages: &mut ZPageSpace, ptr: usize, size: usize) -> usize {
+    let emptied = pages.subtract_live_bytes_range(ptr, size);
     let mut released = 0usize;
-    for idx in first..=last {
-        if pages.is_relocation_set(idx)
-            && !page_has_live_object(ctx, pages, idx)
-            && pages.release(idx)
-        {
+    for idx in emptied {
+        if pages.is_relocation_set(idx) && pages.release(idx) {
             released += 1;
         }
     }
     released
-}
-
-fn page_has_live_object(ctx: &mut GcContext<'_>, pages: &ZPageSpace, page_idx: usize) -> bool {
-    let Some(page_start) = pages.page_start(page_idx) else {
-        return false;
-    };
-    let page_end = page_start.saturating_add(ZPAGE_SIZE);
-    let obj_table_ptr = ctx.obj_table_ptr();
-    let obj_table_count = ctx.obj_table_count();
-    ctx.with_memory(|data| {
-        for h in 0..obj_table_count as Handle {
-            let Some(entry) = read_entry_from_memory(data, obj_table_ptr, h) else {
-                break;
-            };
-            if entry.is_empty() {
-                continue;
-            }
-            let ptr = entry.ptr() as usize;
-            let Some(size) = object_size_from_memory(data, ptr) else {
-                continue;
-            };
-            if ranges_overlap(ptr, ptr.saturating_add(size), page_start, page_end) {
-                return true;
-            }
-        }
-        false
-    })
 }
 
 fn read_entry_from_memory(data: &[u8], obj_table_ptr: usize, h: Handle) -> Option<ZEntry> {
@@ -508,10 +469,6 @@ fn read_entry_from_memory(data: &[u8], obj_table_ptr: usize, h: Handle) -> Optio
         obj_table_ptr.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
     let bytes: [u8; 4] = data.get(slot..slot + 4)?.try_into().ok()?;
     Some(ZEntry::from(u32::from_le_bytes(bytes)))
-}
-
-fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
-    a_start < b_end && b_start < a_end
 }
 
 fn align_up(value: usize, align: usize) -> Option<usize> {
