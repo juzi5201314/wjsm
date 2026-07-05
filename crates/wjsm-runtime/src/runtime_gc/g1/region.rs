@@ -27,6 +27,7 @@ pub struct RegionMeta {
     pub kind: RegionKind,
     pub age: u8,
     pub implicit_black_epoch: u64,
+    pub live_bytes: usize,
 }
 
 impl RegionMeta {
@@ -35,6 +36,7 @@ impl RegionMeta {
             kind,
             age: 0,
             implicit_black_epoch: 0,
+            live_bytes: 0,
         }
     }
 }
@@ -104,6 +106,30 @@ impl RegionSpace {
         region.kind = kind;
         region.age = age;
         true
+    }
+
+    pub fn mark_implicit_black(&mut self, idx: usize, epoch: u64) -> bool {
+        let Some(region) = self.meta.get_mut(idx) else {
+            return false;
+        };
+        region.implicit_black_epoch = epoch;
+        true
+    }
+
+    pub fn implicit_black_epoch(&self, idx: usize) -> Option<u64> {
+        self.meta.get(idx).map(|region| region.implicit_black_epoch)
+    }
+
+    pub fn set_live_bytes(&mut self, idx: usize, bytes: usize) -> bool {
+        let Some(region) = self.meta.get_mut(idx) else {
+            return false;
+        };
+        region.live_bytes = bytes;
+        true
+    }
+
+    pub fn live_bytes(&self, idx: usize) -> Option<usize> {
+        self.meta.get(idx).map(|region| region.live_bytes)
     }
 
     pub fn count_kind(&self, kind: RegionKind) -> usize {

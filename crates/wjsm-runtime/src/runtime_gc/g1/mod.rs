@@ -1,3 +1,4 @@
+mod concurrent_mark;
 mod region;
 mod rset;
 mod young;
@@ -7,6 +8,7 @@ use super::api::{
     Value,
 };
 use crate::runtime_gc::context::object_size_from_memory;
+use concurrent_mark::{ConcurrentMark, MarkStep};
 use region::RegionSpace;
 use rset::{BarrierEvent, G1RSet, SlotOwner};
 use wasmtime::Val;
@@ -15,6 +17,7 @@ use wjsm_ir::constants;
 pub(crate) struct G1Collector {
     regions: RegionSpace,
     rset: G1RSet,
+    mark: ConcurrentMark,
     stats: GcStats,
 }
 
@@ -23,6 +26,7 @@ impl G1Collector {
         Self {
             regions: RegionSpace::default(),
             rset: G1RSet::default(),
+            mark: ConcurrentMark::new(),
             stats: GcStats::default(),
         }
     }
@@ -150,7 +154,15 @@ impl GcAlgorithm for G1Collector {
         req: AllocRequest,
     ) -> Option<usize> {
         self.refresh_regions(ctx);
-        let ptr = young::alloc_slow(ctx, roots, req, &mut self.regions, &mut self.rset);
+        self.barrier_flush(ctx);
+        let ptr = young::alloc_slow(
+            ctx,
+            roots,
+            req,
+            &mut self.regions,
+            &mut self.rset,
+            self.mark.active_epoch(),
+        );
         self.stats = ctx.stats.clone();
         ptr
     }
@@ -161,15 +173,52 @@ impl GcAlgorithm for G1Collector {
         roots: &mut dyn RootProvider,
         budget: StepBudget,
     ) -> StepOutcome {
-        let _ = (roots, budget);
+        self.refresh_regions(ctx);
         self.barrier_flush(ctx);
-        StepOutcome::Idle
+        if self.mark.is_active() {
+            return match self.mark.drain_incremental(ctx, &mut self.rset, budget) {
+                MarkStep::Progress { remaining_estimate } => {
+                    StepOutcome::Progress { remaining_estimate }
+                }
+                MarkStep::ReadyForRemark => {
+                    self.barrier_flush(ctx);
+                    let stats = self.mark.finish_after_barrier_flush(
+                        ctx,
+                        roots,
+                        &mut self.regions,
+                        &mut self.rset,
+                    );
+                    self.stats = stats;
+                    StepOutcome::CycleComplete
+                }
+            };
+        }
+        if self.mark.should_start(ctx, &self.regions) {
+            let _ = young::collect_young(ctx, roots, &mut self.regions, &mut self.rset, None);
+            self.refresh_regions(ctx);
+            self.mark.start_cycle(ctx, &mut self.rset);
+            self.mark
+                .initial_mark(ctx, roots, &self.regions, &mut self.rset);
+            StepOutcome::Progress {
+                remaining_estimate: budget.work_bytes.max(1),
+            }
+        } else {
+            StepOutcome::Idle
+        }
     }
 
     fn collect_full(&mut self, ctx: &mut GcContext<'_>, roots: &mut dyn RootProvider) -> GcStats {
         self.barrier_flush(ctx);
         self.refresh_regions(ctx);
-        let stats = young::collect_young(ctx, roots, &mut self.regions, &mut self.rset);
+        let _ = young::collect_young(ctx, roots, &mut self.regions, &mut self.rset, None);
+        self.refresh_regions(ctx);
+        self.mark.start_cycle(ctx, &mut self.rset);
+        self.mark
+            .initial_mark(ctx, roots, &self.regions, &mut self.rset);
+        self.barrier_flush(ctx);
+        let stats =
+            self.mark
+                .finish_after_barrier_flush(ctx, roots, &mut self.regions, &mut self.rset);
         self.stats = stats.clone();
         stats
     }

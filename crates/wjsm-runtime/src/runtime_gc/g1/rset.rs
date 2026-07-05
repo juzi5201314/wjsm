@@ -125,6 +125,10 @@ impl G1RSet {
         &self.satb_handles
     }
 
+    pub fn drain_satb_handles(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.satb_handles)
+    }
+
     fn mark_dirty(&mut self, slot_addr: usize, card_idx: usize) {
         self.dirty_cards.insert(card_idx);
         let count = self.card_write_counts.entry(card_idx).or_default();

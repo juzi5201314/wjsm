@@ -205,3 +205,20 @@
 - `cargo nextest run -E 'test(happy__)'` → 589 passed, 148 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 589 passed, 148 skipped。
 - `cargo nextest run --workspace` → 1265 passed, 2 skipped。
+
+## P3 T3.5 evidence
+
+- 新增 `runtime_gc::g1::concurrent_mark`：IHOP 以 old/humongous occupancy/heap_limit 触发；状态机包含 Idle/Mark、cycle epoch、mark bitmap、worklist、budgeted drain 与 final remark。
+- `G1Collector::safepoint_step` 现在在 IHOP 触发时启动 initial mark，按 `StepBudget` drain；ready 后 flush barrier、重扫 roots fixed-point、吸收 SATB，再执行 cleanup。
+- `G1RSet` 的 SATB handles 被 concurrent mark drain；host roots/immortal roots/object_walker 子引用进入同一 mark bitmap，implicit-black region 在本 cycle 中不被 cleanup 回收。
+- cleanup 统计 region live bytes，释放全死 old/humongous region；dead handles 经 obj_table 清零、owner side-table reclaim、WeakRef/stream cleanup 后才发布到 handle free-list，避免 cleanup 后 handle 复用顺序错误。
+- 新增 `fixtures/happy/gc_g1_concurrent_mark_churn.js`，覆盖显式 GC 后 old reference 保活与断开后的 cleanup 路径；默认与 `WJSM_TEST_GC=g1` 都通过。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 22 passed, 128 skipped。
+- `cargo nextest run -E 'test(happy__gc_g1_concurrent_mark_churn)'` → 1 passed, 737 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__gc_g1_concurrent_mark_churn)'` → 1 passed, 737 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__weakref_gc)'` → 1 passed, 737 skipped。
+- `cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo nextest run --workspace` → 1272 passed, 2 skipped。

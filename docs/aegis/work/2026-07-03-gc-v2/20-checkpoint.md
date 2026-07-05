@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T3.5 实现 G1 concurrent mark`（in progress）。
-- Next: `T3.6 实现 G1 mixed GC`。
+- Active: `T3.6 实现 G1 mixed GC`（in progress）。
+- Next: `T3.7 组装 G1 registry`。
 
 ## Completed todos
 
@@ -35,19 +35,20 @@
   - `T3.2 实现 G1 rset barrier`
   - `T3.3 生成 G1 support 变体`
   - `T3.4 实现 G1 young GC`
+  - `T3.5 实现 G1 concurrent mark`
 
 ## Active slice card
 
-- Goal: P3 T3.5，实现 G1 增量 concurrent mark 状态机：IHOP 触发、initial mark、safepoint budget drain、final remark 与 cleanup。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §10.4、§12、§14。
-- Files: 新建 `g1/concurrent_mark.rs`，更新 `g1/mod.rs`、`g1/region.rs`、必要的 stats/roots/object_walker helper。
-- Boundary: 本 slice 只实现 old/humongous 增量标记与 cleanup；mixed evacuation 留给 T3.6，ZGC 留给 P4。
-- Verification: concurrent mark 单测覆盖 SATB 覆盖写旧引用存活、mark 中删除 host side-table 旧 root 仍存活到本周期、implicit-black region 不被 cleanup 回收、WeakRef/FinalizationRegistry 指向 old dead 对象时先清理再复用 handle；新增/运行 `WJSM_TEST_GC=g1` 长循环 fixture。
-- Stop: T3.5 验证通过，checkpoint/evidence 更新，然后进入 T3.6。
+- Goal: P3 T3.6，实现 G1 mixed GC：按 live bytes/收益选择 CSet，STW old→old evacuation，更新 obj_table 并回收/压缩 region。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §10.5。
+- Files: 新建 `g1/mixed.rs`，更新 `g1/mod.rs`、`g1/region.rs`、必要的 stats/fragmentation 可观测 helper。
+- Boundary: 本 slice 只实现 mixed old evacuation；dead handle cleanup 已由 concurrent mark 负责，mixed 不再次发布 dead handles；不做 per-reference 修正。
+- Verification: mixed 单测覆盖 CSet budget 截断、85% live 阈值、evacuate 后引用槽无需改写仍读新对象、目的 card re-dirty、mixed 不重复发布 dead handle；`gc_fragmentation_churn` 在 g1 下保持通过并记录 fragmentation 下降路径。
+- Stop: T3.6 验证通过，checkpoint/evidence 更新，然后进入 T3.7。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2、T3.3、T3.4 已完成；T3.5 正在进行。
+详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2、T3.3、T3.4、T3.5 已完成；T3.6 正在进行。
 
 ## Blocked-on items
 
@@ -57,16 +58,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T3.5 / spec §10.4、§12、§14。
-2. 继续 concurrent mark：先建立 mark cycle state 与 SATB worklist，再实现 final remark/cleanup。
-3. 完成后运行 concurrent mark 单测、相关 fixture、`cargo check -p wjsm-runtime` 与 `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'`。
+1. 读取本文件、`90-evidence.md` 与父计划 T3.6 / spec §10.5。
+2. 继续 mixed GC：先实现 CSet 选择与 evacuation helpers，再接入 safepoint/full collect。
+3. 完成后运行 mixed 单测、`WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__gc_fragmentation_churn)'`、`cargo check -p wjsm-runtime` 与 G1 happy 子集。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T3.4 已完成 STW young GC，当前进入 G1 增量标记。
-- Does current work still serve goal and stop condition? 是，T3.5 只交付 concurrent mark，不提前实现 mixed evacuation。
-- Compatibility boundary: 默认 mark-sweep 行为保持；G1 mark bitmap/implicit-black metadata 仅由 `g1::concurrent_mark` 维护。
-- New owner/fallback/adapter/branch: `runtime_gc::g1::concurrent_mark` 将成为 old/humongous 标记与 cleanup owner；`g1::young` 继续只负责 young evacuation。
-- Retirement track: G1 仅委托 mark-sweep 全收集的临时路径已退休；T3.5 开始退休“old/humongous 永不回收”的临时限制。
-- Evidence sufficiency: T3.4 sufficient；T3.5 pending。
+- Does current work still serve original task intent? 是，T3.5 已完成 concurrent mark/cleanup，当前进入 mixed evacuation。
+- Does current work still serve goal and stop condition? 是，T3.6 只交付 old CSet compaction，不提前做 T3.7/P4。
+- Compatibility boundary: 默认 mark-sweep 行为保持；mixed 只更新 obj_table，不修改引用槽 handle。
+- New owner/fallback/adapter/branch: `runtime_gc::g1::mixed` 将成为 old region CSet 选择与 evacuation owner。
+- Retirement track: “old/humongous 永不回收”的临时限制已退休；T3.6 开始退休 old region 碎片不压缩限制。
+- Evidence sufficiency: T3.5 sufficient；T3.6 pending。
 - Decision: continue。

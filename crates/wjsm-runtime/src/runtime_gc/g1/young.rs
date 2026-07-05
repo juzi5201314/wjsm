@@ -46,6 +46,7 @@ struct YoungCollectionResult {
 struct EvacuationAllocator {
     survivor: Option<BumpRegion>,
     old: Option<BumpRegion>,
+    survivor_regions: Vec<usize>,
 }
 
 struct BumpRegion {
@@ -59,6 +60,7 @@ impl EvacuationAllocator {
         Self {
             survivor: None,
             old: None,
+            survivor_regions: Vec::new(),
         }
     }
 
@@ -71,7 +73,14 @@ impl EvacuationAllocator {
         if size > HUMONGOUS_THRESHOLD {
             return None;
         }
-        allocate_in_current_or_new(regions, &mut self.survivor, RegionKind::Survivor, age, size)
+        allocate_in_current_or_new(
+            regions,
+            &mut self.survivor,
+            &mut self.survivor_regions,
+            RegionKind::Survivor,
+            age,
+            size,
+        )
     }
 
     fn allocate_old(&mut self, regions: &mut RegionSpace, size: usize) -> Option<usize> {
@@ -80,7 +89,19 @@ impl EvacuationAllocator {
             let idx = regions.take_contiguous_free_as_humongous(count)?;
             return regions.region_start(idx);
         }
-        allocate_in_current_or_new(regions, &mut self.old, RegionKind::Old, 0, size)
+        let mut unused_regions = Vec::new();
+        allocate_in_current_or_new(
+            regions,
+            &mut self.old,
+            &mut unused_regions,
+            RegionKind::Old,
+            0,
+            size,
+        )
+    }
+
+    fn survivor_region_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.survivor_regions.iter().copied()
     }
 }
 
@@ -90,18 +111,19 @@ pub(super) fn alloc_slow(
     req: AllocRequest,
     regions: &mut RegionSpace,
     rset: &mut G1RSet,
+    mark_epoch: Option<u64>,
 ) -> Option<usize> {
-    if let Some(ptr) = allocate_request(ctx, req, regions) {
+    if let Some(ptr) = allocate_request_with_mark(ctx, req, regions, mark_epoch) {
         return Some(ptr);
     }
 
-    let _ = collect_young(ctx, roots, regions, rset);
-    if let Some(ptr) = allocate_request(ctx, req, regions) {
+    let _ = collect_young(ctx, roots, regions, rset, mark_epoch);
+    if let Some(ptr) = allocate_request_with_mark(ctx, req, regions, mark_epoch) {
         return Some(ptr);
     }
 
     if grow_for_request(ctx, regions, req.size) {
-        return allocate_request(ctx, req, regions);
+        return allocate_request_with_mark(ctx, req, regions, mark_epoch);
     }
     None
 }
@@ -111,6 +133,7 @@ pub(super) fn collect_young(
     roots_provider: &mut dyn RootProvider,
     regions: &mut RegionSpace,
     rset: &mut G1RSet,
+    mark_epoch: Option<u64>,
 ) -> GcStats {
     let started = Instant::now();
     let obj_table_ptr = ctx.obj_table_ptr();
@@ -143,25 +166,17 @@ pub(super) fn collect_young(
         &mut walker,
     );
 
-    loop {
-        let before = live_young.len();
-        let mut host_roots = Vec::new();
-        let mut is_marked = |h: Handle| !young_handles.contains(&h) || live_young.contains(&h);
-        roots_provider.for_each_host_table_root(ctx, &mut is_marked, &mut |h| host_roots.push(h));
-        mark_handles(&object_info, &mut live_young, &mut worklist, host_roots);
-        drain_young_graph(
-            ctx,
-            &object_info,
-            obj_table_ptr,
-            obj_table_count,
-            &mut live_young,
-            &mut worklist,
-            &mut walker,
-        );
-        if live_young.len() == before {
-            break;
-        }
-    }
+    drain_host_roots_fixed_point(
+        ctx,
+        roots_provider,
+        &object_info,
+        &young_handles,
+        obj_table_ptr,
+        obj_table_count,
+        &mut live_young,
+        &mut worklist,
+        &mut walker,
+    );
 
     let mut immortal_roots = Vec::new();
     roots::for_each_immortal_region_root(ctx, &mut |h| immortal_roots.push(h));
@@ -185,8 +200,26 @@ pub(super) fn collect_young(
         &mut worklist,
         &mut walker,
     );
+    drain_host_roots_fixed_point(
+        ctx,
+        roots_provider,
+        &object_info,
+        &young_handles,
+        obj_table_ptr,
+        obj_table_count,
+        &mut live_young,
+        &mut worklist,
+        &mut walker,
+    );
 
-    let mut result = evacuate_live_young(ctx, regions, &object_info, &young_handles, &live_young);
+    let mut result = evacuate_live_young(
+        ctx,
+        regions,
+        &object_info,
+        &young_handles,
+        &live_young,
+        mark_epoch,
+    );
     refine_dirty_cards(ctx, regions, rset, obj_table_ptr, obj_table_count);
     redirty_promoted_destinations(
         ctx,
@@ -252,6 +285,36 @@ fn allocate_in_current_eden(
     ctx.set_heap_ptr(new_ptr);
     ctx.alloc_window_set(new_ptr, end);
     Some(ptr)
+}
+
+fn allocate_request_with_mark(
+    ctx: &mut GcContext<'_>,
+    req: AllocRequest,
+    regions: &mut RegionSpace,
+    mark_epoch: Option<u64>,
+) -> Option<usize> {
+    let ptr = allocate_request(ctx, req, regions)?;
+    mark_implicit_black_range(regions, ptr, req.size, mark_epoch);
+    Some(ptr)
+}
+
+fn mark_implicit_black_range(
+    regions: &mut RegionSpace,
+    ptr: usize,
+    size: usize,
+    mark_epoch: Option<u64>,
+) {
+    let Some(epoch) = mark_epoch else {
+        return;
+    };
+    let Some(first) = regions.region_index(ptr) else {
+        return;
+    };
+    let last_addr = ptr.saturating_add(size.saturating_sub(1));
+    let last = regions.region_index(last_addr).unwrap_or(first);
+    for idx in first..=last {
+        regions.mark_implicit_black(idx, epoch);
+    }
 }
 
 fn grow_for_request(ctx: &mut GcContext<'_>, regions: &mut RegionSpace, size: usize) -> bool {
@@ -351,6 +414,38 @@ fn drain_young_graph(
     }
 }
 
+fn drain_host_roots_fixed_point(
+    ctx: &mut GcContext<'_>,
+    roots_provider: &mut dyn RootProvider,
+    objects: &HashMap<Handle, ObjectInfo>,
+    young_handles: &HashSet<Handle>,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+    live_young: &mut HashSet<Handle>,
+    worklist: &mut Vec<Handle>,
+    walker: &mut ObjectWalker,
+) {
+    loop {
+        let before = live_young.len();
+        let mut host_roots = Vec::new();
+        let mut is_marked = |h: Handle| !young_handles.contains(&h) || live_young.contains(&h);
+        roots_provider.for_each_host_table_root(ctx, &mut is_marked, &mut |h| host_roots.push(h));
+        mark_handles(objects, live_young, worklist, host_roots);
+        drain_young_graph(
+            ctx,
+            objects,
+            obj_table_ptr,
+            obj_table_count,
+            live_young,
+            worklist,
+            walker,
+        );
+        if live_young.len() == before {
+            break;
+        }
+    }
+}
+
 fn collect_dirty_card_roots(
     ctx: &mut GcContext<'_>,
     regions: &RegionSpace,
@@ -379,6 +474,7 @@ fn evacuate_live_young(
     objects: &HashMap<Handle, ObjectInfo>,
     young_handles: &HashSet<Handle>,
     live_young: &HashSet<Handle>,
+    mark_epoch: Option<u64>,
 ) -> YoungCollectionResult {
     let mut result = YoungCollectionResult {
         live_young: live_young.clone(),
@@ -398,29 +494,34 @@ fn evacuate_live_young(
             }
             EvacuationDecision::Survivor { age } => {
                 if let Some(dest) = allocator.allocate_survivor(regions, info.size, age) {
+                    mark_implicit_black_range(regions, dest, info.size, mark_epoch);
                     copy_object(ctx, info.ptr, dest, info.size, &mut scratch);
                     ctx.write_obj_table_slot(h, dest);
                     result.relocated_bytes += info.size;
                 } else if let Some(dest) = allocator.allocate_old(regions, info.size) {
                     copy_object(ctx, info.ptr, dest, info.size, &mut scratch);
+                    mark_implicit_black_range(regions, dest, info.size, mark_epoch);
                     ctx.write_obj_table_slot(h, dest);
                     result.promoted_handles.push(h);
                     result.relocated_bytes += info.size;
                 } else {
                     regions.set_kind_age(info.region_idx, RegionKind::Old, 0);
                     kept_source_regions.insert(info.region_idx);
+                    mark_implicit_black_range(regions, info.ptr, info.size, mark_epoch);
                     result.promoted_handles.push(h);
                 }
             }
             EvacuationDecision::Promote => {
                 if let Some(dest) = allocator.allocate_old(regions, info.size) {
                     copy_object(ctx, info.ptr, dest, info.size, &mut scratch);
+                    mark_implicit_black_range(regions, dest, info.size, mark_epoch);
                     ctx.write_obj_table_slot(h, dest);
                     result.promoted_handles.push(h);
                     result.relocated_bytes += info.size;
                 } else {
                     regions.set_kind_age(info.region_idx, RegionKind::Old, 0);
                     kept_source_regions.insert(info.region_idx);
+                    mark_implicit_black_range(regions, info.ptr, info.size, mark_epoch);
                     result.promoted_handles.push(h);
                 }
             }
@@ -436,6 +537,8 @@ fn evacuate_live_young(
             result.freed_bytes += info.size;
         }
     }
+
+    kept_source_regions.extend(allocator.survivor_region_indices());
 
     for idx in regions.young_region_indices() {
         if !kept_source_regions.contains(&idx) {
@@ -674,6 +777,7 @@ fn stats_for_result(
 fn allocate_in_current_or_new(
     regions: &mut RegionSpace,
     current: &mut Option<BumpRegion>,
+    allocated_regions: &mut Vec<usize>,
     kind: RegionKind,
     age: u8,
     size: usize,
@@ -686,6 +790,7 @@ fn allocate_in_current_or_new(
     let idx = regions.take_free_as_with_age(kind, age)?;
     let start = regions.region_start(idx)?;
     let end = regions.region_end(idx)?;
+    allocated_regions.push(idx);
     *current = Some(BumpRegion {
         idx,
         cursor: start,
@@ -730,63 +835,4 @@ fn evacuation_decision(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use wjsm_ir::constants;
-
-    #[test]
-    fn g1_young_promotes_when_age_reaches_threshold() {
-        assert_eq!(
-            evacuation_decision(RegionKind::Survivor, 1, 128, true),
-            EvacuationDecision::Promote
-        );
-    }
-
-    #[test]
-    fn g1_young_promotes_when_survivor_space_is_unavailable() {
-        assert_eq!(
-            evacuation_decision(RegionKind::Eden, 0, 128, false),
-            EvacuationDecision::Promote
-        );
-    }
-
-    #[test]
-    fn g1_young_leaves_humongous_objects_in_place() {
-        assert_eq!(
-            evacuation_decision(RegionKind::HumongousStart, 0, REGION_SIZE, true),
-            EvacuationDecision::Stay
-        );
-    }
-
-    #[test]
-    fn g1_young_keeps_dirty_card_when_refined_slots_still_point_to_young() {
-        let mut rset = G1RSet::default();
-        rset.mark_dirty_slot(4096, 8);
-        assert_eq!(rset.dirty_card_snapshot(), vec![8]);
-        rset.clear_card(8);
-        assert!(rset.dirty_card_snapshot().is_empty());
-        rset.mark_dirty_slot(4096, 8);
-        assert_eq!(rset.dirty_card_snapshot(), vec![8]);
-    }
-
-    #[test]
-    fn g1_young_marks_promoted_destination_card_dirty_for_young_child() {
-        let object_heap_start = REGION_SIZE;
-        let mut regions = RegionSpace::default();
-        regions.attach(
-            object_heap_start,
-            object_heap_start,
-            object_heap_start,
-            object_heap_start + 4 * REGION_SIZE,
-        );
-        let old_idx = regions.take_free_as_with_age(RegionKind::Old, 0).unwrap();
-        let slot_addr =
-            regions.region_start(old_idx).unwrap() + constants::HEAP_OBJECT_HEADER_SIZE as usize;
-        let mut rset = G1RSet::default();
-        let card_idx = regions.card_index(slot_addr).unwrap();
-
-        rset.mark_dirty_slot(slot_addr, card_idx);
-
-        assert_eq!(rset.dirty_card_snapshot(), vec![card_idx]);
-    }
-}
+mod tests;
