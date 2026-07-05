@@ -191,6 +191,46 @@ fn zgc_relocate_remapped_entry_points_at_destination() {
 }
 
 #[test]
+fn zgc_relocate_source_page_waits_for_last_live_object() {
+    let mut pages = ZPageSpace::default();
+    let first = ZPAGE_SIZE;
+    let object_size = constants::HEAP_OBJECT_HEADER_SIZE as usize
+        + constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
+    let second = first + object_size;
+    pages.attach(ZPAGE_SIZE, 3 * ZPAGE_SIZE);
+    pages.add_live_bytes_range(first, object_size);
+    pages.add_live_bytes_range(second, object_size);
+    assert!(pages.mark_relocation_set(0));
+
+    assert_eq!(
+        release_empty_source_pages(&mut pages, first, object_size),
+        0
+    );
+    assert_eq!(pages.page(0).unwrap().kind, ZPageKind::Relocating);
+
+    assert_eq!(
+        release_empty_source_pages(&mut pages, second, object_size),
+        1
+    );
+    assert_eq!(pages.page(0).unwrap().kind, ZPageKind::Free);
+}
+
+#[test]
+fn zgc_relocate_releases_cross_page_source_object_chunks() {
+    let mut pages = ZPageSpace::default();
+    let ptr = ZPAGE_SIZE - 8;
+    let size = 16;
+    pages.attach(0, 3 * ZPAGE_SIZE);
+    pages.add_live_bytes_range(ptr, size);
+    assert!(pages.mark_relocation_set(0));
+    assert!(pages.mark_relocation_set(1));
+
+    assert_eq!(release_empty_source_pages(&mut pages, ptr, size), 2);
+    assert_eq!(pages.page(0).unwrap().kind, ZPageKind::Free);
+    assert_eq!(pages.page(1).unwrap().kind, ZPageKind::Free);
+}
+
+#[test]
 fn zgc_relocate_summary_does_not_publish_dead_handles() {
     let result = RelocateResult {
         relocated_objects: 2,
