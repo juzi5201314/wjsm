@@ -217,7 +217,11 @@ fn assert_wall_time(mark_sweep: &BenchResult, g1: &BenchResult, zgc: &BenchResul
     Ok(())
 }
 
-fn assert_fragmentation(mark_sweep: &BenchResult, g1: &BenchResult, zgc: &BenchResult) -> Result<()> {
+fn assert_fragmentation(
+    mark_sweep: &BenchResult,
+    g1: &BenchResult,
+    zgc: &BenchResult,
+) -> Result<()> {
     let ms_fragmentation = mark_sweep.external_fragmentation();
     ensure!(
         g1.external_fragmentation() < ms_fragmentation,

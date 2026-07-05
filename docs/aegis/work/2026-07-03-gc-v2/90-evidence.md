@@ -393,3 +393,38 @@
 - `WJSM_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 149 skipped。
 - `WJSM_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 149 skipped。
 - `cargo build` → passed（zero warnings）。
+
+## P5 T5.4 evidence
+
+- 新增 `MemoryFootprintSample` 与 `GcExecutionStats.memory_footprint_hist`；`RuntimeState` 维护最近 256 次 footprint 样本环形缓冲，随 `store_last_gc_stats` 记录 `committed_pages/free_bytes_reusable`。
+- 新增根 test target `gc_footprint_long_run`（`crates/wjsm-runtime/tests/gc_footprint_long_run.rs`），默认无 `WJSM_GC_BENCH=1` 时快速 skip；启用后对 mark-sweep/G1/ZGC 执行同一增长→下降→再增长 workload。
+- footprint bench 断言三算法均有 committed pages、多样本 hist、最终 sample 等于 last stats、曾观测到可复用 free bytes，且稳态尾段 committed pages 不持续 grow。
+- enabled bench 指标：mark-sweep samples=14 committed_first=4 committed_max=5 committed_final=5 reusable_max=57840；G1 samples=12 committed_first=4 committed_max=9 committed_final=9 reusable_max=327680；ZGC samples=9 committed_first=4 committed_max=11 committed_final=11 reusable_max=327680。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -E 'test(gc_footprint_long_run)'` → 1 passed, 740 skipped（skip gate）。
+- `WJSM_GC_BENCH=1 cargo nextest run -E 'test(gc_footprint_long_run)'` → 1 passed, 740 skipped。
+- `cargo nextest run -p wjsm-runtime -E 'test(memory_footprint_hist_ring_wraps_at_256_entries)'` → 1 passed, 197 skipped。
+
+## P5 T5.5 evidence
+
+- 新增 `docs/aegis/work/2026-07-03-gc-v2/regression-matrix-coverage.md`，逐项审计侧表、长期 churn、OOM 前一致性、WeakRef/FinalizationRegistry、BoundFunction、Proxy、Closure、async/streams/typedarray/fetch 等历史缺口。
+- 新增 `fixtures/happy/gc_bound_proxy_closure_churn.js` / `.expected`，同场覆盖 BoundFunction bound this/args、Proxy target/handler、Closure env 在多轮显式 GC 与分配 churn 后仍存活。
+- 覆盖结论：新增 fixture 后，T5.5 指定历史缺口均已有 fixture 或 P3/P4 evidence 支撑，未发现剩余明确缺口。
+- `cargo nextest run -E 'test(happy__gc_bound_proxy_closure_churn) + test(happy__gc_side_table_roots) + test(happy__gc_typedarray_dataview_side_refs) + test(happy__gc_map_set_owner_reachability) + test(happy__weakref_gc) + test(happy__finalization_registry_cleanup) + test(happy__weak_collections_gc) + test(happy__gc_async_await) + test(happy__streams_byob_gc_pending_view) + test(happy__gc_g1_young_churn) + test(happy__gc_g1_concurrent_mark_churn) + test(happy__gc_fragmentation_churn) + test(happy__streams_fetch_body_data_url) + test(happy__fetch_data_url_init)'` → 14 passed, 727 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__gc_bound_proxy_closure_churn) + test(happy__gc_side_table_roots) + test(happy__gc_typedarray_dataview_side_refs) + test(happy__gc_map_set_owner_reachability) + test(happy__weakref_gc) + test(happy__finalization_registry_cleanup) + test(happy__weak_collections_gc) + test(happy__gc_async_await) + test(happy__streams_byob_gc_pending_view) + test(happy__gc_g1_young_churn) + test(happy__gc_g1_concurrent_mark_churn) + test(happy__gc_fragmentation_churn) + test(happy__streams_fetch_body_data_url) + test(happy__fetch_data_url_init)'` → 14 passed, 727 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__gc_bound_proxy_closure_churn) + test(happy__gc_side_table_roots) + test(happy__gc_typedarray_dataview_side_refs) + test(happy__gc_map_set_owner_reachability) + test(happy__weakref_gc) + test(happy__finalization_registry_cleanup) + test(happy__weak_collections_gc) + test(happy__gc_async_await) + test(happy__streams_byob_gc_pending_view) + test(happy__gc_g1_young_churn) + test(happy__gc_g1_concurrent_mark_churn) + test(happy__gc_fragmentation_churn) + test(happy__streams_fetch_body_data_url) + test(happy__fetch_data_url_init)'` → 14 passed, 727 skipped。
+- `cargo nextest run -p wjsm-runtime` → 196 passed, 2 skipped。
+- `cargo nextest run --workspace` → 1318 passed, 2 skipped。
+- `cargo build` → passed（zero warnings）。
+
+## P5 T5.6 evidence
+
+- P5 observability 阶段 closure：T5.1-T5.5 已完成并验证；选择机制、`GcStats` v2/log、pause benchmark、footprint benchmark 与回归矩阵审计均保持绿。
+- `cargo nextest run --workspace` → 1318 passed, 2 skipped。
+- `cargo nextest run -E 'test(happy__)'` with `WJSM_GC=g1` → 591 passed, 150 skipped（并发验证中超时一次，solo rerun 通过）。
+- `cargo nextest run -E 'test(happy__)'` with `WJSM_GC=zgc` → 591 passed, 150 skipped（并发验证中超时一次，solo rerun 通过）。
+- `cargo nextest run -E 'test(gc_pause_bench) + test(gc_footprint_long_run)'` → 2 passed, 739 skipped（skip gate）。
+- `WJSM_GC_BENCH=1 cargo nextest run -E 'test(gc_pause_bench) + test(gc_footprint_long_run)'` → 2 passed, 739 skipped。
+- `cargo build` → passed（zero warnings）。
+- DriftCheckDraft：Scope=P5 selection/observability/benchmark；Compatibility=默认 workspace、G1 happy、ZGC happy、bench skip/enabled 均绿；Retirement=`WJSM_TEST_GC` 单入口假设、stats 字段不完整、pause/footprint 未验收、GC 回归矩阵缺口均已退休；Decision=continue to P6。

@@ -28,8 +28,8 @@ mod runtime_combinators;
 mod runtime_date;
 mod runtime_eval;
 mod runtime_gc;
-pub use runtime_gc::registry::GcAlgorithmKind;
 pub use runtime_gc::api::{CycleKind, GcStats};
+pub use runtime_gc::registry::GcAlgorithmKind;
 mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;
@@ -168,6 +168,15 @@ impl RuntimeOptions {
     }
 }
 
+/// 单次 GC 后记录的 linear-memory footprint 样本。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemoryFootprintSample {
+    /// Wasm linear memory 当前已提交页数（64KiB/page）。
+    pub committed_pages: usize,
+    /// 当前 GC 算法可直接复用的空闲字节数。
+    pub free_bytes_reusable: usize,
+}
+
 /// 单次运行结束后暴露给定量基准的 GC 观测快照。
 #[derive(Clone, Debug, Default)]
 pub struct GcExecutionStats {
@@ -175,6 +184,8 @@ pub struct GcExecutionStats {
     pub last: GcStats,
     /// 本次运行中观测到的 GC pause 最大值序列（纳秒）。
     pub pause_hist: Vec<u64>,
+    /// 最近 GC 周期的 committed/reusable footprint 序列。
+    pub memory_footprint_hist: Vec<MemoryFootprintSample>,
 }
 
 pub fn gc_algorithm_from_env(
@@ -688,6 +699,7 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
     .await
 }
 const GC_PAUSE_HIST_CAP: usize = 256;
+const GC_MEMORY_FOOTPRINT_HIST_CAP: usize = 256;
 
 #[derive(Debug)]
 struct GcPauseHist {
@@ -719,6 +731,40 @@ impl GcPauseHist {
         }
         (0..GC_PAUSE_HIST_CAP)
             .map(|idx| self.entries[(self.next + idx) % GC_PAUSE_HIST_CAP])
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+struct MemoryFootprintHist {
+    entries: [MemoryFootprintSample; GC_MEMORY_FOOTPRINT_HIST_CAP],
+    len: usize,
+    next: usize,
+}
+
+impl Default for MemoryFootprintHist {
+    fn default() -> Self {
+        Self {
+            entries: [MemoryFootprintSample::default(); GC_MEMORY_FOOTPRINT_HIST_CAP],
+            len: 0,
+            next: 0,
+        }
+    }
+}
+
+impl MemoryFootprintHist {
+    fn push(&mut self, sample: MemoryFootprintSample) {
+        self.entries[self.next] = sample;
+        self.next = (self.next + 1) % GC_MEMORY_FOOTPRINT_HIST_CAP;
+        self.len = self.len.saturating_add(1).min(GC_MEMORY_FOOTPRINT_HIST_CAP);
+    }
+
+    fn snapshot(&self) -> Vec<MemoryFootprintSample> {
+        if self.len < GC_MEMORY_FOOTPRINT_HIST_CAP {
+            return self.entries[..self.len].to_vec();
+        }
+        (0..GC_MEMORY_FOOTPRINT_HIST_CAP)
+            .map(|idx| self.entries[(self.next + idx) % GC_MEMORY_FOOTPRINT_HIST_CAP])
             .collect()
     }
 }
@@ -782,6 +828,7 @@ impl Clone for RuntimeState {
             gc_scheduler: self.gc_scheduler.clone(),
             last_gc_stats: self.last_gc_stats.clone(),
             gc_pause_hist: self.gc_pause_hist.clone(),
+            memory_footprint_hist: self.memory_footprint_hist.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -905,6 +952,8 @@ struct RuntimeState {
     last_gc_stats: Arc<Mutex<crate::runtime_gc::api::GcStats>>,
     /// 最近 256 次 GC pause 观测，按纳秒记录；写入 last_gc_stats 时同步推进。
     gc_pause_hist: Arc<Mutex<GcPauseHist>>,
+    /// 最近 256 次 GC footprint 观测；写入 last_gc_stats 时同步推进。
+    memory_footprint_hist: Arc<Mutex<MemoryFootprintHist>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -1034,7 +1083,7 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
-    /// 记录最近一次 GC 统计（含碎片治理指标与 v2 pause 指标）。
+    /// 记录最近一次 GC 统计，并同步推进 v2 环形观测序列。
     pub(crate) fn store_last_gc_stats(
         &self,
         algorithm: &'static str,
@@ -1046,13 +1095,22 @@ impl RuntimeState {
             let mut hist = self.gc_pause_hist.lock().unwrap_or_else(|e| e.into_inner());
             hist.push(stats.pause_ns_max);
         }
+        {
+            let mut hist = self
+                .memory_footprint_hist
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            hist.push(MemoryFootprintSample {
+                committed_pages: stats.committed_pages,
+                free_bytes_reusable: stats.free_bytes_reusable,
+            });
+        }
         if has_pause && gc_log_enabled() {
             eprintln!("{}", format_gc_log_summary(algorithm, &stats));
         }
         let mut slot = self.last_gc_stats.lock().unwrap_or_else(|e| e.into_inner());
         *slot = stats;
     }
-
 
     /// 复制当前运行的 GC 统计快照，避免 integration test 直接窥探 RuntimeState。
     pub(crate) fn gc_execution_stats_snapshot(&self) -> GcExecutionStats {
@@ -1062,11 +1120,23 @@ impl RuntimeState {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let pause_hist = self.gc_pause_hist_snapshot();
-        GcExecutionStats { last, pause_hist }
+        let memory_footprint_hist = self.memory_footprint_hist_snapshot();
+        GcExecutionStats {
+            last,
+            pause_hist,
+            memory_footprint_hist,
+        }
     }
 
     fn gc_pause_hist_snapshot(&self) -> Vec<u64> {
         self.gc_pause_hist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot()
+    }
+
+    fn memory_footprint_hist_snapshot(&self) -> Vec<MemoryFootprintSample> {
+        self.memory_footprint_hist
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .snapshot()
@@ -1238,6 +1308,7 @@ impl RuntimeState {
             )),
             last_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
             gc_pause_hist: Arc::new(Mutex::new(GcPauseHist::default())),
+            memory_footprint_hist: Arc::new(Mutex::new(MemoryFootprintHist::default())),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -1394,6 +1465,28 @@ mod tests {
         assert_eq!(hist.len(), 256);
         assert_eq!(hist[0], 5);
         assert_eq!(hist[255], 260);
+    }
+
+    #[test]
+    fn memory_footprint_hist_ring_wraps_at_256_entries() {
+        let state = super::RuntimeState::new();
+        for idx in 0..260usize {
+            state.store_last_gc_stats(
+                "mark-sweep",
+                GcStats {
+                    committed_pages: idx + 1,
+                    free_bytes_reusable: (idx + 1) * 10,
+                    ..GcStats::default()
+                },
+            );
+        }
+
+        let hist = state.memory_footprint_hist_snapshot();
+        assert_eq!(hist.len(), 256);
+        assert_eq!(hist[0].committed_pages, 5);
+        assert_eq!(hist[0].free_bytes_reusable, 50);
+        assert_eq!(hist[255].committed_pages, 260);
+        assert_eq!(hist[255].free_bytes_reusable, 2600);
     }
 
     #[test]

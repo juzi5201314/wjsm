@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T5.4 添加 footprint 指标`（in progress）。
-- Next: `T5.5 审计 GC 回归矩阵`。
+- Active: `T6.1 执行删除清单`（in progress）。
+- Next: `T6.2 同步文档描述`。
 
 ## Completed todos
 
@@ -50,19 +50,22 @@
   - `T5.1 实现三入口选择`
   - `T5.2 完善 GcStats v2`
   - `T5.3 添加 pause benchmark`
+  - `T5.4 添加 footprint 指标`
+  - `T5.5 审计 GC 回归矩阵`
+  - `T5.6 验证 P5 阶段`
 
 ## Active slice card
 
-- Goal: P5 T5.4，新增 `memory_footprint_hist` 与长运行 footprint 治理测试，验证对象存活量下降后后续分配优先复用空闲区域而非持续 grow。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T5.4；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §17、§21.2。
-- Files: `runtime_gc/api.rs` 已有 committed/reusable 字段，需补 RuntimeState footprint hist 与 `tests/gc_footprint_long_run.rs`。
-- Boundary: 本 slice 只做 footprint hist 与 `WJSM_GC_BENCH=1` 门控长运行；回归矩阵覆盖审计留给 T5.5。
-- Verification: `WJSM_GC_BENCH=1 cargo nextest run -E 'test(gc_footprint_long_run)'` 绿；无 env 时 skipped；三算法字段含 committed/reusable。
-- Stop: T5.4 验证通过，checkpoint/evidence 更新，然后进入 T5.5。
+- Goal: P6 T6.1，执行删除清单：按 spec §18 与计划 grep 复核 v1 trait 名、旧 `gc_maybe_collect`、WIP 残留与不再需要的 `#[allow(dead_code)]`。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T6.1；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §18。
+- Files: runtime/backend/support 代码与测试；只删除确认由 v2/三算法取代的内部残留。
+- Boundary: 本 slice 只做代码清理/残留复核；文档同步留给 T6.2，ADR 留给 T6.3。
+- Verification: grep 记录、`cargo check` / targeted tests / build 零 warning。
+- Stop: T6.1 验证通过，checkpoint/evidence 更新，然后进入 T6.2。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2/P3/P4、T5.1、T5.2、T5.3 已完成；T5.4 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3/P4/P5 已完成；T6.1 正在进行。
 
 ## Blocked-on items
 
@@ -72,16 +75,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T5.4。
-2. 新增 footprint hist ring buffer 与 long-run reuse benchmark。
-3. 完成后运行 footprint bench、workspace/build 必要验证。
+1. 读取本文件、`90-evidence.md` 与父计划 T6.1 / spec §18。
+2. grep 复核 v1 trait/旧 collect/WIP/dead_code allow 残留，删除或记录保留理由。
+3. 完成后运行清理验证与必要 build/check。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T5.3 已完成 pause benchmark，当前进入 footprint 指标。
-- Does current work still serve goal and stop condition? 是，T5.4 只交付 footprint hist/long-run，不提前做回归矩阵审计。
-- Compatibility boundary: footprint bench 默认 skipped，只有 `WJSM_GC_BENCH=1` 执行。
-- New owner/fallback/adapter/branch: runtime footprint hist + `gc_footprint_long_run.rs` 成为 memory footprint 治理验收 owner。
-- Retirement track: footprint 未验收限制开始退休；T5.5 后续审计 fixture 覆盖面。
-- Evidence sufficiency: T5.3 sufficient；T5.4 pending。
+- Does current work still serve original task intent? 是，P5 已完成并验证，当前进入 P6 清理。
+- Does current work still serve goal and stop condition? 是，T6.1 只执行删除清单，不提前同步文档/ADR。
+- Compatibility boundary: 默认/G1/ZGC 行为不得改变；清理只删除已由 v2 取代的内部残留。
+- New owner/fallback/adapter/branch: 无新增 owner。
+- Retirement track: P6 开始执行旧接口/旧路径/临时 allow 的最终退休。
+- Evidence sufficiency: T5.6 sufficient；T6.1 pending。
 - Decision: continue。
