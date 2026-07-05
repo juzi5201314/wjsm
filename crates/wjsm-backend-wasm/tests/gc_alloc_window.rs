@@ -24,6 +24,7 @@ enum OwnedOperator {
     I32Ne,
     I32Add,
     I32Mul,
+    I32Shl,
     I32Load,
     I32Store,
     I64Store,
@@ -90,6 +91,9 @@ fn parse_support_module_with(flavor: GcFlavor) -> SupportModuleInfo {
                         }
                         Operator::I32Mul => {
                             ops.push(OwnedOperator::I32Mul);
+                        }
+                        Operator::I32Shl => {
+                            ops.push(OwnedOperator::I32Shl);
                         }
                         Operator::I32Load { .. } => {
                             ops.push(OwnedOperator::I32Load);
@@ -196,8 +200,8 @@ fn support_obj_set_re_resolves_old_ptr_before_resize_copy() {
     let re_resolve_old_ptr = [
         OwnedOperator::GlobalGet(G_OBJ_TABLE_PTR),
         OwnedOperator::LocalGet(9),
-        OwnedOperator::I32Const(4),
-        OwnedOperator::I32Mul,
+        OwnedOperator::I32Const(2),
+        OwnedOperator::I32Shl,
         OwnedOperator::I32Add,
         OwnedOperator::I32Load,
         OwnedOperator::LocalSet(6),
