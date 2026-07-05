@@ -439,3 +439,11 @@
 - `cargo nextest run -p wjsm-runtime -E 'test(g1) | test(zgc) | test(gc_stats) | test(pause_hist) | test(memory_footprint)'` → 79 passed, 119 skipped。
 - `cargo nextest run --workspace` → 1318 passed, 2 skipped。
 - `cargo build` → passed（zero warnings）。
+
+## P6 T6.2 evidence
+
+- `AGENTS.md` 同步当前 WASM contract：registry-owned env host funcs、27 globals、Normal mode 10 个 support helper imports、三算法 `--gc`/`WJSM_GC`/`WJSM_TEST_GC` 选择链。
+- `AGENTS.md` 同步 build-time embedded runtime：support cwasm 现在为 mark-sweep/G1/ZGC 三变体，runtime instantiation 按 active GC algorithm 选择对应 artifact。
+- `docs/aegis/specs/2026-07-03-napi-native-addon-design.md` 将 non-moving GC 假设改为 handle 恒定（INV-C1）：G1/ZGC 可移动对象，但 N-API scope/backing store 对外保存 handle/backing store 指针，root 源保活 handle。
+- 文档 grep 验证：`non-moving` / `<19 globals>` / `<14 host funcs>` / `EMBEDDED_SUPPORT_CWASM` 等旧描述已从目标文档移除或替换为当前 API。
+- `cargo check -p wjsm-runtime -p wjsm-backend-wasm -p wjsm-runtime-support` → passed（zero warnings）。

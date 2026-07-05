@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T6.2 同步文档描述`（in progress）。
-- Next: `T6.3 新增 ADR 0005`。
+- Active: `T6.3 新增 ADR 0005`（in progress）。
+- Next: `T6.4 执行全矩阵终验`。
 
 ## Completed todos
 
@@ -55,19 +55,20 @@
   - `T5.6 验证 P5 阶段`
 - P6:
   - `T6.1 执行删除清单`
+  - `T6.2 同步文档描述`
 
 ## Active slice card
 
-- Goal: P6 T6.2，同步项目文档描述：WASM contract globals/host funcs/support helpers/GC 三算法选择，以及 N-API 设计文档中的 non-moving 描述改为 handle 恒定（INV-C1）。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T6.2；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §15.2。
-- Files: `AGENTS.md`、`docs/aegis/specs/2026-07-03-napi-native-addon-design.md`，必要时只改相关段落。
-- Boundary: 本 slice 只同步已有实现事实，不新增架构决策（ADR 留给 T6.3）。
-- Verification: 文档中的 globals/host funcs/support helper 数量与实现核对；grep 确认 “non-moving” 残留只在历史/无关上下文。
-- Stop: T6.2 验证通过，checkpoint/evidence 更新，然后进入 T6.3。
+- Goal: P6 T6.3，新增 ADR 0005，记录 pluggable GC v2 的 durable architecture decision：INV-C1/C2、v2 lifecycle 接口、三 support 变体、增量调度、v1 appendix retirement 与 alternatives。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T6.3。
+- Files: `docs/adr/0005-pluggable-gc-v2.md`，必要时更新 `docs/adr/INDEX.md`。
+- Boundary: 本 slice 只记录已实现并验证的架构决策，不新增代码行为。
+- Verification: recording-architecture-decisions 惯例格式；ADR index 登记；文档读取检查。
+- Stop: T6.3 验证通过，checkpoint/evidence 更新，然后进入 T6.4。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2/P3/P4/P5、T6.1 已完成；T6.2 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3/P4/P5、T6.1、T6.2 已完成；T6.3 正在进行。
 
 ## Blocked-on items
 
@@ -77,16 +78,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T6.2。
-2. 核对 `module_setup.rs` / host import tables / support ABI 的实数，再同步 `AGENTS.md` 与 N-API spec。
-3. 完成后运行文档 grep/相关 build check。
+1. 读取本文件、`90-evidence.md`、ADR 目录现有格式与父计划 T6.3。
+2. 新增 ADR 0005 并更新 ADR index。
+3. 完成后读取/验证 ADR 格式与链接。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T6.1 已完成代码残留清理，当前进入文档同步。
-- Does current work still serve goal and stop condition? 是，T6.2 只同步描述，不提前写 ADR。
-- Compatibility boundary: 文档必须反映当前实现，不改变代码行为。
-- New owner/fallback/adapter/branch: 无新增 owner。
-- Retirement track: 旧文档中单算法/non-moving/旧 globals 描述开始退休。
-- Evidence sufficiency: T6.1 sufficient；T6.2 pending。
+- Does current work still serve original task intent? 是，T6.2 已完成文档描述同步，当前进入 ADR 持久记录。
+- Does current work still serve goal and stop condition? 是，T6.3 只写 ADR，不提前执行全矩阵终验。
+- Compatibility boundary: ADR 记录现状，不改变代码行为。
+- New owner/fallback/adapter/branch: ADR 0005 将成为 pluggable GC v2 决策记录 owner。
+- Retirement track: 旧文档中单算法/non-moving/旧 globals 描述已退休；T6.3 记录 v1 附录 D 取代声明。
+- Evidence sufficiency: T6.2 sufficient；T6.3 pending。
 - Decision: continue。
