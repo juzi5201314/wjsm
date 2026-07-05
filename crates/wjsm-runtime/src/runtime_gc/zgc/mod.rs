@@ -2,15 +2,17 @@
 pub mod color;
 mod mark;
 pub mod page;
+mod relocate;
 
 use super::api::{
     AllocRequest, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget, StepOutcome,
     Value,
 };
-use super::mark_sweep::MarkSweepCollector;
 use color::{PTR_MASK, ZColor, ZColorState, ZEntry, ZPhase};
 use mark::{MarkStep, ZMarkState};
 use page::{ZPageSpace, recolor_live_obj_table_entries};
+use relocate::{RelocateStep, ZRelocateState};
+use std::time::{Duration, Instant};
 use wasmtime::Val;
 use wjsm_ir::constants;
 
@@ -18,7 +20,7 @@ pub(crate) struct ZgcCollector {
     colors: ZColorState,
     pages: ZPageSpace,
     mark: ZMarkState,
-    fallback: MarkSweepCollector,
+    relocate: ZRelocateState,
     stats: GcStats,
 }
 
@@ -28,7 +30,7 @@ impl ZgcCollector {
             colors: ZColorState::default(),
             pages: ZPageSpace::default(),
             mark: ZMarkState::new(),
-            fallback: MarkSweepCollector::new(),
+            relocate: ZRelocateState::new(),
             stats: GcStats::default(),
         }
     }
@@ -68,6 +70,7 @@ impl ZgcCollector {
         &mut self,
         ctx: &mut GcContext<'_>,
         roots: &mut dyn RootProvider,
+        copy_budget: usize,
     ) -> Option<GcStats> {
         if !self.mark.is_active() {
             return None;
@@ -76,15 +79,76 @@ impl ZgcCollector {
         let stats = self
             .mark
             .finish_after_barrier_flush(ctx, roots, &mut self.pages, good);
-        self.colors.finish_cycle();
-        self.sync_wasm_color_phase(ctx);
         self.stats = stats.clone();
+        let excluded = self.pages.page_index(ctx.heap_ptr());
+        if self
+            .relocate
+            .start_cycle_excluding(&mut self.pages, copy_budget, excluded)
+        {
+            self.colors.start_relocate();
+        } else {
+            self.colors.finish_cycle();
+        }
+        self.sync_wasm_color_phase(ctx);
         Some(stats)
     }
 
-    fn sync_after_delegate(&mut self, ctx: &mut GcContext<'_>) {
-        self.attach_pages_and_recolor(ctx);
-        self.stats = self.fallback.last_stats().clone();
+    fn merge_stats(primary: &mut GcStats, extra: &GcStats) {
+        primary.swept = primary.swept.saturating_add(extra.swept);
+        primary.freed_bytes = primary.freed_bytes.saturating_add(extra.freed_bytes);
+        primary.elapsed += extra.elapsed;
+        primary.free_block_count = extra.free_block_count;
+        primary.total_free_bytes = extra.total_free_bytes;
+        primary.largest_free_block = extra.largest_free_block;
+        primary.external_fragmentation = extra.external_fragmentation;
+        primary.heap_used_bytes = extra.heap_used_bytes;
+    }
+
+    fn finish_relocate_step(&mut self, ctx: &mut GcContext<'_>, stats: GcStats) -> StepOutcome {
+        self.colors.finish_cycle();
+        self.sync_wasm_color_phase(ctx);
+        Self::merge_stats(&mut self.stats, &stats);
+        ctx.stats = self.stats.clone();
+        StepOutcome::CycleComplete
+    }
+
+    fn unbounded_budget() -> StepBudget {
+        StepBudget {
+            work_bytes: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(24 * 60 * 60),
+        }
+    }
+
+    fn alloc_from_bump(&mut self, ctx: &mut GcContext<'_>, size: usize) -> Option<usize> {
+        let (_, dynamic_start, _) = ctx.with_state(|state| state.heap_layout_boundaries());
+        let ptr = ctx.heap_ptr().max(dynamic_start);
+        let end = ptr.checked_add(size)?;
+        let align = constants::HEAP_ALLOCATION_ALIGNMENT as usize;
+        let aligned_end = end.checked_add(align - 1).map(|v| v & !(align - 1))?;
+        if aligned_end > ctx.heap_limit() {
+            return None;
+        }
+        if aligned_end > ctx.env.memory.data_size(&ctx.store) {
+            let grow_bytes = aligned_end.checked_sub(ptr)?;
+            if !matches!(ctx.grow_to_fit_heap_allocation(grow_bytes), Ok(true)) {
+                return None;
+            }
+        }
+        ctx.set_heap_ptr(aligned_end);
+        let alloc_end = ctx.env.memory.data_size(&ctx.store).min(ctx.heap_limit());
+        ctx.alloc_window_set(aligned_end, alloc_end);
+        self.refresh_pages(ctx);
+        Some(ptr)
+    }
+
+    fn sync_alloc_window(&mut self, ctx: &mut GcContext<'_>) {
+        let (_, dynamic_start, _) = ctx.with_state(|state| state.heap_layout_boundaries());
+        let ptr = ctx.heap_ptr().max(dynamic_start);
+        if ptr != ctx.heap_ptr() {
+            ctx.set_heap_ptr(ptr);
+        }
+        let alloc_end = ctx.env.memory.data_size(&ctx.store).min(ctx.heap_limit());
+        ctx.alloc_window_set(ptr, alloc_end);
     }
 
     fn sync_wasm_color_phase(&self, ctx: &mut GcContext<'_>) {
@@ -131,32 +195,6 @@ impl ZgcCollector {
         });
     }
 
-    fn strip_colors_for_delegate(&mut self, ctx: &mut GcContext<'_>) {
-        let obj_table_ptr = ctx.obj_table_ptr();
-        let obj_table_count = ctx.obj_table_count();
-        let changed = ctx.with_memory_mut(|data| {
-            let mut changed = 0usize;
-            for handle in 0..obj_table_count {
-                let slot = obj_table_ptr + handle * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-                let Some(bytes) = data.get_mut(slot..slot + 4) else {
-                    break;
-                };
-                let mut raw = [0u8; 4];
-                raw.copy_from_slice(bytes);
-                let entry = ZEntry::from(u32::from_le_bytes(raw));
-                if entry.is_empty() || entry.raw() == entry.ptr() {
-                    continue;
-                }
-                bytes.copy_from_slice(&entry.ptr().to_le_bytes());
-                changed += 1;
-            }
-            changed
-        });
-        if changed != 0 {
-            ctx.increment_gc_epoch();
-        }
-    }
-
     fn reset_barrier_buffer(ctx: &mut GcContext<'_>) {
         let (_, _, base) = ctx.with_state(|state| state.heap_layout_boundaries());
         if base == 0 {
@@ -181,9 +219,9 @@ impl GcAlgorithm for ZgcCollector {
         "zgc"
     }
 
-    fn attach_heap(&mut self, ctx: &mut GcContext<'_>, dynamic_start: usize) {
-        self.fallback.attach_heap(ctx, dynamic_start);
+    fn attach_heap(&mut self, ctx: &mut GcContext<'_>, _dynamic_start: usize) {
         self.attach_pages_and_recolor(ctx);
+        self.sync_alloc_window(ctx);
     }
 
     fn alloc_slow(
@@ -192,11 +230,24 @@ impl GcAlgorithm for ZgcCollector {
         roots: &mut dyn RootProvider,
         req: AllocRequest,
     ) -> Option<usize> {
-        let _ = self.finish_active_mark(ctx, roots);
-        self.strip_colors_for_delegate(ctx);
-        let ptr = self.fallback.alloc_slow(ctx, roots, req);
-        self.sync_after_delegate(ctx);
-        ptr
+        self.refresh_pages(ctx);
+        if self.relocate.is_active() {
+            let budget = StepBudget {
+                work_bytes: req.size.max(64 * 1024),
+                deadline: Instant::now() + Duration::from_millis(2),
+            };
+            if let RelocateStep::Complete { stats } =
+                self.relocate
+                    .drain_incremental(ctx, &mut self.pages, budget)
+            {
+                let _ = self.finish_relocate_step(ctx, stats);
+            }
+        }
+        if let Some(ptr) = self.alloc_from_bump(ctx, req.size) {
+            return Some(ptr);
+        }
+        let _ = self.collect_full(ctx, roots);
+        self.alloc_from_bump(ctx, req.size)
     }
 
     fn safepoint_step(
@@ -212,9 +263,27 @@ impl GcAlgorithm for ZgcCollector {
                     StepOutcome::Progress { remaining_estimate }
                 }
                 MarkStep::ReadyForMarkEnd => {
-                    let _ = self.finish_active_mark(ctx, roots);
-                    StepOutcome::CycleComplete
+                    let _ = self.finish_active_mark(ctx, roots, budget.work_bytes);
+                    if self.relocate.is_active() {
+                        StepOutcome::Progress {
+                            remaining_estimate: budget.work_bytes.max(1),
+                        }
+                    } else {
+                        StepOutcome::CycleComplete
+                    }
                 }
+            };
+        }
+        if self.relocate.is_active() {
+            return match self
+                .relocate
+                .drain_incremental(ctx, &mut self.pages, budget)
+            {
+                RelocateStep::Idle => StepOutcome::Idle,
+                RelocateStep::Progress { remaining_estimate } => {
+                    StepOutcome::Progress { remaining_estimate }
+                }
+                RelocateStep::Complete { stats } => self.finish_relocate_step(ctx, stats),
             };
         }
         self.start_mark_cycle(ctx, roots);
@@ -225,16 +294,37 @@ impl GcAlgorithm for ZgcCollector {
 
     fn collect_full(&mut self, ctx: &mut GcContext<'_>, roots: &mut dyn RootProvider) -> GcStats {
         self.refresh_pages(ctx);
-        if !self.mark.is_active() {
-            self.start_mark_cycle(ctx, roots);
+        if !self.relocate.is_active() {
+            if !self.mark.is_active() {
+                self.start_mark_cycle(ctx, roots);
+            }
+            let _ = self.finish_active_mark(ctx, roots, usize::MAX);
         }
-        self.finish_active_mark(ctx, roots)
-            .unwrap_or_else(|| self.stats.clone())
+        while self.relocate.is_active() {
+            match self
+                .relocate
+                .drain_incremental(ctx, &mut self.pages, Self::unbounded_budget())
+            {
+                RelocateStep::Complete { stats } => {
+                    let _ = self.finish_relocate_step(ctx, stats);
+                }
+                RelocateStep::Idle => break,
+                RelocateStep::Progress { .. } => break,
+            }
+        }
+        ctx.stats = self.stats.clone();
+        self.stats.clone()
     }
 
     fn load_barrier_slow(&mut self, ctx: &mut GcContext<'_>, h: Handle) -> u32 {
-        if self.colors.phase() == ZPhase::Mark {
-            return self.mark.mark_from_load_barrier(ctx, h, self.colors.good());
+        match self.colors.phase() {
+            ZPhase::Mark => return self.mark.mark_from_load_barrier(ctx, h, self.colors.good()),
+            ZPhase::Relocate => {
+                return self
+                    .relocate
+                    .relocate_or_remap_handle(ctx, &mut self.pages, h);
+            }
+            ZPhase::Idle => {}
         }
         let Some((slot, entry)) = Self::read_entry(ctx, h) else {
             return 0;

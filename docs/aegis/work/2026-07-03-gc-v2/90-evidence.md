@@ -305,3 +305,22 @@
 - `cargo nextest run --workspace` → 1297 passed, 2 skipped。
 - `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1297 passed, 2 skipped。
 - `cargo build` → passed（zero warnings）。
+
+## P4 T4.4 evidence
+
+- 新增 `runtime_gc::zgc::relocate`：Relocate phase 使用 `good=Remapped`，按 page live bytes/fragmentation 选择 relocation set，主动搬迁与 load-barrier/host-resolve 协助搬迁共享同一 copy/heal owner。
+- relocation set 跳过当前 active allocation page，避免 mutator 继续向被搬迁源页写入；候选对象在 cycle start 缓存，`alloc_slow` 仅按小 budget 补步进，避免每次分配重新全表扫描导致 `gc_fragmentation_churn` 超时。
+- 搬迁路径复制对象原始 bytes 到目标 zPage，写 `obj_table[h]=new_ptr|Remapped`；对象内部引用槽保持 handle，不做 per-reference rewrite。
+- source page reclaim 只在扫描确认没有 live obj_table entry 落在源页时释放；RelocateStep 不发布 dead handles、不调用 WeakRef/side-table cleanup。
+- 调试修复：T4.4 初版 `WJSM_TEST_GC=zgc happy__gc_typedarray_dataview_side_refs` 输出 `undefined`，根因是 relocation 选中了当前分配页并在 mutator 仍写该页时回收源页；跳过 active allocation page 后 fixture 恢复。
+- 调试修复：T4.4 初版 `WJSM_TEST_GC=zgc happy__gc_fragmentation_churn` 超时，根因是 alloc slow path 对 relocation 全量 drain 且每轮重新扫描 obj_table；改为缓存候选 + allocation budgeted step 后恢复。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(zgc)'` → 22 passed, 165 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__gc_typedarray_dataview_side_refs)'` → 1 passed, 737 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__gc_fragmentation_churn)'` → 1 passed, 737 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo nextest run --workspace` → 1304 passed, 2 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1304 passed, 2 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo build` → passed（zero warnings）。

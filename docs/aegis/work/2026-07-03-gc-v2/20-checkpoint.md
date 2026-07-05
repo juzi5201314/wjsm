@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T4.4 实现 ZGC relocate`（in progress）。
-- Next: `T4.5 组装 ZGC registry`。
+- Active: `T4.5 组装 ZGC registry`（in progress）。
+- Next: `T4.6 验证 P4 阶段`。
 
 ## Completed todos
 
@@ -44,18 +44,19 @@
   - `T4.2 生成 ZGC support 变体`
   - `T4.3 实现 ZGC mark`
 
+  - `T4.4 实现 ZGC relocate`
 ## Active slice card
 
-- Goal: P4 T4.4，实现 ZGC 增量 relocation + 强制 heal：选择 relocation set，主动搬迁与 load barrier 协助搬迁，更新 `obj_table[h]=new|11`，源 page 搬完后归还空间。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T4.4；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §11.3、§12、§14。
-- Files: 新建 `runtime_gc/zgc/relocate.rs`，更新 `zgc/mod.rs`、`zgc/page.rs`、必要的 heap access/on_host_resolve 测试。
-- Boundary: 本 slice 只实现 relocation/heal；dead handles 仍只在 MarkEnd cleanup 后发布，RelocateStep/page reclaim 不发布 handles。
-- Verification: 单测覆盖 RS 选择（live=0 已回收、fragmentation>25%、预算截断）、host 读/写 RS 内对象时同步 heal、`obj_table` remapped entry、源 page 回收不重复发布 handle；`WJSM_TEST_GC=zgc` fixture 冒烟。
-- Stop: T4.4 验证通过，checkpoint/evidence 更新，然后进入 T4.5。
+- Goal: P4 T4.5，审计并收口 `ZgcCollector` 的完整 v2 `GcAlgorithm` 钩子与 registry 接入：alloc/mark/relocate/full/barrier/load-barrier 路径协同一致。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T4.5。
+- Files: `zgc/mod.rs`、`registry.rs`，必要时只做收口修正。
+- Boundary: 本 slice 不新增算法阶段；只确认 ZGC 对外组装、registry 与 residual fallback/未实现路径已干净。
+- Verification: ZGC 单测全绿、`WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` 与 workspace 绿。
+- Stop: T4.5 验证通过，checkpoint/evidence 更新，然后进入 T4.6。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2/P3、T4.1、T4.2、T4.3 已完成；T4.4 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3、T4.1、T4.2、T4.3、T4.4 已完成；T4.5 正在进行。
 
 ## Blocked-on items
 
@@ -65,16 +66,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T4.4 / spec §11.3、§14。
-2. 继续 ZGC relocate：先实现 relocation set/page allocator/heal owner，再接入 load_barrier_slow 与 safepoint/full collect。
-3. 完成后运行 ZGC relocate 单测、`cargo check -p wjsm-runtime`、`WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'`。
+1. 读取本文件、`90-evidence.md` 与父计划 T4.5。
+2. 审计 ZgcCollector alloc/safepoint/full/barrier/load-barrier 组装、registry Zgc → Ok。
+3. 完成后运行 T4.5 指定验证并进入 T4.6 阶段矩阵。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T4.3 已完成 ZGC mark/dead-handle cleanup，当前进入 relocation。
-- Does current work still serve goal and stop condition? 是，T4.4 只交付 relocate/heal，不提前做 T4.5/P5。
-- Compatibility boundary: 默认 mark-sweep、G1 与 ZGC mark 路径保持；RelocateStep 不发布 dead handles。
-- New owner/fallback/adapter/branch: `runtime_gc::zgc::relocate` 将成为 relocation set、copy/heal 与 source page reclaim owner。
-- Retirement track: ZGC 仅委托 mark-sweep full collect 的临时路径已退休；T4.4 开始退休 ZGC 不搬迁限制。
-- Evidence sufficiency: T4.3 sufficient；T4.4 pending。
+- Does current work still serve original task intent? 是，T4.4 已完成 relocation/heal，当前进入 ZGC 组装收口。
+- Does current work still serve goal and stop condition? 是，T4.5 只审计/收口 ZGC registry 与 hooks，不提前做 P5。
+- Compatibility boundary: 默认 mark-sweep、G1 与 ZGC happy/workspace 路径保持。
+- New owner/fallback/adapter/branch: 无新增 owner；ZGC 子模块 owner 已在 T4.1-T4.4 建立。
+- Retirement track: ZGC 不搬迁限制已退休；T4.5 清理残余组装缺口。
+- Evidence sufficiency: T4.4 sufficient；T4.5 pending。
 - Decision: continue。

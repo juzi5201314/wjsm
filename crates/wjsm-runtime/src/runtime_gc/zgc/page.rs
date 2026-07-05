@@ -2,6 +2,7 @@
 use super::color::{ZColor, ZEntry};
 
 pub const ZPAGE_SIZE: usize = 64 * 1024;
+const RELOCATION_FRAGMENTATION_PERCENT: usize = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -68,6 +69,61 @@ impl ZPageSpace {
     pub fn page(&self, idx: usize) -> Option<&ZPageMeta> {
         self.pages.get(idx)
     }
+    pub fn is_relocation_set(&self, idx: usize) -> bool {
+        self.pages
+            .get(idx)
+            .is_some_and(|page| page.relocation_set && page.kind == ZPageKind::Relocating)
+    }
+
+    pub fn addr_in_relocation_set(&self, addr: usize) -> bool {
+        self.page_index(addr)
+            .is_some_and(|idx| self.is_relocation_set(idx))
+    }
+    pub fn select_relocation_set_excluding(
+        &self,
+        copy_budget: usize,
+        excluded_page: Option<usize>,
+    ) -> Vec<usize> {
+        let mut candidates = self.relocation_candidates();
+        if let Some(excluded) = excluded_page {
+            candidates.retain(|&(idx, _)| idx != excluded);
+        }
+        candidates.sort_by_key(|&(idx, live)| (live, idx));
+
+        let mut selected = Vec::new();
+        let mut selected_live = 0usize;
+        for (idx, live) in candidates {
+            let next = selected_live.saturating_add(live);
+            if next > copy_budget {
+                break;
+            }
+            selected.push(idx);
+            selected_live = next;
+        }
+        selected
+    }
+
+    pub fn select_relocation_set(&self, copy_budget: usize) -> Vec<usize> {
+        self.select_relocation_set_excluding(copy_budget, None)
+    }
+    fn relocation_candidates(&self) -> Vec<(usize, usize)> {
+        (0..self.page_count())
+            .filter_map(|idx| {
+                let page = self.page(idx)?;
+                if !matches!(page.kind, ZPageKind::Active | ZPageKind::Relocating) {
+                    return None;
+                }
+                let live = page.live_bytes;
+                if live == 0 || live >= ZPAGE_SIZE {
+                    return None;
+                }
+                let garbage = ZPAGE_SIZE.saturating_sub(live);
+                (garbage.saturating_mul(100)
+                    > ZPAGE_SIZE.saturating_mul(RELOCATION_FRAGMENTATION_PERCENT))
+                .then_some((idx, live))
+            })
+            .collect()
+    }
 
     pub fn page_index(&self, addr: usize) -> Option<usize> {
         addr.checked_sub(self.dynamic_start)
@@ -109,6 +165,29 @@ impl ZPageSpace {
         page.live_bytes = page.live_bytes.saturating_add(bytes);
         Some(())
     }
+    pub fn add_live_bytes_range(&mut self, ptr: usize, size: usize) {
+        let mut cursor = ptr;
+        let mut remaining = size;
+        while remaining != 0 {
+            let Some(idx) = self.page_index(cursor) else {
+                break;
+            };
+            let Some(start) = self.page_start(idx) else {
+                break;
+            };
+            let page_end = start.saturating_add(ZPAGE_SIZE);
+            let chunk = remaining.min(page_end.saturating_sub(cursor));
+            if chunk == 0 {
+                break;
+            }
+            if let Some(page) = self.pages.get_mut(idx) {
+                page.kind = ZPageKind::Active;
+                page.live_bytes = page.live_bytes.saturating_add(chunk);
+            }
+            cursor = cursor.saturating_add(chunk);
+            remaining -= chunk;
+        }
+    }
 
     pub fn mark_relocation_set(&mut self, idx: usize) -> bool {
         let Some(page) = self.pages.get_mut(idx) else {
@@ -120,6 +199,85 @@ impl ZPageSpace {
         page.kind = ZPageKind::Relocating;
         page.relocation_set = true;
         true
+    }
+    pub fn clear_relocation_set(&mut self) {
+        for page in &mut self.pages {
+            if page.relocation_set {
+                page.relocation_set = false;
+                if page.kind == ZPageKind::Relocating {
+                    page.kind = ZPageKind::Active;
+                }
+            }
+        }
+    }
+
+    pub fn release(&mut self, idx: usize) -> bool {
+        let Some(page) = self.pages.get_mut(idx) else {
+            return false;
+        };
+        *page = ZPageMeta::new(ZPageKind::Free);
+        true
+    }
+
+    pub fn take_contiguous_free_pages(&mut self, count: usize) -> Option<usize> {
+        if count == 0 || count > self.pages.len() {
+            return None;
+        }
+        let start = self
+            .pages
+            .windows(count)
+            .position(|window| window.iter().all(|page| page.kind == ZPageKind::Free))?;
+        for page in &mut self.pages[start..start + count] {
+            *page = ZPageMeta::new(ZPageKind::Active);
+        }
+        self.page_start(start)
+    }
+
+    pub fn free_page_count(&self) -> usize {
+        self.pages
+            .iter()
+            .filter(|page| page.kind == ZPageKind::Free)
+            .count()
+    }
+
+    pub fn activate_page_range(&mut self, start: usize, count: usize) -> bool {
+        if count == 0 || start + count > self.pages.len() {
+            return false;
+        }
+        if self.pages[start..start + count]
+            .iter()
+            .any(|page| page.kind != ZPageKind::Free)
+        {
+            return false;
+        }
+        for page in &mut self.pages[start..start + count] {
+            *page = ZPageMeta::new(ZPageKind::Active);
+        }
+        true
+    }
+
+    pub fn free_page_intervals(&self) -> Vec<(usize, usize)> {
+        let mut intervals = Vec::new();
+        let mut run_start = None;
+        for (idx, page) in self.pages.iter().enumerate() {
+            if page.kind == ZPageKind::Free {
+                run_start.get_or_insert(idx);
+                continue;
+            }
+            if let Some(start) = run_start.take() {
+                intervals.push((
+                    self.page_start(start).unwrap_or(self.dynamic_start),
+                    (idx - start) * ZPAGE_SIZE,
+                ));
+            }
+        }
+        if let Some(start) = run_start {
+            intervals.push((
+                self.page_start(start).unwrap_or(self.dynamic_start),
+                (self.pages.len() - start) * ZPAGE_SIZE,
+            ));
+        }
+        intervals
     }
 
     pub fn reclaim_dead_pages(&mut self) -> Vec<usize> {
