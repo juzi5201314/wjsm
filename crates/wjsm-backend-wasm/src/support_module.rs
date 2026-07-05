@@ -283,8 +283,8 @@ fn emit_resolve_handle_ptr(
 ) {
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::LocalGet(handle_local));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
+    func.instruction(&WasmInstruction::I32Const(2));
+    func.instruction(&WasmInstruction::I32Shl);
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::I32Load(MemArg {
         offset: 0,
