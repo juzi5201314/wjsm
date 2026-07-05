@@ -447,3 +447,12 @@
 - `docs/aegis/specs/2026-07-03-napi-native-addon-design.md` 将 non-moving GC 假设改为 handle 恒定（INV-C1）：G1/ZGC 可移动对象，但 N-API scope/backing store 对外保存 handle/backing store 指针，root 源保活 handle。
 - 文档 grep 验证：`non-moving` / `<19 globals>` / `<14 host funcs>` / `EMBEDDED_SUPPORT_CWASM` 等旧描述已从目标文档移除或替换为当前 API。
 - `cargo check -p wjsm-runtime -p wjsm-backend-wasm -p wjsm-runtime-support` → passed（zero warnings）。
+
+## P6 T6.3 evidence
+
+- ADR action=create：新增 `docs/adr/0005-pluggable-gc-v2.md`，记录已执行的 durable architecture decision（INV-C1/C2、v2 lifecycle、三 support 变体、增量调度、G1/ZGC owner 拆分、observability owner）。
+- ADR Gate：hard to reverse=yes（runtime/support ABI 与 moving-GC contract）、surprising without context=yes（ZGC colored obj_table + handle 恒定）、real trade-off=yes（STW/true thread/single support/rewrite slots alternatives）。
+- Owner surface：项目 `docs/adr/`；baseline sync：`docs/aegis/INDEX.md` Baselines 已登记 ADR 0005，T6.2 已同步 `AGENTS.md` 与 N-API spec。
+- Required read set：`docs/adr/ADR-CREATION-GATE.md` 与 `docs/current/AEGIS_ADR_AUTO_BACKFILL.md` 在本项目不存在；按本项目现有 ADR 0003/0004 格式与 `docs/aegis/INDEX.md` Baselines 约定执行。
+- `read docs/adr/0005-pluggable-gc-v2.md` → structure verified。
+- `grep 0005-pluggable-gc-v2 docs/aegis/INDEX.md docs/adr/0005-pluggable-gc-v2.md` → ADR 与 index link 均命中。
