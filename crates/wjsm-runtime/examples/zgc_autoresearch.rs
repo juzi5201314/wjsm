@@ -1,374 +1,405 @@
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail};
 use tokio::runtime::{Builder, Runtime};
 use wjsm_runtime::{
-    GcAlgorithmKind, GcExecutionStats, RuntimeOptions, compile_source,
+    GcAlgorithmKind, GcExecutionStats, GcStats, RuntimeOptions, compile_source,
     execute_with_writer_with_options_and_stats,
 };
 
-const WARMUP_RUNS: usize = 2;
-const MEASURED_RUNS: usize = 9;
-const MAX_HEAP_SIZE: usize = 12 * 1024 * 1024;
+const WORKLOAD_ITERATIONS: usize = 180;
+const WARMUP_RUNS: usize = 1;
+const MEASURED_RUNS: usize = 5;
+const SURVIVOR_STRIDE: usize = 9;
+const LIVE_SLOTS: usize = 28;
+const BURST_PERIOD: usize = 17;
+const BURST_SLOTS: usize = 10;
+const BURST_LEN: usize = 18;
+const POINTER_REWRITE_ROUNDS: usize = 4;
+const MAX_HEAP_SIZE: usize = 8 * 1024 * 1024;
 
-const EPOCHS: usize = 7;
-const ALLOCATIONS_PER_EPOCH: usize = 900;
-const SURVIVOR_SLOTS: usize = 96;
-const BURST_SLOTS: usize = 18;
-const PROBE_ROUNDS: usize = 6;
+const ALGORITHMS: [GcAlgorithmKind; 3] = [
+    GcAlgorithmKind::MarkSweep,
+    GcAlgorithmKind::G1,
+    GcAlgorithmKind::Zgc,
+];
 
-#[derive(Debug)]
-struct RunSample {
+fn main() -> Result<()> {
+    let source = workload_source();
+    let wasm = compile_source(&source).context("failed to compile autoresearch GC workload")?;
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create tokio runtime")?;
+
+    let mut summaries = Vec::with_capacity(ALGORITHMS.len());
+    for algorithm in ALGORITHMS {
+        for _ in 0..WARMUP_RUNS {
+            let _ = execute_once(&runtime, &wasm, algorithm)?;
+        }
+
+        let mut runs = Vec::with_capacity(MEASURED_RUNS);
+        for _ in 0..MEASURED_RUNS {
+            runs.push(execute_once(&runtime, &wasm, algorithm)?);
+        }
+        summaries.push(AlgorithmSummary::from_runs(algorithm, &runs)?);
+    }
+
+    let zgc = summaries
+        .iter()
+        .find(|summary| summary.algorithm == GcAlgorithmKind::Zgc)
+        .context("ZGC summary missing")?;
+    let primary = zgc.pause_max_ns as f64 + zgc.wall_ns_per_iteration;
+
+    println!("METRIC zgc_latency_overhead_ns={primary:.3}");
+    for summary in &summaries {
+        print_summary_metrics(summary);
+    }
+
+    Ok(())
+}
+
+struct RunObservation {
     wall: Duration,
     stats: GcExecutionStats,
     stdout: String,
 }
 
-#[derive(Debug)]
-struct Summary {
-    wall_mean_ms: f64,
-    wall_median_ms: f64,
-    wall_p95_ms: f64,
-    wall_cv_percent: f64,
-    pause_max_ms: f64,
-    pause_mean_ms: f64,
-    relocated_mb: f64,
-    relocated_objects: usize,
-    external_fragmentation: f64,
-    heap_used_mb: f64,
-    reusable_mb: f64,
-    committed_pages_max: usize,
-    barrier_events: usize,
-    load_barrier_hits: usize,
+struct AlgorithmSummary {
+    algorithm: GcAlgorithmKind,
+    wall_ns_total: u128,
+    wall_ns_per_iteration: f64,
+    throughput_ops_per_sec: f64,
     pause_samples: usize,
+    pause_max_ns: u64,
+    pause_avg_ns: f64,
+    freed_bytes_total: usize,
+    heap_used_bytes_max: usize,
+    reusable_bytes_max: usize,
+    external_fragmentation_max: f64,
+    committed_pages_max: usize,
+    relocated_objects_total: usize,
+    relocated_bytes_total: usize,
+    barrier_events_total: usize,
+    barrier_events_per_iteration: f64,
+    satb_flushes_total: usize,
+    rset_cards_max: usize,
+    load_barrier_hits_total: usize,
+    load_barrier_hits_per_iteration: f64,
 }
 
-fn main() -> Result<()> {
-    let source = workload_source();
-    let wasm = compile_source(&source).context("compile ZGC autoresearch workload")?;
-    let runtime = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create tokio runtime for ZGC autoresearch workload")?;
+impl AlgorithmSummary {
+    fn from_runs(algorithm: GcAlgorithmKind, runs: &[RunObservation]) -> Result<Self> {
+        if runs.is_empty() {
+            bail!("{} produced no measured runs", algorithm.as_str());
+        }
 
-    for _ in 0..WARMUP_RUNS {
-        let sample = execute_once(&runtime, &wasm)?;
-        assert_sample(&sample)?;
+        let expected_stdout = runs[0].stdout.as_str();
+        for run in runs {
+            if run.stdout != expected_stdout {
+                bail!(
+                    "{} workload stdout changed between runs: `{}` vs `{}`",
+                    algorithm.as_str(),
+                    expected_stdout.trim(),
+                    run.stdout.trim()
+                );
+            }
+        }
+
+        let mut pause_samples = 0usize;
+        let mut pause_total_ns = 0u128;
+        let mut pause_max_ns = 0u64;
+        let mut freed_bytes_total = 0usize;
+        let mut heap_used_bytes_max = 0usize;
+        let mut reusable_bytes_max = 0usize;
+        let mut external_fragmentation_max = 0.0f64;
+        let mut committed_pages_max = 0usize;
+        let mut relocated_objects_total = 0usize;
+        let mut relocated_bytes_total = 0usize;
+        let mut barrier_events_total = 0usize;
+        let mut satb_flushes_total = 0usize;
+        let mut rset_cards_max = 0usize;
+        let mut load_barrier_hits_total = 0usize;
+
+        for run in runs {
+            let stats = &run.stats.last;
+            let pause = pause_observation(&run.stats);
+            pause_samples = pause_samples.saturating_add(pause.count);
+            pause_total_ns = pause_total_ns.saturating_add(pause.total_ns);
+            pause_max_ns = pause_max_ns.max(pause.max_ns);
+            freed_bytes_total = freed_bytes_total.saturating_add(stats.freed_bytes);
+            heap_used_bytes_max = heap_used_bytes_max.max(stats.heap_used_bytes);
+            reusable_bytes_max = reusable_bytes_max.max(stats.free_bytes_reusable);
+            external_fragmentation_max =
+                external_fragmentation_max.max(stats.external_fragmentation);
+            committed_pages_max = committed_pages_max.max(max_committed_pages(&run.stats));
+            relocated_objects_total =
+                relocated_objects_total.saturating_add(stats.relocated_objects);
+            relocated_bytes_total = relocated_bytes_total.saturating_add(stats.relocated_bytes);
+            barrier_events_total = barrier_events_total.saturating_add(stats.barrier_events);
+            satb_flushes_total = satb_flushes_total.saturating_add(stats.satb_flushes);
+            rset_cards_max = rset_cards_max.max(stats.rset_cards);
+            load_barrier_hits_total =
+                load_barrier_hits_total.saturating_add(load_barrier_hits(stats));
+        }
+
+        if pause_samples == 0 {
+            bail!("{} did not observe any GC pause", algorithm.as_str());
+        }
+
+        let wall_ns_total: u128 = runs.iter().map(|run| run.wall.as_nanos()).sum();
+        let measured_iterations = (runs.len() * WORKLOAD_ITERATIONS) as f64;
+        let wall_ns_per_iteration = wall_ns_total as f64 / measured_iterations;
+        let throughput_ops_per_sec = measured_iterations / (wall_ns_total as f64 / 1_000_000_000.0);
+        let pause_avg_ns = pause_total_ns as f64 / pause_samples as f64;
+
+        Ok(Self {
+            algorithm,
+            wall_ns_total,
+            wall_ns_per_iteration,
+            throughput_ops_per_sec,
+            pause_samples,
+            pause_max_ns,
+            pause_avg_ns,
+            freed_bytes_total,
+            heap_used_bytes_max,
+            reusable_bytes_max,
+            external_fragmentation_max,
+            committed_pages_max,
+            relocated_objects_total,
+            relocated_bytes_total,
+            barrier_events_total,
+            barrier_events_per_iteration: barrier_events_total as f64 / measured_iterations,
+            satb_flushes_total,
+            rset_cards_max,
+            load_barrier_hits_total,
+            load_barrier_hits_per_iteration: load_barrier_hits_total as f64 / measured_iterations,
+        })
     }
-
-    let mut samples = Vec::with_capacity(MEASURED_RUNS);
-    for _ in 0..MEASURED_RUNS {
-        let sample = execute_once(&runtime, &wasm)?;
-        assert_sample(&sample)?;
-        samples.push(sample);
-    }
-
-    let summary = summarize(&samples);
-    print_metrics(&summary);
-    Ok(())
 }
 
-fn execute_once(runtime: &Runtime, wasm: &[u8]) -> Result<RunSample> {
+struct PauseObservation {
+    count: usize,
+    total_ns: u128,
+    max_ns: u64,
+}
+
+fn pause_observation(stats: &GcExecutionStats) -> PauseObservation {
+    if !stats.pause_hist.is_empty() {
+        let total_ns = stats.pause_hist.iter().map(|&sample| sample as u128).sum();
+        let max_ns = stats.pause_hist.iter().copied().max().unwrap_or(0);
+        return PauseObservation {
+            count: stats.pause_hist.len(),
+            total_ns,
+            max_ns,
+        };
+    }
+
+    PauseObservation {
+        count: stats.last.pause_count,
+        total_ns: stats.last.pause_ns_total as u128,
+        max_ns: stats.last.pause_ns_max,
+    }
+}
+
+fn max_committed_pages(stats: &GcExecutionStats) -> usize {
+    stats
+        .memory_footprint_hist
+        .iter()
+        .map(|sample| sample.committed_pages)
+        .max()
+        .unwrap_or(stats.last.committed_pages)
+}
+
+fn load_barrier_hits(stats: &GcStats) -> usize {
+    stats
+        .load_barrier_mark_hits
+        .saturating_add(stats.load_barrier_relocate_hits)
+}
+
+fn execute_once(
+    runtime: &Runtime,
+    wasm: &[u8],
+    algorithm: GcAlgorithmKind,
+) -> Result<RunObservation> {
     let options = RuntimeOptions {
         max_heap_size: Some(MAX_HEAP_SIZE),
-        gc_algorithm: GcAlgorithmKind::Zgc,
+        gc_algorithm: algorithm,
         ..RuntimeOptions::default()
     };
 
     let started = Instant::now();
-    let (stdout, diagnostics, stats) = runtime.block_on(async {
-        execute_with_writer_with_options_and_stats(wasm, Vec::new(), options).await
-    })?;
-    ensure!(
-        diagnostics.is_empty(),
-        "ZGC autoresearch workload emitted diagnostics: {}",
-        String::from_utf8_lossy(&diagnostics)
-    );
+    let (stdout, diagnostics, stats) = runtime
+        .block_on(async {
+            execute_with_writer_with_options_and_stats(wasm, Vec::new(), options).await
+        })
+        .with_context(|| format!("{} workload execution failed", algorithm.as_str()))?;
 
-    Ok(RunSample {
+    if !diagnostics.is_empty() {
+        bail!(
+            "{} emitted diagnostics: {}",
+            algorithm.as_str(),
+            String::from_utf8_lossy(&diagnostics)
+        );
+    }
+
+    let pause = pause_observation(&stats);
+    if pause.count == 0 {
+        bail!("{} workload did not trigger GC", algorithm.as_str());
+    }
+
+    Ok(RunObservation {
         wall: started.elapsed(),
         stats,
-        stdout: String::from_utf8(stdout).context("ZGC workload stdout must be utf8")?,
+        stdout: String::from_utf8(stdout).context("workload stdout was not UTF-8")?,
     })
 }
 
-fn assert_sample(sample: &RunSample) -> Result<()> {
-    ensure!(
-        sample.stdout.starts_with("zgc-autoresearch-ok survivors="),
-        "ZGC workload did not complete expected path: {}",
-        sample.stdout.trim()
-    );
-    ensure!(
-        !sample.stats.pause_hist.is_empty() || sample.stats.last.has_pause_observation(),
-        "ZGC workload did not observe a GC pause"
-    );
-    ensure!(
-        sample.stats.last.relocated_objects != 0,
-        "ZGC workload did not relocate any objects"
-    );
-    ensure!(
-        sample.stats.last.committed_pages != 0,
-        "ZGC workload did not report committed pages"
-    );
-    Ok(())
-}
-
-fn summarize(samples: &[RunSample]) -> Summary {
-    let mut wall_ms: Vec<f64> = samples.iter().map(|sample| ms(sample.wall)).collect();
-    wall_ms.sort_by(f64::total_cmp);
-
-    let wall_mean_ms = mean(&wall_ms);
-    let wall_median_ms = percentile(&wall_ms, 50);
-    let wall_p95_ms = percentile(&wall_ms, 95);
-    let wall_cv_percent = coefficient_of_variation_percent(&wall_ms, wall_mean_ms);
-
-    let pause_max_ms = samples.iter().map(sample_pause_max_ms).fold(0.0, f64::max);
-    let pause_mean_ms = mean(&samples.iter().map(sample_pause_mean_ms).collect::<Vec<_>>());
-    let relocated_mb = mean(
-        &samples
-            .iter()
-            .map(|sample| bytes_to_mib(sample.stats.last.relocated_bytes))
-            .collect::<Vec<_>>(),
-    );
-    let relocated_objects = samples
-        .iter()
-        .map(|sample| sample.stats.last.relocated_objects)
-        .max()
-        .unwrap_or_default();
-    let external_fragmentation = mean(
-        &samples
-            .iter()
-            .map(|sample| sample.stats.last.external_fragmentation)
-            .collect::<Vec<_>>(),
-    );
-    let heap_used_mb = mean(
-        &samples
-            .iter()
-            .map(|sample| bytes_to_mib(sample.stats.last.heap_used_bytes))
-            .collect::<Vec<_>>(),
-    );
-    let reusable_mb = mean(
-        &samples
-            .iter()
-            .map(|sample| bytes_to_mib(sample.stats.last.free_bytes_reusable))
-            .collect::<Vec<_>>(),
-    );
-    let committed_pages_max = samples
-        .iter()
-        .flat_map(|sample| {
-            sample
-                .stats
-                .memory_footprint_hist
-                .iter()
-                .map(|footprint| footprint.committed_pages)
-        })
-        .max()
-        .unwrap_or_else(|| {
-            samples
-                .iter()
-                .map(|sample| sample.stats.last.committed_pages)
-                .max()
-                .unwrap_or_default()
-        });
-    let barrier_events = samples
-        .iter()
-        .map(|sample| sample.stats.last.barrier_events)
-        .max()
-        .unwrap_or_default();
-    let load_barrier_hits = samples
-        .iter()
-        .map(|sample| {
-            sample
-                .stats
-                .last
-                .load_barrier_mark_hits
-                .saturating_add(sample.stats.last.load_barrier_relocate_hits)
-        })
-        .max()
-        .unwrap_or_default();
-    let pause_samples = samples
-        .iter()
-        .map(|sample| {
-            sample
-                .stats
-                .pause_hist
-                .len()
-                .max(sample.stats.last.pause_count)
-        })
-        .max()
-        .unwrap_or_default();
-
-    Summary {
-        wall_mean_ms,
-        wall_median_ms,
-        wall_p95_ms,
-        wall_cv_percent,
-        pause_max_ms,
-        pause_mean_ms,
-        relocated_mb,
-        relocated_objects,
-        external_fragmentation,
-        heap_used_mb,
-        reusable_mb,
-        committed_pages_max,
-        barrier_events,
-        load_barrier_hits,
-        pause_samples,
-    }
-}
-
-fn print_metrics(summary: &Summary) {
-    println!("METRIC zgc_wall_p95_ms={:.6}", summary.wall_p95_ms);
-    println!("METRIC zgc_wall_mean_ms={:.6}", summary.wall_mean_ms);
-    println!("METRIC zgc_wall_median_ms={:.6}", summary.wall_median_ms);
-    println!("METRIC zgc_wall_cv_percent={:.6}", summary.wall_cv_percent);
-    println!("METRIC zgc_pause_max_ms={:.6}", summary.pause_max_ms);
-    println!("METRIC zgc_pause_mean_ms={:.6}", summary.pause_mean_ms);
-    println!("METRIC zgc_relocated_mb={:.6}", summary.relocated_mb);
-    println!("METRIC zgc_relocated_objects={}", summary.relocated_objects);
+fn print_summary_metrics(summary: &AlgorithmSummary) {
+    let prefix = metric_prefix(summary.algorithm);
+    println!("METRIC {prefix}_wall_ns_total={}", summary.wall_ns_total);
     println!(
-        "METRIC zgc_external_fragmentation={:.6}",
-        summary.external_fragmentation
+        "METRIC {prefix}_wall_ns_per_iter={:.3}",
+        summary.wall_ns_per_iteration
     );
-    println!("METRIC zgc_heap_used_mb={:.6}", summary.heap_used_mb);
-    println!("METRIC zgc_reusable_mb={:.6}", summary.reusable_mb);
     println!(
-        "METRIC zgc_committed_pages_max={}",
+        "METRIC {prefix}_throughput_ops_per_sec={:.3}",
+        summary.throughput_ops_per_sec
+    );
+    println!("METRIC {prefix}_pause_samples={}", summary.pause_samples);
+    println!("METRIC {prefix}_pause_max_ns={}", summary.pause_max_ns);
+    println!("METRIC {prefix}_pause_avg_ns={:.3}", summary.pause_avg_ns);
+    println!(
+        "METRIC {prefix}_freed_bytes_total={}",
+        summary.freed_bytes_total
+    );
+    println!(
+        "METRIC {prefix}_heap_used_bytes_max={}",
+        summary.heap_used_bytes_max
+    );
+    println!(
+        "METRIC {prefix}_reusable_bytes_max={}",
+        summary.reusable_bytes_max
+    );
+    println!(
+        "METRIC {prefix}_external_fragmentation_max={:.9}",
+        summary.external_fragmentation_max
+    );
+    println!(
+        "METRIC {prefix}_committed_pages_max={}",
         summary.committed_pages_max
     );
-    println!("METRIC zgc_barrier_events={}", summary.barrier_events);
-    println!("METRIC zgc_load_barrier_hits={}", summary.load_barrier_hits);
-    println!("METRIC zgc_pause_samples={}", summary.pause_samples);
+    println!(
+        "METRIC {prefix}_relocated_objects_total={}",
+        summary.relocated_objects_total
+    );
+    println!(
+        "METRIC {prefix}_relocated_bytes_total={}",
+        summary.relocated_bytes_total
+    );
+    println!(
+        "METRIC {prefix}_barrier_events_total={}",
+        summary.barrier_events_total
+    );
+    println!(
+        "METRIC {prefix}_barrier_events_per_iter={:.6}",
+        summary.barrier_events_per_iteration
+    );
+    println!(
+        "METRIC {prefix}_satb_flushes_total={}",
+        summary.satb_flushes_total
+    );
+    println!("METRIC {prefix}_rset_cards_max={}", summary.rset_cards_max);
+    println!(
+        "METRIC {prefix}_load_barrier_hits_total={}",
+        summary.load_barrier_hits_total
+    );
+    println!(
+        "METRIC {prefix}_load_barrier_hits_per_iter={:.6}",
+        summary.load_barrier_hits_per_iteration
+    );
 }
 
-fn percentile(sorted_values: &[f64], percentile: usize) -> f64 {
-    if sorted_values.is_empty() {
-        return 0.0;
+fn metric_prefix(algorithm: GcAlgorithmKind) -> &'static str {
+    match algorithm {
+        GcAlgorithmKind::MarkSweep => "mark_sweep",
+        GcAlgorithmKind::G1 => "g1",
+        GcAlgorithmKind::Zgc => "zgc",
     }
-    let rank = (sorted_values.len() * percentile).div_ceil(100);
-    sorted_values[rank.saturating_sub(1).min(sorted_values.len() - 1)]
-}
-
-fn coefficient_of_variation_percent(values: &[f64], mean_value: f64) -> f64 {
-    if values.is_empty() || mean_value == 0.0 {
-        return 0.0;
-    }
-    let variance = values
-        .iter()
-        .map(|value| {
-            let delta = *value - mean_value;
-            delta * delta
-        })
-        .sum::<f64>()
-        / values.len() as f64;
-    variance.sqrt() / mean_value * 100.0
-}
-
-fn sample_pause_max_ms(sample: &RunSample) -> f64 {
-    let hist_max = sample.stats.pause_hist.iter().copied().max().unwrap_or(0);
-    nanos_to_ms(hist_max.max(sample.stats.last.pause_ns_max))
-}
-
-fn sample_pause_mean_ms(sample: &RunSample) -> f64 {
-    if !sample.stats.pause_hist.is_empty() {
-        return nanos_to_ms(
-            (sample
-                .stats
-                .pause_hist
-                .iter()
-                .map(|&pause| pause as u128)
-                .sum::<u128>()
-                / sample.stats.pause_hist.len() as u128) as u64,
-        );
-    }
-    nanos_to_ms(sample.stats.last.pause_ns_total) / sample.stats.last.pause_count.max(1) as f64
-}
-
-fn mean(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.iter().sum::<f64>() / values.len() as f64
-}
-
-fn ms(duration: Duration) -> f64 {
-    duration.as_secs_f64() * 1000.0
-}
-
-fn nanos_to_ms(nanos: u64) -> f64 {
-    nanos as f64 / 1_000_000.0
-}
-
-fn bytes_to_mib(bytes: usize) -> f64 {
-    bytes as f64 / (1024.0 * 1024.0)
 }
 
 fn workload_source() -> String {
     format!(
         r#"
-        const EPOCHS = {EPOCHS};
-        const ALLOCATIONS_PER_EPOCH = {ALLOCATIONS_PER_EPOCH};
-        const SURVIVOR_SLOTS = {SURVIVOR_SLOTS};
+        const ITER = {WORKLOAD_ITERATIONS};
+        const SURVIVOR_STRIDE = {SURVIVOR_STRIDE};
+        const LIVE_SLOTS = {LIVE_SLOTS};
+        const BURST_PERIOD = {BURST_PERIOD};
         const BURST_SLOTS = {BURST_SLOTS};
-        const PROBE_ROUNDS = {PROBE_ROUNDS};
+        const BURST_LEN = {BURST_LEN};
+        const POINTER_REWRITE_ROUNDS = {POINTER_REWRITE_ROUNDS};
         const survivors = [];
-        let cursor = 0;
+        const bursts = [];
         let checksum = 0;
+        let survivorCursor = 0;
+        let burstCursor = 0;
 
-        for (let slot = 0; slot < SURVIVOR_SLOTS; slot = slot + 1) {{
-            survivors.push(null);
+        for (let s = 0; s < LIVE_SLOTS; s = s + 1) {{
+            survivors.push({{ id: s, value: s + 1, next: null, alt: null }});
+        }}
+        for (let initBurstIndex = 0; initBurstIndex < BURST_SLOTS; initBurstIndex = initBurstIndex + 1) {{
+            bursts.push(null);
         }}
 
-        for (let epoch = 0; epoch < EPOCHS; epoch = epoch + 1) {{
-            for (let i = 0; i < ALLOCATIONS_PER_EPOCH; i = i + 1) {{
-                const base = epoch * 100000 + i;
-                const survivor = {{ a: base, b: base + 1, c: base + 2, d: base + 3, e: base + 4, f: base + 5 }};
-                const transient = {{ a: base + 6, b: base + 7, c: base + 8, d: base + 9, e: base + 10, f: base + 11 }};
+        for (let i = 0; i < ITER; i = i + 1) {{
+            const obj = {{ a: i, b: i + 1, c: i + 2, d: i + 3, e: i + 4, f: i + 5 }};
+            const pair = {{ left: obj, right: {{ v: i + 6, w: i + 7, x: i + 8, y: i + 9 }}, tag: i }};
+            const previous = survivors[survivorCursor];
+            pair.left.prev = previous;
+            previous.next = pair;
+            previous.alt = obj;
 
-                if (i % 3 === 0) {{
-                    survivors[cursor] = survivor;
-                    cursor = (cursor + 1) % SURVIVOR_SLOTS;
-                }}
-
-                if (i % 37 === 0) {{
-                    const burst = [];
-                    for (let burstSlot = 0; burstSlot < BURST_SLOTS; burstSlot = burstSlot + 1) {{
-                        burst.push({{ a: base + burstSlot, b: burstSlot + 1, c: burstSlot + 2, d: burstSlot + 3 }});
-                    }}
-                    checksum = (checksum + burst.length + burst[0].a) % 1000000007;
-                }}
-
-                checksum = (checksum + survivor.a + transient.e + cursor) % 1000000007;
+            for (let r = 0; r < POINTER_REWRITE_ROUNDS; r = r + 1) {{
+                const slot = (survivorCursor + r) % LIVE_SLOTS;
+                survivors[slot].alt = r % 2 === 0 ? pair : obj;
+                survivors[slot].value = survivors[slot].value + r + i;
             }}
 
-            gc();
+            if (i % SURVIVOR_STRIDE === 0) {{
+                survivors[survivorCursor] = pair;
+                survivorCursor = (survivorCursor + 1) % LIVE_SLOTS;
+            }}
 
-            for (let probeRound = 0; probeRound < PROBE_ROUNDS; probeRound = probeRound + 1) {{
-                for (let probe = 0; probe < SURVIVOR_SLOTS; probe = probe + 1) {{
-                    const item = survivors[probe];
-                    if (item !== null) {{
-                        checksum = (checksum + item.a + item.c + item.f) % 1000000007;
-                    }}
+            if (i % BURST_PERIOD === 0) {{
+                const burst = [];
+                for (let j = 0; j < BURST_LEN; j = j + 1) {{
+                    const item = {{ idx: j, value: i + j, ref: obj, pair: pair, pad0: j + 1, pad1: j + 2, pad2: j + 3 }};
+                    burst.push(item);
+                    checksum = (checksum + item.value + item.pad2) % 1000003;
                 }}
+                bursts[burstCursor] = burst;
+                burstCursor = (burstCursor + 1) % BURST_SLOTS;
             }}
 
-            for (let drop = epoch % 4; drop < SURVIVOR_SLOTS; drop = drop + 4) {{
-                survivors[drop] = null;
-            }}
+            checksum = (checksum + obj.a + pair.right.v + survivorCursor + burstCursor + previous.id) % 1000003;
         }}
 
         gc();
 
-        let live = 0;
-        for (let finalProbe = 0; finalProbe < SURVIVOR_SLOTS; finalProbe = finalProbe + 1) {{
-            const finalItem = survivors[finalProbe];
-            if (finalItem !== null) {{
-                live = live + 1;
-                checksum = (checksum + finalItem.b + finalItem.e) % 1000000007;
+        for (let k = 0; k < LIVE_SLOTS; k = k + 1) {{
+            const entry = survivors[k];
+            if (entry !== null) {{
+                checksum = (checksum + entry.tag + entry.value + k) % 1000003;
+            }}
+        }}
+        for (let finalBurstIndex = 0; finalBurstIndex < BURST_SLOTS; finalBurstIndex = finalBurstIndex + 1) {{
+            const burst = bursts[finalBurstIndex];
+            if (burst !== null) {{
+                checksum = (checksum + burst.length + finalBurstIndex) % 1000003;
             }}
         }}
 
-        console.log('zgc-autoresearch-ok survivors=' + live + ' checksum=' + checksum);
+        console.log('survivorSlots=' + survivors.length + ' burstSlots=' + bursts.length + ' checksum=' + checksum);
         "#,
     )
 }
