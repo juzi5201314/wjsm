@@ -239,3 +239,11 @@
 - `cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `cargo nextest run --workspace` → 1279 passed, 2 skipped。
+
+## P3 T3.7 evidence
+
+- 审计 `G1Collector` v2 hooks：`alloc_slow` flush barrier → young alloc/collect → mixed fallback；`safepoint_step` 派发 concurrent mark、remark、mixed；`collect_full` 执行 young + full mark + mixed 到候选耗尽或 to-space 受阻；`on_host_write`/`barrier_flush` 均接入 RSet/SATB。
+- `runtime_gc::registry::create(G1)` 已返回 `G1Collector::new()`；`Zgc` 保持显式未实现错误并列出当前 available `mark-sweep, g1`。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 29 passed, 136 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
