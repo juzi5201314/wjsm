@@ -6,7 +6,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::time::Instant;
 
-use crate::runtime_gc::api::{GcContext, GcStats, Handle, Value};
+use crate::runtime_gc::api::{CycleKind, GcContext, GcStats, Handle, Value};
 use crate::runtime_gc::context::object_size_from_memory;
 use crate::runtime_gc::heap_governance;
 use crate::runtime_gc::object_walker::{self, SlotValue};
@@ -66,6 +66,7 @@ struct EvacuationPlan {
 #[derive(Debug, Default)]
 struct MixedResult {
     relocated_objects: usize,
+    relocated_bytes: usize,
     released_regions: usize,
     reclaimed_bytes: usize,
 }
@@ -94,6 +95,7 @@ pub(super) fn collect_step(
             ctx,
             started,
             regions,
+            rset,
             remaining_candidate_bytes(regions) != 0,
         );
     }
@@ -102,7 +104,7 @@ pub(super) fn collect_step(
     let obj_table_count = ctx.obj_table_count();
     let objects = snapshot_cset_objects(ctx, regions, obj_table_ptr, obj_table_count, &cset);
     let Some(plan) = build_evacuation_plan(regions, &objects, &cset) else {
-        return idle_collection(ctx, started, regions, true);
+        return idle_collection(ctx, started, regions, rset, true);
     };
 
     let mut scratch = Vec::new();
@@ -114,7 +116,7 @@ pub(super) fn collect_step(
             relocation.size,
             &mut scratch,
         ) {
-            return idle_collection(ctx, started, regions, true);
+            return idle_collection(ctx, started, regions, rset, true);
         }
     }
 
@@ -134,10 +136,15 @@ pub(super) fn collect_step(
 
     let result = MixedResult {
         relocated_objects: plan.relocations.len(),
+        relocated_bytes: plan
+            .relocations
+            .iter()
+            .map(|relocation| relocation.size)
+            .sum(),
         released_regions: plan.released_regions.len(),
         reclaimed_bytes: plan.released_regions.len() * REGION_SIZE,
     };
-    let stats = stats_for_result(ctx, started, regions, &result);
+    let stats = stats_for_result(ctx, started, regions, rset, &result);
     MixedCollection {
         stats,
         remaining_estimate: remaining_candidate_bytes(regions),
@@ -150,10 +157,11 @@ fn idle_collection(
     ctx: &mut GcContext<'_>,
     started: Instant,
     regions: &RegionSpace,
+    rset: &mut G1RSet,
     blocked: bool,
 ) -> MixedCollection {
     MixedCollection {
-        stats: stats_for_result(ctx, started, regions, &MixedResult::default()),
+        stats: stats_for_result(ctx, started, regions, rset, &MixedResult::default()),
         remaining_estimate: remaining_candidate_bytes(regions),
         relocated_objects: 0,
         blocked,
@@ -469,13 +477,15 @@ fn stats_for_result(
     ctx: &mut GcContext<'_>,
     started: Instant,
     regions: &RegionSpace,
+    rset: &mut G1RSet,
     result: &MixedResult,
 ) -> GcStats {
     if result.relocated_objects != 0 || result.released_regions != 0 {
         ctx.increment_gc_epoch();
     }
     let metrics = heap_governance::compute_metrics(&regions.free_region_intervals());
-    let stats = GcStats {
+    let rset_metrics = rset.stats_snapshot();
+    let mut stats = GcStats {
         marked: result.relocated_objects,
         swept: result.released_regions,
         freed_bytes: result.reclaimed_bytes,
@@ -485,8 +495,20 @@ fn stats_for_result(
         largest_free_block: metrics.largest_free_block,
         external_fragmentation: metrics.external_fragmentation,
         heap_used_bytes: ctx.heap_used(),
+        cycle_kind: CycleKind::Mixed,
+        relocated_bytes: result.relocated_bytes,
+        relocated_objects: result.relocated_objects,
+        committed_pages: ctx.committed_pages(),
+        free_bytes_reusable: metrics.total_free_bytes,
+        satb_flushes: rset_metrics.satb_flushes,
+        barrier_events: rset_metrics.barrier_events,
+        rset_cards: rset_metrics.dirty_cards,
+        rset_precise_slots: rset_metrics.precise_slots,
         ..GcStats::default()
     };
+    regions.fill_stats(&mut stats);
+    stats.ensure_pause_from_elapsed();
+    rset.reset_stats_counters();
     ctx.stats = stats.clone();
     stats
 }
@@ -599,6 +621,7 @@ mod tests {
     fn g1_mixed_summary_does_not_publish_dead_handles() {
         let result = MixedResult {
             relocated_objects: 2,
+            relocated_bytes: 2 * REGION_SIZE,
             released_regions: 1,
             reclaimed_bytes: REGION_SIZE,
         };

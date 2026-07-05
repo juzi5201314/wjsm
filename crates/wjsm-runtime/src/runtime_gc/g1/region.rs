@@ -1,3 +1,5 @@
+use crate::runtime_gc::api::GcStats;
+
 use wjsm_ir::constants;
 
 pub const REGION_SIZE: usize = 64 * 1024;
@@ -137,6 +139,24 @@ impl RegionSpace {
             .iter()
             .filter(|region| region.kind == kind)
             .count()
+    }
+
+    pub fn fill_stats(&self, stats: &mut GcStats) {
+        stats.regions_total = self.region_count();
+        stats.regions_free = self.count_kind(RegionKind::Free);
+        stats.regions_eden = self.count_kind(RegionKind::Eden);
+        stats.regions_survivor = self.count_kind(RegionKind::Survivor);
+        stats.regions_old = self.count_kind(RegionKind::Old);
+        stats.regions_humongous = self
+            .meta
+            .iter()
+            .filter(|region| {
+                matches!(
+                    region.kind,
+                    RegionKind::HumongousStart | RegionKind::HumongousCont
+                )
+            })
+            .count();
     }
 
     pub fn young_region_indices(&self) -> Vec<usize> {

@@ -1009,13 +1009,14 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             // P4：gc() global 重接到 GC 框架（不再调旧 trigger_gc，P5 删除）。
             let env = crate::wasm_env::WasmEnv::from_caller(&mut *caller).expect("WasmEnv");
             let gc_arc = caller.data().gc_algorithm.clone();
-            let stats = {
+            let (algorithm, stats) = {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut *caller, &env, gc.name());
+                let algorithm = gc.name();
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut *caller, &env, algorithm);
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                gc.collect_full(&mut ctx, &mut roots as _)
+                (algorithm, gc.collect_full(&mut ctx, &mut roots as _))
             };
-            caller.data().store_last_gc_stats(stats);
+            caller.data().store_last_gc_stats(algorithm, stats);
             Some(value::encode_undefined())
         }
         NativeCallable::SharedArrayBufferConstructor => {

@@ -5,8 +5,8 @@ mod rset;
 mod young;
 
 use super::api::{
-    AllocRequest, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget, StepOutcome,
-    Value,
+    AllocRequest, CycleKind, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget,
+    StepOutcome, Value,
 };
 use crate::runtime_gc::context::object_size_from_memory;
 use concurrent_mark::{ConcurrentMark, MarkStep};
@@ -137,14 +137,7 @@ impl G1Collector {
     }
 
     fn merge_stats(primary: &mut GcStats, extra: &GcStats) {
-        primary.swept = primary.swept.saturating_add(extra.swept);
-        primary.freed_bytes = primary.freed_bytes.saturating_add(extra.freed_bytes);
-        primary.elapsed += extra.elapsed;
-        primary.free_block_count = extra.free_block_count;
-        primary.total_free_bytes = extra.total_free_bytes;
-        primary.largest_free_block = extra.largest_free_block;
-        primary.external_fragmentation = extra.external_fragmentation;
-        primary.heap_used_bytes = extra.heap_used_bytes;
+        primary.merge_from(extra);
     }
 
     fn mixed_step_outcome(result: &mixed::MixedCollection) -> StepOutcome {
@@ -266,15 +259,16 @@ impl GcAlgorithm for G1Collector {
     fn collect_full(&mut self, ctx: &mut GcContext<'_>, roots: &mut dyn RootProvider) -> GcStats {
         self.barrier_flush(ctx);
         self.refresh_regions(ctx);
-        let _ = young::collect_young(ctx, roots, &mut self.regions, &mut self.rset, None);
+        let mut stats = young::collect_young(ctx, roots, &mut self.regions, &mut self.rset, None);
         self.refresh_regions(ctx);
         self.mark.start_cycle(ctx, &mut self.rset);
         self.mark
             .initial_mark(ctx, roots, &self.regions, &mut self.rset);
         self.barrier_flush(ctx);
-        let mut stats =
+        let mark_stats =
             self.mark
                 .finish_after_barrier_flush(ctx, roots, &mut self.regions, &mut self.rset);
+        Self::merge_stats(&mut stats, &mark_stats);
         loop {
             let mixed = mixed::collect_step(ctx, &mut self.regions, &mut self.rset, usize::MAX);
             Self::merge_stats(&mut stats, &mixed.stats);
@@ -283,6 +277,7 @@ impl GcAlgorithm for G1Collector {
                 break;
             }
         }
+        stats.cycle_kind = CycleKind::Full;
         self.stats = stats.clone();
         ctx.stats = stats.clone();
         stats

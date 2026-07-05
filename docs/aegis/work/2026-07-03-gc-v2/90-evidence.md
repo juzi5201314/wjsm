@@ -360,3 +360,19 @@
 - `WJSM_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。
 - `WJSM_GC=zgc cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。
 - `WJSM_GC=bogus WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。
+
+## P5 T5.2 evidence
+
+- `GcStats` 扩展 spec §17 字段：cycle_kind、pause_ns_max/total/count、relocated_bytes/objects、committed_pages、free_bytes_reusable、region/page/RSet/SATB/load-barrier 计数；保留既有 mark/sweep/free/fragmentation 字段。
+- mark-sweep/G1/ZGC 均从真实 owner 填充统计：mark-sweep barrier/relocation/load-barrier 为 0；G1 从 RSet/barrier/region/mixed owner 填充；ZGC 从 page/mark/relocate/load-barrier owner 填充。
+- `RuntimeState` 新增最近 256 次 pause 环形缓冲；`store_last_gc_stats` 在观测到 pause 时推进 hist，并在 `WJSM_GC_LOG=1` 时输出 algorithm/cycle/pause/relocated/barrier/rset/load_barrier 摘要。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(gc_stats) | test(pause_hist) | test(zgc) | test(g1)'` → 56 passed, 139 skipped。
+- `WJSM_GC_LOG=1 WJSM_GC=mark-sweep cargo run -- run -e 'gc(); console.log("ok")'` → 输出 GC 摘要并 stdout `ok`。
+- `WJSM_GC_LOG=1 WJSM_GC=g1 cargo run -- run -e 'gc(); console.log("ok")'` → 输出 GC 摘要（含 barrier_events=601）并 stdout `ok`。
+- `WJSM_GC_LOG=1 WJSM_GC=zgc cargo run -- run -e 'gc(); console.log("ok")'` → 输出 GC 摘要并 stdout `ok`。
+- `cargo nextest run --workspace` → 1312 passed, 2 skipped。
+- `WJSM_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `WJSM_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo build` → passed（zero warnings）。

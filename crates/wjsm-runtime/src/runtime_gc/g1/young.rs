@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use crate::runtime_gc::api::{AllocRequest, GcContext, GcStats, Handle, RootProvider};
+use crate::runtime_gc::api::{AllocRequest, CycleKind, GcContext, GcStats, Handle, RootProvider};
 use crate::runtime_gc::context::object_size_from_memory;
 use crate::runtime_gc::object_walker::{self, ObjectWalker, SlotValue};
 use crate::runtime_gc::{roots, weak_refs};
@@ -40,6 +40,7 @@ struct YoungCollectionResult {
     freed_handles: Vec<Handle>,
     promoted_handles: Vec<Handle>,
     relocated_bytes: usize,
+    relocated_objects: usize,
     freed_bytes: usize,
 }
 
@@ -144,7 +145,13 @@ pub(super) fn collect_young(
         .filter_map(|(&h, info)| info.kind.is_young().then_some(h))
         .collect::<HashSet<_>>();
     if young_handles.is_empty() {
-        let stats = stats_for_result(ctx, started, YoungCollectionResult::default());
+        let stats = stats_for_result(
+            ctx,
+            started,
+            regions,
+            rset,
+            YoungCollectionResult::default(),
+        );
         ctx.stats = stats.clone();
         return stats;
     }
@@ -232,7 +239,7 @@ pub(super) fn collect_young(
     release_freed_handles(ctx, &result.freed_handles);
     result.live_young = live_young;
 
-    let stats = stats_for_result(ctx, started, result);
+    let stats = stats_for_result(ctx, started, regions, rset, result);
     ctx.stats = stats.clone();
     stats
 }
@@ -498,12 +505,14 @@ fn evacuate_live_young(
                     copy_object(ctx, info.ptr, dest, info.size, &mut scratch);
                     ctx.write_obj_table_slot(h, dest);
                     result.relocated_bytes += info.size;
+                    result.relocated_objects += 1;
                 } else if let Some(dest) = allocator.allocate_old(regions, info.size) {
                     copy_object(ctx, info.ptr, dest, info.size, &mut scratch);
                     mark_implicit_black_range(regions, dest, info.size, mark_epoch);
                     ctx.write_obj_table_slot(h, dest);
                     result.promoted_handles.push(h);
                     result.relocated_bytes += info.size;
+                    result.relocated_objects += 1;
                 } else {
                     regions.set_kind_age(info.region_idx, RegionKind::Old, 0);
                     kept_source_regions.insert(info.region_idx);
@@ -518,6 +527,7 @@ fn evacuate_live_young(
                     ctx.write_obj_table_slot(h, dest);
                     result.promoted_handles.push(h);
                     result.relocated_bytes += info.size;
+                    result.relocated_objects += 1;
                 } else {
                     regions.set_kind_age(info.region_idx, RegionKind::Old, 0);
                     kept_source_regions.insert(info.region_idx);
@@ -759,19 +769,35 @@ fn release_freed_handles(ctx: &mut GcContext<'_>, freed_handles: &[Handle]) {
 fn stats_for_result(
     ctx: &mut GcContext<'_>,
     started: Instant,
+    regions: &RegionSpace,
+    rset: &mut G1RSet,
     result: YoungCollectionResult,
 ) -> GcStats {
     if result.relocated_bytes != 0 || !result.freed_handles.is_empty() {
         ctx.increment_gc_epoch();
     }
-    GcStats {
+    let metrics = rset.stats_snapshot();
+    let mut stats = GcStats {
         marked: result.live_young.len(),
         swept: result.freed_handles.len(),
         freed_bytes: result.freed_bytes,
         elapsed: started.elapsed(),
         heap_used_bytes: ctx.heap_used(),
+        cycle_kind: CycleKind::Young,
+        relocated_bytes: result.relocated_bytes,
+        relocated_objects: result.relocated_objects,
+        committed_pages: ctx.committed_pages(),
+        free_bytes_reusable: regions.count_kind(RegionKind::Free) * REGION_SIZE,
+        satb_flushes: metrics.satb_flushes,
+        barrier_events: metrics.barrier_events,
+        rset_cards: metrics.dirty_cards,
+        rset_precise_slots: metrics.precise_slots,
         ..GcStats::default()
-    }
+    };
+    regions.fill_stats(&mut stats);
+    stats.ensure_pause_from_elapsed();
+    rset.reset_stats_counters();
+    stats
 }
 
 fn allocate_in_current_or_new(

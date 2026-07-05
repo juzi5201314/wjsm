@@ -10,7 +10,9 @@ use std::time::Instant;
 use wasmtime::Val;
 use wjsm_ir::constants;
 
-use crate::runtime_gc::api::{GcContext, GcStats, Handle, RootProvider, StepBudget, Value};
+use crate::runtime_gc::api::{
+    CycleKind, GcContext, GcStats, Handle, RootProvider, StepBudget, Value,
+};
 use crate::runtime_gc::context::object_size_from_memory;
 use crate::runtime_gc::mark_bitmap::MarkBitmap;
 use crate::runtime_gc::object_walker::{self, ObjectWalker};
@@ -35,6 +37,8 @@ pub(super) struct ZMarkState {
     dead_handle_set: Vec<Handle>,
     active: bool,
     started_at: Option<Instant>,
+    barrier_events: usize,
+    satb_flushes: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +96,8 @@ impl ZMarkState {
         self.worklist.clear();
         self.satb_handles.clear();
         self.dead_handle_set.clear();
+        self.barrier_events = 0;
+        self.satb_flushes = 0;
         pages.reset_live_bytes();
         self.reset_stale_barrier_buffer(ctx);
         self.mark_roots_fixed_point(ctx, roots_provider, good);
@@ -163,6 +169,7 @@ impl ZMarkState {
 
     pub(super) fn record_host_write(&mut self, ctx: &mut GcContext<'_>, old_val: Value) {
         if self.active {
+            self.barrier_events = self.barrier_events.saturating_add(1);
             self.record_satb_value(ctx, old_val);
         }
     }
@@ -180,6 +187,9 @@ impl ZMarkState {
                     .map(|buf| decode_buffer_old_values(buf).collect::<Vec<_>>())
                     .unwrap_or_default()
             });
+            if !old_values.is_empty() {
+                self.barrier_events = self.barrier_events.saturating_add(old_values.len());
+            }
             for old in old_values {
                 self.record_satb_value(ctx, old);
             }
@@ -249,6 +259,7 @@ impl ZMarkState {
         if self.satb_handles.is_empty() {
             return;
         }
+        self.satb_flushes = self.satb_flushes.saturating_add(1);
         let count = ctx.obj_table_count();
         let handles = std::mem::take(&mut self.satb_handles);
         self.push_handles(ctx, count, good, handles);
@@ -316,14 +327,26 @@ impl ZMarkState {
         if !plan.dead_handles.is_empty() || !reclaimed_pages.is_empty() {
             ctx.increment_gc_epoch();
         }
+        let metrics =
+            crate::runtime_gc::heap_governance::compute_metrics(&pages.free_page_intervals());
         GcStats {
             marked: plan.live_handles,
             swept: plan.dead_handles.len(),
             freed_bytes: plan.freed_bytes,
             elapsed: started_at.elapsed(),
+            free_block_count: metrics.free_block_count,
+            total_free_bytes: metrics.total_free_bytes,
+            largest_free_block: metrics.largest_free_block,
+            external_fragmentation: metrics.external_fragmentation,
             heap_used_bytes: ctx.heap_used(),
+            cycle_kind: CycleKind::ZgcCycle,
+            committed_pages: ctx.committed_pages(),
+            free_bytes_reusable: metrics.total_free_bytes,
+            satb_flushes: self.satb_flushes,
+            barrier_events: self.barrier_events,
             ..GcStats::default()
         }
+        .with_elapsed_pause()
     }
 }
 

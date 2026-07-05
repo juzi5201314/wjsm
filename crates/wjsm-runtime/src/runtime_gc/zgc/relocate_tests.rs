@@ -194,6 +194,7 @@ fn zgc_relocate_remapped_entry_points_at_destination() {
 fn zgc_relocate_summary_does_not_publish_dead_handles() {
     let result = RelocateResult {
         relocated_objects: 2,
+        relocated_bytes: 2 * ZPAGE_SIZE,
         released_pages: 1,
     };
 

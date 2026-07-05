@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use wasmtime::Val;
 
-use crate::runtime_gc::api::{GcContext, GcStats, Handle, RootProvider, StepBudget};
+use crate::runtime_gc::api::{CycleKind, GcContext, GcStats, Handle, RootProvider, StepBudget};
 use crate::runtime_gc::context::object_size_from_memory;
 use crate::runtime_gc::mark_bitmap::MarkBitmap;
 use crate::runtime_gc::object_walker::{self, ObjectWalker};
@@ -156,7 +156,13 @@ impl ConcurrentMark {
         self.mark_roots_fixed_point(ctx, roots_provider, regions);
         self.absorb_satb(ctx, rset);
         self.drain_all(ctx);
-        let stats = self.cleanup(ctx, regions);
+        let mut stats = self.cleanup(ctx, regions);
+        let metrics = rset.stats_snapshot();
+        stats.satb_flushes = metrics.satb_flushes;
+        stats.barrier_events = metrics.barrier_events;
+        stats.rset_cards = metrics.dirty_cards;
+        stats.rset_precise_slots = metrics.precise_slots;
+        rset.reset_stats_counters();
         self.phase = MarkPhase::Idle;
         self.started_at = None;
         self.worklist.clear();
@@ -264,14 +270,26 @@ impl ConcurrentMark {
         if !plan.dead_handles.is_empty() || !plan.release_regions.is_empty() {
             ctx.increment_gc_epoch();
         }
-        GcStats {
+        let metrics =
+            crate::runtime_gc::heap_governance::compute_metrics(&regions.free_region_intervals());
+        let mut stats = GcStats {
             marked: self.mark_bits.popcount(),
             swept: plan.dead_handles.len(),
             freed_bytes: plan.freed_bytes,
             elapsed: started_at.elapsed(),
+            free_block_count: metrics.free_block_count,
+            total_free_bytes: metrics.total_free_bytes,
+            largest_free_block: metrics.largest_free_block,
+            external_fragmentation: metrics.external_fragmentation,
             heap_used_bytes: ctx.heap_used(),
+            cycle_kind: CycleKind::Mixed,
+            committed_pages: ctx.committed_pages(),
+            free_bytes_reusable: metrics.total_free_bytes,
             ..GcStats::default()
-        }
+        };
+        regions.fill_stats(&mut stats);
+        stats.ensure_pause_from_elapsed();
+        stats
     }
 }
 

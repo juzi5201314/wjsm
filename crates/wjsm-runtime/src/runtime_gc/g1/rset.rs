@@ -53,6 +53,16 @@ pub struct G1RSet {
     precise_slots: BTreeMap<usize, BTreeSet<usize>>,
     card_write_counts: BTreeMap<usize, u8>,
     satb_handles: Vec<u32>,
+    barrier_events: usize,
+    satb_flushes: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct G1RSetStats {
+    pub satb_flushes: usize,
+    pub barrier_events: usize,
+    pub dirty_cards: usize,
+    pub precise_slots: usize,
 }
 
 #[allow(dead_code)]
@@ -66,6 +76,7 @@ impl G1RSet {
         card_idx: usize,
         new_owner: Option<SlotOwner>,
     ) {
+        self.barrier_events = self.barrier_events.saturating_add(1);
         if let Some(old_handle) = value_to_handle(old_value) {
             self.satb_handles.push(old_handle);
         }
@@ -127,12 +138,30 @@ impl G1RSet {
     pub fn mark_dirty_slot(&mut self, slot_addr: usize, card_idx: usize) {
         self.mark_dirty(slot_addr, card_idx);
     }
+    pub fn stats_snapshot(&self) -> G1RSetStats {
+        G1RSetStats {
+            satb_flushes: self.satb_flushes,
+            barrier_events: self.barrier_events,
+            dirty_cards: self.dirty_cards.len(),
+            precise_slots: self.precise_slots.values().map(BTreeSet::len).sum(),
+        }
+    }
+
+    pub fn reset_stats_counters(&mut self) {
+        self.satb_flushes = 0;
+        self.barrier_events = 0;
+    }
+
     pub fn satb_handles(&self) -> &[u32] {
         &self.satb_handles
     }
 
     pub fn drain_satb_handles(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.satb_handles)
+        let handles = std::mem::take(&mut self.satb_handles);
+        if !handles.is_empty() {
+            self.satb_flushes = self.satb_flushes.saturating_add(1);
+        }
+        handles
     }
 
     fn mark_dirty(&mut self, slot_addr: usize, card_idx: usize) {

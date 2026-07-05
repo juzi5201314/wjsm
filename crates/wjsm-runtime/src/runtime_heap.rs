@@ -55,10 +55,13 @@ fn collect_for_host_allocation_pressure<C: AsContextMut<Data = RuntimeState>>(
 ) {
     let gc_arc = ctx.as_context().data().gc_algorithm.clone();
     let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.name());
+    let algorithm = gc.name();
+    let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, algorithm);
     let mut roots = crate::runtime_gc::roots::RuntimeRoots;
     let stats = gc.collect_full(&mut gc_ctx, &mut roots as _);
-    ctx.as_context().data().store_last_gc_stats(stats);
+    ctx.as_context()
+        .data()
+        .store_last_gc_stats(algorithm, stats);
 }
 
 /// 线性内存不足时按页扩展，供 host 侧 bump / resize 使用；同时遵守 JS 堆预算。

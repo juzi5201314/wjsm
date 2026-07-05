@@ -22,6 +22,8 @@ pub(crate) struct ZgcCollector {
     mark: ZMarkState,
     relocate: ZRelocateState,
     stats: GcStats,
+    load_barrier_mark_hits: usize,
+    load_barrier_relocate_hits: usize,
 }
 
 impl ZgcCollector {
@@ -32,6 +34,8 @@ impl ZgcCollector {
             mark: ZMarkState::new(),
             relocate: ZRelocateState::new(),
             stats: GcStats::default(),
+            load_barrier_mark_hits: 0,
+            load_barrier_relocate_hits: 0,
         }
     }
 
@@ -61,6 +65,8 @@ impl ZgcCollector {
 
     fn start_mark_cycle(&mut self, ctx: &mut GcContext<'_>, roots: &mut dyn RootProvider) {
         self.refresh_pages(ctx);
+        self.load_barrier_mark_hits = 0;
+        self.load_barrier_relocate_hits = 0;
         let good = self.colors.start_mark();
         self.sync_wasm_color_phase(ctx);
         self.mark.start_cycle(ctx, roots, &mut self.pages, good);
@@ -76,9 +82,10 @@ impl ZgcCollector {
             return None;
         }
         let good = self.colors.good();
-        let stats = self
+        let mut stats = self
             .mark
             .finish_after_barrier_flush(ctx, roots, &mut self.pages, good);
+        stats.load_barrier_mark_hits = self.load_barrier_mark_hits;
         self.stats = stats.clone();
         let excluded = self.pages.page_index(ctx.heap_ptr());
         if self
@@ -94,19 +101,13 @@ impl ZgcCollector {
     }
 
     fn merge_stats(primary: &mut GcStats, extra: &GcStats) {
-        primary.swept = primary.swept.saturating_add(extra.swept);
-        primary.freed_bytes = primary.freed_bytes.saturating_add(extra.freed_bytes);
-        primary.elapsed += extra.elapsed;
-        primary.free_block_count = extra.free_block_count;
-        primary.total_free_bytes = extra.total_free_bytes;
-        primary.largest_free_block = extra.largest_free_block;
-        primary.external_fragmentation = extra.external_fragmentation;
-        primary.heap_used_bytes = extra.heap_used_bytes;
+        primary.merge_from(extra);
     }
 
-    fn finish_relocate_step(&mut self, ctx: &mut GcContext<'_>, stats: GcStats) -> StepOutcome {
+    fn finish_relocate_step(&mut self, ctx: &mut GcContext<'_>, mut stats: GcStats) -> StepOutcome {
         self.colors.finish_cycle();
         self.sync_wasm_color_phase(ctx);
+        stats.load_barrier_relocate_hits = self.load_barrier_relocate_hits;
         Self::merge_stats(&mut self.stats, &stats);
         ctx.stats = self.stats.clone();
         StepOutcome::CycleComplete
@@ -318,11 +319,22 @@ impl GcAlgorithm for ZgcCollector {
 
     fn load_barrier_slow(&mut self, ctx: &mut GcContext<'_>, h: Handle) -> u32 {
         match self.colors.phase() {
-            ZPhase::Mark => return self.mark.mark_from_load_barrier(ctx, h, self.colors.good()),
+            ZPhase::Mark => {
+                let entry = self.mark.mark_from_load_barrier(ctx, h, self.colors.good());
+                if entry != 0 {
+                    self.load_barrier_mark_hits = self.load_barrier_mark_hits.saturating_add(1);
+                }
+                return entry;
+            }
             ZPhase::Relocate => {
-                return self
+                let entry = self
                     .relocate
                     .relocate_or_remap_handle(ctx, &mut self.pages, h);
+                if entry != 0 {
+                    self.load_barrier_relocate_hits =
+                        self.load_barrier_relocate_hits.saturating_add(1);
+                }
+                return entry;
             }
             ZPhase::Idle => {}
         }

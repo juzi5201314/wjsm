@@ -651,6 +651,70 @@ async fn execute_with_writer_shared_inner<W: Write>(
     )
     .await
 }
+const GC_PAUSE_HIST_CAP: usize = 256;
+
+#[derive(Debug)]
+struct GcPauseHist {
+    entries: [u64; GC_PAUSE_HIST_CAP],
+    len: usize,
+    next: usize,
+}
+
+impl Default for GcPauseHist {
+    fn default() -> Self {
+        Self {
+            entries: [0; GC_PAUSE_HIST_CAP],
+            len: 0,
+            next: 0,
+        }
+    }
+}
+
+impl GcPauseHist {
+    fn push(&mut self, pause_ns: u64) {
+        self.entries[self.next] = pause_ns;
+        self.next = (self.next + 1) % GC_PAUSE_HIST_CAP;
+        self.len = self.len.saturating_add(1).min(GC_PAUSE_HIST_CAP);
+    }
+
+    #[cfg(test)]
+    fn snapshot(&self) -> Vec<u64> {
+        if self.len < GC_PAUSE_HIST_CAP {
+            return self.entries[..self.len].to_vec();
+        }
+        (0..GC_PAUSE_HIST_CAP)
+            .map(|idx| self.entries[(self.next + idx) % GC_PAUSE_HIST_CAP])
+            .collect()
+    }
+}
+
+fn gc_log_enabled() -> bool {
+    gc_log_enabled_value(std::env::var_os("WJSM_GC_LOG").as_deref())
+}
+
+fn gc_log_enabled_value(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == std::ffi::OsStr::new("1"))
+}
+
+fn format_gc_log_summary(algorithm: &str, stats: &crate::runtime_gc::api::GcStats) -> String {
+    format!(
+        "wjsm gc algorithm={} cycle={} pause_ns_max={} pause_ns_total={} pause_count={} relocated_bytes={} relocated_objects={} barrier_events={} satb_flushes={} rset_cards={} rset_precise_slots={} load_barrier_mark_hits={} load_barrier_relocate_hits={}",
+        algorithm,
+        stats.cycle_kind.as_str(),
+        stats.pause_ns_max,
+        stats.pause_ns_total,
+        stats.pause_count,
+        stats.relocated_bytes,
+        stats.relocated_objects,
+        stats.barrier_events,
+        stats.satb_flushes,
+        stats.rset_cards,
+        stats.rset_precise_slots,
+        stats.load_barrier_mark_hits,
+        stats.load_barrier_relocate_hits,
+    )
+}
+
 impl Clone for RuntimeState {
     fn clone(&self) -> Self {
         Self {
@@ -682,6 +746,7 @@ impl Clone for RuntimeState {
             gc_algorithm: self.gc_algorithm.clone(),
             gc_scheduler: self.gc_scheduler.clone(),
             last_gc_stats: self.last_gc_stats.clone(),
+            gc_pause_hist: self.gc_pause_hist.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -803,6 +868,8 @@ struct RuntimeState {
     /// 最近一次 GC 统计（含碎片治理指标，issue #332）。
     /// 每次完整 collection 后由 host 更新，供可观测性 API 查询。
     last_gc_stats: Arc<Mutex<crate::runtime_gc::api::GcStats>>,
+    /// 最近 256 次 GC pause 观测，按纳秒记录；写入 last_gc_stats 时同步推进。
+    gc_pause_hist: Arc<Mutex<GcPauseHist>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -932,10 +999,31 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
-    /// 记录最近一次 GC 统计（含碎片治理指标，issue #332）。
-    pub(crate) fn store_last_gc_stats(&self, stats: crate::runtime_gc::api::GcStats) {
+    /// 记录最近一次 GC 统计（含碎片治理指标与 v2 pause 指标）。
+    pub(crate) fn store_last_gc_stats(
+        &self,
+        algorithm: &'static str,
+        mut stats: crate::runtime_gc::api::GcStats,
+    ) {
+        stats.ensure_pause_from_elapsed();
+        let has_pause = stats.has_pause_observation();
+        if has_pause {
+            let mut hist = self.gc_pause_hist.lock().unwrap_or_else(|e| e.into_inner());
+            hist.push(stats.pause_ns_max);
+        }
+        if has_pause && gc_log_enabled() {
+            eprintln!("{}", format_gc_log_summary(algorithm, &stats));
+        }
         let mut slot = self.last_gc_stats.lock().unwrap_or_else(|e| e.into_inner());
         *slot = stats;
+    }
+
+    #[cfg(test)]
+    fn gc_pause_hist_snapshot(&self) -> Vec<u64> {
+        self.gc_pause_hist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot()
     }
 
     /// 记录启动期 immortal/dynamic/barrier 三段边界，供 GC attach 与后续算法查询。
@@ -1103,6 +1191,7 @@ impl RuntimeState {
                 crate::runtime_gc::scheduler::GcScheduler::default(),
             )),
             last_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
+            gc_pause_hist: Arc::new(Mutex::new(GcPauseHist::default())),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -1235,8 +1324,70 @@ mod tests {
         GcAlgorithmKind, RuntimeOptions, execute_with_writer, execute_with_writer_with_options,
         gc_algorithm_from_env,
     };
+    use crate::runtime_gc::api::{CycleKind, GcStats};
     use anyhow::Result;
+    use std::ffi::OsStr;
+    use std::time::Duration;
     use tokio::runtime::Runtime;
+
+    #[test]
+    fn pause_hist_ring_wraps_at_256_entries() {
+        let state = super::RuntimeState::new();
+        for idx in 0..260u64 {
+            state.store_last_gc_stats(
+                "mark-sweep",
+                GcStats {
+                    cycle_kind: CycleKind::Step,
+                    elapsed: Duration::from_nanos(idx + 1),
+                    ..GcStats::default()
+                },
+            );
+        }
+
+        let hist = state.gc_pause_hist_snapshot();
+        assert_eq!(hist.len(), 256);
+        assert_eq!(hist[0], 5);
+        assert_eq!(hist[255], 260);
+    }
+
+    #[test]
+    fn gc_stats_log_gate_accepts_only_one() {
+        assert!(super::gc_log_enabled_value(Some(OsStr::new("1"))));
+        assert!(!super::gc_log_enabled_value(Some(OsStr::new("true"))));
+        assert!(!super::gc_log_enabled_value(Some(OsStr::new("0"))));
+        assert!(!super::gc_log_enabled_value(None));
+    }
+
+    #[test]
+    fn gc_stats_log_summary_contains_required_fields() {
+        let stats = GcStats {
+            cycle_kind: CycleKind::ZgcCycle,
+            pause_ns_max: 11,
+            pause_ns_total: 17,
+            pause_count: 2,
+            relocated_bytes: 64,
+            relocated_objects: 3,
+            barrier_events: 5,
+            satb_flushes: 1,
+            rset_cards: 7,
+            rset_precise_slots: 2,
+            load_barrier_mark_hits: 13,
+            load_barrier_relocate_hits: 21,
+            ..GcStats::default()
+        };
+
+        let line = super::format_gc_log_summary("zgc", &stats);
+
+        assert!(line.contains("algorithm=zgc"));
+        assert!(line.contains("cycle=zgc-cycle"));
+        assert!(line.contains("pause_ns_max=11"));
+        assert!(line.contains("pause_ns_total=17"));
+        assert!(line.contains("relocated_bytes=64"));
+        assert!(line.contains("barrier_events=5"));
+        assert!(line.contains("rset_cards=7"));
+        assert!(line.contains("load_barrier_mark_hits=13"));
+        assert!(line.contains("load_barrier_relocate_hits=21"));
+    }
     // Phase 5 TDD 回归标记（严格按主代理 2026-06-01 授权方案）：
     // - TimerEntry.deadline 改为 tokio::time::Instant（仅此字段，interval 仍 std Duration）
     // - 仅通过根 use + 创建点显式路径 + sync loop 最小限定符（若需）实现

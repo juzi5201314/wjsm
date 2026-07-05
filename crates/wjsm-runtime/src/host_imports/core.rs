@@ -1494,20 +1494,24 @@ pub(crate) fn define_core(
             // 算法持有在 RuntimeState.gc_algorithm（Arc<Mutex>），经 GcContext 调用。
             // v2 alloc_slow 自行处理 free list、collection assist、grow 与最终 OOM 判定。
             let gc_arc = caller.data().gc_algorithm.clone();
-            {
+            let allocated = {
                 let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                let algorithm = gc.name();
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
                 let req = crate::runtime_gc::api::AllocRequest {
                     size,
                     heap_type,
                     capacity,
                 };
-                if let Some(ptr) = gc.alloc_slow(&mut ctx, &mut roots as _, req) {
-                    let stats = gc.last_stats().clone();
-                    caller.data().store_last_gc_stats(stats);
-                    return Ok(ptr as i32);
+                gc.alloc_slow(&mut ctx, &mut roots as _, req)
+                    .map(|ptr| (ptr, algorithm, ctx.stats.clone()))
+            };
+            if let Some((ptr, algorithm, stats)) = allocated {
+                if stats.has_pause_observation() {
+                    caller.data().store_last_gc_stats(algorithm, stats);
                 }
+                return Ok(ptr as i32);
             }
             // 真 OOM：先写入可诊断 runtime_error，再 trap 中止执行。
             let used = {
@@ -1552,9 +1556,10 @@ pub(crate) fn define_core(
             scheduler.budget()
         };
         let started = std::time::Instant::now();
-        let (outcome, stats, heap_limit) = {
+        let (outcome, stats, heap_limit, algorithm) = {
             let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
+            let algorithm = gc.name();
+            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
             let outcome = gc.safepoint_step(&mut ctx, &mut roots as _, budget);
             let heap_limit = ctx.heap_limit();
@@ -1563,7 +1568,7 @@ pub(crate) fn define_core(
             } else {
                 None
             };
-            (outcome, stats, heap_limit)
+            (outcome, stats, heap_limit, algorithm)
         };
         let elapsed = started.elapsed();
         let next_trigger = {
@@ -1577,8 +1582,12 @@ pub(crate) fn define_core(
         if let Some(global) = env.gc_trigger_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
         }
-        if let Some(stats) = stats {
-            caller.data().store_last_gc_stats(stats);
+        if let Some(mut stats) = stats {
+            stats.pause_ns_max = 0;
+            stats.pause_ns_total = 0;
+            stats.pause_count = 0;
+            stats.record_pause(elapsed);
+            caller.data().store_last_gc_stats(algorithm, stats);
         }
     });
     linker.define(&mut store, "env", "gc_safepoint_poll", f)?;

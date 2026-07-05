@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T5.2 完善 GcStats v2`（in progress）。
-- Next: `T5.3 添加 pause benchmark`。
+- Active: `T5.3 添加 pause benchmark`（in progress）。
+- Next: `T5.4 添加 footprint 指标`。
 
 ## Completed todos
 
@@ -48,19 +48,20 @@
   - `T4.6 验证 P4 阶段`
 - P5:
   - `T5.1 实现三入口选择`
+  - `T5.2 完善 GcStats v2`
 
 ## Active slice card
 
-- Goal: P5 T5.2，补全 `GcStats` v2 字段与 pause 直方图：字段覆盖 spec §17，runtime 记录最近 256 次 pause，`WJSM_GC_LOG=1` 输出周期摘要。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T5.2；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §17。
-- Files: `runtime_gc/api.rs`、`runtime_gc/*` 各算法填充点、`lib.rs` runtime state pause hist、必要 tests。
-- Boundary: 本 slice 只实现统计字段/直方图/log；pause benchmark 与定量达标调参留给 T5.3+。
-- Verification: 单测覆盖直方图环形语义；`WJSM_GC_LOG=1` 三算法各跑 churn/hello，摘要字段存在且 mark/relocate load barrier hits 可区分。
-- Stop: T5.2 验证通过，checkpoint/evidence 更新，然后进入 T5.3。
+- Goal: P5 T5.3，新增门控 pause benchmark，执行三算法定量基准并记录/调参直到 spec §21.2 pause/吞吐/碎片验收达标。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T5.3；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §21.2。
+- Files: 新建 `crates/wjsm-runtime/tests/gc_pause_bench.rs`，必要时小幅调整 scheduler/算法 step budget。
+- Boundary: 本 slice 只新增 `WJSM_GC_BENCH=1` 门控 benchmark 与必要参数调优；footprint 长运行指标留给 T5.4。
+- Verification: `WJSM_GC_BENCH=1 cargo nextest run -E 'test(gc_pause_bench)'` 达标；不启用 env 时 bench skipped。
+- Stop: T5.3 验证通过，checkpoint/evidence 更新，然后进入 T5.4。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2/P3/P4 与 T5.1 已完成；T5.2 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3/P4、T5.1、T5.2 已完成；T5.3 正在进行。
 
 ## Blocked-on items
 
@@ -70,16 +71,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T5.2 / spec §17。
-2. 补全 `GcStats` 字段、pause hist ring buffer、`WJSM_GC_LOG=1` 摘要。
-3. 完成后运行 runtime stats 单测、三算法 log 冒烟与必要 workspace/build。
+1. 读取本文件、`90-evidence.md` 与父计划 T5.3 / spec §21.2。
+2. 新增 `gc_pause_bench.rs` 门控基准并运行三算法；若不达标，调度/步进 owner 内修正并记录。
+3. 完成后运行 bench、workspace/build 必要验证。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T5.1 已完成三入口选择，当前进入 stats/可观测性。
-- Does current work still serve goal and stop condition? 是，T5.2 只交付 stats/log，不提前做 benchmark。
-- Compatibility boundary: 三算法选择路径保持；新增 log 只在 `WJSM_GC_LOG=1` 时输出。
-- New owner/fallback/adapter/branch: `GcStats` + runtime pause hist 成为 GC 可观测性 source of truth。
-- Retirement track: 统计字段不完整限制开始退休；后续 T5.3 benchmark 消费这些字段。
-- Evidence sufficiency: T5.1 sufficient；T5.2 pending。
+- Does current work still serve original task intent? 是，T5.2 已完成 stats/log，当前进入 pause benchmark。
+- Does current work still serve goal and stop condition? 是，T5.3 只交付 pause benchmark 与达标调参，不提前做 footprint。
+- Compatibility boundary: bench 默认 skipped，只有 `WJSM_GC_BENCH=1` 执行。
+- New owner/fallback/adapter/branch: `gc_pause_bench.rs` 成为定量 pause 验收 owner。
+- Retirement track: 定量 pause 未验收限制开始退休；T5.4 后续消费 footprint 字段。
+- Evidence sufficiency: T5.2 sufficient；T5.3 pending。
 - Decision: continue。

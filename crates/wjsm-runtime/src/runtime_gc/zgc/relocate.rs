@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use wjsm_ir::constants;
 
-use crate::runtime_gc::api::{GcContext, GcStats, Handle, StepBudget};
+use crate::runtime_gc::api::{CycleKind, GcContext, GcStats, Handle, StepBudget};
 use crate::runtime_gc::context::object_size_from_memory;
 use crate::runtime_gc::heap_governance;
 
@@ -27,6 +27,7 @@ pub(super) struct ZRelocateState {
     scratch: Vec<u8>,
     candidates: Vec<RelocationCandidate>,
     cursor: usize,
+    cycle_result: RelocateResult,
 }
 
 #[derive(Debug, Default)]
@@ -51,7 +52,18 @@ struct RelocationCandidate {
 #[derive(Debug, Default)]
 struct RelocateResult {
     relocated_objects: usize,
+    relocated_bytes: usize,
     released_pages: usize,
+}
+
+impl RelocateResult {
+    fn add(&mut self, other: Self) {
+        self.relocated_objects = self
+            .relocated_objects
+            .saturating_add(other.relocated_objects);
+        self.relocated_bytes = self.relocated_bytes.saturating_add(other.relocated_bytes);
+        self.released_pages = self.released_pages.saturating_add(other.released_pages);
+    }
 }
 
 impl ZRelocateState {
@@ -78,6 +90,7 @@ impl ZRelocateState {
         self.allocator.reset();
         self.candidates.clear();
         self.cursor = 0;
+        self.cycle_result = RelocateResult::default();
         pages.clear_relocation_set();
 
         let selected = pages.select_relocation_set_excluding(copy_budget, excluded_page);
@@ -104,12 +117,11 @@ impl ZRelocateState {
         }
 
         let mut copied = 0usize;
-        let mut result = RelocateResult::default();
         if self.candidates.is_empty() {
             self.candidates = collect_relocation_candidates(ctx, pages);
             self.active = !self.candidates.is_empty();
             if !self.active {
-                return self.finish(ctx, pages, result);
+                return self.finish(ctx, pages);
             }
         }
         let budget_bytes = budget.work_bytes.max(1);
@@ -120,7 +132,7 @@ impl ZRelocateState {
                 };
             }
             let Some(candidate) = self.next_relocation_candidate(ctx, pages) else {
-                return self.finish(ctx, pages, result);
+                return self.finish(ctx, pages);
             };
             let Some(relocated) = relocate_candidate(
                 ctx,
@@ -130,15 +142,10 @@ impl ZRelocateState {
                 candidate,
             ) else {
                 remap_remaining_rs_entries(ctx, pages);
-                return self.finish(ctx, pages, result);
+                return self.finish(ctx, pages);
             };
             copied = copied.saturating_add(candidate.size.max(1));
-            result.relocated_objects = result
-                .relocated_objects
-                .saturating_add(relocated.relocated_objects);
-            result.released_pages = result
-                .released_pages
-                .saturating_add(relocated.released_pages);
+            self.cycle_result.add(relocated);
         }
     }
 
@@ -194,15 +201,14 @@ impl ZRelocateState {
                 ptr,
                 size,
             };
-            if relocate_candidate(
+            if let Some(relocated) = relocate_candidate(
                 ctx,
                 pages,
                 &mut self.allocator,
                 &mut self.scratch,
                 candidate,
-            )
-            .is_some()
-            {
+            ) {
+                self.cycle_result.add(relocated);
                 return read_entry(ctx, h)
                     .map(|(_, moved)| moved.raw())
                     .unwrap_or(0);
@@ -227,18 +233,14 @@ impl ZRelocateState {
         repaired.raw()
     }
 
-    fn finish(
-        &mut self,
-        ctx: &mut GcContext<'_>,
-        pages: &mut ZPageSpace,
-        result: RelocateResult,
-    ) -> RelocateStep {
+    fn finish(&mut self, ctx: &mut GcContext<'_>, pages: &mut ZPageSpace) -> RelocateStep {
         self.active = false;
         self.allocator.reset();
         self.candidates.clear();
         self.cursor = 0;
         pages.clear_relocation_set();
-        let stats = stats_for_result(ctx, pages, self.started_at.take(), &result);
+        let stats = stats_for_result(ctx, pages, self.started_at.take(), &self.cycle_result);
+        self.cycle_result = RelocateResult::default();
         RelocateStep::Complete { stats }
     }
 }
@@ -374,6 +376,7 @@ fn relocate_candidate(
     let released_pages = release_empty_source_pages(ctx, pages, candidate.ptr, candidate.size);
     Some(RelocateResult {
         relocated_objects: 1,
+        relocated_bytes: candidate.size,
         released_pages,
     })
 }
@@ -532,8 +535,14 @@ fn stats_for_result(
         largest_free_block: metrics.largest_free_block,
         external_fragmentation: metrics.external_fragmentation,
         heap_used_bytes: ctx.heap_used(),
+        cycle_kind: CycleKind::ZgcCycle,
+        relocated_bytes: result.relocated_bytes,
+        relocated_objects: result.relocated_objects,
+        committed_pages: ctx.committed_pages(),
+        free_bytes_reusable: metrics.total_free_bytes,
         ..GcStats::default()
-    };
+    }
+    .with_elapsed_pause();
     ctx.stats = stats.clone();
     stats
 }

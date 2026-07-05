@@ -136,6 +136,10 @@ impl<'a> GcContext<'a> {
         self.heap_ptr().saturating_sub(heap_start)
     }
 
+    pub fn committed_pages(&self) -> usize {
+        self.env.memory.size(&self.store) as usize
+    }
+
     pub fn grow_to_fit_heap_allocation(&mut self, size: usize) -> Result<bool, ()> {
         let heap_ptr = self.heap_ptr();
         let Some(needed_end) = heap_ptr.checked_add(size) else {

@@ -8,7 +8,8 @@ pub mod marker;
 pub mod sweeper;
 
 use crate::runtime_gc::api::{
-    AllocRequest, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget, StepOutcome,
+    AllocRequest, CycleKind, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget,
+    StepOutcome,
 };
 use crate::runtime_gc::mark_bitmap::MarkBitmap;
 use crate::runtime_gc::weak_refs;
@@ -122,6 +123,7 @@ impl MarkSweepCollector {
         &mut self,
         ctx: &mut GcContext,
         started_at: std::time::Instant,
+        cycle_kind: CycleKind,
     ) -> GcStats {
         self.reclaim_owner_backed_side_tables(ctx);
         weak_refs::process_weak_refs_after_sweep(ctx, &self.freed_handles);
@@ -135,6 +137,10 @@ impl MarkSweepCollector {
         ctx.increment_gc_epoch();
         ctx.stats.marked = self.mark_bits.popcount();
         ctx.stats.elapsed = started_at.elapsed();
+        ctx.stats.cycle_kind = cycle_kind;
+        ctx.stats.committed_pages = ctx.committed_pages();
+        ctx.stats.free_bytes_reusable = ctx.stats.total_free_bytes;
+        ctx.stats.ensure_pause_from_elapsed();
         let stats = ctx.stats.clone();
         self.stats_cache = stats.clone();
         self.sync_alloc_window(ctx);
@@ -147,14 +153,14 @@ impl MarkSweepCollector {
         started_at: std::time::Instant,
     ) -> GcStats {
         sweeper::sweep(self, ctx);
-        self.finalize_sweep_cycle(ctx, started_at)
+        self.finalize_sweep_cycle(ctx, started_at, CycleKind::Full)
     }
 
     fn finish_pending_lazy_sweep(&mut self, ctx: &mut GcContext) -> Option<GcStats> {
         let mut state = self.lazy_sweep.take()?;
         let started_at = state.started_at();
         sweeper::sweep_lazy_to_completion(self, ctx, &mut state);
-        Some(self.finalize_sweep_cycle(ctx, started_at))
+        Some(self.finalize_sweep_cycle(ctx, started_at, CycleKind::Step))
     }
 
     fn advance_lazy_sweep(
@@ -174,7 +180,7 @@ impl MarkSweepCollector {
                 StepOutcome::Progress { remaining_estimate }
             }
             sweeper::LazySweepStep::Complete => {
-                self.finalize_sweep_cycle(ctx, started_at);
+                self.finalize_sweep_cycle(ctx, started_at, CycleKind::Step);
                 StepOutcome::CycleComplete
             }
         }

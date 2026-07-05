@@ -212,6 +212,33 @@ impl<'a> GcContext<'a> {
 }
 
 // ── GC 统计 ──
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CycleKind {
+    Full,
+    Young,
+    Mixed,
+    ZgcCycle,
+    Step,
+}
+
+impl CycleKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Young => "young",
+            Self::Mixed => "mixed",
+            Self::ZgcCycle => "zgc-cycle",
+            Self::Step => "step",
+        }
+    }
+}
+
+impl Default for CycleKind {
+    fn default() -> Self {
+        Self::Full
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GcStats {
     pub marked: usize,
@@ -231,4 +258,183 @@ pub struct GcStats {
     pub tail_reclaimed_bytes: usize,
     /// 堆已用字节（heap_ptr - heap_start，sweep 后）。
     pub heap_used_bytes: usize,
+    // ── v2 可观测性指标（spec §17）──
+    pub cycle_kind: CycleKind,
+    pub pause_ns_max: u64,
+    pub pause_ns_total: u64,
+    pub pause_count: usize,
+    pub relocated_bytes: usize,
+    pub relocated_objects: usize,
+    pub committed_pages: usize,
+    pub free_bytes_reusable: usize,
+    pub regions_total: usize,
+    pub regions_free: usize,
+    pub regions_eden: usize,
+    pub regions_survivor: usize,
+    pub regions_old: usize,
+    pub regions_humongous: usize,
+    pub satb_flushes: usize,
+    pub barrier_events: usize,
+    pub rset_cards: usize,
+    pub rset_precise_slots: usize,
+    pub scan_oblets: usize,
+    pub load_barrier_mark_hits: usize,
+    pub load_barrier_relocate_hits: usize,
+}
+
+impl GcStats {
+    pub fn record_pause(&mut self, pause: std::time::Duration) {
+        let pause_ns = nanos_u64(pause);
+        self.pause_ns_max = self.pause_ns_max.max(pause_ns);
+        self.pause_ns_total = self.pause_ns_total.saturating_add(pause_ns);
+        self.pause_count = self.pause_count.saturating_add(1);
+    }
+
+    pub fn with_elapsed_pause(mut self) -> Self {
+        if !self.elapsed.is_zero() {
+            self.record_pause(self.elapsed);
+        }
+        self
+    }
+
+    pub fn ensure_pause_from_elapsed(&mut self) {
+        if self.pause_count == 0 && !self.elapsed.is_zero() {
+            self.record_pause(self.elapsed);
+        }
+    }
+
+    pub fn has_pause_observation(&self) -> bool {
+        self.pause_count != 0 || !self.elapsed.is_zero()
+    }
+
+    pub fn merge_from(&mut self, extra: &Self) {
+        self.marked = self.marked.saturating_add(extra.marked);
+        self.swept = self.swept.saturating_add(extra.swept);
+        self.freed_bytes = self.freed_bytes.saturating_add(extra.freed_bytes);
+        self.elapsed += extra.elapsed;
+        self.free_block_count = extra.free_block_count;
+        self.total_free_bytes = extra.total_free_bytes;
+        self.largest_free_block = extra.largest_free_block;
+        self.external_fragmentation = extra.external_fragmentation;
+        self.tail_reclaimed_bytes = self
+            .tail_reclaimed_bytes
+            .saturating_add(extra.tail_reclaimed_bytes);
+        self.heap_used_bytes = extra.heap_used_bytes;
+        self.pause_ns_max = self.pause_ns_max.max(extra.pause_ns_max);
+        self.pause_ns_total = self.pause_ns_total.saturating_add(extra.pause_ns_total);
+        self.pause_count = self.pause_count.saturating_add(extra.pause_count);
+        self.relocated_bytes = self.relocated_bytes.saturating_add(extra.relocated_bytes);
+        self.relocated_objects = self
+            .relocated_objects
+            .saturating_add(extra.relocated_objects);
+        self.committed_pages = extra.committed_pages;
+        self.free_bytes_reusable = extra.free_bytes_reusable;
+        self.regions_total = extra.regions_total;
+        self.regions_free = extra.regions_free;
+        self.regions_eden = extra.regions_eden;
+        self.regions_survivor = extra.regions_survivor;
+        self.regions_old = extra.regions_old;
+        self.regions_humongous = extra.regions_humongous;
+        self.satb_flushes = self.satb_flushes.saturating_add(extra.satb_flushes);
+        self.barrier_events = self.barrier_events.saturating_add(extra.barrier_events);
+        self.rset_cards = extra.rset_cards;
+        self.rset_precise_slots = extra.rset_precise_slots;
+        self.scan_oblets = self.scan_oblets.saturating_add(extra.scan_oblets);
+        self.load_barrier_mark_hits = self
+            .load_barrier_mark_hits
+            .saturating_add(extra.load_barrier_mark_hits);
+        self.load_barrier_relocate_hits = self
+            .load_barrier_relocate_hits
+            .saturating_add(extra.load_barrier_relocate_hits);
+    }
+}
+
+fn nanos_u64(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CycleKind, GcStats};
+    use std::time::Duration;
+
+    #[test]
+    fn gc_stats_record_pause_tracks_max_total_and_count() {
+        let mut stats = GcStats::default();
+
+        stats.record_pause(Duration::from_nanos(7));
+        stats.record_pause(Duration::from_nanos(3));
+
+        assert_eq!(stats.pause_ns_max, 7);
+        assert_eq!(stats.pause_ns_total, 10);
+        assert_eq!(stats.pause_count, 2);
+    }
+
+    #[test]
+    fn gc_stats_merge_preserves_existing_and_v2_fields() {
+        let mut stats = GcStats {
+            cycle_kind: CycleKind::Full,
+            marked: 2,
+            swept: 1,
+            freed_bytes: 10,
+            elapsed: Duration::from_nanos(5),
+            heap_used_bytes: 90,
+            pause_ns_max: 5,
+            pause_ns_total: 5,
+            pause_count: 1,
+            relocated_bytes: 8,
+            relocated_objects: 1,
+            barrier_events: 2,
+            rset_cards: 1,
+            load_barrier_mark_hits: 1,
+            ..GcStats::default()
+        };
+        let extra = GcStats {
+            cycle_kind: CycleKind::Mixed,
+            marked: 3,
+            swept: 4,
+            freed_bytes: 20,
+            elapsed: Duration::from_nanos(7),
+            heap_used_bytes: 70,
+            pause_ns_max: 7,
+            pause_ns_total: 7,
+            pause_count: 1,
+            relocated_bytes: 16,
+            relocated_objects: 2,
+            committed_pages: 5,
+            free_bytes_reusable: 4096,
+            regions_total: 6,
+            regions_free: 2,
+            satb_flushes: 1,
+            barrier_events: 3,
+            rset_cards: 2,
+            rset_precise_slots: 1,
+            load_barrier_relocate_hits: 4,
+            ..GcStats::default()
+        };
+
+        stats.merge_from(&extra);
+
+        assert_eq!(stats.cycle_kind, CycleKind::Full);
+        assert_eq!(stats.marked, 5);
+        assert_eq!(stats.swept, 5);
+        assert_eq!(stats.freed_bytes, 30);
+        assert_eq!(stats.elapsed, Duration::from_nanos(12));
+        assert_eq!(stats.heap_used_bytes, 70);
+        assert_eq!(stats.pause_ns_max, 7);
+        assert_eq!(stats.pause_ns_total, 12);
+        assert_eq!(stats.pause_count, 2);
+        assert_eq!(stats.relocated_bytes, 24);
+        assert_eq!(stats.relocated_objects, 3);
+        assert_eq!(stats.committed_pages, 5);
+        assert_eq!(stats.free_bytes_reusable, 4096);
+        assert_eq!(stats.regions_total, 6);
+        assert_eq!(stats.regions_free, 2);
+        assert_eq!(stats.satb_flushes, 1);
+        assert_eq!(stats.barrier_events, 5);
+        assert_eq!(stats.rset_cards, 2);
+        assert_eq!(stats.rset_precise_slots, 1);
+        assert_eq!(stats.load_barrier_mark_hits, 1);
+        assert_eq!(stats.load_barrier_relocate_hits, 4);
+    }
 }
