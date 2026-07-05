@@ -332,3 +332,14 @@
 - `cargo check -p wjsm-runtime` → passed（zero warnings）。
 - `cargo nextest run -p wjsm-runtime -E 'test(zgc)'` → 22 passed, 165 skipped。
 - `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+
+## P4 T4.6 evidence
+
+- P4 ZGC 阶段 closure：T4.1-T4.5 已完成并验证；默认 mark-sweep、G1 与 ZGC 路径均保持绿。
+- `cargo nextest run -E 'test(gc_)'` → 14 passed, 724 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(gc_)'` → 14 passed, 724 skipped。
+- `cargo nextest run --workspace` → 1304 passed, 2 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1304 passed, 2 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo build` → passed（zero warnings）。
+- DriftCheckDraft：Scope=P4 ZGC；Compatibility=默认 mark-sweep、G1 happy、ZGC workspace 全绿；Retirement=ZGC registry 拒绝路径、无 support 变体、无 mark、无 relocate/heal 的临时限制均已退休；Decision=continue to P5。

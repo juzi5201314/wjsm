@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T4.6 验证 P4 阶段`（in progress）。
-- Next: `T5.1 实现三入口选择`。
+- Active: `T5.1 实现三入口选择`（in progress）。
+- Next: `T5.2 完善 GcStats v2`。
 
 ## Completed todos
 
@@ -43,21 +43,21 @@
   - `T4.1 实现 ZGC color page`
   - `T4.2 生成 ZGC support 变体`
   - `T4.3 实现 ZGC mark`
-
   - `T4.4 实现 ZGC relocate`
   - `T4.5 组装 ZGC registry`
+  - `T4.6 验证 P4 阶段`
 ## Active slice card
 
-- Goal: P4 T4.6，执行 ZGC 阶段矩阵终验，确认默认 mark-sweep、`WJSM_TEST_GC=g1` 与 `WJSM_TEST_GC=zgc` 关键路径均绿。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T4.6。
-- Files: 仅更新 evidence/checkpoint；如验证失败则回到对应 owner 修复。
-- Boundary: 本 slice 不新增功能，只做 P4 阶段验收与漂移检查。
-- Verification: `WJSM_TEST_GC=zgc cargo nextest run --workspace` 全量绿 + GC 子集绿；默认/G1 回归冒烟；build 零 warning。
-- Stop: T4.6 验证通过，checkpoint/evidence 更新，然后进入 P5/T5.1。
+- Goal: P5 T5.1，实现三入口 GC 算法选择：`RuntimeOptions::with_gc_algorithm`、env `WJSM_GC` 默认链、CLI `--gc <mark-sweep|g1|zgc>`，优先级 CLI > env > 默认。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T5.1。
+- Files: `crates/wjsm-runtime/src/lib.rs`、`crates/wjsm-cli/src/lib.rs`、CLI/in-process tests。
+- Boundary: 本 slice 只实现选择机制；GcStats v2、pause hist、benchmark 留给 T5.2+。
+- Verification: CLI 集成测试覆盖三入口优先级与非法值列合法值；手验/测试 `wjsm run --gc g1 fixtures/happy/hello.js`。
+- Stop: T5.1 验证通过，checkpoint/evidence 更新，然后进入 T5.2。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2/P3、T4.1、T4.2、T4.3、T4.4、T4.5 已完成；T4.6 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3/P4 已完成；T5.1 正在进行。
 
 ## Blocked-on items
 
@@ -67,16 +67,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T4.6。
-2. 执行 P4 矩阵终验：ZGC workspace + GC 子集、默认 workspace、G1 happy、build 零 warning。
-3. 完成后记录 P4 closure 并进入 T5.1。
+1. 读取本文件、`90-evidence.md` 与父计划 T5.1。
+2. 实现 RuntimeOptions builder、`WJSM_GC` 解析、CLI `--gc` 与优先级测试。
+3. 完成后运行 CLI/runtime 相关测试、三算法 hello 冒烟与必要 build/check。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T4.5 已完成 ZGC 组装收口，当前进入 P4 验收。
-- Does current work still serve goal and stop condition? 是，T4.6 只验证 P4，不提前实现 P5 observability。
-- Compatibility boundary: 默认 mark-sweep、G1 与 ZGC 三路径均需保持绿。
-- New owner/fallback/adapter/branch: 无新增 owner。
-- Retirement track: ZGC 残余组装缺口已清理；T4.6 确认 P4 无未退休路径。
-- Evidence sufficiency: T4.5 sufficient；T4.6 pending。
+- Does current work still serve original task intent? 是，P4 已完成并验证，当前进入 P5 选择机制与可观测性。
+- Does current work still serve goal and stop condition? 是，T5.1 只交付三入口选择，不提前实现 stats/bench。
+- Compatibility boundary: 现有 `WJSM_TEST_GC` 测试矩阵入口保持；新增 `WJSM_GC` 与 CLI `--gc` 对用户路径生效。
+- New owner/fallback/adapter/branch: `RuntimeOptions` 成为算法选择 source of truth；CLI/env 只负责填充 options。
+- Retirement track: 测试专用 `WJSM_TEST_GC` 单入口假设开始退休，后续保留为测试覆盖入口或并入默认链。
+- Evidence sufficiency: T4.6 sufficient；T5.1 pending。
 - Decision: continue。
