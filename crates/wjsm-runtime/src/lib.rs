@@ -29,6 +29,7 @@ mod runtime_date;
 mod runtime_eval;
 mod runtime_gc;
 pub use runtime_gc::registry::GcAlgorithmKind;
+pub use runtime_gc::api::{CycleKind, GcStats};
 mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;
@@ -167,6 +168,15 @@ impl RuntimeOptions {
     }
 }
 
+/// 单次运行结束后暴露给定量基准的 GC 观测快照。
+#[derive(Clone, Debug, Default)]
+pub struct GcExecutionStats {
+    /// 最近一次完成 GC 周期的完整 v2 统计。
+    pub last: GcStats,
+    /// 本次运行中观测到的 GC pause 最大值序列（纳秒）。
+    pub pause_hist: Vec<u64>,
+}
+
 pub fn gc_algorithm_from_env(
     env: &[(String, String)],
 ) -> std::result::Result<GcAlgorithmKind, String> {
@@ -214,6 +224,14 @@ pub async fn execute_with_writer_with_options<W: Write>(
     options: RuntimeOptions,
 ) -> Result<(W, Vec<u8>)> {
     execute_with_writer_shared_inner(wasm_bytes, writer, None, true, options).await
+}
+
+pub async fn execute_with_writer_with_options_and_stats<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    options: RuntimeOptions,
+) -> Result<(W, Vec<u8>, GcExecutionStats)> {
+    execute_with_writer_shared_inner_with_stats(wasm_bytes, writer, None, true, options).await
 }
 
 /// 编译 JS/TS 源码到 WASM 字节码的共享辅助函数。
@@ -595,6 +613,24 @@ async fn execute_with_writer_shared_inner<W: Write>(
     use_epoch_async_yield: bool,
     options: RuntimeOptions,
 ) -> Result<(W, Vec<u8>)> {
+    let (writer, diagnostics, _) = execute_with_writer_shared_inner_with_stats(
+        wasm_bytes,
+        writer,
+        shared_state,
+        use_epoch_async_yield,
+        options,
+    )
+    .await?;
+    Ok((writer, diagnostics))
+}
+
+async fn execute_with_writer_shared_inner_with_stats<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+    use_epoch_async_yield: bool,
+    options: RuntimeOptions,
+) -> Result<(W, Vec<u8>, GcExecutionStats)> {
     let config = startup_engine_config(use_epoch_async_yield, options.wasmtime_memory_reservation);
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
@@ -677,7 +713,6 @@ impl GcPauseHist {
         self.len = self.len.saturating_add(1).min(GC_PAUSE_HIST_CAP);
     }
 
-    #[cfg(test)]
     fn snapshot(&self) -> Vec<u64> {
         if self.len < GC_PAUSE_HIST_CAP {
             return self.entries[..self.len].to_vec();
@@ -1018,7 +1053,18 @@ impl RuntimeState {
         *slot = stats;
     }
 
-    #[cfg(test)]
+
+    /// 复制当前运行的 GC 统计快照，避免 integration test 直接窥探 RuntimeState。
+    pub(crate) fn gc_execution_stats_snapshot(&self) -> GcExecutionStats {
+        let last = self
+            .last_gc_stats
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let pause_hist = self.gc_pause_hist_snapshot();
+        GcExecutionStats { last, pause_hist }
+    }
+
     fn gc_pause_hist_snapshot(&self) -> Vec<u64> {
         self.gc_pause_hist
             .lock()

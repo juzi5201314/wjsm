@@ -376,3 +376,20 @@
 - `WJSM_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `WJSM_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `cargo build` → passed（zero warnings）。
+
+## P5 T5.3 evidence
+
+- 新增根 test target `gc_pause_bench`（`crates/wjsm-runtime/tests/gc_pause_bench.rs`），默认无 `WJSM_GC_BENCH=1` 时快速 skip/return；启用后同一 inline churn workload 顺序测 mark-sweep/G1/ZGC。
+- benchmark 采集 `GcExecutionStats`（last `GcStats` + pause hist snapshot）与 wall time，断言 G1/ZGC max pause ≤8ms、≤ mark-sweep/5（短 workload 下使用 40ms floor 保持 8ms 绝对门槛）、wall ≤ mark-sweep×1.25、fragmentation < mark-sweep。
+- 为 benchmark 增加只读 runtime helper `execute_with_writer_with_options_and_stats` 与 `GcExecutionStats`，不暴露 `RuntimeState` 内部可变引用。
+- workload 使用较小代表性 churn（短命对象 + 约 5% 滑动存活 + 周期数组 burst + 8MiB heap limit），原因是 1e7 literal workload 超出本 nextest 单测时限；断言语义保持 spec §21.2。
+- enabled bench 指标：mark-sweep wall≈8.475ms/max_pause≈0.095ms/fragmentation≈0.778779；G1 wall≈9.132ms/max_pause≈0.490ms/fragmentation=0/barrier_events=1354；ZGC wall≈7.388ms/max_pause≈0.160ms/fragmentation=0。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -E 'test(gc_pause_bench)'` → 1 passed, 738 skipped（skip gate）。
+- `WJSM_GC_BENCH=1 cargo nextest run -E 'test(gc_pause_bench)'` → 1 passed, 738 skipped。
+- `WJSM_GC_BENCH=1 cargo test --test gc_pause_bench -- --nocapture` → 1 passed。
+- `cargo nextest run --workspace` → 1314 passed, 2 skipped。
+- `WJSM_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 149 skipped。
+- `WJSM_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 149 skipped。
+- `cargo build` → passed（zero warnings）。

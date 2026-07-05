@@ -396,7 +396,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     diagnostics: Arc<Mutex<Vec<u8>>>,
     writer: W,
     completion_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
-) -> anyhow::Result<(W, Vec<u8>)> {
+) -> anyhow::Result<(W, Vec<u8>, GcExecutionStats)> {
     let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
     let main_result = main.call_async(&mut store, ()).await;
     let main_ok = match &main_result {
@@ -498,6 +498,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     if process_exit_signal.is_none() {
         process_exit_signal = crate::runtime_process::take_process_exit_signal(store.data());
     }
+    let gc_stats = store.data().gc_execution_stats_snapshot();
     drop(store);
 
     let mut writer = writer;
@@ -518,7 +519,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     // Propagate any wasm trap from main() call (must be after output collection)
     main_result?;
 
-    Ok((writer, diag_bytes))
+    Ok((writer, diag_bytes, gc_stats))
 }
 
 #[cfg(test)]
