@@ -4,7 +4,6 @@
 //! 统计。relocation 由后续 `relocate.rs` 接管；这里在 MarkEnd 只负责判定死亡
 //! handle、执行共享 cleanup，并把 handle 发布给 free-list。
 
-use std::collections::HashSet;
 use std::time::Instant;
 
 use wasmtime::Val;
@@ -561,7 +560,7 @@ fn release_dead_handles(ctx: &mut GcContext<'_>, dead_handles: &[Handle]) {
     if dead_handles.is_empty() {
         return;
     }
-    let dead_set = dead_handles.iter().copied().collect::<HashSet<_>>();
+    debug_assert!(dead_handles.windows(2).all(|pair| pair[0] < pair[1]));
     for stage in DEAD_HANDLE_CLEANUP_ORDER {
         match stage {
             DeadHandleCleanupStage::ClearObjTableSlots => {
@@ -571,7 +570,9 @@ fn release_dead_handles(ctx: &mut GcContext<'_>, dead_handles: &[Handle]) {
             }
             DeadHandleCleanupStage::ReclaimOwnerSideTables => {
                 ctx.with_state(|st| {
-                    st.reclaim_unmarked_collection_entries(|h| !dead_set.contains(&h));
+                    st.reclaim_unmarked_collection_entries(|h| {
+                        dead_handles.binary_search(&h).is_err()
+                    });
                 });
             }
             DeadHandleCleanupStage::ProcessWeakRefs => {
