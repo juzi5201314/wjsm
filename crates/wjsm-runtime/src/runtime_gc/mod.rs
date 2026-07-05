@@ -84,6 +84,7 @@ pub mod roots;
 pub mod scheduler;
 pub mod side_table_refs;
 pub mod weak_refs;
+pub mod zgc;
 
 pub use api::{GcAlgorithm, GcContext};
 pub use registry::GcAlgorithmKind;

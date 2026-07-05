@@ -255,3 +255,14 @@
 - `WJSM_TEST_GC=g1 cargo nextest run --workspace` → 1279 passed, 2 skipped。
 - `cargo build` → passed（zero warnings）。
 - DriftCheckDraft：Scope=P3 G1；Compatibility=默认 mark-sweep 未变且 G1 workspace 全绿；Retirement=G1 registry 拒绝路径、单 support cwasm 假设、host/WASM 无 barrier 记录假设、young-only/old-never-compact 临时限制均已退休；Decision=continue to P4。
+
+## P4 T4.1 evidence
+
+- 新增 `runtime_gc::zgc::color`：`ZEntry` 以低 2 bit 承载 `Empty/Marked0/Marked1/Remapped`，`ZColorState` 支持 Marked0/Marked1 双 good 切换与 relocate 期 `good=11`。
+- 新增 `runtime_gc::zgc::page`：`ZPageSpace` 使用 host-side page metadata，按 dynamic heap start 计算 page index/grow，metadata 不写入 wasm dynamic heap；支持 live bytes、relocation set 与全死 page immediate reclaim。
+- `recolor_live_obj_table_entries` 作为 attach/restore owner helper，将非空 obj_table entry 统一 recolor 到当前 good，保证 live entry 不保持 `00`。
+- T4.1 未打开 ZGC registry：计划 T4.2 生成 ZGC support cwasm 后再执行 `WJSM_TEST_GC=zgc` 冒烟，避免在无 load barrier support 时提供伪运行路径。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(zgc)'` → 11 passed, 164 skipped。
+- `cargo nextest run -p wjsm-runtime` → 173 passed, 2 skipped。
