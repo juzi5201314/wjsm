@@ -5,6 +5,7 @@ use wjsm_backend_wasm::{GcFlavor, emit_support_module};
 
 #[derive(Default)]
 struct SupportModuleInfo {
+    imported_names: Vec<String>,
     imported_funcs: Vec<String>,
     exports: HashMap<String, u32>,
     bodies: Vec<Vec<OwnedOperator>>,
@@ -24,8 +25,8 @@ enum OwnedOperator {
     MemoryCopy,
 }
 
-fn parse_support_module() -> SupportModuleInfo {
-    let wasm = emit_support_module(GcFlavor::MarkSweep).expect("emit support module");
+fn parse_support_module_with(flavor: GcFlavor) -> SupportModuleInfo {
+    let wasm = emit_support_module(flavor).expect("emit support module");
     let mut info = SupportModuleInfo::default();
 
     for payload in Parser::new(0).parse_all(&wasm) {
@@ -36,6 +37,7 @@ fn parse_support_module() -> SupportModuleInfo {
                     if matches!(import.ty, TypeRef::Func(_)) {
                         info.imported_funcs.push(import.name.to_string());
                     }
+                    info.imported_names.push(import.name.to_string());
                 }
             }
             Payload::ExportSection(section) => {
@@ -91,6 +93,10 @@ fn parse_support_module() -> SupportModuleInfo {
     }
 
     info
+}
+
+fn parse_support_module() -> SupportModuleInfo {
+    parse_support_module_with(GcFlavor::MarkSweep)
 }
 
 fn exported_body<'a>(info: &'a SupportModuleInfo, name: &str) -> &'a [OwnedOperator] {
@@ -188,4 +194,57 @@ fn support_obj_set_re_resolves_old_ptr_before_resize_copy() {
         contains_subsequence(body, &re_resolve_old_ptr),
         "support obj_set must reload old_ptr from obj_table immediately before resize memory.copy"
     );
+}
+
+#[test]
+fn g1_support_write_helpers_emit_barrier_events() {
+    const G_BARRIER_BUF_PTR: u32 = 25;
+    const G_BARRIER_BUF_END: u32 = 26;
+    const EVENT_SIZE: i32 = 24;
+
+    let info = parse_support_module_with(GcFlavor::G1);
+    let barrier_flush_idx = imported_func_index(&info, "gc_barrier_flush");
+
+    for export in ["obj_set", "elem_set"] {
+        let body = exported_body(&info, export);
+        let ops: HashSet<_> = body.iter().copied().collect();
+        for required in [
+            OwnedOperator::GlobalGet(G_BARRIER_BUF_PTR),
+            OwnedOperator::GlobalGet(G_BARRIER_BUF_END),
+            OwnedOperator::GlobalSet(G_BARRIER_BUF_PTR),
+            OwnedOperator::I32Const(EVENT_SIZE),
+            OwnedOperator::Call(barrier_flush_idx),
+        ] {
+            assert!(
+                ops.contains(&required),
+                "g1 support `{export}` body missing barrier event operator {required:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn mark_sweep_support_write_helpers_do_not_emit_barrier_events() {
+    let info = parse_support_module();
+    let barrier_flush_idx = imported_func_index(&info, "gc_barrier_flush");
+
+    for export in ["obj_set", "elem_set"] {
+        let body = exported_body(&info, export);
+        assert!(
+            !body.contains(&OwnedOperator::Call(barrier_flush_idx)),
+            "mark-sweep support `{export}` must not call gc_barrier_flush"
+        );
+    }
+}
+
+#[test]
+fn g1_support_has_no_linear_card_or_region_meta_imports() {
+    let info = parse_support_module_with(GcFlavor::G1);
+
+    for retired in ["__card_table_base", "__region_meta_base"] {
+        assert!(
+            !info.imported_names.iter().any(|name| name == retired),
+            "g1 support must not import retired linear metadata global `{retired}`"
+        );
+    }
 }

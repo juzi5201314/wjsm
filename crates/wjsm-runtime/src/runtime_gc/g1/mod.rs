@@ -7,7 +7,7 @@ use super::api::{
 };
 use super::mark_sweep::MarkSweepCollector;
 use crate::runtime_gc::context::object_size_from_memory;
-use region::{REGION_SIZE, RegionKind, RegionSpace};
+use region::RegionSpace;
 use rset::{BarrierEvent, G1RSet, SlotOwner};
 use wasmtime::Val;
 use wjsm_ir::constants;
@@ -42,18 +42,6 @@ impl G1Collector {
             dynamic_start,
             Self::committed_end(ctx),
         );
-    }
-
-    fn install_next_eden_window(&mut self, ctx: &mut GcContext<'_>) -> bool {
-        let Some(region_idx) = self.regions.take_free_as(RegionKind::Eden) else {
-            return false;
-        };
-        let Some(start) = self.regions.region_start(region_idx) else {
-            return false;
-        };
-        ctx.set_heap_ptr(start);
-        ctx.alloc_window_set(start, start + REGION_SIZE);
-        true
     }
 
     fn sync_after_delegate(&mut self, ctx: &mut GcContext<'_>) {
@@ -169,9 +157,6 @@ impl GcAlgorithm for G1Collector {
         roots: &mut dyn RootProvider,
         req: AllocRequest,
     ) -> Option<usize> {
-        if req.size <= REGION_SIZE / 2 && self.install_next_eden_window(ctx) {
-            return self.fallback.alloc_slow(ctx, roots, req);
-        }
         let ptr = self.fallback.alloc_slow(ctx, roots, req);
         self.sync_after_delegate(ctx);
         ptr

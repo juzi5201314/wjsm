@@ -650,24 +650,40 @@ pub(super) async fn setup_shared_env_and_support(
         define_env_global(linker, store, name, ty, true, init);
     }
 
+    let gc_kind = {
+        let gc = store
+            .data()
+            .gc_algorithm
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match gc.name() {
+            "g1" => crate::GcAlgorithmKind::G1,
+            "zgc" => crate::GcAlgorithmKind::Zgc,
+            _ => crate::GcAlgorithmKind::MarkSweep,
+        }
+    };
+    let support_flavor = match gc_kind {
+        crate::GcAlgorithmKind::MarkSweep => wjsm_backend_wasm::GcFlavor::MarkSweep,
+        crate::GcAlgorithmKind::G1 => wjsm_backend_wasm::GcFlavor::G1,
+        crate::GcAlgorithmKind::Zgc => wjsm_backend_wasm::GcFlavor::Zgc,
+    };
+
     // 获取 support module：优先从 embedded cwasm deserialize，否则从 emit_support_module 编译。
     // cwasm 的 precompile 配置必须与运行时 engine 配置匹配（epoch interruption 等），
     // 不匹配时 fallback 到 Module::new 从 wasm bytes 编译。
-    let support_module = if let Some(cwasm_bytes) = embedded_support_cwasm() {
+    let support_module = if let Some(cwasm_bytes) = embedded_support_cwasm_for(gc_kind) {
         match unsafe { Module::deserialize(engine, cwasm_bytes) } {
             Ok(m) => m,
             Err(_) => {
                 // cwasm 配置不匹配（如 epoch interruption），fallback 到从 wasm bytes 编译
-                let support_wasm =
-                    wjsm_backend_wasm::emit_support_module(wjsm_backend_wasm::GcFlavor::MarkSweep)?;
+                let support_wasm = wjsm_backend_wasm::emit_support_module(support_flavor)?;
                 Module::new(engine, &support_wasm)
                     .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
             }
         }
     } else {
         // build-time snapshot 生成路径：没有 embedded cwasm，直接从 emit_support_module 编译。
-        let support_wasm =
-            wjsm_backend_wasm::emit_support_module(wjsm_backend_wasm::GcFlavor::MarkSweep)?;
+        let support_wasm = wjsm_backend_wasm::emit_support_module(support_flavor)?;
         Module::new(engine, &support_wasm)
             .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
     };

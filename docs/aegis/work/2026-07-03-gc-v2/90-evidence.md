@@ -174,3 +174,16 @@
 - `cargo check -p wjsm-runtime` → passed（zero warnings）。
 - `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 11 passed, 139 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__hello)'` → 1 passed, 735 skipped。
+
+## P3 T3.3 evidence
+
+- `support_module.rs` 现在可 emit `GcFlavor::G1` support module；`GcFlavor::Zgc` 仍显式拒绝，避免伪 artifact。
+- `support_object_helpers.rs::emit_obj_set` 与 `support_module.rs::emit_elem_set` 在 G1 flavor 下写入 24B barrier event：空间不足先 `gc_barrier_flush`，写入 flags/slot_addr/old_value/new_value，推进 `__barrier_buf_ptr`；mark-sweep flavor 不生成该序列。
+- `wjsm-runtime-support` build.rs 预编译 `wjsm_support_mark_sweep.cwasm` 与 `wjsm_support_g1.cwasm`；ABI 可用 flavor 更新为 `mark-sweep,g1`，ZGC 保持 absent。
+- `runtime_startup.rs` 按当前 `GcAlgorithm` 名称选择 support flavor；`embedded_support_cwasm_for(G1)` 使用 G1 embedded artifact，mark-sweep 默认路径保持不变。
+- 调试修复：`WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` 首次暴露 4 个 fixture 失败，根因为 G1 skeleton 在 young GC 未实现前切换后续 Eden region，破坏 mark-sweep fallback 的 contiguous heap 扫描假设；T3.3 将 `G1Collector::alloc_slow` 在 young GC 交付前保持委托 mark-sweep 连续分配，仅同步 region metadata。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-backend-wasm -p wjsm-runtime-support -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-backend-wasm` → 60 passed。
+- `cargo nextest run -p wjsm-runtime-support` → 9 passed。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 588 passed, 148 skipped。

@@ -442,7 +442,7 @@ fn emit_obj_get(_flavor: GcFlavor) -> Function {
     func
 }
 
-fn emit_obj_set(_flavor: GcFlavor) -> Function {
+fn emit_obj_set(flavor: GcFlavor) -> Function {
     // local 0 = $boxed (i64), local 1 = $name_id (i32), local 2 = $value (i64)
     // local 3 = proto_handle (i32, reused from unused pad)
     // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
@@ -694,6 +694,7 @@ fn emit_obj_set(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
     // 可写，更新 value (offset 8)
+    emit_g1_barrier_event(&mut func, flavor, 6, 8, 2);
     func.instruction(&WasmInstruction::LocalGet(6));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I64Store(MemArg {

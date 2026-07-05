@@ -15,9 +15,6 @@ fn main() -> anyhow::Result<()> {
 
     let out_dir =
         std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR not set by cargo"));
-    let flavor = wjsm_backend_wasm::GcFlavor::MarkSweep;
-    let suffix = flavor.artifact_suffix();
-
     let mut cfg = wasmtime::Config::new();
     // 运行时 engine 默认启用 epoch interruption（async yield 路径），
     // precompile 必须匹配，否则 Module::deserialize 会拒绝：
@@ -25,12 +22,19 @@ fn main() -> anyhow::Result<()> {
     cfg.epoch_interruption(true);
     cfg.wasm_bulk_memory(true);
     let engine = wasmtime::Engine::new(&cfg)?;
-    let wasm = wjsm_backend_wasm::emit_support_module(flavor)?;
-    let cwasm_bytes = engine.precompile_module(&wasm)?;
-    std::fs::write(
-        out_dir.join(format!("wjsm_support_{suffix}.cwasm")),
-        &cwasm_bytes,
-    )?;
+
+    for flavor in [
+        wjsm_backend_wasm::GcFlavor::MarkSweep,
+        wjsm_backend_wasm::GcFlavor::G1,
+    ] {
+        let suffix = flavor.artifact_suffix();
+        let wasm = wjsm_backend_wasm::emit_support_module(flavor)?;
+        let cwasm_bytes = engine.precompile_module(&wasm)?;
+        std::fs::write(
+            out_dir.join(format!("wjsm_support_{suffix}.cwasm")),
+            &cwasm_bytes,
+        )?;
+    }
 
     // 把 backend support_module emit 与 abi 文件纳入重建链。
     println!("cargo:rerun-if-changed=build.rs");

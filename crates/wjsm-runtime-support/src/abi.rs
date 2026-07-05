@@ -35,9 +35,10 @@ pub enum SupportGcFlavor {
     Zgc,
 }
 
-/// 当前随 build-time artifact 发布的 support flavor。G1/ZGC 变体入口已命名，
+/// 当前随 build-time artifact 发布的 support flavor。ZGC 变体入口已命名，
 /// 但在对应阶段实现前不得进入 ABI union。
-pub const AVAILABLE_SUPPORT_GC_FLAVORS: &[SupportGcFlavor] = &[SupportGcFlavor::MarkSweep];
+pub const AVAILABLE_SUPPORT_GC_FLAVORS: &[SupportGcFlavor] =
+    &[SupportGcFlavor::MarkSweep, SupportGcFlavor::G1];
 
 /// Imported env global 的值类型。
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -286,6 +287,9 @@ mod tests {
 
     #[test]
     fn available_support_gc_flavors_count_locked() {
-        assert_eq!(AVAILABLE_SUPPORT_GC_FLAVORS, &[SupportGcFlavor::MarkSweep]);
+        assert_eq!(
+            AVAILABLE_SUPPORT_GC_FLAVORS,
+            &[SupportGcFlavor::MarkSweep, SupportGcFlavor::G1]
+        );
     }
 }

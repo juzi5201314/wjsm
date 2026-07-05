@@ -338,6 +338,9 @@ static INSTALLED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
 static DEFAULT_MARK_SWEEP_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
     wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::MarkSweep)
 });
+static DEFAULT_G1_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
+    wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::G1)
+});
 
 /// 安装编译时嵌入的 support cwasm；进程内只需调用一次（重复 set 静默忽略）。
 /// 未显式调用时，`embedded_support_cwasm()` 使用 build-time 默认 artifact。
@@ -353,6 +356,14 @@ pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
         .get()
         .copied()
         .or(*DEFAULT_MARK_SWEEP_SUPPORT_CWASM)
+}
+
+pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]> {
+    match kind {
+        GcAlgorithmKind::MarkSweep => embedded_support_cwasm(),
+        GcAlgorithmKind::G1 => *DEFAULT_G1_SUPPORT_CWASM,
+        GcAlgorithmKind::Zgc => None,
+    }
 }
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     wasm_bytes: &[u8],

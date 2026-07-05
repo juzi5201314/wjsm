@@ -112,6 +112,7 @@ const HOST_OBJ_GET_RUNTIME_KEY: u32 = 22;
 const HOST_OBJ_SET_RUNTIME_KEY: u32 = 23;
 const HOST_OBJ_DELETE_RUNTIME_KEY: u32 = 24;
 
+const HOST_GC_BARRIER_FLUSH: u32 = 25;
 const NUM_HOST_IMPORTS: u32 = 26;
 
 // ── Defined function indices ──────────────────────────────────────────
@@ -184,6 +185,78 @@ const G_BARRIER_BUF_PTR: u32 = 25;
 #[allow(dead_code)]
 const G_BARRIER_BUF_END: u32 = 26;
 
+fn emit_g1_barrier_event(
+    func: &mut Function,
+    flavor: GcFlavor,
+    slot_addr_local: u32,
+    slot_offset: u64,
+    new_value_local: u32,
+) {
+    if flavor != GcFlavor::G1 {
+        return;
+    }
+
+    // 缓冲区剩余不足 24B 时先 flush；flush 只 drain event，不触发 GC/move。
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
+    func.instruction(&WasmInstruction::I32Const(
+        constants::GC_BARRIER_EVENT_SIZE as i32,
+    ));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_END));
+    func.instruction(&WasmInstruction::I32GtU);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::Call(HOST_GC_BARRIER_FLUSH));
+    func.instruction(&WasmInstruction::End);
+
+    // flags:u32 = 0。
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    // slot_addr:u32 指向实际 inline value slot。
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
+    func.instruction(&WasmInstruction::LocalGet(slot_addr_local));
+    if slot_offset != 0 {
+        func.instruction(&WasmInstruction::I32Const(slot_offset as i32));
+        func.instruction(&WasmInstruction::I32Add);
+    }
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 4,
+        align: 2,
+        memory_index: 0,
+    }));
+    // old_value:i64 必须取写前槽位的 NaN-boxed value。
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
+    func.instruction(&WasmInstruction::LocalGet(slot_addr_local));
+    func.instruction(&WasmInstruction::I64Load(MemArg {
+        offset: slot_offset,
+        align: 3,
+        memory_index: 0,
+    }));
+    func.instruction(&WasmInstruction::I64Store(MemArg {
+        offset: 8,
+        align: 3,
+        memory_index: 0,
+    }));
+    // new_value:i64 来自当前写入值，flush 不重读 slot。
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
+    func.instruction(&WasmInstruction::LocalGet(new_value_local));
+    func.instruction(&WasmInstruction::I64Store(MemArg {
+        offset: 16,
+        align: 3,
+        memory_index: 0,
+    }));
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
+    func.instruction(&WasmInstruction::I32Const(
+        constants::GC_BARRIER_EVENT_SIZE as i32,
+    ));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_BARRIER_BUF_PTR));
+}
+
 // Imported env globals — 与 abi::ENV_GLOBALS 同步：27 项。
 const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     ("__func_props", ValType::I32, true),
@@ -251,7 +324,7 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
 
 /// 生成指定 GC flavor 的 support module wasm bytes。
 pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
-    if flavor != GcFlavor::MarkSweep {
+    if flavor == GcFlavor::Zgc {
         bail!("support module for {flavor:?} is not implemented yet");
     }
     let mut module = Module::new();
@@ -1033,8 +1106,8 @@ fn emit_elem_get(_flavor: GcFlavor) -> Function {
 
 // ── elem_set (param $boxed i64) (param $index i32) (param $value i64) — Type 9 ──
 // 移植自 compiler_array_helpers.rs::compile_array_helpers elem_set 段。
-fn emit_elem_set(_flavor: GcFlavor) -> Function {
-    let mut func = Function::new(vec![(2, ValType::I32)]);
+fn emit_elem_set(flavor: GcFlavor) -> Function {
+    let mut func = Function::new(vec![(3, ValType::I32)]);
     // 检查 TAG_ARRAY
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I64Const(32));
@@ -1078,6 +1151,9 @@ fn emit_elem_set(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I32Const(8));
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::LocalSet(5));
+    emit_g1_barrier_event(&mut func, flavor, 5, 0, 2);
+    func.instruction(&WasmInstruction::LocalGet(5));
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I64Store(MemArg {
         offset: 0,
@@ -1224,10 +1300,14 @@ mod tests {
     }
 
     #[test]
+    fn g1_support_module_passes_wasmparser_validation() {
+        let bytes = emit_support_module(GcFlavor::G1).expect("emit");
+        wasmparser::validate(&bytes).expect("g1 support.wasm must validate");
+    }
+
+    #[test]
     fn unsupported_support_flavors_do_not_emit_fake_modules() {
-        for flavor in [GcFlavor::G1, GcFlavor::Zgc] {
-            assert!(emit_support_module(flavor).is_err());
-        }
+        assert!(emit_support_module(GcFlavor::Zgc).is_err());
     }
 
     #[test]
