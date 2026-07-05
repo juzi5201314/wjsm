@@ -324,3 +324,11 @@
 - `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1304 passed, 2 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `cargo build` → passed（zero warnings）。
+
+## P4 T4.5 evidence
+
+- 审计 `ZgcCollector` v2 hooks：`alloc_slow` flush barrier → Mark/Relocate budgeted progress → fallback allocation；`safepoint_step` 派发 Mark/Relocate；`collect_full` 同步完整 mark+relocate 周期；`on_host_write`/`barrier_flush` 进入 SATB；`load_barrier_slow` 在 Mark phase 协助标记、Relocate phase 协助 heal。
+- `runtime_gc::registry::create(Zgc)` 已返回 `ZgcCollector::new()`；无残余 ZGC 未实现路径。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(zgc)'` → 22 passed, 165 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。

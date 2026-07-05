@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T4.5 组装 ZGC registry`（in progress）。
-- Next: `T4.6 验证 P4 阶段`。
+- Active: `T4.6 验证 P4 阶段`（in progress）。
+- Next: `T5.1 实现三入口选择`。
 
 ## Completed todos
 
@@ -45,18 +45,19 @@
   - `T4.3 实现 ZGC mark`
 
   - `T4.4 实现 ZGC relocate`
+  - `T4.5 组装 ZGC registry`
 ## Active slice card
 
-- Goal: P4 T4.5，审计并收口 `ZgcCollector` 的完整 v2 `GcAlgorithm` 钩子与 registry 接入：alloc/mark/relocate/full/barrier/load-barrier 路径协同一致。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T4.5。
-- Files: `zgc/mod.rs`、`registry.rs`，必要时只做收口修正。
-- Boundary: 本 slice 不新增算法阶段；只确认 ZGC 对外组装、registry 与 residual fallback/未实现路径已干净。
-- Verification: ZGC 单测全绿、`WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` 与 workspace 绿。
-- Stop: T4.5 验证通过，checkpoint/evidence 更新，然后进入 T4.6。
+- Goal: P4 T4.6，执行 ZGC 阶段矩阵终验，确认默认 mark-sweep、`WJSM_TEST_GC=g1` 与 `WJSM_TEST_GC=zgc` 关键路径均绿。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T4.6。
+- Files: 仅更新 evidence/checkpoint；如验证失败则回到对应 owner 修复。
+- Boundary: 本 slice 不新增功能，只做 P4 阶段验收与漂移检查。
+- Verification: `WJSM_TEST_GC=zgc cargo nextest run --workspace` 全量绿 + GC 子集绿；默认/G1 回归冒烟；build 零 warning。
+- Stop: T4.6 验证通过，checkpoint/evidence 更新，然后进入 P5/T5.1。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2/P3、T4.1、T4.2、T4.3、T4.4 已完成；T4.5 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3、T4.1、T4.2、T4.3、T4.4、T4.5 已完成；T4.6 正在进行。
 
 ## Blocked-on items
 
@@ -66,16 +67,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T4.5。
-2. 审计 ZgcCollector alloc/safepoint/full/barrier/load-barrier 组装、registry Zgc → Ok。
-3. 完成后运行 T4.5 指定验证并进入 T4.6 阶段矩阵。
+1. 读取本文件、`90-evidence.md` 与父计划 T4.6。
+2. 执行 P4 矩阵终验：ZGC workspace + GC 子集、默认 workspace、G1 happy、build 零 warning。
+3. 完成后记录 P4 closure 并进入 T5.1。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T4.4 已完成 relocation/heal，当前进入 ZGC 组装收口。
-- Does current work still serve goal and stop condition? 是，T4.5 只审计/收口 ZGC registry 与 hooks，不提前做 P5。
-- Compatibility boundary: 默认 mark-sweep、G1 与 ZGC happy/workspace 路径保持。
-- New owner/fallback/adapter/branch: 无新增 owner；ZGC 子模块 owner 已在 T4.1-T4.4 建立。
-- Retirement track: ZGC 不搬迁限制已退休；T4.5 清理残余组装缺口。
-- Evidence sufficiency: T4.4 sufficient；T4.5 pending。
+- Does current work still serve original task intent? 是，T4.5 已完成 ZGC 组装收口，当前进入 P4 验收。
+- Does current work still serve goal and stop condition? 是，T4.6 只验证 P4，不提前实现 P5 observability。
+- Compatibility boundary: 默认 mark-sweep、G1 与 ZGC 三路径均需保持绿。
+- New owner/fallback/adapter/branch: 无新增 owner。
+- Retirement track: ZGC 残余组装缺口已清理；T4.6 确认 P4 无未退休路径。
+- Evidence sufficiency: T4.5 sufficient；T4.6 pending。
 - Decision: continue。
