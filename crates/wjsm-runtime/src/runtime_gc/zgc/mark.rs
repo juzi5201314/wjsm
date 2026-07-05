@@ -39,6 +39,7 @@ pub(super) struct ZMarkState {
     satb_flushes: usize,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MarkObject {
     handle: Handle,
@@ -428,6 +429,7 @@ fn decode_buffer_old_values(input: &[u8]) -> impl Iterator<Item = Value> + '_ {
     })
 }
 
+#[cfg(test)]
 fn snapshot_mark_objects(ctx: &mut GcContext<'_>, pages: &ZPageSpace) -> Vec<MarkObject> {
     let obj_table_ptr = ctx.obj_table_ptr();
     let obj_table_count = ctx.obj_table_count();
@@ -510,6 +512,7 @@ fn build_cleanup_plan_from_heap(
     })
 }
 
+#[cfg(test)]
 fn build_cleanup_plan(
     objects: &[MarkObject],
     pages: &ZPageSpace,
