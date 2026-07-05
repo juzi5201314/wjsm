@@ -1,8 +1,8 @@
 //! ZGC 增量标记 owner。
 //!
-//! 本模块维护本周期 mark bitmap、worklist、SATB 旧引用缓冲、dead handle 集合与
-//! page live-bytes 统计。relocation 由后续 `relocate.rs` 接管；这里在 MarkEnd 只负责
-//! 判定死亡 handle、执行共享 cleanup，并把 handle 发布给 free-list。
+//! 本模块维护本周期 mark bitmap、worklist、SATB 旧引用缓冲与 page live-bytes
+//! 统计。relocation 由后续 `relocate.rs` 接管；这里在 MarkEnd 只负责判定死亡
+//! handle、执行共享 cleanup，并把 handle 发布给 free-list。
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -34,7 +34,6 @@ pub(super) struct ZMarkState {
     mark_bits: MarkBitmap,
     worklist: Vec<Handle>,
     satb_handles: Vec<Handle>,
-    dead_handle_set: Vec<Handle>,
     active: bool,
     started_at: Option<Instant>,
     barrier_events: usize,
@@ -95,7 +94,6 @@ impl ZMarkState {
         self.mark_bits.reset(ctx.obj_table_count());
         self.worklist.clear();
         self.satb_handles.clear();
-        self.dead_handle_set.clear();
         self.barrier_events = 0;
         self.satb_flushes = 0;
         pages.reset_live_bytes();
@@ -315,14 +313,12 @@ impl ZMarkState {
         good: ZColor,
     ) -> GcStats {
         let started_at = self.started_at.unwrap_or_else(Instant::now);
-        let objects = snapshot_mark_objects(ctx, pages);
-        let plan = build_cleanup_plan(&objects, pages, &self.mark_bits, good);
+        let plan = build_cleanup_plan_from_heap(ctx, pages, &self.mark_bits, good);
         pages.reset_live_bytes();
         for (idx, &bytes) in plan.live_by_page.iter().enumerate() {
             pages.set_live_bytes(idx, bytes);
         }
         let reclaimed_pages = pages.reclaim_dead_pages();
-        self.dead_handle_set = plan.dead_handles.clone();
         release_dead_handles(ctx, &plan.dead_handles);
         if !plan.dead_handles.is_empty() || !reclaimed_pages.is_empty() {
             ctx.increment_gc_epoch();
@@ -466,6 +462,52 @@ fn snapshot_mark_objects(ctx: &mut GcContext<'_>, pages: &ZPageSpace) -> Vec<Mar
             });
         }
         out
+    })
+}
+
+fn build_cleanup_plan_from_heap(
+    ctx: &mut GcContext<'_>,
+    pages: &ZPageSpace,
+    mark_bits: &MarkBitmap,
+    good: ZColor,
+) -> CleanupPlan {
+    let obj_table_ptr = ctx.obj_table_ptr();
+    let obj_table_count = ctx.obj_table_count();
+    ctx.with_memory(|data| {
+        let mut plan = CleanupPlan {
+            live_by_page: vec![0; pages.page_count()],
+            ..CleanupPlan::default()
+        };
+        for h in 0..obj_table_count as Handle {
+            let slot = obj_table_ptr + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            let Some(bytes) = data.get(slot..slot + 4) else {
+                break;
+            };
+            let entry = zentry_from_raw(u32::from_le_bytes(bytes.try_into().unwrap()));
+            if entry.is_empty() {
+                continue;
+            }
+            let ptr = entry.ptr() as usize;
+            if pages.page_index(ptr).is_none() {
+                continue;
+            }
+            let Some(size) = object_size_from_memory(data, ptr) else {
+                debug_assert!(
+                    false,
+                    "ZGC mark: live obj_table entry has unreadable header"
+                );
+                continue;
+            };
+            let live = mark_bits.is_marked(h) || entry.color() == good;
+            if live {
+                plan.live_handles = plan.live_handles.saturating_add(1);
+                add_live_bytes(&mut plan.live_by_page, pages, ptr, size);
+            } else {
+                plan.dead_handles.push(h);
+                plan.freed_bytes = plan.freed_bytes.saturating_add(size);
+            }
+        }
+        plan
     })
 }
 
