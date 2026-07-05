@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T3.4 实现 G1 young GC`（in progress）。
-- Next: `T3.5 实现 G1 concurrent mark`。
+- Active: `T3.5 实现 G1 concurrent mark`（in progress）。
+- Next: `T3.6 实现 G1 mixed GC`。
 
 ## Completed todos
 
@@ -34,19 +34,20 @@
   - `T3.1 实现 G1 region`
   - `T3.2 实现 G1 rset barrier`
   - `T3.3 生成 G1 support 变体`
+  - `T3.4 实现 G1 young GC`
 
 ## Active slice card
 
-- Goal: P3 T3.4，实现 G1 STW young GC：young roots、复制/晋升、obj_table 更新、dirty card re-dirty、weak/side-table cleanup 与 handle 复用协议。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §10.3、§14。
-- Files: 新建 `g1/young.rs`；新增/扩展 `runtime_gc/roots.rs` 与 `runtime_gc/object_walker.rs`，更新 `g1/mod.rs` 与相关测试/fixture。
-- Boundary: 本 slice 只实现 STW young GC；不实现 concurrent mark、mixed GC 或 ZGC。复制期间不走 `alloc_slow`，避免 INV-C2 额外 GC 点。
-- Verification: young 单测覆盖 age 晋升、survivor 溢出、humongous 不动、dirty card re-dirty、晋升目的 card re-dirty、immortal 扫描跳过 padding/abandoned、oblet 拆分不漏槽、WeakRef cleanup 先于 handle 复用；新增 `gc_g1_young_churn.js` fixture 并跑 `WJSM_TEST_GC=g1`。
-- Stop: T3.4 验证通过，checkpoint/evidence 更新，然后进入 T3.5。
+- Goal: P3 T3.5，实现 G1 增量 concurrent mark 状态机：IHOP 触发、initial mark、safepoint budget drain、final remark 与 cleanup。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §10.4、§12、§14。
+- Files: 新建 `g1/concurrent_mark.rs`，更新 `g1/mod.rs`、`g1/region.rs`、必要的 stats/roots/object_walker helper。
+- Boundary: 本 slice 只实现 old/humongous 增量标记与 cleanup；mixed evacuation 留给 T3.6，ZGC 留给 P4。
+- Verification: concurrent mark 单测覆盖 SATB 覆盖写旧引用存活、mark 中删除 host side-table 旧 root 仍存活到本周期、implicit-black region 不被 cleanup 回收、WeakRef/FinalizationRegistry 指向 old dead 对象时先清理再复用 handle；新增/运行 `WJSM_TEST_GC=g1` 长循环 fixture。
+- Stop: T3.5 验证通过，checkpoint/evidence 更新，然后进入 T3.6。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2、T3.3 已完成；T3.4 正在进行。
+详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2、T3.3、T3.4 已完成；T3.5 正在进行。
 
 ## Blocked-on items
 
@@ -56,16 +57,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T3.4 / spec §10.3、§14。
-2. 继续 young GC：先建立统一 object walker 与 immortal/dirty-card root 扫描，再实现 young copy/promote。
-3. 完成后运行 young 单测、新 fixture、`cargo check -p wjsm-runtime` 与 `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'`。
+1. 读取本文件、`90-evidence.md` 与父计划 T3.5 / spec §10.4、§12、§14。
+2. 继续 concurrent mark：先建立 mark cycle state 与 SATB worklist，再实现 final remark/cleanup。
+3. 完成后运行 concurrent mark 单测、相关 fixture、`cargo check -p wjsm-runtime` 与 `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'`。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T3.3 已完成 G1 support event 生成，当前进入 G1 young GC。
-- Does current work still serve goal and stop condition? 是，T3.4 只交付 STW young GC，不提前实现 concurrent mark/mixed。
-- Compatibility boundary: 默认 mark-sweep 行为保持；G1 young GC 必须遵守 handle-only 引用与 obj_table 更新契约。
-- New owner/fallback/adapter/branch: `runtime_gc::g1::young` 将成为 young evacuation owner；`object_walker` 成为对象引用槽遍历 owner。
-- Retirement track: 单一 support cwasm 假设已退休；T3.4 开始退休 G1 仅委托 mark-sweep 全收集的临时路径。
-- Evidence sufficiency: T3.3 sufficient；T3.4 pending。
+- Does current work still serve original task intent? 是，T3.4 已完成 STW young GC，当前进入 G1 增量标记。
+- Does current work still serve goal and stop condition? 是，T3.5 只交付 concurrent mark，不提前实现 mixed evacuation。
+- Compatibility boundary: 默认 mark-sweep 行为保持；G1 mark bitmap/implicit-black metadata 仅由 `g1::concurrent_mark` 维护。
+- New owner/fallback/adapter/branch: `runtime_gc::g1::concurrent_mark` 将成为 old/humongous 标记与 cleanup owner；`g1::young` 继续只负责 young evacuation。
+- Retirement track: G1 仅委托 mark-sweep 全收集的临时路径已退休；T3.5 开始退休“old/humongous 永不回收”的临时限制。
+- Evidence sufficiency: T3.4 sufficient；T3.5 pending。
 - Decision: continue。

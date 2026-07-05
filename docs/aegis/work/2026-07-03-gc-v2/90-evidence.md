@@ -187,3 +187,21 @@
 - `cargo nextest run -p wjsm-backend-wasm` → 60 passed。
 - `cargo nextest run -p wjsm-runtime-support` → 9 passed。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 588 passed, 148 skipped。
+
+## P3 T3.4 evidence
+
+- 新增 `runtime_gc::object_walker` 作为对象引用槽遍历 owner；mark-sweep marker 改用同一 walker，避免 G1/ZGC 复制 proto/property/array/side-table-backed 引用扫描逻辑。
+- 新增 `runtime_gc::g1::young`：STW young collection 从 shadow/host roots、immortal 对象引用槽、dirty card/precise slot 收集 young roots，复制 Eden/Survivor live 对象，按 age 晋升 Old 或保留 Survivor，并更新 obj_table。
+- G1 allocation slow path 使用当前 Eden bump window；window 不足时先 young collect，再按需 grow region metadata/linear memory，避免 T3.3 暂态中每次 host 分配占用整 region。
+- `G1RSet` 扩充 dirty card snapshot/clear 与 card re-dirty helper；young GC 在 dirty 槽仍指向 young 或 promoted destination 落在 card 上时重新标脏。
+- Weak/side-table cleanup 在 freed handle 归还前执行；freed young handles 先清理 side tables，再写 obj_table=0 并归还 handle free-list。
+- 新增 `fixtures/happy/gc_g1_young_churn.js`，覆盖长期 root 通过已有 property 与固定数组元素反复指向 young child；默认 mark-sweep 与 `WJSM_TEST_GC=g1` 都通过。
+- 调试修复：初版 young allocation 每次 `alloc_slow` 都取新 Eden region，导致 host 分配过度消耗 region 并触发大量 fixture 失败；根因是 host 分配也走 `alloc_slow`，修正为优先在当前 Eden bump 指针内分配。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime` → 150 passed, 2 skipped。
+- `cargo nextest run -E 'test(happy__gc_g1_young_churn)'` → 1 passed, 736 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__gc_g1_young_churn)'` → 1 passed, 736 skipped。
+- `cargo nextest run -E 'test(happy__)'` → 589 passed, 148 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 589 passed, 148 skipped。
+- `cargo nextest run --workspace` → 1265 passed, 2 skipped。

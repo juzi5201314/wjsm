@@ -101,6 +101,26 @@ impl G1RSet {
             .map(|slots| slots.iter().copied())
     }
 
+    pub fn dirty_card_snapshot(&self) -> Vec<usize> {
+        self.dirty_cards.iter().copied().collect()
+    }
+
+    pub fn precise_slot_snapshot(&self, card_idx: usize) -> Vec<usize> {
+        self.precise_slots
+            .get(&card_idx)
+            .map(|slots| slots.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn clear_card(&mut self, card_idx: usize) {
+        self.dirty_cards.remove(&card_idx);
+        self.precise_slots.remove(&card_idx);
+        self.card_write_counts.remove(&card_idx);
+    }
+
+    pub fn mark_dirty_slot(&mut self, slot_addr: usize, card_idx: usize) {
+        self.mark_dirty(slot_addr, card_idx);
+    }
     pub fn satb_handles(&self) -> &[u32] {
         &self.satb_handles
     }
@@ -136,8 +156,13 @@ pub fn decode_buffer(input: &[u8]) -> impl Iterator<Item = BarrierEvent> + '_ {
 }
 
 fn needs_rset_edge(owner_kind: RegionKind, new_kind: Option<RegionKind>) -> bool {
-    matches!(owner_kind, RegionKind::Old | RegionKind::Immortal)
-        && matches!(new_kind, Some(RegionKind::Eden | RegionKind::Survivor))
+    matches!(
+        owner_kind,
+        RegionKind::Old
+            | RegionKind::HumongousStart
+            | RegionKind::HumongousCont
+            | RegionKind::Immortal
+    ) && matches!(new_kind, Some(RegionKind::Eden | RegionKind::Survivor))
 }
 
 #[cfg(test)]

@@ -1,11 +1,11 @@
 mod region;
 mod rset;
+mod young;
 
 use super::api::{
     AllocRequest, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget, StepOutcome,
     Value,
 };
-use super::mark_sweep::MarkSweepCollector;
 use crate::runtime_gc::context::object_size_from_memory;
 use region::RegionSpace;
 use rset::{BarrierEvent, G1RSet, SlotOwner};
@@ -15,7 +15,6 @@ use wjsm_ir::constants;
 pub(crate) struct G1Collector {
     regions: RegionSpace,
     rset: G1RSet,
-    fallback: MarkSweepCollector,
     stats: GcStats,
 }
 
@@ -24,7 +23,6 @@ impl G1Collector {
         Self {
             regions: RegionSpace::default(),
             rset: G1RSet::default(),
-            fallback: MarkSweepCollector::new(),
             stats: GcStats::default(),
         }
     }
@@ -42,11 +40,6 @@ impl G1Collector {
             dynamic_start,
             Self::committed_end(ctx),
         );
-    }
-
-    fn sync_after_delegate(&mut self, ctx: &mut GcContext<'_>) {
-        self.refresh_regions(ctx);
-        self.stats = self.fallback.last_stats().clone();
     }
 
     fn owner_for_handle(&self, ctx: &mut GcContext<'_>, h: Handle) -> Option<SlotOwner> {
@@ -142,8 +135,7 @@ impl GcAlgorithm for G1Collector {
         "g1"
     }
 
-    fn attach_heap(&mut self, ctx: &mut GcContext<'_>, dynamic_start: usize) {
-        self.fallback.attach_heap(ctx, dynamic_start);
+    fn attach_heap(&mut self, ctx: &mut GcContext<'_>, _dynamic_start: usize) {
         self.refresh_regions(ctx);
         if let Some((start, end)) = self.regions.eden_window() {
             ctx.set_heap_ptr(start);
@@ -157,8 +149,9 @@ impl GcAlgorithm for G1Collector {
         roots: &mut dyn RootProvider,
         req: AllocRequest,
     ) -> Option<usize> {
-        let ptr = self.fallback.alloc_slow(ctx, roots, req);
-        self.sync_after_delegate(ctx);
+        self.refresh_regions(ctx);
+        let ptr = young::alloc_slow(ctx, roots, req, &mut self.regions, &mut self.rset);
+        self.stats = ctx.stats.clone();
         ptr
     }
 
@@ -168,14 +161,15 @@ impl GcAlgorithm for G1Collector {
         roots: &mut dyn RootProvider,
         budget: StepBudget,
     ) -> StepOutcome {
-        let outcome = self.fallback.safepoint_step(ctx, roots, budget);
-        self.sync_after_delegate(ctx);
-        outcome
+        let _ = (roots, budget);
+        self.barrier_flush(ctx);
+        StepOutcome::Idle
     }
 
     fn collect_full(&mut self, ctx: &mut GcContext<'_>, roots: &mut dyn RootProvider) -> GcStats {
-        let stats = self.fallback.collect_full(ctx, roots);
+        self.barrier_flush(ctx);
         self.refresh_regions(ctx);
+        let stats = young::collect_young(ctx, roots, &mut self.regions, &mut self.rset);
         self.stats = stats.clone();
         stats
     }

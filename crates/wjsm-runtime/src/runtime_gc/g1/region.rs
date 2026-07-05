@@ -16,6 +16,12 @@ pub enum RegionKind {
     Immortal = 6,
 }
 
+impl RegionKind {
+    pub fn is_young(self) -> bool {
+        matches!(self, Self::Eden | Self::Survivor)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionMeta {
     pub kind: RegionKind,
@@ -87,6 +93,34 @@ impl RegionSpace {
         self.meta.get(idx).map(|region| region.kind)
     }
 
+    pub fn age(&self, idx: usize) -> Option<u8> {
+        self.meta.get(idx).map(|region| region.age)
+    }
+
+    pub fn set_kind_age(&mut self, idx: usize, kind: RegionKind, age: u8) -> bool {
+        let Some(region) = self.meta.get_mut(idx) else {
+            return false;
+        };
+        region.kind = kind;
+        region.age = age;
+        true
+    }
+
+    pub fn count_kind(&self, kind: RegionKind) -> usize {
+        self.meta
+            .iter()
+            .filter(|region| region.kind == kind)
+            .count()
+    }
+
+    pub fn young_region_indices(&self) -> Vec<usize> {
+        self.meta
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, region)| region.kind.is_young().then_some(idx))
+            .collect()
+    }
+
     pub fn region_index(&self, addr: usize) -> Option<usize> {
         addr.checked_sub(self.object_heap_start)
             .map(|offset| offset / REGION_SIZE)
@@ -100,6 +134,10 @@ impl RegionSpace {
     pub fn region_start(&self, idx: usize) -> Option<usize> {
         self.object_heap_start
             .checked_add(idx.checked_mul(REGION_SIZE)?)
+    }
+
+    pub fn region_end(&self, idx: usize) -> Option<usize> {
+        self.region_start(idx)?.checked_add(REGION_SIZE)
     }
 
     pub fn extend_for_committed_end(&mut self, committed_end: usize) {
@@ -118,6 +156,23 @@ impl RegionSpace {
             .position(|region| region.kind == RegionKind::Free)?;
         self.meta[idx] = RegionMeta::new(kind);
         Some(idx)
+    }
+
+    pub fn take_free_as_with_age(&mut self, kind: RegionKind, age: u8) -> Option<usize> {
+        let idx = self.take_free_as(kind)?;
+        self.meta[idx].age = age;
+        Some(idx)
+    }
+
+    pub fn take_contiguous_free_as_humongous(&mut self, count: usize) -> Option<usize> {
+        if count == 0 || count > self.meta.len() {
+            return None;
+        }
+        let start = self
+            .meta
+            .windows(count)
+            .position(|window| window.iter().all(|region| region.kind == RegionKind::Free))?;
+        self.mark_humongous(start, count).then_some(start)
     }
 
     pub fn release(&mut self, idx: usize) -> bool {

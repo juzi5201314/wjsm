@@ -78,6 +78,7 @@ pub mod heap_governance;
 pub mod mark_bitmap;
 pub mod mark_sweep;
 pub mod native_callable_refs;
+pub mod object_walker;
 pub mod registry;
 pub mod roots;
 pub mod scheduler;

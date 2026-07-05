@@ -74,6 +74,7 @@
 //! 这允许编译器采用保守策略（宁可多 spill，也不漏 spill）。
 use crate::runtime_gc::GcContext;
 use crate::runtime_gc::api::{Handle, RootProvider};
+use crate::runtime_gc::object_walker::{self, ObjectWalker};
 use wjsm_ir::{SHADOW_STACK_SIZE, value};
 
 /// 运行时 root 提供者：扫描 shadow stack + host 侧表（fixed-point 友好）。
@@ -197,97 +198,47 @@ impl RootProvider for RuntimeRoots {
     }
 }
 
+/// 扫描 immortal 区 live 对象的引用槽，并把槽内 handle 作为动态代 root 注入。
+///
+/// 只遍历 obj_table 中仍 live 且 ptr 落在 `[object_heap_start, immortal_objects_end)` 的
+/// 对象，禁止线性扫 immortal padding 或 resize abandoned 旧块。
+pub(crate) fn for_each_immortal_region_root(ctx: &mut GcContext, visit: &mut dyn FnMut(Handle)) {
+    let object_heap_start = ctx.object_heap_start();
+    let immortal_objects_end = ctx.with_state(|st| st.heap_layout_boundaries().0);
+    if object_heap_start == 0 || immortal_objects_end <= object_heap_start {
+        return;
+    }
+    let obj_table_ptr = ctx.obj_table_ptr();
+    let obj_table_count = ctx.obj_table_count();
+    let handles: Vec<Handle> = ctx.with_memory(|data| {
+        let mut out = Vec::new();
+        for h in 0..obj_table_count as Handle {
+            let Some(ptr) = object_walker::resolve_handle(data, h, obj_table_ptr, obj_table_count)
+            else {
+                continue;
+            };
+            if (object_heap_start..immortal_objects_end).contains(&ptr) {
+                let tasks = object_walker::scan_tasks_for_ptr(data, h, ptr);
+                assert!(
+                    !tasks.is_empty(),
+                    "GC: live immortal handle points at an unreadable object header"
+                );
+                out.push(h);
+            }
+        }
+        out
+    });
+    let mut walker = ObjectWalker::new();
+    for h in handles {
+        walker.visit_object_children(ctx, h, obj_table_ptr, obj_table_count, visit);
+    }
+}
+
 /// 把一个 NaN-boxed value 解析为它引用的 obj_table handle（含 closure/native_callable）。
 /// 对每个解析出的 handle 调 visit（递归收敛，受 host 表大小约束）。
 fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)) {
-    if !value::tag_needs_root(val) {
-        return;
-    }
     let count = ctx.obj_table_count();
-    if value::is_object(val) || value::is_array(val) {
-        let h = value::decode_object_handle(val);
-        if (h as usize) < count {
-            visit(h);
-        }
-        return;
-    }
-    if value::is_function(val) {
-        // 函数值低 32 位是 IR function id；只有 id < num_ir_functions 才有
-        // function_props_base + id 属性对象。越界 function-like 值不能映射到普通对象 handle。
-        let function_idx = val as u32 as usize;
-        if function_idx < ctx.num_ir_functions() {
-            let h = function_idx.saturating_add(ctx.function_props_base());
-            if h < count {
-                visit(h as Handle);
-            }
-        }
-        return;
-    }
-    if value::is_closure(val) {
-        let closure_idx = value::decode_closure_idx(val) as usize;
-        let env_obj = ctx.with_state(|st| {
-            st.closures
-                .lock()
-                .ok()
-                .and_then(|g| g.get(closure_idx).map(|e| e.env_obj))
-        });
-        if let Some(env) = env_obj {
-            push_value_roots(ctx, env, visit);
-        }
-        return;
-    }
-    if value::is_native_callable(val) {
-        let idx = value::decode_native_callable_idx(val) as usize;
-        let refs = ctx.with_state(|st| collect_native_callable_refs(st, idx));
-        for r in refs {
-            push_value_roots(ctx, r, visit);
-        }
-    }
-    if value::is_bound(val) {
-        let idx = value::decode_bound_idx(val) as usize;
-        let refs =
-            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_bound_refs(st, idx));
-        for r in refs {
-            push_value_roots(ctx, r, visit);
-        }
-        return;
-    }
-    if value::is_proxy(val) {
-        let idx = value::decode_proxy_handle(val) as usize;
-        let refs =
-            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_proxy_refs(st, idx));
-        for r in refs {
-            push_value_roots(ctx, r, visit);
-        }
-        return;
-    }
-    if value::is_iterator(val) {
-        let idx = value::decode_handle(val) as usize;
-        let refs =
-            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx));
-        for r in refs {
-            push_value_roots(ctx, r, visit);
-        }
-        return;
-    }
-    if value::is_scope_record(val) {
-        let handle = value::decode_scope_record_handle(val);
-        let refs = ctx.with_state(|st| {
-            crate::runtime_gc::side_table_refs::collect_scope_record_refs(st, handle)
-        });
-        for r in refs {
-            push_value_roots(ctx, r, visit);
-        }
-        return;
-    }
-    // 其余 tag（bigint/symbol/regexp/enumerator/runtime_string/exception）：
-    // 侧表不含 obj_table 引用，不需追踪。
-}
-
-/// 从 native_callable 表项提取其内部持有的对象引用。
-/// 委托给 `runtime_gc::native_callable_refs` 的共享实现。
-fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec<i64> {
-    crate::runtime_gc::native_callable_refs::collect_native_callable_refs(st, idx)
+    object_walker::visit_value_handles(ctx, val, count, visit);
 }
 
 fn collect_http_response_handle_values(

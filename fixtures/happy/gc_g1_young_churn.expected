@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+root
+23
+23,24,25
+23
+--- stderr ---
