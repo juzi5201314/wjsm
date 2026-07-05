@@ -222,3 +222,20 @@
 - `cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `cargo nextest run --workspace` → 1272 passed, 2 skipped。
+
+## P3 T3.6 evidence
+
+- 新增 `runtime_gc::g1::mixed`：CSet 按 live bytes 升序选择，受 copy budget 截断，跳过 live bytes 超过 85% region。
+- mixed evacuation 在 to-space 中复制 old/humongous live object 原始字节，更新 `obj_table[h]` 指向新地址；对象内部引用槽保持 handle 原值，不做 per-reference 修正。
+- source region release 后清理对应 RSet card；destination object 扫描后若仍含 young handle，重新标脏 destination card。
+- mixed 只压缩空间：dead handle cleanup 仍由 concurrent mark owner 负责，mixed 不清 obj_table、不发布 handle。
+- `G1Collector::safepoint_step` 在 remark/cleanup 后执行 budgeted mixed step；`collect_full` 循环 mixed 到候选耗尽或 to-space 受阻。
+- runtime governance 单测新增较短 G1 churn；完整 `gc_fragmentation_churn` fixture 仍由 `WJSM_TEST_GC=g1` integration test 覆盖。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime` → 163 passed, 2 skipped。
+- `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 29 passed, 136 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__gc_fragmentation_churn)'` → 1 passed, 737 skipped。
+- `cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo nextest run --workspace` → 1279 passed, 2 skipped。

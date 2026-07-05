@@ -118,6 +118,12 @@ impl G1RSet {
         self.card_write_counts.remove(&card_idx);
     }
 
+    pub fn clear_card_range(&mut self, start: usize, end: usize) {
+        for card_idx in start..end {
+            self.clear_card(card_idx);
+        }
+    }
+
     pub fn mark_dirty_slot(&mut self, slot_addr: usize, card_idx: usize) {
         self.mark_dirty(slot_addr, card_idx);
     }

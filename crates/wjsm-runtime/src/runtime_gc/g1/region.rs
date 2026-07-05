@@ -238,6 +238,30 @@ impl RegionSpace {
         ))
     }
 
+    pub fn free_region_intervals(&self) -> Vec<(usize, usize)> {
+        let mut intervals = Vec::new();
+        let mut run_start = None;
+        for (idx, region) in self.meta.iter().enumerate() {
+            if region.kind == RegionKind::Free {
+                run_start.get_or_insert(idx);
+                continue;
+            }
+            if let Some(start) = run_start.take() {
+                intervals.push((
+                    self.region_start(start).unwrap_or(self.object_heap_start),
+                    (idx - start) * REGION_SIZE,
+                ));
+            }
+        }
+        if let Some(start) = run_start {
+            intervals.push((
+                self.region_start(start).unwrap_or(self.object_heap_start),
+                (self.meta.len() - start) * REGION_SIZE,
+            ));
+        }
+        intervals
+    }
+
     fn mark_immortal_range(&mut self, start: usize, end: usize) {
         if end <= start {
             return;

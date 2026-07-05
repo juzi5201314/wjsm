@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T3.6 实现 G1 mixed GC`（in progress）。
-- Next: `T3.7 组装 G1 registry`。
+- Active: `T3.7 组装 G1 registry`（in progress）。
+- Next: `T3.8 验证 P3 阶段`。
 
 ## Completed todos
 
@@ -36,19 +36,20 @@
   - `T3.3 生成 G1 support 变体`
   - `T3.4 实现 G1 young GC`
   - `T3.5 实现 G1 concurrent mark`
+  - `T3.6 实现 G1 mixed GC`
 
 ## Active slice card
 
-- Goal: P3 T3.6，实现 G1 mixed GC：按 live bytes/收益选择 CSet，STW old→old evacuation，更新 obj_table 并回收/压缩 region。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §10.5。
-- Files: 新建 `g1/mixed.rs`，更新 `g1/mod.rs`、`g1/region.rs`、必要的 stats/fragmentation 可观测 helper。
-- Boundary: 本 slice 只实现 mixed old evacuation；dead handle cleanup 已由 concurrent mark 负责，mixed 不再次发布 dead handles；不做 per-reference 修正。
-- Verification: mixed 单测覆盖 CSet budget 截断、85% live 阈值、evacuate 后引用槽无需改写仍读新对象、目的 card re-dirty、mixed 不重复发布 dead handle；`gc_fragmentation_churn` 在 g1 下保持通过并记录 fragmentation 下降路径。
-- Stop: T3.6 验证通过，checkpoint/evidence 更新，然后进入 T3.7。
+- Goal: P3 T3.7，审计并收口 `G1Collector` 的完整 v2 `GcAlgorithm` 钩子与 registry 接入：alloc/young/mark/mixed/full/barrier 路径协同一致。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md`；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §10。
+- Files: `g1/mod.rs`、`registry.rs`，必要时只做收口修正。
+- Boundary: 本 slice 不新增算法阶段；只确认 G1 对外组装、registry 和 fallback/未实现路径已干净。
+- Verification: `cargo check -p wjsm-runtime`、`cargo nextest run -p wjsm-runtime -E 'test(g1)'`、`WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'`。
+- Stop: T3.7 验证通过，checkpoint/evidence 更新，然后进入 T3.8。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2、T3.3、T3.4、T3.5 已完成；T3.6 正在进行。
+详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2、T3.3、T3.4、T3.5、T3.6 已完成；T3.7 正在进行。
 
 ## Blocked-on items
 
@@ -58,16 +59,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T3.6 / spec §10.5。
-2. 继续 mixed GC：先实现 CSet 选择与 evacuation helpers，再接入 safepoint/full collect。
-3. 完成后运行 mixed 单测、`WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__gc_fragmentation_churn)'`、`cargo check -p wjsm-runtime` 与 G1 happy 子集。
+1. 读取本文件、`90-evidence.md` 与父计划 T3.7。
+2. 审计 G1Collector alloc/safepoint/full/barrier 组装、registry G1 → Ok、ZGC 未实现边界。
+3. 完成后运行 T3.7 指定验证并进入 T3.8 阶段矩阵。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T3.5 已完成 concurrent mark/cleanup，当前进入 mixed evacuation。
-- Does current work still serve goal and stop condition? 是，T3.6 只交付 old CSet compaction，不提前做 T3.7/P4。
-- Compatibility boundary: 默认 mark-sweep 行为保持；mixed 只更新 obj_table，不修改引用槽 handle。
-- New owner/fallback/adapter/branch: `runtime_gc::g1::mixed` 将成为 old region CSet 选择与 evacuation owner。
-- Retirement track: “old/humongous 永不回收”的临时限制已退休；T3.6 开始退休 old region 碎片不压缩限制。
-- Evidence sufficiency: T3.5 sufficient；T3.6 pending。
+- Does current work still serve original task intent? 是，T3.6 已完成 mixed evacuation，当前进入 G1 组装收口。
+- Does current work still serve goal and stop condition? 是，T3.7 只审计/收口 G1 registry 与 hooks，不提前做 P4。
+- Compatibility boundary: 默认 mark-sweep 行为保持；registry 中 `g1` 可用，`zgc` 仍显式未实现。
+- New owner/fallback/adapter/branch: 无新增 owner；G1 子模块 owner 已在 T3.1-T3.6 建立。
+- Retirement track: old region 碎片不压缩限制已退休；T3.7 清理残余组装缺口。
+- Evidence sufficiency: T3.6 sufficient；T3.7 pending。
 - Decision: continue。

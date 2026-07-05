@@ -1,4 +1,5 @@
 mod concurrent_mark;
+mod mixed;
 mod region;
 mod rset;
 mod young;
@@ -18,6 +19,7 @@ pub(crate) struct G1Collector {
     regions: RegionSpace,
     rset: G1RSet,
     mark: ConcurrentMark,
+    mixed_pending: bool,
     stats: GcStats,
 }
 
@@ -27,6 +29,7 @@ impl G1Collector {
             regions: RegionSpace::default(),
             rset: G1RSet::default(),
             mark: ConcurrentMark::new(),
+            mixed_pending: false,
             stats: GcStats::default(),
         }
     }
@@ -132,6 +135,36 @@ impl G1Collector {
             let _ = global.set(&mut ctx.store, Val::I32(base as i32));
         }
     }
+
+    fn merge_stats(primary: &mut GcStats, extra: &GcStats) {
+        primary.swept = primary.swept.saturating_add(extra.swept);
+        primary.freed_bytes = primary.freed_bytes.saturating_add(extra.freed_bytes);
+        primary.elapsed += extra.elapsed;
+        primary.free_block_count = extra.free_block_count;
+        primary.total_free_bytes = extra.total_free_bytes;
+        primary.largest_free_block = extra.largest_free_block;
+        primary.external_fragmentation = extra.external_fragmentation;
+        primary.heap_used_bytes = extra.heap_used_bytes;
+    }
+
+    fn mixed_step_outcome(result: &mixed::MixedCollection) -> StepOutcome {
+        if result.has_remaining() {
+            StepOutcome::Progress {
+                remaining_estimate: result.remaining_estimate(),
+            }
+        } else if result.did_work() {
+            StepOutcome::CycleComplete
+        } else {
+            StepOutcome::Idle
+        }
+    }
+
+    fn run_mixed_step(&mut self, ctx: &mut GcContext<'_>, budget_bytes: usize) -> StepOutcome {
+        let result = mixed::collect_step(ctx, &mut self.regions, &mut self.rset, budget_bytes);
+        self.mixed_pending = result.has_remaining();
+        self.stats = result.stats.clone();
+        Self::mixed_step_outcome(&result)
+    }
 }
 
 impl GcAlgorithm for G1Collector {
@@ -155,7 +188,7 @@ impl GcAlgorithm for G1Collector {
     ) -> Option<usize> {
         self.refresh_regions(ctx);
         self.barrier_flush(ctx);
-        let ptr = young::alloc_slow(
+        let mut ptr = young::alloc_slow(
             ctx,
             roots,
             req,
@@ -163,6 +196,17 @@ impl GcAlgorithm for G1Collector {
             &mut self.rset,
             self.mark.active_epoch(),
         );
+        if ptr.is_none() && self.mixed_pending {
+            let _ = self.run_mixed_step(ctx, usize::MAX);
+            ptr = young::alloc_slow(
+                ctx,
+                roots,
+                req,
+                &mut self.regions,
+                &mut self.rset,
+                self.mark.active_epoch(),
+            );
+        }
         self.stats = ctx.stats.clone();
         ptr
     }
@@ -182,16 +226,28 @@ impl GcAlgorithm for G1Collector {
                 }
                 MarkStep::ReadyForRemark => {
                     self.barrier_flush(ctx);
-                    let stats = self.mark.finish_after_barrier_flush(
+                    let mut stats = self.mark.finish_after_barrier_flush(
                         ctx,
                         roots,
                         &mut self.regions,
                         &mut self.rset,
                     );
-                    self.stats = stats;
-                    StepOutcome::CycleComplete
+                    let mixed = mixed::collect_step(
+                        ctx,
+                        &mut self.regions,
+                        &mut self.rset,
+                        budget.work_bytes,
+                    );
+                    Self::merge_stats(&mut stats, &mixed.stats);
+                    self.mixed_pending = mixed.has_remaining();
+                    self.stats = stats.clone();
+                    ctx.stats = stats;
+                    Self::mixed_step_outcome(&mixed)
                 }
             };
+        }
+        if self.mixed_pending {
+            return self.run_mixed_step(ctx, budget.work_bytes);
         }
         if self.mark.should_start(ctx, &self.regions) {
             let _ = young::collect_young(ctx, roots, &mut self.regions, &mut self.rset, None);
@@ -216,10 +272,19 @@ impl GcAlgorithm for G1Collector {
         self.mark
             .initial_mark(ctx, roots, &self.regions, &mut self.rset);
         self.barrier_flush(ctx);
-        let stats =
+        let mut stats =
             self.mark
                 .finish_after_barrier_flush(ctx, roots, &mut self.regions, &mut self.rset);
+        loop {
+            let mixed = mixed::collect_step(ctx, &mut self.regions, &mut self.rset, usize::MAX);
+            Self::merge_stats(&mut stats, &mixed.stats);
+            self.mixed_pending = mixed.has_remaining();
+            if !mixed.did_work() || !self.mixed_pending {
+                break;
+            }
+        }
         self.stats = stats.clone();
+        ctx.stats = stats.clone();
         stats
     }
 
