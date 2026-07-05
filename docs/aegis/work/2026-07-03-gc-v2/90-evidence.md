@@ -247,3 +247,11 @@
 - `cargo check -p wjsm-runtime` → passed（zero warnings）。
 - `cargo nextest run -p wjsm-runtime -E 'test(g1)'` → 29 passed, 136 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+
+## P3 T3.8 evidence
+
+- P3 G1 阶段 closure：T3.0-T3.7 已完成并验证，默认 mark-sweep 与 `WJSM_TEST_GC=g1` 路径均保持绿。
+- `cargo nextest run -E 'test(gc_)'` → 14 passed, 724 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run --workspace` → 1279 passed, 2 skipped。
+- `cargo build` → passed（zero warnings）。
+- DriftCheckDraft：Scope=P3 G1；Compatibility=默认 mark-sweep 未变且 G1 workspace 全绿；Retirement=G1 registry 拒绝路径、单 support cwasm 假设、host/WASM 无 barrier 记录假设、young-only/old-never-compact 临时限制均已退休；Decision=continue to P4。

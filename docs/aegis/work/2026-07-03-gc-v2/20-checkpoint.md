@@ -2,8 +2,8 @@
 
 ## Current todo
 
-- Active: `T3.8 验证 P3 阶段`（in progress）。
-- Next: `T4.1 实现 ZGC color page`。
+- Active: `T4.1 实现 ZGC color page`（in progress）。
+- Next: `T4.2 生成 ZGC support 变体`。
 
 ## Completed todos
 
@@ -38,19 +38,20 @@
   - `T3.5 实现 G1 concurrent mark`
   - `T3.6 实现 G1 mixed GC`
   - `T3.7 组装 G1 registry`
+  - `T3.8 验证 P3 阶段`
 
 ## Active slice card
 
-- Goal: P3 T3.8，执行 G1 阶段矩阵终验，确认默认 mark-sweep 与 `WJSM_TEST_GC=g1` 全量路径均绿。
-- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T3.8。
-- Files: 仅更新 evidence/checkpoint；如验证失败则回到对应 owner 修复。
-- Boundary: 本 slice 不新增功能，只做 P3 阶段验收与漂移检查。
-- Verification: `cargo nextest run -E 'test(gc_)'`（默认）+ `WJSM_TEST_GC=g1 cargo nextest run --workspace` + 必要 build/check 零 warning。
-- Stop: T3.8 验证通过，checkpoint/evidence 更新，然后进入 P4/T4.1。
+- Goal: P4 T4.1，新增 ZGC color/page 基础：色协议、双 good 切换、host-side page metadata、attach live entry recolor 与全死 page 回收前置 owner。
+- Parent plan/spec: `docs/aegis/plans/2026-07-03-pluggable-gc-v2.md` T4.1；`docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md` §11.2、§11.3。
+- Files: 新建 `runtime_gc/zgc/{mod,color,page}.rs`，更新 `runtime_gc/mod.rs`、`registry.rs`。
+- Boundary: 本 slice 只实现 color/page/attach 与 registry skeleton；load barrier support 变体留给 T4.2，mark/relocate 留给 T4.3/T4.4。
+- Verification: color/page 单测覆盖双 good 转移、attach 后 live entry 非 00、host-side page meta grow、不占 wasm dynamic heap、Remapped good、坏色修复、全死 page immediate reclaim、weak cleanup before handle reuse owner helper。
+- Stop: T4.1 验证通过，checkpoint/evidence 更新，然后进入 T4.2。
 
 ## Evidence refs
 
-详见 `90-evidence.md`。P0/P1/P2、T3.0、T3.1、T3.2、T3.3、T3.4、T3.5、T3.6、T3.7 已完成；T3.8 正在进行。
+详见 `90-evidence.md`。P0/P1/P2/P3 已完成；T4.1 正在进行。
 
 ## Blocked-on items
 
@@ -60,16 +61,16 @@
 
 恢复时先执行：
 
-1. 读取本文件、`90-evidence.md` 与父计划 T3.8。
-2. 执行 P3 矩阵终验：默认 `test(gc_)`、G1 workspace，全量零 warning。
-3. 完成后记录 P3 closure 并进入 T4.1。
+1. 读取本文件、`90-evidence.md` 与父计划 T4.1 / spec §11.2-§11.3。
+2. 实现 ZGC color/page 基础与 registry skeleton；不改 backend support emitter。
+3. 完成后运行 `cargo check -p wjsm-runtime`、ZGC color/page 单测与 `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__hello)'` 冒烟（若 T4.1 skeleton 允许）。
 
 # DriftCheckDraft
 
-- Does current work still serve original task intent? 是，T3.7 已完成 G1 组装收口，当前进入 P3 验收。
-- Does current work still serve goal and stop condition? 是，T3.8 只验证 P3，不提前实现 ZGC。
-- Compatibility boundary: 默认 mark-sweep 与 `WJSM_TEST_GC=g1` 都必须保持全量绿；ZGC 仍未实现。
-- New owner/fallback/adapter/branch: 无新增 owner。
-- Retirement track: G1 残余组装缺口已清理；T3.8 确认 P3 无未退休路径。
-- Evidence sufficiency: T3.7 sufficient；T3.8 pending。
+- Does current work still serve original task intent? 是，P3 已完成并验证，当前进入 P4 ZGC。
+- Does current work still serve goal and stop condition? 是，T4.1 只交付 color/page 基础，不提前实现 support load barrier/mark/relocate。
+- Compatibility boundary: 默认 mark-sweep 与 G1 均保持；ZGC 在 T4.1 起 registry 可创建 skeleton，但不得提供伪 load barrier 行为。
+- New owner/fallback/adapter/branch: `runtime_gc::zgc::{color,page}` 将成为 ZGC entry color 与 page metadata owner。
+- Retirement track: P3 G1 临时路径已收口；T4.1 开始退休 ZGC registry 拒绝路径。
+- Evidence sufficiency: T3.8 sufficient；T4.1 pending。
 - Decision: continue。
