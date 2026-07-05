@@ -1,6 +1,6 @@
 # ADR 0005: Pluggable GC v2 Boundary
 
-**Status**: Accepted after implementation verification. P0-P5 已落地：mark-sweep 默认、G1、ZGC 三算法可通过 `RuntimeOptions` / CLI `--gc` / `WJSM_GC` 选择；`WJSM_TEST_GC` 保留为测试矩阵 override。P6 收口中。
+**Status**: Accepted after full implementation verification. P0-P6 已落地并通过最终矩阵：mark-sweep 默认、G1、ZGC 三算法可通过 `RuntimeOptions` / CLI `--gc` / `WJSM_GC` 选择；`WJSM_TEST_GC` 保留为测试矩阵 override。
 
 **Date**: 2026-07-05
 
@@ -88,7 +88,7 @@ wjsm 采用 **Pluggable GC v2** 边界：
 | P3 G1 | ✅ | region/RSet/young/concurrent mark/mixed + G1 workspace/happy 验证 |
 | P4 ZGC | ✅ | color/page/support/mark/relocate + ZGC workspace/happy 验证 |
 | P5 observability | ✅ | `GcStats` v2、pause/footprint bench、regression matrix |
-| P6 cleanup/docs/ADR | ⏳ | 本 ADR + final matrix 待 T6.4 收口 |
+| P6 cleanup/docs/ADR | ✅ | cleanup/docs/ADR + final matrix verified |
 
 ## Baseline Sync
 

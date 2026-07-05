@@ -456,3 +456,17 @@
 - Required read set：`docs/adr/ADR-CREATION-GATE.md` 与 `docs/current/AEGIS_ADR_AUTO_BACKFILL.md` 在本项目不存在；按本项目现有 ADR 0003/0004 格式与 `docs/aegis/INDEX.md` Baselines 约定执行。
 - `read docs/adr/0005-pluggable-gc-v2.md` → structure verified。
 - `grep 0005-pluggable-gc-v2 docs/aegis/INDEX.md docs/adr/0005-pluggable-gc-v2.md` → ADR 与 index link 均命中。
+
+## P6 T6.4 evidence
+
+- Final matrix：默认、G1、ZGC 三算法 workspace 全量均通过；startup snapshot on/off happy subset 均通过；pause/footprint bench skip/enabled gate 均通过；build 零 warning。
+- `cargo nextest run --workspace` → 1318 passed, 2 skipped。
+- `WJSM_TEST_GC=g1 cargo nextest run --workspace` → 1318 passed, 2 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1318 passed, 2 skipped。
+- `cargo nextest run -E 'test(happy__)'` → 591 passed, 150 skipped。
+- `WJSM_STARTUP_SNAPSHOT=0 cargo nextest run -E 'test(happy__)'` → 591 passed, 150 skipped。
+- `WJSM_GC_BENCH=1 cargo nextest run -E 'test(gc_pause_bench) + test(gc_footprint_long_run)'` → 2 passed, 739 skipped（并发验证中受资源竞争失败一次，solo rerun 通过）。
+- `cargo nextest run -E 'test(gc_pause_bench) + test(gc_footprint_long_run)'` → 2 passed, 739 skipped（skip gate）。
+- `cargo build` → passed（zero warnings）。
+- Plan status header updated to completed；ADR 0005 status table updated to P6 ✅。
+- DriftCheckDraft：Scope=whole plan P0-P6；Compatibility=default/G1/ZGC workspace + snapshot dual + bench gate + build all green；Retirement=v1/old support/non-moving docs/temporary algorithm limitations retired; Decision=complete。
