@@ -69,14 +69,15 @@ pub fn object_size_from_memory(data: &[u8], ptr: usize) -> Option<usize> {
     }
     let heap_type = data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize];
     let (cap_off, elem_size) = object_cap_and_elem_size(heap_type);
-    let capacity = u32::from_le_bytes([
-        data[ptr + cap_off],
-        data[ptr + cap_off + 1],
-        data[ptr + cap_off + 2],
-        data[ptr + cap_off + 3],
-    ]) as usize;
+    let capacity = unsafe { read_u32_le_unchecked(data, ptr + cap_off) } as usize;
     let payload = capacity.checked_mul(elem_size)?;
     HEADER_SIZE.checked_add(payload)
+}
+
+unsafe fn read_u32_le_unchecked(data: &[u8], offset: usize) -> u32 {
+    // SAFETY: 调用方已确认 `offset..offset + 4` 落在 `data` 内；对象 header
+    // 字段只要求小端字节序，不要求 wasm memory 中的地址按 u32 对齐。
+    u32::from_le(unsafe { data.as_ptr().add(offset).cast::<u32>().read_unaligned() })
 }
 
 /// 读对象 heap_type byte。
