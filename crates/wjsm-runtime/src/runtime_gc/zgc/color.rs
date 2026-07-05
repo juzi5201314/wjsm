@@ -110,7 +110,9 @@ pub struct ZColorState {
 impl Default for ZColorState {
     fn default() -> Self {
         Self {
-            next_mark: ZColor::Marked0,
+            // attach/restore 后 live entries 以 Marked0 作为当前 good；第一轮 mark 必须
+            // 切到 Marked1，否则所有未访问对象都会因为旧色等于本周期 good 而误保活。
+            next_mark: ZColor::Marked1,
             good: ZColor::Marked0,
             phase: ZPhase::Idle,
         }
@@ -162,14 +164,14 @@ mod tests {
     fn good_color_switches_mark_mark_relocate() {
         let mut state = ZColorState::default();
 
-        assert_eq!(state.start_mark(), ZColor::Marked0);
+        assert_eq!(state.start_mark(), ZColor::Marked1);
         assert_eq!(state.phase(), ZPhase::Mark);
         assert_eq!(state.start_relocate(), ZColor::Remapped);
         state.finish_cycle();
-        assert_eq!(state.start_mark(), ZColor::Marked1);
+        assert_eq!(state.start_mark(), ZColor::Marked0);
         assert_eq!(state.start_relocate(), ZColor::Remapped);
         state.finish_cycle();
-        assert_eq!(state.start_mark(), ZColor::Marked0);
+        assert_eq!(state.start_mark(), ZColor::Marked1);
     }
 
     #[test]

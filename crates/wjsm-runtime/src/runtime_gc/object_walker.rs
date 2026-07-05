@@ -111,7 +111,8 @@ pub(crate) fn resolve_handle(
     let addr =
         obj_table_ptr.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
     let bytes: [u8; 4] = data.get(addr..addr + 4)?.try_into().ok()?;
-    let ptr = u32::from_le_bytes(bytes) as usize;
+    let entry = u32::from_le_bytes(bytes) as usize;
+    let ptr = entry & !0x3;
     (ptr != 0).then_some(ptr)
 }
 

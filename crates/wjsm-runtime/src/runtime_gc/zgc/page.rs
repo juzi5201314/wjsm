@@ -87,6 +87,21 @@ impl ZPageSpace {
             .resize_with(needed, || ZPageMeta::new(ZPageKind::Free));
     }
 
+    pub fn reset_live_bytes(&mut self) {
+        for page in &mut self.pages {
+            page.live_bytes = 0;
+        }
+    }
+
+    pub fn set_live_bytes(&mut self, idx: usize, bytes: usize) {
+        if let Some(page) = self.pages.get_mut(idx) {
+            page.live_bytes = bytes;
+            if bytes != 0 && page.kind == ZPageKind::Free {
+                page.kind = ZPageKind::Active;
+            }
+        }
+    }
+
     pub fn mark_live_bytes(&mut self, ptr: usize, bytes: usize) -> Option<()> {
         let idx = self.page_index(ptr)?;
         let page = self.pages.get_mut(idx)?;

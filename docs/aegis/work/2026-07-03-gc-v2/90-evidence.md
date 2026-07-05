@@ -286,3 +286,22 @@
 - `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1292 passed, 2 skipped。
 - `WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
 - `cargo build` → passed（zero warnings）。
+
+## P4 T4.3 evidence
+
+- 新增 `runtime_gc::zgc::mark`：维护 mark bitmap、worklist、SATB handles、dead_handle_set 与 page live-bytes 统计；MarkStart 切换当前 mark good color并 snapshot roots，MarkEnd flush SATB + fixed-point 重扫 host/side-table roots。
+- `ZgcCollector::safepoint_step` 按 `StepBudget` drain；`load_barrier_slow` 在 Mark phase repair bad color 到当前 good 并把 handle 入 mark worklist，实现 load barrier assisted marking。
+- `barrier_flush` / `on_host_write` 消费统一 24B barrier buffer 与 host old value，作为 SATB 输入；flush 只 drain/reset，不触发 collect/grow/move。
+- MarkEnd 生成 dead_handle_set 并执行 cleanup：清 obj_table slot、owner side-table reclaim、WeakRef/FinalizationRegistry enqueue、stream side-table cleanup 之后才发布 handles 到 free-list。
+- `object_walker::resolve_handle` 去除低 2 bit color，保证共享 root/object 扫描能读取 ZGC colored obj_table entries。
+- 调试修复：第一轮 ZGC mark 不能继续使用 attach 后的 Marked0 good；`ZColorState` 默认 `good=Marked0,next_mark=Marked1`，否则未访问对象因旧色等于本周期 good 被误保活，WeakRef/FinalizationRegistry fixture 不会 cleanup。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(zgc)'` → 15 passed, 165 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__hello)'` → 1 passed, 737 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__weakref_gc) + test(happy__finalization_registry_cleanup) + test(happy__gc_map_set_owner_reachability) + test(happy__weak_collections_gc)'` → 4 passed, 734 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'` → 590 passed, 148 skipped。
+- `cargo nextest run -p wjsm-runtime` → 178 passed, 2 skipped。
+- `cargo nextest run --workspace` → 1297 passed, 2 skipped。
+- `WJSM_TEST_GC=zgc cargo nextest run --workspace` → 1297 passed, 2 skipped。
+- `cargo build` → passed（zero warnings）。
