@@ -86,6 +86,12 @@ impl ZPageSpace {
         copy_budget: usize,
         excluded_page: Option<usize>,
     ) -> Vec<usize> {
+        if copy_budget == usize::MAX && excluded_page.is_some() {
+            return (0..self.page_count())
+                .filter(|&idx| Some(idx) != excluded_page)
+                .filter(|&idx| self.relocation_candidate_live_bytes(idx).is_some())
+                .collect();
+        }
         let mut candidates = self.relocation_candidates();
         if let Some(excluded) = excluded_page {
             candidates.retain(|&(idx, _)| idx != excluded);
@@ -111,21 +117,22 @@ impl ZPageSpace {
     }
     fn relocation_candidates(&self) -> Vec<(usize, usize)> {
         (0..self.page_count())
-            .filter_map(|idx| {
-                let page = self.page(idx)?;
-                if !matches!(page.kind, ZPageKind::Active | ZPageKind::Relocating) {
-                    return None;
-                }
-                let live = page.live_bytes;
-                if live == 0 || live >= ZPAGE_SIZE {
-                    return None;
-                }
-                let garbage = ZPAGE_SIZE.saturating_sub(live);
-                (garbage.saturating_mul(100)
-                    > ZPAGE_SIZE.saturating_mul(RELOCATION_FRAGMENTATION_PERCENT))
-                .then_some((idx, live))
-            })
+            .filter_map(|idx| Some((idx, self.relocation_candidate_live_bytes(idx)?)))
             .collect()
+    }
+
+    fn relocation_candidate_live_bytes(&self, idx: usize) -> Option<usize> {
+        let page = self.page(idx)?;
+        if !matches!(page.kind, ZPageKind::Active | ZPageKind::Relocating) {
+            return None;
+        }
+        let live = page.live_bytes;
+        if live == 0 || live >= ZPAGE_SIZE {
+            return None;
+        }
+        let garbage = ZPAGE_SIZE.saturating_sub(live);
+        (garbage.saturating_mul(100) > ZPAGE_SIZE.saturating_mul(RELOCATION_FRAGMENTATION_PERCENT))
+            .then_some(live)
     }
 
     pub fn page_index(&self, addr: usize) -> Option<usize> {
