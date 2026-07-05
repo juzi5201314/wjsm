@@ -1,4 +1,3 @@
-#![allow(dead_code)] // T4.1 建立 T4.2-T4.4 会接入的 ZGC collector skeleton。
 pub mod color;
 mod mark;
 pub mod page;
@@ -196,20 +195,12 @@ impl ZgcCollector {
         });
     }
 
-    fn reset_barrier_buffer(ctx: &mut GcContext<'_>) {
-        let (_, _, base) = ctx.with_state(|state| state.heap_layout_boundaries());
-        if base == 0 {
-            return;
-        }
-        if let Some(global) = ctx.env.barrier_buf_ptr {
-            let _ = global.set(&mut ctx.store, Val::I32(base as i32));
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn start_mark_for_tests(&mut self) -> ZColor {
         self.colors.start_mark()
     }
 
+    #[cfg(test)]
     pub(crate) fn start_relocate_for_tests(&mut self) -> ZColor {
         self.colors.start_relocate()
     }

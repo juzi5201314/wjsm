@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use wjsm_ir::{constants, value};
 
-use super::region::{CARD_SIZE, RegionKind};
+use super::region::RegionKind;
 
 pub const BARRIER_EVENT_SIZE: usize = constants::GC_BARRIER_EVENT_SIZE as usize;
 const PRECISE_SLOT_THRESHOLD: u8 = 4;
@@ -15,8 +15,8 @@ pub struct BarrierEvent {
     pub new_value: i64,
 }
 
-#[allow(dead_code)]
 impl BarrierEvent {
+    #[cfg(test)]
     pub fn encode(self, out: &mut [u8]) -> bool {
         if out.len() != BARRIER_EVENT_SIZE {
             return false;
@@ -65,7 +65,6 @@ pub struct G1RSetStats {
     pub precise_slots: usize,
 }
 
-#[allow(dead_code)]
 impl G1RSet {
     pub fn record_write(
         &mut self,
@@ -102,10 +101,12 @@ impl G1RSet {
         );
     }
 
+    #[cfg(test)]
     pub fn dirty_cards(&self) -> impl Iterator<Item = usize> + '_ {
         self.dirty_cards.iter().copied()
     }
 
+    #[cfg(test)]
     pub fn precise_slots(&self, card_idx: usize) -> Option<impl Iterator<Item = usize> + '_> {
         self.precise_slots
             .get(&card_idx)
@@ -152,6 +153,7 @@ impl G1RSet {
         self.barrier_events = 0;
     }
 
+    #[cfg(test)]
     pub fn satb_handles(&self) -> &[u32] {
         &self.satb_handles
     }
@@ -181,11 +183,11 @@ pub fn value_to_handle(value: i64) -> Option<u32> {
     value::tag_needs_root(value).then(|| value::decode_handle(value))
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn slot_card_index(object_heap_start: usize, slot_addr: usize) -> Option<usize> {
     slot_addr
         .checked_sub(object_heap_start)
-        .map(|offset| offset / CARD_SIZE)
+        .map(|offset| offset / super::region::CARD_SIZE)
 }
 
 pub fn decode_buffer(input: &[u8]) -> impl Iterator<Item = BarrierEvent> + '_ {
@@ -206,6 +208,7 @@ fn needs_rset_edge(owner_kind: RegionKind, new_kind: Option<RegionKind>) -> bool
 
 #[cfg(test)]
 mod tests {
+    use super::super::region::CARD_SIZE;
     use super::*;
 
     fn old_owner() -> SlotOwner {

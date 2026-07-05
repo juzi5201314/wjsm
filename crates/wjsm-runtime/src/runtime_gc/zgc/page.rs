@@ -1,4 +1,3 @@
-#![allow(dead_code)] // T4.1 建立 T4.2-T4.4 会接入的 page metadata API。
 use super::color::{ZColor, ZEntry};
 
 pub const ZPAGE_SIZE: usize = 64 * 1024;
@@ -31,12 +30,14 @@ impl ZPageMeta {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadHandleCleanupStage {
     WeakAndSideTables,
     PublishHandles,
 }
 
+#[cfg(test)]
 pub const DEAD_HANDLE_CLEANUP_ORDER: [DeadHandleCleanupStage; 2] = [
     DeadHandleCleanupStage::WeakAndSideTables,
     DeadHandleCleanupStage::PublishHandles,
@@ -62,6 +63,7 @@ impl ZPageSpace {
         self.pages.len()
     }
 
+    #[cfg(test)]
     pub fn metadata_bytes(&self) -> usize {
         self.pages.len() * std::mem::size_of::<ZPageMeta>()
     }
@@ -103,6 +105,7 @@ impl ZPageSpace {
         selected
     }
 
+    #[cfg(test)]
     pub fn select_relocation_set(&self, copy_budget: usize) -> Vec<usize> {
         self.select_relocation_set_excluding(copy_budget, None)
     }
@@ -158,6 +161,7 @@ impl ZPageSpace {
         }
     }
 
+    #[cfg(test)]
     pub fn mark_live_bytes(&mut self, ptr: usize, bytes: usize) -> Option<()> {
         let idx = self.page_index(ptr)?;
         let page = self.pages.get_mut(idx)?;
@@ -233,6 +237,7 @@ impl ZPageSpace {
         self.page_start(start)
     }
 
+    #[cfg(test)]
     pub fn free_page_count(&self) -> usize {
         self.pages
             .iter()

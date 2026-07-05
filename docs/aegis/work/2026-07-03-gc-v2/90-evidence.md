@@ -428,3 +428,14 @@
 - `WJSM_GC_BENCH=1 cargo nextest run -E 'test(gc_pause_bench) + test(gc_footprint_long_run)'` → 2 passed, 739 skipped。
 - `cargo build` → passed（zero warnings）。
 - DriftCheckDraft：Scope=P5 selection/observability/benchmark；Compatibility=默认 workspace、G1 happy、ZGC happy、bench skip/enabled 均绿；Retirement=`WJSM_TEST_GC` 单入口假设、stats 字段不完整、pause/footprint 未验收、GC 回归矩阵缺口均已退休；Decision=continue to P6。
+
+## P6 T6.1 evidence
+
+- 删除/收口 stale cleanup 项：移除 `runtime_gc/api.rs` 的 `#![allow(dead_code)]` 与未使用 `HeapObjectQuery`/`algorithm_name` 字段；移除 G1/ZGC T4 阶段遗留的 crate-level dead-code allow；将仅测试使用的 helper 改为 `#[cfg(test)]`。
+- 清理 `runtime_builtins.rs` 中过期的 “P5 后切 registry” 注释，改为描述 `gc()` 当前直接调用 registry 选择算法。
+- grep 复核 `gc_maybe_collect`、v1 trait 名、WIP/placeholder/unimplemented 与 dead-code allow；剩余命中为测试 helper/文档化字段或既有 host 常量注释，无 v2 退休阻塞项。
+- `cargo fmt` → passed。
+- `cargo check -p wjsm-runtime` → passed（zero warnings）。
+- `cargo nextest run -p wjsm-runtime -E 'test(g1) | test(zgc) | test(gc_stats) | test(pause_hist) | test(memory_footprint)'` → 79 passed, 119 skipped。
+- `cargo nextest run --workspace` → 1318 passed, 2 skipped。
+- `cargo build` → passed（zero warnings）。

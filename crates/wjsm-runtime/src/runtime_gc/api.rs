@@ -7,7 +7,6 @@
 //! - INV-C1：JS 值层引用是 handle；`obj_table[h]` 是唯一 ptr truth。
 //! - INV-C2：raw ptr 不跨潜在 moving/collect GC 点；跨越必须重新 resolve。
 //! - IMPL-8：`GcContext` 不持 `&mut [u8]`；每阶段重借，grow 经 `ctx.grow()`。
-#![allow(dead_code)]
 use crate::RuntimeState;
 use crate::wasm_env::WasmEnv;
 use wasmtime::{AsContextMut, StoreContextMut};
@@ -39,18 +38,6 @@ pub enum StepOutcome {
     Idle,
     Progress { remaining_estimate: usize },
     CycleComplete,
-}
-
-// ── 对象元信息查询（所有算法共享，只读） ──
-/// 查询对象堆元信息。算法通过 GcContext.with_memory 现场算，不缓存。
-/// 本 trait 保留为能力注入接口（未来 moving 算法可注入 forwarding 查询）。
-pub trait HeapObjectQuery {
-    /// 从 header 算对象总大小（16B header + payload）。
-    fn object_size(&self, h: Handle) -> usize;
-    /// obj_table[h] → linear memory ptr。
-    fn object_ptr(&self, h: Handle) -> usize;
-    /// 对象 heap_type tag（HEAP_TYPE_OBJECT/ARRAY/...）。
-    fn heap_type(&self, h: Handle) -> u8;
 }
 
 // ── Root 发现（回调式，#6，避免每次 GC clone 整个 shadow stack）──
@@ -142,8 +129,6 @@ pub struct GcContext<'a> {
     pub store: StoreContextMut<'a, RuntimeState>,
     /// WASM 导出句柄集（Global/Memory/Table，Copy），供 read_i32_global 替代。
     pub env: &'a WasmEnv,
-    /// 仅用于日志。
-    pub gc_algorithm_name: &'static str,
     pub stats: GcStats,
 }
 
@@ -151,12 +136,11 @@ impl<'a> GcContext<'a> {
     pub fn new<C: AsContextMut<Data = RuntimeState>>(
         ctx: &'a mut C,
         env: &'a WasmEnv,
-        algorithm_name: &'static str,
+        _algorithm_name: &'static str,
     ) -> Self {
         Self {
             store: ctx.as_context_mut(),
             env,
-            gc_algorithm_name: algorithm_name,
             stats: GcStats::default(),
         }
     }

@@ -5,7 +5,6 @@ use wjsm_ir::constants;
 pub const REGION_SIZE: usize = 64 * 1024;
 pub const CARD_SIZE: usize = constants::GC_CARD_SIZE as usize;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RegionKind {
@@ -50,7 +49,6 @@ pub struct RegionSpace {
     meta: Vec<RegionMeta>,
 }
 
-#[allow(dead_code)]
 impl RegionSpace {
     pub fn attach(
         &mut self,
@@ -78,14 +76,11 @@ impl RegionSpace {
         self.object_heap_start
     }
 
-    pub fn dynamic_start(&self) -> usize {
-        self.dynamic_start
-    }
-
     pub fn region_count(&self) -> usize {
         self.meta.len()
     }
 
+    #[cfg(test)]
     pub fn metadata_bytes(&self) -> usize {
         self.meta.len() * std::mem::size_of::<RegionMeta>()
     }

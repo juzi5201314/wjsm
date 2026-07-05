@@ -75,6 +75,7 @@ impl ZRelocateState {
         self.active
     }
 
+    #[cfg(test)]
     pub(super) fn start_cycle(&mut self, pages: &mut ZPageSpace, copy_budget: usize) -> bool {
         self.start_cycle_excluding(pages, copy_budget, None)
     }

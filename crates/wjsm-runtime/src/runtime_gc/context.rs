@@ -1,4 +1,4 @@
-//! GcContext 桥接辅助 + HeapObjectQuery 运行时实现（spec §6/T3.3）。
+//! GcContext 桥接辅助（spec §6/T3.3）。
 //!
 //! GcContext 本体定义在 api.rs（持 StoreContextMut + WasmEnv，不持 slice，#9）。
 //! 本文件提供：

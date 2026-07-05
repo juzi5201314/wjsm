@@ -1,4 +1,3 @@
-#![allow(dead_code)] // T4.1 建立 T4.2-T4.4 会接入的颜色协议 API。
 pub const COLOR_MASK: u32 = 0x3;
 pub const PTR_MASK: u32 = !COLOR_MASK;
 

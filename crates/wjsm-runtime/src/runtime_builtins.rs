@@ -1006,7 +1006,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
         NativeCallable::GcCollect => {
-            // P4：gc() global 重接到 GC 框架（不再调旧 trigger_gc，P5 删除）。
+            // gc() global 直接调当前 registry 选择的 GC 算法。
             let env = crate::wasm_env::WasmEnv::from_caller(&mut *caller).expect("WasmEnv");
             let gc_arc = caller.data().gc_algorithm.clone();
             let (algorithm, stats) = {
