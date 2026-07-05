@@ -7,7 +7,7 @@
 use std::time::Instant;
 
 use wasmtime::Val;
-use wjsm_ir::constants;
+use wjsm_ir::{constants, value};
 
 use crate::runtime_gc::api::{
     CycleKind, GcContext, GcStats, Handle, RootProvider, StepBudget, Value,
@@ -425,7 +425,8 @@ fn decode_buffer_old_values(input: &[u8]) -> impl Iterator<Item = Value> + '_ {
         if flags & 1 == 0 {
             return None;
         }
-        Some(i64::from_le_bytes(chunk[8..16].try_into().ok()?))
+        let old = i64::from_le_bytes(chunk[8..16].try_into().ok()?);
+        value::tag_needs_root(old).then_some(old)
     })
 }
 
@@ -683,12 +684,16 @@ mod tests {
 
     #[test]
     fn zgc_mark_decodes_only_satb_barrier_events() {
-        let mut buf = vec![0u8; BARRIER_EVENT_SIZE * 2];
+        let mut buf = vec![0u8; BARRIER_EVENT_SIZE * 3];
         buf[0..4].copy_from_slice(&1u32.to_le_bytes());
         buf[8..16].copy_from_slice(&value::encode_object_handle(9).to_le_bytes());
         buf[BARRIER_EVENT_SIZE..BARRIER_EVENT_SIZE + 4].copy_from_slice(&2u32.to_le_bytes());
         buf[BARRIER_EVENT_SIZE + 8..BARRIER_EVENT_SIZE + 16]
             .copy_from_slice(&value::encode_object_handle(10).to_le_bytes());
+        let number_event = BARRIER_EVENT_SIZE * 2;
+        buf[number_event..number_event + 4].copy_from_slice(&1u32.to_le_bytes());
+        buf[number_event + 8..number_event + 16]
+            .copy_from_slice(&(42.0f64.to_bits() as i64).to_le_bytes());
 
         let old_values = decode_buffer_old_values(&buf).collect::<Vec<_>>();
 
