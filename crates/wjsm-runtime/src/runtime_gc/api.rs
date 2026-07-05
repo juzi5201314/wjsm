@@ -168,6 +168,7 @@ impl<'a> GcContext<'a> {
     }
 
     /// 当前 GC epoch。debug INV-C2 用：任何可能改写 obj_table ptr/色位的 GC 点递增。
+    #[cfg(debug_assertions)]
     pub fn gc_epoch(&self) -> u64 {
         self.store
             .data()

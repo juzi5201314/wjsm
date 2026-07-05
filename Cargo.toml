@@ -58,11 +58,6 @@ tokio = { workspace = true }
 wjsm-runtime = { path = "crates/wjsm-runtime" }
 
 [[test]]
-name = "gc_pause_bench"
-path = "crates/wjsm-runtime/tests/gc_pause_bench.rs"
-
-
-[[test]]
 name = "gc_footprint_long_run"
 path = "crates/wjsm-runtime/tests/gc_footprint_long_run.rs"
 # 仅对 wasmtime/cranelift 这类编译密集型依赖启用优化，

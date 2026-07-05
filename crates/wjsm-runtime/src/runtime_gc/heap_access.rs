@@ -27,6 +27,8 @@ pub struct HeapPtr {
 
 impl HeapPtr {
     fn new(ptr: usize, ctx: &GcContext<'_>) -> Self {
+        #[cfg(not(debug_assertions))]
+        let _ = ctx;
         Self {
             ptr,
             #[cfg(debug_assertions)]
@@ -36,6 +38,8 @@ impl HeapPtr {
 
     /// 返回 raw ptr；debug 构建确认它没有跨越可能移动/重染色的 GC 点。
     pub fn get(&self, ctx: &mut GcContext<'_>) -> usize {
+        #[cfg(not(debug_assertions))]
+        let _ = ctx;
         #[cfg(debug_assertions)]
         debug_assert_eq!(self.epoch, ctx.gc_epoch(), "INV-C2: ptr crossed GC point");
         self.ptr
