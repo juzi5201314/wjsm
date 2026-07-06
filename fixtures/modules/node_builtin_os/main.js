@@ -1,0 +1,11 @@
+import os from 'node:os';
+console.log(os.platform() === process.platform);
+console.log(os.arch() === process.arch);
+console.log(typeof os.tmpdir(), typeof os.homedir(), typeof os.hostname());
+console.log(Array.isArray(os.cpus()));
+console.log(os.totalmem() > 0);
+console.log(os.freemem() >= 0);
+console.log(typeof os.networkInterfaces());
+console.log(typeof os.constants.signals.SIGINT);
+console.log(typeof os.constants.errno.ENOENT);
+console.log(JSON.stringify(os.EOL));

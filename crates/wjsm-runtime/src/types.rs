@@ -445,6 +445,42 @@ pub(crate) enum ArrayIterKind {
     Entries,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum OsInfoKind {
+    Tmpdir = 0,
+    Homedir = 1,
+    Hostname = 2,
+    Cpus = 3,
+    Totalmem = 4,
+    Freemem = 5,
+    Type = 6,
+    Release = 7,
+    Version = 8,
+    NetworkInterfaces = 9,
+}
+
+impl OsInfoKind {
+    pub(crate) fn from_method(method: u8) -> Option<Self> {
+        match method {
+            0 => Some(Self::Tmpdir),
+            1 => Some(Self::Homedir),
+            2 => Some(Self::Hostname),
+            3 => Some(Self::Cpus),
+            4 => Some(Self::Totalmem),
+            5 => Some(Self::Freemem),
+            6 => Some(Self::Type),
+            7 => Some(Self::Release),
+            8 => Some(Self::Version),
+            9 => Some(Self::NetworkInterfaces),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn method(self) -> u8 {
+        self as u8
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum NativeCallable {
     EvalIndirect,
@@ -614,6 +650,9 @@ pub(crate) enum NativeCallable {
     Btoa,
     QueueMicrotask,
     PerformanceNow,
+    OsInfo {
+        kind: OsInfoKind,
+    },
     BigInt64ArrayConstructor,
     BigUint64ArrayConstructor,
     ProxyConstructor,

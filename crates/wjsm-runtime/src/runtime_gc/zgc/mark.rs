@@ -430,6 +430,7 @@ fn decode_buffer_old_values(input: &[u8]) -> impl Iterator<Item = Value> + '_ {
     })
 }
 
+#[allow(dead_code)]
 #[cfg(test)]
 fn snapshot_mark_objects(ctx: &mut GcContext<'_>, pages: &ZPageSpace) -> Vec<MarkObject> {
     let obj_table_ptr = ctx.obj_table_ptr();

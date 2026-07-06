@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+a/b
+file
+../c/d
+file.txt
+--- stderr ---

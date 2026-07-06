@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+true
+true
+string string string
+true
+true
+true
+object
+number
+number
+"\n"
+--- stderr ---

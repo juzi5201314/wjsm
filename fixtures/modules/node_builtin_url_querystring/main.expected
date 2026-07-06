@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+https://example.com/a?x=1&y=2#h
+1 1
+https: example.com 8080 /p ?q=1 #h
+https://example.com/x?a=1
+https://e/c
+/tmp/a b
+xn--maana-pta.com mañana.com
+a=1&a=2&b=x%20y
+--- stderr ---

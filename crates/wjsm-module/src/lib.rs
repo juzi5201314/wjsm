@@ -1,6 +1,7 @@
 // wjsm-module: ES Module / CommonJS bundling support
 // 将多个模块编译为单一 WASM 二进制
 
+mod builtin_modules;
 mod bundler;
 pub mod cjs_transform;
 mod graph;

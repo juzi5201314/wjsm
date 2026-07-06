@@ -862,7 +862,10 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         )),
         NativeCallable::PerformanceNow => {
             Some(crate::runtime_node_globals::call_performance_now(caller))
-        }
+        },
+        NativeCallable::OsInfo { kind } => {
+            Some(crate::runtime_node_globals::call_os_info(caller, kind))
+        },
         NativeCallable::ArrayConstructor => {
             if value::is_object(this_val) {
                 Some(this_val)

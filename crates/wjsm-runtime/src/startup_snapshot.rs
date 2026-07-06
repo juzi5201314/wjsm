@@ -136,6 +136,7 @@ pub(crate) fn capture_startup_snapshot(
                 | NativeCallable::SymbolPrimitiveMethod { method }
                 | NativeCallable::RegExpPrimitiveMethod { method } => *method,
                 NativeCallable::TypedArrayConstructor(kind) => kind.index() as u8,
+                NativeCallable::OsInfo { kind } => kind.method(),
                 _ => 0,
             });
         }

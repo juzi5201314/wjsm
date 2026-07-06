@@ -156,6 +156,7 @@ pub enum SnapshotNativeCallable {
     Btoa = 72,
     QueueMicrotask = 73,
     PerformanceNow = 74,
+    OsInfo = 75,
 }
 
 impl SnapshotNativeCallable {
@@ -235,6 +236,7 @@ impl SnapshotNativeCallable {
             71 => Some(Self::Atob),
             72 => Some(Self::Btoa),
             73 => Some(Self::QueueMicrotask),
+            75 => Some(Self::OsInfo),
             74 => Some(Self::PerformanceNow),
             _ => None,
         }
@@ -665,7 +667,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=74 {
+    for d in 0u32..=75 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);
@@ -757,7 +759,7 @@ mod tests {
             s.hash(&mut hasher);
         }
 
-        for d in 0u32..=74 {
+        for d in 0u32..=75 {
             if SnapshotNativeCallable::from_discriminant(d).is_some() {
                 d.hash(&mut hasher);
             }

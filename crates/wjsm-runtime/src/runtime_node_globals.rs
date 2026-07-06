@@ -50,6 +50,19 @@ pub(crate) fn install_node_web_globals_from_caller(
     let now = alloc_native_callable(caller, NativeCallable::PerformanceNow);
     define_global(caller, performance, "now", now);
     define_global(caller, global_obj, "performance", performance);
+
+    let os = alloc_host_object(caller, &env, 10);
+    install_native(caller, os, "tmpdir", NativeCallable::OsInfo { kind: OsInfoKind::Tmpdir });
+    install_native(caller, os, "homedir", NativeCallable::OsInfo { kind: OsInfoKind::Homedir });
+    install_native(caller, os, "hostname", NativeCallable::OsInfo { kind: OsInfoKind::Hostname });
+    install_native(caller, os, "cpus", NativeCallable::OsInfo { kind: OsInfoKind::Cpus });
+    install_native(caller, os, "totalmem", NativeCallable::OsInfo { kind: OsInfoKind::Totalmem });
+    install_native(caller, os, "freemem", NativeCallable::OsInfo { kind: OsInfoKind::Freemem });
+    install_native(caller, os, "type", NativeCallable::OsInfo { kind: OsInfoKind::Type });
+    install_native(caller, os, "release", NativeCallable::OsInfo { kind: OsInfoKind::Release });
+    install_native(caller, os, "version", NativeCallable::OsInfo { kind: OsInfoKind::Version });
+    install_native(caller, os, "networkInterfaces", NativeCallable::OsInfo { kind: OsInfoKind::NetworkInterfaces });
+    define_global(caller, global_obj, "__wjsm_node_os", os);
     Ok(())
 }
 
@@ -290,6 +303,122 @@ fn option_bool(caller: &mut Caller<'_, RuntimeState>, options: i64, name: &str) 
         return false;
     };
     read_object_property_by_name(caller, ptr, name).is_some_and(|v| to_boolean(caller, v))
+}
+
+pub(crate) fn call_os_info(caller: &mut Caller<'_, RuntimeState>, kind: OsInfoKind) -> i64 {
+    match kind {
+        OsInfoKind::Tmpdir => store_runtime_string(
+            caller,
+            std::env::temp_dir().to_string_lossy().into_owned(),
+        ),
+        OsInfoKind::Homedir => store_runtime_string(caller, home_dir_string()),
+        OsInfoKind::Hostname => {
+            store_runtime_string(caller, sysinfo::System::host_name().unwrap_or_default())
+        }
+        OsInfoKind::Cpus => alloc_cpu_info_array(caller),
+        OsInfoKind::Totalmem => {
+            let mut system = sysinfo::System::new();
+            system.refresh_memory();
+            value::encode_f64(system.total_memory() as f64)
+        }
+        OsInfoKind::Freemem => {
+            let mut system = sysinfo::System::new();
+            system.refresh_memory();
+            value::encode_f64(system.available_memory() as f64)
+        }
+        OsInfoKind::Type => {
+            let fallback = caller.data().process.platform.to_string();
+            store_runtime_string(caller, sysinfo::System::name().unwrap_or(fallback))
+        }
+        OsInfoKind::Release => {
+            store_runtime_string(caller, sysinfo::System::kernel_version().unwrap_or_default())
+        }
+        OsInfoKind::Version => store_runtime_string(
+            caller,
+            sysinfo::System::long_os_version()
+                .or_else(sysinfo::System::os_version)
+                .unwrap_or_default(),
+        ),
+        OsInfoKind::NetworkInterfaces => alloc_network_interfaces(caller),
+    }
+}
+
+fn home_dir_string() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        return home;
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        return profile;
+    }
+    match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+        (Ok(drive), Ok(path)) => format!("{drive}{path}"),
+        _ => String::new(),
+    }
+}
+
+fn alloc_cpu_info_array(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+    let system = sysinfo::System::new_all();
+    let cpus = system.cpus();
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let arr = alloc_array(caller, cpus.len() as u32);
+    for (index, cpu) in cpus.iter().enumerate() {
+        let item = alloc_host_object(caller, &env, 3);
+        let model = store_runtime_string(caller, cpu.brand().to_string());
+        define_global(caller, item, "model", model);
+        define_global(caller, item, "speed", value::encode_f64(cpu.frequency() as f64));
+        let times = alloc_host_object(caller, &env, 5);
+        for name in ["user", "nice", "sys", "idle", "irq"] {
+            define_global(caller, times, name, value::encode_f64(0.0));
+        }
+        define_global(caller, item, "times", times);
+        set_array_elem(caller, arr, index as i32, item);
+    }
+    arr
+}
+
+fn alloc_network_interfaces(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_null_proto_object(caller, &env, 4);
+    let Ok(interfaces) = get_if_addrs::get_if_addrs() else {
+        return obj;
+    };
+    let mut groups: std::collections::BTreeMap<String, Vec<(String, String, String, bool)>> =
+        std::collections::BTreeMap::new();
+    for interface in interfaces {
+        let internal = interface.is_loopback();
+        match interface.addr {
+            get_if_addrs::IfAddr::V4(addr) => groups.entry(interface.name).or_default().push((
+                addr.ip.to_string(),
+                addr.netmask.to_string(),
+                "IPv4".to_string(),
+                internal,
+            )),
+            get_if_addrs::IfAddr::V6(addr) => groups.entry(interface.name).or_default().push((
+                addr.ip.to_string(),
+                addr.netmask.to_string(),
+                "IPv6".to_string(),
+                internal,
+            )),
+        }
+    }
+    for (name, entries) in groups {
+        let arr = alloc_array(caller, entries.len() as u32);
+        for (index, (address, netmask, family, internal)) in entries.into_iter().enumerate() {
+            let item = alloc_host_object(caller, &env, 6);
+            let address = store_runtime_string(caller, address);
+            let netmask = store_runtime_string(caller, netmask);
+            let family = store_runtime_string(caller, family);
+            define_global(caller, item, "address", address);
+            define_global(caller, item, "netmask", netmask);
+            define_global(caller, item, "family", family);
+            define_global(caller, item, "mac", value::encode_undefined());
+            define_global(caller, item, "internal", value::encode_bool(internal));
+            define_global(caller, item, "cidr", value::encode_null());
+            set_array_elem(caller, arr, index as i32, item);
+        }
+        define_global(caller, obj, &name, arr);
+    }
+    obj
 }
 
 fn install_native(

@@ -28,6 +28,8 @@ base64 = "0.22"
 encoding_rs = { workspace = true }
 memchr = "2"
 icu_normalizer = { version = "2.2", features = ["compiled_data"] }
+sysinfo = { workspace = true }
+get_if_addrs = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 

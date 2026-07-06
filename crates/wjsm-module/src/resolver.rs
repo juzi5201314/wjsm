@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use swc_core::common::Span;
 use swc_core::ecma::ast;
 
+use crate::builtin_modules::{self, BuiltinLookup};
 /// 尝试作为模块入口解析的路径扩展名（顺序优先）
 const MODULE_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "jsx", "tsx"];
 
@@ -271,8 +272,51 @@ impl ModuleResolver {
 
     /// 解析模块（如果已解析过则返回缓存的 ID）
     pub fn resolve(&mut self, specifier: &str, parent: &Path) -> Result<ModuleId> {
-        let path = Self::resolve_path(specifier, parent)?;
-        self.load_resolved_module(specifier, path)
+        match builtin_modules::lookup(specifier) {
+            BuiltinLookup::Found(module) => self.load_builtin_module(module),
+            BuiltinLookup::UnknownNodeBuiltin(name) => {
+                bail!("Unknown built-in module 'node:{}'", name)
+            }
+            BuiltinLookup::NotBuiltin => {
+                let path = Self::resolve_path(specifier, parent)?;
+                self.load_resolved_module(specifier, path)
+            }
+        }
+    }
+
+    fn load_builtin_module(
+        &mut self,
+        module: &'static builtin_modules::BuiltinModule,
+    ) -> Result<ModuleId> {
+        let path = builtin_modules::virtual_path(module.canonical);
+        debug_assert!(builtin_modules::is_builtin_virtual_path(&path));
+        if let Some(&id) = self.visited.get(&path) {
+            return Ok(id);
+        }
+
+        let ast = wjsm_parser::parse_module_with_path(module.source, &path)
+            .with_context(|| format!("Failed to parse built-in module: {}", module.canonical))?;
+        let imports = Self::extract_imports(&ast);
+        let exports = Self::extract_exports(&ast);
+        let dynamic_imports = Self::extract_dynamic_imports(&ast)?;
+        let id = ModuleId(self.next_id);
+        self.next_id += 1;
+
+        self.visited.insert(path.clone(), id);
+        self.modules.insert(
+            id,
+            ResolvedModule {
+                id,
+                source: module.source.to_string(),
+                path,
+                ast,
+                imports,
+                exports,
+                dynamic_imports,
+                is_cjs: false,
+            },
+        );
+        Ok(id)
     }
 
     fn load_resolved_module(&mut self, specifier: &str, path: PathBuf) -> Result<ModuleId> {
@@ -351,6 +395,25 @@ impl ModuleResolver {
     /// 根据路径查找已解析的模块 ID
     pub fn get_id_by_path(&self, path: &Path) -> Option<ModuleId> {
         self.visited.get(path).copied()
+    }
+
+    pub(crate) fn get_id_for_specifier(
+        &self,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<Option<ModuleId>> {
+        match builtin_modules::lookup(specifier) {
+            BuiltinLookup::Found(module) => {
+                Ok(self.visited.get(&builtin_modules::virtual_path(module.canonical)).copied())
+            }
+            BuiltinLookup::UnknownNodeBuiltin(name) => {
+                bail!("Unknown built-in module 'node:{}'", name)
+            }
+            BuiltinLookup::NotBuiltin => {
+                let path = Self::resolve_path(specifier, parent)?;
+                Ok(self.get_id_by_path(&path))
+            }
+        }
     }
 
     /// 为指定模块添加合成默认导出（如果它没有默认导出但有其他导出）

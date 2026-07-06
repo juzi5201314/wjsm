@@ -271,6 +271,7 @@ impl ZPageSpace {
         self.page_start(start)
     }
 
+    #[allow(dead_code)]
     #[cfg(test)]
     pub fn free_page_count(&self) -> usize {
         self.pages

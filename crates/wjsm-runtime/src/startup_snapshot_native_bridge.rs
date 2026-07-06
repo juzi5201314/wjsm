@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 
-use crate::types::{NativeCallable, TypedArrayConstructorKind};
+use crate::types::{NativeCallable, OsInfoKind, TypedArrayConstructorKind};
 use wjsm_snapshot_format::SnapshotNativeCallable;
 
 pub(crate) trait SnapshotNativeCallableBridge {
@@ -101,6 +101,9 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::Btoa => NativeCallable::Btoa,
             Self::QueueMicrotask => NativeCallable::QueueMicrotask,
             Self::PerformanceNow => NativeCallable::PerformanceNow,
+            Self::OsInfo => NativeCallable::OsInfo {
+                kind: OsInfoKind::from_method(method).unwrap_or(OsInfoKind::Tmpdir),
+            },
         }
     }
 
@@ -189,6 +192,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::Btoa => Self::Btoa,
             NativeCallable::QueueMicrotask => Self::QueueMicrotask,
             NativeCallable::PerformanceNow => Self::PerformanceNow,
+            NativeCallable::OsInfo { kind: _ } => Self::OsInfo,
             NativeCallable::StringPrimitiveMethod { .. }
             | NativeCallable::BufferStatic { .. }
             | NativeCallable::BufferMethod { .. }

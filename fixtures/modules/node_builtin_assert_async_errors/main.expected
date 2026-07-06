@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+AssertionError 1 2 strictEqual
+throws
+rejects
+match
+ifError
+--- stderr ---

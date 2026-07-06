@@ -86,21 +86,21 @@ impl ModuleGraph {
         // 为被 CJS 模块默认导入的 ESM 模块添加合成默认导出
         let mut needs_default_export: HashSet<ModuleId> = HashSet::new();
         for module in resolver.all_modules() {
-            if module.is_cjs {
-                for import in &module.imports {
-                    let has_default_import = import
-                        .names
-                        .iter()
-                        .any(|(_, imported_name)| imported_name == "default");
-                    if has_default_import
-                        && let Ok(dep_path) =
-                            ModuleResolver::resolve_path(&import.specifier, &module.path)
-                        && let Some(dep_id) = resolver.get_id_by_path(&dep_path)
-                    {
-                        let dep_module = resolver.get_module(dep_id).unwrap();
-                        if !dep_module.is_cjs {
-                            needs_default_export.insert(dep_id);
-                        }
+            if !module.is_cjs {
+                continue;
+            }
+            for import in &module.imports {
+                let has_default_import = import
+                    .names
+                    .iter()
+                    .any(|(_, imported_name)| imported_name == "default");
+                if !has_default_import {
+                    continue;
+                }
+                if let Some(dep_id) = resolver.get_id_for_specifier(&import.specifier, &module.path)? {
+                    let dep_module = resolver.get_module(dep_id).unwrap();
+                    if !dep_module.is_cjs {
+                        needs_default_export.insert(dep_id);
                     }
                 }
             }
@@ -122,8 +122,7 @@ impl ModuleGraph {
             // 构建依赖列表
             let mut imports_with_ids = Vec::new();
             for import in &module.imports {
-                let dep_path = ModuleResolver::resolve_path(&import.specifier, &module.path)?;
-                if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
+                if let Some(dep_id) = resolver.get_id_for_specifier(&import.specifier, &module.path)? {
                     imports_with_ids.push((dep_id, import.clone()));
                 }
             }
@@ -137,8 +136,7 @@ impl ModuleGraph {
                 if imports_with_ids.iter().any(|(_, i)| i.specifier == source) {
                     continue; // 已通过 import 引入，跳过重复
                 }
-                let dep_path = ModuleResolver::resolve_path(&source, &module.path)?;
-                if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
+                if let Some(dep_id) = resolver.get_id_for_specifier(&source, &module.path)? {
                     // 用空 names 创建合成 ImportEntry（表示依赖关系，不引入绑定）
                     imports_with_ids.push((
                         dep_id,
@@ -154,8 +152,7 @@ impl ModuleGraph {
             // 构建动态 import 列表：(specifier, 目标 ModuleId)
             let mut dynamic_imports_with_ids = Vec::new();
             for specifier in &module.dynamic_imports {
-                let dep_path = ModuleResolver::resolve_path(specifier, &module.path)?;
-                if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
+                if let Some(dep_id) = resolver.get_id_for_specifier(specifier, &module.path)? {
                     dynamic_imports_with_ids.push((specifier.clone(), dep_id));
                 }
             }
@@ -471,6 +468,43 @@ mod tests {
             has_default,
             "ESM module should have synthetic default export added"
         );
+    }
+
+    #[test]
+    fn builtin_resolution_prefers_core_module_over_node_modules() {
+        let root = create_temp_project("builtin_priority");
+        write_file(
+            &root,
+            "main.js",
+            "const path = require('path');\nconsole.log(path.basename('/x/y'));\n",
+        );
+        write_file(
+            &root,
+            "node_modules/path/index.js",
+            "module.exports = { basename() { return 'wrong'; } };\n",
+        );
+
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
+        let builtin_path = crate::builtin_modules::virtual_path("path");
+        let npm_path = root
+            .join("node_modules/path/index.js")
+            .canonicalize()
+            .expect("npm path fixture should exist");
+        let paths: Vec<_> = graph
+            .all_module_ids()
+            .filter_map(|id| graph.get_module(id).map(|node| node.path.clone()))
+            .collect();
+
+        assert!(
+            paths.iter().any(|path| path == &builtin_path),
+            "graph should contain builtin path module"
+        );
+        assert!(
+            !paths.iter().any(|path| path == &npm_path),
+            "node_modules/path must not satisfy require('path')"
+        );
+
+        std::fs::remove_dir_all(root).expect("temp project should be removed");
     }
 
     #[test]
