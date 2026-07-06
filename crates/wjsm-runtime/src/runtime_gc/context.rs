@@ -30,14 +30,10 @@ pub(crate) fn gc_heap_layout(heap_type: u8) -> GcHeapLayout {
         | wjsm_ir::HEAP_TYPE_PROMISE
         | wjsm_ir::HEAP_TYPE_CONTINUATION
         | wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR
-        | wjsm_ir::HEAP_TYPE_ARGUMENTS => GcHeapLayout::ObjectLike,
+        | wjsm_ir::HEAP_TYPE_ARGUMENTS
+        | wjsm_ir::HEAP_TYPE_MODULE_NAMESPACE => GcHeapLayout::ObjectLike,
         tag => {
-            debug_assert!(
-                false,
-                "GC: unhandled heap_type 0x{tag:02x}; extend gc_heap_layout / mark / sweep"
-            );
-            #[cfg(not(debug_assertions))]
-            eprintln!("wjsm GC warning: unhandled heap_type 0x{tag:02x}, assuming OBJECT layout");
+            debug_assert!(false, "unknown heap type tag: {tag:#x}");
             GcHeapLayout::ObjectLike
         }
     }

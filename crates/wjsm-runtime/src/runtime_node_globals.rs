@@ -52,17 +52,93 @@ pub(crate) fn install_node_web_globals_from_caller(
     define_global(caller, global_obj, "performance", performance);
 
     let os = alloc_host_object(caller, &env, 10);
-    install_native(caller, os, "tmpdir", NativeCallable::OsInfo { kind: OsInfoKind::Tmpdir });
-    install_native(caller, os, "homedir", NativeCallable::OsInfo { kind: OsInfoKind::Homedir });
-    install_native(caller, os, "hostname", NativeCallable::OsInfo { kind: OsInfoKind::Hostname });
-    install_native(caller, os, "cpus", NativeCallable::OsInfo { kind: OsInfoKind::Cpus });
-    install_native(caller, os, "totalmem", NativeCallable::OsInfo { kind: OsInfoKind::Totalmem });
-    install_native(caller, os, "freemem", NativeCallable::OsInfo { kind: OsInfoKind::Freemem });
-    install_native(caller, os, "type", NativeCallable::OsInfo { kind: OsInfoKind::Type });
-    install_native(caller, os, "release", NativeCallable::OsInfo { kind: OsInfoKind::Release });
-    install_native(caller, os, "version", NativeCallable::OsInfo { kind: OsInfoKind::Version });
-    install_native(caller, os, "networkInterfaces", NativeCallable::OsInfo { kind: OsInfoKind::NetworkInterfaces });
+    install_native(
+        caller,
+        os,
+        "tmpdir",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Tmpdir,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "homedir",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Homedir,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "hostname",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Hostname,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "cpus",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Cpus,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "totalmem",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Totalmem,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "freemem",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Freemem,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "type",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Type,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "release",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Release,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "version",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::Version,
+        },
+    );
+    install_native(
+        caller,
+        os,
+        "networkInterfaces",
+        NativeCallable::OsInfo {
+            kind: OsInfoKind::NetworkInterfaces,
+        },
+    );
     define_global(caller, global_obj, "__wjsm_node_os", os);
+
+    let fs = crate::runtime_node_fs::create_fs_host_object(caller);
+    define_global(caller, global_obj, "__wjsm_node_fs", fs);
+
+    let crypto = crate::runtime_node_crypto::create_crypto_host_object(caller);
+    define_global(caller, global_obj, "__wjsm_node_crypto", crypto);
     Ok(())
 }
 
@@ -307,10 +383,9 @@ fn option_bool(caller: &mut Caller<'_, RuntimeState>, options: i64, name: &str) 
 
 pub(crate) fn call_os_info(caller: &mut Caller<'_, RuntimeState>, kind: OsInfoKind) -> i64 {
     match kind {
-        OsInfoKind::Tmpdir => store_runtime_string(
-            caller,
-            std::env::temp_dir().to_string_lossy().into_owned(),
-        ),
+        OsInfoKind::Tmpdir => {
+            store_runtime_string(caller, std::env::temp_dir().to_string_lossy().into_owned())
+        }
         OsInfoKind::Homedir => store_runtime_string(caller, home_dir_string()),
         OsInfoKind::Hostname => {
             store_runtime_string(caller, sysinfo::System::host_name().unwrap_or_default())
@@ -330,9 +405,10 @@ pub(crate) fn call_os_info(caller: &mut Caller<'_, RuntimeState>, kind: OsInfoKi
             let fallback = caller.data().process.platform.to_string();
             store_runtime_string(caller, sysinfo::System::name().unwrap_or(fallback))
         }
-        OsInfoKind::Release => {
-            store_runtime_string(caller, sysinfo::System::kernel_version().unwrap_or_default())
-        }
+        OsInfoKind::Release => store_runtime_string(
+            caller,
+            sysinfo::System::kernel_version().unwrap_or_default(),
+        ),
         OsInfoKind::Version => store_runtime_string(
             caller,
             sysinfo::System::long_os_version()
@@ -365,7 +441,12 @@ fn alloc_cpu_info_array(caller: &mut Caller<'_, RuntimeState>) -> i64 {
         let item = alloc_host_object(caller, &env, 3);
         let model = store_runtime_string(caller, cpu.brand().to_string());
         define_global(caller, item, "model", model);
-        define_global(caller, item, "speed", value::encode_f64(cpu.frequency() as f64));
+        define_global(
+            caller,
+            item,
+            "speed",
+            value::encode_f64(cpu.frequency() as f64),
+        );
         let times = alloc_host_object(caller, &env, 5);
         for name in ["user", "nice", "sys", "idle", "irq"] {
             define_global(caller, times, name, value::encode_f64(0.0));

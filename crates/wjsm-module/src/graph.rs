@@ -97,7 +97,9 @@ impl ModuleGraph {
                 if !has_default_import {
                     continue;
                 }
-                if let Some(dep_id) = resolver.get_id_for_specifier(&import.specifier, &module.path)? {
+                if let Some(dep_id) =
+                    resolver.get_id_for_specifier(&import.specifier, &module.path)?
+                {
                     let dep_module = resolver.get_module(dep_id).unwrap();
                     if !dep_module.is_cjs {
                         needs_default_export.insert(dep_id);
@@ -122,7 +124,9 @@ impl ModuleGraph {
             // 构建依赖列表
             let mut imports_with_ids = Vec::new();
             for import in &module.imports {
-                if let Some(dep_id) = resolver.get_id_for_specifier(&import.specifier, &module.path)? {
+                if let Some(dep_id) =
+                    resolver.get_id_for_specifier(&import.specifier, &module.path)?
+                {
                     imports_with_ids.push((dep_id, import.clone()));
                 }
             }
@@ -502,6 +506,30 @@ mod tests {
         assert!(
             !paths.iter().any(|path| path == &npm_path),
             "node_modules/path must not satisfy require('path')"
+        );
+
+        std::fs::remove_dir_all(root).expect("temp project should be removed");
+    }
+
+    #[test]
+    fn builtin_resolution_supports_slash_canonical_names() {
+        let root = create_temp_project("builtin_slash_canonical");
+        write_file(
+            &root,
+            "main.js",
+            "import fsp from 'node:fs/promises';\nconsole.log(typeof fsp.readFile);\n",
+        );
+
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
+        let builtin_path = crate::builtin_modules::virtual_path("fs/promises");
+        let paths: Vec<_> = graph
+            .all_module_ids()
+            .filter_map(|id| graph.get_module(id).map(|node| node.path.clone()))
+            .collect();
+
+        assert!(
+            paths.iter().any(|path| path == &builtin_path),
+            "graph should contain fs/promises builtin module"
         );
 
         std::fs::remove_dir_all(root).expect("temp project should be removed");

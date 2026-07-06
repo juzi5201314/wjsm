@@ -126,12 +126,8 @@ fn setup_multi_module_lowerer(
 
 fn predeclare_cjs_path_bindings(
     lowerer: &mut Lowerer,
-    module_id: wjsm_ir::ModuleId,
+    _module_id: wjsm_ir::ModuleId,
 ) -> Result<(), LoweringError> {
-    if lowerer.module_metadata.get(&module_id).map(|m| m.kind) != Some(ModuleKind::CommonJs) {
-        return Ok(());
-    }
-
     for name in ["__filename", "__dirname"] {
         lowerer
             .scopes
@@ -436,6 +432,24 @@ fn emit_global_constants(lowerer: &mut Lowerer, entry: BasicBlockId) {
             value: inf_val,
         },
     );
+
+    // 创建全局对象，用于 bundled module 中的 builtin global 解析。
+    let global_obj = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::CallBuiltin {
+            dest: Some(global_obj),
+            builtin: Builtin::CreateGlobalObject,
+            args: vec![],
+        },
+    );
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::StoreVar {
+            name: "$0.$global".to_string(),
+            value: global_obj,
+        },
+    );
 }
 
 /// 为动态 import 的目标模块创建并注册命名空间对象
@@ -496,9 +510,6 @@ fn emit_cjs_path_bindings(
     let Some(metadata) = lowerer.module_metadata.get(&module_id).cloned() else {
         return Ok(());
     };
-    if metadata.kind != ModuleKind::CommonJs {
-        return Ok(());
-    }
     let Some(&module_scope) = lowerer.module_scopes.get(&module_id) else {
         return Ok(());
     };

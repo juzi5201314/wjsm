@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+true
+function function
+true
+true
+true false true true
+true
+number number
+promise true
+--- stderr ---

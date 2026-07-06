@@ -1,0 +1,12 @@
+const crypto = require('crypto');
+const nodeCrypto = require('node:crypto');
+const a = Buffer.from('abcd');
+const b = Buffer.from('abcd');
+console.log(crypto === nodeCrypto);
+console.log(crypto.createHash('sha256').update('abc').digest('hex'));
+console.log(crypto.createHmac('sha256', 'key').update('abc').digest('hex'));
+console.log(Buffer.isBuffer(crypto.randomBytes(4)), crypto.randomBytes(4).length);
+console.log(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(crypto.randomUUID()));
+console.log(Number.isInteger(crypto.randomInt(1, 3)));
+console.log(crypto.timingSafeEqual(a, b));
+console.log(crypto.getHashes().includes('sha256'));

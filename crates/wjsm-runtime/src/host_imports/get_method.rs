@@ -6,6 +6,7 @@ use crate::{WasmEnv, constants, value};
 use wasmtime::{Caller, Extern};
 
 use crate::RuntimeState;
+use crate::types::NativeCallable;
 
 /// GetMethod 的 symbol name_id 版本
 pub(crate) fn get_method_by_name_id(
@@ -94,6 +95,27 @@ pub(crate) fn get_by_name_id_sync(
         }
         return value::encode_undefined();
     }
+    if value::is_native_callable(obj) {
+        if !name_id_matches_utf8(caller, name_id, "bigint") {
+            return value::encode_undefined();
+        }
+        let idx = value::decode_native_callable_idx(obj) as usize;
+        let is_hrtime = caller
+            .data()
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(idx)
+            .is_some_and(|record| matches!(record, NativeCallable::ProcessHrtime));
+        if is_hrtime {
+            return crate::create_native_callable(
+                caller.data(),
+                NativeCallable::ProcessHrtimeBigint,
+            );
+        }
+        return value::encode_undefined();
+    }
+
     if !value::is_js_object(obj) {
         return value::encode_undefined();
     }

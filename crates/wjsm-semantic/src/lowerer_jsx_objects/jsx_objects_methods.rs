@@ -581,6 +581,7 @@ impl Lowerer {
                     args: vec![func_ref_val, env_val],
                 },
             );
+            self.expr_merge_block = Some(closure_block);
             closure_val
         };
 

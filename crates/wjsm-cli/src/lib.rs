@@ -46,6 +46,7 @@ const EXIT_USAGE_ERROR: u8 = 3;
 fn runtime_options_for_file(
     cli: &Cli,
     input: &Path,
+    root: Option<&Path>,
     script_args: &[OsString],
 ) -> Result<runtime::RuntimeOptions> {
     let script = if path_is_stdin(input) {
@@ -62,7 +63,9 @@ fn runtime_options_for_file(
             .to_string_lossy()
             .into_owned()
     };
-    runtime_options_with_script(cli, script, script_args)
+    let env = runtime_env_snapshot();
+    let sandbox = fs_sandbox_for_file(input, root, &env);
+    runtime_options_with_script(cli, script, script_args, env, sandbox)
 }
 
 fn runtime_options_for_inline(
@@ -70,23 +73,31 @@ fn runtime_options_for_inline(
     mode_tag: &str,
     script_args: &[OsString],
 ) -> Result<runtime::RuntimeOptions> {
-    runtime_options_with_script(cli, mode_tag.to_string(), script_args)
+    let env = runtime_env_snapshot();
+    let sandbox = fs_sandbox_for_inline(&env);
+    runtime_options_with_script(cli, mode_tag.to_string(), script_args, env, sandbox)
 }
 
 fn runtime_options_with_script(
     cli: &Cli,
     script: String,
     script_args: &[OsString],
+    env: Vec<(String, String)>,
+    sandbox: FsSandbox,
 ) -> Result<runtime::RuntimeOptions> {
     let mut argv = Vec::with_capacity(script_args.len() + 2);
     argv.push(wjsm_argv0());
     argv.push(script);
     argv.extend(script_args.iter().map(|arg| os_string_lossy(arg)));
-    runtime_options_with_argv(cli, argv)
+    runtime_options_with_argv(cli, argv, env, sandbox)
 }
 
-fn runtime_options_with_argv(cli: &Cli, argv: Vec<String>) -> Result<runtime::RuntimeOptions> {
-    let env = runtime_env_snapshot();
+fn runtime_options_with_argv(
+    cli: &Cli,
+    argv: Vec<String>,
+    env: Vec<(String, String)>,
+    sandbox: FsSandbox,
+) -> Result<runtime::RuntimeOptions> {
     let gc_algorithm = match cli.gc.as_deref() {
         Some(raw) if !raw.is_empty() => raw.parse().map_err(anyhow::Error::msg)?,
         _ => runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?,
@@ -99,8 +110,12 @@ fn runtime_options_with_argv(cli: &Cli, argv: Vec<String>) -> Result<runtime::Ru
         cwd: runtime_cwd_string(),
         env,
         pid: std::process::id(),
+        ppid: 0,
         platform: node_platform(),
         arch: node_arch(),
+        fs_read_roots: sandbox.read_roots,
+        fs_write_roots: sandbox.write_roots,
+        fs_allow_write_anywhere: sandbox.allow_write_anywhere,
         ..runtime::RuntimeOptions::default()
     })
 }
@@ -112,6 +127,96 @@ fn wjsm_argv0() -> String {
         .unwrap_or_else(|| "wjsm".to_string())
 }
 
+struct FsSandbox {
+    read_roots: Vec<PathBuf>,
+    write_roots: Vec<PathBuf>,
+    allow_write_anywhere: bool,
+}
+
+fn fs_sandbox_for_file(input: &Path, root: Option<&Path>, env: &[(String, String)]) -> FsSandbox {
+    let mut read_roots = default_project_read_roots(env);
+    if let Some(root_path) = root {
+        push_canonical_root(&mut read_roots, root_path);
+    } else if !path_is_stdin(input)
+        && let Some(parent) = input
+            .canonicalize()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        push_unique_root(&mut read_roots, parent);
+    }
+    fs_sandbox_from_read_roots(read_roots, env)
+}
+
+fn fs_sandbox_for_inline(env: &[(String, String)]) -> FsSandbox {
+    fs_sandbox_from_read_roots(default_project_read_roots(env), env)
+}
+
+fn fs_sandbox_for_in_process(
+    input: &Path,
+    env: &[(String, String)],
+    cwd_override: Option<&Path>,
+) -> FsSandbox {
+    let mut read_roots = Vec::new();
+    if let Some(cwd) = cwd_override {
+        push_canonical_root(&mut read_roots, cwd);
+    } else if let Ok(cwd) = std::env::current_dir() {
+        push_canonical_root(&mut read_roots, &cwd);
+    }
+    if let Some(parent) = input
+        .canonicalize()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        push_unique_root(&mut read_roots, parent);
+    }
+    push_env_read_roots(&mut read_roots, env);
+    fs_sandbox_from_read_roots(read_roots, env)
+}
+
+fn default_project_read_roots(env: &[(String, String)]) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        push_canonical_root(&mut roots, &cwd);
+    }
+    push_env_read_roots(&mut roots, env);
+    roots
+}
+
+fn fs_sandbox_from_read_roots(mut read_roots: Vec<PathBuf>, env: &[(String, String)]) -> FsSandbox {
+    push_unique_root(&mut read_roots, std::env::temp_dir());
+    let write_roots = read_roots.clone();
+    FsSandbox {
+        read_roots,
+        write_roots,
+        allow_write_anywhere: env
+            .iter()
+            .any(|(key, value)| key == "WJSM_FS_ALLOW_WRITE" && value == "1"),
+    }
+}
+
+fn push_env_read_roots(roots: &mut Vec<PathBuf>, env: &[(String, String)]) {
+    for raw in env
+        .iter()
+        .filter_map(|(key, value)| (key == "WJSM_FS_ALLOW_READ").then_some(value))
+    {
+        for path in std::env::split_paths(raw) {
+            push_canonical_root(roots, &path);
+        }
+    }
+}
+
+fn push_canonical_root(roots: &mut Vec<PathBuf>, path: &Path) {
+    if let Ok(canonical) = path.canonicalize() {
+        push_unique_root(roots, canonical);
+    }
+}
+
+fn push_unique_root(roots: &mut Vec<PathBuf>, path: PathBuf) {
+    if !roots.iter().any(|existing| existing == &path) {
+        roots.push(path);
+    }
+}
 fn os_string_lossy(value: &OsStr) -> String {
     value.to_string_lossy().into_owned()
 }
@@ -539,7 +644,7 @@ fn cmd_build(
                                 cli.verbose_enabled(1),
                                 cli.should_verify_ir(),
                             )?,
-                            runtime_options_for_file(cli, &path, &[])?,
+                            runtime_options_for_file(cli, &path, root, &[])?,
                         )
                     } else {
                         (
@@ -551,7 +656,7 @@ fn cmd_build(
                                 cli.verbose_enabled(1),
                                 cli.should_verify_ir(),
                             )?,
-                            runtime_options_for_file(cli, &path, &[])?,
+                            runtime_options_for_file(cli, &path, root, &[])?,
                         )
                     }
                 }
@@ -607,7 +712,7 @@ fn cmd_run(
             cli.should_verify_ir(),
         )?
     };
-    let options = runtime_options_for_file(cli, input, script_args)?;
+    let options = runtime_options_for_file(cli, input, root, script_args)?;
 
     run_compile_then_execute(cli, result, options)
 }
@@ -2026,6 +2131,7 @@ fn runtime_options_for_in_process(
     }
 
     let gc_algorithm = runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?;
+    let sandbox = fs_sandbox_for_in_process(input, &env, cwd_override);
 
     Ok(runtime::RuntimeOptions {
         max_heap_size: None,
@@ -2036,8 +2142,12 @@ fn runtime_options_for_in_process(
             .or_else(runtime_cwd_string),
         env,
         pid: std::process::id(),
+        ppid: 0,
         platform: node_platform(),
         arch: node_arch(),
+        fs_read_roots: sandbox.read_roots,
+        fs_write_roots: sandbox.write_roots,
+        fs_allow_write_anywhere: sandbox.allow_write_anywhere,
         ..runtime::RuntimeOptions::default()
     })
 }

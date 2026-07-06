@@ -137,6 +137,7 @@ pub(crate) fn capture_startup_snapshot(
                 | NativeCallable::RegExpPrimitiveMethod { method } => *method,
                 NativeCallable::TypedArrayConstructor(kind) => kind.index() as u8,
                 NativeCallable::OsInfo { kind } => kind.method(),
+                NativeCallable::FsMethod { kind } => kind.method(),
                 _ => 0,
             });
         }
@@ -595,6 +596,11 @@ pub(crate) fn restore_startup_snapshot(
                 .unwrap_or(0);
             ncs.push(snap_nc.into_native_callable(method));
         }
+        state
+            .native_callable_free_slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         state.iterator_prototype = snapshot.header.iterator_prototype;
         state.generator_prototype = snapshot.header.generator_prototype;
         state.async_iterator_prototype = snapshot.header.async_iterator_prototype;

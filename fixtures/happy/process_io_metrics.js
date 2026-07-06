@@ -1,0 +1,15 @@
+console.log(typeof process.pid, typeof process.ppid);
+console.log(typeof process.stdin.on, typeof process.stdin.resume);
+console.log(typeof process.stdout.end, typeof process.stdout.on, typeof process.stderr.end, typeof process.stderr.on);
+process.stdout.write('out');
+process.stdout.end('-end');
+process.stderr.end('err-end');
+console.log('-line');
+const hr = process.hrtime();
+console.log(Array.isArray(hr), typeof hr[0], typeof hr[1], hr[0] >= 0, hr[1] >= 0);
+console.log(typeof process.hrtime.bigint());
+console.log(process.uptime() >= 0);
+const mem = process.memoryUsage();
+console.log(['rss','heapTotal','heapUsed','external','arrayBuffers'].every((k) => typeof mem[k] === 'number'));
+const cpu = process.cpuUsage();
+console.log(typeof cpu.user, typeof cpu.system);

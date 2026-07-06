@@ -1,4 +1,4 @@
-// Node.js 内置模块元数据 owner。
+// Node.js 内置模块元数据 owner（含当前核心模块封装源）。
 
 use std::path::{Path, PathBuf};
 
@@ -43,6 +43,18 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
     BuiltinModule {
         canonical: "os",
         source: include_str!("../builtin_js/node_os.js"),
+    },
+    BuiltinModule {
+        canonical: "fs",
+        source: include_str!("../builtin_js/node_fs.js"),
+    },
+    BuiltinModule {
+        canonical: "fs/promises",
+        source: include_str!("../builtin_js/node_fs_promises.js"),
+    },
+    BuiltinModule {
+        canonical: "crypto",
+        source: include_str!("../builtin_js/node_crypto.js"),
     },
 ];
 
@@ -91,7 +103,9 @@ mod tests {
     #[test]
     fn builtin_lookup_rejects_unknown_node_prefix() {
         let err = match lookup("node:not_real") {
-            BuiltinLookup::UnknownNodeBuiltin(name) => format!("Unknown built-in module 'node:{name}'"),
+            BuiltinLookup::UnknownNodeBuiltin(name) => {
+                format!("Unknown built-in module 'node:{name}'")
+            }
             other => panic!("unknown node: lookup should be rejected, got {other:?}"),
         };
 
@@ -105,8 +119,24 @@ mod tests {
             PathBuf::from("/__wjsm_builtin__/node/path.mjs")
         );
 
+        assert_eq!(
+            virtual_path("fs/promises"),
+            PathBuf::from("/__wjsm_builtin__/node/fs/promises.mjs")
+        );
+
         let mut seen = HashSet::new();
-        for canonical in ["path", "util", "events", "assert", "url", "querystring", "os"] {
+        for canonical in [
+            "path",
+            "util",
+            "events",
+            "assert",
+            "url",
+            "querystring",
+            "os",
+            "fs",
+            "fs/promises",
+            "crypto",
+        ] {
             assert!(
                 seen.insert(virtual_path(canonical)),
                 "virtual path for {canonical} should be unique"

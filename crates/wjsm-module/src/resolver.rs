@@ -403,9 +403,10 @@ impl ModuleResolver {
         parent: &Path,
     ) -> Result<Option<ModuleId>> {
         match builtin_modules::lookup(specifier) {
-            BuiltinLookup::Found(module) => {
-                Ok(self.visited.get(&builtin_modules::virtual_path(module.canonical)).copied())
-            }
+            BuiltinLookup::Found(module) => Ok(self
+                .visited
+                .get(&builtin_modules::virtual_path(module.canonical))
+                .copied()),
             BuiltinLookup::UnknownNodeBuiltin(name) => {
                 bail!("Unknown built-in module 'node:{}'", name)
             }

@@ -2261,7 +2261,14 @@ pub(crate) fn define_collections_buffers(
 
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 43)
+                let obj = alloc_host_object(&mut caller, &_wjsm_env, 43);
+                if let Some(proto) = native_callable_date_prototype(
+                    &mut caller,
+                    &NativeCallable::DateConstructorGlobal,
+                ) {
+                    set_object_proto_header(&mut caller, &_wjsm_env, obj, proto);
+                }
+                obj
             };
             let ms_val = value::encode_f64(ms);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__date_ms__", ms_val);

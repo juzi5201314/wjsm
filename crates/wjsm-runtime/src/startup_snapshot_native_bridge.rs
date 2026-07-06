@@ -2,6 +2,7 @@
 
 use anyhow::{Result, bail};
 
+use crate::runtime_node_fs::FsMethodKind;
 use crate::types::{NativeCallable, OsInfoKind, TypedArrayConstructorKind};
 use wjsm_snapshot_format::SnapshotNativeCallable;
 
@@ -104,6 +105,9 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::OsInfo => NativeCallable::OsInfo {
                 kind: OsInfoKind::from_method(method).unwrap_or(OsInfoKind::Tmpdir),
             },
+            Self::FsMethod => NativeCallable::FsMethod {
+                kind: FsMethodKind::from_method(method).unwrap_or(FsMethodKind::ReadFileSync),
+            },
         }
     }
 
@@ -193,7 +197,10 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::QueueMicrotask => Self::QueueMicrotask,
             NativeCallable::PerformanceNow => Self::PerformanceNow,
             NativeCallable::OsInfo { kind: _ } => Self::OsInfo,
-            NativeCallable::StringPrimitiveMethod { .. }
+            NativeCallable::FsMethod { kind: _ } => Self::FsMethod,
+            NativeCallable::CryptoMethod { .. }
+            | NativeCallable::CryptoDigestMethod { .. }
+            | NativeCallable::StringPrimitiveMethod { .. }
             | NativeCallable::BufferStatic { .. }
             | NativeCallable::BufferMethod { .. }
             | NativeCallable::TextEncoderMethod { .. }
@@ -223,6 +230,14 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::ProcessNextTick
             | NativeCallable::ProcessStreamWrite { .. }
             | NativeCallable::ProcessEnvTrap { .. }
+            | NativeCallable::ProcessStreamEnd { .. }
+            | NativeCallable::ProcessStreamOn { .. }
+            | NativeCallable::ProcessStdinResume
+            | NativeCallable::ProcessHrtime
+            | NativeCallable::ProcessHrtimeBigint
+            | NativeCallable::ProcessMemoryUsage
+            | NativeCallable::ProcessUptime
+            | NativeCallable::ProcessCpuUsage
             | NativeCallable::PromiseFinallyAwait { .. }
             | NativeCallable::HeadersMethod { .. }
             | NativeCallable::ResponseMethod { .. }

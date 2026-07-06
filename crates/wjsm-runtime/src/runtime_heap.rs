@@ -685,6 +685,53 @@ pub(crate) fn native_callable_regexp_prototype(
     }
 }
 
+pub(crate) fn ensure_date_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().date_prototype) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let object_proto = value::encode_object_handle(object_proto_handle as u32);
+    let date_proto = alloc_host_object(ctx, env, 2);
+    set_object_proto_header(ctx, env, date_proto, object_proto);
+    let constructor = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::DateConstructorGlobal,
+    );
+    let _ = define_host_data_property_with_env(ctx, env, date_proto, "constructor", constructor);
+    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Date".to_string());
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        date_proto,
+        encode_symbol_name_id(2),
+        tag,
+        constants::FLAG_CONFIGURABLE,
+    );
+    ctx.as_context_mut().data_mut().date_prototype = date_proto;
+}
+
+pub(crate) fn native_callable_date_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+) -> Option<i64> {
+    if !matches!(record, NativeCallable::DateConstructorGlobal) {
+        return None;
+    }
+    if !value::is_object(caller.data().date_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_date_prototype_initialized(caller, &env);
+    }
+    let proto = caller.data().date_prototype;
+    value::is_object(proto).then_some(proto)
+}
+
 pub(crate) fn native_callable_error_prototype(
     caller: &mut Caller<'_, RuntimeState>,
     record: &NativeCallable,
@@ -1117,6 +1164,7 @@ pub(crate) fn native_callable_prototype(
         NativeCallable::SymbolConstructor => native_callable_symbol_prototype(caller, record),
         NativeCallable::PromiseConstructor => native_callable_promise_prototype(caller, record),
         NativeCallable::RegExpConstructor => native_callable_regexp_prototype(caller, record),
+        NativeCallable::DateConstructorGlobal => native_callable_date_prototype(caller, record),
         NativeCallable::TypedArrayConstructor(kind) => {
             native_callable_typedarray_prototype(caller, *kind)
         }

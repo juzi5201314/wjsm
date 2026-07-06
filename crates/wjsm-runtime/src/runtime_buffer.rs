@@ -248,6 +248,19 @@ pub(crate) fn visible_bytes(
     read_entry_bytes(caller, &entry)
 }
 
+pub(crate) fn arraybuffer_visible_bytes(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: i64,
+) -> Option<Vec<u8>> {
+    let (handle, byte_length) = arraybuffer_handle(caller, value_raw)?;
+    let table = caller.data().arraybuffer_table.lock().ok()?;
+    let buffer = table.get(handle as usize)?;
+    buffer
+        .data
+        .get(..byte_length as usize)
+        .map(|bytes| bytes.to_vec())
+}
+
 fn define_buffer_prop(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str, value_raw: i64) {
     let _ = define_host_data_property_from_caller(caller, obj, name, value_raw);
 }

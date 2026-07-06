@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+function function function
+a9993e364706816aba3e25717850c26c9cd0d89d
+true
+true
+true
+--- stderr ---

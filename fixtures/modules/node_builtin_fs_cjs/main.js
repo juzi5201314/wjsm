@@ -1,0 +1,14 @@
+const fs = require('fs');
+const nodeFs = require('node:fs');
+const fsp = require('fs/promises');
+console.log(fs === nodeFs);
+console.log(typeof fs.readFileSync, typeof fsp.readFile);
+const source = fs.readFileSync(__filename, 'utf8');
+console.log(source.includes('readFileSync'));
+console.log(fs.existsSync(__filename));
+const st = fs.statSync(__filename);
+console.log(st.isFile(), st.isDirectory(), st.size > 0, st.mtime instanceof Date);
+const entries = fs.readdirSync(__dirname, { withFileTypes: true });
+console.log(entries.some((d) => d.name === 'main.js' && d.isFile()));
+console.log(typeof fs.constants.F_OK, typeof fs.constants.COPYFILE_EXCL);
+fsp.readFile(__filename, 'utf8').then((text) => console.log('promise', text.includes('fsp.readFile')));

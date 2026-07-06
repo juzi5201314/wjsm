@@ -157,6 +157,7 @@ pub enum SnapshotNativeCallable {
     QueueMicrotask = 73,
     PerformanceNow = 74,
     OsInfo = 75,
+    FsMethod = 76,
 }
 
 impl SnapshotNativeCallable {
@@ -238,6 +239,7 @@ impl SnapshotNativeCallable {
             73 => Some(Self::QueueMicrotask),
             75 => Some(Self::OsInfo),
             74 => Some(Self::PerformanceNow),
+            76 => Some(Self::FsMethod),
             _ => None,
         }
     }
@@ -659,6 +661,7 @@ pub fn abi_hash() -> u64 {
     wjsm_ir::HEAP_TYPE_CONTINUATION.hash(&mut hasher);
     wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR.hash(&mut hasher);
     wjsm_ir::HEAP_TYPE_ARGUMENTS.hash(&mut hasher);
+    wjsm_ir::HEAP_TYPE_MODULE_NAMESPACE.hash(&mut hasher);
 
     // Primordial string table
     for (offset, s) in constants::primordial_string_offsets() {
@@ -667,7 +670,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=75 {
+    for d in 0u32..=76 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);
@@ -759,7 +762,7 @@ mod tests {
             s.hash(&mut hasher);
         }
 
-        for d in 0u32..=75 {
+        for d in 0u32..=76 {
             if SnapshotNativeCallable::from_discriminant(d).is_some() {
                 d.hash(&mut hasher);
             }

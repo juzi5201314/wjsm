@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+number number
+function function
+function function function function
+out-end-line
+true number number true true
+bigint
+true
+true
+number number
+--- stderr ---
+err-end

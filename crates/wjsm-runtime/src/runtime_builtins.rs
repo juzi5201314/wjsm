@@ -831,6 +831,39 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ProcessEnvTrap { kind } => Some(
             crate::runtime_process::call_process_env_trap(caller, kind, &args),
         ),
+        NativeCallable::ProcessStreamEnd { kind } => Some(
+            crate::runtime_process::call_process_stream_end(caller, this_val, kind, &args),
+        ),
+        NativeCallable::ProcessStreamOn { kind } => Some(
+            crate::runtime_process::call_process_stream_on(caller, this_val, kind, &args),
+        ),
+        NativeCallable::ProcessStdinResume => Some(
+            crate::runtime_process::call_process_stdin_resume(caller, this_val),
+        ),
+        NativeCallable::ProcessHrtime => {
+            Some(crate::runtime_process::call_process_hrtime(caller, &args))
+        }
+        NativeCallable::ProcessHrtimeBigint => {
+            Some(crate::runtime_process::call_process_hrtime_bigint(caller))
+        }
+        NativeCallable::ProcessMemoryUsage => {
+            Some(crate::runtime_process::call_process_memory_usage(caller))
+        }
+        NativeCallable::ProcessUptime => Some(crate::runtime_process::call_process_uptime(caller)),
+        NativeCallable::ProcessCpuUsage => Some(crate::runtime_process::call_process_cpu_usage(
+            caller, &args,
+        )),
+        NativeCallable::FsMethod { kind } => {
+            Some(crate::runtime_node_fs::call_fs_method(caller, kind, &args))
+        }
+        NativeCallable::CryptoMethod { kind } => Some(
+            crate::runtime_node_crypto::call_crypto_method(caller, kind, &args),
+        ),
+        NativeCallable::CryptoDigestMethod { state, kind } => {
+            Some(crate::runtime_node_crypto::call_crypto_digest_method(
+                caller, this_val, state, kind, &args,
+            ))
+        }
         NativeCallable::BufferConstructor => Some(crate::runtime_buffer::call_buffer_constructor(
             caller, &args,
         )),
@@ -862,10 +895,10 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         )),
         NativeCallable::PerformanceNow => {
             Some(crate::runtime_node_globals::call_performance_now(caller))
-        },
+        }
         NativeCallable::OsInfo { kind } => {
             Some(crate::runtime_node_globals::call_os_info(caller, kind))
-        },
+        }
         NativeCallable::ArrayConstructor => {
             if value::is_object(this_val) {
                 Some(this_val)

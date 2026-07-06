@@ -168,6 +168,9 @@ pub(super) fn register_common_bridges(
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(idx).cloned()
             };
+            if matches!(record, Some(NativeCallable::ProcessHrtime)) && prop_name == "bigint" {
+                return create_native_callable(caller.data(), NativeCallable::ProcessHrtimeBigint);
+            }
             if prop_name != "prototype" {
                 if matches!(record, Some(NativeCallable::BufferConstructor)) {
                     let kind = match prop_name {

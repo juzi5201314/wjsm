@@ -653,6 +653,16 @@ pub(crate) enum NativeCallable {
     OsInfo {
         kind: OsInfoKind,
     },
+    FsMethod {
+        kind: crate::runtime_node_fs::FsMethodKind,
+    },
+    CryptoMethod {
+        kind: crate::runtime_node_crypto::CryptoMethodKind,
+    },
+    CryptoDigestMethod {
+        state: Arc<Mutex<crate::runtime_node_crypto::CryptoDigestState>>,
+        kind: crate::runtime_node_crypto::CryptoDigestKind,
+    },
     BigInt64ArrayConstructor,
     BigUint64ArrayConstructor,
     ProxyConstructor,
@@ -665,6 +675,18 @@ pub(crate) enum NativeCallable {
     ProcessStreamWrite {
         kind: crate::runtime_process::ProcessStreamKind,
     },
+    ProcessStreamEnd {
+        kind: crate::runtime_process::ProcessStreamKind,
+    },
+    ProcessStreamOn {
+        kind: crate::runtime_process::ProcessStreamKind,
+    },
+    ProcessStdinResume,
+    ProcessHrtime,
+    ProcessHrtimeBigint,
+    ProcessMemoryUsage,
+    ProcessUptime,
+    ProcessCpuUsage,
     ProcessEnvTrap {
         kind: crate::runtime_process::ProcessEnvTrapKind,
     },

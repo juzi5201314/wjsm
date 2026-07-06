@@ -6,6 +6,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
@@ -39,6 +40,8 @@ pub(crate) use host_side_table::HostSideTable;
 mod runtime_json;
 mod runtime_linker;
 mod runtime_microtask;
+mod runtime_node_crypto;
+mod runtime_node_fs;
 mod runtime_node_globals;
 mod runtime_process;
 mod runtime_promises;
@@ -128,10 +131,14 @@ pub struct RuntimeOptions {
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
     pub pid: u32,
+    pub ppid: u32,
     pub platform: &'static str,
     pub arch: &'static str,
     pub version: &'static str,
     pub versions: &'static [(&'static str, &'static str)],
+    pub fs_read_roots: Vec<PathBuf>,
+    pub fs_write_roots: Vec<PathBuf>,
+    pub fs_allow_write_anywhere: bool,
 }
 
 impl Default for RuntimeOptions {
@@ -144,10 +151,18 @@ impl Default for RuntimeOptions {
             cwd: None,
             env: Vec::new(),
             pid: std::process::id(),
+            ppid: 0,
             platform: std::env::consts::OS,
             arch: std::env::consts::ARCH,
             version: PROCESS_NODE_VERSION,
             versions: PROCESS_VERSIONS,
+            fs_read_roots: std::env::current_dir().ok().into_iter().collect(),
+            fs_write_roots: std::env::current_dir()
+                .ok()
+                .into_iter()
+                .chain(std::iter::once(std::env::temp_dir()))
+                .collect(),
+            fs_allow_write_anywhere: false,
         }
     }
 }
@@ -858,6 +873,7 @@ impl Clone for RuntimeState {
             array_named_props: self.array_named_props.clone(),
             promise_prototype: self.promise_prototype,
             regexp_prototype: self.regexp_prototype,
+            date_prototype: self.date_prototype,
             buffer_prototype: self.buffer_prototype,
             text_encoder_prototype: self.text_encoder_prototype,
             text_decoder_prototype: self.text_decoder_prototype,
@@ -1008,6 +1024,8 @@ struct RuntimeState {
     promise_prototype: i64,
     /// %RegExpPrototype% 对象（供 RegExp 构造函数 .prototype + instanceof 原型链遍历）
     regexp_prototype: i64,
+    /// %DatePrototype% 对象（供 Date 构造函数 .prototype + instanceof 原型链遍历）。
+    date_prototype: i64,
     /// Buffer.prototype 对象。
     buffer_prototype: i64,
     /// TextEncoder.prototype 对象。
@@ -1409,6 +1427,7 @@ impl RuntimeState {
             async_iterator_prototype: value::encode_undefined(),
             promise_prototype: value::encode_undefined(),
             regexp_prototype: value::encode_undefined(),
+            date_prototype: value::encode_undefined(),
             async_gen_prototype: value::encode_undefined(),
             buffer_prototype: value::encode_undefined(),
             text_encoder_prototype: value::encode_undefined(),

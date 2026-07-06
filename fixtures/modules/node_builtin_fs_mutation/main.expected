@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+hello world
+true true true
+symlink true true true
+false
+--- stderr ---

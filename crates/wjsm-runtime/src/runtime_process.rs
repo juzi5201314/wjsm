@@ -16,10 +16,14 @@ pub(crate) struct ProcessState {
     pub(crate) cwd: Option<String>,
     pub(crate) env: Arc<[(String, String)]>,
     pub(crate) pid: u32,
+    pub(crate) ppid: u32,
     pub(crate) platform: &'static str,
     pub(crate) arch: &'static str,
     pub(crate) version: &'static str,
     pub(crate) versions: &'static [(&'static str, &'static str)],
+    pub(crate) fs_read_roots: Arc<[std::path::PathBuf]>,
+    pub(crate) fs_write_roots: Arc<[std::path::PathBuf]>,
+    pub(crate) fs_allow_write_anywhere: bool,
 }
 
 impl ProcessState {
@@ -29,10 +33,14 @@ impl ProcessState {
             cwd: options.cwd.clone(),
             env: Arc::from(options.env.clone()),
             pid: options.pid,
+            ppid: options.ppid,
             platform: options.platform,
             arch: options.arch,
             version: options.version,
             versions: options.versions,
+            fs_read_roots: Arc::from(options.fs_read_roots.clone()),
+            fs_write_roots: Arc::from(options.fs_write_roots.clone()),
+            fs_allow_write_anywhere: options.fs_allow_write_anywhere,
         }
     }
 }
@@ -59,6 +67,7 @@ pub(crate) enum ProcessEnvTrapKind {
 pub(crate) enum ProcessStreamKind {
     Stdout,
     Stderr,
+    Stdin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -116,7 +125,7 @@ pub(crate) fn install_process_global_from_caller(
     global_obj: i64,
 ) -> Option<()> {
     let env = WasmEnv::from_caller(caller)?;
-    let process_obj = alloc_host_object(caller, &env, 12);
+    let process_obj = alloc_host_object(caller, &env, 20);
     let process = caller.data().process.clone();
 
     let argv = alloc_string_array(caller, &process.argv);
@@ -137,6 +146,12 @@ pub(crate) fn install_process_global_from_caller(
         "pid",
         value::encode_f64(process.pid as f64),
     );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        process_obj,
+        "ppid",
+        value::encode_f64(process.ppid as f64),
+    );
     let _ = define_host_data_property_from_caller(caller, process_obj, "version", version);
 
     define_native_method(caller, process_obj, "cwd", NativeCallable::ProcessCwd);
@@ -147,11 +162,28 @@ pub(crate) fn install_process_global_from_caller(
         "nextTick",
         NativeCallable::ProcessNextTick,
     );
+    define_native_method(caller, process_obj, "hrtime", NativeCallable::ProcessHrtime);
+    define_native_method(
+        caller,
+        process_obj,
+        "memoryUsage",
+        NativeCallable::ProcessMemoryUsage,
+    );
+    define_native_method(caller, process_obj, "uptime", NativeCallable::ProcessUptime);
+    define_native_method(
+        caller,
+        process_obj,
+        "cpuUsage",
+        NativeCallable::ProcessCpuUsage,
+    );
+
+    let stdin = alloc_process_stream(caller, ProcessStreamKind::Stdin)?;
 
     let stdout = alloc_process_stream(caller, ProcessStreamKind::Stdout)?;
     let stderr = alloc_process_stream(caller, ProcessStreamKind::Stderr)?;
     let _ = define_host_data_property_from_caller(caller, process_obj, "stdout", stdout);
     let _ = define_host_data_property_from_caller(caller, process_obj, "stderr", stderr);
+    let _ = define_host_data_property_from_caller(caller, process_obj, "stdin", stdin);
 
     define_host_data_property_from_caller(caller, global_obj, "process", process_obj)
 }
@@ -231,8 +263,147 @@ pub(crate) fn call_process_stream_write(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .extend_from_slice(bytes),
+        ProcessStreamKind::Stdin => {}
     }
     value::encode_bool(true)
+}
+
+pub(crate) fn call_process_stream_end(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: ProcessStreamKind,
+    args: &[i64],
+) -> i64 {
+    if args
+        .first()
+        .is_some_and(|chunk| !value::is_undefined(*chunk))
+    {
+        let _ = call_process_stream_write(caller, kind, args);
+    }
+    this_val
+}
+
+pub(crate) fn call_process_stream_on(
+    _caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    _kind: ProcessStreamKind,
+    _args: &[i64],
+) -> i64 {
+    this_val
+}
+
+pub(crate) fn call_process_stdin_resume(
+    _caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+) -> i64 {
+    this_val
+}
+
+pub(crate) fn call_process_hrtime(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    let elapsed = caller.data().performance_origin.elapsed();
+    let mut seconds = elapsed.as_secs() as i64;
+    let mut nanos = elapsed.subsec_nanos() as i64;
+    if let Some((prev_seconds, prev_nanos)) = args
+        .first()
+        .copied()
+        .and_then(|value| read_hrtime_pair(caller, value))
+    {
+        seconds -= prev_seconds;
+        nanos -= prev_nanos;
+        if nanos < 0 {
+            seconds -= 1;
+            nanos += 1_000_000_000;
+        }
+        if seconds < 0 {
+            seconds = 0;
+            nanos = 0;
+        }
+    }
+    let arr = alloc_array(caller, 2);
+    set_array_elem(caller, arr, 0, value::encode_f64(seconds as f64));
+    set_array_elem(caller, arr, 1, value::encode_f64(nanos as f64));
+    arr
+}
+
+pub(crate) fn call_process_hrtime_bigint(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+    let elapsed = caller.data().performance_origin.elapsed();
+    let nanos = elapsed.as_nanos();
+    let mut table = caller
+        .data()
+        .bigint_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let handle = table.len() as u32;
+    table.push(num_bigint::BigInt::from(nanos));
+    value::encode_bigint_handle(handle)
+}
+
+pub(crate) fn call_process_uptime(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+    value::encode_f64(caller.data().performance_origin.elapsed().as_secs_f64())
+}
+
+pub(crate) fn call_process_memory_usage(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let heap_used = heap_used_bytes(caller, &env) as f64;
+    let heap_total = env.memory.size(&mut *caller) as f64 * 65_536.0;
+    let array_buffers = caller
+        .data()
+        .arraybuffer_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|entry| entry.data.len() as u64)
+        .sum::<u64>() as f64;
+    let obj = alloc_host_object(caller, &env, 5);
+    let _ = define_host_data_property_from_caller(caller, obj, "rss", value::encode_f64(0.0));
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "heapTotal",
+        value::encode_f64(heap_total),
+    );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "heapUsed",
+        value::encode_f64(heap_used),
+    );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "external",
+        value::encode_f64(array_buffers),
+    );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "arrayBuffers",
+        value::encode_f64(array_buffers),
+    );
+    obj
+}
+
+pub(crate) fn call_process_cpu_usage(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    let (mut user, mut system) = current_cpu_usage_micros(caller);
+    if let Some((prev_user, prev_system)) = args
+        .first()
+        .copied()
+        .and_then(|value| read_cpu_usage_pair(caller, value))
+    {
+        user = user.saturating_sub(prev_user);
+        system = system.saturating_sub(prev_system);
+    }
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 2);
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "user", value::encode_f64(user as f64));
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "system",
+        value::encode_f64(system as f64),
+    );
+    obj
 }
 
 pub(crate) fn call_process_env_trap(
@@ -333,13 +504,40 @@ fn alloc_process_stream(
     kind: ProcessStreamKind,
 ) -> Option<i64> {
     let env = WasmEnv::from_caller(caller)?;
-    let obj = alloc_host_object(caller, &env, 1);
-    define_native_method(
-        caller,
-        obj,
-        "write",
-        NativeCallable::ProcessStreamWrite { kind },
-    );
+    let obj = alloc_host_object(caller, &env, 5);
+    match kind {
+        ProcessStreamKind::Stdout | ProcessStreamKind::Stderr => {
+            define_native_method(
+                caller,
+                obj,
+                "write",
+                NativeCallable::ProcessStreamWrite { kind },
+            );
+            define_native_method(
+                caller,
+                obj,
+                "end",
+                NativeCallable::ProcessStreamEnd { kind },
+            );
+            define_native_method(caller, obj, "on", NativeCallable::ProcessStreamOn { kind });
+        }
+        ProcessStreamKind::Stdin => {
+            define_native_method(caller, obj, "on", NativeCallable::ProcessStreamOn { kind });
+            define_native_method(caller, obj, "resume", NativeCallable::ProcessStdinResume);
+            let _ = define_host_data_property_from_caller(
+                caller,
+                obj,
+                "readable",
+                value::encode_bool(true),
+            );
+            let _ = define_host_data_property_from_caller(
+                caller,
+                obj,
+                "isTTY",
+                value::encode_bool(false),
+            );
+        }
+    }
     Some(obj)
 }
 
@@ -474,6 +672,63 @@ fn create_process_native_callable(
         idx
     };
     value::encode_native_callable_idx(idx)
+}
+
+fn read_hrtime_pair(caller: &mut Caller<'_, RuntimeState>, value_raw: i64) -> Option<(i64, i64)> {
+    let ptr = value::is_array(value_raw)
+        .then(|| resolve_array_ptr(caller, value_raw))
+        .flatten()?;
+    let seconds = read_array_elem(caller, ptr, 0)?;
+    let nanos = read_array_elem(caller, ptr, 1)?;
+    Some((
+        value::decode_f64(to_number(caller, seconds)).trunc() as i64,
+        value::decode_f64(to_number(caller, nanos)).trunc() as i64,
+    ))
+}
+
+fn read_cpu_usage_pair(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: i64,
+) -> Option<(u64, u64)> {
+    let ptr = value::is_object(value_raw)
+        .then(|| resolve_handle(caller, value_raw))
+        .flatten()?;
+    let user = read_object_property_by_name(caller, ptr, "user")?;
+    let system = read_object_property_by_name(caller, ptr, "system")?;
+    Some((
+        value::decode_f64(to_number(caller, user)).max(0.0).trunc() as u64,
+        value::decode_f64(to_number(caller, system))
+            .max(0.0)
+            .trunc() as u64,
+    ))
+}
+
+fn current_cpu_usage_micros(caller: &mut Caller<'_, RuntimeState>) -> (u64, u64) {
+    #[cfg(unix)]
+    {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: `getrusage` initializes `usage` when it returns 0, and the pointer is valid.
+        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if rc == 0 {
+            // SAFETY: rc == 0 means libc initialized the rusage struct.
+            let usage = unsafe { usage.assume_init() };
+            return (
+                timeval_to_micros(usage.ru_utime),
+                timeval_to_micros(usage.ru_stime),
+            );
+        }
+    }
+    (
+        caller.data().performance_origin.elapsed().as_micros() as u64,
+        0,
+    )
+}
+
+#[cfg(unix)]
+fn timeval_to_micros(value: libc::timeval) -> u64 {
+    (value.tv_sec as u64)
+        .saturating_mul(1_000_000)
+        .saturating_add(value.tv_usec as u64)
 }
 
 fn process_env_key(caller: &mut Caller<'_, RuntimeState>, prop: i64) -> Option<String> {
