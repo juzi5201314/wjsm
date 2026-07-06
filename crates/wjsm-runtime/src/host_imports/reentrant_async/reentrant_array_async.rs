@@ -263,12 +263,28 @@ async fn arr_proto_map_async(
     };
     let len = read_array_length(caller, ptr).unwrap_or(0);
     let new_arr = array_species_create_async(caller, this_val, len).await;
-    let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
+    if resolve_array_ptr(caller, new_arr).is_none() {
         return value::encode_undefined();
+    }
+    let temp_root_len = {
+        let mut roots = caller
+            .data()
+            .host_temp_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let len = roots.len();
+        roots.push(new_arr);
+        len
     };
     for i in 0..len {
+        let Some(ptr) = resolve_array_ptr(caller, this_val) else {
+            break;
+        };
         if !array_elem_present(caller, ptr, i) {
-            write_array_hole(caller, new_ptr, i);
+            if let Some(new_ptr) = resolve_array_ptr(caller, new_arr) {
+                write_array_hole(caller, new_ptr, i);
+                write_array_length(caller, new_ptr, i + 1);
+            }
             continue;
         }
         let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
@@ -284,9 +300,20 @@ async fn arr_proto_map_async(
             Ok(r) => r,
             Err(_) => value::encode_undefined(),
         };
-        write_array_elem(caller, new_ptr, i, result);
+        if let Some(new_ptr) = resolve_array_ptr(caller, new_arr) {
+            write_array_elem(caller, new_ptr, i, result);
+            write_array_length(caller, new_ptr, i + 1);
+        }
     }
-    write_array_length(caller, new_ptr, len);
+    if let Some(new_ptr) = resolve_array_ptr(caller, new_arr) {
+        write_array_length(caller, new_ptr, len);
+    }
+    caller
+        .data()
+        .host_temp_roots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .truncate(temp_root_len);
     new_arr
 }
 

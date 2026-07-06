@@ -52,7 +52,7 @@ struct LazySweepCompletion {
     freed_bytes: usize,
 }
 
-/// 按 ptr 升序合并物理相邻区间（next.ptr == prev_end）。
+/// 按 ptr 升序合并物理相邻或重叠区间，保证 free list 不含双重释放块。
 fn merge_adjacent_free_intervals(mut intervals: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     if intervals.is_empty() {
         return intervals;
@@ -65,8 +65,8 @@ fn merge_adjacent_free_intervals(mut intervals: Vec<(usize, usize)>) -> Vec<(usi
     };
     for &(ptr, size) in intervals.iter().skip(1) {
         let end = ptr.saturating_add(size);
-        if ptr == cur_end {
-            cur_end = end;
+        if ptr <= cur_end {
+            cur_end = cur_end.max(end);
         } else {
             merged.push((cur_ptr, cur_end - cur_ptr));
             cur_ptr = ptr;
@@ -90,13 +90,21 @@ fn collect_sorted_blocks(
             if addr + 4 > data.len() {
                 break;
             }
-            let ptr =
+            let entry =
                 u32::from_le_bytes([data[addr], data[addr + 1], data[addr + 2], data[addr + 3]])
                     as usize;
+            let ptr = entry & !0x3;
             if ptr == 0 {
                 continue; // 空槽（已回收的 handle）
             }
             if ptr < collector.dynamic_start() {
+                continue;
+            }
+            if ptr + wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE as usize > data.len() {
+                continue;
+            }
+            let heap_type = data[ptr + wjsm_ir::constants::HEAP_OBJECT_TYPE_OFFSET as usize];
+            if !crate::runtime_gc::context::is_known_gc_heap_type(heap_type) {
                 continue;
             }
             let Some(size) = object_size_from_memory(data, ptr) else {
@@ -451,5 +459,18 @@ mod tests {
         collector.free_list.rebuild_from_coalesced_regions(&merged);
         assert_eq!(collector.free_list.alloc(224), Some(1000));
         assert_eq!(collector.free_list.total_free_regions(), 0);
+    }
+
+    /// startup snapshot 恢复后，重复 host 初始化会把双重释放的重叠块送入合并入口。
+    /// free list 必须先去重叠，否则后续分配会把仍存活的全局对象区域再次发出去。
+    #[test]
+    fn overlapping_free_runs_coalesce_before_free_list_rebuild() {
+        let merged = merge_adjacent_free_intervals(vec![(246432, 2576), (243752, 3856)]);
+        assert_eq!(merged, vec![(243752, 5256)]);
+
+        let mut collector = MarkSweepCollector::new();
+        collector.free_list.rebuild_from_coalesced_regions(&merged);
+        assert_eq!(collector.free_list.alloc(2576), Some(243752));
+        assert_eq!(collector.free_list.alloc(3856), None);
     }
 }

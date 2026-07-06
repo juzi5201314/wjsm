@@ -235,6 +235,13 @@ pub(crate) fn for_each_immortal_region_root(ctx: &mut GcContext, visit: &mut dyn
             else {
                 continue;
             };
+            if ptr + wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE as usize > data.len() {
+                continue;
+            }
+            let heap_type = data[ptr + wjsm_ir::constants::HEAP_OBJECT_TYPE_OFFSET as usize];
+            if !crate::runtime_gc::context::is_known_gc_heap_type(heap_type) {
+                continue;
+            }
             if (object_heap_start..immortal_objects_end).contains(&ptr) {
                 let tasks = object_walker::scan_tasks_for_ptr(data, h, ptr);
                 assert!(
@@ -477,6 +484,10 @@ fn collect_host_table_values(
     let mut out = Vec::new();
 
     ctx.with_state(|st| {
+        if let Ok(temp_roots) = st.host_temp_roots.lock() {
+            out.extend(temp_roots.iter().copied());
+        }
+
         // microtask_queue
         if let Ok(microtasks) = st.microtask_queue.lock() {
             for task in microtasks.iter() {
@@ -621,6 +632,15 @@ fn collect_host_table_values(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        if let Ok(contexts) = st.combinator_contexts.lock() {
+            for entry in contexts.iter() {
+                if !entry.settled || entry.outstanding_settlements != 0 {
+                    out.push(entry.result_promise);
+                    out.push(entry.result_array);
                 }
             }
         }

@@ -378,11 +378,10 @@ pub fn is_js_object(val: i64) -> bool {
 /// 供 shadow stack 扫描与 ValueTy 类型推断共用（spec §11.3）。
 ///
 /// - Root（返回 true）：object / array / function / closure / bound / bigint /
-///   symbol / regexp / proxy / scope_record / native_callable / iterator /
-///   enumerator / exception。这些的 payload 是 GC 管理的 handle/下标。
+///   symbol / regexp / proxy / scope_record / native_callable / 运行时字符串句柄 /
+///   iterator / enumerator / exception。这些的 payload 是运行时管理的 handle/下标。
 /// - Scalar（返回 false）：f64（含 0.0）、undefined、null、bool、静态字符串
-///   指针（`encode_string_ptr`）以及运行时字符串句柄（存放在 runtime_strings 侧表，
-///   不是 obj_table handle）。
+///   指针（`encode_string_ptr`）。
 pub fn tag_needs_root(val: i64) -> bool {
     is_object(val)
         || is_array(val)
@@ -395,6 +394,7 @@ pub fn tag_needs_root(val: i64) -> bool {
         || is_proxy(val)
         || is_scope_record(val)
         || is_native_callable(val)
+        || is_runtime_string_handle(val)
         || is_iterator(val)
         || is_enumerator(val)
         || is_exception(val)

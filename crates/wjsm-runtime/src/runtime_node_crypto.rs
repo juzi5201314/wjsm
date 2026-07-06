@@ -46,6 +46,7 @@ pub(crate) struct CryptoDigestState {
 pub(crate) fn create_crypto_host_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = alloc_host_object(caller, &env, 7);
+    let temp_root_len = caller.data().push_host_temp_roots([obj]);
     install_crypto_method(caller, obj, "randomBytes", CryptoMethodKind::RandomBytes);
     install_crypto_method(caller, obj, "randomUUID", CryptoMethodKind::RandomUuid);
     install_crypto_method(caller, obj, "randomInt", CryptoMethodKind::RandomInt);
@@ -58,6 +59,7 @@ pub(crate) fn create_crypto_host_object(caller: &mut Caller<'_, RuntimeState>) -
         CryptoMethodKind::TimingSafeEqual,
     );
     install_crypto_method(caller, obj, "getHashes", CryptoMethodKind::GetHashes);
+    caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }
 

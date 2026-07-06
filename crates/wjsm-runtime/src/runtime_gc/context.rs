@@ -22,6 +22,19 @@ pub(crate) enum GcHeapLayout {
     ObjectLike,
 }
 
+pub(crate) fn is_known_gc_heap_type(heap_type: u8) -> bool {
+    matches!(
+        heap_type,
+        wjsm_ir::HEAP_TYPE_ARRAY
+            | wjsm_ir::HEAP_TYPE_OBJECT
+            | wjsm_ir::HEAP_TYPE_PROMISE
+            | wjsm_ir::HEAP_TYPE_CONTINUATION
+            | wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR
+            | wjsm_ir::HEAP_TYPE_ARGUMENTS
+            | wjsm_ir::HEAP_TYPE_MODULE_NAMESPACE
+    )
+}
+
 /// 将 header 中的 heap_type 映射为 GC 扫描/计大小用的布局；未知 tag 会 debug_assert 并在 release 打日志。
 pub(crate) fn gc_heap_layout(heap_type: u8) -> GcHeapLayout {
     match heap_type {

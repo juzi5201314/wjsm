@@ -345,6 +345,24 @@ pub fn compute_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<
 pub fn compute_var_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<String>> {
     let succ = successors(f);
 
+    // 函数参数和模块全局槽在函数体执行前已经占用 wasm local；即使从未 StoreVar，
+    // safepoint 也必须把这些预置 local 里的 handle 暴露给 GC。
+    let mut entry_preinitialized: HashSet<String> = f.params().iter().cloned().collect();
+    let needs_module_global = f
+        .blocks()
+        .iter()
+        .flat_map(|b| b.instructions())
+        .any(|inst| {
+            matches!(
+                inst,
+                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                    if name == "$0.$global"
+            )
+        });
+    if needs_module_global {
+        entry_preinitialized.insert("$0.$global".to_owned());
+    }
+
     // 块级 occupied_out：块出口时哪些变量槽仍持有值（正向数据流不动点）。
     let mut occupied_in: HashMap<BasicBlockId, HashSet<String>> = HashMap::new();
     let mut occupied_out: HashMap<BasicBlockId, HashSet<String>> = HashMap::new();
@@ -353,7 +371,11 @@ pub fn compute_var_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), Hash
         changed = false;
         for bb in f.blocks() {
             let id = bb.id();
-            let mut in_set: HashSet<String> = HashSet::new();
+            let mut in_set: HashSet<String> = if id == f.entry() {
+                entry_preinitialized.clone()
+            } else {
+                HashSet::new()
+            };
             let preds: Vec<BasicBlockId> = f
                 .blocks()
                 .iter()

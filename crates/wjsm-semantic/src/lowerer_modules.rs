@@ -126,8 +126,11 @@ fn setup_multi_module_lowerer(
 
 fn predeclare_cjs_path_bindings(
     lowerer: &mut Lowerer,
-    _module_id: wjsm_ir::ModuleId,
+    module_id: wjsm_ir::ModuleId,
 ) -> Result<(), LoweringError> {
+    if lowerer.module_metadata.get(&module_id).map(|m| m.kind) != Some(ModuleKind::CommonJs) {
+        return Ok(());
+    }
     for name in ["__filename", "__dirname"] {
         lowerer
             .scopes
@@ -510,6 +513,9 @@ fn emit_cjs_path_bindings(
     let Some(metadata) = lowerer.module_metadata.get(&module_id).cloned() else {
         return Ok(());
     };
+    if metadata.kind != ModuleKind::CommonJs {
+        return Ok(());
+    }
     let Some(&module_scope) = lowerer.module_scopes.get(&module_id) else {
         return Ok(());
     };

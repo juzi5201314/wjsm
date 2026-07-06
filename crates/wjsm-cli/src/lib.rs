@@ -313,10 +313,9 @@ impl PipelineTimings {
 // Entry Points
 // ============================================================================
 
-pub fn main_entry() -> ExitCode {
-    // Install embedded startup snapshot + support cwasm at CLI startup.
-    // Both are produced at `cargo build` time via wjsm-runtime-snapshot/
-    // wjsm-runtime-support build.rs and `include_bytes!`'d into the binary.
+fn install_embedded_runtime_artifacts() {
+    // 安装构建期嵌入的 startup snapshot 与 support cwasm；CLI 与 in-process fixture runner
+    // 必须共用同一 runtime artifact 边界，否则相同 WASM 在测试入口会走不同 support 路径。
     if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
         wjsm_runtime::install_embedded_startup_snapshot(bytes);
     }
@@ -325,6 +324,10 @@ pub fn main_entry() -> ExitCode {
     ) {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }
+}
+
+pub fn main_entry() -> ExitCode {
+    install_embedded_runtime_artifacts();
 
     let cli = match parse_cli(std::env::args_os()) {
         Ok(c) => c,
@@ -2039,26 +2042,21 @@ pub fn run_file_in_process_with_options(
     env_overrides: &[(&str, &str)],
     cwd_override: Option<&Path>,
 ) -> (i32, Vec<u8>, Vec<u8>) {
-    // 与 main_entry 一致：安装 embedded snapshot + support cwasm（OnceLock，幂等）。
-    if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
-        wjsm_runtime::install_embedded_startup_snapshot(bytes);
-    }
-    if let Some(bytes) = wjsm_runtime_support::embedded_support_cwasm(
-        wjsm_runtime_support::SupportGcFlavor::MarkSweep,
-    ) {
-        wjsm_runtime::install_embedded_support_cwasm(bytes);
-    }
+    install_embedded_runtime_artifacts();
 
-    let wasm = match compile_from_file_input(input, None, Target::Wasm, false, false) {
-        Ok(w) => w,
-        Err(e) => {
-            return (
-                EXIT_COMPILE_ERROR as i32,
-                Vec::new(),
-                format!("Error: {e:#}\n").into_bytes(),
-            );
-        }
-    };
+    let wasm =
+        match compile_file_input_to_pipeline_result(input, None, Target::Wasm, false, false, false)
+            .and_then(|result| result.wasm.context("compile stage produced no WASM"))
+        {
+            Ok(wasm) => wasm,
+            Err(e) => {
+                return (
+                    EXIT_COMPILE_ERROR as i32,
+                    Vec::new(),
+                    format!("Error: {e:#}\n").into_bytes(),
+                );
+            }
+        };
 
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

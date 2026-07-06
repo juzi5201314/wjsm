@@ -46,12 +46,15 @@ pub(crate) fn install_node_web_globals_from_caller(
     install_native(caller, global_obj, "btoa", NativeCallable::Btoa);
 
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let temp_root_len = caller.data().push_host_temp_roots([global_obj]);
     let performance = alloc_host_object(caller, &env, 1);
+    let _ = caller.data().push_host_temp_roots([performance]);
     let now = alloc_native_callable(caller, NativeCallable::PerformanceNow);
     define_global(caller, performance, "now", now);
     define_global(caller, global_obj, "performance", performance);
 
     let os = alloc_host_object(caller, &env, 10);
+    let _ = caller.data().push_host_temp_roots([os]);
     install_native(
         caller,
         os,
@@ -135,10 +138,13 @@ pub(crate) fn install_node_web_globals_from_caller(
     define_global(caller, global_obj, "__wjsm_node_os", os);
 
     let fs = crate::runtime_node_fs::create_fs_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([fs]);
     define_global(caller, global_obj, "__wjsm_node_fs", fs);
 
     let crypto = crate::runtime_node_crypto::create_crypto_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([crypto]);
     define_global(caller, global_obj, "__wjsm_node_crypto", crypto);
+    caller.data().truncate_host_temp_roots(temp_root_len);
     Ok(())
 }
 

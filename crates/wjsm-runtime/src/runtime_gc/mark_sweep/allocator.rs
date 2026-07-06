@@ -82,10 +82,15 @@ impl SegregatedFreeList {
             return None;
         }
         let cls = size_class(size);
-        // 从 cls..BIG_CLASS 找第一个非空 class（精确或更大）
+        // 从 cls..BIG_CLASS 找第一个实际大小足够的块；同一 class 只是上界桶，
+        // 不能假设桶内所有块都满足本次请求。
         if cls < BIG_CLASS {
             for c in cls..BIG_CLASS {
-                if let Some((ptr, block_size)) = self.lists[c].pop_front() {
+                if let Some(i) = self.lists[c]
+                    .iter()
+                    .position(|&(_, block_size)| block_size >= size)
+                {
+                    let (ptr, block_size) = self.lists[c].remove(i).expect("just found");
                     self.maybe_split(ptr, size, block_size);
                     return Some(ptr);
                 }
@@ -162,6 +167,15 @@ mod tests {
         assert!(p2.is_some(), "剩余块应可再分配");
     }
 
+    #[test]
+    fn alloc_skips_too_small_blocks_in_same_size_class() {
+        let mut fl = SegregatedFreeList::new();
+        // 2680 与 3856 都落在 4096 桶；桶命中后仍必须检查真实块大小。
+        fl.add_free_region(246328, 2680);
+
+        assert_eq!(fl.alloc(3856), None);
+        assert_eq!(fl.alloc(2680), Some(246328));
+    }
     #[test]
     fn alloc_falls_back_to_higher_class() {
         let mut fl = SegregatedFreeList::new();

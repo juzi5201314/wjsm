@@ -437,14 +437,29 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
         Err(trap) => {
             if crate::runtime_process::pending_process_exit_signal(store.data()).is_some() {
                 false
-            } else if store
+            } else if let Some(message) = store
                 .data()
                 .runtime_error
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .is_some()
+                .clone()
             {
-                // throw import 已经记录了 JS 层异常；先走统一输出/错误收集路径。
+                if message.starts_with("shadow stack overflow:") {
+                    let backtrace_str = trap
+                        .downcast_ref::<WasmBacktrace>()
+                        .map(|bt| {
+                            crate::runtime_source_map::format_backtrace(
+                                bt,
+                                store.data().source_map.as_ref(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    if backtrace_str.is_empty() {
+                        return Err(anyhow::anyhow!(message));
+                    }
+                    return Err(anyhow::anyhow!(format!("{message}\n{backtrace_str}")));
+                }
+                // throw import 已记录运行时错误；先走统一输出/错误收集路径。
                 false
             } else {
                 // 从 trap error 提取 WasmBacktrace，格式化为 JS 堆栈跟踪。

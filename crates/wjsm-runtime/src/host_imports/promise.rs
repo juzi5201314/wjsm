@@ -121,6 +121,16 @@ pub(crate) fn define_promise(
          on_rejected: i64|
          -> i64 {
             let handle = raw_promise_handle(promise);
+            let temp_root_len = {
+                let mut roots = caller
+                    .data()
+                    .host_temp_roots
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let len = roots.len();
+                roots.extend([promise, on_fulfilled, on_rejected]);
+                len
+            };
             // §27.2.5.4 — SpeciesConstructor(promise, %Promise%)（须在锁表前完成，避免借用冲突）
             let species_constructor =
                 promise_result_species_constructor_handle(&mut caller, promise);
@@ -176,6 +186,12 @@ pub(crate) fn define_promise(
                     argument,
                 });
             }
+            caller
+                .data()
+                .host_temp_roots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .truncate(temp_root_len);
             result_promise
         },
     );

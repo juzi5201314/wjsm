@@ -756,6 +756,7 @@ mod tests {
         wjsm_ir::HEAP_TYPE_CONTINUATION.hash(&mut hasher);
         wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR.hash(&mut hasher);
         wjsm_ir::HEAP_TYPE_ARGUMENTS.hash(&mut hasher);
+        wjsm_ir::HEAP_TYPE_MODULE_NAMESPACE.hash(&mut hasher);
 
         for (offset, s) in constants::primordial_string_offsets() {
             offset.hash(&mut hasher);

@@ -126,20 +126,33 @@ pub(crate) fn install_process_global_from_caller(
 ) -> Option<()> {
     let env = WasmEnv::from_caller(caller)?;
     let process_obj = alloc_host_object(caller, &env, 20);
+    let temp_root_len = caller.data().push_host_temp_roots([process_obj]);
     let process = caller.data().process.clone();
 
     let argv = alloc_string_array(caller, &process.argv);
-    let env_proxy = create_process_env_proxy(caller)?;
+    let _ = caller.data().push_host_temp_roots([argv]);
+    let _ = define_host_data_property_from_caller(caller, process_obj, "argv", argv);
+
+    let env_proxy = match create_process_env_proxy(caller) {
+        Some(env_proxy) => env_proxy,
+        None => {
+            caller.data().truncate_host_temp_roots(temp_root_len);
+            return None;
+        }
+    };
+    let _ = caller.data().push_host_temp_roots([env_proxy]);
+    let _ = define_host_data_property_from_caller(caller, process_obj, "env", env_proxy);
+
     let versions = alloc_versions_object(caller, process.versions);
+    let _ = caller.data().push_host_temp_roots([versions]);
+    let _ = define_host_data_property_from_caller(caller, process_obj, "versions", versions);
+
     let platform = store_runtime_string(caller, process.platform.to_string());
     let arch = store_runtime_string(caller, process.arch.to_string());
     let version = store_runtime_string(caller, process.version.to_string());
 
-    let _ = define_host_data_property_from_caller(caller, process_obj, "argv", argv);
-    let _ = define_host_data_property_from_caller(caller, process_obj, "env", env_proxy);
     let _ = define_host_data_property_from_caller(caller, process_obj, "platform", platform);
     let _ = define_host_data_property_from_caller(caller, process_obj, "arch", arch);
-    let _ = define_host_data_property_from_caller(caller, process_obj, "versions", versions);
     let _ = define_host_data_property_from_caller(
         caller,
         process_obj,
@@ -177,15 +190,35 @@ pub(crate) fn install_process_global_from_caller(
         NativeCallable::ProcessCpuUsage,
     );
 
-    let stdin = alloc_process_stream(caller, ProcessStreamKind::Stdin)?;
-
-    let stdout = alloc_process_stream(caller, ProcessStreamKind::Stdout)?;
-    let stderr = alloc_process_stream(caller, ProcessStreamKind::Stderr)?;
+    let stdin = match alloc_process_stream(caller, ProcessStreamKind::Stdin) {
+        Some(stdin) => stdin,
+        None => {
+            caller.data().truncate_host_temp_roots(temp_root_len);
+            return None;
+        }
+    };
+    let stdout = match alloc_process_stream(caller, ProcessStreamKind::Stdout) {
+        Some(stdout) => stdout,
+        None => {
+            caller.data().truncate_host_temp_roots(temp_root_len);
+            return None;
+        }
+    };
+    let stderr = match alloc_process_stream(caller, ProcessStreamKind::Stderr) {
+        Some(stderr) => stderr,
+        None => {
+            caller.data().truncate_host_temp_roots(temp_root_len);
+            return None;
+        }
+    };
+    let _ = caller.data().push_host_temp_roots([stdin, stdout, stderr]);
     let _ = define_host_data_property_from_caller(caller, process_obj, "stdout", stdout);
     let _ = define_host_data_property_from_caller(caller, process_obj, "stderr", stderr);
     let _ = define_host_data_property_from_caller(caller, process_obj, "stdin", stdin);
 
-    define_host_data_property_from_caller(caller, global_obj, "process", process_obj)
+    let result = define_host_data_property_from_caller(caller, global_obj, "process", process_obj);
+    caller.data().truncate_host_temp_roots(temp_root_len);
+    result
 }
 
 pub(crate) fn call_process_cwd(caller: &mut Caller<'_, RuntimeState>) -> i64 {
@@ -505,6 +538,7 @@ fn alloc_process_stream(
 ) -> Option<i64> {
     let env = WasmEnv::from_caller(caller)?;
     let obj = alloc_host_object(caller, &env, 5);
+    let temp_root_len = caller.data().push_host_temp_roots([obj]);
     match kind {
         ProcessStreamKind::Stdout | ProcessStreamKind::Stderr => {
             define_native_method(
@@ -538,6 +572,7 @@ fn alloc_process_stream(
             );
         }
     }
+    caller.data().truncate_host_temp_roots(temp_root_len);
     Some(obj)
 }
 
@@ -545,10 +580,17 @@ fn create_process_env_proxy(caller: &mut Caller<'_, RuntimeState>) -> Option<i64
     let env = WasmEnv::from_caller(caller)?;
     let env_snapshot = caller.data().process.env.clone();
     let target = alloc_host_object(caller, &env, env_snapshot.len() as u32);
+    let temp_root_len = caller.data().push_host_temp_roots([target]);
     for (key, value) in env_snapshot.iter() {
         let val = store_runtime_string(caller, value.clone());
         let name_id =
-            find_memory_c_string(caller, key).or_else(|| alloc_heap_c_string(caller, key))?;
+            match find_memory_c_string(caller, key).or_else(|| alloc_heap_c_string(caller, key)) {
+                Some(name_id) => name_id,
+                None => {
+                    caller.data().truncate_host_temp_roots(temp_root_len);
+                    return None;
+                }
+            };
         let _ = define_host_data_property_by_name_id_with_flags(
             caller,
             target,
@@ -560,6 +602,7 @@ fn create_process_env_proxy(caller: &mut Caller<'_, RuntimeState>) -> Option<i64
     prevent_extensions_impl(caller, target);
 
     let handler = alloc_host_object(caller, &env, 8);
+    let _ = caller.data().push_host_temp_roots([handler]);
     attach_env_trap(caller, handler, "get", ProcessEnvTrapKind::Get);
     attach_env_trap(caller, handler, "set", ProcessEnvTrapKind::Set);
     attach_env_trap(
@@ -603,6 +646,7 @@ fn create_process_env_proxy(caller: &mut Caller<'_, RuntimeState>) -> Option<i64
         });
         handle
     };
+    caller.data().truncate_host_temp_roots(temp_root_len);
     Some(value::encode_proxy_handle(handle))
 }
 
@@ -626,19 +670,23 @@ fn alloc_versions_object(
 ) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = alloc_host_object(caller, &env, versions.len() as u32);
+    let temp_root_len = caller.data().push_host_temp_roots([obj]);
     for (name, value) in versions {
         let val = store_runtime_string(caller, (*value).to_string());
         let _ = define_host_data_property_from_caller(caller, obj, name, val);
     }
+    caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }
 
 fn alloc_string_array(caller: &mut Caller<'_, RuntimeState>, values: &[String]) -> i64 {
     let arr = alloc_array(caller, values.len() as u32);
+    let temp_root_len = caller.data().push_host_temp_roots([arr]);
     for (index, item) in values.iter().enumerate() {
         let value = store_runtime_string(caller, item.clone());
         set_array_elem(caller, arr, index as i32, value);
     }
+    caller.data().truncate_host_temp_roots(temp_root_len);
     arr
 }
 

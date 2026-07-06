@@ -1880,6 +1880,7 @@ pub(crate) fn define_collections_buffers(
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                 alloc_host_object(&mut caller, &_wjsm_env, 80)
             };
+            let temp_root_len = caller.data().push_host_temp_roots([obj]);
             let builtin_pairs: &[(&str, NativeCallable)] = &[
                 ("Array", NativeCallable::ArrayConstructor),
                 ("Object", NativeCallable::ObjectConstructor),
@@ -2014,6 +2015,7 @@ pub(crate) fn define_collections_buffers(
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                 alloc_host_object(&mut caller, &_wjsm_env, 7)
             };
+            let _ = caller.data().push_host_temp_roots([agent_obj]);
             let agent_methods: &[(&str, NativeCallable)] = &[
                 ("start", NativeCallable::AgentStart),
                 ("broadcast", NativeCallable::AgentBroadcast),
@@ -2039,10 +2041,12 @@ pub(crate) fn define_collections_buffers(
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                 alloc_host_object(&mut caller, &_wjsm_env, 1)
             };
+            let _ = caller.data().push_host_temp_roots([harness_obj]);
             let _ =
                 define_host_data_property_from_caller(&mut caller, harness_obj, "agent", agent_obj);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", harness_obj);
 
+            caller.data().truncate_host_temp_roots(temp_root_len);
             obj
         });
     linker.define(

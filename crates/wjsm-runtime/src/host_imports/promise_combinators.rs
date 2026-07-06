@@ -329,9 +329,17 @@ pub(crate) fn define_promise_combinators(
                 }
 
                 if let Some((status, value_name, value)) = outcome {
-                    let record =
-                        alloc_promise_all_settled_result(&mut caller, status, value_name, value);
                     if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                        // GC：同步 allSettled 路径可能在输入 promise 已结算时直接分配
+                        // result record。先把 value/reason 暂存到已 root 的结果数组，
+                        // 避免分配期间 Rust 栈上的 JS handle 丢失。
+                        write_array_elem(&mut caller, result_ptr, index as u32, value);
+                        let record = alloc_promise_all_settled_result(
+                            &mut caller,
+                            status,
+                            value_name,
+                            value,
+                        );
                         write_array_elem(&mut caller, result_ptr, index as u32, record);
                     }
                 }
@@ -339,12 +347,12 @@ pub(crate) fn define_promise_combinators(
 
             set_combinator_remaining(caller.data(), context, remaining);
             if remaining == 0 {
-                mark_combinator_settled(caller.data(), context);
                 settle_promise(
                     caller.data(),
                     result_promise,
                     PromiseSettlement::Fulfill(result_array),
                 );
+                mark_combinator_settled(caller.data(), context);
                 try_recycle_combinator_context(caller.data(), context);
             }
             result_promise

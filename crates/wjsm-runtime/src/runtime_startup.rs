@@ -808,20 +808,16 @@ pub(super) async fn try_restore_snapshot(
             return false;
         }
     };
-    let object_heap_start = bundle
-        .wasm_env
-        .object_heap_start
-        .and_then(|g| g.get(&mut bundle.store).i32())
-        .unwrap_or(0)
-        .max(0) as usize;
-    let immortal_objects_end =
-        match object_heap_start.checked_add(view.header.immortal_objects_end_rel as usize) {
-            Some(end) => end,
-            None => return false,
-        };
     match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)
         .and_then(|()| enforce_heap_limit(&mut bundle.store, &bundle.wasm_env))
         .and_then(|()| {
+            let immortal_objects_end = bundle
+                .wasm_env
+                .heap_ptr
+                .get(&mut bundle.store)
+                .i32()
+                .unwrap_or(0)
+                .max(0) as usize;
             record_and_attach_gc_heap(&mut bundle.store, &bundle.wasm_env, immortal_objects_end)
         }) {
         Ok(()) => true,

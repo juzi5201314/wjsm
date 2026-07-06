@@ -82,6 +82,7 @@ impl FsMethodKind {
 pub(crate) fn create_fs_host_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = alloc_host_object(caller, &env, 18);
+    let temp_root_len = caller.data().push_host_temp_roots([obj]);
     install_fs_method(caller, obj, "readFileSync", FsMethodKind::ReadFileSync);
     install_fs_method(caller, obj, "writeFileSync", FsMethodKind::WriteFileSync);
     install_fs_method(caller, obj, "existsSync", FsMethodKind::ExistsSync);
@@ -100,6 +101,7 @@ pub(crate) fn create_fs_host_object(caller: &mut Caller<'_, RuntimeState>) -> i6
     install_fs_method(caller, obj, "symlinkSync", FsMethodKind::SymlinkSync);
     install_fs_method(caller, obj, "chmodSync", FsMethodKind::ChmodSync);
     install_fs_method(caller, obj, "chownSync", FsMethodKind::ChownSync);
+    caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }
 

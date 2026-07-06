@@ -810,7 +810,7 @@ pub struct ReExportBinding {
 }
 
 // ── Shadow Stack Constants ──────────────────────────────────────────────
-/// 影子栈大小（64KB = 8192 个 i64 槽位）。
+/// 影子栈大小（64KiB = 8192 个 i64 槽位）。
 /// runtime 和 backend-wasm 共享此值，编译期保证一致性。
 pub const SHADOW_STACK_SIZE: u32 = 65536;
 /// 影子栈与对象堆之间的隔离带大小（字节）。

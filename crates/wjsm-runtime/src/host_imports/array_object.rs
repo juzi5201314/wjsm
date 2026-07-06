@@ -2285,15 +2285,6 @@ pub(crate) fn define_array_object(
     let abort_shadow_stack_overflow_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, shadow_sp: i32, args_bytes: i32, stack_end: i32| {
-            let mut buffer = caller
-                .data()
-                .output
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            writeln!(
-                &mut *buffer,
-                "shadow stack overflow: sp=0x{shadow_sp:x} + {args_bytes} bytes > end=0x{stack_end:x}"
-            ).ok();
             *caller
                 .data()
                 .runtime_error

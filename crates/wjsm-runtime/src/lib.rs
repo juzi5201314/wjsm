@@ -827,6 +827,7 @@ impl Clone for RuntimeState {
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
+            host_temp_roots: self.host_temp_roots.clone(),
             process: self.process.clone(),
             next_tick_queue: self.next_tick_queue.clone(),
             process_exit_signal: self.process_exit_signal.clone(),
@@ -927,6 +928,9 @@ struct RuntimeState {
     /// 进程内可捕获的诊断输出（如 unhandled rejection 警告）；真实 CLI 由 execute 刷到 stderr。
     diagnostics: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
+    /// Host import 直接参数的临时 root；WASM 直接入参不在 shadow stack 中，
+    /// host import 若在消费入参前分配 JS 对象，必须短暂保护这些值。
+    host_temp_roots: Arc<Mutex<Vec<i64>>>,
     /// 用户配置的 JS 堆预算（字节）。None 表示只受 wasm32 地址空间和宿主内存约束。
     max_heap_size: Option<usize>,
     /// 注入的 Node `process` 宿主快照。
@@ -1219,6 +1223,28 @@ impl RuntimeState {
         )
     }
 
+    /// 暂存 host import 构造中的 JS 值，防止构造期分配触发 GC 时被误回收。
+    pub(crate) fn push_host_temp_roots<I>(&self, roots: I) -> usize
+    where
+        I: IntoIterator<Item = i64>,
+    {
+        let mut temp_roots = self
+            .host_temp_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let len = temp_roots.len();
+        temp_roots.extend(roots);
+        len
+    }
+
+    /// 恢复 host 临时 root 栈到先前长度。
+    pub(crate) fn truncate_host_temp_roots(&self, len: usize) {
+        self.host_temp_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .truncate(len);
+    }
+
     #[cfg(test)]
     fn new_with_shared(shared_state: Option<Arc<SharedRuntimeState>>) -> Self {
         Self::new_with_shared_and_options(shared_state, RuntimeOptions::default())
@@ -1318,6 +1344,7 @@ impl RuntimeState {
             runtime_property_keys: Arc::new(Mutex::new(Vec::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
+            host_temp_roots: Arc::new(Mutex::new(Vec::new())),
             max_heap_size: None,
             process: ProcessState::from_options(&RuntimeOptions::default()),
             next_tick_queue: Arc::new(Mutex::new(VecDeque::new())),

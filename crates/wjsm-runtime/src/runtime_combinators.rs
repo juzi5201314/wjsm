@@ -275,10 +275,14 @@ pub(crate) fn handle_combinator_reaction<
                 PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
                 _ => unreachable!(),
             };
-            let record = crate::runtime_heap::alloc_all_settled_result(
-                ctx, env, status, value_name, argument,
-            );
             if let Some(result_ptr) = resolve_array_ptr_with_env(ctx, env, result_array) {
+                // GC：分配 allSettled 结果对象前，先把当前 reaction argument
+                // 暂存进已经由 combinator context 持有的结果数组，避免分配期间
+                // mark-sweep/ZGC 看不到 Rust 栈上的 JS handle。
+                write_array_elem_with_env(ctx, env, result_ptr, index as u32, argument);
+                let record = crate::runtime_heap::alloc_all_settled_result(
+                    ctx, env, status, value_name, argument,
+                );
                 write_array_elem_with_env(ctx, env, result_ptr, index as u32, record);
             }
             if let Some((result_promise, result_array)) = {

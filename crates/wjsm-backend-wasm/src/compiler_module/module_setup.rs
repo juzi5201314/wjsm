@@ -25,15 +25,11 @@ impl Compiler {
         if spill_upper_bound == 0 {
             return;
         }
-        // if (shadow_sp + spill_upper_bound) > shadow_stack_end: unreachable
+        // if (shadow_sp + spill_upper_bound) > shadow_stack_end:
+        // 走统一 shadow-stack overflow host import，写入可诊断 runtime_error 后 trap。
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-        self.emit(WasmInstruction::I32Const(spill_upper_bound as i32));
-        self.emit(WasmInstruction::I32Add);
-        self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
-        self.emit(WasmInstruction::I32GtU);
-        self.emit(WasmInstruction::If(BlockType::Empty));
-        self.emit(WasmInstruction::Unreachable);
-        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+        self.emit_shadow_stack_overflow_check(spill_upper_bound as i32);
     }
 
     /// 计算本函数所有 safepoint 处 live handle local 数的最大值 × 8（字节）。

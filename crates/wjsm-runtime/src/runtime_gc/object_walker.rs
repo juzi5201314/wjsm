@@ -125,6 +125,13 @@ pub(crate) fn scan_tasks_for_handle(
     let Some(ptr) = resolve_handle(data, h, obj_table_ptr, obj_table_count) else {
         return Vec::new();
     };
+    if ptr + constants::HEAP_OBJECT_HEADER_SIZE as usize > data.len() {
+        return Vec::new();
+    }
+    let heap_type = data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize];
+    if !crate::runtime_gc::context::is_known_gc_heap_type(heap_type) {
+        return Vec::new();
+    }
     scan_tasks_for_ptr(data, h, ptr)
 }
 
