@@ -10,7 +10,7 @@ use wjsm_ir::value;
 use crate::runtime_string::RuntimeString;
 use crate::startup_snapshot_native_bridge::SnapshotNativeCallableBridge;
 use crate::startup_snapshot_remap::remap_array_proto_function_indices;
-use crate::types::NativeCallable;
+use crate::types::{NativeCallable, TypedArrayConstructorKind};
 use crate::wasm_env::WasmEnv;
 use wjsm_snapshot_format::*;
 
@@ -135,6 +135,7 @@ pub(crate) fn capture_startup_snapshot(
                 | NativeCallable::BigIntPrimitiveMethod { method }
                 | NativeCallable::SymbolPrimitiveMethod { method }
                 | NativeCallable::RegExpPrimitiveMethod { method } => *method,
+                NativeCallable::TypedArrayConstructor(kind) => kind.index() as u8,
                 _ => 0,
             });
         }
@@ -236,6 +237,10 @@ pub(crate) fn reset_primordial_heap_before_restore(
     state.generator_prototype = value::encode_undefined();
     state.async_iterator_prototype = value::encode_undefined();
     state.async_gen_prototype = value::encode_undefined();
+    state.buffer_prototype = value::encode_undefined();
+    state.text_encoder_prototype = value::encode_undefined();
+    state.text_decoder_prototype = value::encode_undefined();
+    state.typedarray_prototypes = [value::encode_undefined(); TypedArrayConstructorKind::COUNT];
     state.array_proto_values.store(
         value::encode_undefined(),
         std::sync::atomic::Ordering::Relaxed,

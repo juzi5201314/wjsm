@@ -1,6 +1,5 @@
 exit_code: 0
 --- stdout ---
-{
-😀😀😀😀😀"a": 1
-}
+true
+310
 --- stderr ---

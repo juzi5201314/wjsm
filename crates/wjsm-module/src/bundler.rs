@@ -1,7 +1,8 @@
 // 模块 Bundler：将多个模块编译为单一 WASM 二进制
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::path::Path;
+use wjsm_semantic::{ModuleKind, ModuleLoweringInput, ModuleMetadata};
 
 use super::graph::ModuleGraph;
 use super::semantic::analyze_module_links;
@@ -34,7 +35,11 @@ impl ModuleBundler {
         let mut modules = Vec::new();
         for &id in &order {
             let node = graph.get_module(id).unwrap();
-            modules.push((id, node.ast.clone()));
+            modules.push(ModuleLoweringInput {
+                id: node.id,
+                ast: node.ast.clone(),
+                metadata: module_metadata_for_node(node)?,
+            });
         }
 
         wjsm_semantic::lower_modules(
@@ -67,6 +72,47 @@ impl ModuleBundler {
 
         wjsm_backend_wasm::compile(&program).with_context(|| "Failed to compile to WASM")
     }
+}
+
+fn module_metadata_for_node(node: &super::graph::GraphNode) -> Result<ModuleMetadata> {
+    let kind = if node.is_cjs {
+        ModuleKind::CommonJs
+    } else {
+        ModuleKind::Esm
+    };
+    let dirname_path = node
+        .path
+        .parent()
+        .ok_or_else(|| anyhow!("module path has no parent: {}", node.path.display()))?;
+
+    let (filename, dirname, url) = match (path_to_utf8(&node.path), path_to_utf8(dirname_path)) {
+        (Ok(filename), Ok(dirname)) => {
+            let url = url::Url::from_file_path(&node.path)
+                .map_err(|_| {
+                    anyhow!(
+                        "module path cannot be converted to file URL: {}",
+                        node.path.display()
+                    )
+                })?
+                .to_string();
+            (filename, dirname, url)
+        }
+        (Err(error), _) | (_, Err(error)) if kind == ModuleKind::CommonJs => return Err(error),
+        _ => (String::new(), String::new(), String::new()),
+    };
+
+    Ok(ModuleMetadata {
+        filename,
+        dirname,
+        url,
+        kind,
+    })
+}
+
+fn path_to_utf8(path: &Path) -> Result<String> {
+    path.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("module path is not valid UTF-8: {}", path.display()))
 }
 
 #[cfg(test)]

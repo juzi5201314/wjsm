@@ -46,15 +46,17 @@ module {
     c43 = functionref(@2)
     c44 = undefined
     c45 = undefined
-    c46 = string("$0.rejectB")
-    c47 = number(2)
-    c48 = undefined
-    c49 = string("$0.resolveA")
-    c50 = number(1)
-    c51 = functionref(@3)
-    c52 = undefined
-    c53 = string("$0.rejectB")
-    c54 = string("$0.resolveA")
+    c46 = string("queueMicrotask")
+    c47 = undefined
+    c48 = string("$0.rejectB")
+    c49 = number(2)
+    c50 = undefined
+    c51 = string("$0.resolveA")
+    c52 = number(1)
+    c53 = functionref(@3)
+    c54 = undefined
+    c55 = string("$0.rejectB")
+    c56 = string("$0.resolveA")
 
   fn @arrow_0 [captures: $0.resolveA] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
@@ -138,20 +140,20 @@ module {
 
   fn @arrow_3 [captures: $0.rejectB, $0.resolveA] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
-      %0 = const c45
+      %0 = const c47
       %1 = load var $env
-      %2 = const c46
+      %2 = const c48
       %3 = get_prop %1, %2
-      %4 = const c47
+      %4 = const c49
       %5 = call %3, this=%0, args=[%4]
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      %8 = const c48
+      %8 = const c50
       %9 = load var $env
-      %10 = const c49
+      %10 = const c51
       %11 = get_prop %9, %10
-      %12 = const c50
+      %12 = const c52
       %13 = call %11, this=%8, args=[%12]
       %14 = is_exception %13
       branch %14, bb4, bb3
@@ -282,36 +284,40 @@ module {
       %53 = call builtin.exception_value(%35)
       throw %53
     bb8:
-      %64 = const c51
-      %65 = load var $0.$shared_env
-      %66 = const c52
-      %67 = stricteq %65, %66
-      branch %67, bb10, bb11
+      %64 = const c45
+      %65 = load var $0.$global
+      %66 = const c46
+      %67 = get_prop %65, %66
+      %68 = const c53
+      %69 = load var $0.$shared_env
+      %70 = const c54
+      %71 = stricteq %69, %70
+      branch %71, bb10, bb11
     bb9:
       %63 = call builtin.exception_value(%61)
       throw %63
     bb10:
-      %68 = new_object(capacity=2)
-      store var $0.$shared_env, %68
-      %69 = load var $0.rejectB
-      %70 = const c53
-      set_prop %68, %70, %69
-      %71 = load var $0.resolveA
-      %72 = const c54
-      set_prop %68, %72, %71
+      %72 = new_object(capacity=2)
+      store var $0.$shared_env, %72
+      %73 = load var $0.rejectB
+      %74 = const c55
+      set_prop %72, %74, %73
+      %75 = load var $0.resolveA
+      %76 = const c56
+      set_prop %72, %76, %75
       jump bb12
     bb11:
       jump bb12
     bb12:
-      %73 = phi [(bb10, %68), (bb11, %65)]
-      store var $0.$shared_env, %73
-      %74 = call builtin.create_closure(%64, %73)
-      %75 = call builtin.queue_microtask(%74)
-      %76 = is_exception %75
-      branch %76, bb14, bb13
+      %77 = phi [(bb10, %72), (bb11, %69)]
+      store var $0.$shared_env, %77
+      %78 = call builtin.create_closure(%68, %77)
+      %79 = call %67, this=%64, args=[%78]
+      %80 = is_exception %79
+      branch %80, bb14, bb13
     bb13:
       return
     bb14:
-      %77 = call builtin.exception_value(%75)
-      throw %77
+      %81 = call builtin.exception_value(%79)
+      throw %81
 }

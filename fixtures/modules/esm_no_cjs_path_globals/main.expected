@@ -1,6 +1,4 @@
 exit_code: 0
 --- stdout ---
-{
-😀😀😀😀😀"a": 1
-}
+undefined undefined
 --- stderr ---

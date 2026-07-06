@@ -5,16 +5,37 @@ use wjsm_ir::{
     Terminator,
 };
 
+#[derive(Debug, Clone)]
+pub struct ModuleLoweringInput {
+    pub id: wjsm_ir::ModuleId,
+    pub ast: swc_ast::Module,
+    pub metadata: ModuleMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleMetadata {
+    pub filename: String,
+    pub dirname: String,
+    pub url: String,
+    pub kind: ModuleKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleKind {
+    Esm,
+    CommonJs,
+}
+
 /// 将多个模块编译为单一的 IR Program（模块 bundling）
 ///
 /// # 参数
-/// - `modules`: 模块列表，每个元素是 (ModuleId, AST)
+/// - `modules`: 模块列表，包含 ModuleId、AST 与编译期路径元数据
 /// - `import_map`: 导入映射，module_id → ImportBinding 列表
 /// - `dynamic_import_targets`: 动态 import() 目标映射，module_id → 被动态 import 的目标模块 ID 列表
 /// - `export_names`: 导出名称映射，module_id → 导出名集合
 /// - `dynamic_import_specifiers`: 动态 import() specifier 映射，module_id → [(specifier, 目标 ModuleId)]
 pub fn lower_modules(
-    modules: Vec<(wjsm_ir::ModuleId, swc_ast::Module)>,
+    modules: Vec<ModuleLoweringInput>,
     import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
     dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
     export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
@@ -24,19 +45,18 @@ pub fn lower_modules(
     >,
     re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
 ) -> Result<Program, LoweringError> {
-    // 如果只有一个模块且没有 import，使用单模块编译路径
-    if modules.len() == 1 && import_map.is_empty() {
-        let (_, module) = modules.into_iter().next().unwrap();
-        return lower_module(module, false);
-    }
-
     // 多模块编译路径
     // 早错误：对每个模块运行私有名静态校验（与单模块路径一致）。
-    for (_, module_ast) in &modules {
-        lowerer_classes_ts::validate_private_names(module_ast)?;
+    for module in &modules {
+        lowerer_classes_ts::validate_private_names(&module.ast)?;
     }
 
+    let module_metadata = modules
+        .iter()
+        .map(|module| (module.id, module.metadata.clone()))
+        .collect();
     let mut lowerer = setup_multi_module_lowerer(
+        module_metadata,
         import_map,
         dynamic_import_targets,
         export_names,
@@ -46,7 +66,9 @@ pub fn lower_modules(
 
     predeclare_module_exports(&mut lowerer, &modules)?;
 
-    let has_tla = modules.iter().any(|(_, m)| has_top_level_await(m));
+    let has_tla = modules
+        .iter()
+        .any(|module| has_top_level_await(&module.ast));
     let entry = init_entry_block(&mut lowerer, has_tla, &modules)?;
 
     lowerer.emit_hoisted_var_initializers(entry);
@@ -65,6 +87,7 @@ pub fn lower_modules(
 
 /// 设置多模块 lowerer 的初始状态
 fn setup_multi_module_lowerer(
+    module_metadata: std::collections::HashMap<wjsm_ir::ModuleId, ModuleMetadata>,
     import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
     dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
     export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
@@ -79,6 +102,7 @@ fn setup_multi_module_lowerer(
     lowerer.dynamic_import_targets = dynamic_import_targets.clone();
     lowerer.module_export_names = export_names.clone();
     lowerer.re_export_map = re_export_map.clone();
+    lowerer.module_metadata = module_metadata;
 
     // 收集需要构建命名空间对象的模块
     for targets in dynamic_import_targets.values() {
@@ -100,13 +124,32 @@ fn setup_multi_module_lowerer(
     Ok(lowerer)
 }
 
+fn predeclare_cjs_path_bindings(
+    lowerer: &mut Lowerer,
+    module_id: wjsm_ir::ModuleId,
+) -> Result<(), LoweringError> {
+    if lowerer.module_metadata.get(&module_id).map(|m| m.kind) != Some(ModuleKind::CommonJs) {
+        return Ok(());
+    }
+
+    for name in ["__filename", "__dirname"] {
+        lowerer
+            .scopes
+            .declare(name, VarKind::Const, true)
+            .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
+    }
+    Ok(())
+}
+
 /// 预扫描：为所有模块的变量声明创建作用域条目，并声明 default export 变量
 fn predeclare_module_exports(
     lowerer: &mut Lowerer,
-    modules: &[(wjsm_ir::ModuleId, swc_ast::Module)],
+    modules: &[ModuleLoweringInput],
 ) -> Result<(), LoweringError> {
-    for (module_id, module_ast) in modules {
-        lowerer.current_module_id = Some(*module_id);
+    for module in modules {
+        let module_id = module.id;
+        let module_ast = &module.ast;
+        lowerer.current_module_id = Some(module_id);
         // 为每个模块的顶层声明创建独立的块级作用域（#43）：
         // 避免两个模块同名的顶层 let/const 落入同一根作用域导致 "cannot redeclare"。
         // 使用 Block 而非 Function 作用域——模块体最终全部降级进同一个 $module_main 函数，
@@ -114,7 +157,8 @@ fn predeclare_module_exports(
         // 破坏捕获/共享 env 的路由判断（live binding 依赖该机制）。
         lowerer.scopes.push_scope(ScopeKind::Block);
         let module_scope = lowerer.scopes.current_scope_id();
-        lowerer.module_scopes.insert(*module_id, module_scope);
+        lowerer.module_scopes.insert(module_id, module_scope);
+        predeclare_cjs_path_bindings(lowerer, module_id)?;
         lowerer.predeclare_stmts(&module_ast.body)?;
         for item in &module_ast.body {
             match item {
@@ -127,7 +171,7 @@ fn predeclare_module_exports(
                     let ir_name = format!("${scope_id}.{default_var}");
                     lowerer
                         .export_map
-                        .insert((*module_id, "default".to_string()), ir_name);
+                        .insert((module_id, "default".to_string()), ir_name);
                 }
                 swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportDefaultDecl(_)) => {
                     let default_var = format!("_default_export_mod{}", module_id.0);
@@ -138,7 +182,7 @@ fn predeclare_module_exports(
                     let ir_name = format!("${scope_id}.{default_var}");
                     lowerer
                         .export_map
-                        .insert((*module_id, "default".to_string()), ir_name);
+                        .insert((module_id, "default".to_string()), ir_name);
                 }
                 swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportDecl(export_decl)) => {
                     let names = decl_exported_names(&export_decl.decl);
@@ -147,7 +191,7 @@ fn predeclare_module_exports(
                         // lookup 会失败；此处只需作用域 id 以登记 export_map（#44）。
                         if let Ok(scope_id) = lowerer.scopes.resolve_scope_id(&name) {
                             let ir_name = format!("${scope_id}.{name}");
-                            lowerer.export_map.insert((*module_id, name), ir_name);
+                            lowerer.export_map.insert((module_id, name), ir_name);
                         }
                     }
                 }
@@ -237,19 +281,20 @@ fn resolve_export_ir(
 /// 处理 import 声明：绑定别名、默认导入与命名空间导入。
 fn process_import_aliases(
     lowerer: &mut Lowerer,
-    modules: &[(wjsm_ir::ModuleId, swc_ast::Module)],
+    modules: &[ModuleLoweringInput],
     mut flow: StmtFlow,
 ) -> Result<StmtFlow, LoweringError> {
-    for (module_id, _module_ast) in modules {
+    for module in modules {
+        let module_id = module.id;
         // 进入导入方模块自己的作用域（#43/#44）：命名空间 local 与别名都属于该模块，
         // 不能落入根作用域，否则跨模块同名 import 会互相覆盖。
-        let Some(&module_scope) = lowerer.module_scopes.get(module_id) else {
+        let Some(&module_scope) = lowerer.module_scopes.get(&module_id) else {
             continue;
         };
         lowerer.scopes.enter_scope(module_scope);
         let bindings: Vec<_> = lowerer
             .import_bindings
-            .get(module_id)
+            .get(&module_id)
             .cloned()
             .unwrap_or_default();
         for binding in bindings {
@@ -287,9 +332,9 @@ fn process_import_aliases(
                     );
                     lowerer
                         .static_namespace_import_objects
-                        .insert((*module_id, local_name.clone()), ns_obj);
+                        .insert((module_id, local_name.clone()), ns_obj);
                     lowerer.static_namespace_import_sources.push((
-                        *module_id,
+                        module_id,
                         local_name.clone(),
                         binding.source_module,
                     ));
@@ -302,7 +347,7 @@ fn process_import_aliases(
                     {
                         lowerer
                             .import_aliases
-                            .insert((*module_id, local_name.clone()), source_ir_name);
+                            .insert((module_id, local_name.clone()), source_ir_name);
                     }
                     continue;
                 }
@@ -311,7 +356,7 @@ fn process_import_aliases(
                 {
                     lowerer
                         .import_aliases
-                        .insert((*module_id, local_name.clone()), source_ir_name);
+                        .insert((module_id, local_name.clone()), source_ir_name);
                 }
             }
         }
@@ -324,13 +369,13 @@ fn process_import_aliases(
 fn init_entry_block(
     lowerer: &mut Lowerer,
     has_tla: bool,
-    modules: &[(wjsm_ir::ModuleId, swc_ast::Module)],
+    modules: &[ModuleLoweringInput],
 ) -> Result<BasicBlockId, LoweringError> {
     if has_tla {
         // 取第一个模块的 span 用于错误报告
         let first_span = modules
             .first()
-            .map(|(_, m)| m.span)
+            .map(|module| module.ast.span)
             .unwrap_or(swc_core::common::DUMMY_SP);
         lowerer.init_async_main_context(first_span)
     } else {
@@ -443,19 +488,75 @@ fn create_namespace_objects(lowerer: &mut Lowerer, entry: BasicBlockId) {
     }
 }
 
+fn emit_cjs_path_bindings(
+    lowerer: &mut Lowerer,
+    module_id: wjsm_ir::ModuleId,
+    block: BasicBlockId,
+) -> Result<(), LoweringError> {
+    let Some(metadata) = lowerer.module_metadata.get(&module_id).cloned() else {
+        return Ok(());
+    };
+    if metadata.kind != ModuleKind::CommonJs {
+        return Ok(());
+    }
+    let Some(&module_scope) = lowerer.module_scopes.get(&module_id) else {
+        return Ok(());
+    };
+
+    emit_module_path_binding(
+        lowerer,
+        block,
+        module_scope,
+        "__filename",
+        metadata.filename,
+    );
+    emit_module_path_binding(lowerer, block, module_scope, "__dirname", metadata.dirname);
+    Ok(())
+}
+
+fn emit_module_path_binding(
+    lowerer: &mut Lowerer,
+    block: BasicBlockId,
+    module_scope: usize,
+    name: &str,
+    value: String,
+) {
+    let string_const = lowerer.module.add_constant(Constant::String(value));
+    let string_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::Const {
+            dest: string_val,
+            constant: string_const,
+        },
+    );
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::StoreVar {
+            name: format!("${module_scope}.{name}"),
+            value: string_val,
+        },
+    );
+}
+
 /// 处理每个模块的 body（语句、导出声明、默认导出等）
 fn lower_module_bodies(
     lowerer: &mut Lowerer,
-    modules: &[(wjsm_ir::ModuleId, swc_ast::Module)],
+    modules: &[ModuleLoweringInput],
 ) -> Result<StmtFlow, LoweringError> {
     let entry_block = lowerer.current_function.last_block_id();
     let mut flow = StmtFlow::Open(entry_block);
-    for (module_id, module_ast) in modules {
-        lowerer.current_module_id = Some(*module_id);
+    for module in modules {
+        let module_id = module.id;
+        let module_ast = &module.ast;
+        lowerer.current_module_id = Some(module_id);
         // 进入该模块的顶层作用域（#43）：模块体中的标识符解析必须命中模块自己的作用域，
         // 而非根作用域，否则同名顶层变量会跨模块互相解析错位。
-        if let Some(&module_scope) = lowerer.module_scopes.get(module_id) {
+        if let Some(&module_scope) = lowerer.module_scopes.get(&module_id) {
             lowerer.scopes.enter_scope(module_scope);
+        }
+        if let StmtFlow::Open(block) = flow {
+            emit_cjs_path_bindings(lowerer, module_id, block)?;
         }
         for item in &module_ast.body {
             // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
@@ -473,7 +574,7 @@ fn lower_module_bodies(
         }
         // 模块体执行完毕后，为以本模块为来源的命名空间对象安装 live binding getter（#45）。
         // 拓扑序保证来源模块先于导入方降级，此时本模块的导出绑定与捕获闭包均已就绪。
-        flow = install_live_namespace_getters_for_source(lowerer, *module_id, flow)?;
+        flow = install_live_namespace_getters_for_source(lowerer, module_id, flow)?;
         lowerer.scopes.pop_scope();
     }
     Ok(flow)

@@ -159,9 +159,6 @@ pub(super) fn register_common_bridges(
             {
                 return val;
             }
-            if prop_name != "prototype" {
-                return value::encode_undefined();
-            }
             let idx = value::decode_native_callable_idx(native) as usize;
             let record = {
                 let table = caller
@@ -171,6 +168,28 @@ pub(super) fn register_common_bridges(
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(idx).cloned()
             };
+            if prop_name != "prototype" {
+                if matches!(record, Some(NativeCallable::BufferConstructor)) {
+                    let kind = match prop_name {
+                        "alloc" => BufferStaticKind::Alloc,
+                        "allocUnsafe" => BufferStaticKind::AllocUnsafe,
+                        "from" => BufferStaticKind::From,
+                        "concat" => BufferStaticKind::Concat,
+                        "isBuffer" => BufferStaticKind::IsBuffer,
+                        "byteLength" => BufferStaticKind::ByteLength,
+                        _ => return value::encode_undefined(),
+                    };
+                    let mut table = caller
+                        .data()
+                        .native_callables
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let idx = table.len() as u32;
+                    table.push(NativeCallable::BufferStatic { kind });
+                    return value::encode_native_callable_idx(idx);
+                }
+                return value::encode_undefined();
+            }
             match &record {
                 Some(nc) => crate::runtime_heap::native_callable_prototype(&mut caller, nc)
                     .unwrap_or_else(value::encode_undefined),

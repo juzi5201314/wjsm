@@ -273,7 +273,17 @@ pub(crate) fn define_string_methods(
                 let len = get_string_value(&mut caller, receiver).utf16_len();
                 return value::encode_f64(len as f64);
             }
-            value::encode_undefined()
+            let method =
+                match crate::runtime_render::read_string_bytes(&mut caller, name_id).as_slice() {
+                    b"includes" => 0,
+                    b"startsWith" => 1,
+                    b"indexOf" => 2,
+                    _ => return value::encode_undefined(),
+                };
+            create_native_callable(
+                caller.data(),
+                NativeCallable::StringPrimitiveMethod { method },
+            )
         },
     );
     linker.define(

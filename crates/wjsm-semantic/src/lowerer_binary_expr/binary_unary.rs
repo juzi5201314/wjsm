@@ -499,6 +499,35 @@ impl Lowerer {
                 Ok(dest)
             }
             TypeOf => {
+                if let swc_ast::Expr::Ident(ident) = unary.arg.as_ref() {
+                    let name = ident.sym.to_string();
+                    let has_module_alias = self.current_module_id.is_some_and(|module_id| {
+                        self.static_namespace_import_objects
+                            .contains_key(&(module_id, name.clone()))
+                            || self.import_aliases.contains_key(&(module_id, name.clone()))
+                    });
+                    if !has_module_alias
+                        && !self.eval_scope_bridge_active()
+                        && name != "eval"
+                        && !is_builtin_global(&name)
+                        && let Err(msg) = self.scopes.lookup(&name)
+                        && msg.starts_with("undeclared identifier")
+                    {
+                        let undef_const = self
+                            .module
+                            .add_constant(Constant::String("undefined".to_string()));
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest,
+                                constant: undef_const,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                }
+
                 let mut current_block = block;
                 let arg = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();

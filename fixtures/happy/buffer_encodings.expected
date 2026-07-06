@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+68656c6c6f20776f726c64
+aGVsbG8gd29ybGQ=
+hi
+hello
+ac20
+127:255
+--- stderr ---

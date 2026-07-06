@@ -148,6 +148,14 @@ pub enum SnapshotNativeCallable {
     ArrayProtoKeys = 64,
     ArrayProtoEntries = 65,
     IteratorProtoSymbolIterator = 66,
+    BufferConstructor = 67,
+    TextEncoderConstructor = 68,
+    TextDecoderConstructor = 69,
+    StructuredClone = 70,
+    Atob = 71,
+    Btoa = 72,
+    QueueMicrotask = 73,
+    PerformanceNow = 74,
 }
 
 impl SnapshotNativeCallable {
@@ -220,6 +228,14 @@ impl SnapshotNativeCallable {
             64 => Some(Self::ArrayProtoKeys),
             65 => Some(Self::ArrayProtoEntries),
             66 => Some(Self::IteratorProtoSymbolIterator),
+            67 => Some(Self::BufferConstructor),
+            68 => Some(Self::TextEncoderConstructor),
+            69 => Some(Self::TextDecoderConstructor),
+            70 => Some(Self::StructuredClone),
+            71 => Some(Self::Atob),
+            72 => Some(Self::Btoa),
+            73 => Some(Self::QueueMicrotask),
+            74 => Some(Self::PerformanceNow),
             _ => None,
         }
     }
@@ -649,7 +665,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=66 {
+    for d in 0u32..=74 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);
@@ -741,7 +757,7 @@ mod tests {
             s.hash(&mut hasher);
         }
 
-        for d in 0u32..=66 {
+        for d in 0u32..=74 {
             if SnapshotNativeCallable::from_discriminant(d).is_some() {
                 d.hash(&mut hasher);
             }

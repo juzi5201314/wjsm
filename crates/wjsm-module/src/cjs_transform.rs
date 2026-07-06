@@ -16,6 +16,13 @@ use swc_core::ecma::ast;
 use swc_core::ecma::visit::{Visit, VisitWith};
 
 pub fn is_commonjs_module(module: &ast::Module) -> bool {
+    if module
+        .body
+        .iter()
+        .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
+    {
+        return false;
+    }
     let mut detector = CjsDetector { found: false };
     module.visit_with(&mut detector);
     detector.found
@@ -96,6 +103,15 @@ struct CjsDetector {
 }
 
 impl Visit for CjsDetector {
+    fn visit_ident(&mut self, n: &ast::Ident) {
+        if self.found {
+            return;
+        }
+        if matches!(n.sym.as_ref(), "__filename" | "__dirname") {
+            self.found = true;
+        }
+    }
+
     fn visit_call_expr(&mut self, n: &ast::CallExpr) {
         if self.found {
             return;

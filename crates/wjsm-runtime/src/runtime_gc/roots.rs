@@ -180,16 +180,34 @@ impl RootProvider for RuntimeRoots {
         // 字段持有，handle 低于 function_props_base，不被区间扫描覆盖。构造器是无状态
         // NativeCallable，其 .prototype 在 get 时动态合成、不在堆上留引用，故必须显式 root，
         // 否则 GC 在内存压力下回收原型对象 → instanceof / .prototype 读到 garbage。
-        let (regexp_proto, promise_proto, symbol_proto) = ctx.with_state(|st| {
+        let (
+            regexp_proto,
+            promise_proto,
+            symbol_proto,
+            buffer_proto,
+            text_encoder_proto,
+            text_decoder_proto,
+            typedarray_protos,
+        ) = ctx.with_state(|st| {
             (
                 st.regexp_prototype,
                 st.promise_prototype,
                 st.symbol_prototype,
+                st.buffer_prototype,
+                st.text_encoder_prototype,
+                st.text_decoder_prototype,
+                st.typedarray_prototypes,
             )
         });
         push_value_roots(ctx, regexp_proto, visit);
         push_value_roots(ctx, promise_proto, visit);
         push_value_roots(ctx, symbol_proto, visit);
+        push_value_roots(ctx, buffer_proto, visit);
+        push_value_roots(ctx, text_encoder_proto, visit);
+        push_value_roots(ctx, text_decoder_proto, visit);
+        for proto in typedarray_protos {
+            push_value_roots(ctx, proto, visit);
+        }
         // 动态 root：host 侧表快照 → 解析每个 raw 值为 handle。
         let snapshot = collect_host_table_values(ctx, is_marked);
         for val in snapshot {

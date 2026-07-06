@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 
-use crate::types::NativeCallable;
+use crate::types::{NativeCallable, TypedArrayConstructorKind};
 use wjsm_snapshot_format::SnapshotNativeCallable;
 
 pub(crate) trait SnapshotNativeCallableBridge {
@@ -88,8 +88,19 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::SymbolProtoDescriptionGetter => NativeCallable::SymbolProtoDescriptionGetter,
             Self::SymbolProtoToPrimitive => NativeCallable::SymbolProtoToPrimitive,
             Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
-            Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(()),
+            Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(
+                TypedArrayConstructorKind::from_index(method as usize)
+                    .unwrap_or(TypedArrayConstructorKind::Uint8),
+            ),
             Self::ErrorProtoToString => NativeCallable::ErrorProtoToString,
+            Self::BufferConstructor => NativeCallable::BufferConstructor,
+            Self::TextEncoderConstructor => NativeCallable::TextEncoderConstructor,
+            Self::TextDecoderConstructor => NativeCallable::TextDecoderConstructor,
+            Self::StructuredClone => NativeCallable::StructuredClone,
+            Self::Atob => NativeCallable::Atob,
+            Self::Btoa => NativeCallable::Btoa,
+            Self::QueueMicrotask => NativeCallable::QueueMicrotask,
+            Self::PerformanceNow => NativeCallable::PerformanceNow,
         }
     }
 
@@ -169,8 +180,21 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::RegExpPrimitiveMethod { method: _ } => Self::RegExpPrimitiveMethod,
             NativeCallable::SymbolProtoDescriptionGetter => Self::SymbolProtoDescriptionGetter,
             NativeCallable::SymbolProtoToPrimitive => Self::SymbolProtoToPrimitive,
-            NativeCallable::TypedArrayConstructor(()) => Self::TypedArrayConstructor,
-            NativeCallable::EvalFunction(_)
+            NativeCallable::TypedArrayConstructor(_) => Self::TypedArrayConstructor,
+            NativeCallable::BufferConstructor => Self::BufferConstructor,
+            NativeCallable::TextEncoderConstructor => Self::TextEncoderConstructor,
+            NativeCallable::TextDecoderConstructor => Self::TextDecoderConstructor,
+            NativeCallable::StructuredClone => Self::StructuredClone,
+            NativeCallable::Atob => Self::Atob,
+            NativeCallable::Btoa => Self::Btoa,
+            NativeCallable::QueueMicrotask => Self::QueueMicrotask,
+            NativeCallable::PerformanceNow => Self::PerformanceNow,
+            NativeCallable::StringPrimitiveMethod { .. }
+            | NativeCallable::BufferStatic { .. }
+            | NativeCallable::BufferMethod { .. }
+            | NativeCallable::TextEncoderMethod { .. }
+            | NativeCallable::TextDecoderMethod { .. }
+            | NativeCallable::EvalFunction(_)
             | NativeCallable::PromiseResolvingFunction { .. }
             | NativeCallable::PromiseCombinatorReaction { .. }
             | NativeCallable::AsyncGeneratorMethod { .. }

@@ -718,6 +718,378 @@ pub(crate) fn native_callable_error_prototype(
     }
 }
 
+pub(crate) fn ensure_typedarray_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    kind: TypedArrayConstructorKind,
+) {
+    let index = kind.index();
+    if value::is_object(ctx.as_context().data().typedarray_prototypes[index]) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let object_proto = value::encode_object_handle(object_proto_handle as u32);
+    let proto = alloc_host_object(ctx, env, 2);
+    set_object_proto_header(ctx, env, proto, object_proto);
+    let ctor = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::TypedArrayConstructor(kind),
+    );
+    let _ = define_host_data_property_with_env(ctx, env, proto, "constructor", ctor);
+    let tag = store_runtime_string_in_state(ctx.as_context().data(), kind.name().to_string());
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        proto,
+        encode_symbol_name_id(2),
+        tag,
+        constants::FLAG_CONFIGURABLE,
+    );
+    ctx.as_context_mut().data_mut().typedarray_prototypes[index] = proto;
+}
+
+pub(crate) fn native_callable_typedarray_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    kind: TypedArrayConstructorKind,
+) -> Option<i64> {
+    if !value::is_object(caller.data().typedarray_prototypes[kind.index()])
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_typedarray_prototype_initialized(caller, &env, kind);
+    }
+    let proto = caller.data().typedarray_prototypes[kind.index()];
+    value::is_object(proto).then_some(proto)
+}
+
+pub(crate) fn ensure_buffer_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().buffer_prototype) {
+        return;
+    }
+    ensure_typedarray_prototype_initialized(ctx, env, TypedArrayConstructorKind::Uint8);
+    let parent =
+        ctx.as_context().data().typedarray_prototypes[TypedArrayConstructorKind::Uint8.index()];
+    if !value::is_object(parent) {
+        return;
+    }
+    let proto = alloc_host_object(ctx, env, 40);
+    set_object_proto_header(ctx, env, proto, parent);
+    let ctor = create_native_callable(ctx.as_context().data(), NativeCallable::BufferConstructor);
+    let _ = define_host_data_property_with_env(ctx, env, proto, "constructor", ctor);
+    define_buffer_method(ctx, env, proto, "toString", BufferMethodKind::ToString);
+    define_buffer_method(ctx, env, proto, "slice", BufferMethodKind::Slice);
+    define_buffer_method(ctx, env, proto, "subarray", BufferMethodKind::Subarray);
+    define_buffer_method(ctx, env, proto, "copy", BufferMethodKind::Copy);
+    define_buffer_method(ctx, env, proto, "compare", BufferMethodKind::Compare);
+    define_buffer_method(ctx, env, proto, "write", BufferMethodKind::Write);
+    define_buffer_method(ctx, env, proto, "readUInt8", BufferMethodKind::ReadUInt8);
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readUInt16BE",
+        BufferMethodKind::ReadUInt16BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readUInt16LE",
+        BufferMethodKind::ReadUInt16LE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readUInt32BE",
+        BufferMethodKind::ReadUInt32BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readUInt32LE",
+        BufferMethodKind::ReadUInt32LE,
+    );
+    define_buffer_method(ctx, env, proto, "readInt8", BufferMethodKind::ReadInt8);
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readInt16BE",
+        BufferMethodKind::ReadInt16BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readInt16LE",
+        BufferMethodKind::ReadInt16LE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readInt32BE",
+        BufferMethodKind::ReadInt32BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readInt32LE",
+        BufferMethodKind::ReadInt32LE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readFloatBE",
+        BufferMethodKind::ReadFloatBE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readFloatLE",
+        BufferMethodKind::ReadFloatLE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readDoubleBE",
+        BufferMethodKind::ReadDoubleBE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "readDoubleLE",
+        BufferMethodKind::ReadDoubleLE,
+    );
+    define_buffer_method(ctx, env, proto, "writeUInt8", BufferMethodKind::WriteUInt8);
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeUInt16BE",
+        BufferMethodKind::WriteUInt16BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeUInt16LE",
+        BufferMethodKind::WriteUInt16LE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeUInt32BE",
+        BufferMethodKind::WriteUInt32BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeUInt32LE",
+        BufferMethodKind::WriteUInt32LE,
+    );
+    define_buffer_method(ctx, env, proto, "writeInt8", BufferMethodKind::WriteInt8);
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeInt16BE",
+        BufferMethodKind::WriteInt16BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeInt16LE",
+        BufferMethodKind::WriteInt16LE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeInt32BE",
+        BufferMethodKind::WriteInt32BE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeInt32LE",
+        BufferMethodKind::WriteInt32LE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeFloatBE",
+        BufferMethodKind::WriteFloatBE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeFloatLE",
+        BufferMethodKind::WriteFloatLE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeDoubleBE",
+        BufferMethodKind::WriteDoubleBE,
+    );
+    define_buffer_method(
+        ctx,
+        env,
+        proto,
+        "writeDoubleLE",
+        BufferMethodKind::WriteDoubleLE,
+    );
+    define_buffer_method(ctx, env, proto, "fill", BufferMethodKind::Fill);
+    define_buffer_method(ctx, env, proto, "indexOf", BufferMethodKind::IndexOf);
+    define_buffer_method(ctx, env, proto, "includes", BufferMethodKind::Includes);
+    define_buffer_method(ctx, env, proto, "toJSON", BufferMethodKind::ToJson);
+    define_buffer_method(ctx, env, proto, "equals", BufferMethodKind::Equals);
+    ctx.as_context_mut().data_mut().buffer_prototype = proto;
+}
+
+fn define_buffer_method<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    proto: i64,
+    name: &str,
+    kind: BufferMethodKind,
+) {
+    let method = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::BufferMethod { kind },
+    );
+    let _ = define_host_data_property_with_env(ctx, env, proto, name, method);
+}
+
+pub(crate) fn native_callable_buffer_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+) -> Option<i64> {
+    if !value::is_object(caller.data().buffer_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_buffer_prototype_initialized(caller, &env);
+    }
+    let proto = caller.data().buffer_prototype;
+    value::is_object(proto).then_some(proto)
+}
+
+pub(crate) fn ensure_text_encoder_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().text_encoder_prototype) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let proto = alloc_host_object(ctx, env, 3);
+    set_object_proto_header(
+        ctx,
+        env,
+        proto,
+        value::encode_object_handle(object_proto_handle as u32),
+    );
+    let ctor = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::TextEncoderConstructor,
+    );
+    let _ = define_host_data_property_with_env(ctx, env, proto, "constructor", ctor);
+    let encode = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::TextEncoderMethod {
+            kind: TextEncoderMethodKind::Encode,
+        },
+    );
+    let encode_into = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::TextEncoderMethod {
+            kind: TextEncoderMethodKind::EncodeInto,
+        },
+    );
+    let _ = define_host_data_property_with_env(ctx, env, proto, "encode", encode);
+    let _ = define_host_data_property_with_env(ctx, env, proto, "encodeInto", encode_into);
+    ctx.as_context_mut().data_mut().text_encoder_prototype = proto;
+}
+
+pub(crate) fn native_callable_text_encoder_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+) -> Option<i64> {
+    if !value::is_object(caller.data().text_encoder_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_text_encoder_prototype_initialized(caller, &env);
+    }
+    let proto = caller.data().text_encoder_prototype;
+    value::is_object(proto).then_some(proto)
+}
+
+pub(crate) fn ensure_text_decoder_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().text_decoder_prototype) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let proto = alloc_host_object(ctx, env, 2);
+    set_object_proto_header(
+        ctx,
+        env,
+        proto,
+        value::encode_object_handle(object_proto_handle as u32),
+    );
+    let ctor = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::TextDecoderConstructor,
+    );
+    let _ = define_host_data_property_with_env(ctx, env, proto, "constructor", ctor);
+    let decode = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::TextDecoderMethod {
+            kind: TextDecoderMethodKind::Decode,
+        },
+    );
+    let _ = define_host_data_property_with_env(ctx, env, proto, "decode", decode);
+    ctx.as_context_mut().data_mut().text_decoder_prototype = proto;
+}
+
+pub(crate) fn native_callable_text_decoder_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+) -> Option<i64> {
+    if !value::is_object(caller.data().text_decoder_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_text_decoder_prototype_initialized(caller, &env);
+    }
+    let proto = caller.data().text_decoder_prototype;
+    value::is_object(proto).then_some(proto)
+}
+
 /// 统一解析 native callable 构造器的 `.prototype` 值。
 /// 供直接属性读取（native_callable_get_property）与 instanceof / Reflect.get
 /// 反射路径（reflect_get_impl_with_receiver_async）共用，消除两条路径对
@@ -745,6 +1117,12 @@ pub(crate) fn native_callable_prototype(
         NativeCallable::SymbolConstructor => native_callable_symbol_prototype(caller, record),
         NativeCallable::PromiseConstructor => native_callable_promise_prototype(caller, record),
         NativeCallable::RegExpConstructor => native_callable_regexp_prototype(caller, record),
+        NativeCallable::TypedArrayConstructor(kind) => {
+            native_callable_typedarray_prototype(caller, *kind)
+        }
+        NativeCallable::BufferConstructor => native_callable_buffer_prototype(caller),
+        NativeCallable::TextEncoderConstructor => native_callable_text_encoder_prototype(caller),
+        NativeCallable::TextDecoderConstructor => native_callable_text_decoder_prototype(caller),
         _ => native_callable_error_prototype(caller, record),
     }
 }

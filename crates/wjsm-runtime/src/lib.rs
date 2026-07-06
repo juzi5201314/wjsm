@@ -21,11 +21,13 @@ mod host_side_table;
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
+mod runtime_buffer;
 mod runtime_builtins;
 mod runtime_collection_gc;
 mod runtime_collections;
 mod runtime_combinators;
 mod runtime_date;
+mod runtime_encoding;
 mod runtime_eval;
 mod runtime_gc;
 pub use runtime_gc::api::{CycleKind, GcStats};
@@ -37,6 +39,7 @@ pub(crate) use host_side_table::HostSideTable;
 mod runtime_json;
 mod runtime_linker;
 mod runtime_microtask;
+mod runtime_node_globals;
 mod runtime_process;
 mod runtime_promises;
 mod runtime_regexp;
@@ -44,6 +47,7 @@ mod runtime_source_map;
 mod runtime_startup;
 mod runtime_string;
 mod runtime_string_to_number;
+mod runtime_structured_clone;
 mod runtime_typedarray;
 mod runtime_value_adapter;
 mod shared_buffer;
@@ -800,6 +804,7 @@ impl Clone for RuntimeState {
     fn clone(&self) -> Self {
         Self {
             output: self.output.clone(),
+            performance_origin: self.performance_origin.clone(),
             iterators: self.iterators.clone(),
             enumerators: self.enumerators.clone(),
             runtime_strings: self.runtime_strings.clone(),
@@ -853,6 +858,10 @@ impl Clone for RuntimeState {
             array_named_props: self.array_named_props.clone(),
             promise_prototype: self.promise_prototype,
             regexp_prototype: self.regexp_prototype,
+            buffer_prototype: self.buffer_prototype,
+            text_encoder_prototype: self.text_encoder_prototype,
+            text_decoder_prototype: self.text_decoder_prototype,
+            typedarray_prototypes: self.typedarray_prototypes,
             combinator_contexts: self.combinator_contexts.clone(),
             module_namespace_cache: self.module_namespace_cache.clone(),
             error_table: self.error_table.clone(),
@@ -894,6 +903,7 @@ impl Clone for RuntimeState {
 }
 struct RuntimeState {
     output: Arc<Mutex<Vec<u8>>>,
+    performance_origin: Arc<std::time::Instant>,
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
     runtime_strings: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
@@ -998,6 +1008,14 @@ struct RuntimeState {
     promise_prototype: i64,
     /// %RegExpPrototype% 对象（供 RegExp 构造函数 .prototype + instanceof 原型链遍历）
     regexp_prototype: i64,
+    /// Buffer.prototype 对象。
+    buffer_prototype: i64,
+    /// TextEncoder.prototype 对象。
+    text_encoder_prototype: i64,
+    /// TextDecoder.prototype 对象。
+    text_decoder_prototype: i64,
+    /// TypedArray 构造器 prototype 对象缓存，按 TypedArrayConstructorKind::index() 存放。
+    typedarray_prototypes: [i64; TypedArrayConstructorKind::COUNT],
     /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
     /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
@@ -1274,6 +1292,7 @@ impl RuntimeState {
 
     pub(crate) fn new() -> Self {
         RuntimeState {
+            performance_origin: Arc::new(std::time::Instant::now()),
             output: Arc::new(Mutex::new(Vec::new())),
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
@@ -1391,6 +1410,10 @@ impl RuntimeState {
             promise_prototype: value::encode_undefined(),
             regexp_prototype: value::encode_undefined(),
             async_gen_prototype: value::encode_undefined(),
+            buffer_prototype: value::encode_undefined(),
+            text_encoder_prototype: value::encode_undefined(),
+            text_decoder_prototype: value::encode_undefined(),
+            typedarray_prototypes: [value::encode_undefined(); TypedArrayConstructorKind::COUNT],
             error_prototypes: crate::runtime_heap::ErrorPrototypes::default(),
             symbol_prototype: value::encode_undefined(),
             combinator_contexts: Arc::new(Mutex::new(Vec::new())),

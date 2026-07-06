@@ -26,6 +26,7 @@ pub struct GraphNode {
     pub exports: Vec<ExportEntry>,
     /// 动态 import() 的目标模块：(specifier, 目标模块 ID)
     pub dynamic_imports: Vec<(String, ModuleId)>,
+    pub is_cjs: bool,
 }
 
 impl ModuleGraph {
@@ -117,7 +118,7 @@ impl ModuleGraph {
             let source = module.source.clone();
             let ast = module.ast.clone();
             let exports = module.exports.clone();
-
+            let is_cjs = module.is_cjs;
             // 构建依赖列表
             let mut imports_with_ids = Vec::new();
             for import in &module.imports {
@@ -167,6 +168,7 @@ impl ModuleGraph {
                 imports: imports_with_ids,
                 exports,
                 dynamic_imports: dynamic_imports_with_ids,
+                is_cjs,
             };
 
             modules.insert(id, node);

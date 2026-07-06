@@ -1,6 +1,7 @@
 exit_code: 0
 --- stdout ---
-{
-😀😀😀😀😀"a": 1
-}
+true 4 ABC
+1,1,1,1
+5 74e97374
+hello
 --- stderr ---

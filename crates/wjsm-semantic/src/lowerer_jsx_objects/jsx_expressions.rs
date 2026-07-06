@@ -160,9 +160,7 @@ impl Lowerer {
                     );
                     Ok(dest)
                 }
-                swc_ast::MetaPropKind::ImportMeta => {
-                    Err(self.error(meta.span, "SyntaxError: import.meta is not supported"))
-                }
+                swc_ast::MetaPropKind::ImportMeta => self.lower_import_meta(meta, block),
             },
             _ => Err(self.error(
                 expr.span(),
@@ -171,6 +169,84 @@ impl Lowerer {
         }
     }
 
+    fn lower_import_meta(
+        &mut self,
+        meta: &swc_ast::MetaPropExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let Some(module_id) = self.current_module_id else {
+            return Err(self.error(
+                meta.span,
+                "SyntaxError: import.meta is only supported in ES modules",
+            ));
+        };
+        let Some(metadata) = self.module_metadata.get(&module_id).cloned() else {
+            return Err(self.error(
+                meta.span,
+                "SyntaxError: import.meta is only supported in ES modules",
+            ));
+        };
+        if metadata.kind != ModuleKind::Esm {
+            return Err(self.error(
+                meta.span,
+                "SyntaxError: import.meta is only supported in ES modules",
+            ));
+        }
+        if metadata.filename.is_empty() || metadata.dirname.is_empty() || metadata.url.is_empty() {
+            return Err(self.error(
+                meta.span,
+                "SyntaxError: import.meta cannot be used for a module path that is not valid UTF-8",
+            ));
+        }
+
+        let meta_obj = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: meta_obj,
+                capacity: 3,
+            },
+        );
+        self.set_import_meta_string_property(block, meta_obj, "url", metadata.url);
+        self.set_import_meta_string_property(block, meta_obj, "dirname", metadata.dirname);
+        self.set_import_meta_string_property(block, meta_obj, "filename", metadata.filename);
+        Ok(meta_obj)
+    }
+
+    fn set_import_meta_string_property(
+        &mut self,
+        block: BasicBlockId,
+        object: ValueId,
+        key: &str,
+        value: String,
+    ) {
+        let key_const = self.module.add_constant(Constant::String(key.to_string()));
+        let key_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: key_val,
+                constant: key_const,
+            },
+        );
+        let value_const = self.module.add_constant(Constant::String(value));
+        let value_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: value_val,
+                constant: value_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object,
+                key: key_val,
+                value: value_val,
+            },
+        );
+    }
     pub(crate) fn lower_tpl(
         &mut self,
         tpl: &swc_ast::Tpl,

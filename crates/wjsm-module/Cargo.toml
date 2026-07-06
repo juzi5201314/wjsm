@@ -8,6 +8,7 @@ anyhow = { workspace = true }
 swc_core = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+url = { workspace = true }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-ir = { path = "../wjsm-ir" }

@@ -66,6 +66,8 @@ pub(crate) struct Lowerer {
     /// 每个模块的顶层块作用域 ID（predeclare 阶段分配，lower 阶段重新进入）。
     /// 使各模块顶层 let/const 处于独立作用域，避免跨模块同名冲突（#43）。
     pub(crate) module_scopes: std::collections::HashMap<wjsm_ir::ModuleId, usize>,
+    /// 每个模块的编译期路径元数据，供 CJS 路径绑定和 import.meta 使用。
+    pub(crate) module_metadata: std::collections::HashMap<wjsm_ir::ModuleId, ModuleMetadata>,
     /// 动态 import() 目标映射：module_id → 被动态 import 的目标模块 ID 列表
     pub(crate) dynamic_import_targets:
         std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,

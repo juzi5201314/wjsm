@@ -2,5 +2,5 @@ exit_code: 0
 --- stdout ---
 "quote\"back\\slash"
 "tab\there\nnewline"
-"emojiðunicode"
+"emoji😀unicode"
 --- stderr ---

@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+255 -1 4660 4660 3735928559 -2 1.5 2.25
+true true
+copy
+616161
+1 true true
+true
+2 c3a9
+--- stderr ---

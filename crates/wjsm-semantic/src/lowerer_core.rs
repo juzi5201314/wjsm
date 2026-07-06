@@ -94,6 +94,7 @@ impl Lowerer {
             export_map: std::collections::HashMap::new(),
             import_aliases: std::collections::HashMap::new(),
             module_scopes: std::collections::HashMap::new(),
+            module_metadata: std::collections::HashMap::new(),
             dynamic_import_targets: std::collections::HashMap::new(),
             dynamic_import_namespace_modules: std::collections::HashSet::new(),
             dynamic_import_namespace_objects: std::collections::HashMap::new(),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_string::RuntimeString;
 
 #[derive(Clone, Copy)]
 pub(crate) enum PromiseSettlement {
@@ -11,6 +12,36 @@ pub(crate) fn raw_promise_handle(promise: i64) -> usize {
         value::decode_object_handle(promise) as usize
     } else {
         promise as usize
+    }
+}
+fn invoke_string_primitive_method(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    method: u8,
+    args: &[i64],
+) -> i64 {
+    let receiver = get_string_value(caller, this_val);
+    let search = args
+        .first()
+        .copied()
+        .map(|value| crate::runtime_encoding::js_string_value(caller, value))
+        .unwrap_or_else(|| RuntimeString::from_utf8_str("undefined"));
+    let position = args
+        .get(1)
+        .copied()
+        .map(|value| value::decode_f64(to_number(caller, value)))
+        .filter(|number| number.is_finite() && *number > 0.0)
+        .map(|number| number.trunc() as usize)
+        .unwrap_or(0)
+        .min(receiver.utf16_len());
+    match method {
+        0 => value::encode_bool(receiver.find_units(&search, position).is_some()),
+        1 => value::encode_bool(receiver.starts_with_units(&search, position)),
+        2 => receiver
+            .find_units(&search, position)
+            .map(|index| value::encode_f64(index as f64))
+            .unwrap_or_else(|| value::encode_f64(-1.0)),
+        _ => value::encode_undefined(),
     }
 }
 
@@ -678,6 +709,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::NumberPrimitiveMethod { method } => Some(invoke_number_primitive_method(
             caller, this_val, method, &args,
         )),
+        NativeCallable::StringPrimitiveMethod { method } => Some(invoke_string_primitive_method(
+            caller, this_val, method, &args,
+        )),
         NativeCallable::SymbolPrimitiveMethod { method } => {
             Some(invoke_symbol_primitive_method(caller, this_val, method))
         }
@@ -797,6 +831,38 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ProcessEnvTrap { kind } => Some(
             crate::runtime_process::call_process_env_trap(caller, kind, &args),
         ),
+        NativeCallable::BufferConstructor => Some(crate::runtime_buffer::call_buffer_constructor(
+            caller, &args,
+        )),
+        NativeCallable::BufferStatic { kind } => Some(crate::runtime_buffer::call_buffer_static(
+            caller, kind, &args,
+        )),
+        NativeCallable::BufferMethod { kind } => Some(crate::runtime_buffer::call_buffer_method(
+            caller, this_val, kind, &args,
+        )),
+        NativeCallable::TextEncoderConstructor => Some(
+            crate::runtime_node_globals::call_text_encoder_constructor(caller),
+        ),
+        NativeCallable::TextEncoderMethod { kind } => Some(
+            crate::runtime_node_globals::call_text_encoder_method(caller, kind, &args),
+        ),
+        NativeCallable::TextDecoderConstructor => Some(
+            crate::runtime_node_globals::call_text_decoder_constructor(caller, &args),
+        ),
+        NativeCallable::TextDecoderMethod { kind } => Some(
+            crate::runtime_node_globals::call_text_decoder_method(caller, this_val, kind, &args),
+        ),
+        NativeCallable::StructuredClone => Some(crate::runtime_structured_clone::structured_clone(
+            caller, &args,
+        )),
+        NativeCallable::Atob => Some(crate::runtime_node_globals::call_atob(caller, &args)),
+        NativeCallable::Btoa => Some(crate::runtime_node_globals::call_btoa(caller, &args)),
+        NativeCallable::QueueMicrotask => Some(crate::runtime_node_globals::call_queue_microtask(
+            caller, &args,
+        )),
+        NativeCallable::PerformanceNow => {
+            Some(crate::runtime_node_globals::call_performance_now(caller))
+        }
         NativeCallable::ArrayConstructor => {
             if value::is_object(this_val) {
                 Some(this_val)
@@ -932,10 +998,18 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
             alloc_host_object(caller, &_wjsm_env, 4)
         }),
-        NativeCallable::TypedArrayConstructor(_) => Some({
-            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
-            alloc_host_object(caller, &_wjsm_env, 4)
-        }),
+        NativeCallable::TypedArrayConstructor(kind) => {
+            let (element_size, element_kind) = kind.element();
+            Some(typedarray_construct(
+                caller,
+                argument,
+                args.get(1).copied().unwrap_or_else(value::encode_undefined),
+                args.get(2).copied().unwrap_or_else(value::encode_undefined),
+                element_size,
+                element_kind,
+                Some(this_val),
+            ))
+        }
         NativeCallable::BigInt64ArrayConstructor => Some(typedarray_construct(
             caller,
             argument,

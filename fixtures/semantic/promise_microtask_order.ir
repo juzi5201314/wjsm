@@ -25,9 +25,11 @@ module {
     c22 = number(3)
     c23 = functionref(@0)
     c24 = undefined
-    c25 = number(2)
-    c26 = functionref(@1)
-    c27 = number(0)
+    c25 = undefined
+    c26 = string("queueMicrotask")
+    c27 = number(2)
+    c28 = functionref(@1)
+    c29 = number(0)
 
   fn @arrow_0 [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -37,7 +39,7 @@ module {
 
   fn @arrow_1 [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
-      %0 = const c25
+      %0 = const c27
       %1 = call builtin.console.log(%0)
       return %1
 
@@ -102,24 +104,28 @@ module {
       %24 = call builtin.exception_value(%22)
       throw %24
     bb3:
-      %33 = const c26
-      %34 = call builtin.queue_microtask(%33)
-      %35 = is_exception %34
-      branch %35, bb6, bb5
+      %33 = const c25
+      %34 = load var $0.$global
+      %35 = const c26
+      %36 = get_prop %34, %35
+      %37 = const c28
+      %38 = call %36, this=%33, args=[%37]
+      %39 = is_exception %38
+      branch %39, bb6, bb5
     bb4:
       %32 = call builtin.exception_value(%30)
       throw %32
     bb5:
-      %37 = const c27
-      %38 = call builtin.console.log(%37)
-      %39 = is_exception %38
-      branch %39, bb8, bb7
+      %41 = const c29
+      %42 = call builtin.console.log(%41)
+      %43 = is_exception %42
+      branch %43, bb8, bb7
     bb6:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      %40 = call builtin.exception_value(%38)
+      throw %40
     bb7:
       return
     bb8:
-      %40 = call builtin.exception_value(%38)
-      throw %40
+      %44 = call builtin.exception_value(%42)
+      throw %44
 }

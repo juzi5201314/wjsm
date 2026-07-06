@@ -23,7 +23,7 @@ mod scan_await;
 mod scope;
 mod wk_symbol_map;
 pub(crate) use function_builder::*;
-pub use lowerer_modules::lower_modules;
+pub use lowerer_modules::{ModuleKind, ModuleLoweringInput, ModuleMetadata, lower_modules};
 pub(crate) use lowerer_types::*;
 pub(crate) use scan_await::has_top_level_await;
 pub(crate) use scope::*;

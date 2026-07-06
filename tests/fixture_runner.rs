@@ -482,22 +482,16 @@ fn normalize_paths(text: &str) -> String {
 /// 归一化对象句柄数字（如 [object Object:208] → [object Object:<id>]）
 fn normalize_object_handles(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
-    let bytes = text.as_bytes();
-    let len = bytes.len();
     let mut i = 0;
 
-    while i < len {
-        // 寻找 "[object " 模式
-        if i + 8 <= len && bytes[i] == b'[' && &bytes[i + 1..i + 8] == b"object " {
-            // 找到匹配的 ']'
-            if let Some(close) = bytes[i..].iter().position(|&b| b == b']') {
-                let close_abs = i + close;
-                let inner = &text[i + 1..close_abs]; // "object XXX:123"
-                // 检查末尾是否有冒号+数字
+    while i < text.len() {
+        if text[i..].starts_with("[object ") {
+            if let Some(close_rel) = text[i..].find(']') {
+                let close_abs = i + close_rel;
+                let inner = &text[i + 1..close_abs];
                 if let Some(colon) = inner.rfind(':') {
                     let suffix = &inner[colon + 1..];
                     if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
-                        // 是对象句柄格式，替换数字为 <id>
                         result.push('[');
                         result.push_str(&inner[..colon]);
                         result.push_str(":<id>]");
@@ -507,8 +501,11 @@ fn normalize_object_handles(text: &str) -> String {
                 }
             }
         }
-        result.push(bytes[i] as char);
-        i += 1;
+
+        let ch = text[i..].chars().next().expect("valid UTF-8 boundary");
+        result.push(ch);
+        i += ch.len_utf8();
     }
+
     result
 }

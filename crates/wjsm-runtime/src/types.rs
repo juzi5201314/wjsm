@@ -457,6 +457,10 @@ pub(crate) enum NativeCallable {
     NumberPrimitiveMethod {
         method: u8,
     },
+    /// string primitive 上 String.prototype 方法；`method`: 0=includes, 1=startsWith, 2=indexOf
+    StringPrimitiveMethod {
+        method: u8,
+    },
     /// symbol handle 上 Symbol.prototype 方法；`method`: 0=toString, 1=valueOf
     SymbolPrimitiveMethod {
         method: u8,
@@ -589,7 +593,27 @@ pub(crate) enum NativeCallable {
     PromiseConstructor,
     ArrayBufferConstructorGlobal,
     DataViewConstructorGlobal,
-    TypedArrayConstructor(()),
+    TypedArrayConstructor(TypedArrayConstructorKind),
+    BufferConstructor,
+    BufferStatic {
+        kind: BufferStaticKind,
+    },
+    BufferMethod {
+        kind: BufferMethodKind,
+    },
+    TextEncoderConstructor,
+    TextEncoderMethod {
+        kind: TextEncoderMethodKind,
+    },
+    TextDecoderConstructor,
+    TextDecoderMethod {
+        kind: TextDecoderMethodKind,
+    },
+    StructuredClone,
+    Atob,
+    Btoa,
+    QueueMicrotask,
+    PerformanceNow,
     BigInt64ArrayConstructor,
     BigUint64ArrayConstructor,
     ProxyConstructor,
@@ -713,6 +737,154 @@ pub(crate) enum NativeCallable {
         kind: QueuingStrategySizeKind,
     },
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TypedArrayConstructorKind {
+    Int8,
+    Uint8,
+    Uint8Clamped,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
+    Float32,
+    Float64,
+    BigInt64,
+    BigUint64,
+}
+
+impl TypedArrayConstructorKind {
+    pub(crate) const COUNT: usize = 11;
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Int8 => 0,
+            Self::Uint8 => 1,
+            Self::Uint8Clamped => 2,
+            Self::Int16 => 3,
+            Self::Uint16 => 4,
+            Self::Int32 => 5,
+            Self::Uint32 => 6,
+            Self::Float32 => 7,
+            Self::Float64 => 8,
+            Self::BigInt64 => 9,
+            Self::BigUint64 => 10,
+        }
+    }
+
+    pub(crate) fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Int8),
+            1 => Some(Self::Uint8),
+            2 => Some(Self::Uint8Clamped),
+            3 => Some(Self::Int16),
+            4 => Some(Self::Uint16),
+            5 => Some(Self::Int32),
+            6 => Some(Self::Uint32),
+            7 => Some(Self::Float32),
+            8 => Some(Self::Float64),
+            9 => Some(Self::BigInt64),
+            10 => Some(Self::BigUint64),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn element(self) -> (u8, u8) {
+        match self {
+            Self::Int8 => (1, 0),
+            Self::Uint8 => (1, 1),
+            Self::Uint8Clamped => (1, 2),
+            Self::Int16 => (2, 0),
+            Self::Uint16 => (2, 1),
+            Self::Int32 => (4, 0),
+            Self::Uint32 => (4, 1),
+            Self::Float32 => (4, 3),
+            Self::Float64 => (8, 3),
+            Self::BigInt64 => (8, 4),
+            Self::BigUint64 => (8, 5),
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Int8 => "Int8Array",
+            Self::Uint8 => "Uint8Array",
+            Self::Uint8Clamped => "Uint8ClampedArray",
+            Self::Int16 => "Int16Array",
+            Self::Uint16 => "Uint16Array",
+            Self::Int32 => "Int32Array",
+            Self::Uint32 => "Uint32Array",
+            Self::Float32 => "Float32Array",
+            Self::Float64 => "Float64Array",
+            Self::BigInt64 => "BigInt64Array",
+            Self::BigUint64 => "BigUint64Array",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BufferStaticKind {
+    Alloc,
+    AllocUnsafe,
+    From,
+    Concat,
+    IsBuffer,
+    ByteLength,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TextEncoderMethodKind {
+    Encode,
+    EncodeInto,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TextDecoderMethodKind {
+    Decode,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BufferMethodKind {
+    ToString,
+    Slice,
+    Subarray,
+    Copy,
+    Compare,
+    Write,
+    ReadUInt8,
+    ReadUInt16BE,
+    ReadUInt16LE,
+    ReadUInt32BE,
+    ReadUInt32LE,
+    ReadInt8,
+    ReadInt16BE,
+    ReadInt16LE,
+    ReadInt32BE,
+    ReadInt32LE,
+    ReadFloatBE,
+    ReadFloatLE,
+    ReadDoubleBE,
+    ReadDoubleLE,
+    WriteUInt8,
+    WriteUInt16BE,
+    WriteUInt16LE,
+    WriteUInt32BE,
+    WriteUInt32LE,
+    WriteInt8,
+    WriteInt16BE,
+    WriteInt16LE,
+    WriteInt32BE,
+    WriteInt32LE,
+    WriteFloatBE,
+    WriteFloatLE,
+    WriteDoubleBE,
+    WriteDoubleLE,
+    Fill,
+    IndexOf,
+    Includes,
+    ToJson,
+    Equals,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum MapSetMethodKind {
     MapSet,

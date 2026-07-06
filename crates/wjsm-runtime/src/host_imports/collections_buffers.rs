@@ -1878,7 +1878,7 @@ pub(crate) fn define_collections_buffers(
         Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 64)
+                alloc_host_object(&mut caller, &_wjsm_env, 80)
             };
             let builtin_pairs: &[(&str, NativeCallable)] = &[
                 ("Array", NativeCallable::ArrayConstructor),
@@ -1937,8 +1937,50 @@ pub(crate) fn define_collections_buffers(
                 ),
                 ("Atomics", NativeCallable::AtomicsGlobal),
                 ("DataView", NativeCallable::DataViewConstructorGlobal),
-                ("BigInt64Array", NativeCallable::BigInt64ArrayConstructor),
-                ("BigUint64Array", NativeCallable::BigUint64ArrayConstructor),
+                (
+                    "Int8Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Int8),
+                ),
+                (
+                    "Uint8Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Uint8),
+                ),
+                (
+                    "Uint8ClampedArray",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Uint8Clamped),
+                ),
+                (
+                    "Int16Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Int16),
+                ),
+                (
+                    "Uint16Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Uint16),
+                ),
+                (
+                    "Int32Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Int32),
+                ),
+                (
+                    "Uint32Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Uint32),
+                ),
+                (
+                    "Float32Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Float32),
+                ),
+                (
+                    "Float64Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::Float64),
+                ),
+                (
+                    "BigInt64Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::BigInt64),
+                ),
+                (
+                    "BigUint64Array",
+                    NativeCallable::TypedArrayConstructor(TypedArrayConstructorKind::BigUint64),
+                ),
                 ("Proxy", NativeCallable::ProxyConstructor),
                 ("gc", NativeCallable::GcCollect),
             ];
@@ -1964,6 +2006,8 @@ pub(crate) fn define_collections_buffers(
 
             let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);
             let _ = install_process_global_from_caller(&mut caller, obj);
+            let _ =
+                crate::runtime_node_globals::install_node_web_globals_from_caller(&mut caller, obj);
 
             // test262 harness: global `$262` with `.agent` methods
             let agent_obj = {

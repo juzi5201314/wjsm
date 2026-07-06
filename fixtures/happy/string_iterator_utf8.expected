@@ -1,9 +1,9 @@
 exit_code: 0
 --- stdout ---
 for-of count: 6
-for-of: ["h","Ã©","l","l","o","ð"]
-spread hello: ["h","Ã©","l","l","o"]
-spread emoji: ["ð"]
+for-of: ["h","é","l","l","o","🌍"]
+spread hello: ["h","é","l","l","o"]
+spread emoji: ["🌍"]
 spread ascii: ["a","b","c"]
 empty iter ran: false
 --- stderr ---

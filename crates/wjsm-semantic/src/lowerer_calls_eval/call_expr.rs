@@ -209,6 +209,13 @@ impl Lowerer {
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(string_builtin) =
                             builtin_from_string_proto_method(&prop_ident.sym)
+                        && (matches!(
+                            member_expr.obj.as_ref(),
+                            swc_ast::Expr::Lit(swc_ast::Lit::Str(_)) | swc_ast::Expr::Tpl(_)
+                        ) || !matches!(
+                            prop_ident.sym.as_ref(),
+                            "concat" | "includes" | "indexOf" | "slice"
+                        ))
                     {
                         let _ = builtin_call_signature(string_builtin);
                         return self.emit_proto_builtin_call(
