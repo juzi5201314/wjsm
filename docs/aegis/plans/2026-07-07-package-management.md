@@ -13,14 +13,14 @@ Baseline/Authority Refs:
 - `docs/aegis/specs/2026-07-07-runtime-module-loading-design.md` + `docs/aegis/plans/2026-07-07-runtime-module-loading.md`（issue #312，P5 前置依赖：可重定位 IR / 分离编译地基）
 - `docs/adr/0003-startup-snapshot-boundary.md`（relocatable heap 同源思路）
 - `crates/wjsm-module/src/resolver.rs`（`ModuleResolver` struct L70、`with_options` L89、`find_package_in_node_modules` L328、源码读取 L754）
-- `crates/wjsm-module/src/bundler.rs`（`ModuleBundler` L12、`with_resolution_options` L23）
+- `crates/wjsm-module/src/bundler.rs`（`ModuleBundler` L20、`with_resolution_options` L31）
 - `crates/wjsm-module/src/graph.rs`（`ModuleGraph::build_with_options` L39）
 - `crates/wjsm-module/src/package_json.rs`（`read_package_info` L48、`fs::read_to_string` L60）
 - `crates/wjsm-module/src/resolution_options.rs`（`ResolutionKind` / `ResolutionOptions`）
 - `crates/wjsm-semantic/src/lowerer_modules.rs`（`lower_modules` L37、`ModuleLoweringInput` L9、`ModuleMetadata` L16、`ModuleKind` L24）
 - `crates/wjsm-semantic/src/scope.rs`（`ScopeTree` L43、`push_scope` L61 全局递增 arena；IR 名 `${scope_id}.{name}`）
 - `crates/wjsm-cli/src/cli_args.rs`（`Commands` enum L150、`CacheCommand` L411）
-- `crates/wjsm-cli/src/lib.rs`（`main_entry` L335、命令 dispatch L365、`cmd_cache` L1407、`run_file_in_process` L2074）
+- `crates/wjsm-cli/src/lib.rs`（`main_entry` L381 仅 `match execute(cli)`；真正的命令 dispatch 在 `execute`（L407）`match cli.command`，每臂返回 `Result<ExitCode>`；`Cache` 臂 L520；`cmd_cache` L1453；`run_file_in_process` L2120）
 - `crates/wjsm-runtime/src/runtime_startup.rs`（`compile_or_load_cached` L55、`precompile_module` L85）
 - `crates/wjsm-snapshot-format`（`abi_hash`、`register_abi_hash_external_input`）
 - `tests/fixture_runner.rs`（E2E harness）
@@ -57,9 +57,9 @@ Facts（已核对代码）:
   - node_modules 遍历：`find_package_in_node_modules`（L328）；bare specifier 入口 `resolve_bare_specifier`（L242）先查 `find_nearest_package` 再遍历 node_modules（L265）。
   - package.json 读取：`package_json.rs:read_package_info`（L48，`fs::metadata` + `read_package_info_manifest`→L60 `fs::read_to_string`）。
   - **决定性事实**：`std::fs::canonicalize` 要求路径在真实磁盘存在。CAS 虚拟路径 `<vroot>/<name>@<ver>/…` 永不落盘，直接 canonicalize 必然失败。因此 CAS 切入**不是**"改三处读取"，而是"把 resolver 的全部 fs 谓词路由进 `Vfs`，并让 `Vfs::canonicalize` 对虚拟路径做恒等归一化"。这是 resolver 级重构（任务 1.6 承载），是 P2–P4 的地基。
-- `ModuleBundler`（bundler.rs:12）持 `root_path/options`，`lower_bundle`/`parse_entry_ast`/`bundle` 均经 `ModuleGraph::build_with_options`（graph.rs:39）。注入点在 bundler + graph + resolver 构造链。
+- `ModuleBundler`（bundler.rs:20）持 `root_path/options`，`lower_bundle`（L39）/`bundle`（L102）均经 `ModuleGraph::build_with_options`（graph.rs:39）。注入点在 bundler + graph + resolver 构造链。
 - `lower_modules`（lowerer_modules.rs:37）接收 `Vec<ModuleLoweringInput>` + 各种 `HashMap<ModuleId, _>`，所有模块共用一棵 `ScopeTree`，scope id 全局递增（scope.rs:61 `idx = self.arenas.len()`）并写进 IR 名 `${scope_id}.{name}`。这是 L1 跨项目复用的命门——必须模块局部化 + 重定位。
-- CLI dispatch 在 `main_entry`（lib.rs:365）`match cli.command`；`Commands` enum 在 cli_args.rs:150；现有 `Cache` 子命令 dispatch 到 `cmd_cache`（L1407）。新子命令加在这两处。
+- CLI dispatch 在 **`execute`（lib.rs:411）** `match cli.command`（**不是** `main_entry`——`main_entry` L381 只做 `match execute(cli)` 收敛退出码）；`execute(cli: Cli) -> Result<ExitCode>`，**每个 match 臂返回 `Result<ExitCode>`**（如 `Commands::Cache { ref command } => cmd_cache(command)`，L520）；`Commands` enum 在 cli_args.rs:150；`cmd_cache`（L1453）。新子命令的 dispatch 臂**必须返回 `Result<ExitCode>`**（`cmd_install(dir).map(|()| ExitCode::from(EXIT_SUCCESS))`），不得返回裸 `ExitCode`。
 - workspace 已有 `reqwest`（rustls-tls+stream）、`tokio`、`toml`、`serde_json`、`serde`。**新增依赖**：`rusqlite`、`zstd`、`blake3`、`tar`、`flate2`、`sha2`、`base64`、`pubgrub`、`serde_yaml`。
 - `runtime_startup.rs:55` `compile_or_load_cached` 用 wasmtime `precompile_module`（L85）+ `deserialize_file` 做 cwasm 缓存，按 wasm bytes 哈希 key——L2 复用此机制思路扩展到包粒度。
 - fixture runner（tests/fixture_runner.rs）in-process 跑 `run_file_in_process`（lib.rs:2074），比对 exit+stdout+stderr。
@@ -637,7 +637,7 @@ Steps:
   pub mod manifest;
 
   use anyhow::{Context, Result};
-  use blob::{hash_content, read_blob, PackWriter};
+  use blob::{hash_content, read_blob, BlobHash, BlobLoc, PackWriter};
   use index::StoreIndex;
   use manifest::{Manifest, ManifestEntry};
   use std::path::{Path, PathBuf};
@@ -1564,7 +1564,7 @@ Files:
 Why: PubGrub 内核求"去重最大化"解；instance-splitting 在单版本不可满足时分裂实例，复现 npm 嵌套多版本共存语义。这是本设计相对纯 PubGrub 工具的 npm 适配核心。
 
 **求解语义（明确定义，不 hand-wave）**：
-- **依赖类型处理**：`dependencies` 为硬约束（参与求解，不可满足即失败）；`peerDependencies` 翻译为对**求解全局**的约束——包 `a@1.0.0` 的 peer `react@^17` 表示"最终图中被 `a` 看见的 `react` 必须满足 `^17`"，在 PubGrub 中建模为 `a@1.0.0` 依赖 `react`（区间 `^17`）的一条边，与普通 dependency 同参与求解，但**不触发 instance-splitting**（peer 冲突是真失败，见下）；`optionalDependencies` **不进入 `get_dependencies` 的返回边**——optional 依赖在求解层直接**不建边**（pubgrub 无版本时会判 `NoSolution`，无法在 provider 内"捕获忽略"，因为 `get_dependencies` 返回的是约束集合、缺版本由内核在 `choose_version` 阶段发现）。正确做法：`get_dependencies` 只返回 `dependencies`+`peerDependencies` 边；optional 边由 `install` 编排层**在求解定稿后**单独尝试解析（能装则装、装不上静默跳过），不参与主求解的可满足性判定。pubgrub 0.4 的 `Dependencies::Unavailable(M)` 用于"该 (包,版本) 本身元数据不可得"（如平台不支持），与 optional 语义不同，本计划不用它表达 optional。
+- **依赖类型处理**：`dependencies` 为硬约束（参与求解，不可满足即失败）；`peerDependencies` 翻译为对**求解全局**的约束——包 `a@1.0.0` 的 peer `react@^17` 表示"最终图中被 `a` 看见的 `react` 必须满足 `^17`"，在 PubGrub 中建模为 `a@1.0.0` 依赖 `react`（区间 `^17`）的一条边，与普通 dependency 同参与求解，但**不触发 instance-splitting**（peer 冲突是真失败，见下）；`optionalDependencies` **不进入 `get_dependencies` 的返回边**——optional 依赖在求解层直接**不建边**（pubgrub 无版本时会判 `NoSolution`，无法在 provider 内"捕获忽略"，因为 `get_dependencies` 返回的是约束集合、缺版本由内核在 `choose_version` 阶段发现）。正确做法：`get_dependencies` 只返回 `dependencies`+`peerDependencies` 边；optional 边由 **`solve` 的求解后 pass**（pubgrub 定稿解出来之后、`solve` 返回 `ResolvedGraph` 之前）单独尝试对已定稿图解析（能无冲突满足则纳入 `ResolvedGraph`、否则静默跳过），**不参与主求解的可满足性判定**（owner 在 `solve` 而非 install 编排层——测试 `solver_optional_dep_missing_is_skipped` 经 `solve` 断言 `ResolvedGraph`，install 层直接消费定稿图不再解析 optional）。pubgrub 0.4 的 `Dependencies::Unavailable(M)` 用于"该 (包,版本) 本身元数据不可得"（如平台不支持），与 optional 语义不同，本计划不用它表达 optional。
 - **instance-splitting 触发条件**：仅当**普通 dependency** 的同名包无单版本满足全部 dependent 的区间交集时触发——按 dependent 子树把该包分裂为多个实例（`c` → `c#a`、`c#b`），各实例独立求版本。peer 冲突**不分裂**（peer 的语义是"共享同一实例"，分裂会违反 peer 契约）。
 - **peer 冲突 = 真失败**：两个包对同一 peer 要求不相交区间（`^17` vs `^18`）→ 无法共享单实例、又不可分裂 → `NoSolution`，`explain` 输出派生链，必须提及冲突的 peer 名。
 
@@ -1643,7 +1643,8 @@ Steps:
   `solver/mod.rs` 定义 `solve`、`ResolvedGraph`、`MockIndex`、`explain.rs` 的解释构造（签名见上一步）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(solver)'`。
 - [ ] **最小代码**：实现 `solve`（`pubgrub::resolve(&provider, root, version)`）：
-  - 先跑 PubGrub 单版本（普通 dependency + peer 均作硬边）。optional 边在 `get_dependencies` 中**预筛**：若 `PackageIndex` 中该 optional 目标包无任何版本满足区间，则**不把该边放进返回的 `DependencyConstraints`**（等价 npm「缺失 optional 静默跳过」）；若目标存在则作普通边参与求解。（不依赖捕获求解期错误——0.3+ 无 `NoVersion` 变体；缺席即不加约束。）
+  - 先跑 PubGrub 单版本：`get_dependencies` **只返回 `dependencies` + `peerDependencies` 硬边**，**optional 边完全不进入主求解**（pubgrub 无「软边」概念，一旦进 `DependencyConstraints` 即为硬约束——present-but-conflicting 的 optional 会触发 `NoSolution` 全局失败，违反设计 §7.5「optional 求解失败可跳过、不判全局失败」）。不依赖捕获求解期错误——0.3+ 无 `NoVersion` 变体。
+  - **optional 由 `solve` 的求解后 pass 处理**（不是 `get_dependencies` 内预筛，也不是 install 层）：pubgrub 返回定稿解后，`solve` 遍历各已解析实例的 optional 边，逐条尝试对**已定稿图**解析——若已有满足区间的同名实例则复用、否则尝试新增一个满足区间的实例（仅当存在满足版本**且**不与既有硬约束冲突）；**任一 optional 无法无冲突满足即静默跳过、绝不使主求解失败**。这同时正确覆盖 (a) 目标包在 index 中不存在（`solver_optional_dep_missing_is_skipped` 测试的缺失场景）与 (b) 目标存在但与硬约束冲突（设计 §7.5 的「求解失败可跳过」）。定稿后的 `ResolvedGraph` 已含可满足的 optional 实例，install 编排层直接消费、无需再解析 optional。
   - `resolve` 返回 `Err(PubGrubError::NoSolution(derivation_tree))` 时区分成因：若冲突源是**普通 dependency** 的同名包区间不交 → 触发 duplication，按 dependent 子树把该包分裂为实例（`c#a`/`c#b`）递归求解各子锥，合并 `ResolvedGraph`；若冲突源含 **peer** 约束 → 不分裂，直接 `explain` 产出派生链并返回 `SolveError`。
   - `explain`：用 `pubgrub::DefaultStringReporter::report(&derivation_tree)` 渲染派生链（0.3+ 提供），或自行遍历 `DerivationTree` 提取涉及包名，保证冲突 peer 名出现在输出。
 - [ ] **Verify GREEN**：四测试通过（去重 / 分裂 / peer 冲突 / optional 跳过）。
@@ -2114,12 +2115,13 @@ Steps:
   /// Remove a dependency (npm uninstall 等价)
   Remove { pkg: String, #[arg(default_value = ".")] dir: std::path::PathBuf },
   ```
-  `lib.rs` dispatch（L365 match 内）追加：
+  `lib.rs` dispatch（**`execute`（L411）`match cli.command` 内**，**不是** `main_entry`）追加。**每臂必须返回 `Result<ExitCode>`**（与既有臂 `Commands::Cache { ref command } => cmd_cache(command)` 一致；`execute` 签名 `-> Result<ExitCode>`，末尾统一由 `main_entry` 的 `match execute(cli)` 收敛错误到退出码）——故**不得**写成 `.map(...).unwrap_or(ExitCode::FAILURE)` 返回裸 `ExitCode`（类型不符、且吞掉错误信息，`main_entry` 的 `Err(e) => eprintln!("Error: {:#}", e)` 是唯一错误打印点）：
   ```rust
-  Commands::Install { ref dir } => pm_commands::cmd_install(dir).map(|_| ExitCode::SUCCESS).unwrap_or(ExitCode::FAILURE),
-  Commands::Add { ref pkg, ref dir } => pm_commands::cmd_add(pkg, dir).map(|_| ExitCode::SUCCESS).unwrap_or(ExitCode::FAILURE),
-  Commands::Remove { ref pkg, ref dir } => pm_commands::cmd_remove(pkg, dir).map(|_| ExitCode::SUCCESS).unwrap_or(ExitCode::FAILURE),
+  Commands::Install { ref dir } => pm_commands::cmd_install(dir).map(|()| ExitCode::from(EXIT_SUCCESS)),
+  Commands::Add { ref pkg, ref dir } => pm_commands::cmd_add(pkg, dir).map(|()| ExitCode::from(EXIT_SUCCESS)),
+  Commands::Remove { ref pkg, ref dir } => pm_commands::cmd_remove(pkg, dir).map(|()| ExitCode::from(EXIT_SUCCESS)),
   ```
+  （`cmd_install`/`cmd_add`/`cmd_remove` 返回 `Result<()>`，`.map(|()| ExitCode::from(EXIT_SUCCESS))` 提升为 `Result<ExitCode>`；错误经 `?`/`Result` 冒泡到 `main_entry` 统一打印。`EXIT_SUCCESS` 是 lib.rs:38 既有常量。）
   `lib.rs` 顶部 `mod pm_commands;`；`Cargo.toml` 加 `wjsm-pm = { path = "../wjsm-pm" }`。
 - [ ] **Verify RED**：`cargo build -p wjsm-cli` 预期先因 `cmd_add`/`cmd_remove` 未定义失败。
 - [ ] **最小代码**：补 `cmd_add`（读 package.json → 加 dep → 调 install）、`cmd_remove`（删 dep → 重解析）。
