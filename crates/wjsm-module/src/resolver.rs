@@ -1,12 +1,17 @@
 // 模块解析器：文件系统模块解析、import/export 提取
 
 use anyhow::{Context, Result, bail};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use swc_core::common::Span;
 use swc_core::ecma::ast;
 
 use crate::builtin_modules::{self, BuiltinLookup};
+use crate::exports::{resolve_package_exports, resolve_package_imports};
+use crate::module_format::{ModuleFormat, detect_module_format};
+use crate::package_json::{self, BrowserField, PackageInfo};
+use crate::resolution_options::{ResolutionKind, ResolutionOptions};
 /// 尝试作为模块入口解析的路径扩展名（顺序优先）
 const MODULE_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "jsx", "tsx"];
 
@@ -64,18 +69,31 @@ pub enum ExportEntry {
 /// 模块解析器
 pub struct ModuleResolver {
     root_path: PathBuf,
+    options: ResolutionOptions,
+    package_cache: RefCell<HashMap<PathBuf, Option<PackageInfo>>>,
     next_id: u32,
     visited: HashMap<PathBuf, ModuleId>,
     modules: HashMap<ModuleId, ResolvedModule>,
 }
 
+enum ResolvedSpecifier {
+    Builtin(&'static builtin_modules::BuiltinModule),
+    Path(PathBuf),
+}
+
 impl ModuleResolver {
     pub fn new(root_path: &Path) -> Self {
+        Self::with_options(root_path, ResolutionOptions::default())
+    }
+
+    pub(crate) fn with_options(root_path: &Path, options: ResolutionOptions) -> Self {
         let root_path = root_path
             .canonicalize()
             .unwrap_or_else(|_| root_path.to_path_buf());
         Self {
             root_path,
+            options,
+            package_cache: RefCell::new(HashMap::new()),
             next_id: 0,
             visited: HashMap::new(),
             modules: HashMap::new(),
@@ -84,6 +102,66 @@ impl ModuleResolver {
 
     /// 解析模块路径（相对路径、目录 index、node_modules bare specifier）
     pub fn resolve_path(specifier: &str, parent: &Path) -> Result<PathBuf> {
+        let root = Self::path_resolution_root(parent);
+        let resolver = Self::new(&root);
+        match resolver.resolve_specifier(specifier, parent)? {
+            ResolvedSpecifier::Builtin(module) => {
+                Ok(builtin_modules::virtual_path(module.canonical))
+            }
+            ResolvedSpecifier::Path(path) => Ok(path),
+        }
+    }
+
+    fn path_resolution_root(parent: &Path) -> PathBuf {
+        let start = parent.parent().unwrap_or(parent);
+        start
+            .ancestors()
+            .last()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(start)
+            .to_path_buf()
+    }
+
+    fn resolve_specifier(&self, specifier: &str, parent: &Path) -> Result<ResolvedSpecifier> {
+        self.resolve_specifier_with_conditions(specifier, parent, self.options.conditions())
+    }
+
+    fn resolve_specifier_with_kind(
+        &self,
+        specifier: &str,
+        parent: &Path,
+        kind: ResolutionKind,
+    ) -> Result<ResolvedSpecifier> {
+        self.resolve_specifier_with_conditions(
+            specifier,
+            parent,
+            self.options.conditions_for_kind(kind),
+        )
+    }
+
+    fn resolve_specifier_with_conditions(
+        &self,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<ResolvedSpecifier> {
+        match builtin_modules::lookup(specifier) {
+            BuiltinLookup::Found(module) => Ok(ResolvedSpecifier::Builtin(module)),
+            BuiltinLookup::UnknownNodeBuiltin(name) => {
+                bail!("Unknown built-in module 'node:{}'", name)
+            }
+            BuiltinLookup::NotBuiltin => self
+                .resolve_path_non_builtin(specifier, parent, conditions)
+                .map(ResolvedSpecifier::Path),
+        }
+    }
+
+    fn resolve_path_non_builtin(
+        &self,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<PathBuf> {
         if specifier.starts_with('/') {
             bail!(
                 "Module specifier '{}' is not supported. Absolute path imports are not supported.",
@@ -91,13 +169,18 @@ impl ModuleResolver {
             );
         }
 
-        if Self::is_bare_specifier(specifier) {
-            return Self::resolve_bare_specifier(specifier, parent);
+        if specifier.starts_with('#') {
+            return self.resolve_imports_specifier(specifier, parent, conditions);
         }
+
+        if Self::is_bare_specifier(specifier) {
+            return self.resolve_bare_specifier(specifier, parent, conditions);
+        }
+
         let base = parent.parent().unwrap_or(parent);
         let resolved = base.join(specifier);
 
-        Self::resolve_file_or_directory(&resolved, specifier, parent)
+        self.resolve_mapped_file_or_directory(&resolved, specifier, parent)
     }
 
     fn is_bare_specifier(specifier: &str) -> bool {
@@ -126,63 +209,243 @@ impl ModuleResolver {
         }
     }
 
-    fn resolve_bare_specifier(specifier: &str, parent: &Path) -> Result<PathBuf> {
-        let (package_name, subpath) = Self::split_npm_specifier(specifier);
-        let start_dir = parent.parent().unwrap_or(parent);
-        let package_dir = Self::find_package_in_node_modules(&package_name, start_dir)
-            .ok_or_else(|| anyhow::anyhow!("Cannot find module '{}'", specifier))?;
+    fn resolve_imports_specifier(
+        &self,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<PathBuf> {
+        let Some(package) = self.find_nearest_package(parent).with_context(|| {
+            format!(
+                "resolve package import `{specifier}` from {}",
+                parent.display()
+            )
+        })?
+        else {
+            bail!(
+                "ERR_PACKAGE_IMPORT_NOT_DEFINED: package import `{specifier}` is not defined from {}",
+                parent.display()
+            )
+        };
 
-        if let Some(sub) = subpath {
-            let target = package_dir.join(sub);
-            return Self::resolve_file_or_directory(&target, specifier, parent);
-        }
-
-        Self::resolve_package_entry(&package_dir, specifier, parent)
+        let target =
+            resolve_package_imports(&package, specifier, conditions).with_context(|| {
+                format!(
+                    "resolve package import `{specifier}` from {}",
+                    parent.display()
+                )
+            })?;
+        let target_path = package.root.join(target.relative_path);
+        Self::resolve_package_target_path(&target_path, specifier, parent)
     }
 
-    /// 从 `from_dir` 起向上遍历，查找 `node_modules/<package_name>` 目录
-    fn find_package_in_node_modules(package_name: &str, from_dir: &Path) -> Option<PathBuf> {
-        let mut dir = from_dir.to_path_buf();
+    fn resolve_bare_specifier(
+        &self,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<PathBuf> {
+        let (package_name, subpath) = Self::split_npm_specifier(specifier);
+        if let Some(package) = self.find_nearest_package(parent)?
+            && package.exports.is_some()
+            && package.name.as_deref() == Some(package_name.as_str())
+        {
+            return self.resolve_package_specifier(
+                &package.root,
+                Some(&package),
+                subpath.as_deref(),
+                specifier,
+                parent,
+                conditions,
+            );
+        }
+
+        let start_dir = parent.parent().unwrap_or(parent);
+        let package_dir = self
+            .find_package_in_node_modules(&package_name, start_dir)?
+            .ok_or_else(|| anyhow::anyhow!("Cannot find module '{}'", specifier))?;
+        let package_info = self.read_package_info(&package_dir)?;
+
+        self.resolve_package_specifier(
+            &package_dir,
+            package_info.as_ref(),
+            subpath.as_deref(),
+            specifier,
+            parent,
+            conditions,
+        )
+    }
+
+    fn resolve_package_specifier(
+        &self,
+        package_dir: &Path,
+        package_info: Option<&PackageInfo>,
+        subpath: Option<&str>,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<PathBuf> {
+        if let Some(package) = package_info
+            && package.exports.is_some()
+        {
+            return self
+                .resolve_package_exports_target(package, subpath, specifier, parent, conditions);
+        }
+
+        let package_root = package_info
+            .map(|package| package.root.as_path())
+            .unwrap_or(package_dir);
+        if let Some(subpath) = subpath {
+            let target = package_root.join(subpath);
+            return self.resolve_file_or_directory(&target, specifier, parent);
+        }
+
+        self.resolve_legacy_package_entry(package_root, package_info, specifier, parent)
+    }
+
+    fn resolve_package_exports_target(
+        &self,
+        package: &PackageInfo,
+        subpath: Option<&str>,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<PathBuf> {
+        let package_subpath = subpath
+            .map(|subpath| format!("./{subpath}"))
+            .unwrap_or_else(|| ".".to_string());
+        let target = resolve_package_exports(package, &package_subpath, conditions).with_context(|| {
+            format!(
+                "resolve package export `{package_subpath}` for specifier `{specifier}` from {}",
+                parent.display()
+            )
+        })?;
+        let target_path = package.root.join(target.relative_path);
+        Self::resolve_package_target_path(&target_path, specifier, parent)
+    }
+
+    /// 从 `from_dir` 起向上遍历，查找 `node_modules/<package_name>` 目录。
+    fn find_package_in_node_modules(
+        &self,
+        package_name: &str,
+        from_dir: &Path,
+    ) -> Result<Option<PathBuf>> {
+        let mut dir = from_dir
+            .canonicalize()
+            .unwrap_or_else(|_| from_dir.to_path_buf());
         loop {
+            if !dir.starts_with(&self.root_path) {
+                return Ok(None);
+            }
+
             let candidate = dir.join("node_modules").join(package_name);
             if candidate.is_dir() {
-                return Some(candidate);
+                return candidate.canonicalize().map(Some).with_context(|| {
+                    format!("canonicalize package directory {}", candidate.display())
+                });
             }
-            if !dir.pop() {
-                break;
+            if dir == self.root_path || !dir.pop() {
+                return Ok(None);
             }
         }
-        None
+    }
+
+    fn find_nearest_package(&self, start: &Path) -> Result<Option<PackageInfo>> {
+        let start_dir = if start.is_dir() {
+            start
+        } else {
+            start.parent().unwrap_or(start)
+        };
+        let mut current = start_dir.canonicalize().with_context(|| {
+            format!("canonicalize package search start {}", start_dir.display())
+        })?;
+
+        loop {
+            if !current.starts_with(&self.root_path) {
+                return Ok(None);
+            }
+
+            if let Some(package) = self.read_package_info(&current)? {
+                return Ok(Some(package));
+            }
+
+            if current == self.root_path || !current.pop() {
+                return Ok(None);
+            }
+        }
+    }
+
+    fn read_package_info(&self, package_dir: &Path) -> Result<Option<PackageInfo>> {
+        let canonical_dir = package_dir
+            .canonicalize()
+            .with_context(|| format!("canonicalize package directory {}", package_dir.display()))?;
+        if let Some(package) = self.package_cache.borrow().get(&canonical_dir) {
+            return Ok(package.clone());
+        }
+
+        let package = package_json::read_package_info(&canonical_dir)?;
+        self.package_cache
+            .borrow_mut()
+            .insert(canonical_dir, package.clone());
+        Ok(package)
     }
 
     /// 解析包目录入口（package.json 的 module/main，或 index.*）
-    fn resolve_package_entry(
+    fn resolve_legacy_package_entry(
+        &self,
         package_dir: &Path,
+        package_info: Option<&PackageInfo>,
         specifier: &str,
         parent: &Path,
     ) -> Result<PathBuf> {
-        let pkg_json = package_dir.join("package.json");
-        if pkg_json.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&pkg_json) {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                    for key in ["module", "main"] {
-                        if let Some(entry) = value.get(key).and_then(|v| v.as_str()) {
-                            let entry_path = package_dir.join(entry);
-                            if let Ok(path) =
-                                Self::resolve_existing_module_path(&entry_path, specifier, parent)
-                            {
-                                return Ok(path);
-                            }
-                        }
+        if let Some(package) = package_info {
+            let browser_entry = if self.options.browser() {
+                match package.browser.as_ref() {
+                    Some(BrowserField::Entry(entry)) => Some(entry.as_str()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            for entry in [
+                browser_entry,
+                package.module.as_deref(),
+                package.main.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let entry_path = package.root.join(entry);
+                if self.options.browser()
+                    && let Some(path) = self.resolve_browser_mapping_for_package(
+                        package,
+                        &entry_path,
+                        specifier,
+                        parent,
+                    )?
+                {
+                    return Ok(path);
+                }
+                if let Ok(path) = self.resolve_existing_module_path(&entry_path, specifier, parent)
+                {
+                    if self.options.browser()
+                        && let Some(mapped_path) = self.resolve_browser_mapping_for_package(
+                            package, &path, specifier, parent,
+                        )?
+                    {
+                        return Ok(mapped_path);
                     }
+                    return Ok(path);
                 }
             }
         }
+
         Self::resolve_directory_index(package_dir, specifier, parent)
     }
 
     /// 将路径解析为具体模块文件：扩展名补全、目录 index、package.json main/module
     fn resolve_file_or_directory(
+        &self,
         resolved: &Path,
         specifier: &str,
         parent: &Path,
@@ -191,7 +454,13 @@ impl ModuleResolver {
             return Ok(resolved.canonicalize()?);
         }
         if resolved.is_dir() {
-            return Self::resolve_package_entry(resolved, specifier, parent);
+            let package_info = self.read_package_info(resolved)?;
+            return self.resolve_legacy_package_entry(
+                resolved,
+                package_info.as_ref(),
+                specifier,
+                parent,
+            );
         }
 
         let file_candidates = Self::file_candidates(resolved);
@@ -203,7 +472,13 @@ impl ModuleResolver {
 
         for candidate in &file_candidates {
             if candidate.is_dir() {
-                return Self::resolve_package_entry(candidate, specifier, parent);
+                let package_info = self.read_package_info(candidate)?;
+                return self.resolve_legacy_package_entry(
+                    candidate,
+                    package_info.as_ref(),
+                    specifier,
+                    parent,
+                );
             }
         }
 
@@ -215,7 +490,101 @@ impl ModuleResolver {
         );
     }
 
+    fn resolve_mapped_file_or_directory(
+        &self,
+        resolved: &Path,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<PathBuf> {
+        if self.options.browser()
+            && let Some(path) = self.resolve_browser_mapping(parent, resolved, specifier)?
+        {
+            return Ok(path);
+        }
+
+        let path = self.resolve_file_or_directory(resolved, specifier, parent)?;
+        if self.options.browser()
+            && let Some(path) = self.resolve_browser_mapping(parent, &path, specifier)?
+        {
+            return Ok(path);
+        }
+
+        Ok(path)
+    }
+
+    fn resolve_browser_mapping(
+        &self,
+        parent: &Path,
+        requested_path: &Path,
+        specifier: &str,
+    ) -> Result<Option<PathBuf>> {
+        let Some(package) = self.find_nearest_package(parent)? else {
+            return Ok(None);
+        };
+        self.resolve_browser_mapping_for_package(&package, requested_path, specifier, parent)
+    }
+
+    fn resolve_browser_mapping_for_package(
+        &self,
+        package: &PackageInfo,
+        requested_path: &Path,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<Option<PathBuf>> {
+        let Some(BrowserField::Map(map)) = package.browser.as_ref() else {
+            return Ok(None);
+        };
+        let Some(key) = Self::browser_map_key(package, requested_path) else {
+            return Ok(None);
+        };
+        let Some(replacement) = map.get(&key) else {
+            return Ok(None);
+        };
+
+        match replacement {
+            Some(replacement) => {
+                let target_path = Self::join_package_relative(&package.root, replacement);
+                Self::resolve_package_target_path(&target_path, specifier, parent).map(Some)
+            }
+            None => bail!(
+                "ERR_PACKAGE_PATH_DISABLED_BY_BROWSER: package path `{key}` is disabled by browser field in {}",
+                package.path.display()
+            ),
+        }
+    }
+
+    fn browser_map_key(package: &PackageInfo, path: &Path) -> Option<String> {
+        let root = Self::normalize_path_lexically(&package.root);
+        let path = Self::normalize_path_lexically(path);
+        let relative = path.strip_prefix(root).ok()?;
+        if relative.as_os_str().is_empty() {
+            return None;
+        }
+        let relative = relative.to_str()?.replace('\\', "/");
+        Some(format!("./{relative}"))
+    }
+
+    fn join_package_relative(package_root: &Path, target: &str) -> PathBuf {
+        let target = target.strip_prefix("./").unwrap_or(target);
+        package_root.join(target)
+    }
+
+    fn normalize_path_lexically(path: &Path) -> PathBuf {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                component => normalized.push(component.as_os_str()),
+            }
+        }
+        normalized
+    }
+
     fn resolve_existing_module_path(
+        &self,
         path: &Path,
         specifier: &str,
         parent: &Path,
@@ -223,7 +592,36 @@ impl ModuleResolver {
         if path.is_file() {
             return Ok(path.canonicalize()?);
         }
-        Self::resolve_file_or_directory(path, specifier, parent)
+        self.resolve_file_or_directory(path, specifier, parent)
+    }
+
+    fn resolve_package_target_path(path: &Path, specifier: &str, parent: &Path) -> Result<PathBuf> {
+        if path.is_file() {
+            return Ok(path.canonicalize()?);
+        }
+        if path.is_dir() {
+            return Self::resolve_directory_index(path, specifier, parent);
+        }
+
+        let file_candidates = Self::file_candidates(path);
+        for candidate in &file_candidates {
+            if candidate.is_file() {
+                return Ok(candidate.canonicalize()?);
+            }
+        }
+
+        for candidate in &file_candidates {
+            if candidate.is_dir() {
+                return Self::resolve_directory_index(candidate, specifier, parent);
+            }
+        }
+
+        bail!(
+            "Cannot find module '{}' from '{}'. Tried: {:?}",
+            specifier,
+            parent.display(),
+            file_candidates
+        );
     }
 
     fn resolve_directory_index(dir: &Path, specifier: &str, parent: &Path) -> Result<PathBuf> {
@@ -270,17 +668,32 @@ impl ModuleResolver {
             .with_context(|| format!("Failed to canonicalize input file: {}", entry.display()))
     }
 
-    /// 解析模块（如果已解析过则返回缓存的 ID）
     pub fn resolve(&mut self, specifier: &str, parent: &Path) -> Result<ModuleId> {
-        match builtin_modules::lookup(specifier) {
-            BuiltinLookup::Found(module) => self.load_builtin_module(module),
-            BuiltinLookup::UnknownNodeBuiltin(name) => {
-                bail!("Unknown built-in module 'node:{}'", name)
-            }
-            BuiltinLookup::NotBuiltin => {
-                let path = Self::resolve_path(specifier, parent)?;
-                self.load_resolved_module(specifier, path)
-            }
+        let options = self.options.clone();
+        self.resolve_with_options(specifier, parent, options.conditions())
+    }
+
+    pub(crate) fn resolve_with_kind(
+        &mut self,
+        specifier: &str,
+        parent: &Path,
+        kind: ResolutionKind,
+    ) -> Result<ModuleId> {
+        match self.resolve_specifier_with_kind(specifier, parent, kind)? {
+            ResolvedSpecifier::Builtin(module) => self.load_builtin_module(module),
+            ResolvedSpecifier::Path(path) => self.load_resolved_module(specifier, path),
+        }
+    }
+
+    fn resolve_with_options(
+        &mut self,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<ModuleId> {
+        match self.resolve_specifier_with_conditions(specifier, parent, conditions)? {
+            ResolvedSpecifier::Builtin(module) => self.load_builtin_module(module),
+            ResolvedSpecifier::Path(path) => self.load_resolved_module(specifier, path),
         }
     }
 
@@ -334,6 +747,9 @@ impl ModuleResolver {
             return Ok(id);
         }
 
+        // 查找当前文件所属 package（路径已由 resolver canonicalize，可复用 package cache）。
+        let package = self.find_nearest_package(&path)?;
+
         // 读取文件
         let source = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read module: {}", path.display()))?;
@@ -344,8 +760,13 @@ impl ModuleResolver {
 
         Self::validate_typescript_module_syntax(&ast, &path)?;
 
-        // 检测并转换 CommonJS 模块
-        let is_cjs = crate::cjs_transform::is_commonjs_module(&ast);
+        // 检测模块格式；.mjs/.cjs/package type 优先，TS/JSX 继续使用 AST 检测。
+        let ast_is_cjs = crate::cjs_transform::is_commonjs_module(&ast);
+        let format = detect_module_format(&path, package.as_ref(), ast_is_cjs);
+        let is_cjs = matches!(format, ModuleFormat::CommonJs);
+        if is_cjs {
+            Self::validate_commonjs_goal_syntax(&ast, &path)?;
+        }
         let ast = if is_cjs {
             let prefix = format!("_{}_", self.next_id);
             crate::cjs_transform::transform_with_prefix(&ast, &prefix)
@@ -397,23 +818,40 @@ impl ModuleResolver {
         self.visited.get(path).copied()
     }
 
+    #[cfg(test)]
     pub(crate) fn get_id_for_specifier(
         &self,
         specifier: &str,
         parent: &Path,
     ) -> Result<Option<ModuleId>> {
-        match builtin_modules::lookup(specifier) {
-            BuiltinLookup::Found(module) => Ok(self
+        self.get_id_for_specifier_with_conditions(specifier, parent, self.options.conditions())
+    }
+
+    pub(crate) fn get_id_for_specifier_with_kind(
+        &self,
+        specifier: &str,
+        parent: &Path,
+        kind: ResolutionKind,
+    ) -> Result<Option<ModuleId>> {
+        self.get_id_for_specifier_with_conditions(
+            specifier,
+            parent,
+            self.options.conditions_for_kind(kind),
+        )
+    }
+
+    fn get_id_for_specifier_with_conditions(
+        &self,
+        specifier: &str,
+        parent: &Path,
+        conditions: &[String],
+    ) -> Result<Option<ModuleId>> {
+        match self.resolve_specifier_with_conditions(specifier, parent, conditions)? {
+            ResolvedSpecifier::Builtin(module) => Ok(self
                 .visited
                 .get(&builtin_modules::virtual_path(module.canonical))
                 .copied()),
-            BuiltinLookup::UnknownNodeBuiltin(name) => {
-                bail!("Unknown built-in module 'node:{}'", name)
-            }
-            BuiltinLookup::NotBuiltin => {
-                let path = Self::resolve_path(specifier, parent)?;
-                Ok(self.get_id_by_path(&path))
-            }
+            ResolvedSpecifier::Path(path) => Ok(self.get_id_by_path(&path)),
         }
     }
 
@@ -934,6 +1372,29 @@ impl ModuleResolver {
                     _ => {}
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_commonjs_goal_syntax(module: &ast::Module, path: &Path) -> Result<()> {
+        let has_static_import_export = module.body.iter().any(|item| {
+            matches!(
+                item,
+                ast::ModuleItem::ModuleDecl(
+                    ast::ModuleDecl::Import(_)
+                        | ast::ModuleDecl::ExportDecl(_)
+                        | ast::ModuleDecl::ExportNamed(_)
+                        | ast::ModuleDecl::ExportDefaultDecl(_)
+                        | ast::ModuleDecl::ExportDefaultExpr(_)
+                        | ast::ModuleDecl::ExportAll(_)
+                )
+            )
+        });
+        if has_static_import_export {
+            bail!(
+                "SyntaxError: Cannot use import/export syntax in CommonJS module {}",
+                path.display()
+            );
         }
         Ok(())
     }

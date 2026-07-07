@@ -275,6 +275,7 @@ mod tests {
     #[test]
     fn reports_missing_export() {
         let root = create_temp_project("missing_export");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -291,6 +292,7 @@ mod tests {
     #[test]
     fn reports_duplicate_export() {
         let root = create_temp_project("duplicate_export");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -311,6 +313,7 @@ mod tests {
     #[test]
     fn reports_duplicate_import_alias() {
         let root = create_temp_project("duplicate_import_alias");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -328,6 +331,7 @@ mod tests {
     #[test]
     fn produces_runtime_consumable_link_result() {
         let root = create_temp_project("link_result");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -382,9 +386,14 @@ mod tests {
         std::fs::write(path, content).expect("fixture file should be writable");
     }
 
+    fn write_type_module_package(root: &Path) {
+        write_file(root, "package.json", r#"{"type":"module"}"#);
+    }
+
     #[test]
     fn wildcard_reexport_allows_any_import() {
         let root = create_temp_project("wildcard_reexport");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -404,6 +413,7 @@ mod tests {
     #[test]
     fn namespace_import_skips_missing_check() {
         let root = create_temp_project("namespace_import");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -422,6 +432,7 @@ mod tests {
     #[test]
     fn duplicate_default_export_detected() {
         let root = create_temp_project("dup_default");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -439,6 +450,7 @@ mod tests {
     #[test]
     fn link_result_contains_correct_export_names() {
         let root = create_temp_project("export_names");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -480,18 +492,23 @@ mod tests {
 
     #[test]
     fn re_export_fixture_resolves_source_module() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("fixtures/modules/re_export");
-        if !root.join("main.js").exists() {
-            return;
-        }
+        let root = create_temp_project("re_export_fixture");
+        write_type_module_package(&root);
+        write_file(
+            &root,
+            "main.js",
+            "import { x } from './re.js';\nconsole.log(x);\n",
+        );
+        write_file(
+            &root,
+            "re.js",
+            "export { value as x } from './source.js';\n",
+        );
+        write_file(&root, "source.js", "export const value = 42;\n");
+
         let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph");
         let link = analyze_module_links(&graph).expect("link");
-        let re_path = root.join("re.js");
+        let re_path = root.join("re.js").canonicalize().expect("re path");
         let re_id = graph
             .all_module_ids()
             .find(|id| graph.get_module(*id).map(|n| n.path.as_path()) == Some(re_path.as_path()))

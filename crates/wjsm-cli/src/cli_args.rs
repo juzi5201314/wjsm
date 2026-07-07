@@ -75,6 +75,14 @@ pub struct Cli {
     #[arg(long, default_value = "wasm", global = true)]
     pub(crate) target: Target,
 
+    /// Enable the explicit browser package condition and browser field mappings
+    #[arg(long, global = true)]
+    pub(crate) browser: bool,
+
+    /// Add a custom package resolution condition (repeatable)
+    #[arg(long = "condition", value_name = "NAME", global = true)]
+    pub(crate) condition: Vec<String>,
+
     /// Limit JavaScript heap allocations (bytes, or K/M/G suffixes)
     #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
     pub(crate) max_heap_size: Option<usize>,

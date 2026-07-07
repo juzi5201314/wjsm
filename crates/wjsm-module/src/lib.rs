@@ -4,13 +4,18 @@
 mod builtin_modules;
 mod bundler;
 pub mod cjs_transform;
+mod exports;
 mod graph;
+mod module_format;
+mod package_json;
+mod resolution_options;
 mod resolver;
 mod semantic;
 use swc_core::ecma::ast;
 
 pub use bundler::ModuleBundler;
 pub use graph::{ModuleGraph, ModuleId};
+pub use resolution_options::ResolutionOptions;
 pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
 pub use semantic::{ModuleLinkResult, analyze_module_links};
 
@@ -19,13 +24,31 @@ use std::path::Path;
 
 /// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
 pub fn lower_bundle(entry: &Path, root_path: &Path) -> Result<wjsm_ir::Program> {
-    let bundler = ModuleBundler::new(root_path)?;
+    lower_bundle_with_options(entry, root_path, ResolutionOptions::default())
+}
+
+/// Lowers an entry module with explicit package resolution options.
+pub fn lower_bundle_with_options(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+) -> Result<wjsm_ir::Program> {
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
     bundler.lower_bundle(entry)
 }
 
 /// 解析入口模块 AST（用于 dump-ast 等，会构建依赖图）
 pub fn parse_entry_ast(entry: &Path, root_path: &Path) -> Result<swc_core::ecma::ast::Module> {
-    let bundler = ModuleBundler::new(root_path)?;
+    parse_entry_ast_with_options(entry, root_path, ResolutionOptions::default())
+}
+
+/// Parses an entry module AST with explicit package resolution options.
+pub fn parse_entry_ast_with_options(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+) -> Result<swc_core::ecma::ast::Module> {
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
     bundler.parse_entry_ast(entry)
 }
 
@@ -34,7 +57,16 @@ pub fn parse_entry_ast(entry: &Path, root_path: &Path) -> Result<swc_core::ecma:
 /// 返回值可直接交给 runtime 执行；失败时错误会携带 `entry` 和 `root_path`，
 /// 方便调用方定位是哪个入口图构建失败。
 pub fn bundle(entry: &Path, root_path: &Path) -> Result<Vec<u8>> {
-    let bundler = ModuleBundler::new(root_path)
+    bundle_with_options(entry, root_path, ResolutionOptions::default())
+}
+
+/// Bundles an entry module with explicit package resolution options.
+pub fn bundle_with_options(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+) -> Result<Vec<u8>> {
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)
         .with_context(|| format!("create module bundler for root {}", root_path.display()))?;
     bundler.bundle(entry).with_context(|| {
         format!(
@@ -271,7 +303,6 @@ fn expr_has_dynamic_import(expr: &ast::Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn parse_module(source: &str) -> ast::Module {
         wjsm_parser::parse_module(source).expect("parse should succeed")
@@ -291,18 +322,21 @@ mod tests {
 
     #[test]
     fn public_bundle_function_works() {
-        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("fixtures/modules/simple");
+        let root =
+            std::env::temp_dir().join(format!("wjsm_module_public_bundle_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp project dir should be creatable");
+        std::fs::write(root.join("package.json"), r#"{"type":"module"}"#)
+            .expect("package should be writable");
+        std::fs::write(
+            root.join("main.js"),
+            "import { value } from './lib.js';\nconsole.log(value);\n",
+        )
+        .expect("main module should be writable");
+        std::fs::write(root.join("lib.js"), "export const value = 42;\n")
+            .expect("lib module should be writable");
 
-        if !fixtures_dir.exists() {
-            return;
-        }
-
-        let result = bundle(Path::new("main.js"), &fixtures_dir);
+        let result = bundle(Path::new("main.js"), &root);
         assert!(
             result.is_ok(),
             "public bundle should succeed: {:?}",
@@ -317,5 +351,7 @@ mod tests {
             wasm_bytes.starts_with(b"\x00asm"),
             "output should be valid WASM binary"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

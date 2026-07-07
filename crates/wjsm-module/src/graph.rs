@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
+use super::resolution_options::{ResolutionKind, ResolutionOptions};
 pub use super::resolver::ModuleId;
 use super::resolver::{ExportEntry, ImportEntry, ModuleResolver};
 
@@ -32,7 +33,15 @@ pub struct GraphNode {
 impl ModuleGraph {
     /// 从入口模块构建依赖图
     pub fn build(entry: &Path, root: &Path) -> Result<Self> {
-        let mut resolver = ModuleResolver::new(root);
+        Self::build_with_options(entry, root, ResolutionOptions::default())
+    }
+
+    pub(crate) fn build_with_options(
+        entry: &Path,
+        root: &Path,
+        options: ResolutionOptions,
+    ) -> Result<Self> {
+        let mut resolver = ModuleResolver::with_options(root, options);
 
         // 入口模块来自 CLI/公共 API 的真实路径，不能经由 UTF-8 specifier 重新拼接。
         let entry_path = if entry.is_absolute() {
@@ -54,10 +63,13 @@ impl ModuleGraph {
             let exports = module.exports.clone();
             let dynamic_imports = module.dynamic_imports.clone();
             let path = module.path.clone();
+            let is_cjs = module.is_cjs;
 
             // 解析所有静态 import 依赖
+            let static_import_kind = static_import_resolution_kind(is_cjs);
             for import in &imports {
-                let dep_id = resolver.resolve(&import.specifier, &path)?;
+                let dep_id =
+                    resolver.resolve_with_kind(&import.specifier, &path, static_import_kind)?;
                 if discovered.insert(dep_id) {
                     queue.push_back(dep_id);
                 }
@@ -68,7 +80,7 @@ impl ModuleGraph {
                     ExportEntry::All { source } => source,
                     _ => continue,
                 };
-                let dep_id = resolver.resolve(source, &path)?;
+                let dep_id = resolver.resolve_with_kind(source, &path, ResolutionKind::Import)?;
                 if discovered.insert(dep_id) {
                     queue.push_back(dep_id);
                 }
@@ -76,7 +88,8 @@ impl ModuleGraph {
 
             // 解析所有动态 import() 依赖（BFS 遍历确保模块被发现）
             for specifier in &dynamic_imports {
-                let dep_id = resolver.resolve(specifier, &path)?;
+                let dep_id =
+                    resolver.resolve_with_kind(specifier, &path, ResolutionKind::Import)?;
                 if discovered.insert(dep_id) {
                     queue.push_back(dep_id);
                 }
@@ -97,9 +110,11 @@ impl ModuleGraph {
                 if !has_default_import {
                     continue;
                 }
-                if let Some(dep_id) =
-                    resolver.get_id_for_specifier(&import.specifier, &module.path)?
-                {
+                if let Some(dep_id) = resolver.get_id_for_specifier_with_kind(
+                    &import.specifier,
+                    &module.path,
+                    ResolutionKind::Require,
+                )? {
                     let dep_module = resolver.get_module(dep_id).unwrap();
                     if !dep_module.is_cjs {
                         needs_default_export.insert(dep_id);
@@ -122,11 +137,14 @@ impl ModuleGraph {
             let exports = module.exports.clone();
             let is_cjs = module.is_cjs;
             // 构建依赖列表
+            let static_import_kind = static_import_resolution_kind(is_cjs);
             let mut imports_with_ids = Vec::new();
             for import in &module.imports {
-                if let Some(dep_id) =
-                    resolver.get_id_for_specifier(&import.specifier, &module.path)?
-                {
+                if let Some(dep_id) = resolver.get_id_for_specifier_with_kind(
+                    &import.specifier,
+                    &module.path,
+                    static_import_kind,
+                )? {
                     imports_with_ids.push((dep_id, import.clone()));
                 }
             }
@@ -140,7 +158,11 @@ impl ModuleGraph {
                 if imports_with_ids.iter().any(|(_, i)| i.specifier == source) {
                     continue; // 已通过 import 引入，跳过重复
                 }
-                if let Some(dep_id) = resolver.get_id_for_specifier(&source, &module.path)? {
+                if let Some(dep_id) = resolver.get_id_for_specifier_with_kind(
+                    &source,
+                    &module.path,
+                    ResolutionKind::Import,
+                )? {
                     // 用空 names 创建合成 ImportEntry（表示依赖关系，不引入绑定）
                     imports_with_ids.push((
                         dep_id,
@@ -156,7 +178,11 @@ impl ModuleGraph {
             // 构建动态 import 列表：(specifier, 目标 ModuleId)
             let mut dynamic_imports_with_ids = Vec::new();
             for specifier in &module.dynamic_imports {
-                if let Some(dep_id) = resolver.get_id_for_specifier(specifier, &module.path)? {
+                if let Some(dep_id) = resolver.get_id_for_specifier_with_kind(
+                    specifier,
+                    &module.path,
+                    ResolutionKind::Import,
+                )? {
                     dynamic_imports_with_ids.push((specifier.clone(), dep_id));
                 }
             }
@@ -256,6 +282,14 @@ impl ModuleGraph {
     }
 }
 
+fn static_import_resolution_kind(is_cjs: bool) -> ResolutionKind {
+    if is_cjs {
+        ResolutionKind::Require
+    } else {
+        ResolutionKind::Import
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VisitState {
     Visiting,
@@ -265,12 +299,16 @@ enum VisitState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::Deref;
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEST_PROJECT: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn topological_order_is_dependency_first() {
         let root = create_temp_project("order_dependency_first");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -315,6 +353,7 @@ mod tests {
     #[test]
     fn shared_module_is_loaded_once() {
         let root = create_temp_project("cache_once");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -360,6 +399,7 @@ mod tests {
     #[test]
     fn basic_cycle_has_predictable_order() {
         let root = create_temp_project("basic_cycle");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -405,18 +445,43 @@ mod tests {
             .expect("module should appear in order")
     }
 
-    fn create_temp_project(case: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be monotonic enough for tests")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "wjsm_module_graph_{case}_{}_{}",
-            std::process::id(),
-            nanos
-        ));
-        std::fs::create_dir_all(&dir).expect("temp project dir should be creatable");
-        dir
+    struct TestProject {
+        path: PathBuf,
+    }
+
+    impl TestProject {
+        fn new(case: &str) -> Self {
+            let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "wjsm_module_graph_{case}_{}_{id}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("temp project dir should be creatable");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Deref for TestProject {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.path()
+        }
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn create_temp_project(case: &str) -> TestProject {
+        TestProject::new(case)
     }
 
     fn write_file(root: &Path, relative: &str, content: &str) {
@@ -427,9 +492,14 @@ mod tests {
         std::fs::write(path, content).expect("fixture file should be writable");
     }
 
+    fn write_type_module_package(root: &Path) {
+        write_file(root, "package.json", r#"{"type":"module"}"#);
+    }
+
     #[test]
     fn build_creates_correct_dependency_edges() {
         let root = create_temp_project("dep_edges");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -454,9 +524,9 @@ mod tests {
         write_file(
             &root,
             "main.js",
-            "const lib = require('./lib.js');\nconsole.log(lib);\n",
+            "const lib = require('./lib.mjs');\nconsole.log(lib);\n",
         );
-        write_file(&root, "lib.js", "export const value = 42;\n");
+        write_file(&root, "lib.mjs", "export const value = 42;\n");
 
         let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
         let lib_id = graph
@@ -471,6 +541,89 @@ mod tests {
         assert!(
             has_default,
             "ESM module should have synthetic default export added"
+        );
+    }
+
+    #[test]
+    fn cjs_require_uses_require_condition() {
+        let root = create_temp_project("cjs_require_condition");
+        write_file(
+            &root,
+            "main.js",
+            "const x = require('pkg');\nconsole.log(x);\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/package.json",
+            r#"{"exports":{".":{"import":"./esm.js","require":"./cjs.js"}}}"#,
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/esm.js",
+            "export const value = 'esm';\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/cjs.js",
+            "module.exports = { value: 'cjs' };\n",
+        );
+
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
+        let entry = graph
+            .get_module(graph.entry_id())
+            .expect("entry should exist");
+        assert_eq!(entry.imports.len(), 1);
+        let dep = graph
+            .get_module(entry.imports[0].0)
+            .expect("require target should exist");
+
+        assert!(
+            dep.path.ends_with(Path::new("node_modules/pkg/cjs.js")),
+            "CJS require should resolve package exports require condition, got {}",
+            dep.path.display()
+        );
+    }
+
+    #[test]
+    fn dynamic_import_from_cjs_uses_import_condition() {
+        let root = create_temp_project("cjs_dynamic_import_condition");
+        write_file(
+            &root,
+            "main.js",
+            "module.exports = { ready: true };\nimport('pkg').then((mod) => console.log(mod));\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/package.json",
+            r#"{"type":"module","exports":{".":{"import":"./esm.js","require":"./cjs.js"}}}"#,
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/esm.js",
+            "export const value = 'esm';\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/cjs.js",
+            "module.exports = { value: 'cjs' };\n",
+        );
+
+        let graph = ModuleGraph::build(Path::new("./main.js"), &root).expect("graph should build");
+        let entry = graph
+            .get_module(graph.entry_id())
+            .expect("entry should exist");
+        assert!(entry.is_cjs, "test parent must stay on the CJS path");
+        assert_eq!(entry.dynamic_imports.len(), 1);
+        let (specifier, dep_id) = &entry.dynamic_imports[0];
+        let dep = graph
+            .get_module(*dep_id)
+            .expect("dynamic import target should exist");
+
+        assert_eq!(specifier, "pkg");
+        assert!(
+            dep.path.ends_with(Path::new("node_modules/pkg/esm.js")),
+            "dynamic import should resolve package exports import condition, got {}",
+            dep.path.display()
         );
     }
 
@@ -507,13 +660,12 @@ mod tests {
             !paths.iter().any(|path| path == &npm_path),
             "node_modules/path must not satisfy require('path')"
         );
-
-        std::fs::remove_dir_all(root).expect("temp project should be removed");
     }
 
     #[test]
     fn builtin_resolution_supports_slash_canonical_names() {
         let root = create_temp_project("builtin_slash_canonical");
+        write_type_module_package(&root);
         write_file(
             &root,
             "main.js",
@@ -531,8 +683,6 @@ mod tests {
             paths.iter().any(|path| path == &builtin_path),
             "graph should contain fs/promises builtin module"
         );
-
-        std::fs::remove_dir_all(root).expect("temp project should be removed");
     }
 
     #[test]

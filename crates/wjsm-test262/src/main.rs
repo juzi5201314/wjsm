@@ -79,7 +79,7 @@ mod read;
 use config::should_run_test;
 use exec::{
     DEFAULT_CHILD_MEMORY_LIMIT_MIB, DEFAULT_JOB_MEMORY_COST_MIB, DEFAULT_TIMEOUT_SECS,
-    DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB, RunLimits, SuiteResults, TestResult,
+    DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB, RunLimits, Statistics, SuiteResults, TestResult,
 };
 use read::{read_harness, read_suite, read_test};
 
@@ -510,6 +510,30 @@ fn print_table_results(results: &SuiteResults) {
     }
 }
 
+fn by_feature_json_map<'a>(
+    by_feature: impl IntoIterator<Item = (&'a String, &'a Statistics)>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut entries = by_feature.into_iter().collect::<Vec<_>>();
+    entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+
+    entries
+        .into_iter()
+        .map(|(name, stats)| {
+            (
+                name.clone(),
+                serde_json::json!({
+                    "total": stats.total,
+                    "passed": stats.passed,
+                    "failed": stats.failed,
+                    "ignored": stats.ignored,
+                    "timed_out": stats.timed_out,
+                    "errors": stats.errors,
+                }),
+            )
+        })
+        .collect()
+}
+
 fn write_json_results(results: &SuiteResults, path: &Path) -> Result<()> {
     let json = serde_json::json!({
         "total": results.stats.total,
@@ -520,16 +544,7 @@ fn write_json_results(results: &SuiteResults, path: &Path) -> Result<()> {
         "errors": results.stats.errors,
         "conformance_rate": results.stats.conformance_rate(),
         "duration_seconds": results.duration.as_secs_f64(),
-        "by_feature": results.by_feature.iter().map(|(name, stats)| {
-            (name.clone(), serde_json::json!({
-                "total": stats.total,
-                "passed": stats.passed,
-                "failed": stats.failed,
-                "ignored": stats.ignored,
-                "timed_out": stats.timed_out,
-                "errors": stats.errors,
-            }))
-        }).collect::<serde_json::Map<_, _>>(),
+        "by_feature": by_feature_json_map(results.by_feature.iter()),
         "failures": results.failures.iter().map(|f| {
             serde_json::json!({
                 "path": f.path,
@@ -549,6 +564,29 @@ fn write_json_results(results: &SuiteResults, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn by_feature_json_map_sorts_feature_names() {
+        let alpha_name = "alpha".to_string();
+        let zeta_name = "zeta".to_string();
+        let alpha = Statistics {
+            total: 1,
+            passed: 1,
+            ..Statistics::default()
+        };
+        let zeta = Statistics {
+            total: 1,
+            failed: 1,
+            ..Statistics::default()
+        };
+
+        let map = by_feature_json_map([(&zeta_name, &zeta), (&alpha_name, &alpha)]);
+
+        assert_eq!(
+            map.keys().cloned().collect::<Vec<_>>(),
+            vec!["alpha".to_string(), "zeta".to_string()]
+        );
+    }
 
     #[test]
     fn memory_budget_caps_requested_jobs() {

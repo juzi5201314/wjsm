@@ -5,23 +5,31 @@ use std::path::Path;
 use wjsm_semantic::{ModuleKind, ModuleLoweringInput, ModuleMetadata};
 
 use super::graph::ModuleGraph;
+use super::resolution_options::ResolutionOptions;
 use super::semantic::analyze_module_links;
 
 /// 模块 Bundler
 pub struct ModuleBundler {
     root_path: std::path::PathBuf,
+    options: ResolutionOptions,
 }
 
 impl ModuleBundler {
     pub fn new(root_path: &Path) -> Result<Self> {
+        Self::with_resolution_options(root_path, ResolutionOptions::default())
+    }
+
+    /// Creates a module bundler with explicit package resolution options.
+    pub fn with_resolution_options(root_path: &Path, options: ResolutionOptions) -> Result<Self> {
         Ok(Self {
             root_path: root_path.to_path_buf(),
+            options,
         })
     }
 
     /// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
     pub fn lower_bundle(&self, entry: &Path) -> Result<wjsm_ir::Program> {
-        let graph = ModuleGraph::build(entry, &self.root_path)
+        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
             .with_context(|| "Failed to build module graph")?;
 
         let (order, cycles) = graph
@@ -55,7 +63,7 @@ impl ModuleBundler {
 
     /// 解析入口模块 AST（含依赖图构建，用于 dump-ast 等）
     pub fn parse_entry_ast(&self, entry: &Path) -> Result<swc_core::ecma::ast::Module> {
-        let graph = ModuleGraph::build(entry, &self.root_path)
+        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
             .with_context(|| "Failed to build module graph")?;
         let entry_id = graph.entry_id();
         let node = graph
@@ -118,7 +126,62 @@ fn path_to_utf8(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::Deref;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEST_PROJECT: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestProject {
+        path: PathBuf,
+    }
+
+    impl TestProject {
+        fn new(case: &str) -> Self {
+            let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "wjsm_module_bundler_{case}_{}_{id}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("temp project dir should be creatable");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Deref for TestProject {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.path()
+        }
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn create_temp_project(case: &str) -> TestProject {
+        TestProject::new(case)
+    }
+
+    fn write_file(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("parent dir should be created");
+        }
+        std::fs::write(path, content).expect("fixture file should be writable");
+    }
+
+    fn write_type_module_package(root: &Path) {
+        write_file(root, "package.json", r#"{"type":"module"}"#);
+    }
 
     #[test]
     fn bundler_new_creates_instance() {
@@ -129,20 +192,16 @@ mod tests {
 
     #[test]
     fn bundle_simple_modules_produces_wasm() {
-        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("fixtures/modules/simple");
-
-        assert!(
-            fixtures_dir.exists(),
-            "Test fixtures not found at {:?}. Run from workspace root.",
-            fixtures_dir
+        let root = create_temp_project("simple_bundle");
+        write_type_module_package(&root);
+        write_file(
+            &root,
+            "main.js",
+            "import { value } from './lib.js';\nconsole.log(value);\n",
         );
+        write_file(&root, "lib.js", "export const value = 42;\n");
 
-        let bundler = ModuleBundler::new(&fixtures_dir).expect("bundler should be created");
+        let bundler = ModuleBundler::new(&root).expect("bundler should be created");
         let result = bundler.bundle(Path::new("main.js"));
         assert!(result.is_ok(), "bundle should succeed: {:?}", result.err());
         let wasm_bytes = result.unwrap();
@@ -158,16 +217,21 @@ mod tests {
 
     #[test]
     fn lower_bundle_re_export_chain() {
-        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("fixtures/modules/re_export");
-        if !fixtures_dir.exists() {
-            return;
-        }
-        let bundler = ModuleBundler::new(&fixtures_dir).expect("bundler");
+        let root = create_temp_project("re_export_bundle");
+        write_type_module_package(&root);
+        write_file(
+            &root,
+            "main.js",
+            "import { x } from './re.js';\nconsole.log(x);\n",
+        );
+        write_file(
+            &root,
+            "re.js",
+            "export { value as x } from './source.js';\n",
+        );
+        write_file(&root, "source.js", "export const value = 42;\n");
+
+        let bundler = ModuleBundler::new(&root).expect("bundler");
         let result = bundler.lower_bundle(Path::new("main.js"));
         assert!(
             result.is_ok(),

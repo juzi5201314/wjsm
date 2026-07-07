@@ -1,19 +1,47 @@
 use super::*;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn create_temp_project(case: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be monotonic enough for tests")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "wjsm_module_resolver_{case}_{}_{}",
-        std::process::id(),
-        nanos
-    ));
-    std::fs::create_dir_all(&dir).expect("temp project dir should be creatable");
-    dir
+static NEXT_TEST_PROJECT: AtomicUsize = AtomicUsize::new(0);
+
+struct TestProject {
+    path: PathBuf,
+}
+
+impl TestProject {
+    fn new(case: &str) -> Self {
+        let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "wjsm_module_resolver_{case}_{}_{id}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp project dir should be creatable");
+        Self { path: dir }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Deref for TestProject {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.path()
+    }
+}
+
+impl Drop for TestProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn create_temp_project(case: &str) -> TestProject {
+    TestProject::new(case)
 }
 
 fn write_file(root: &Path, relative: &str, content: &str) {
@@ -22,6 +50,28 @@ fn write_file(root: &Path, relative: &str, content: &str) {
         std::fs::create_dir_all(parent).expect("parent dir should be created");
     }
     std::fs::write(path, content).expect("fixture file should be writable");
+}
+
+fn write_type_module_package(root: &Path) {
+    write_file(root, "package.json", r#"{"type":"module"}"#);
+}
+
+fn resolve_loaded_path(root: &Path, parent: &Path, specifier: &str) -> PathBuf {
+    let mut resolver = ModuleResolver::new(root);
+    let id = resolver
+        .resolve(specifier, parent)
+        .expect("specifier should resolve");
+    resolver
+        .get_module(id)
+        .expect("module should be loaded")
+        .path
+        .clone()
+}
+
+fn resolve_error(root: &Path, parent: &Path, specifier: &str) -> String {
+    let mut resolver = ModuleResolver::new(root);
+    let error = resolver.resolve(specifier, parent).unwrap_err();
+    format!("{error:#}")
 }
 
 #[test]
@@ -116,12 +166,599 @@ fn resolve_path_node_modules_package_json_main() {
     let path = result.unwrap();
     assert!(path.to_string_lossy().ends_with("entry.js"));
 }
+
+#[test]
+fn exports_blocks_main_fallback() {
+    let root = create_temp_project("exports_blocks_main");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"main":"legacy.js","exports":{"./only":"./only.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/legacy.js",
+        "export const legacy = true;\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/only.js",
+        "export const only = true;\n",
+    );
+
+    let err = resolve_error(&root, &root.join("main.js"), "pkg");
+
+    assert!(err.contains("ERR_PACKAGE_PATH_NOT_EXPORTED"));
+    assert!(err.contains(".`"));
+}
+
+#[test]
+fn exports_resolves_package_main_dot() {
+    let root = create_temp_project("exports_dot");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","main":"legacy.js","exports":{".":"./esm.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/legacy.js",
+        "export const value = 'legacy';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/esm.js",
+        "export const value = 'esm';\n",
+    );
+
+    let path = resolve_loaded_path(&root, &root.join("main.js"), "pkg");
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/esm.js")));
+}
+
+#[test]
+fn exports_resolves_directory_target_to_index_without_package_entry() {
+    let root = create_temp_project("exports_dir_target_index");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","main":"legacy.js","exports":{".":"./dir"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/legacy.js",
+        "export const value = 'legacy';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/dir/package.json",
+        r#"{"type":"module","module":"wrong-module.js","main":"wrong.js"}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/dir/wrong-module.js",
+        "export const value = 'wrong-module';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/dir/wrong.js",
+        "export const value = 'wrong';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/dir/index.js",
+        "export const value = 'index';\n",
+    );
+
+    let path = resolve_loaded_path(&root, &root.join("main.js"), "pkg");
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/dir/index.js")));
+}
+
+#[test]
+fn exports_resolves_get_id_for_specifier_matches_resolve_id() {
+    let root = create_temp_project("exports_get_id_consistency");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","exports":{".":"./esm.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/esm.js",
+        "export const value = 'esm';\n",
+    );
+    let parent = root.join("main.js");
+    let mut resolver = ModuleResolver::new(&root);
+
+    let id = resolver
+        .resolve("pkg", &parent)
+        .expect("package exports should resolve");
+    let cached_id = resolver
+        .get_id_for_specifier("pkg", &parent)
+        .expect("specifier id lookup should resolve");
+
+    assert_eq!(cached_id, Some(id));
+}
+
+#[test]
+fn exports_resolves_subpath() {
+    let root = create_temp_project("exports_subpath");
+    write_file(&root, "main.js", "import 'pkg/feature';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","exports":{"./feature":"./src/feature.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/src/feature.js",
+        "export const feature = true;\n",
+    );
+
+    let path = resolve_loaded_path(&root, &root.join("main.js"), "pkg/feature");
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/src/feature.js")));
+}
+
+#[test]
+fn exports_resolves_pattern() {
+    let root = create_temp_project("exports_pattern");
+    write_file(&root, "main.js", "import 'pkg/features/a';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","exports":{"./features/*":"./src/features/*.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/src/features/a.js",
+        "export const a = true;\n",
+    );
+
+    let path = resolve_loaded_path(&root, &root.join("main.js"), "pkg/features/a");
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/src/features/a.js")));
+}
+
+#[test]
+fn exports_null_blocks_subpath() {
+    let root = create_temp_project("exports_null");
+    write_file(&root, "main.js", "import 'pkg/blocked';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"exports":{"./blocked":null}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/blocked.js",
+        "export const blocked = true;\n",
+    );
+
+    let parent = root.join("main.js");
+    let err = resolve_error(&root, &parent, "pkg/blocked");
+
+    assert!(err.contains("ERR_PACKAGE_PATH_NOT_EXPORTED"));
+    assert!(err.contains("./blocked"));
+    assert!(err.contains(&parent.display().to_string()));
+}
+
+#[test]
+fn imports_resolves_hash_alias_within_parent_package() {
+    let root = create_temp_project("imports_alias");
+    write_file(
+        &root,
+        "package.json",
+        r##"{"name":"app","type":"module","imports":{"#alias":"./src/alias.js"}}"##,
+    );
+    write_file(&root, "src/main.js", "import '#alias';\n");
+    write_file(&root, "src/alias.js", "export const alias = true;\n");
+
+    let path = resolve_loaded_path(&root, &root.join("src/main.js"), "#alias");
+
+    assert!(path.ends_with(Path::new("src/alias.js")));
+}
+
+#[test]
+fn imports_missing_reports_import_not_defined() {
+    let root = create_temp_project("imports_missing");
+    write_file(
+        &root,
+        "package.json",
+        r##"{"name":"app","type":"module","imports":{"#present":"./src/present.js"}}"##,
+    );
+    write_file(&root, "src/main.js", "import '#missing';\n");
+    write_file(&root, "src/present.js", "export const present = true;\n");
+
+    let parent = root.join("src/main.js");
+    let err = resolve_error(&root, &parent, "#missing");
+
+    assert!(err.contains("ERR_PACKAGE_IMPORT_NOT_DEFINED"));
+    assert!(err.contains("#missing"));
+    assert!(err.contains(&parent.display().to_string()));
+}
+
+#[test]
+fn self_reference_uses_own_exports_before_node_modules() {
+    let root = create_temp_project("self_reference");
+    write_file(
+        &root,
+        "package.json",
+        r#"{"name":"pkg","type":"module","exports":{"./self":"./src/self.js"}}"#,
+    );
+    write_file(&root, "src/main.js", "import 'pkg/self';\n");
+    write_file(&root, "src/self.js", "export const source = 'self';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"name":"pkg","exports":{"./self":"./wrong.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/wrong.js",
+        "export const source = 'node_modules';\n",
+    );
+
+    let path = resolve_loaded_path(&root, &root.join("src/main.js"), "pkg/self");
+
+    assert!(path.ends_with(Path::new("src/self.js")));
+}
+
+#[test]
+fn self_reference_without_exports_uses_node_modules_package() {
+    let root = create_temp_project("self_reference_no_exports");
+    write_file(&root, "package.json", r#"{"name":"pkg","type":"module"}"#);
+    write_file(&root, "src/main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"name":"pkg","type":"module","exports":{".":"./node.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/node.js",
+        "export const source = 'node_modules';\n",
+    );
+
+    let path = resolve_loaded_path(&root, &root.join("src/main.js"), "pkg");
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/node.js")));
+}
+
+#[test]
+fn legacy_main_still_works_without_exports() {
+    let root = create_temp_project("legacy_main_without_exports");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","main":"legacy.js"}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/legacy.js",
+        "export const value = 'legacy';\n",
+    );
+
+    let path = resolve_loaded_path(&root, &root.join("main.js"), "pkg");
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/legacy.js")));
+}
+
+#[test]
+fn browser_string_replaces_package_entry_when_enabled() {
+    let root = create_temp_project("browser_string_entry");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","module":"module.js","main":"main.js","browser":"browser.js"}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/module.js",
+        "export const value = 'module';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/main.js",
+        "export const value = 'main';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/browser.js",
+        "export const value = 'browser';\n",
+    );
+
+    let default_path = resolve_loaded_path(&root, &root.join("main.js"), "pkg");
+    assert!(default_path.ends_with(Path::new("node_modules/pkg/module.js")));
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let id = resolver
+        .resolve("pkg", &root.join("main.js"))
+        .expect("browser entry should resolve");
+    let path = &resolver
+        .get_module(id)
+        .expect("module should be loaded")
+        .path;
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/browser.js")));
+}
+
+#[test]
+fn browser_object_replaces_package_entry_when_enabled() {
+    let root = create_temp_project("browser_object_entry");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","main":"main.js","browser":{"./main.js":"./browser.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/main.js",
+        "export const value = 'main';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/browser.js",
+        "export const value = 'browser';\n",
+    );
+
+    let default_path = resolve_loaded_path(&root, &root.join("main.js"), "pkg");
+    assert!(default_path.ends_with(Path::new("node_modules/pkg/main.js")));
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let id = resolver
+        .resolve("pkg", &root.join("main.js"))
+        .expect("browser object entry should resolve");
+    let path = &resolver
+        .get_module(id)
+        .expect("module should be loaded")
+        .path;
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/browser.js")));
+}
+
+#[test]
+fn browser_object_false_disables_package_entry_when_enabled() {
+    let root = create_temp_project("browser_object_entry_false");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","main":"main.js","browser":{"./main.js":false}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/main.js",
+        "export const value = 'main';\n",
+    );
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let error = resolver
+        .resolve("pkg", &root.join("main.js"))
+        .expect_err("browser false package entry should disable the package path");
+    let message = format!("{error:#}");
+
+    assert!(message.contains("ERR_PACKAGE_PATH_DISABLED_BY_BROWSER"));
+    assert!(message.contains("./main.js"));
+}
+
+#[test]
+fn browser_object_replaces_extensionless_package_entry_when_enabled() {
+    let root = create_temp_project("browser_object_extensionless_entry");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","main":"main","browser":{"./main.js":"./browser.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/main.js",
+        "export const value = 'main';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/browser.js",
+        "export const value = 'browser';\n",
+    );
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let id = resolver
+        .resolve("pkg", &root.join("main.js"))
+        .expect("browser object entry should resolve after extension lookup");
+    let path = &resolver
+        .get_module(id)
+        .expect("module should be loaded")
+        .path;
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/browser.js")));
+}
+
+#[test]
+fn browser_object_false_disables_extensionless_package_entry_when_enabled() {
+    let root = create_temp_project("browser_object_extensionless_false");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","main":"main","browser":{"./main.js":false}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/main.js",
+        "export const value = 'main';\n",
+    );
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let error = resolver
+        .resolve("pkg", &root.join("main.js"))
+        .expect_err("browser false package entry should disable resolved extension path");
+    let message = format!("{error:#}");
+
+    assert!(message.contains("ERR_PACKAGE_PATH_DISABLED_BY_BROWSER"));
+    assert!(message.contains("./main.js"));
+}
+
+#[test]
+fn browser_object_replaces_extensionless_module_entry_when_enabled() {
+    let root = create_temp_project("browser_object_extensionless_module_entry");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","module":"module","main":"main.js","browser":{"./module.js":"./browser.js"}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/module.js",
+        "export const value = 'module';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/main.js",
+        "export const value = 'main';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/browser.js",
+        "export const value = 'browser';\n",
+    );
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let id = resolver
+        .resolve("pkg", &root.join("main.js"))
+        .expect("browser object module entry should resolve after extension lookup");
+    let path = &resolver
+        .get_module(id)
+        .expect("module should be loaded")
+        .path;
+
+    assert!(path.ends_with(Path::new("node_modules/pkg/browser.js")));
+}
+
+#[test]
+fn browser_object_false_disables_extensionless_module_entry_when_enabled() {
+    let root = create_temp_project("browser_object_extensionless_module_false");
+    write_file(&root, "main.js", "import 'pkg';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"type":"module","module":"module","main":"main.js","browser":{"./module.js":false}}"#,
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/module.js",
+        "export const value = 'module';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/main.js",
+        "export const value = 'main';\n",
+    );
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let error = resolver
+        .resolve("pkg", &root.join("main.js"))
+        .expect_err("browser false module entry should disable resolved extension path");
+    let message = format!("{error:#}");
+
+    assert!(message.contains("ERR_PACKAGE_PATH_DISABLED_BY_BROWSER"));
+    assert!(message.contains("./module.js"));
+}
+
+#[test]
+fn browser_mapping_replaces_relative_dependency_when_enabled() {
+    let root = create_temp_project("browser_map_replace");
+    write_type_module_package(&root);
+    write_file(&root, "main.js", "import './server.js';\n");
+    write_file(&root, "server.js", "export const target = 'server';\n");
+    write_file(&root, "browser.js", "export const target = 'browser';\n");
+    write_file(
+        &root,
+        "package.json",
+        r#"{"type":"module","browser":{"./server.js":"./browser.js"}}"#,
+    );
+
+    let default_path = resolve_loaded_path(&root, &root.join("main.js"), "./server.js");
+    assert!(default_path.ends_with(Path::new("server.js")));
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let id = resolver
+        .resolve("./server.js", &root.join("main.js"))
+        .expect("browser mapping should resolve");
+    let path = &resolver
+        .get_module(id)
+        .expect("module should be loaded")
+        .path;
+
+    assert!(path.ends_with(Path::new("browser.js")));
+}
+
+#[test]
+fn browser_mapping_false_reports_disabled() {
+    let root = create_temp_project("browser_map_false");
+    write_file(
+        &root,
+        "package.json",
+        r#"{"type":"module","browser":{"./native.js":false}}"#,
+    );
+    write_file(&root, "main.js", "import './native.js';\n");
+    write_file(&root, "native.js", "export const native = true;\n");
+
+    let mut resolver =
+        ModuleResolver::with_options(&root, ResolutionOptions::default().with_browser(true));
+    let error = resolver
+        .resolve("./native.js", &root.join("main.js"))
+        .expect_err("browser false mapping should disable the package path");
+    let message = format!("{error:#}");
+
+    assert!(message.contains("ERR_PACKAGE_PATH_DISABLED_BY_BROWSER"));
+    assert!(message.contains("./native.js"));
+}
+#[test]
+fn node_prefix_still_resolves_builtin_without_node_modules() {
+    let root = create_temp_project("node_prefix_builtin");
+    write_file(&root, "main.js", "import 'node:fs';\n");
+    write_file(
+        &root,
+        "node_modules/fs/index.js",
+        "export const wrong = true;\n",
+    );
+    #[cfg(not(windows))]
+    write_file(
+        &root,
+        "node_modules/node:fs/index.js",
+        "export const wrong = true;\n",
+    );
+    let path = resolve_loaded_path(&root, &root.join("main.js"), "node:fs");
+
+    assert!(
+        path.to_string_lossy()
+            .ends_with("/__wjsm_builtin__/node/fs.mjs")
+    );
+}
+
 #[test]
 fn resolve_rejects_path_outside_root() {
     let root = create_temp_project("outside_root");
-    let outside_name = format!("{}_sibling", root.file_name().unwrap().to_string_lossy());
-    let outside = root.parent().unwrap().join(&outside_name);
-    std::fs::create_dir_all(&outside).expect("outside dir should be created");
+    let outside = create_temp_project("outside_root_sibling");
+    let outside_name = outside.file_name().unwrap().to_string_lossy();
     write_file(&outside, "dep.js", "export const x = 1;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -135,6 +772,7 @@ fn resolve_rejects_path_outside_root() {
 #[test]
 fn resolve_returns_cached_id_on_second_call() {
     let root = create_temp_project("cache_test");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const x = 1;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -163,6 +801,7 @@ fn resolve_detects_cjs_module() {
 #[test]
 fn resolve_parses_esm_module() {
     let root = create_temp_project("esm_detect");
+    write_type_module_package(&root);
     write_file(&root, "esm.js", "export const x = 1;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -174,8 +813,108 @@ fn resolve_parses_esm_module() {
 }
 
 #[test]
+fn mjs_forces_esm_even_with_package_commonjs() {
+    let root = create_temp_project("mjs_forces_esm");
+    write_file(&root, "package.json", r#"{"type":"commonjs"}"#);
+    write_file(&root, "entry.mjs", "module.exports = { value: 1 };\n");
+    let parent = root.join("main.js");
+    let mut resolver = ModuleResolver::new(&root);
+
+    let id = resolver
+        .resolve("./entry.mjs", &parent)
+        .expect("resolve should succeed");
+    let module = resolver.get_module(id).expect("module should exist");
+
+    assert!(!module.is_cjs, ".mjs should force ESM goal");
+    assert!(
+        module.exports.is_empty(),
+        "ESM goal should not transform module.exports into synthetic exports"
+    );
+}
+
+#[test]
+fn cjs_forces_commonjs_even_with_package_module() {
+    let root = create_temp_project("cjs_forces_commonjs");
+    write_file(&root, "package.json", r#"{"type":"module"}"#);
+    write_file(&root, "entry.cjs", "const value = 1;\n");
+    let parent = root.join("main.js");
+    let mut resolver = ModuleResolver::new(&root);
+
+    let id = resolver
+        .resolve("./entry.cjs", &parent)
+        .expect("resolve should succeed");
+    let module = resolver.get_module(id).expect("module should exist");
+
+    assert!(module.is_cjs, ".cjs should force CommonJS goal");
+}
+
+#[test]
+fn type_module_js_is_esm() {
+    let root = create_temp_project("type_module_js_is_esm");
+    write_file(&root, "package.json", r#"{"type":"module"}"#);
+    write_file(&root, "entry.js", "module.exports = { value: 1 };\n");
+    let parent = root.join("main.js");
+    let mut resolver = ModuleResolver::new(&root);
+
+    let id = resolver
+        .resolve("./entry.js", &parent)
+        .expect("resolve should succeed");
+    let module = resolver.get_module(id).expect("module should exist");
+
+    assert!(!module.is_cjs, "package type=module should force ESM goal");
+    assert!(
+        module.exports.is_empty(),
+        "ESM goal should not transform module.exports into synthetic exports"
+    );
+}
+
+#[test]
+fn type_commonjs_js_is_commonjs() {
+    let root = create_temp_project("type_commonjs_js_is_commonjs");
+    write_file(&root, "package.json", r#"{"type":"commonjs"}"#);
+    write_file(&root, "entry.js", "const value = 1;\n");
+    let parent = root.join("main.js");
+    let mut resolver = ModuleResolver::new(&root);
+
+    let id = resolver
+        .resolve("./entry.js", &parent)
+        .expect("resolve should succeed");
+    let module = resolver.get_module(id).expect("module should exist");
+
+    assert!(
+        module.is_cjs,
+        "package type=commonjs should force CommonJS goal"
+    );
+}
+
+#[test]
+fn commonjs_goal_rejects_static_import_syntax() {
+    let root = create_temp_project("commonjs_rejects_static_import");
+    write_file(&root, "package.json", r#"{"type":"commonjs"}"#);
+    write_file(&root, "dep.js", "module.exports.value = 1;\n");
+    write_file(&root, "entry.js", "import { value } from './dep.js';\n");
+    let parent = root.join("main.js");
+    let mut resolver = ModuleResolver::new(&root);
+
+    let err = resolver
+        .resolve("./entry.js", &parent)
+        .expect_err("static import should fail under CommonJS goal");
+    let msg = err.to_string();
+    let entry = root.join("entry.js");
+
+    assert!(
+        msg.contains(&format!(
+            "SyntaxError: Cannot use import/export syntax in CommonJS module {}",
+            entry.display()
+        )),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
 fn get_module_returns_some_for_existing() {
     let root = create_temp_project("get_mod_some");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const x = 1;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -195,6 +934,7 @@ fn get_module_returns_none_for_missing() {
 #[test]
 fn all_modules_iterates_all() {
     let root = create_temp_project("all_mods");
+    write_type_module_package(&root);
     write_file(&root, "a.js", "export const a = 1;\n");
     write_file(&root, "b.js", "export const b = 2;\n");
     let parent = root.join("main.js");
@@ -212,6 +952,7 @@ fn all_modules_iterates_all() {
 #[test]
 fn get_id_by_path_returns_some_for_visited() {
     let root = create_temp_project("id_by_path_some");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const x = 1;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -236,6 +977,7 @@ fn get_id_by_path_returns_none_for_unknown() {
 #[test]
 fn ensure_default_export_adds_when_no_default() {
     let root = create_temp_project("ensure_default_add");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const x = 1;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -256,6 +998,7 @@ fn ensure_default_export_adds_when_no_default() {
 #[test]
 fn ensure_default_export_skips_when_has_default() {
     let root = create_temp_project("ensure_default_skip_has");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export default 42;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -297,6 +1040,7 @@ fn ensure_default_export_skips_when_no_exports() {
 #[test]
 fn extract_imports_handles_named_import() {
     let root = create_temp_project("import_named");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const x = 1;\n");
     write_file(
         &root,
@@ -319,6 +1063,7 @@ fn extract_imports_handles_named_import() {
 #[test]
 fn extract_imports_handles_default_import() {
     let root = create_temp_project("import_default");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export default 42;\n");
     write_file(
         &root,
@@ -341,6 +1086,7 @@ fn extract_imports_handles_default_import() {
 #[test]
 fn extract_imports_handles_namespace_import() {
     let root = create_temp_project("import_ns");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const x = 1;\n");
     write_file(
         &root,
@@ -363,6 +1109,7 @@ fn extract_imports_handles_namespace_import() {
 #[test]
 fn extract_imports_handles_aliased_named_import() {
     let root = create_temp_project("import_alias");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const x = 1;\n");
     write_file(
         &root,
@@ -385,6 +1132,7 @@ fn extract_imports_handles_aliased_named_import() {
 #[test]
 fn extract_exports_handles_named_export() {
     let root = create_temp_project("export_named");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "const x = 1;\nexport { x };\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -403,6 +1151,7 @@ fn extract_exports_handles_named_export() {
 #[test]
 fn extract_exports_handles_default_expr_export() {
     let root = create_temp_project("export_default_expr");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export default 99;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -421,6 +1170,7 @@ fn extract_exports_handles_default_expr_export() {
 #[test]
 fn extract_exports_handles_default_fn_export() {
     let root = create_temp_project("export_default_fn");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export default function hello() {}\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -439,6 +1189,7 @@ fn extract_exports_handles_default_fn_export() {
 #[test]
 fn extract_exports_handles_default_class_export() {
     let root = create_temp_project("export_default_class");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export default class MyClass {}\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -457,6 +1208,7 @@ fn extract_exports_handles_default_class_export() {
 #[test]
 fn extract_exports_handles_declaration_export() {
     let root = create_temp_project("export_decl");
+    write_type_module_package(&root);
     write_file(
         &root,
         "dep.js",
@@ -487,6 +1239,7 @@ fn extract_exports_handles_declaration_export() {
 #[test]
 fn extract_exports_handles_export_all() {
     let root = create_temp_project("export_all");
+    write_type_module_package(&root);
     write_file(&root, "base.js", "export const x = 1;\n");
     write_file(&root, "dep.js", "export * from './base.js';\n");
     let parent = root.join("main.js");
@@ -506,6 +1259,7 @@ fn extract_exports_handles_export_all() {
 #[test]
 fn extract_exports_handles_re_export_with_source() {
     let root = create_temp_project("re_export");
+    write_type_module_package(&root);
     write_file(&root, "base.js", "export const x = 1;\n");
     write_file(&root, "dep.js", "export { x } from './base.js';\n");
     let parent = root.join("main.js");
@@ -525,6 +1279,7 @@ fn extract_exports_handles_re_export_with_source() {
 #[test]
 fn extract_exports_handles_default_anonymous_fn() {
     let root = create_temp_project("export_default_anon_fn");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export default function() {}\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -543,6 +1298,7 @@ fn extract_exports_handles_default_anonymous_fn() {
 #[test]
 fn extract_exports_handles_default_anonymous_class() {
     let root = create_temp_project("export_default_anon_class");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export default class {}\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);
@@ -561,6 +1317,7 @@ fn extract_exports_handles_default_anonymous_class() {
 #[test]
 fn extract_exports_handles_multiple_var_declarations() {
     let root = create_temp_project("export_multi_var");
+    write_type_module_package(&root);
     write_file(&root, "dep.js", "export const a = 1, b = 2;\n");
     let parent = root.join("main.js");
     let mut resolver = ModuleResolver::new(&root);

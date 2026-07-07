@@ -39,6 +39,12 @@ const EXIT_COMPILE_ERROR: u8 = 1;
 const EXIT_RUNTIME_ERROR: u8 = 2;
 const EXIT_USAGE_ERROR: u8 = 3;
 
+fn module_resolution_options(cli: &Cli) -> wjsm_module::ResolutionOptions {
+    wjsm_module::ResolutionOptions::default()
+        .with_browser(cli.browser)
+        .with_conditions(cli.condition.iter().cloned())
+}
+
 // ============================================================================
 // Runtime bridge (sync CLI -> async Store)
 // ============================================================================
@@ -598,6 +604,7 @@ fn cmd_build(
                             cli.target,
                             script,
                             cli.should_verify_ir(),
+                            &module_resolution_options(cli),
                         )?
                     }
                 }
@@ -658,6 +665,7 @@ fn cmd_build(
                                 script,
                                 cli.verbose_enabled(1),
                                 cli.should_verify_ir(),
+                                &module_resolution_options(cli),
                             )?,
                             runtime_options_for_file(cli, &path, root, &[])?,
                         )
@@ -713,6 +721,7 @@ fn cmd_run(
             script,
             verbose_compile,
             cli.should_verify_ir(),
+            &module_resolution_options(cli),
         )?
     };
     let options = runtime_options_for_file(cli, input, root, script_args)?;
@@ -1262,6 +1271,7 @@ fn cmd_dump_wat(
                     script,
                     cli.verbose_enabled(1),
                     cli.should_verify_ir(),
+                    &module_resolution_options(cli),
                 )?;
                 if cli.time {
                     pipeline.timings.print(cli.effective_verbose());
@@ -1639,20 +1649,35 @@ fn run_file_input_pipeline(
                 wasm: None,
                 timings: PipelineTimings::default(),
             };
+            let resolution_options = module_resolution_options(cli);
             match stop_at {
                 Stage::Parse => {
-                    let ast = wjsm_module::parse_entry_ast(&entry, &root)?;
+                    let ast = wjsm_module::parse_entry_ast_with_options(
+                        &entry,
+                        &root,
+                        resolution_options.clone(),
+                    )?;
                     result.timings.parse_us = start.elapsed().as_micros() as u64;
                     result.ast = Some(ast);
                 }
                 Stage::Lower => {
-                    let program = wjsm_module::lower_bundle(&entry, &root)?;
+                    let program = wjsm_module::lower_bundle_with_options(
+                        &entry,
+                        &root,
+                        resolution_options.clone(),
+                    )?;
                     verify_ir_for_pipeline(&program, cli.should_verify_ir())?;
                     result.timings.lower_us = start.elapsed().as_micros() as u64;
                     result.program = Some(program);
                 }
                 Stage::Compile | Stage::Execute => {
-                    let wasm = compile_bundle(&entry, &root, cli.target, cli.should_verify_ir())?;
+                    let wasm = compile_bundle(
+                        &entry,
+                        &root,
+                        cli.target,
+                        cli.should_verify_ir(),
+                        &resolution_options,
+                    )?;
                     result.timings.compile_us = start.elapsed().as_micros() as u64;
                     result.wasm = Some(wasm);
                 }
@@ -1936,6 +1961,7 @@ fn compile_file_input_to_pipeline_result(
     script: bool,
     verbose: bool,
     verify_ir: bool,
+    resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<PipelineResult> {
     let plan = build_compile_plan(input, root)?;
     match plan {
@@ -1944,7 +1970,7 @@ fn compile_file_input_to_pipeline_result(
                 eprintln!("Bundling modules...");
             }
             let start = Instant::now();
-            let wasm = compile_bundle(&entry, &root, target, verify_ir)?;
+            let wasm = compile_bundle(&entry, &root, target, verify_ir, resolution_options)?;
             let mut result = PipelineResult {
                 ast: None,
                 program: None,
@@ -1975,10 +2001,13 @@ fn compile_from_file_input(
     target: Target,
     script: bool,
     verify_ir: bool,
+    resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<Vec<u8>> {
     let plan = build_compile_plan(input, root)?;
     match plan {
-        CompilePlan::Bundle { entry, root } => compile_bundle(&entry, &root, target, verify_ir),
+        CompilePlan::Bundle { entry, root } => {
+            compile_bundle(&entry, &root, target, verify_ir, resolution_options)
+        }
         CompilePlan::SingleSource { source, filename } => {
             compile_source(&source, Some(filename.as_str()), target, script, verify_ir)
         }
@@ -2006,15 +2035,25 @@ fn compile_source(
     }
 }
 
-fn compile_bundle(entry: &Path, root: &Path, target: Target, verify_ir: bool) -> Result<Vec<u8>> {
+fn compile_bundle(
+    entry: &Path,
+    root: &Path,
+    target: Target,
+    verify_ir: bool,
+    resolution_options: &wjsm_module::ResolutionOptions,
+) -> Result<Vec<u8>> {
     match target {
         Target::Wasm => {
             if verify_ir {
-                let program = wjsm_module::lower_bundle(entry, root)?;
+                let program = wjsm_module::lower_bundle_with_options(
+                    entry,
+                    root,
+                    resolution_options.clone(),
+                )?;
                 verify_ir_for_pipeline(&program, true)?;
                 backend_wasm::compile(&program)
             } else {
-                wjsm_module::bundle(entry, root)
+                wjsm_module::bundle_with_options(entry, root, resolution_options.clone())
             }
         }
         Target::Jit => bail!("JIT backend is not implemented yet"),
@@ -2044,19 +2083,26 @@ pub fn run_file_in_process_with_options(
 ) -> (i32, Vec<u8>, Vec<u8>) {
     install_embedded_runtime_artifacts();
 
-    let wasm =
-        match compile_file_input_to_pipeline_result(input, None, Target::Wasm, false, false, false)
-            .and_then(|result| result.wasm.context("compile stage produced no WASM"))
-        {
-            Ok(wasm) => wasm,
-            Err(e) => {
-                return (
-                    EXIT_COMPILE_ERROR as i32,
-                    Vec::new(),
-                    format!("Error: {e:#}\n").into_bytes(),
-                );
-            }
-        };
+    let wasm = match compile_file_input_to_pipeline_result(
+        input,
+        None,
+        Target::Wasm,
+        false,
+        false,
+        false,
+        &wjsm_module::ResolutionOptions::default(),
+    )
+    .and_then(|result| result.wasm.context("compile stage produced no WASM"))
+    {
+        Ok(wasm) => wasm,
+        Err(e) => {
+            return (
+                EXIT_COMPILE_ERROR as i32,
+                Vec::new(),
+                format!("Error: {e:#}\n").into_bytes(),
+            );
+        }
+    };
 
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2148,4 +2194,175 @@ fn runtime_options_for_in_process(
         fs_allow_write_anywhere: sandbox.allow_write_anywhere,
         ..runtime::RuntimeOptions::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::fs;
+    use std::ops::Deref;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEST_PROJECT: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestProject {
+        path: PathBuf,
+    }
+
+    impl TestProject {
+        fn new(case: &str) -> Self {
+            let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "wjsm_cli_browser_conditions_{case}_{}_{id}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("test project should be created");
+            Self { path }
+        }
+    }
+
+    impl Deref for TestProject {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.path
+        }
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn write_file(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("parent dir should be created");
+        }
+        fs::write(path, content).expect("fixture file should be writable");
+    }
+
+    fn parse_cli_for_test(args: &[&str]) -> Cli {
+        parse_cli(args).expect("CLI args should parse")
+    }
+
+    #[test]
+    fn cli_browser_flag_enables_browser_condition() {
+        let root = TestProject::new("browser_flag");
+        write_file(&root, "package.json", r#"{"type":"module"}"#);
+        write_file(
+            &root,
+            "main.js",
+            "import { value } from 'pkg';\nconsole.log(value);\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/package.json",
+            r#"{"type":"module","main":"node.js","browser":"browser.js"}"#,
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/node.js",
+            "export const other = 1;\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/browser.js",
+            "export const value = 1;\n",
+        );
+
+        let default_cli = parse_cli_for_test(&[
+            "wjsm",
+            "check",
+            "--root",
+            root.to_str().expect("root should be UTF-8"),
+            root.join("main.js")
+                .to_str()
+                .expect("input should be UTF-8"),
+        ]);
+        let default_error = execute(default_cli).expect_err("browser should be opt-in");
+        let default_message = format!("{default_error:#}");
+        assert!(
+            default_message.contains("Missing export 'value'"),
+            "{default_message}"
+        );
+
+        let browser_cli = parse_cli_for_test(&[
+            "wjsm",
+            "--browser",
+            "check",
+            "--root",
+            root.to_str().expect("root should be UTF-8"),
+            root.join("main.js")
+                .to_str()
+                .expect("input should be UTF-8"),
+        ]);
+
+        assert_eq!(
+            execute(browser_cli).expect("browser flag should enable browser entry"),
+            ExitCode::from(EXIT_SUCCESS)
+        );
+    }
+
+    #[test]
+    fn cli_condition_adds_custom_condition() {
+        let root = TestProject::new("custom_condition");
+        write_file(&root, "package.json", r#"{"type":"module"}"#);
+        write_file(
+            &root,
+            "main.js",
+            "import { value } from 'pkg';\nconsole.log(value);\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/package.json",
+            r#"{"type":"module","exports":{".":{"custom":"./custom.js","default":"./default.js"}}}"#,
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/custom.js",
+            "export const value = 1;\n",
+        );
+        write_file(
+            &root,
+            "node_modules/pkg/default.js",
+            "export const other = 1;\n",
+        );
+
+        let default_cli = parse_cli_for_test(&[
+            "wjsm",
+            "check",
+            "--root",
+            root.to_str().expect("root should be UTF-8"),
+            root.join("main.js")
+                .to_str()
+                .expect("input should be UTF-8"),
+        ]);
+        let default_error = execute(default_cli).expect_err("custom condition should be opt-in");
+        let default_message = format!("{default_error:#}");
+        assert!(
+            default_message.contains("Missing export 'value'"),
+            "{default_message}"
+        );
+
+        let custom_cli = parse_cli_for_test(&[
+            "wjsm",
+            "--condition",
+            "custom",
+            "check",
+            "--root",
+            root.to_str().expect("root should be UTF-8"),
+            root.join("main.js")
+                .to_str()
+                .expect("input should be UTF-8"),
+        ]);
+
+        assert_eq!(
+            execute(custom_cli).expect("custom condition should select custom export"),
+            ExitCode::from(EXIT_SUCCESS)
+        );
+    }
 }

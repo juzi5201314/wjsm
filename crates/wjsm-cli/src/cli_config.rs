@@ -18,6 +18,8 @@ struct CliConfig {
     color: Option<ColorChoice>,
     no_color: Option<bool>,
     target: Option<Target>,
+    browser: Option<bool>,
+    condition: Option<Vec<String>>,
     max_heap_size: Option<usize>,
     root: Option<PathBuf>,
     script: Option<bool>,
@@ -120,6 +122,16 @@ fn apply_global_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &CliCo
         && !command_line_global(matches, "target")
     {
         cli.target = target;
+    }
+    if let Some(browser) = config.browser
+        && !command_line_global(matches, "browser")
+    {
+        cli.browser = browser;
+    }
+    if let Some(condition) = &config.condition
+        && !command_line_global(matches, "condition")
+    {
+        cli.condition = condition.clone();
     }
     if let Some(max_heap_size) = config.max_heap_size
         && !command_line_global(matches, "max_heap_size")
