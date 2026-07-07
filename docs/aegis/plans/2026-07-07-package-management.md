@@ -2,7 +2,7 @@
 
 Goal: 实现 wjsm 的完整 npm 生态包管理能力（`wjsm install/add/remove/task/x` + workspaces），做到无 `node_modules`、全局内容寻址存储（CAS blob + SQLite + zstd + packfile）直供编译器，并实现 AOT 独有的跨项目分层编译产物复用（L1 可重定位 IR + L2 cwasm 片段）。批准的设计见 `docs/aegis/specs/2026-07-07-package-management-design.md`。
 
-Architecture: 新增独立 crate `wjsm-pm`，拥有 registry client / CAS store / PubGrub solver / lockfile / scripts / workspace。`wjsm-module` 新增 `Vfs` + `ResolutionOverlay` 两个 trait（定义在 module 侧，实现在 pm 侧）；`Vfs` 覆盖 `ModuleResolver` 解析算法的**全部**文件系统谓词（`read_to_string` / `canonicalize` / `is_file` / `is_dir` / `exists` / `read_package_json`，共约 20 处触点），而非仅三处读取——`wjsm-module` **不反向依赖** `wjsm-pm`。`wjsm-semantic` 新增可重定位 IR 单包 lower + 链接阶段（服务 L1）。`wjsm-cli` 组装注入并新增子命令。依赖方向：`wjsm-pm → wjsm-module`、`wjsm-pm → wjsm-snapshot-format`、`wjsm-cli → wjsm-pm`。
+Architecture: 新增独立 crate `wjsm-pm`，拥有 registry client / CAS store / PubGrub solver / lockfile / scripts / workspace。`wjsm-module` 新增 `Vfs` + `ResolutionOverlay` 两个 trait（定义在 module 侧，实现在 pm 侧）；`Vfs` 抽象 `ModuleResolver` 解析算法实际路由的**全部**文件系统谓词（`read_to_string`×1 / `canonicalize`×12 / `is_file`×7 / `is_dir`×6，resolver.rs 内共 **26 处**）+ `package_json.rs` 的 `read_package_json`（合并原 `fs::metadata`+`read_to_string`），而非仅三处读取；trait 另提供 `exists`（`FsVfs`=`Path::exists`）作抽象完整性、供 `CasVfs` 内部前缀判定复用——**resolver 自身不调用 `exists`**（已 grep 核实 `wjsm-module` 无 `.exists()` 触点）。`wjsm-module` **不反向依赖** `wjsm-pm`。`wjsm-semantic` 新增可重定位 IR 单包 lower + 链接阶段（服务 L1）。`wjsm-cli` 组装注入并新增子命令。依赖方向：`wjsm-pm → wjsm-module`、`wjsm-pm → wjsm-snapshot-format`、`wjsm-cli → wjsm-pm`。
 
 Tech Stack: Rust 2024；`rusqlite`（bundled SQLite，WAL）；`zstd`；`blake3`（内容哈希）；`tar` + `flate2`（tgz 解包）；`sha2` + base64（npm SSRI 完整性校验）；`reqwest`（workspace 已有，async/tokio）；`tokio`（workspace 已有，`spawn_blocking` 隔离 SQLite 同步写）；`pubgrub` crate（版本求解）；`toml`（workspace 已有，lockfile）；`serde_json`（packument、迁移读取）；`serde_yaml`（pnpm-lock 迁移）；现有 fixture runner + nextest。
 
@@ -97,7 +97,7 @@ src/scripts/mod.rs
 src/workspace.rs
 tests/mock_registry.rs      # 内置离线 mock registry 测试辅助
 ```
-修改 `crates/wjsm-module/src/`：新增 `vfs.rs`（trait 定义 + `FsVfs`/`NoOverlay` 默认实现）；`resolver.rs`（构造器接受 vfs/overlay，**全部约 20 处 fs 谓词**——`read_to_string`/`canonicalize`/`is_file`/`is_dir`/`metadata`——改 trait 调用）；`bundler.rs`/`graph.rs`（注入透传）；`lib.rs`（导出 trait）。
+修改 `crates/wjsm-module/src/`：新增 `vfs.rs`（trait 定义 + `FsVfs`/`NoOverlay` 默认实现）；`resolver.rs`（构造器接受 vfs/overlay，**全部 26 处 fs 谓词**——`read_to_string`×1/`canonicalize`×12/`is_file`×7/`is_dir`×6——改 trait 调用；resolver 无 `exists`/独立 `metadata` 触点）；`package_json.rs`（`read_package_info` 经 `Vfs::read_package_json`，合并原 `fs::metadata`+`fs::read_to_string`）；`bundler.rs`/`graph.rs`（注入透传）；`lib.rs`（导出 trait）。
 修改 `crates/wjsm-semantic/src/`：新增 `relocatable/{mod,lower_one,relocate,link}.rs`；`lib.rs` 导出。
 修改 `crates/wjsm-cli/src/`：`cli_args.rs`（新增 `Install/Add/Remove/Task/X` 子命令）；`lib.rs`（dispatch + `cmd_install` 等）；新增 `pm_commands.rs`。
 修改根 `Cargo.toml`：workspace members + 新增依赖。
@@ -458,9 +458,9 @@ Files:
 
 Why: SQLite index.db（WAL）统管 packages/manifests/blobs/artifacts 映射，取代海量 JSON 小文件元数据。
 
-Impact/Compatibility: 纯新增。事务写保证中断可回滚——本任务提供 `transaction()` 入口（`&mut self` 借出 `rusqlite::Transaction`），任务 1.5 的 `add_package_from_dir` **必须**在单事务内写完 blobs+manifest+package，中断则整体回滚。
+Impact/Compatibility: 纯新增。事务写保证中断可回滚——本任务提供 `with_txn(|tx| …)` 入口（内部锁 `Mutex<Connection>` 后开 `rusqlite::Transaction`，成功 commit / 失败 rollback；**不暴露**裸 `transaction(&mut self)`，因 `Store` 经 `Arc` 共享、`conn` 在 `Mutex` 内），任务 1.5 的 `add_package_from_dir` **必须**经 `with_txn` 在单事务内写完 blobs+manifest+package，中断则整体回滚。
 
-**与批准设计 §6.3 的偏离（显式记录）**：设计 §6.3 用规范化三表 `manifests(id) + manifest_entries(manifest_id, rel_path, blob_hash, mode)` + `packages.meta BLOB(MessagePack)`。本计划首版塌缩为 `manifests(hash, body BLOB)`（manifest 整体 JSON 存 body）并省略 `packages.meta`。理由：首版读取路径只需"包→manifest→rel_path→blob"整体加载，不需按 rel_path 做 SQL 查询；`meta` 快照（package.json 关键字段）在 solver 阶段直接从 packument 取，不必冗余进 index。**代价**：无法用 SQL 直接查"哪些包含某 rel_path"；`manifest_entries` 可查询性推迟到需要 `wjsm store ls`/按文件反查时再规范化（届时递增 store 版本 `v2`）。此偏离已在 executing 后补 ADR 时记录。
+**与批准设计 §6.3 的偏离（显式记录）**：设计 §6.3 用规范化三表 `manifests(id) + manifest_entries(manifest_id, rel_path, blob_hash, mode)` + `packages.meta BLOB(MessagePack)`。本计划首版**仅**塌缩 manifest 存储为 `manifests(hash, body BLOB)`（manifest 整体 JSON 存 body），**保留** `packages.meta` 列（与设计对齐，本任务建列、写入见任务 3.2）。理由：首版读取路径只需"包→manifest→rel_path→blob"整体加载，不需按 rel_path 做 SQL 查询。**代价**：无法用 SQL 直接查"哪些包含某 rel_path"；`manifest_entries` 规范化（可查询性）推迟到需要 `wjsm store ls`/按文件反查时再实现（届时递增 store 版本 `v2`）。`packages.meta` 不属此偏离——它照设计保留。此偏离已在 executing 后补 ADR 时记录。
 
 Verification: `cargo nextest run -p wjsm-pm -E 'test(index)'`
 
@@ -599,6 +599,7 @@ Steps:
 - [ ] **最小代码**：**先把上面代码里的 `conn: Connection` 改为 `conn: std::sync::Mutex<Connection>`**（`Store` 经 `Arc` 共享，事务需内部可变；所有 `self.conn.execute`/`prepare` 改为先 `self.conn.lock().unwrap()` 借出 guard 再调用）。再补齐下列（供任务 1.5 / GC / 求解使用），并各加一个 `index_*` 测试：
   - `put_manifest_raw(hash, body)` / `get_manifest_raw(hash)`（manifest body 存取，任务 1.5 用）。
   - `with_txn<R>(&self, f: impl FnOnce(&Transaction) -> Result<R>) -> Result<R>`：锁 `Mutex<Connection>` 后开事务、执行闭包、成功 `commit`/失败 `rollback`。任务 1.5 用它把「写全部 blob + manifest + package」包进单事务，中断整体回滚。（不暴露裸 `transaction(&mut self)`，因 `Store` 经 `Arc` 共享、`conn` 在 `Mutex` 内。）
+  - **事务作用域自由函数**（模块级 `fn`，非 `&self` 方法）：`txn_put_blob(tx: &Transaction, hash, loc)` / `txn_put_manifest_raw(tx, hash, body)` / `txn_put_package(tx, name, version, integrity, manifest_hash)`。它们直接在传入的 `&Transaction` 上 `execute`，**不触碰 `Mutex`**——因为 `with_txn` 的闭包运行时锁已被 `with_txn` 持有，闭包内若再调 `&self` 的 `put_*` 方法会二次 `lock()` 同一 `Mutex` **死锁**。任务 1.5 的 `add_package_from_dir` 只能经这三个 `txn_*` 自由函数写入。`&self` 的 `put_blob`/`put_manifest_raw`/`put_package` 保留供事务外单发写入（各自 `lock()` 一次），与 `txn_*` 共享同一 SQL（可让 `&self` 方法内部 `lock` 后转调 `txn_*` 复用 SQL，避免两份语句）。
   - `active_pack_id()` / `bump_pack() -> Result<u32>`：读写 `packs` 表当前活跃 pack（任务 1.2 pack 轮转的索引侧）。
   - `reachable_blob_hashes() -> HashSet<BlobHash>`：`packages`→`manifests`(body 反序列化 entries) 收集全部可达 blob；`gc` 用它标记，未被引用的 blobs 行 + packfile 尾部孤儿字节为可回收（GC 实现见任务 1.5b 的 `store::gc`）。
   - `packages.meta` 列建列即可，写入 package.json 关键字段 MessagePack 快照在任务 3.2 install 编排补（对齐设计 §6.3，供 solver 免二次拉取）。
@@ -795,7 +796,7 @@ Steps:
   }
   ```
   （`index` 字段 test 访问需 `pub(crate) index`——把 `Store.index` 改 `pub(crate)`。）
-  **可变性**：`Store` 经 `Arc<Store>` 共享（CasVfs 持有），故 `add_package_from_dir(&self, …)` 是 `&self`；但 rusqlite `Connection::transaction()` 要求 `&mut Connection`。因此 `StoreIndex.conn` 用 `Mutex<Connection>` 包裹（`StoreIndex { conn: Mutex<Connection> }`），`transaction()` 内 `lock()` 后 `conn.transaction()`——写路径串行化（与 WAL 单写模型一致），读路径同样经 `lock()`。这也满足 `Vfs: Send + Sync`（`CasVfs` 内 `Arc<Store>` 需 `Sync`）。`StoreIndex` 提供 `transaction()` 供 `add_package_from_dir` 包裹整包写入，把 blob/manifest/package 三类写入收进单个事务，保证「要么整包入库、要么整包回滚」，兑现 Impact 声明的原子性。
+  **可变性**：`Store` 经 `Arc<Store>` 共享（CasVfs 持有），故 `add_package_from_dir(&self, …)` 是 `&self`；但 rusqlite `Connection::transaction()` 要求 `&mut Connection`。因此 `StoreIndex.conn` 用 `Mutex<Connection>` 包裹（`StoreIndex { conn: Mutex<Connection> }`），`with_txn()` 内 `lock()` 后 `conn.transaction()`——写路径串行化（与 WAL 单写模型一致），读路径同样经 `lock()`。这也满足 `Vfs: Send + Sync`（`CasVfs` 内 `Arc<Store>` 需 `Sync`）。`StoreIndex` 提供 `with_txn(&self, f)`（不暴露裸 `transaction(&mut self)`，因 `conn` 在 `Mutex` 内且 `Store` 经 `Arc` 共享）供 `add_package_from_dir` 包裹整包写入，把 blob/manifest/package 三类写入收进单个事务，保证「要么整包入库、要么整包回滚」，兑现 Impact 声明的原子性。
   `Store` 另需 `manifest_has_prefix(name, version, rel) -> Result<bool>`（供 CasVfs::is_dir 判定目录）：加载包 manifest，返回是否存在任一 entry 的 `rel_path` 以 `rel/` 为前缀（或等于 `rel` 的父目录链）。
   `normalize_mode(meta: &std::fs::Metadata) -> u32` 辅助：跨平台归一化文件模式——Unix 下保留可执行位（`0o755` 若 owner-exec 置位，否则 `0o644`）；非 Unix 恒 `0o644`。保证同内容文件在不同平台 manifest 一致（blob 去重不受 mode 影响，mode 只随 manifest entry）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(store_integration)'`。
@@ -829,7 +830,7 @@ Steps:
 Files:
 - 创建 `crates/wjsm-module/src/vfs.rs`
 - 修改 `crates/wjsm-module/src/lib.rs`（导出）
-- 修改 `crates/wjsm-module/src/resolver.rs`（构造器接受 trait 对象；**全部** fs 谓词——`read_to_string`/`canonicalize`/`is_file`/`is_dir`/`exists`——改 trait 调用）
+- 修改 `crates/wjsm-module/src/resolver.rs`（构造器接受 trait 对象；resolver 实际调用的 fs 谓词——`read_to_string`×1/`canonicalize`×12/`is_file`×7/`is_dir`×6——改 trait 调用。注：resolver 自身**不调用** `Path::exists`，`Vfs::exists` 仅为 `CasVfs` 内部 `is_file`/`is_dir` 复用与 trait 完备性而定义）
 - 修改 `crates/wjsm-module/src/package_json.rs`（`read_package_info` 经 Vfs）
 - 修改 `crates/wjsm-module/src/bundler.rs` / `graph.rs`（注入透传）
 
@@ -2144,7 +2145,7 @@ Verification: `cargo nextest run -p wjsm-semantic -E 'test(relocatable_ir_equiva
 
 Steps:
 
-- [ ] **写失败测试（可编译、无占位符）**。`link.rs` 测试。**注意**：`lower_modules` 需 6 个 map 入参，测试用一个 `build_bundle_inputs` 辅助从源码构造它们（复用 `wjsm-module` 的 `analyze_module_links` 或在 semantic 测试内手工构造最小 map），并同时喂给两条路径，保证入参一致：
+- [ ] **写失败测试（可编译、无占位符）**。`link.rs` 测试。**注意**：`lower_modules` 需 6 个 map 入参，测试用一个 `build_bundle` 辅助从源码构造它们（在 semantic 测试内**手工构造**最小 map——**不得**反向引用 `wjsm-module::analyze_module_links`，见「最小代码」的依赖方向说明），并同时喂给两条路径，保证入参一致：
   ```rust
   #[cfg(test)]
   mod tests {
@@ -2216,7 +2217,7 @@ Steps:
   ```
 - [ ] **Verify RED**：运行预期失败（`build_bundle`/`link`/`LinkMeta` 未实现）。
 - [ ] **最小代码（分级实现）**：
-  - 实现 `build_bundle`：对每个 `(id, src)` `wjsm_parser::parse_module` + 构造 `ModuleMetadata`；用 `import`/`export` 语法静态提取构造 6 个 map。L2-a 叶子包各 map 为空；L2-b/L2-c **必须**填 `import_map`（`ImportBinding` 记录 `import {x} from './a'` 的 `(local, imported, target_module)`）、`export_names`、`re_export_map`（`export {v as w} from './a'`）——否则两条路径入参不一致、等价性测试无意义。可直接复用 `wjsm-module` 的 `analyze_module_links` 生成这些 map（在 semantic 测试内以最小 stub 模拟 `ModuleGraph`），或手工构造对应的 `ImportBinding`/`ReExportBinding`。
+  - 实现 `build_bundle`：对每个 `(id, src)` `wjsm_parser::parse_module` + 构造 `ModuleMetadata`；用 `import`/`export` 语法静态提取构造 6 个 map。L2-a 叶子包各 map 为空；L2-b/L2-c **必须**填 `import_map`（`ImportBinding { source_module, names: Vec<(local, imported)>, specifier }`，对齐 `wjsm-ir` 实际字段——核对 `crates/wjsm-ir/src/lib.rs:789`）、`export_names`、`re_export_map`（`ReExportBinding { source_module, local_name: Option<String>, exported_name: Option<String> }`，核对 `lib.rs:803`）——否则两条路径入参不一致、等价性测试无意义。**注意依赖方向**：`wjsm-module` 已 normal-depend `wjsm-semantic`（`bundler.rs:5`），故 semantic 测试**不得**反向引用 `wjsm-module::analyze_module_links`（会成 dev-dep 环，且 `analyze_module_links` 需真实 `ModuleGraph`（由磁盘文件 BFS 构建，`graph.rs:35`）无法 stub）。测试**自包含**：直接手工构造 `ImportBinding`/`ReExportBinding` 填 map，与 `whole_program`/`linked_program` 两条路径共用同一 `Bundle`。
   - 实现 `LinkMeta::from_bundle`：记录模块顺序、每模块 scope 基址（下一节）、import 边、export 名到全局符号的解析。
   - 实现 `link`：**scope 基址分配须复现 `lower_modules` 的分配序**——先占用全局根 scope 0（`$0.$global`/全局常量），再对每模块按 bundle 顺序 `push_scope(Block)` 得到该模块基址（见任务 5.1 `min_scope_id` 的语义：局部 IR 从 1 起，链接时整体加 `base-1` 偏移，使模块首 scope 落在 `lower_modules` 分配的同一 id）。对每片段应用重定位：scope id 加偏移、常量索引加 const_base、DataSection 字符串偏移加 data_base、import 符号解析到目标模块全局名。
   - **迭代顺序**：先让 L2-a 绿（无 import/无 $global 交互）→ commit；再 L2-b（import 边 + 命名空间对象顺序）→ commit；再 L2-c（re-export/shared_env）→ commit 或（若不可达）标记降级到 L2-bundle 并 commit 说明。
@@ -2333,7 +2334,7 @@ Steps:
 ## 自审记录
 
 - Spec 覆盖：CAS 存储(P1)/求解(P2)/install+lockfile+CLI(P3)/task+x+workspaces(P4)/编译产物缓存(P5) 各有任务；spec §13 测试策略逐项映射到任务验收。
-- Placeholder：无 TBD/TODO；每步含完整可粘贴代码与命令；P5 等价性测试的入参已展开为可编译代码（`sample_link_modules` helper），无 `/* ... */` 占位。
+- Placeholder：无 TBD/TODO；每步含完整可粘贴代码与命令；P5 等价性测试的入参已展开为可编译代码（`build_bundle` helper 构造 `Bundle`，两条路径共用），无 `/* ... */` 占位。
 - 类型一致：`BlobHash=[u8;32]`、`BlobLoc`、`Manifest`、`SemVer`/`Range`/`Comparator`、`WjsmLock`（含 `root_deps`）、`encode_pkg_dir`、`RelocatableModule`/`LOCAL_SCOPE_BASE` 跨任务签名一致。
 - 兼容：默认 FsVfs/NoOverlay 零破坏、module 不依赖 pm 均标为硬验收；`FsVfs` 每方法与被替换的 `std::fs`/`Path` 调用语义逐处等价。
 - 复杂度：主逻辑进新 crate/新文件；resolver.rs 只做 wiring（全部 fs 谓词路由进 `self.vfs`，不新增包管理逻辑），不因触点数量增负。
@@ -2344,10 +2345,10 @@ Steps:
 
 针对首轮计划的以下缺口已逐项修正：
 
-1. **「3 处磁盘接缝」证伪** → 任务 1.6 重写为「全部 fs 谓词（`canonicalize`×12 / `is_file`×7 / `is_dir`×6 / `read_to_string`）路由进 `Vfs`」，`Vfs` trait 补 `canonicalize`/`is_file`/`exists`；`CasVfs::canonicalize` 对虚拟路径做词法归一化（`normalize_virtual`）。这是 P2–P4 地基。
+1. **「3 处磁盘接缝」证伪** → 任务 1.6 重写为「resolver 实际路由的全部 fs 谓词（`read_to_string`×1 / `canonicalize`×12 / `is_file`×7 / `is_dir`×6，共 26 处）路由进 `Vfs`」，`Vfs` trait 提供 `canonicalize`/`is_file`/`is_dir`/`read_to_string`/`read_package_json`，另加 `exists`（resolver 不调用，仅供 `CasVfs` 内部前缀判定 + trait 完备性）；`CasVfs::canonicalize` 对虚拟路径做词法归一化（`normalize_virtual`）。这是 P2–P4 地基。
 2. **npm_semver 部分实现** → 任务 2.1 重写为 comparator 结构模型，覆盖 `^`/`~`/x-range/hyphen/比较运算符/`||`/**预发布包含规则**（修正原 `(lo,hi)` 元组模型对 `2.0.0-alpha` 的误判硬伤），符合 hard rule「No partial implementations」。
 3. **P5 逐指令等价 + 占位测试** → 任务 5.1/5.2 修正 `LOCAL_SCOPE_BASE`（避开全局根 `$0.$global`），等价性测试展开为可编译代码，并分四阶段验收（单模块无 import → 常量/字符串 → 跨模块 import → `$global`/live-binding），承认这是研究级里程碑。
-4. **Store 非事务 + GC/pack 轮转缺失** → 任务 1.4/1.5 加 `packs` 表 + `transaction()` 整包原子写 + 回滚测试；新增任务 1.5b 标记-复制 gc；`PackWriter` 支持 pack 轮转。
+4. **Store 非事务 + GC/pack 轮转缺失** → 任务 1.4/1.5 加 `packs` 表 + `with_txn(|tx| …)` 整包原子写（配套 `txn_put_blob`/`txn_put_manifest_raw`/`txn_put_package` 事务作用域自由函数，避免闭包内二次 `lock` 死锁）+ 回滚测试；新增任务 1.5b 标记-复制 gc；`PackWriter` 支持 pack 轮转。
 5. **CasVfs scoped 包破损 + PnpOverlay 真空** → 任务 3.2 用 `encode_pkg_dir`（`/`→`%2F`、`@`→`%40`）保证包目录单组件、scoped 包安全；`is_dir` 用 `manifest_has_prefix` 支持中间目录；补全 `PnpOverlay` 实现（边表 + root_deps）。
 6. **peer 求解 hand-wave** → 任务 2.3 明确 peer→PubGrub 约束翻译、`MockIndex` API、optionalDependencies 跳过语义 + 对应测试。
 7. **fixture 命名不一致** → 统一 pm 端到端为 CLI 集成测试 `test(pm_*)`，移除不存在的 `fixtures/pm` suite（fixture runner 仅 happy/errors/modules）。
