@@ -240,13 +240,38 @@ Task 7 quality-review repair — extensionless runtime CommonJS probe:
 - Updated `docs/aegis/INDEX.md` Baselines with ADR 0006.
 - Baseline sync: required and satisfied by ADR 0006 plus the Aegis index baseline entry; no separate baseline snapshot was created because this repository already uses project `docs/adr/` as the architecture baseline owner for runtime boundaries.
 
+### Final review blocker repairs — runtime ModuleId ranges and builtins
+
+- Added `fixtures/modules/runtime_loading/esm_dynamic_import_module_id_collision`, `esm_dynamic_import_builtin`, and `cjs_require_builtin`; wired them into `tests/integration/fixtures.rs`. The collision fixture now uses function-body literal `import('./dep.mjs')` as an assignment expression, which the module graph lowers through the static `dynamic_import(module_id)` fast path.
+- Added `lower_runtime_entry_bundle_keeps_static_dynamic_import_module_ids_offsettable`, which proves runtime entry lowering emits a `Constant::ModuleId` for static `import('./dep.mjs')` and that `offset_module_ids` rewrites both entry/dependency ids before backend compilation.
+- Static fast-path confirmation: `cargo run --quiet -- dump-ir fixtures/modules/runtime_loading/esm_dynamic_import_module_id_collision/first/entry.mjs --root fixtures/modules/runtime_loading/esm_dynamic_import_module_id_collision/first` showed `call builtin.dynamic_import(%1)` and `call builtin.register_module_namespace(%5, %4)` with `moduleid(mod1)` constants.
+- Repair: `RuntimeModuleRegistry` now reserves globally unique runtime ModuleId ranges, distinguishes runtime-compiled ids from `PrecompiledModuleId`, and removes the temporary runtime-id key when an entry is promoted to its canonical File/Builtin key; `RuntimeModuleInstantiationContext` exposes the reservation seam; `wjsm-ir` offsets `Constant::ModuleId` values atomically; CLI offsets each runtime ESM/builtin bundle before backend compilation.
+- Repair: `wjsm-module` exposes a narrow runtime-builtin bundle API backed by existing `builtin_js`; CLI compiles builtin bundles for `RuntimeModuleKey::Builtin`; runtime instantiation returns builtin namespaces for `import()` and default exports for `require()` while keeping `require.resolve('node:path')` / `import.meta.resolve('node:path')` at `node:path`.
+- Node path builtin compatibility guard: `cargo nextest run -E 'test(modules__runtime_loading__esm_dynamic_import_builtin) | test(modules__runtime_loading__cjs_require_builtin) | test(modules__node_builtin_path_esm) | test(modules__node_builtin_path_cjs)'` passed — `Summary [   1.276s] 4 tests run: 4 passed, 796 skipped`.
+- New regression guard: `cargo nextest run -E 'test(modules__runtime_loading__esm_dynamic_import_module_id_collision)'` passed — `Summary [   0.070s] 1 test run: 1 passed, 799 skipped`.
+- IR remap guard: `cargo nextest run -p wjsm-ir -E 'test(offset_module_ids)'` passed — `Summary [   0.005s] 2 tests run: 2 passed, 17 skipped`.
+- Acceptance: `cargo check -p wjsm-runtime -p wjsm-cli` passed — `cargo build (2 crates compiled)` and `Finished dev profile [unoptimized + debuginfo] target(s) in 1.38s`.
+- Acceptance: `cargo nextest run -p wjsm-module -E 'test(lower_runtime_entry_bundle_keeps_static_dynamic_import_module_ids_offsettable) | test(runtime_resolve_) | test(dynamic_import) | test(runtime_commonjs_probe_)'` passed — `Summary [   0.014s] 13 tests run: 13 passed, 213 skipped`.
+- Acceptance: `cargo nextest run -p wjsm-runtime -E 'test(dynamic_module) | test(module_registry_) | test(require_resolve)'` passed — `Summary [   0.099s] 27 tests run: 27 passed, 208 skipped`.
+- Acceptance: `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__dynamic_import)'` passed — `Summary [   1.119s] 18 tests run: 18 passed, 782 skipped`.
+
 ### Final targeted verification — 2026-07-07
 
-- `cargo check -p wjsm-runtime -p wjsm-cli` passed — `cargo build (0 crates compiled)` and `Finished dev profile [unoptimized + debuginfo] target(s) in 0.49s`.
-- `cargo nextest run -p wjsm-module -E 'test(cjs_) | test(runtime_resolve_) | test(resolve_paths_) | test(dynamic_import) | test(runtime_commonjs_probe_)'` passed — `Summary [   0.169s] 106 tests run: 106 passed, 119 skipped`.
-- `cargo nextest run -p wjsm-semantic -E 'test(dynamic_import) | test(import_meta_resolve) | test(require_runtime)'` passed — `Summary [   0.024s] 14 tests run: 14 passed, 134 skipped`.
-- `cargo nextest run -p wjsm-runtime -E 'test(dynamic_module) | test(import_meta_resolve) | test(require_cache) | test(module_registry_) | test(require_resolve) | test(dynamic_module_loader_unavailable) | test(require_loader_unavailable)'` passed — `Summary [   0.163s] 31 tests run: 31 passed, 201 skipped`.
-- `cargo nextest run -p wjsm-backend-wasm -E 'test(builtin_registry_binding_count_matches_ir_contract) | test(import_names_are_unique) | test(builtin_bindings_are_unique) | test(host_imports_count_locked)'` passed — `Summary [   0.021s] 4 tests run: 4 passed, 59 skipped`.
-- `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__cjs_conditional_require_false) | test(modules__dynamic_import)'` passed — `Summary [   0.406s] 17 tests run: 17 passed, 777 skipped`.
+- `cargo check -p wjsm-runtime -p wjsm-cli` passed — `cargo build (0 crates compiled)` and `Finished dev profile [unoptimized + debuginfo] target(s) in 0.28s`.
+- `cargo nextest run -p wjsm-ir -E 'test(offset_module_ids)'` passed — `Summary [   0.005s] 2 tests run: 2 passed, 17 skipped`.
+- `cargo nextest run -p wjsm-module -E 'test(cjs_) | test(runtime_resolve_) | test(resolve_paths_) | test(dynamic_import) | test(runtime_commonjs_probe_) | test(lower_runtime_entry_bundle_keeps_static_dynamic_import_module_ids_offsettable)'` passed — `Summary [   0.117s] 107 tests run: 107 passed, 119 skipped`.
+- `cargo nextest run -p wjsm-semantic -E 'test(dynamic_import) | test(import_meta_resolve) | test(require_runtime)'` passed — `Summary [   0.023s] 14 tests run: 14 passed, 134 skipped`.
+- `cargo nextest run -p wjsm-runtime -E 'test(dynamic_module) | test(import_meta_resolve) | test(require_cache) | test(module_registry_) | test(require_resolve) | test(dynamic_module_loader_unavailable) | test(require_loader_unavailable)'` passed — `Summary [   0.166s] 35 tests run: 35 passed, 201 skipped`.
+- `cargo nextest run -p wjsm-backend-wasm -E 'test(builtin_registry_binding_count_matches_ir_contract) | test(import_names_are_unique) | test(builtin_bindings_are_unique) | test(host_imports_count_locked)'` passed — `Summary [   0.010s] 4 tests run: 4 passed, 59 skipped`.
+- `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__cjs_conditional_require_false) | test(modules__dynamic_import) | test(modules__node_builtin_path_esm) | test(modules__node_builtin_path_cjs)'` passed — `Summary [   1.215s] 22 tests run: 22 passed, 778 skipped`.
 - CLI smoke `cargo run -- run fixtures/modules/runtime_loading/cjs_computed_require/main.js --root fixtures/modules/runtime_loading/cjs_computed_require` printed `computed-cjs-loaded` and `true`.
 - CLI smoke `cargo run -- run fixtures/modules/runtime_loading/esm_dynamic_import_variable/main.js --root fixtures/modules/runtime_loading/esm_dynamic_import_variable` printed `dynamic-esm-loaded`.
+
+### Final quality-blocker repair — errored runtime ModuleId cleanup
+
+- Added `module_registry_promotes_runtime_entry_id_to_canonical_errored_key`, simulating a runtime-loaded ESM namespace registered under a reserved runtime ModuleId and then failed under its canonical file key. The regression asserts `get_namespace_by_module_id` returns `None`, direct lookup by the temporary `RuntimeModuleId` key is missing, the temporary key is removed, and only the canonical error is rooted.
+- Repair: `RuntimeModuleRegistry::finish_errored` now mirrors loaded promotion cleanup by removing a different temporary module-id key before recording the canonical errored key, and compiled runtime-module `main` failures now record ESM/Builtin errors with the entry module id instead of only recording CJS failures with that id.
+- New regression: `cargo nextest run -p wjsm-runtime module_registry_promotes_runtime_entry_id_to_canonical_errored_key` passed — `Summary [   0.075s] 1 test run: 1 passed, 235 skipped`.
+- Acceptance: `cargo nextest run -p wjsm-runtime -E 'test(dynamic_module) | test(module_registry_)'` passed — `Summary [   0.129s] 26 tests run: 26 passed, 210 skipped`.
+- Acceptance: `cargo nextest run -E 'test(modules__runtime_loading__esm_dynamic_import_module_id_collision) | test(modules__runtime_loading__esm_dynamic_import_builtin) | test(modules__runtime_loading__cjs_require_builtin)'` passed — `Summary [   1.244s] 3 tests run: 3 passed, 797 skipped`.
+- Acceptance: `cargo check -p wjsm-runtime -p wjsm-cli` passed — `cargo build (3 crates compiled)` and `Finished dev profile [unoptimized + debuginfo] target(s) in 13.43s`.

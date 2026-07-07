@@ -1,6 +1,6 @@
 # ADR 0006: Runtime Module Loading Boundary
 
-**Status**: Accepted. issue #312 implementation landed in the working tree: runtime CJS `require()`, expression `import(expr)`, `import.meta.resolve()`, `require.resolve()`, live `require.cache`, JSON `require()`, runtime module registry, and CLI runtime loader are implemented with targeted fixture/runtime/semantic/backend verification.
+**Status**: Accepted. issue #312 implementation landed in the working tree: runtime CJS `require()`, expression `import(expr)`, `import.meta.resolve()`, `require.resolve()`, live `require.cache`, JSON `require()`, runtime builtin loading, runtime module registry, and CLI runtime loader are implemented with targeted fixture/runtime/semantic/backend verification.
 
 **Date**: 2026-07-07
 
@@ -27,10 +27,10 @@ parser → semantic → ir ← backend-wasm → runtime → cli
 Runtime module loading is split across three canonical owners:
 
 1. **`wjsm-module` owns runtime resolution.**
-   `crates/wjsm-module/src/runtime_resolution.rs` exposes plain runtime-resolution DTOs and reuses the issue #309 resolver/package condition logic for `Import` and `Require` resolution. It also owns `require.resolve.paths()` search path calculation.
+   `crates/wjsm-module/src/runtime_resolution.rs` exposes plain runtime-resolution DTOs and reuses the issue #309 resolver/package condition logic for `Import` and `Require` resolution. It also owns `require.resolve.paths()` search path calculation and exposes a narrow runtime-builtin bundle API so CLI can compile builtin JS sources without making runtime depend on compiler crates.
 
 2. **`wjsm-runtime` owns runtime module state and host semantics.**
-   `crates/wjsm-runtime/src/runtime_module_registry.rs` is the runtime source of truth for module cache state. It keys modules by canonical file / JSON / builtin / precompiled identity and models `Loading`, `Loaded`, and `Errored` states. CJS circular requires read partial exports during `Loading`; loaded CJS requires read live `module.exports`; errored entries are observable and deletable through `require.cache`.
+   `crates/wjsm-runtime/src/runtime_module_registry.rs` is the runtime source of truth for module cache state. It keys modules by canonical file / JSON / builtin / precompiled identity, reserves globally unique ids for runtime-compiled ESM bundles, and models `Loading`, `Loaded`, and `Errored` states. CJS circular requires read partial exports during `Loading`; loaded CJS requires read live `module.exports`; errored entries are observable and deletable through `require.cache`.
 
    `crates/wjsm-runtime/src/runtime_module_loader.rs` defines runtime-owned DTOs and the `RuntimeModuleLoader` trait. The trait deliberately contains no `wjsm-module`, parser, semantic, or backend types.
 
@@ -47,6 +47,7 @@ Runtime module loading is split across three canonical owners:
 - `import(expr)` evaluates the specifier under dynamic-import completion semantics: abrupt completions reject the returned Promise with the original reason instead of throwing synchronously or stringifying an exception handle.
 - `import.meta.resolve(specifier)` uses Import-condition runtime resolution and propagates exceptions before enclosing expression evaluation continues.
 - CJS `require('./data.json')` is supported; dynamic `import('./data.json')` without import assertions remains rejected because JSON import assertions are out of scope.
+- Runtime `import('node:path')` and runtime `require('node:path')` are supported through the CLI loader: builtins resolve to `RuntimeModuleKey::Builtin`, compile from `wjsm-module/builtin_js`, and cache under builtin identity. `require.resolve('node:path')` and `import.meta.resolve('node:path')` return `node:path`.
 - Runtime `.ts`, `.tsx`, and `.jsx` file loads are rejected with an unsupported runtime-loader diagnostic rather than being compiled at runtime.
 
 ## Alternatives Considered
@@ -63,6 +64,10 @@ Rejected. This would make host imports straightforward, but it reverses the curr
 
 Rejected. `ModuleId -> namespace` is only enough for static dynamic import. It cannot represent file/JSON/builtin identity, live CommonJS exports, `Loading`/`Errored` state, `require.cache`, or deletion/retry semantics. It is replaced by `RuntimeModuleRegistry`; precompiled module ids are retained only as a compatibility key for the static fast path.
 
+### Keep local runtime-loaded ModuleId values as registry keys
+
+Rejected. Runtime-loaded ESM bundles are compiled independently, so local dependency ids such as `mod1` can recur across separate runtime loads. The registry now reserves a global id range per runtime-compiled ESM bundle and offsets emitted `Constant::ModuleId` values before backend compilation; initial AOT `PrecompiledModuleId` remains only the static fast-path compatibility key.
+
 ## Consequences
 
 ### Positive
@@ -72,6 +77,9 @@ Rejected. `ModuleId -> namespace` is only enough for static dynamic import. It c
 - Runtime remains compiler-agnostic; CLI supplies compilation/instantiation glue through the loader trait.
 - CJS runtime semantics are closer to Node-compatible behavior: false branches do not execute, circular requires observe partial exports, `module.exports` reassignment is live, cache deletion is observable, and optional missing dependencies can be caught.
 - Dynamic import expression semantics are Promise-owned, including specifier abrupt completions.
+
+- Runtime-loaded ESM namespace lookup no longer aliases separately compiled subgraphs that reused local ModuleId values.
+- Builtin runtime loads use the same registry/cache owner as file and JSON loads instead of an accidental unsupported-loader boundary.
 
 ### Negative / Risks
 
@@ -87,6 +95,7 @@ Rejected. `ModuleId -> namespace` is only enough for static dynamic import. It c
 - Runtime loader is installed by CLI/file-backed execution. Library/runtime execution without a loader returns explicit loader-unavailable errors for true runtime loads.
 - Runtime crate dependency direction remains intact: no runtime dependency on `wjsm-module`, parser, semantic, or backend crates.
 - Runtime TypeScript/JSX compilation is not supported.
+- Runtime builtin loading is supported for the builtin JS sources shipped by `wjsm-module`.
 
 ## Implementation Notes
 
@@ -95,6 +104,8 @@ Rejected. `ModuleId -> namespace` is only enough for static dynamic import. It c
 - Runtime CJS module lifecycle is `Loading -> Loaded` on success and `Loading -> Errored` on body failure, so thrown partial exports do not become stale loaded entries.
 - Dynamic import lowers runtime specifiers through a completion-propagating path so intermediate abrupt completions inside sequence/conditional/composed expressions are preserved as Promise rejections.
 - CLI runtime loader maps backend host-import specs to runtime-owned import-link descriptors before calling runtime instantiation helpers.
+- Runtime ESM bundle compilation reserves a global ModuleId range via `RuntimeModuleInstantiationContext`, offsets IR module-id constants before backend compilation, and promotes entry ids from temporary runtime-id keys to canonical File/Builtin keys after successful load.
+- Runtime builtin loading compiles builtin JS through the CLI loader and stores successful loads under `RuntimeModuleKey::Builtin`.
 
 ## Status of Implementation
 
@@ -106,7 +117,7 @@ Rejected. `ModuleId -> namespace` is only enough for static dynamic import. It c
 | CJS require/resolve/cache host behavior | ✅ | runtime require/resolve/cache tests; live `module.exports`; live `require.cache` |
 | Dynamic import + import.meta.resolve | ✅ | semantic/runtime/module dynamic import tests; abrupt-completion regressions |
 | CLI runtime loader | ✅ | computed CJS require and dynamic import variable fixtures; loader-unavailable tests; TS/TSX/JSX rejection |
-| Fixture matrix | ✅ | JSON require, optional missing dependency, cache delete/retry, errored cache retry, circular partial exports, resolve.paths, explicit ESM preservation, extensionless CJS probing |
+| Fixture matrix | ✅ | JSON require, optional missing dependency, cache delete/retry, errored cache retry, circular partial exports, resolve.paths, explicit ESM preservation, extensionless CJS probing, runtime builtin import/require, runtime ESM module-id collision guard |
 
 ## References
 

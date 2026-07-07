@@ -4,7 +4,7 @@ Date: 2026-07-07
 
 ## TodoCheckpointDraft
 
-Current todo: Record ADR and evidence.
+Current todo: none.
 
 Completed todos:
 
@@ -18,14 +18,15 @@ Completed todos:
 - Task 5 completed: added expression dynamic import and `import.meta.resolve`, retired AOT-only expression import diagnostics, fixed import extra-arg validation and abrupt-completion Promise rejection semantics, and passed spec + quality review.
 - Task 6 completed: installed CLI runtime loader, preserved runtime dependency boundary, added shared-env dynamic instantiation, added computed CJS/dynamic import variable fixtures, fixed loader diagnostics, and passed spec + quality review.
 - Task 7 completed: added JSON require, optional missing, cache delete/retry, errored cache, circular partial exports, resolve.paths, explicit ESM and extensionless CJS fixtures, fixed JSON import rejection and runtime CJS lifecycle, and passed spec + quality review.
+- Task 8 completed: wrote ADR 0006, updated evidence/checkpoint/reflection, fixed final module-id/builtin review gaps, and passed final spec + quality review plus fresh targeted verification.
 
 Active slice:
 
-- Task 8: ADR, final evidence, and closeout verification.
+- None.
 
 Next step:
 
-- Write ADR 0006, update Aegis records, run final targeted verification, and request final review.
+- User can review or request commit/issue closeout. No implementation blocker remains.
 
 Blocked-on items:
 
@@ -50,9 +51,9 @@ Then continue with Subagent-Driven Development: implementer, spec compliance rev
 ## DriftCheckDraft
 
 - Original task intent: issue #312 runtime module loading.
-- Current slice alignment: Task 8 records the runtime module loading boundary and consolidates final verification/evidence.
-- Compatibility boundary: ADR documents injected loader + registry boundary and rejected alternatives without changing code behavior.
-- New owner/branch: `docs/adr/0006-runtime-module-loading-boundary.md` and final evidence records.
-- Retirement track: AOT-only dynamic import diagnostics, transform global require bridge, and `module_namespace_cache` as cache owner are retired in evidence.
-- Evidence state: Tasks 1-7 evidence recorded; final verification and ADR evidence remain.
-- Decision: continue.
+- Current slice alignment: all planned slices completed and final review gaps closed.
+- Compatibility boundary: runtime/compiler dependency boundary preserved; static fast paths preserved; runtime TS/JSX and JSON import assertions remain out of scope.
+- New owner/branch: ADR 0006 records the injected loader + runtime registry boundary.
+- Retirement track: AOT-only dynamic import diagnostics, transform global require bridge, raw runtime ModuleId collisions, and `module_namespace_cache` as cache owner are retired or bounded by registry-owned compatibility keys.
+- Evidence state: final targeted verification recorded in `90-evidence.md`.
+- Decision: complete.
