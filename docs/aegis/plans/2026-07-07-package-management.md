@@ -1588,7 +1588,7 @@ Steps:
 - [ ] **定义 `MockIndex` 与 `ResolvedGraph` 契约**（测试地基，先写清签名）。`solver/mod.rs`：
   - **`PackageIndex` 是同步 trait**（`versions_of(name) -> Vec<SemVer>` / `deps_of(name, &SemVer)` / `peers_of` / `optionals_of`）——因 pubgrub `DependencyProvider` 的 `choose_version`/`get_dependencies` 均为**同步**方法，index 必须同步可读，**不能**在其中 `.await`。故所有 registry 网络 I/O 必须在 solve **之前**完成（见任务 3.2 install 的 async 预取阶段）。
   - `MockIndex::new()` → builder（测试用同步内存实现）；`.pkg(name, version, deps: &[(name, range)])` 追加一个版本及其普通依赖；`.peer(name, version, peers: &[(name, range)])` 为已存在的 `(name,version)` 追加 peer 约束；`.optional(name, version, opts)` 追加 optional 边。builder 实现 `provider::PackageIndex`。
-  - **真实实现 `RegistryIndex`**（本任务定义结构 + 从缓存读的同步逻辑，**不含网络**——网络预取归 install/3.2）：持 `packuments: HashMap<String, crate::registry::packument::Packument>`（solve 前由 install 的 async 预取阶段填满传递闭包）。`versions_of(name)` = 该包 packument 的 `versions` 键解析为 `SemVer` 排序去预发布（除非某 dependent 区间显式含预发布，与 task 2.1 预发布规则一致）；`deps_of/peers_of/optionals_of` = 从对应 `VersionMeta` 的 `dependencies`/`peer_dependencies`/`optional_dependencies` 读并 `Range::parse`。`RegistryIndex::new(packuments)` 构造。**缺包即 panic 不可发生**——预取闭包保证 solve 期间 `get_dependencies` 触达的每个包名都已在 map 内（预取按声明 deps 名递归拉取，见任务 3.2）；若 map 缺键，`versions_of` 返回空 → pubgrub 判 `NoSolution`（正确失败，非 panic）。加一个 `solver_registry_index_reads_prefetched` 测试：手工塞两个 packument 进 map，断言 `solve(&RegistryIndex::new(map), "root", ...)` 与等价 `MockIndex` 同解（证明真实 index 与 mock 行为一致）。
+  - **真实实现 `RegistryIndex`**（本任务定义结构 + 从缓存读的同步逻辑，**不含网络**——网络预取归 install/3.2）：持 `packuments: HashMap<String, crate::registry::packument::Packument>`（solve 前由 install 的 async 预取阶段填满传递闭包）。`versions_of(name)` = 该包 packument 的 `versions` 键**全部**解析为 `SemVer` 并按序返回（**不在此预筛预发布**——`versions_of` 只有包名、无 dependent 区间信息，无法判断预发布是否该纳入；预发布包含/排除由 `VS::contains`（任务 2.1 `set_matches`）在 pubgrub `choose_version` 阶段按各 comparator-set 规则决定，与 task 2.1 单一真相一致）；`deps_of/peers_of/optionals_of` = 从对应 `VersionMeta` 的 `dependencies`/`peer_dependencies`/`optional_dependencies` 读并 `Range::parse`。`RegistryIndex::new(packuments)` 构造。**缺包即 panic 不可发生**——预取闭包保证 solve 期间 `get_dependencies` 触达的每个包名都已在 map 内（预取按声明 deps 名递归拉取，见任务 3.2）；若 map 缺键，`versions_of` 返回空 → pubgrub 判 `NoSolution`（正确失败，非 panic）。加一个 `solver_registry_index_reads_prefetched` 测试：手工塞两个 packument（含一个作 root 入口的 packument）进 map，断言 `solve(&RegistryIndex::new(map), "root", ...)` 与等价 `MockIndex` 同解（证明真实 index 与 mock 行为一致；此测试用 map 内真实 "root" packument 作入口，与 install 的 `$root` 合成 root 路径正交——两条构造路径都产出实现 `PackageIndex` 的 index）。
   - `ResolvedGraph { instances: Vec<ResolvedInstance> }`；`ResolvedInstance { name, version, deps: Vec<(String, InstanceId)> }`；`instances_of(name) -> Vec<&ResolvedInstance>`。
   - `solve(idx, root_name, root_version) -> Result<ResolvedGraph, SolveError>`；`SolveError::explanation() -> String`。
 - [ ] **写失败测试**。`solver/provider.rs` 实现 `DependencyProvider`：`Package = String`（含 instance 后缀 `name#owner`）、`Version = SemVer`、依赖从 `PackageIndex` 取（惰性）。`solver/duplication.rs` 实现 instance-splitting：
@@ -1981,17 +1981,27 @@ Steps:
       edges: HashMap<(String, String), HashMap<String, String>>,
       /// 顶层项目直接依赖：dep_name → resolved_version
       root_deps: HashMap<String, String>,
+      /// workspace 本地成员：包名 → 成员真实磁盘目录（非 CAS 虚拟路径）。
+      /// 命中本地成员时 resolve_bare 返回真实路径，经 RoutingVfs 走 FsVfs 读源码。
+      local_members: HashMap<String, PathBuf>,
   }
 
   impl PnpOverlay {
       pub fn from_lock(lock: &WjsmLock, vroot: PathBuf, project_dir: PathBuf) -> Self {
+          Self::from_lock_with_workspace(lock, vroot, project_dir, HashMap::new())
+      }
+      /// workspace 变体：额外传入本地成员映射（包名 → 成员目录）。非 workspace 场景 members 空。
+      pub fn from_lock_with_workspace(
+          lock: &WjsmLock, vroot: PathBuf, project_dir: PathBuf,
+          local_members: HashMap<String, PathBuf>,
+      ) -> Self {
           let mut edges = HashMap::new();
           for p in &lock.packages {
               let map: HashMap<_, _> = p.deps.iter().cloned().collect();
               edges.insert((p.name.clone(), p.version.clone()), map);
           }
           let root_deps = lock.root_deps.iter().cloned().collect();
-          Self { vroot, project_dir, edges, root_deps }
+          Self { vroot, project_dir, edges, root_deps, local_members }
       }
       /// referrer 所属包 (name, version)：虚拟路径 → 解码；项目路径 → None（走 root_deps）。
       fn owner_of(&self, referrer: &Path) -> Option<(String, String)> {
@@ -2005,6 +2015,10 @@ Steps:
       fn resolve_bare(&self, specifier: &str, referrer: &Path) -> Result<Option<PathBuf>> {
           // 取包名（去子路径）：@scope/name/... → @scope/name；name/... → name
           let pkg = split_pkg_name(specifier);
+          // workspace 本地成员优先：命中即返回真实磁盘目录（RoutingVfs 走 FsVfs）。
+          if let Some(dir) = self.local_members.get(&pkg) {
+              return Ok(Some(dir.clone()));
+          }
           let resolved = match self.owner_of(referrer) {
               Some(owner) => self.edges.get(&owner).and_then(|m| m.get(&pkg)),
               None if referrer.starts_with(&self.project_dir) => self.root_deps.get(&pkg),
@@ -2168,7 +2182,7 @@ Steps:
 
 - [ ] **写失败测试**。新增 `crates/wjsm-cli/tests/pm_run_from_cas.rs`，测试 `pm_run_from_cas`：构造临时项目（package.json 依赖 demo，用预置 store 或内置 mock registry），`wjsm install` 后 `run_file_in_process` 跑入口 `import {v} from 'demo'; console.log(v)`，断言 stdout 含预期值且项目目录**无 `node_modules`**。
 - [ ] **Verify RED**：运行预期失败（run 尚未注入 CAS）。
-- [ ] **最小代码**：`lib.rs` 的 `cmd_run`/`cmd_build` 前置：探测 `<dir>/wjsm-lock.toml` 并 `from_toml` 解析，**当且仅当存在且 `lock.packages` 非空**时（空 lockfile 等价无依赖，走默认 FsVfs 路径，兑现行 30/2139 的"有 lockfile + 依赖"不变式与零破坏）构造 `vroot = <store_root>/v1/.vroot` 哨兵根 + `CasVfs::new(store, vroot)`，用 **`RoutingVfs::new(Arc::new(cas), vroot)`**（**不是**裸 `CasVfs`——入口文件与项目本地源在真实磁盘，须经 FsVfs；见任务 3.2 RoutingVfs）作为 `Vfs`，配 `PnpOverlay::from_lock(&lock, vroot, project_dir)` 作 overlay，经 `ModuleBundler::with_providers(root, options, Arc::new(RoutingVfs::…), Arc::new(PnpOverlay::…))` 替代默认 bundler。
+- [ ] **最小代码**：`lib.rs` 的 `cmd_run`/`cmd_build` 前置：探测 `<dir>/wjsm-lock.toml` 并 `from_toml` 解析，**当且仅当存在且 `lock.packages` 非空**时（空 lockfile 等价无依赖，走默认 FsVfs 路径，兑现行 30/2139 的"有 lockfile + 依赖"不变式与零破坏）构造 `vroot = <store_root>/v1/.vroot` 哨兵根 + `CasVfs::new(store, vroot)`，用 **`RoutingVfs::new(Arc::new(cas), vroot)`**（**不是**裸 `CasVfs`——入口文件与项目本地源在真实磁盘，须经 FsVfs；见任务 3.2 RoutingVfs）作为 `Vfs`，配 `PnpOverlay::from_lock(&lock, vroot, project_dir)` 作 overlay（**若项目 package.json 含 `workspaces` 字段**：先 `discover_workspace_members` + `workspace_link_map` 得本地成员表，改用 `PnpOverlay::from_lock_with_workspace(&lock, vroot, project_dir, local_members)`，使 workspace 内 `import '@ws/other'` 经真实磁盘 FsVfs 分支编译——见任务 4.2），经 `ModuleBundler::with_providers(root, options, Arc::new(RoutingVfs::…), Arc::new(PnpOverlay::…))` 替代默认 bundler。
 - [ ] **Verify GREEN**：`cargo nextest run -p wjsm-cli -E 'test(pm_run_from_cas)'` 通过，断言项目无 node_modules。
 - [ ] **Commit**：`git commit -am "feat(cli): run/build 惰性接入 CAS（无 node_modules 直供编译器）"`
 
@@ -2239,7 +2253,7 @@ Files:
 
 Why: `wjsm x <pkg>` 临时拉取执行包 bin（承接 npx）；workspaces 支持 monorepo 本地包链接 + 根 lockfile。
 
-Impact/Compatibility: 新增。workspace 本地包以虚拟链接接入 PnpOverlay。
+Impact/Compatibility: 新增。workspace 本地包**不进 CAS**——以成员真实磁盘目录经 `PnpOverlay.local_members`（任务 3.2 已建字段）接入解析覆盖层，`resolve_bare` 命中本地成员时返回真实路径（RoutingVfs 走 FsVfs 读），兑现设计 §54/§380 的 `workspace_link` 验收。
 
 Verification: `cargo nextest run -p wjsm-pm -E 'test(workspace) | test(bin)'`
 
@@ -2297,10 +2311,15 @@ Steps:
   }
   ```
   `scripts/mod.rs` 加 `resolve_package_bin`（读包 package.json `bin` 字段）+ 测试；CLI `X { pkg: String, args: Vec<String> }` + `cmd_x`（拉包→解析 bin→执行）。
-- [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(workspace) | test(bin)'`。
-- [ ] **最小代码**：上面 + cmd_x。
-- [ ] **Verify GREEN**：测试通过。
-- [ ] **Commit**：`git commit -am "feat: wjsm x（npx 等价）+ workspaces 发现"`
+- [ ] **写失败测试（workspace 本地包链接，兑现设计 §54/§380/§430 `workspace_link` 验收）**。`workspace.rs` 加 `workspace_link_map(members: &[PathBuf]) -> Result<Vec<(String, PathBuf)>>`：读每个成员的 `package.json` `name` 字段，产出 `(包名 → 成员目录真实路径)` 表。测试 `workspace_link_maps_member_names`：两个成员 `packages/a`（name `@ws/a`）、`packages/b`（name `@ws/b`），断言 map 含两项且路径指向真实成员目录。再在 `store/overlay.rs` 加测试 `pnp_overlay_workspace_local_resolves_to_disk`：`PnpOverlay::from_lock_with_workspace` 注入一个本地成员 `@ws/a → /repo/packages/a`，断言 `resolve_bare("@ws/a", <项目内 referrer>)` 返回**真实磁盘路径** `/repo/packages/a`（非 `vroot` 虚拟路径），证明本地包经 RoutingVfs 的 FsVfs 分支编译。
+- [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(workspace) | test(bin) | test(pnp_overlay_workspace)'`。
+- [ ] **最小代码**：
+  - `workspace.rs` 补 `workspace_link_map`。
+  - `PnpOverlay::from_lock_with_workspace(lock, vroot, project_dir, local_members)` 填 `local_members` 字段（任务 3.2 已建）；`from_lock` 保持零本地成员的既有行为。
+  - **install 编排（任务 3.2 `install`）workspace 感知**：`install` 首步若项目 `package.json` 含 `workspaces` 字段 → `discover_workspace_members` + `workspace_link_map` → 在 **workspace 根统一求解**：合成 `$root` 伪包的 deps = 全体成员 `dependencies` 并集**减去**本地成员名（本地成员不从 registry 拉，直接链接），单一根 `wjsm-lock.toml` 落 workspace 根；预取/solve/下载对**外部依赖并集**执行一次（去重跨成员共享依赖）。无 `workspaces` 字段走既有单项目路径（零变化）。
+  - `cmd_x`：拉包（若 store 无则 async fetch+入库）→ `resolve_package_bin` → `std::process::Command` 执行，PATH 前置 wjsm 目录。
+- [ ] **Verify GREEN**：`cargo nextest run -p wjsm-pm -E 'test(workspace) | test(bin) | test(pnp_overlay_workspace)'` 通过（含 `workspace_link` 本地包解析到真实磁盘路径）。
+- [ ] **Commit**：`git commit -am "feat: wjsm x（npx 等价）+ workspaces（glob 发现 + 本地包链接 PnpOverlay + 根统一求解）"`
 
 ---
 
