@@ -1,0 +1,7 @@
+const paths = require.resolve.paths('pkg');
+exports.marker = 'extensionless-cjs-loaded';
+exports.pathsIsArray = Array.isArray(paths);
+exports.firstPathIsLocal = paths[0].includes('modules/runtime_loading/extensionless_cjs_require/node_modules');
+exports.moduleBinding = typeof module;
+exports.exportsBinding = typeof exports;
+exports.moduleExportsMatches = module.exports === exports;

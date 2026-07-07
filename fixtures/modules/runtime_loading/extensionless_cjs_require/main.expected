@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+extensionless-cjs-loaded
+true
+true
+object
+object
+true
+--- stderr ---

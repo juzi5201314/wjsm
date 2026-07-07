@@ -338,15 +338,17 @@ fn detect_runtime_file_format(
 }
 
 // The resolver already owns explicit extension/package goals. The AST probe is
-// only a second pass for no-package `.js`, where `detect_module_format` treats
-// source shape as the CommonJS signal.
+// only a second pass for ambiguous no-package `.js` and extensionless files,
+// where source shape is the CommonJS signal.
 fn should_probe_runtime_commonjs(
     path: &Path,
     fallback: RuntimeModuleFormat,
     root: &Path,
 ) -> bool {
+    let extension = path.extension().and_then(|extension| extension.to_str());
+
     fallback == RuntimeModuleFormat::EsModule
-        && path.extension().and_then(|extension| extension.to_str()) == Some("js")
+        && matches!(extension, Some("js") | None)
         && !has_nearest_package_manifest(path, root)
 }
 
@@ -387,4 +389,51 @@ fn reject_unsupported_runtime_extension(path: &Path) -> Result<(), RuntimeModule
 
 fn invalid_module_error(error: anyhow::Error) -> RuntimeModuleLoadError {
     RuntimeModuleLoadError::new(RuntimeModuleLoadErrorCode::InvalidModule, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_commonjs_probe_includes_extensionless_no_package() {
+        assert!(should_probe_runtime_commonjs(
+            Path::new("/repo/child"),
+            RuntimeModuleFormat::EsModule,
+            Path::new("/repo"),
+        ));
+    }
+
+    #[test]
+    fn runtime_commonjs_probe_preserves_explicit_esm_boundaries() {
+        assert!(!should_probe_runtime_commonjs(
+            Path::new("/repo/entry.mjs"),
+            RuntimeModuleFormat::EsModule,
+            Path::new("/repo"),
+        ));
+
+        assert!(!should_probe_runtime_commonjs(
+            Path::new("/repo/entry.js"),
+            RuntimeModuleFormat::CommonJs,
+            Path::new("/repo"),
+        ));
+
+        let root = std::env::temp_dir().join(format!(
+            "wjsm-runtime-loader-probe-{}",
+            std::process::id()
+        ));
+        let package_root = root.join("pkg");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&package_root).expect("temp package root should be created");
+        std::fs::write(package_root.join("package.json"), r#"{"type":"module"}"#)
+            .expect("temp package manifest should be written");
+
+        assert!(!should_probe_runtime_commonjs(
+            &package_root.join("entry.js"),
+            RuntimeModuleFormat::EsModule,
+            &root,
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

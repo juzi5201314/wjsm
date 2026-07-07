@@ -67,11 +67,12 @@ Facts（已核对代码）:
 Assumptions:
 
 - issue #312 在 P5 开工时已合并，提供分离编译 loader 与 multi-instance shared-env（P5 任务假设其存在；若未合并，P5 阻塞，P1–P4 不受影响）。
-- `pubgrub` crate（**0.4**，MSRV 1.92 / edition 2024，与本 workspace 一致；0.3 起为翻转式重写，引入 `get_dependencies`/`prioritize` + 关联类型 `P`/`V`/`VS`/`M`/`Priority`/`Err`，本计划 task 2.3 代码即按此形态写）支持自定义 `V`/`VS`（用于 npm SemVer 语义）。版本区间类型 `Ranges` 在 0.3+ 已拆到独立 crate `version-ranges`——但本计划**不用**其内置 `Ranges`，而是自定义 `VersionSet`（`solver/npm_semver.rs` 的 `Range`）承载 npm 语义，故不依赖 `version-ranges`。
+- `pubgrub` crate（**0.4**，MSRV 1.92 / edition 2024，与本 workspace 一致；0.3 起为翻转式重写，引入 `get_dependencies`/`prioritize` + 关联类型 `P`/`V`/`VS`/`M`/`Priority`/`Err`，本计划 task 2.3 代码即按此形态写）支持自定义 `V`/`VS`（用于 npm SemVer 语义）。`VersionSet` trait（web 已核对 0.3=0.4 一致）要求 `empty`/`singleton`/`complement`/`intersection`/`contains` 五个方法——**`complement` 是难点**：任务 2.1 的 comparator-set `Range` 模型（携带预发布信息、擅长 `contains`/`matches`）对"求补集"不直接。**候选方案（task 2.3 spike 定稿，附回退）**：`pubgrub` 的 `VS` 用其内置 `version_ranges::Ranges<SemVer>`（0.3+ 从 `pubgrub::range::Range` 拆出的独立 crate，已实现全部集合代数），求解层把 npm `Range` **转换**为 `Ranges<SemVer>` 喂给 pubgrub。**预发布是这一转换的真正难点**（uv 对 Python 预发布也是靠复杂建模解决）：`Ranges<SemVer>` 的纯区间代数无法表达 npm"预发布版本仅当同 tuple 且某 comparator 自身带预发布才纳入"规则，而 pubgrub 对 `VS` 做 `complement`/`intersection` 后无法回溯是哪个 comparator-set 在问。spike 首步须**先定预发布建模**再落 provider：候选是"转换时对不含预发布 comparator 的区间显式排除全部预发布点"（在 `Ranges` 边界上编码），使转换后的 `Ranges::contains` 与 comparator-`Range::matches` 在**已发布版本集**上逐一等价——task 2.1 的 `prerelease_inclusion_rule` 测试即验收基准；若纯 `Ranges` 编码无法达成逐一等价（可能），**回退**为自定义 `VersionSet` impl（在 `SemVer` 集合上直接实现五方法，`complement`/`intersection` 按预发布规则自定义），此时 comparator-`Range` 直接承载 `contains`。两条路都保留 task 2.1 的 comparator-`Range::matches` 作为最终语义基准。故 dep 清单含 `version-ranges`（候选路用；回退路可移除，spike 定稿后决定去留）。
 
 Unknowns（计划内解决）:
 
 - pubgrub 0.4 `DependencyProvider` 的确切关联类型默认值与 `Dependencies::Unavailable(M)` 形态（web 已确认 0.3=0.4 trait 一致：`prioritize`+`choose_version`+`get_dependencies`，`M` 为自定义不可用原因类型）→ 任务 2.3 首步 spike 用本地 `cargo doc` 复核并锁定 `M`/`Priority` 具体类型。
+- `VS`（VersionSet）承载 npm 预发布包含规则的建模路径——候选 `version_ranges::Ranges<SemVer>` 编码 vs 回退自定义 `VersionSet`（见 Assumptions pubgrub 条目）→ 任务 2.3 首步 spike 定稿，验收基准是 task 2.1 `prerelease_inclusion_rule` 转换后逐一等价。
 - 可重定位 IR 重定位表需覆盖的引用种类完整清单 → 任务 5.1 首步用等价性快照测试驱动发现。
 
 ## BaselineUsageDraft
@@ -187,6 +188,7 @@ Steps:
   pubgrub = "0.4"
   version-ranges = "0.1"
   serde_yaml = "0.9"
+  fs2 = "0.4"      # store 级跨进程 advisory flock（并发 install / gc 串行化）
   ```
   创建 `crates/wjsm-pm/Cargo.toml`：
   ```toml
@@ -205,12 +207,14 @@ Steps:
   sha2 = { workspace = true }
   base64 = { workspace = true }
   pubgrub = { workspace = true }
+  version-ranges = { workspace = true }  # 候选路：VS=Ranges<SemVer>；spike 定稿若走回退自定义 VersionSet 则移除
   reqwest = { workspace = true }
   tokio = { workspace = true }
   toml = { workspace = true }
   serde = { workspace = true }
   serde_json = { workspace = true }
   serde_yaml = { workspace = true }
+  fs2 = { workspace = true }
   wjsm-module = { path = "../wjsm-module" }
   wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }
   ```
@@ -273,11 +277,16 @@ Steps:
       }
 
       /// 写入一个 blob，返回位置。内容独立 zstd 压缩。
+      ///
+      /// 注意：文件以 `.append(true)` 打开，OS 保证每次 `write_all` 落到**真实 EOF**，
+      /// 但 `BlobLoc.offset` 必须记录该次写入的真实起点。因此**不信任缓存 `self.offset`**——
+      /// 写前 `seek(End(0))` 取真实偏移作为 `offset`（`Store::add_package_from_dir` 持
+      /// store 级独占写锁，故单进程内 `&mut self` 串行 + 跨进程 flock 串行，此 seek 结果稳定）。
       pub fn append(&mut self, content: &[u8]) -> Result<BlobLoc> {
           let compressed = zstd::encode_all(content, 19).context("zstd 压缩 blob")?;
-          let offset = self.offset;
+          let offset = self.file.seek(SeekFrom::End(0)).context("定位 packfile 尾部")?;
           self.file.write_all(&compressed).context("追加 blob 到 packfile")?;
-          self.offset += compressed.len() as u64;
+          self.offset = offset + compressed.len() as u64;
           Ok(BlobLoc {
               pack_id: self.pack_id,
               offset,
@@ -653,7 +662,22 @@ Steps:
           Ok(Self { root, packs_dir, index })
       }
 
+      /// 获取 store 级**跨进程独占写锁**（advisory flock）。全局 store `~/.wjsm/store` 被
+      /// 所有项目共享，多个 `wjsm install` 进程可能并发写；packfile 追加 + index 事务 + pack
+      /// 轮转必须整体串行化，否则两进程各持缓存 offset 追加同一 pack 会**互相覆写字节**
+      /// （O_APPEND 写真实 EOF，但记录的是各自缓存 offset → read_blob 读到错位数据，静默损坏）。
+      /// 锁文件 `<root>/.write.lock`，`fs2::FileExt::lock_exclusive`；guard drop 时自动释放。
+      /// 读路径（read_package_file）**不**需此锁——blob 内容寻址不可变、WAL 允许并发读。
+      fn write_lock(&self) -> Result<std::fs::File> {
+          use fs2::FileExt;
+          let lock_path = self.root.join(".write.lock");
+          let f = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path)?;
+          f.lock_exclusive().context("获取 store 写锁")?;
+          Ok(f) // guard：drop 即 unlock（含 panic/? 早退）
+      }
+
       /// 选取活跃 packfile；超过软上限则轮转到下一 pack_id（index.packs 表记录）。
+      /// **必须在持有 `write_lock` 时调用**——pack 轮转决策 + PackWriter 打开须与追加原子。
       fn active_writer(&self) -> Result<PackWriter> {
           let mut pack_id = self.index.active_pack_id()?;
           let mut writer = PackWriter::open(&self.packs_dir, pack_id)?;
@@ -670,6 +694,7 @@ Steps:
       /// 但 index 的 blobs/manifests/packages 三表写入包裹在**单个 SQLite 事务**中——
       /// 中断则整体回滚，index 永不出现"包已登记但 manifest/blob 缺失"的半写状态。
       pub fn add_package_from_dir(&self, name: &str, version: &str, integrity: &str, dir: &Path) -> Result<()> {
+          let _guard = self.write_lock()?; // 跨进程独占：整个 append+sync+commit 临界区串行化
           let mut writer = self.active_writer()?;
           // 阶段一：blob 落 packfile，收集 (hash, loc, 是否新) + manifest entries（不写 index）。
           let mut new_blobs: Vec<(BlobHash, BlobLoc)> = Vec::new();
@@ -822,7 +847,7 @@ Steps:
 
 - [ ] **写失败测试**。`store/gc.rs`：`gc(store) -> GcStats { reclaimed_blobs, reclaimed_bytes }`。测试 `gc_reclaims_orphan_blob`：向 store 写一个包 A，直接经 `PackWriter` 追加一个不被任何 manifest 引用的孤儿 blob（模拟中断残留），运行 `gc`，断言孤儿 blob 被回收（`reclaimed_blobs >= 1`）且 A 的文件仍可 `read_package_file` 读出（可达 blob 保留、位置已重映射）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(gc)'`。
-- [ ] **最小代码**：实现标记-复制 gc + store 级 flock（`fs2` 或 `std` advisory lock；workspace 若无 `fs2`，用 `O_EXCL` lock 文件）。CLI `cache gc` 调用 `wjsm_pm::store::gc`。
+- [ ] **最小代码**：实现标记-复制 gc + store 级 flock（复用任务 1.5 的 `Store::write_lock`——同一 `.write.lock`，`fs2::FileExt::lock_exclusive`，保证 gc 与 `add_package_from_dir` 互斥）。CLI `cache gc` 调用 `wjsm_pm::store::gc`。
 - [ ] **Verify GREEN**：测试通过。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): store gc 回收孤儿 blob（标记-复制 + 文件锁）"`
 
@@ -1549,7 +1574,7 @@ Verification: `cargo nextest run -p wjsm-pm -E 'test(solver)'`
 
 Steps:
 
-- [ ] **Spike 首步：核对 pubgrub 0.4 API**（版本已由 web 调研锁定 0.4.0，见 Assumptions；本步是编译期确认签名，非选版）。运行 `cargo doc -p pubgrub --no-deps --open` 或 `grep -rn "trait DependencyProvider" ~/.cargo/registry/src/*/pubgrub-0.4*/src/`，把 0.4 的 `DependencyProvider` 签名抄进 `provider.rs` 顶部注释作实现依据：**关联类型** `type P: Package`、`type V: Debug+Display+Clone+Ord`、`type VS: VersionSet<V=Self::V>`、`type M: Eq+Clone+Debug+Display`（自定义不可满足元数据）、`type Priority: Ord+Clone`、`type Err: Error`；**方法** `prioritize(&self, &P, &VS, &PackageResolutionStatistics) -> Priority`、`choose_version(&self, &P, &VS) -> Result<Option<V>, Err>`、`get_dependencies(&self, &P, &V) -> Result<Dependencies<P, VS, M>, Err>`。**注意 0.2→0.3 破坏性变更**：0.2 只有 `choose_version`、无 `get_dependencies`、无这些关联类型；本计划代码用的是 0.3 引入、0.4 保持的接口，故 Cargo.toml 必须钉 `pubgrub = "0.4"`（钉 0.2 无法编译）。VersionSet 用独立 crate `version_ranges::Ranges`（0.3+ 从 `pubgrub::range::Range` 拆出），`solver` 对 `SemVer` 实现 `VersionSet` 或直接用 `Ranges<SemVer>` 承载 npm 区间。
+- [ ] **Spike 首步：核对 pubgrub 0.4 API**（版本已由 web 调研锁定 0.4.0，见 Assumptions；本步是编译期确认签名，非选版）。运行 `cargo doc -p pubgrub --no-deps --open` 或 `grep -rn "trait DependencyProvider" ~/.cargo/registry/src/*/pubgrub-0.4*/src/`，把 0.4 的 `DependencyProvider` 签名抄进 `provider.rs` 顶部注释作实现依据：**关联类型** `type P: Package`、`type V: Debug+Display+Clone+Ord`、`type VS: VersionSet<V=Self::V>`、`type M: Eq+Clone+Debug+Display`（自定义不可满足元数据）、`type Priority: Ord+Clone`、`type Err: Error`；**方法** `prioritize(&self, &P, &VS, &PackageResolutionStatistics) -> Priority`、`choose_version(&self, &P, &VS) -> Result<Option<V>, Err>`、`get_dependencies(&self, &P, &V) -> Result<Dependencies<P, VS, M>, Err>`。**注意 0.2→0.3 破坏性变更**：0.2 只有 `choose_version`、无 `get_dependencies`、无这些关联类型；本计划代码用的是 0.3 引入、0.4 保持的接口，故 Cargo.toml 必须钉 `pubgrub = "0.4"`（钉 0.2 无法编译）。**同步定 `VS` 与预发布建模**（见 Assumptions 的候选/回退方案）：`VersionSet` 需实现 `empty`/`singleton`/`complement`/`intersection`/`contains` 五方法（web 已核 0.3=0.4 一致）；预发布规则无法直接用纯区间代数表达，spike 须先决定"`Ranges<SemVer>` 编码预发布排除"（候选）抑或"自定义 `VersionSet` on `SemVer`"（回退），验收基准是 task 2.1 的 `prerelease_inclusion_rule` 在转换后仍逐一等价。选定后再落 `provider.rs`。
 - [ ] **定义 `MockIndex` 与 `ResolvedGraph` 契约**（测试地基，先写清签名）。`solver/mod.rs`：
   - `MockIndex::new()` → builder；`.pkg(name, version, deps: &[(name, range)])` 追加一个版本及其普通依赖；`.peer(name, version, peers: &[(name, range)])` 为已存在的 `(name,version)` 追加 peer 约束；`.optional(name, version, opts)` 追加 optional 边。builder 实现 `provider::PackageIndex`（`versions_of(name)` / `deps_of(name, version)` / `peers_of` / `optionals_of`）。
   - `ResolvedGraph { instances: Vec<ResolvedInstance> }`；`ResolvedInstance { name, version, deps: Vec<(String, InstanceId)> }`；`instances_of(name) -> Vec<&ResolvedInstance>`。
@@ -2427,9 +2452,10 @@ Steps:
 
 - **可重定位 IR 逐指令等价**（最高风险，研究级里程碑）：重定位偏差是静默错误代码，非崩溃。`lower_modules` 存在 `$0.$global`、entry-block 顺序常量、**两趟顺序 scope 分配（单模块 id 拆成不连续两段，须逐 id 重映射而非单偏移）**、shared-env/live-binding 路由等跨模块耦合，「一次成型逐指令等价」不现实。缓解：任务 5.2 **分级验收**——L2-a（单包无 import）→ L2-b（跨模块 import 边）→ L2-c（re-export/`$global`/live-binding）逐级引入，每级用逐指令等价快照硬验收；L2-c 未达前，含 re-export/live-binding 的包 L1 缓存**不启用**（回退 L2-bundle 整体路径），不影响 P1–P4 与不含该模式的包。不通过不合并。
 - **pubgrub API 形态**：版本已锁定 `0.4`（web 调研确认 0.3=0.4 `DependencyProvider` 一致：`prioritize`+`choose_version`+`get_dependencies` + 关联类型 `P`/`V`/`VS`/`M`/`Priority`/`Err`；MSRV 1.92 / edition 2024 与本 workspace 一致）。残余不确定仅在 `M`/`Priority` 的具体类型选择——任务 2.3 首步 spike 用本地 `cargo doc` 复核并抄进 `provider.rs` 注释。**不再考虑 0.2**（无 `get_dependencies`、与本计划代码不兼容）。极端回退（0.4 某关联类型无法承载 npm 语义）才手写 CDCL，评估概率极低。
+- **VersionSet 建模 npm 预发布规则**（求解正确性）：pubgrub `VS` 需 `complement`/`intersection`，而 npm"预发布仅同 tuple + comparator 自带预发布才纳入"规则无法直接用纯区间代数表达（uv 对 Python 预发布同样靠专门建模）。缓解：任务 2.3 spike 先定建模（候选 `Ranges<SemVer>` 编码预发布排除 / 回退自定义 `VersionSet` on `SemVer`），以 task 2.1 `prerelease_inclusion_rule` 转换后逐一等价为硬验收；两条路都保留 comparator-`Range::matches` 为最终语义基准。选定前不落 provider。
 - **instance-splitting / peer 正确性**：可满足场景须复现 npm 多版本，真冲突须给解释。缓解：任务 2.3 四测试覆盖去重/分裂/peer 冲突/optional 跳过四态；peer 约束翻译（`peer(react ^17)` → 对宿主环境已选 react 版本的 comparator）明确定义；后续可加真实 npm 树对照测试。
 - **前置 #312 未合并**：P5 阻塞。缓解：P1–P4 完全独立可先交付；P5 首步前置检查。
-- **SQLite 并发写 / 中断原子性**：WAL 单写多读；写路径 CLI 层 `spawn_blocking` 隔离；整包写入包在单事务内（任务 1.5），中断回滚；孤儿 blob 由 `store gc`（任务 1.5b）标记-复制回收。缓解：任务 1.4 用 WAL；install 串行写 + store 级文件锁。
+- **全局 store 并发写（跨进程）/ 中断原子性**：`~/.wjsm/store` 全局共享，多个 `wjsm install`（不同项目）可并发写同一 packfile + index.db。**原计划硬伤**：`PackWriter` 缓存 `offset` 并以之记录 `BlobLoc`，但 `.append(true)` 下 OS 写到真实 EOF——两并发写者各自缓存同一 `offset`，B 的 `BlobLoc.offset` 会指向 A 的字节，`read_blob` 静默返回错数据（内容损坏）。缓解（任务 1.2/1.5）：① `add_package_from_dir` 全程持 **store 级独占写锁**（flock `.write.lock`，跨进程串行化 append+sync+commit 临界区）；② `PackWriter::append` **不信任缓存 offset**，写前 `seek(End(0))` 取真实偏移记录进 `BlobLoc`；③ index 三表写入包在单 SQLite 事务（WAL），中断回滚；④ 孤儿尾字节由 `store gc`（任务 1.5b，同一 flock）标记-复制回收。任务 1.5 加 `store_integration_concurrent_writers` 测试：多线程/多 `Store` 实例并发 `add_package_from_dir` 后逐包 `read_package_file` 校验内容正确。
 - **默认 Vfs 破坏现有行为**（关键）：resolver 全部 fs 谓词（含 12 处 `canonicalize`）改经 Vfs，`FsVfs` 须与原 `std::fs`/`Path` 调用语义逐处等价。缓解：任务 1.6 硬验收 `cargo nextest run --workspace` 全绿 + `FsVfs::canonicalize` 与 `Path::canonicalize` 对照单测。
 - **tarball 解包路径逃逸 / 链接逃逸**（安全）：解包 registry tarball 时，恶意作者可发布 integrity 合法却含 `../` 逃逸路径或符号/硬链接的 tarball（node-tar CVE 系列 CVE-2021-32803/CVE-2026-24842、RUSTSEC-2026-0067）——SSRI **不覆盖**此面。缓解：任务 2.2 `extract_tgz` 三重守卫（逐组件拒 `..`/绝对/盘符前缀 + 拒链接与特殊条目 + 落盘前复核前缀），配 `registry_extract_rejects_path_traversal` / `registry_extract_rejects_symlink_entry` 两测试硬验收；`tar` 依赖锁 `>=0.4.45`（含 RUSTSEC-2026-0067 修复）。**不**用手写 `dest.join` 裸循环（原计划硬伤）。
 

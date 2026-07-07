@@ -220,3 +220,22 @@ Task 7 quality-review repair — explicit ESM runtime format preservation:
 - Explicit ESM regression: `cargo nextest run -E 'test(modules__runtime_loading__explicit_esm_require_resolve_paths)'` passed — `Summary [   0.082s] 1 test run: 1 passed, 791 skipped`.
 - Ambiguous `.js` guard: `cargo nextest run -E 'test(modules__runtime_loading__require_resolve_paths)'` passed — `Summary [   0.075s] 1 test run: 1 passed, 791 skipped`.
 - Acceptance: `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__cjs_conditional_require_false)'` passed — `Summary [   0.329s] 13 tests run: 13 passed, 779 skipped`.
+
+Task 7 quality-review repair — extensionless runtime CommonJS probe:
+
+- Added `fixtures/modules/runtime_loading/extensionless_cjs_require`, covering a runtime `require('./child')` inside a non-hoistable branch that resolves an exact extensionless file with `require.resolve.paths('pkg')`, `exports.*`, and `module.exports === exports` CommonJS binding checks; wired it into `tests/integration/fixtures.rs`.
+- RED before repair: `cargo nextest run -p wjsm-cli -E 'test(runtime_commonjs_probe_includes_extensionless_no_package)'` failed because `should_probe_runtime_commonjs` returned false for a no-package extensionless path.
+- Repair: `crates/wjsm-cli/src/runtime_loader.rs` now runs the CommonJS AST probe for ambiguous no-package `.js` and extensionless files only; `.mjs`, already-CommonJS fallbacks, and package-manifest `.js` files remain outside the second-pass probe.
+- Helper guard: `cargo nextest run -p wjsm-cli -E 'test(runtime_commonjs_probe_)'` passed — `Summary [   0.009s] 2 tests run: 2 passed, 2 skipped`.
+- Explicit ESM regression: `cargo nextest run -E 'test(modules__runtime_loading__explicit_esm_require_resolve_paths)'` passed — `Summary [   0.077s] 1 test run: 1 passed, 793 skipped`.
+- Ambiguous `.js` guard: `cargo nextest run -E 'test(modules__runtime_loading__require_resolve_paths)'` passed — `Summary [   0.058s] 1 test run: 1 passed, 793 skipped`.
+- Extensionless runtime CJS guard: `cargo nextest run -E 'test(modules__runtime_loading__extensionless_cjs_require)'` passed — `Summary [   0.087s] 1 test run: 1 passed, 793 skipped`.
+- Acceptance: `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__cjs_conditional_require_false)'` passed — `Summary [   0.325s] 14 tests run: 14 passed, 780 skipped`.
+
+### Task 8 — ADR and closeout records
+
+- ADR creation gate source files requested by `recording-architecture-decisions` (`docs/adr/ADR-CREATION-GATE.md` and `docs/current/AEGIS_ADR_AUTO_BACKFILL.md`) are not present in this repository, so the decision used the existing project ADR style in `docs/adr/0002-*`, `0003-*`, and `0004-*` plus the approved issue #312 spec/plan as authority.
+- ADR gate result: create. The runtime module loading boundary is durable, surprising without context, and has a real trade-off: injected CLI loader + runtime registry vs eager-only loading vs compiler-in-runtime.
+- Wrote `docs/adr/0006-runtime-module-loading-boundary.md` documenting canonical owners, dependency boundary, alternatives, compatibility, implementation state, and references.
+- Updated `docs/aegis/INDEX.md` Baselines with ADR 0006.
+- Baseline sync: required and satisfied by ADR 0006 plus the Aegis index baseline entry; no separate baseline snapshot was created because this repository already uses project `docs/adr/` as the architecture baseline owner for runtime boundaries.

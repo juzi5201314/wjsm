@@ -4,7 +4,7 @@ Date: 2026-07-07
 
 ## TodoCheckpointDraft
 
-Current todo: Complete cache fixture matrix.
+Current todo: Record ADR and evidence.
 
 Completed todos:
 
@@ -17,14 +17,15 @@ Completed todos:
 - Task 4 completed: added module-local CJS require/module/exports bindings, runtime require/resolve/cache host behavior, retired the transform global bridge, fixed live `module.exports` and live `require.cache` semantics, and passed spec + quality review.
 - Task 5 completed: added expression dynamic import and `import.meta.resolve`, retired AOT-only expression import diagnostics, fixed import extra-arg validation and abrupt-completion Promise rejection semantics, and passed spec + quality review.
 - Task 6 completed: installed CLI runtime loader, preserved runtime dependency boundary, added shared-env dynamic instantiation, added computed CJS/dynamic import variable fixtures, fixed loader diagnostics, and passed spec + quality review.
+- Task 7 completed: added JSON require, optional missing, cache delete/retry, errored cache, circular partial exports, resolve.paths, explicit ESM and extensionless CJS fixtures, fixed JSON import rejection and runtime CJS lifecycle, and passed spec + quality review.
 
 Active slice:
 
-- Task 7: Complete JSON require, circular cache, and fixture matrix.
+- Task 8: ADR, final evidence, and closeout verification.
 
 Next step:
 
-- Dispatch a fresh implementer for Task 7 with runtime loading fixture matrix context.
+- Write ADR 0006, update Aegis records, run final targeted verification, and request final review.
 
 Blocked-on items:
 
@@ -49,9 +50,9 @@ Then continue with Subagent-Driven Development: implementer, spec compliance rev
 ## DriftCheckDraft
 
 - Original task intent: issue #312 runtime module loading.
-- Current slice alignment: Task 7 finishes the observable fixture matrix for JSON require, cache deletion/reload, circular partial exports, optional missing dependency, and resolve.paths.
-- Compatibility boundary: JSON dynamic import assertions remain out of scope; CJS JSON `require()` is in scope.
-- New owner/branch: fixture matrix and any missing registry/loader behavior discovered by those fixtures.
-- Retirement track: fake-loader-only confidence for cache/circular behavior retires in favor of CLI/integration fixtures.
-- Evidence state: Tasks 1-6 evidence recorded; Task 7 needs implementation evidence.
+- Current slice alignment: Task 8 records the runtime module loading boundary and consolidates final verification/evidence.
+- Compatibility boundary: ADR documents injected loader + registry boundary and rejected alternatives without changing code behavior.
+- New owner/branch: `docs/adr/0006-runtime-module-loading-boundary.md` and final evidence records.
+- Retirement track: AOT-only dynamic import diagnostics, transform global require bridge, and `module_namespace_cache` as cache owner are retired in evidence.
+- Evidence state: Tasks 1-7 evidence recorded; final verification and ADR evidence remain.
 - Decision: continue.
