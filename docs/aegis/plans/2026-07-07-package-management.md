@@ -4,7 +4,7 @@ Goal: 实现 wjsm 的完整 npm 生态包管理能力（`wjsm install/add/remove
 
 Architecture: 新增独立 crate `wjsm-pm`，拥有 registry client / CAS store / PubGrub solver / lockfile / scripts / workspace。`wjsm-module` 新增 `Vfs` + `ResolutionOverlay` 两个 trait（定义在 module 侧，实现在 pm 侧）；`Vfs` 抽象 `ModuleResolver` 解析算法实际路由的**全部**文件系统谓词（`read_to_string`×1 / `canonicalize`×12 / `is_file`×7 / `is_dir`×6，resolver.rs 内共 **26 处**）+ `package_json.rs` 的 `read_package_json`（合并原 `fs::metadata`+`read_to_string`），而非仅三处读取；trait 另提供 `exists`（`FsVfs`=`Path::exists`）作抽象完整性、供 `CasVfs` 内部前缀判定复用——**resolver 自身不调用 `exists`**（已 grep 核实 `wjsm-module` 无 `.exists()` 触点）。`wjsm-module` **不反向依赖** `wjsm-pm`。`wjsm-semantic` 新增可重定位 IR 单包 lower + 链接阶段（服务 L1）。`wjsm-cli` 组装注入并新增子命令。依赖方向：`wjsm-pm → wjsm-module`、`wjsm-pm → wjsm-snapshot-format`、`wjsm-cli → wjsm-pm`。
 
-Tech Stack: Rust 2024；`rusqlite`（bundled SQLite，WAL）；`zstd`；`blake3`（内容哈希）；`tar` + `flate2`（tgz 解包）；`sha2` + base64（npm SSRI 完整性校验）；`reqwest`（workspace 已有，async/tokio）；`tokio`（workspace 已有，`spawn_blocking` 隔离 SQLite 同步写）；`pubgrub` crate（版本求解）；`toml`（workspace 已有，lockfile）；`serde_json`（packument、迁移读取）；`serde_yaml`（pnpm-lock 迁移）；现有 fixture runner + nextest。
+Tech Stack: Rust 2024；`rusqlite`（bundled SQLite，WAL）；`zstd`；`blake3`（内容哈希）；`tar` + `flate2`（tgz 解包）；`sha2` + base64（npm SSRI 完整性校验）；`reqwest`（workspace 已有，async/tokio）；`tokio`（workspace 已有，`spawn_blocking` 隔离 SQLite 同步写、`JoinSet` 并发预取 packument——**不引入** `futures` crate）；`pubgrub` crate（版本求解）；`toml`（workspace 已有，lockfile）；`serde_json`（packument、迁移读取）；`serde_yaml`（pnpm-lock 迁移）；现有 fixture runner + nextest。
 
 Baseline/Authority Refs:
 
@@ -34,7 +34,7 @@ Compatibility Boundary:
 - 已知代价：首版无物化 node_modules，外部 Node 工具链看不到依赖（wjsm 自有 check/lint/fmt 走 CAS 不受影响）；`--node-modules-dir` 逃生舱不在本计划。
 - 迁移不删除原生态 lockfile（除非 `--prune`）。
 - P5 前置依赖 issue #312 已合并；可重定位 IR 分离编译产出与现有 `lower_modules` 整体路径**分级逐指令等价**（L2-a 叶子包 / L2-b import 边必过；L2-c re-export/shared-env 等价或明确降级到 L2-bundle）。
-- tarball 必须 SSRI 校验通过才入库（证明字节 == registry 所发）；**且**解包必须防路径逃逸 + 拒绝链接条目（`extract_tgz` 三重守卫——SSRI 不覆盖此边界，恶意作者可发布 integrity 合法却含 `../`/符号链接的 tarball，见任务 2.2）；依赖生命周期脚本默认禁用，需 `trustedDependencies` 或 `--allow-scripts`。
+- tarball 必须 SSRI 校验通过才入库（证明字节 == registry 所发）；**且**解包必须防路径逃逸 + 拒绝链接条目（`extract_tgz` 三重守卫——SSRI 不覆盖此边界，恶意作者可发布 integrity 合法却含 `../`/符号链接的 tarball，见任务 2.2）；**本版 install 全程不执行任何依赖包生命周期脚本**（`preinstall`/`install`/`postinstall` 等一律不运行——CAS 只读归档模型下依赖包无可写目录供脚本落地，AOT 直供编译也不需要原生构建产物）；因此**不引入** `trustedDependencies`/`--allow-scripts` 授权开关（列入非目标）。项目**自身** package.json 的 scripts 仍由 `wjsm task`（P4）显式执行，与依赖生命周期脚本正交。
 
 Verification:
 
@@ -106,7 +106,7 @@ tests/mock_registry.rs      # 内置离线 mock registry 测试辅助
 ## Compatibility
 
 - 不变式：`wjsm-module` 无 `wjsm-pm` 依赖；FS 模式默认；现有 fixture 全绿；`wjsm run file.js` 语义不变；blob 内容寻址；lockfile 分离。
-- 非目标（不实现）：物化 node_modules、`wjsm publish`、原生 postinstall 编译、git+/远程 tarball 依赖源、HMR、私有 registry 完整企业 auth。
+- 非目标（不实现）：物化 node_modules、`wjsm publish`、原生 postinstall 编译、依赖包生命周期脚本执行（含 `trustedDependencies`/`--allow-scripts` 授权开关，见 Compatibility Boundary）、git+/远程 tarball 依赖源、HMR、私有 registry 完整企业 auth。
 - 稳定接口：`Vfs`/`ResolutionOverlay` trait 一经定义即为 module↔pm 契约（ADR 信号 2）。
 
 ## Architecture Integrity Lens
@@ -470,7 +470,7 @@ Why: SQLite index.db（WAL）统管 packages/manifests/blobs/artifacts 映射，
 
 Impact/Compatibility: 纯新增。事务写保证中断可回滚——本任务提供 `with_txn(|tx| …)` 入口（内部锁 `Mutex<Connection>` 后开 `rusqlite::Transaction`，成功 commit / 失败 rollback；**不暴露**裸 `transaction(&mut self)`，因 `Store` 经 `Arc` 共享、`conn` 在 `Mutex` 内），任务 1.5 的 `add_package_from_dir` **必须**经 `with_txn` 在单事务内写完 blobs+manifest+package，中断则整体回滚。
 
-**与批准设计 §6.3 的偏离（显式记录）**：设计 §6.3 用规范化三表 `manifests(id) + manifest_entries(manifest_id, rel_path, blob_hash, mode)` + `packages.meta BLOB(MessagePack)`。本计划首版**仅**塌缩 manifest 存储为 `manifests(hash, body BLOB)`（manifest 整体 JSON 存 body），**保留** `packages.meta` 列（与设计对齐，本任务建列、写入见任务 3.2）。理由：首版读取路径只需"包→manifest→rel_path→blob"整体加载，不需按 rel_path 做 SQL 查询。**代价**：无法用 SQL 直接查"哪些包含某 rel_path"；`manifest_entries` 规范化（可查询性）推迟到需要 `wjsm store ls`/按文件反查时再实现（届时递增 store 版本 `v2`）。`packages.meta` 不属此偏离——它照设计保留。此偏离已在 executing 后补 ADR 时记录。
+**与批准设计 §6.3 的偏离（显式记录）**：设计 §6.3 用规范化三表 `manifests(id) + manifest_entries(manifest_id, rel_path, blob_hash, mode)` + `packages.meta BLOB(MessagePack)`。本计划首版有**两处**偏离：① manifest 存储塌缩为 `manifests(hash, body BLOB)`（manifest 整体 JSON 存 body），不做 `manifest_entries` 规范化；② `packages.meta` 列**保留**（对齐设计语义）但**编码改用 `serde_json`（JSON BLOB）而非 MessagePack**——本计划不引入 `rmp-serde`/`rmpv` 等 MessagePack 依赖，全 store 序列化（manifest body + meta）统一走 `serde_json`，减一个依赖面。理由：首版读取路径只需"包→manifest→rel_path→blob"整体加载，不需按 rel_path 做 SQL 查询，JSON 与 MessagePack 在此路径无可观测差异。**代价**：(a) 无法用 SQL 直接查"哪些包含某 rel_path"，`manifest_entries` 规范化（可查询性）推迟到需要 `wjsm store ls`/按文件反查时再实现（届时递增 store 版本 `v2`）；(b) meta 体积略大于 MessagePack（可接受，包元数据小）。**`packages.meta` 的定位澄清**：它是包**单版本** package.json 关键字段快照，**不能替代 solver 所需的全版本 packument**（solver 求解需某包全部候选版本 + 各自依赖区间，由任务 3.2 async 预取拉进 `RegistryIndex`）；meta 仅供**已解析确定版本后**免二次读磁盘取该版本元数据（如展示、bin 解析），首版**无强制读取消费者**（写入即为 `wjsm store` 查询与 P4 bin 解析预留），不构成 solve 依赖。两处偏离均在 executing 后补 ADR 时记录。
 
 Verification: `cargo nextest run -p wjsm-pm -E 'test(index)'`
 
@@ -499,7 +499,7 @@ Steps:
   CREATE TABLE IF NOT EXISTS packages (
       name TEXT NOT NULL, version TEXT NOT NULL, integrity TEXT NOT NULL,
       manifest_hash BLOB NOT NULL,
-      meta BLOB,  -- package.json 关键字段 MessagePack 快照（对齐设计 §6.3，供 solver 免二次拉取）；本任务建列，写入见任务 3.2
+      meta BLOB,  -- package.json 关键字段 JSON 快照（对齐设计 §6.3 保留列；编码用 serde_json，非 MessagePack——本计划未引入 rmp 依赖，与 manifest body 编码统一）；本任务建列，写入见任务 3.2
       PRIMARY KEY (name, version)
   );
   CREATE TABLE IF NOT EXISTS artifacts (
@@ -612,7 +612,7 @@ Steps:
   - **事务作用域自由函数**（模块级 `fn`，非 `&self` 方法）：`txn_put_blob(tx: &Transaction, hash, loc)` / `txn_put_manifest_raw(tx, hash, body)` / `txn_put_package(tx, name, version, integrity, manifest_hash)`。它们直接在传入的 `&Transaction` 上 `execute`，**不触碰 `Mutex`**——因为 `with_txn` 的闭包运行时锁已被 `with_txn` 持有，闭包内若再调 `&self` 的 `put_*` 方法会二次 `lock()` 同一 `Mutex` **死锁**。任务 1.5 的 `add_package_from_dir` 只能经这三个 `txn_*` 自由函数写入。`&self` 的 `put_blob`/`put_manifest_raw`/`put_package` 保留供事务外单发写入（各自 `lock()` 一次），与 `txn_*` 共享同一 SQL（可让 `&self` 方法内部 `lock` 后转调 `txn_*` 复用 SQL，避免两份语句）。
   - `active_pack_id()` / `bump_pack() -> Result<u32>`：读写 `packs` 表当前活跃 pack（任务 1.2 pack 轮转的索引侧）。
   - `reachable_blob_hashes() -> HashSet<BlobHash>`：`packages`→`manifests`(body 反序列化 entries) 收集全部可达 blob；`gc` 用它标记，未被引用的 blobs 行 + packfile 尾部孤儿字节为可回收（GC 实现见任务 1.5b 的 `store::gc`）。
-  - `packages.meta` 列建列即可，写入 package.json 关键字段 MessagePack 快照在任务 3.2 install 编排补（对齐设计 §6.3，供 solver 免二次拉取）。
+  - `packages.meta` 列建列即可，写入 package.json 关键字段 **JSON 快照（`serde_json`，非 MessagePack——见本任务偏离说明）** 在任务 3.2 install 编排补（对齐设计 §6.3 保留列；供已解析版本免二次读磁盘取元数据，非 solver 求解输入）。
 - [ ] **Verify GREEN**：全部 `index_*` 测试通过。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): SQLite index.db（blobs/manifests/packages/artifacts/packs + 事务 + GC 支持）"`
 
@@ -1448,6 +1448,9 @@ Steps:
   pub struct Packument {
       #[serde(default)]
       pub versions: BTreeMap<String, VersionMeta>,
+      /// dist-tags（`latest`/`next`/… → 具体版本），供 `wjsm add <pkg>`（无 range）取默认版本。
+      #[serde(default, rename = "dist-tags")]
+      pub dist_tags: BTreeMap<String, String>,
   }
 
   #[derive(Debug, Deserialize, Clone)]
@@ -1480,6 +1483,11 @@ Steps:
               .max_by(|a, b| SemVer::parse(&a.version).unwrap().cmp(&SemVer::parse(&b.version).unwrap()))
               .cloned()
       }
+      /// `dist-tags.latest` 指向的版本号（供 `wjsm add <pkg>` 无版本时确定默认区间基准）。
+      /// npm 无版本安装即取 latest tag（非"最高语义版本"——latest 可能落后于预发布/次要发布）。
+      pub fn latest_version(&self) -> Option<&str> {
+          self.dist_tags.get("latest").map(|s| s.as_str())
+      }
   }
 
   #[cfg(test)]
@@ -1489,7 +1497,7 @@ Steps:
 
       #[test]
       fn registry_packument_best_match() {
-          let json = r#"{"versions":{
+          let json = r#"{"dist-tags":{"latest":"1.2.0"},"versions":{
             "1.0.0":{"version":"1.0.0","dist":{"tarball":"http://x/1.0.0.tgz","integrity":"sha512-a"}},
             "1.2.0":{"version":"1.2.0","dist":{"tarball":"http://x/1.2.0.tgz","integrity":"sha512-b"}},
             "2.0.0":{"version":"2.0.0","dist":{"tarball":"http://x/2.0.0.tgz","integrity":"sha512-c"}}
@@ -1497,6 +1505,8 @@ Steps:
           let p = Packument::parse(json).unwrap();
           let m = p.best_match(&Range::parse("^1.0.0").unwrap()).unwrap();
           assert_eq!(m.version, "1.2.0");
+          // dist-tags.latest 供 wjsm add 无版本时确定默认区间基准。
+          assert_eq!(p.latest_version(), Some("1.2.0"));
       }
   }
   ```
@@ -1576,7 +1586,9 @@ Steps:
 
 - [ ] **Spike 首步：核对 pubgrub 0.4 API**（版本已由 web 调研锁定 0.4.0，见 Assumptions；本步是编译期确认签名，非选版）。运行 `cargo doc -p pubgrub --no-deps --open` 或 `grep -rn "trait DependencyProvider" ~/.cargo/registry/src/*/pubgrub-0.4*/src/`，把 0.4 的 `DependencyProvider` 签名抄进 `provider.rs` 顶部注释作实现依据：**关联类型** `type P: Package`、`type V: Debug+Display+Clone+Ord`、`type VS: VersionSet<V=Self::V>`、`type M: Eq+Clone+Debug+Display`（自定义不可满足元数据）、`type Priority: Ord+Clone`、`type Err: Error`；**方法** `prioritize(&self, &P, &VS, &PackageResolutionStatistics) -> Priority`、`choose_version(&self, &P, &VS) -> Result<Option<V>, Err>`、`get_dependencies(&self, &P, &V) -> Result<Dependencies<P, VS, M>, Err>`。**注意 0.2→0.3 破坏性变更**：0.2 只有 `choose_version`、无 `get_dependencies`、无这些关联类型；本计划代码用的是 0.3 引入、0.4 保持的接口，故 Cargo.toml 必须钉 `pubgrub = "0.4"`（钉 0.2 无法编译）。**同步定 `VS` 与预发布建模**（见 Assumptions 的候选/回退方案）：`VersionSet` 需实现 `empty`/`singleton`/`complement`/`intersection`/`contains` 五方法（web 已核 0.3=0.4 一致）；预发布规则无法直接用纯区间代数表达，spike 须先决定"`Ranges<SemVer>` 编码预发布排除"（候选）抑或"自定义 `VersionSet` on `SemVer`"（回退），验收基准是 task 2.1 的 `prerelease_inclusion_rule` 在转换后仍逐一等价。选定后再落 `provider.rs`。
 - [ ] **定义 `MockIndex` 与 `ResolvedGraph` 契约**（测试地基，先写清签名）。`solver/mod.rs`：
-  - `MockIndex::new()` → builder；`.pkg(name, version, deps: &[(name, range)])` 追加一个版本及其普通依赖；`.peer(name, version, peers: &[(name, range)])` 为已存在的 `(name,version)` 追加 peer 约束；`.optional(name, version, opts)` 追加 optional 边。builder 实现 `provider::PackageIndex`（`versions_of(name)` / `deps_of(name, version)` / `peers_of` / `optionals_of`）。
+  - **`PackageIndex` 是同步 trait**（`versions_of(name) -> Vec<SemVer>` / `deps_of(name, &SemVer)` / `peers_of` / `optionals_of`）——因 pubgrub `DependencyProvider` 的 `choose_version`/`get_dependencies` 均为**同步**方法，index 必须同步可读，**不能**在其中 `.await`。故所有 registry 网络 I/O 必须在 solve **之前**完成（见任务 3.2 install 的 async 预取阶段）。
+  - `MockIndex::new()` → builder（测试用同步内存实现）；`.pkg(name, version, deps: &[(name, range)])` 追加一个版本及其普通依赖；`.peer(name, version, peers: &[(name, range)])` 为已存在的 `(name,version)` 追加 peer 约束；`.optional(name, version, opts)` 追加 optional 边。builder 实现 `provider::PackageIndex`。
+  - **真实实现 `RegistryIndex`**（本任务定义结构 + 从缓存读的同步逻辑，**不含网络**——网络预取归 install/3.2）：持 `packuments: HashMap<String, crate::registry::packument::Packument>`（solve 前由 install 的 async 预取阶段填满传递闭包）。`versions_of(name)` = 该包 packument 的 `versions` 键解析为 `SemVer` 排序去预发布（除非某 dependent 区间显式含预发布，与 task 2.1 预发布规则一致）；`deps_of/peers_of/optionals_of` = 从对应 `VersionMeta` 的 `dependencies`/`peer_dependencies`/`optional_dependencies` 读并 `Range::parse`。`RegistryIndex::new(packuments)` 构造。**缺包即 panic 不可发生**——预取闭包保证 solve 期间 `get_dependencies` 触达的每个包名都已在 map 内（预取按声明 deps 名递归拉取，见任务 3.2）；若 map 缺键，`versions_of` 返回空 → pubgrub 判 `NoSolution`（正确失败，非 panic）。加一个 `solver_registry_index_reads_prefetched` 测试：手工塞两个 packument 进 map，断言 `solve(&RegistryIndex::new(map), "root", ...)` 与等价 `MockIndex` 同解（证明真实 index 与 mock 行为一致）。
   - `ResolvedGraph { instances: Vec<ResolvedInstance> }`；`ResolvedInstance { name, version, deps: Vec<(String, InstanceId)> }`；`instances_of(name) -> Vec<&ResolvedInstance>`。
   - `solve(idx, root_name, root_version) -> Result<ResolvedGraph, SolveError>`；`SolveError::explanation() -> String`。
 - [ ] **写失败测试**。`solver/provider.rs` 实现 `DependencyProvider`：`Package = String`（含 instance 后缀 `name#owner`）、`Version = SemVer`、依赖从 `PackageIndex` 取（惰性）。`solver/duplication.rs` 实现 instance-splitting：
@@ -2043,7 +2055,14 @@ Steps:
       }
   }
   ```
-  `store/mod.rs` 补 `manifest_has_prefix(name, version, rel_prefix)`（load_manifest 后判断是否存在以 `rel_prefix + "/"` 起始或等于的 entry）。`lockfile/wjsm_lock.rs` 的 `WjsmLock` 增 `root_deps: Vec<(String,String)>` 字段（顶层直接依赖，任务 3.1 一并加）。`lib.rs` 增 `pub async fn install(project_dir: &Path, store: &Store) -> Result<WjsmLock>`：读 package.json deps → `solve` → 对每个包 `fetch_tarball`+`verify_integrity`+`extract`+`add_package_from_dir` → 组装含 `root_deps` + 每包 `deps` 边的 `WjsmLock` → 返回。加一个用 mock registry 的 `install_end_to_end` 测试。
+  `store/mod.rs` 补 `manifest_has_prefix(name, version, rel_prefix)`（load_manifest 后判断是否存在以 `rel_prefix + "/"` 起始或等于的 entry）。`lockfile/wjsm_lock.rs` 的 `WjsmLock` 增 `root_deps: Vec<(String,String)>` 字段（顶层直接依赖，任务 3.1 一并加）。`lib.rs` 增 `pub async fn install(project_dir: &Path, store: &Store) -> Result<WjsmLock>`。**async→sync 求解桥（关键，兑现任务 2.3 `RegistryIndex` 契约）**：pubgrub `DependencyProvider` 全部方法是**同步**的，registry fetch 是 **async**——不能在 `solve` 内部 `.await`。故 install 编排是 **合成 root → async 预取 → 同步求解 → async 下载 → 组装 lockfile** 五步：
+  1. **读 package.json + 合成 root 伪包**：读项目 `dependencies`（+ `devDependencies`，install 全装）为 `(name, range)` 集。**顶层项目不是 registry 包、无 packument**，故须为它合成一个 root 伪包注入 `RegistryIndex`：约定固定 `root_name = "$root"`（`$` 前缀不会与任何合法 npm 包名冲突）、`root_version = "0.0.0"`，其 `deps_of("$root", 0.0.0)` 直接返回项目直接依赖的 `(name, Range)` 集，`versions_of("$root")` 仅含 `[0.0.0]`、无 peer/optional。`solve(idx, "$root", "0.0.0")` 以它为求解入口；定稿 `ResolvedGraph` 中 `instances_of("$root")` 被剥离（不入 lockfile / 不下载），其 deps 边即 `WjsmLock.root_deps`。`RegistryIndex` 因此需 `with_synthetic_root(deps: Vec<(String, Range)>)` 构造项（预取阶段填真实包 packument，合成 root 单独注入）。
+  2. **async 预取回合**（BFS 直到不动点）：从项目直接依赖名起，`fetch_packument` 每个待解析包 → 存进 `RegistryIndex` 内部 `HashMap<String, Packument>` 缓存 → 从 packument 各版本的 `dependencies`/`peerDependencies`/`optionalDependencies` 收集新出现的包名 → 下一回合 fetch 它们，直到无新包名。此回合**只拉元数据、不下载 tarball**：每回合内并发用 **`tokio::task::JoinSet`**（workspace tokio 已启用 `rt`/`rt-multi-thread`；**不引入 `futures` crate**——非 workspace 依赖，`join_all` 不可用），并发度由 `tokio::sync::Semaphore`（tokio `sync` 特性已启用）限制。合成 root 不 fetch（无 packument）。
+  3. **同步 `solve`**：把预取好的 `RegistryIndex`（已实现同步 `PackageIndex`，`versions_of`/`deps_of` 直接查 `HashMap` + 合成 root）传给 `solve(idx, "$root", "0.0.0")`，pubgrub 全同步运行。预取不动点保证 solve 期触达的包名均已在缓存内；**万一缺键**（不应发生），`versions_of` 返回空 → pubgrub 判 `NoSolution`（正确失败路径，非 panic、非 `bail!`，与任务 2.3 `RegistryIndex` 契约一致）。
+  4. **async 下载 + 写 CAS**：对 `ResolvedGraph` 每实例（`$root` 伪包剥离、不下载），若 store 已有 `(name,version)` 则跳过下载（CAS 去重），否则 `fetch_tarball`+`verify_integrity`+`extract_tgz`+`add_package_from_dir`，并写 `packages.meta`（package.json 关键字段快照，对齐任务 1.4 建列）。
+  5. 组装含 `root_deps`（`$root` 的 deps 边）+ 每包 `deps` 边的 `WjsmLock` 返回。
+
+  加一个用 mock registry 的 `install_end_to_end` 测试（覆盖预取不动点 → solve → 下载 → lockfile 全链）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(cas_vfs) | test(pnp_overlay) | test(install)'`。
 - [ ] **最小代码**：上面 + `manifest_has_prefix` + install 编排。
 - [ ] **Verify GREEN**：测试通过。
@@ -2124,7 +2143,10 @@ Steps:
   （`cmd_install`/`cmd_add`/`cmd_remove` 返回 `Result<()>`，`.map(|()| ExitCode::from(EXIT_SUCCESS))` 提升为 `Result<ExitCode>`；错误经 `?`/`Result` 冒泡到 `main_entry` 统一打印。`EXIT_SUCCESS` 是 lib.rs:38 既有常量。）
   `lib.rs` 顶部 `mod pm_commands;`；`Cargo.toml` 加 `wjsm-pm = { path = "../wjsm-pm" }`。
 - [ ] **Verify RED**：`cargo build -p wjsm-cli` 预期先因 `cmd_add`/`cmd_remove` 未定义失败。
-- [ ] **最小代码**：补 `cmd_add`（读 package.json → 加 dep → 调 install）、`cmd_remove`（删 dep → 重解析）。
+- [ ] **最小代码**：补 `cmd_add` / `cmd_remove`。**`cmd_add` 的版本来源必须明确**（spec 行 373 `wjsm add <pkg>[@range]`）——解析 `pkg` 参数为 `(name, requested_range)`：
+  - **`pkg` 含 `@<range>` 后缀**（如 `lodash@^4`、`@babel/core@^7`；scoped 包首字符 `@` 不算分隔符——用「最后一个 `@` 且其前非空且不在首位」判定 range 分隔）→ 直接用该 range 写入 package.json `dependencies`。
+  - **`pkg` 无版本**（如 `lodash`）→ `fetch_packument(name)` 取 `dist_tags.latest`（经上一步新增的 `Packument::latest_version()`），写入 package.json `dependencies` 为 `^<latest>`（npm `save-prefix` 默认 `^`；无 `dist-tags.latest` 时回退取 `versions` 中最高**非预发布**版本，仍无则报错）。
+  写回 package.json（保序、`serde_json` 处理 `dependencies` 对象，无则新建）后调 `cmd_install(dir)` 触发 solve+下载+写 lockfile。`cmd_remove`：从 package.json `dependencies`/`devDependencies` 删 `pkg` 键（不存在则报错），写回后调 `cmd_install(dir)` 重解析（移除包不再被根依赖引用 → 新 lockfile 不含它；其 CAS blob 由 `store gc` 回收，install 不主动删 store）。二者均新增 `pm_cmd_add_parses_pkg_range` 单测（覆盖 `lodash`/`lodash@^4`/`@scope/x`/`@scope/x@^2` 四形态的 `(name, range)` 拆分）。
 - [ ] **Verify GREEN**：`cargo build -p wjsm-cli && cargo run -- install --help && cargo nextest run -p wjsm-cli -E 'test(pm_)'`。
 - [ ] **Commit**：`git commit -am "feat(cli): wjsm install/add/remove 子命令"`
 
