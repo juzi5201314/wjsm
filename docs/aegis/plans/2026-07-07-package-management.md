@@ -1779,7 +1779,7 @@ Why: install 编排 = 读 package.json → solve → 下载 → 写 CAS → 写 
 
 Impact/Compatibility: 纯新增。CasVfs 读路径全程零文件系统物化。
 
-Verification: `cargo nextest run -p wjsm-pm -E 'test(install) | test(cas_vfs)'`
+Verification: `cargo nextest run -p wjsm-pm -E 'test(install) | test(cas_vfs)'`（`cas_vfs` 过滤器同时覆盖 `CasVfs` 与 `RoutingVfs` 路由测试）
 
 Steps:
 
@@ -1880,6 +1880,75 @@ Steps:
           assert!(vfs.is_dir(&dir.join("lib")));  // 前缀目录
           assert!(!vfs.is_file(&dir.join("lib"))); // 目录不是文件
           assert!(!vfs.exists(&dir.join("missing.js")));
+      }
+  }
+  ```
+  **关键：混合文件系统路由**（原计划遗漏——bundle 图**同时**含真实磁盘路径（入口文件 `<project>/main.ts`、项目自身本地源码、相对 import）与虚拟 CAS 路径（依赖 `<vroot>/…`）。纯 `CasVfs` 对真实入口路径 `split()` 返回 `None` → `read_to_string` 报"非虚拟路径"，**无法编译入口**）。故 CAS 模式注入的不是裸 `CasVfs`，而是 `RoutingVfs`：按路径是否以 `vroot` 为前缀分派——虚拟路径走 `CasVfs`，其余走 `FsVfs`（真实磁盘）。`vroot` 取一个**保证不与真实项目路径冲突**的哨兵根（如 `<store_root>/v1/.vroot`，该目录不放实际文件，仅作虚拟命名空间；`CasVfs::split` 以它为 strip 前缀）。
+  ```rust
+  // RoutingVfs：按 vroot 前缀分派——虚拟路径→CasVfs，真实磁盘路径→FsVfs。
+  // bundle 图跨两个文件系统（入口/项目源在真实盘，依赖在 CAS 虚拟树），单一 Vfs 无法覆盖。
+  use std::path::{Path, PathBuf};
+  use std::sync::Arc;
+  use wjsm_module::{FsVfs, Vfs};
+
+  pub struct RoutingVfs {
+      vroot: PathBuf,
+      cas: Arc<CasVfs>,
+      fs: FsVfs,
+  }
+
+  impl RoutingVfs {
+      pub fn new(cas: Arc<CasVfs>, vroot: PathBuf) -> Self { Self { vroot, cas, fs: FsVfs } }
+      fn is_virtual(&self, p: &Path) -> bool { p.starts_with(&self.vroot) }
+  }
+
+  impl Vfs for RoutingVfs {
+      fn read_to_string(&self, p: &Path) -> anyhow::Result<String> {
+          if self.is_virtual(p) { self.cas.read_to_string(p) } else { self.fs.read_to_string(p) }
+      }
+      fn canonicalize(&self, p: &Path) -> anyhow::Result<PathBuf> {
+          if self.is_virtual(p) { self.cas.canonicalize(p) } else { self.fs.canonicalize(p) }
+      }
+      fn is_file(&self, p: &Path) -> bool {
+          if self.is_virtual(p) { self.cas.is_file(p) } else { self.fs.is_file(p) }
+      }
+      fn is_dir(&self, p: &Path) -> bool {
+          if self.is_virtual(p) { self.cas.is_dir(p) } else { self.fs.is_dir(p) }
+      }
+      fn exists(&self, p: &Path) -> bool {
+          if self.is_virtual(p) { self.cas.exists(p) } else { self.fs.exists(p) }
+      }
+      fn read_package_json(&self, dir: &Path) -> anyhow::Result<Option<String>> {
+          if self.is_virtual(dir) { self.cas.read_package_json(dir) } else { self.fs.read_package_json(dir) }
+      }
+  }
+
+  #[cfg(test)]
+  mod routing_tests {
+      use super::*;
+      #[test]
+      fn cas_vfs_routing_reads_both_disk_and_virtual() {
+          let root = std::env::temp_dir().join(format!("wjsm_pm_route_{}", std::process::id()));
+          let _ = std::fs::remove_dir_all(&root);
+          // 真实磁盘入口文件
+          let proj = root.join("proj");
+          std::fs::create_dir_all(&proj).unwrap();
+          std::fs::write(proj.join("main.js"), b"import {v} from 'demo';").unwrap();
+          // CAS 依赖
+          let pkg = root.join("src_pkg");
+          std::fs::create_dir_all(&pkg).unwrap();
+          std::fs::write(pkg.join("index.js"), b"export const v=1;").unwrap();
+          let store = Arc::new(Store::open(&root.join("store")).unwrap());
+          store.add_package_from_dir("demo", "1.0.0", "sha512-x", &pkg).unwrap();
+          let vroot = root.join("store").join("v1").join(".vroot");
+          let cas = Arc::new(CasVfs::new(store, vroot.clone()));
+          let router = RoutingVfs::new(cas, vroot.clone());
+          use wjsm_module::Vfs;
+          // 真实盘入口经 FsVfs
+          assert!(router.read_to_string(&proj.join("main.js")).unwrap().contains("import"));
+          // 虚拟依赖经 CasVfs
+          let dep = vroot.join(encode_pkg_dir("demo", "1.0.0")).join("index.js");
+          assert_eq!(router.read_to_string(&dep).unwrap(), "export const v=1;");
       }
   }
   ```
@@ -2074,7 +2143,7 @@ Steps:
 
 - [ ] **写失败测试**。新增 `crates/wjsm-cli/tests/pm_run_from_cas.rs`，测试 `pm_run_from_cas`：构造临时项目（package.json 依赖 demo，用预置 store 或内置 mock registry），`wjsm install` 后 `run_file_in_process` 跑入口 `import {v} from 'demo'; console.log(v)`，断言 stdout 含预期值且项目目录**无 `node_modules`**。
 - [ ] **Verify RED**：运行预期失败（run 尚未注入 CAS）。
-- [ ] **最小代码**：`lib.rs` 的 `cmd_run`/`cmd_build` 前置：探测 `<dir>/wjsm-lock.toml`，存在则用 `ModuleBundler::with_providers(root, options, Arc::new(CasVfs::new(...)), Arc::new(PnpOverlay::from_lock(...)))` 替代默认 bundler。
+- [ ] **最小代码**：`lib.rs` 的 `cmd_run`/`cmd_build` 前置：探测 `<dir>/wjsm-lock.toml`，存在则构造 `vroot = <store_root>/v1/.vroot` 哨兵根 + `CasVfs::new(store, vroot)`，用 **`RoutingVfs::new(Arc::new(cas), vroot)`**（**不是**裸 `CasVfs`——入口文件与项目本地源在真实磁盘，须经 FsVfs；见任务 3.2 RoutingVfs）作为 `Vfs`，配 `PnpOverlay::from_lock(&lock, vroot, project_dir)` 作 overlay，经 `ModuleBundler::with_providers(root, options, Arc::new(RoutingVfs::…), Arc::new(PnpOverlay::…))` 替代默认 bundler。
 - [ ] **Verify GREEN**：`cargo nextest run -p wjsm-cli -E 'test(pm_run_from_cas)'` 通过，断言项目无 node_modules。
 - [ ] **Commit**：`git commit -am "feat(cli): run/build 惰性接入 CAS（无 node_modules 直供编译器）"`
 

@@ -603,17 +603,19 @@ fn transform_expr_handles_opt_chain_call() {
 }
 
 #[test]
-fn transform_expr_handles_await() {
+fn transform_expr_keeps_await_function_require_runtime() {
     let module = parse(r#"async function f() { const x = require('./foo'); await x; }"#);
     let transformed = transform(&module);
-    assert!(has_import_decl(&transformed));
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
 }
 
 #[test]
-fn transform_expr_handles_yield() {
+fn transform_expr_keeps_yield_function_require_runtime() {
     let module = parse(r#"function* f() { const x = require('./foo'); yield x; }"#);
     let transformed = transform(&module);
-    assert!(has_import_decl(&transformed));
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
 }
 
 #[test]
@@ -703,10 +705,11 @@ fn transform_stmt_handles_try_finally() {
 }
 
 #[test]
-fn transform_stmt_handles_return() {
+fn transform_stmt_keeps_function_return_require_runtime() {
     let module = parse(r#"function f() { const x = require('./foo'); return x; }"#);
     let transformed = transform(&module);
-    assert!(has_import_decl(&transformed));
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
 }
 
 #[test]

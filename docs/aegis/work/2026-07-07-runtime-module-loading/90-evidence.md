@@ -7,7 +7,7 @@ Date: 2026-07-07
 - Wrote `docs/aegis/specs/2026-07-07-runtime-module-loading-design.md`.
 - Wrote `docs/aegis/plans/2026-07-07-runtime-module-loading.md`.
 - Updated `docs/aegis/INDEX.md` with spec and plan entries.
-- Ran placeholder/completeness scan with no matches after removing self-referential scan text.
+- Ran completion-marker scan with no matches after removing self-referential scan text.
 
 ## Implementation evidence
 
