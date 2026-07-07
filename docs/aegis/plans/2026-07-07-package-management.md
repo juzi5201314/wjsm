@@ -2,7 +2,7 @@
 
 Goal: 实现 wjsm 的完整 npm 生态包管理能力（`wjsm install/add/remove/task/x` + workspaces），做到无 `node_modules`、全局内容寻址存储（CAS blob + SQLite + zstd + packfile）直供编译器，并实现 AOT 独有的跨项目分层编译产物复用（L1 可重定位 IR + L2 cwasm 片段）。批准的设计见 `docs/aegis/specs/2026-07-07-package-management-design.md`。
 
-Architecture: 新增独立 crate `wjsm-pm`，拥有 registry client / CAS store / PubGrub solver / lockfile / scripts / workspace。`wjsm-module` 新增 `Vfs` + `ResolutionOverlay` 两个 trait（定义在 module 侧，实现在 pm 侧），把现有三处磁盘访问抽象化——`wjsm-module` **不反向依赖** `wjsm-pm`。`wjsm-semantic` 新增可重定位 IR 单包 lower + 链接阶段（服务 L1）。`wjsm-cli` 组装注入并新增子命令。依赖方向：`wjsm-pm → wjsm-module`、`wjsm-pm → wjsm-snapshot-format`、`wjsm-cli → wjsm-pm`。
+Architecture: 新增独立 crate `wjsm-pm`，拥有 registry client / CAS store / PubGrub solver / lockfile / scripts / workspace。`wjsm-module` 新增 `Vfs` + `ResolutionOverlay` 两个 trait（定义在 module 侧，实现在 pm 侧）；`Vfs` 覆盖 `ModuleResolver` 解析算法的**全部**文件系统谓词（`read_to_string` / `canonicalize` / `is_file` / `is_dir` / `exists` / `read_package_json`，共约 20 处触点），而非仅三处读取——`wjsm-module` **不反向依赖** `wjsm-pm`。`wjsm-semantic` 新增可重定位 IR 单包 lower + 链接阶段（服务 L1）。`wjsm-cli` 组装注入并新增子命令。依赖方向：`wjsm-pm → wjsm-module`、`wjsm-pm → wjsm-snapshot-format`、`wjsm-cli → wjsm-pm`。
 
 Tech Stack: Rust 2024；`rusqlite`（bundled SQLite，WAL）；`zstd`；`blake3`（内容哈希）；`tar` + `flate2`（tgz 解包）；`sha2` + base64（npm SSRI 完整性校验）；`reqwest`（workspace 已有，async/tokio）；`tokio`（workspace 已有，`spawn_blocking` 隔离 SQLite 同步写）；`pubgrub` crate（版本求解）；`toml`（workspace 已有，lockfile）；`serde_json`（packument、迁移读取）；`serde_yaml`（pnpm-lock 迁移）；现有 fixture runner + nextest。
 
@@ -33,7 +33,7 @@ Compatibility Boundary:
 - blob 内容寻址身份、lockfile 解析结果身份分离；store 版本目录 `~/.wjsm/store/v1`。
 - 已知代价：首版无物化 node_modules，外部 Node 工具链看不到依赖（wjsm 自有 check/lint/fmt 走 CAS 不受影响）；`--node-modules-dir` 逃生舱不在本计划。
 - 迁移不删除原生态 lockfile（除非 `--prune`）。
-- P5 前置依赖 issue #312 已合并；可重定位 IR 分离编译产出必须与现有 `lower_modules` 整体路径**逐指令等价**。
+- P5 前置依赖 issue #312 已合并；可重定位 IR 分离编译产出与现有 `lower_modules` 整体路径**分级逐指令等价**（L2-a 叶子包 / L2-b import 边必过；L2-c re-export/shared-env 等价或明确降级到 L2-bundle）。
 - tarball 必须 SSRI 校验通过才入库；依赖生命周期脚本默认禁用，需 `trustedDependencies` 或 `--allow-scripts`。
 
 Verification:
@@ -41,7 +41,7 @@ Verification:
 - `cargo nextest run -p wjsm-pm`
 - `cargo nextest run -p wjsm-module`（回归 Vfs 抽象不破坏 FS 模式）
 - `cargo nextest run -p wjsm-semantic -E 'test(relocatable_ir)'`
-- `cargo nextest run -E 'test(pm__)'`（fixtures）
+- `cargo nextest run -p wjsm-cli -E 'test(pm_)'`（CLI 集成测试：install→run，含无 node_modules 断言。pm 场景需 store 预置 + install 前置步骤，标准 fixture_runner（仅 happy/errors/modules 三 suite、纯 run 比对）无法表达，故用 `crates/wjsm-cli/tests/` 下自定义集成测试，不注册 fixtures/pm suite）
 - `cargo nextest run --workspace`（全量回归）
 - 冒烟：含依赖 fixture 项目 `wjsm install` 后 `wjsm run` 成功且磁盘无 node_modules
 
@@ -49,7 +49,14 @@ Verification:
 
 Facts（已核对代码）:
 
-- `ModuleResolver`（resolver.rs:70）字段 `root_path/options/package_cache/visited`；`with_options`（L89）是唯一带 options 构造器。源码读取唯一点在 `resolve`→L754 `std::fs::read_to_string(&path)`；node_modules 查找在 `find_package_in_node_modules`（L328）；package.json 读取在 `package_json.rs:60`。这三处是 CAS 切入接缝。
+- `ModuleResolver`（resolver.rs:70）字段 `root_path/options/package_cache/visited`；`with_options`（L89）是唯一带 options 构造器。**文件系统触点远不止三处**（已逐行核对 resolver.rs）：
+  - `std::fs::read_to_string`：L754（源码读取，唯一读点）。
+  - `Path::canonicalize`：L91、334、343、359、380、454、469、593、600、609、631、667（12 处，遍布 `resolve_file_or_directory`/`resolve_existing_module_path`/`resolve_package_target_path`/`resolve_directory_index`/`find_nearest_package`/`read_package_info`/`canonical_entry_path`/`find_package_in_node_modules`）。
+  - `Path::is_file`：L453、468、592、599、608、630、663（7 处）。
+  - `Path::is_dir`：L342、354、456、474、602、614（6 处）。
+  - node_modules 遍历：`find_package_in_node_modules`（L328）；bare specifier 入口 `resolve_bare_specifier`（L242）先查 `find_nearest_package` 再遍历 node_modules（L265）。
+  - package.json 读取：`package_json.rs:read_package_info`（L48，`fs::metadata` + `read_package_info_manifest`→L60 `fs::read_to_string`）。
+  - **决定性事实**：`std::fs::canonicalize` 要求路径在真实磁盘存在。CAS 虚拟路径 `<vroot>/<name>@<ver>/…` 永不落盘，直接 canonicalize 必然失败。因此 CAS 切入**不是**"改三处读取"，而是"把 resolver 的全部 fs 谓词路由进 `Vfs`，并让 `Vfs::canonicalize` 对虚拟路径做恒等归一化"。这是 resolver 级重构（任务 1.6 承载），是 P2–P4 的地基。
 - `ModuleBundler`（bundler.rs:12）持 `root_path/options`，`lower_bundle`/`parse_entry_ast`/`bundle` 均经 `ModuleGraph::build_with_options`（graph.rs:39）。注入点在 bundler + graph + resolver 构造链。
 - `lower_modules`（lowerer_modules.rs:37）接收 `Vec<ModuleLoweringInput>` + 各种 `HashMap<ModuleId, _>`，所有模块共用一棵 `ScopeTree`，scope id 全局递增（scope.rs:61 `idx = self.arenas.len()`）并写进 IR 名 `${scope_id}.{name}`。这是 L1 跨项目复用的命门——必须模块局部化 + 重定位。
 - CLI dispatch 在 `main_entry`（lib.rs:365）`match cli.command`；`Commands` enum 在 cli_args.rs:150；现有 `Cache` 子命令 dispatch 到 `cmd_cache`（L1407）。新子命令加在这两处。
@@ -84,13 +91,13 @@ Cargo.toml
 src/lib.rs                 # 公共 API：install/add/remove/resolve/link_provider
 src/solver/{mod,npm_semver,provider,duplication,explain}.rs
 src/registry/{mod,packument,tarball,npmrc}.rs
-src/store/{mod,index,blob,manifest,artifact,vfs,overlay}.rs
+src/store/{mod,index,blob,manifest,artifact,vfs,overlay,gc}.rs
 src/lockfile/{mod,wjsm_lock,migrate}.rs
 src/scripts/mod.rs
 src/workspace.rs
 tests/mock_registry.rs      # 内置离线 mock registry 测试辅助
 ```
-修改 `crates/wjsm-module/src/`：新增 `vfs.rs`（trait 定义 + `FsVfs`/`NoOverlay` 默认实现）；`resolver.rs`（构造器接受 vfs/overlay，3 处磁盘访问改 trait 调用）；`bundler.rs`/`graph.rs`（注入透传）；`lib.rs`（导出 trait）。
+修改 `crates/wjsm-module/src/`：新增 `vfs.rs`（trait 定义 + `FsVfs`/`NoOverlay` 默认实现）；`resolver.rs`（构造器接受 vfs/overlay，**全部约 20 处 fs 谓词**——`read_to_string`/`canonicalize`/`is_file`/`is_dir`/`metadata`——改 trait 调用）；`bundler.rs`/`graph.rs`（注入透传）；`lib.rs`（导出 trait）。
 修改 `crates/wjsm-semantic/src/`：新增 `relocatable/{mod,lower_one,relocate,link}.rs`；`lib.rs` 导出。
 修改 `crates/wjsm-cli/src/`：`cli_args.rs`（新增 `Install/Add/Remove/Task/X` 子命令）；`lib.rs`（dispatch + `cmd_install` 等）；新增 `pm_commands.rs`。
 修改根 `Cargo.toml`：workspace members + 新增依赖。
@@ -122,9 +129,9 @@ tests/mock_registry.rs      # 内置离线 mock registry 测试辅助
 
 Complexity Budget：
 - Artifact class：新 crate（承载主复杂度）+ 现有 crate 微创注入 + semantic 架构演进。
-- Target files：`wjsm-pm/*`（全新，每文件单一职责 ≤500 行）；`wjsm-module`（trait 抽象微创，3 处调用改写 + 新 vfs.rs）；`wjsm-semantic/relocatable/*`（新 owner 文件，非改大文件）；`wjsm-cli`（新 pm_commands.rs + dispatch 微创）。
-- Current pressure：`resolver.rs` 1576 行已超纪律——**禁止**往其加包管理逻辑，只改 3 处调用签名。
-- Projected post-change pressure：主复杂度进新文件，现有大文件不增负。
+- Target files：`wjsm-pm/*`（全新，每文件单一职责 ≤500 行）；`wjsm-module`（新 vfs.rs 承载 trait + 默认实现；resolver.rs 全部 fs 谓词路由进 Vfs——是有实质工作量的重构，非"改几处签名"）；`wjsm-semantic/relocatable/*`（新 owner 文件，非改大文件）；`wjsm-cli`（新 pm_commands.rs + dispatch 微创）。
+- Current pressure：`resolver.rs` 1567 行已超纪律——**禁止**往其加包管理逻辑；fs 谓词 Vfs 化是"把散落的 `std::fs`/`Path` 调用替换为 `self.vfs.*` 调用"的等量替换，不新增业务逻辑，行数基本持平。若替换后逼近 1600 行，将解析算法按类别（相对/bare/package-target）拆到 resolver 子模块，作为该任务收尾。
+- Projected post-change pressure：主复杂度进新文件；resolver.rs 行数持平（等量替换）；现有大文件不增业务负担。
 - Budget result：within-budget。
 - Planned governance：每子模块独立文件；resolver/lib 只做 wiring。
 
@@ -217,7 +224,7 @@ Files:
 
 Why: blob 层是 CAS 核心——文件内容按 blake3 哈希去重、zstd 压缩、追加进 packfile，解决小文件 inode 爆炸。
 
-Impact/Compatibility: 纯新增。packfile 追加式；写中断产生的尾部字节由 gc 回收（本任务只实现读写，gc 见任务 1.4 索引层）。
+Impact/Compatibility: 纯新增。packfile 追加式；单 pack 软上限轮转由 `Store`（任务 1.5，经 index `active_pack_id`/`bump_pack`）驱动，本任务的 `PackWriter` 只提供 `len()`（供轮转判定）与 `sync()`（fsync）。写中断产生的孤儿尾部字节由 `wjsm store gc`（任务 1.5b）回收。
 
 Verification: `cargo nextest run -p wjsm-pm -E 'test(blob)'`
 
@@ -277,6 +284,12 @@ Steps:
               ulen: content.len() as u32,
           })
       }
+
+      /// 当前 packfile 已写字节数（供 Store 判断是否轮转）。
+      pub fn len(&self) -> u64 { self.offset }
+      pub fn pack_id(&self) -> u32 { self.pack_id }
+      /// fsync：确保 blob 字节落盘先于 index 事务提交（崩溃一致性）。
+      pub fn sync(&self) -> Result<()> { self.file.sync_all().context("fsync packfile")?; Ok(()) }
   }
 
   /// 从 packfile 读取并解压一个 blob。
@@ -330,7 +343,7 @@ Steps:
   ```
   `store/mod.rs` 追加：`pub mod blob;`
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(blob)'` 预期未编译前失败 → 补齐后运行。
-- [ ] **最小代码**：上面代码即完整实现，无需额外。
+- [ ] **最小代码**：上面 `PackWriter`（含 `len`/`sync`/`pack_id`）即完整。轮转决策**不在** blob 层——`PackWriter` 只对单一 `pack_id` 负责；「活跃 pack 选择 + 超软上限换新 pack」是 `Store::active_writer`（任务 1.5）经 `index.active_pack_id()`/`bump_pack()` 决定，pack 元数据落 `packs` 表（任务 1.4）。此分层避免 blob 层扫描目录、避免两处各存一份"当前 pack"状态。
 - [ ] **Verify GREEN**：`cargo nextest run -p wjsm-pm -E 'test(blob)'` 两个测试通过。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): blob 层 zstd+packfile 内容寻址"`
 
@@ -445,7 +458,9 @@ Files:
 
 Why: SQLite index.db（WAL）统管 packages/manifests/blobs/artifacts 映射，取代海量 JSON 小文件元数据。
 
-Impact/Compatibility: 纯新增。事务写保证中断可回滚。
+Impact/Compatibility: 纯新增。事务写保证中断可回滚——本任务提供 `transaction()` 入口（`&mut self` 借出 `rusqlite::Transaction`），任务 1.5 的 `add_package_from_dir` **必须**在单事务内写完 blobs+manifest+package，中断则整体回滚。
+
+**与批准设计 §6.3 的偏离（显式记录）**：设计 §6.3 用规范化三表 `manifests(id) + manifest_entries(manifest_id, rel_path, blob_hash, mode)` + `packages.meta BLOB(MessagePack)`。本计划首版塌缩为 `manifests(hash, body BLOB)`（manifest 整体 JSON 存 body）并省略 `packages.meta`。理由：首版读取路径只需"包→manifest→rel_path→blob"整体加载，不需按 rel_path 做 SQL 查询；`meta` 快照（package.json 关键字段）在 solver 阶段直接从 packument 取，不必冗余进 index。**代价**：无法用 SQL 直接查"哪些包含某 rel_path"；`manifest_entries` 可查询性推迟到需要 `wjsm store ls`/按文件反查时再规范化（届时递增 store 版本 `v2`）。此偏离已在 executing 后补 ADR 时记录。
 
 Verification: `cargo nextest run -p wjsm-pm -E 'test(index)'`
 
@@ -473,11 +488,17 @@ Steps:
   );
   CREATE TABLE IF NOT EXISTS packages (
       name TEXT NOT NULL, version TEXT NOT NULL, integrity TEXT NOT NULL,
-      manifest_hash BLOB NOT NULL, PRIMARY KEY (name, version)
+      manifest_hash BLOB NOT NULL,
+      meta BLOB,  -- package.json 关键字段 MessagePack 快照（对齐设计 §6.3，供 solver 免二次拉取）；本任务建列，写入见任务 3.2
+      PRIMARY KEY (name, version)
   );
   CREATE TABLE IF NOT EXISTS artifacts (
       cache_key BLOB PRIMARY KEY, tier INTEGER NOT NULL,
       pack_id INTEGER, offset INTEGER, clen INTEGER, ulen INTEGER
+  );
+  -- packfile 元数据：当前活动 pack 与已封存字节（gc 计算孤儿字节的基准）
+  CREATE TABLE IF NOT EXISTS packs (
+      pack_id INTEGER PRIMARY KEY, committed_len INTEGER NOT NULL
   );
   "#;
 
@@ -575,9 +596,14 @@ Steps:
   ```
   `store/mod.rs` 追加 `pub mod index;`
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(index)'`。
-- [ ] **最小代码**：上面即完整。
-- [ ] **Verify GREEN**：两测试通过。
-- [ ] **Commit**：`git commit -am "feat(wjsm-pm): SQLite index.db（blobs/manifests/packages/artifacts）"`
+- [ ] **最小代码**：**先把上面代码里的 `conn: Connection` 改为 `conn: std::sync::Mutex<Connection>`**（`Store` 经 `Arc` 共享，事务需内部可变；所有 `self.conn.execute`/`prepare` 改为先 `self.conn.lock().unwrap()` 借出 guard 再调用）。再补齐下列（供任务 1.5 / GC / 求解使用），并各加一个 `index_*` 测试：
+  - `put_manifest_raw(hash, body)` / `get_manifest_raw(hash)`（manifest body 存取，任务 1.5 用）。
+  - `with_txn<R>(&self, f: impl FnOnce(&Transaction) -> Result<R>) -> Result<R>`：锁 `Mutex<Connection>` 后开事务、执行闭包、成功 `commit`/失败 `rollback`。任务 1.5 用它把「写全部 blob + manifest + package」包进单事务，中断整体回滚。（不暴露裸 `transaction(&mut self)`，因 `Store` 经 `Arc` 共享、`conn` 在 `Mutex` 内。）
+  - `active_pack_id()` / `bump_pack() -> Result<u32>`：读写 `packs` 表当前活跃 pack（任务 1.2 pack 轮转的索引侧）。
+  - `reachable_blob_hashes() -> HashSet<BlobHash>`：`packages`→`manifests`(body 反序列化 entries) 收集全部可达 blob；`gc` 用它标记，未被引用的 blobs 行 + packfile 尾部孤儿字节为可回收（GC 实现见任务 1.5b 的 `store::gc`）。
+  - `packages.meta` 列建列即可，写入 package.json 关键字段 MessagePack 快照在任务 3.2 install 编排补（对齐设计 §6.3，供 solver 免二次拉取）。
+- [ ] **Verify GREEN**：全部 `index_*` 测试通过。
+- [ ] **Commit**：`git commit -am "feat(wjsm-pm): SQLite index.db（blobs/manifests/packages/artifacts/packs + 事务 + GC 支持）"`
 
 ## 任务 1.5：Store 统一入口（写包 + 读文件事务）
 
@@ -607,10 +633,13 @@ Steps:
 
   pub const STORE_VERSION: &str = "v1";
 
+  /// 单 packfile 软上限（超过则轮转到下一 pack，避免单文件无限膨胀）。
+  const PACK_ROTATE_BYTES: u64 = 512 * 1024 * 1024;
+
   pub struct Store {
       root: PathBuf,
       packs_dir: PathBuf,
-      index: StoreIndex,
+      pub(crate) index: StoreIndex,
   }
 
   impl Store {
@@ -622,44 +651,64 @@ Steps:
           Ok(Self { root, packs_dir, index })
       }
 
-      /// 把一个解包后的包目录写入 CAS：每文件去重成 blob，构建 manifest，入库。
+      /// 选取活跃 packfile；超过软上限则轮转到下一 pack_id（index.packs 表记录）。
+      fn active_writer(&self) -> Result<PackWriter> {
+          let mut pack_id = self.index.active_pack_id()?;
+          let mut writer = PackWriter::open(&self.packs_dir, pack_id)?;
+          if writer.len() >= PACK_ROTATE_BYTES {
+              pack_id = self.index.bump_pack()?; // 原子递增活跃 pack_id
+              writer = PackWriter::open(&self.packs_dir, pack_id)?;
+          }
+          Ok(writer)
+      }
+
+      /// 把一个解包后的包目录写入 CAS：每文件去重成 blob，构建 manifest，**整包在单事务内入库**。
+      ///
+      /// 原子性：blob 字节先追加进 packfile（追加式，中断只留孤儿尾字节，由 gc 回收），
+      /// 但 index 的 blobs/manifests/packages 三表写入包裹在**单个 SQLite 事务**中——
+      /// 中断则整体回滚，index 永不出现"包已登记但 manifest/blob 缺失"的半写状态。
       pub fn add_package_from_dir(&self, name: &str, version: &str, integrity: &str, dir: &Path) -> Result<()> {
+          let mut writer = self.active_writer()?;
+          // 阶段一：blob 落 packfile，收集 (hash, loc, 是否新) + manifest entries（不写 index）。
+          let mut new_blobs: Vec<(BlobHash, BlobLoc)> = Vec::new();
           let mut entries = Vec::new();
-          let mut writer = PackWriter::open(&self.packs_dir, 0)?;
           let mut stack = vec![dir.to_path_buf()];
           while let Some(cur) = stack.pop() {
               for ent in std::fs::read_dir(&cur)? {
                   let ent = ent?;
                   let path = ent.path();
-                  if path.is_dir() {
+                  let meta = ent.metadata()?;
+                  if meta.is_dir() {
                       stack.push(path);
                       continue;
                   }
                   let content = std::fs::read(&path)?;
                   let h = hash_content(&content);
-                  if self.index.get_blob(&h)?.is_none() {
+                  if self.index.get_blob(&h)?.is_none()
+                      && !new_blobs.iter().any(|(bh, _)| bh == &h)
+                  {
                       let loc = writer.append(&content)?;
-                      self.index.put_blob(&h, loc)?;
+                      new_blobs.push((h, loc));
                   }
                   let rel = path.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
-                  entries.push(ManifestEntry { rel_path: rel, blob_hash: h, mode: 0o644 });
+                  // mode：保留可执行位（bin 文件），其余归一化 0o644。
+                  let mode = normalize_mode(&meta);
+                  entries.push(ManifestEntry { rel_path: rel, blob_hash: h, mode });
               }
           }
+          writer.sync()?; // fsync packfile，确保 blob 字节先于 index 落盘
           let m = Manifest::from_entries(entries);
-          let mh = m.hash();
-          self.index.put_package(name, version, integrity, &mh)?;
-          // manifest body 存 index
-          self.put_manifest(&m)?;
-          Ok(())
-      }
-
-      fn put_manifest(&self, m: &Manifest) -> Result<()> {
           let body = serde_json::to_vec(&m.entries)?;
-          self.index_conn_put_manifest(&m.hash(), &body)
-      }
-
-      fn index_conn_put_manifest(&self, hash: &[u8; 32], body: &[u8]) -> Result<()> {
-          self.index.put_manifest_raw(hash, body)
+          let mh = m.hash();
+          // 阶段二：单事务写 index（blobs + manifest + package 原子提交，失败回滚）。
+          self.index.with_txn(|tx| {
+              for (h, loc) in &new_blobs {
+                  index::txn_put_blob(tx, h, *loc)?;
+              }
+              index::txn_put_manifest_raw(tx, &mh, &body)?;
+              index::txn_put_package(tx, name, version, integrity, &mh)?;
+              Ok(())
+          })
       }
 
       fn load_manifest(&self, hash: &[u8; 32]) -> Result<Manifest> {
@@ -746,22 +795,47 @@ Steps:
   }
   ```
   （`index` 字段 test 访问需 `pub(crate) index`——把 `Store.index` 改 `pub(crate)`。）
+  **可变性**：`Store` 经 `Arc<Store>` 共享（CasVfs 持有），故 `add_package_from_dir(&self, …)` 是 `&self`；但 rusqlite `Connection::transaction()` 要求 `&mut Connection`。因此 `StoreIndex.conn` 用 `Mutex<Connection>` 包裹（`StoreIndex { conn: Mutex<Connection> }`），`transaction()` 内 `lock()` 后 `conn.transaction()`——写路径串行化（与 WAL 单写模型一致），读路径同样经 `lock()`。这也满足 `Vfs: Send + Sync`（`CasVfs` 内 `Arc<Store>` 需 `Sync`）。`StoreIndex` 提供 `transaction()` 供 `add_package_from_dir` 包裹整包写入，把 blob/manifest/package 三类写入收进单个事务，保证「要么整包入库、要么整包回滚」，兑现 Impact 声明的原子性。
+  `Store` 另需 `manifest_has_prefix(name, version, rel) -> Result<bool>`（供 CasVfs::is_dir 判定目录）：加载包 manifest，返回是否存在任一 entry 的 `rel_path` 以 `rel/` 为前缀（或等于 `rel` 的父目录链）。
+  `normalize_mode(meta: &std::fs::Metadata) -> u32` 辅助：跨平台归一化文件模式——Unix 下保留可执行位（`0o755` 若 owner-exec 置位，否则 `0o644`）；非 Unix 恒 `0o644`。保证同内容文件在不同平台 manifest 一致（blob 去重不受 mode 影响，mode 只随 manifest entry）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(store_integration)'`。
-- [ ] **最小代码**：上面即完整。
-- [ ] **Verify GREEN**：两测试通过。
-- [ ] **Commit**：`git commit -am "feat(wjsm-pm): Store 统一入口（写包+读文件）"`
+- [ ] **最小代码**：上面即完整。新增第三个测试 `store_integration_atomic_rollback`：构造一个中途 `add_package_from_dir` 失败（如注入一个不可读文件），断言失败后 `read_package_file` 返回 `None`（package 行未提交），证明事务回滚。
+- [ ] **Verify GREEN**：三测试通过。
+- [ ] **Commit**：`git commit -am "feat(wjsm-pm): Store 统一入口（写包+读文件，整包事务+pack 轮转）"`
 
-## 任务 1.6：wjsm-module 新增 Vfs/ResolutionOverlay trait（默认实现零破坏）
+## 任务 1.5b：store gc（回收孤儿 blob + packfile 重写）
+
+Files:
+- 创建 `crates/wjsm-pm/src/store/gc.rs`
+- 修改 `crates/wjsm-pm/src/store/mod.rs`
+- 修改 `crates/wjsm-cli/src/cli_args.rs`（`cache gc` 子命令，或复用现有 `Cache`）
+
+Why: packfile 是追加式；写中断的孤儿字节、以及被 `--prune` 移除的包，其 blob 会成为不可达垃圾。设计 §6.2/§6.3 明示由 `wjsm store gc` 回收。前序任务（1.2/1.4/1.5）已把 gc 引为「后续任务实现」——此任务兑现，不留悬空能力。
+
+Impact/Compatibility: 纯新增。gc 走「标记-复制」：`reachable_blob_hashes`（index 已提供）标记可达 blob，把可达 blob 复制进新 packfile，原子替换 `packs/` 与 blobs 表位置，删除旧 pack。gc 期间加 store 级文件锁串行化。
+
+Verification: `cargo nextest run -p wjsm-pm -E 'test(gc)'`
+
+Steps:
+
+- [ ] **写失败测试**。`store/gc.rs`：`gc(store) -> GcStats { reclaimed_blobs, reclaimed_bytes }`。测试 `gc_reclaims_orphan_blob`：向 store 写一个包 A，直接经 `PackWriter` 追加一个不被任何 manifest 引用的孤儿 blob（模拟中断残留），运行 `gc`，断言孤儿 blob 被回收（`reclaimed_blobs >= 1`）且 A 的文件仍可 `read_package_file` 读出（可达 blob 保留、位置已重映射）。
+- [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(gc)'`。
+- [ ] **最小代码**：实现标记-复制 gc + store 级 flock（`fs2` 或 `std` advisory lock；workspace 若无 `fs2`，用 `O_EXCL` lock 文件）。CLI `cache gc` 调用 `wjsm_pm::store::gc`。
+- [ ] **Verify GREEN**：测试通过。
+- [ ] **Commit**：`git commit -am "feat(wjsm-pm): store gc 回收孤儿 blob（标记-复制 + 文件锁）"`
+
+## 任务 1.6：wjsm-module 新增 Vfs/ResolutionOverlay trait（全量 fs 谓词抽象，默认零破坏）
 
 Files:
 - 创建 `crates/wjsm-module/src/vfs.rs`
 - 修改 `crates/wjsm-module/src/lib.rs`（导出）
-- 修改 `crates/wjsm-module/src/resolver.rs`（构造器接受 trait 对象，3 处磁盘访问改调用）
+- 修改 `crates/wjsm-module/src/resolver.rs`（构造器接受 trait 对象；**全部** fs 谓词——`read_to_string`/`canonicalize`/`is_file`/`is_dir`/`exists`——改 trait 调用）
+- 修改 `crates/wjsm-module/src/package_json.rs`（`read_package_info` 经 Vfs）
 - 修改 `crates/wjsm-module/src/bundler.rs` / `graph.rs`（注入透传）
 
-Why: 把 resolver.rs:754/328、package_json.rs:60 三处磁盘访问抽象为 trait，让 CAS 无缝切入且不反转依赖方向。默认 `FsVfs`/`NoOverlay` 保证现有行为不变。
+Why: 让 CAS 无缝切入解析且不反转依赖方向。**关键更正**：resolver.rs 的 fs 触点远不止三处（见 Plan Basis Facts）——`canonicalize`（12 处）、`is_file`（7 处）、`is_dir`（6 处）遍布整个解析算法。其中 `std::fs::canonicalize` 要求路径在真实磁盘存在，CAS 虚拟路径 `<vroot>/<name>@<ver>/…` 永不落盘，直接 canonicalize 必然失败。因此 CAS 切入**不是**"改三处读取"，而是"把 resolver 全部 fs 谓词路由进 `Vfs`，并让 `Vfs::canonicalize` 对虚拟路径做恒等归一化（去 `.`/`..`，不触碰磁盘）"。这是 resolver 级重构，是 P2–P4 的地基。
 
-Impact/Compatibility: **关键兼容任务**。默认实现必须与现有行为逐字节等价——现有 module + 全量 fixture 必须全绿。
+Impact/Compatibility: **最关键兼容任务**。`FsVfs` 的每个方法必须与被替换的 `std::fs`/`Path` 调用**语义逐字节等价**（含 `canonicalize` 的符号链接解析与错误信息）——现有 module 单测 + 全量 fixture 必须全绿。回归失败即视为等价性破坏，不得放行。
 
 Verification: `cargo nextest run -p wjsm-module && cargo nextest run --workspace`
 
@@ -769,32 +843,45 @@ Steps:
 
 - [ ] **写失败测试**。`vfs.rs`：
   ```rust
-  // 虚拟文件系统抽象 + 解析覆盖层：让 CAS 无缝切入解析，不反转依赖方向
+  // 虚拟文件系统抽象 + 解析覆盖层：让 CAS 无缝切入解析，不反转依赖方向。
+  // Vfs 覆盖 ModuleResolver 解析算法的全部 fs 谓词——不止读取，还包括
+  // canonicalize/is_file/is_dir/exists，因为 CAS 虚拟路径无法走真实磁盘 canonicalize。
   use anyhow::{Context, Result};
   use std::path::{Path, PathBuf};
 
-  /// 源码/元数据读取抽象。默认 FsVfs = 现有 std::fs 行为。
+  /// 源码/元数据读取 + 路径谓词抽象。默认 FsVfs = 现有 std::fs / Path 行为。
   pub trait Vfs: Send + Sync {
       fn read_to_string(&self, path: &Path) -> Result<String>;
+      /// 归一化路径为规范绝对路径。FsVfs 走 std::fs::canonicalize（解析符号链接、要求存在）；
+      /// CasVfs 对虚拟路径做纯词法归一化（合并 `.`/`..`，不触碰磁盘）。
+      fn canonicalize(&self, path: &Path) -> Result<PathBuf>;
+      fn is_file(&self, path: &Path) -> bool;
       fn is_dir(&self, path: &Path) -> bool;
+      fn exists(&self, path: &Path) -> bool;
       fn read_package_json(&self, dir: &Path) -> Result<Option<String>>;
   }
 
-  /// 解析覆盖层：bare specifier → 虚拟树中的具体包根。None = 回退默认 node_modules 遍历。
+  /// 解析覆盖层：(referrer 上下文 + bare specifier) → 虚拟树中的具体包根。
+  /// None = 回退默认 node_modules 遍历。
   pub trait ResolutionOverlay: Send + Sync {
       fn resolve_bare(&self, specifier: &str, referrer: &Path) -> Result<Option<PathBuf>>;
   }
 
-  /// 默认文件系统实现（现有行为）。
+  /// 默认文件系统实现（现有行为，逐调用等价）。
   pub struct FsVfs;
 
   impl Vfs for FsVfs {
       fn read_to_string(&self, path: &Path) -> Result<String> {
-          std::fs::read_to_string(path).with_context(|| format!("Failed to read module: {}", path.display()))
+          std::fs::read_to_string(path)
+              .with_context(|| format!("Failed to read module: {}", path.display()))
       }
-      fn is_dir(&self, path: &Path) -> bool {
-          path.is_dir()
+      fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+          path.canonicalize()
+              .with_context(|| format!("canonicalize {}", path.display()))
       }
+      fn is_file(&self, path: &Path) -> bool { path.is_file() }
+      fn is_dir(&self, path: &Path) -> bool { path.is_dir() }
+      fn exists(&self, path: &Path) -> bool { path.exists() }
       fn read_package_json(&self, dir: &Path) -> Result<Option<String>> {
           let path = dir.join("package.json");
           match std::fs::read_to_string(&path) {
@@ -819,13 +906,21 @@ Steps:
       use super::*;
 
       #[test]
-      fn fs_vfs_reads_and_reports_missing_pkg_json() {
+      fn fs_vfs_predicates_match_std() {
           let dir = std::env::temp_dir().join(format!("wjsm_vfs_{}", std::process::id()));
           let _ = std::fs::remove_dir_all(&dir);
           std::fs::create_dir_all(&dir).unwrap();
           std::fs::write(dir.join("a.js"), "export const x=1;").unwrap();
           let vfs = FsVfs;
           assert_eq!(vfs.read_to_string(&dir.join("a.js")).unwrap(), "export const x=1;");
+          assert!(vfs.is_file(&dir.join("a.js")));
+          assert!(vfs.is_dir(&dir));
+          assert!(vfs.exists(&dir.join("a.js")));
+          assert!(!vfs.exists(&dir.join("missing.js")));
+          // canonicalize 与 std 一致（要求存在）
+          assert_eq!(vfs.canonicalize(&dir.join("a.js")).unwrap(),
+                     dir.join("a.js").canonicalize().unwrap());
+          assert!(vfs.canonicalize(&dir.join("missing.js")).is_err());
           assert!(vfs.read_package_json(&dir).unwrap().is_none());
           std::fs::write(dir.join("package.json"), r#"{"name":"x"}"#).unwrap();
           assert!(vfs.read_package_json(&dir).unwrap().is_some());
@@ -837,16 +932,37 @@ Steps:
       }
   }
   ```
-  `lib.rs` 追加 `mod vfs;` + `pub use vfs::{FsVfs, NoOverlay, ResolutionOverlay, Vfs};`
+  `vfs.rs` 追加纯词法归一化辅助（供 CasVfs::canonicalize 复用，供虚拟路径去 `.`/`..`，不触碰磁盘）：
+  ```rust
+  /// 纯词法路径归一化：合并 `.`/`..` 组件，保留其余，不解析符号链接、不访问磁盘。
+  /// 用于 CasVfs 的虚拟路径（虚拟树无符号链接，无需真实 canonicalize）。
+  pub fn normalize_virtual(path: &Path) -> PathBuf {
+      use std::path::Component;
+      let mut out = PathBuf::new();
+      for comp in path.components() {
+          match comp {
+              Component::ParentDir => { out.pop(); }
+              Component::CurDir => {}
+              other => out.push(other.as_os_str()),
+          }
+      }
+      out
+  }
+  ```
+  `lib.rs` 追加 `mod vfs;` + `pub use vfs::{normalize_virtual, FsVfs, NoOverlay, ResolutionOverlay, Vfs};`
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-module -E 'test(vfs)'`。
-- [ ] **最小代码 + 接入**：
-  - `resolver.rs`：`ModuleResolver` 增字段 `vfs: std::sync::Arc<dyn Vfs>`、`overlay: std::sync::Arc<dyn ResolutionOverlay>`；`with_options` 默认注入 `Arc::new(FsVfs)` / `Arc::new(NoOverlay)`；新增 `with_providers(root, options, vfs, overlay)` 构造器。
-  - L754 `std::fs::read_to_string(&path)` → `self.vfs.read_to_string(&path)`。
-  - L328 `find_package_in_node_modules` 起始处：先 `if let Some(root) = self.overlay.resolve_bare(package_name, from_dir)? { return Ok(Some(root)); }` 再回退现有遍历；遍历里 `candidate.is_dir()` → `self.vfs.is_dir(&candidate)`。
-  - `package_json.rs`：`read_package_info` 增参数或改为经 vfs——最小改动：新增 `read_package_info_with_vfs(dir, vfs)`，`read_package_info` 保留调用 `FsVfs`。resolver 调用点传 `&*self.vfs`。
-  - `bundler.rs`/`graph.rs`：`ModuleBundler` 增 `with_providers`，`ModuleGraph::build_with_providers` 透传到 `ModuleResolver::with_providers`；现有 `build_with_options` 内部用默认 provider。
-- [ ] **Verify GREEN**：`cargo nextest run -p wjsm-module && cargo nextest run --workspace` 全绿（证明默认实现零破坏）。
-- [ ] **Commit**：`git commit -am "feat(wjsm-module): Vfs/ResolutionOverlay trait 抽象磁盘访问（默认零破坏）"`
+- [ ] **最小代码 + 全量接入**：
+  - `resolver.rs`：`ModuleResolver` 增字段 `vfs: Arc<dyn Vfs>`、`overlay: Arc<dyn ResolutionOverlay>`；`with_options` 默认注入 `Arc::new(FsVfs)` / `Arc::new(NoOverlay)`；新增 `with_providers(root, options, vfs, overlay)` 构造器。构造器里 `root_path.canonicalize()`（L91）改 `vfs.canonicalize`。
+  - **全部 fs 谓词改经 `self.vfs`**（这是本任务核心，逐处改写，不遗漏）：
+    - `canonicalize`：L334、343、359、380、454、469、593、600、609、631、667 全部 → `self.vfs.canonicalize(...)`。注意其中若干是关联函数（`Self::resolve_package_target_path`/`resolve_directory_index`/`canonical_entry_path` 为 `fn`（无 `&self`）），需改签名接受 `&dyn Vfs` 参数或提升为方法——按调用链最小改动提升为 `&self` 方法。
+    - `is_file`：L453、468、592、599、608、630、663 → `self.vfs.is_file(...)`。
+    - `is_dir`：L342、354、456、474、602、614 → `self.vfs.is_dir(...)`。
+    - L754 `std::fs::read_to_string(&path)` → `self.vfs.read_to_string(&path)`。
+  - `find_package_in_node_modules`（L328）起始处：先 `if let Some(root) = self.overlay.resolve_bare(package_name, from_dir)? { return Ok(Some(root)); }` 再回退现有遍历（遍历内 `candidate.is_dir()`/`canonicalize` 已按上条改经 vfs）。**注意**：`resolve_bare_specifier`（L242）在遍历前先查 `find_nearest_package`（L249）——overlay 命中路径须在 node_modules 遍历前生效，故 overlay 钩子放在 `find_package_in_node_modules` 入口即可覆盖 bare specifier 主路径。
+  - `package_json.rs`：`read_package_info` 改签名 `read_package_info(dir, vfs: &dyn Vfs)`，内部 `fs::metadata`+`fs::read_to_string` → `vfs.read_package_json(dir)`（合并为一次调用，语义等价：Some→解析、None→Ok(None)）。resolver 的 `read_package_info`（L378）调用点传 `&*self.vfs`。
+  - `bundler.rs`/`graph.rs`：`ModuleBundler` 增 `with_providers`，`ModuleGraph::build_with_providers` 透传到 `ModuleResolver::with_providers`；现有 `build_with_options`/`with_resolution_options` 内部用默认 provider（`Arc::new(FsVfs)`/`Arc::new(NoOverlay)`）。
+- [ ] **Verify GREEN**：`cargo nextest run -p wjsm-module && cargo nextest run --workspace` 全绿（证明默认 FsVfs 与原 std 调用逐处等价、零破坏）。
+- [ ] **Commit**：`git commit -am "feat(wjsm-module): Vfs/ResolutionOverlay trait 抽象全部 fs 谓词（默认零破坏）"`
 
 ---
 
@@ -859,7 +975,14 @@ Files:
 - 创建 `crates/wjsm-pm/src/solver/npm_semver.rs`
 - 修改 `crates/wjsm-pm/src/lib.rs`
 
-Why: npm 区间语义（`^`/`~`/x-range/`||`/预发布规则）与通用 semver 有差异，必须精确匹配 node-semver，作为 PubGrub 的 Version/VersionSet 基础。
+Why: npm 区间语义（`^`/`~`/x-range/hyphen/比较运算符/`||`/预发布包含规则）与通用 semver 有差异，必须精确匹配 node-semver。设计 §7.3 要求**精确匹配**——按项目 hard rule「No partial implementations」，本任务一次性覆盖 node-semver 全部区间形态，不留「后续按 fixture 补」的缺口。
+
+**node-semver 语义要点（决定实现结构）**：
+1. **预发布包含规则**（最易错）：带预发布的版本（如 `2.0.0-alpha`）只有当**同一 comparator set 中存在某个 comparator，其 `[major,minor,patch]` 元组与该版本相同且该 comparator 自身带预发布**时才可能匹配。即 `^1.2.3`（无预发布，展开上界 `<2.0.0`）**不匹配** `2.0.0-alpha`——原计划的 `(lo,hi)` 元组模型此处有硬伤（`2.0.0-alpha < 2.0.0` 会误判命中）。故 Range 不能塌缩为单一 `(lo,hi)`，须保留 comparator 结构以携带各 comparator 的预发布信息。
+2. **comparator set = 交集**（空格分隔），**多 set = 并集**（`||`）。
+3. **x-range**：`*`/空/`x`/`X`/缺省段（`1`、`1.2`、`1.x`、`1.2.x`）——按缺省位置展开为范围。
+4. **hyphen range**：`1.2.3 - 2.3.4`（含两端，右端部分版本按"补齐上界"展开）。
+5. **`~`/`^` 部分版本**：`~1`→`>=1.0.0 <2.0.0`；`~1.2`→`>=1.2.0 <1.3.0`；`^1`→`>=1.0.0 <2.0.0`；`^0`→`>=0.0.0 <1.0.0`；`^0.0`→`>=0.0.0 <0.1.0`。
 
 Impact/Compatibility: 纯新增。
 
@@ -867,9 +990,10 @@ Verification: `cargo nextest run -p wjsm-pm -E 'test(npm_semver)'`
 
 Steps:
 
-- [ ] **写失败测试**（对照 node-semver 行为表）。`solver/npm_semver.rs`：
+- [ ] **Spike 首步：锁定对照表**。以 node-semver README 的 Ranges 表 + `test/fixtures/range-parse.js` 行为为准，把下列样例写成断言表（GREEN 目标）。若与本任务代码有分歧，以 node-semver 实际行为为准修正代码，不修正测试。
+- [ ] **写失败测试**（comparator 结构模型，携带预发布信息）。`solver/npm_semver.rs`：
   ```rust
-  // npm 精确 SemVer 区间语义（^ ~ x-range || 预发布规则）
+  // npm 精确 SemVer：版本序 + comparator（op+partial）集合，精确匹配 node-semver
   use std::cmp::Ordering;
 
   #[derive(Debug, Clone, PartialEq, Eq)]
@@ -877,134 +1001,208 @@ Steps:
       pub major: u64,
       pub minor: u64,
       pub patch: u64,
-      pub pre: Vec<String>,
+      pub pre: Vec<PreId>,       // 预发布标识（数字/字母混合，按 semver 规则排序）
   }
+
+  #[derive(Debug, Clone, PartialEq, Eq)]
+  pub enum PreId { Num(u64), Alpha(String) }
 
   impl SemVer {
       pub fn parse(s: &str) -> Option<Self> {
           let s = s.trim().trim_start_matches('v');
-          let (core, pre) = match s.split_once('-') {
-              Some((c, p)) => (c, p.split('.').map(String::from).collect()),
-              None => (s, Vec::new()),
+          let core_pre = s.split('+').next().unwrap_or(s); // 去 build metadata
+          let (core, pre) = match core_pre.split_once('-') {
+              Some((c, p)) => (c, parse_pre(p)),
+              None => (core_pre, Vec::new()),
           };
-          let core = core.split('+').next().unwrap_or(core);
           let mut it = core.split('.');
           let major = it.next()?.parse().ok()?;
           let minor = it.next()?.parse().ok()?;
           let patch = it.next()?.parse().ok()?;
+          if it.next().is_some() { return None; }
           Some(SemVer { major, minor, patch, pre })
       }
+      pub fn has_pre(&self) -> bool { !self.pre.is_empty() }
+      fn tuple(&self) -> (u64, u64, u64) { (self.major, self.minor, self.patch) }
   }
 
-  impl PartialOrd for SemVer {
-      fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) }
+  fn parse_pre(s: &str) -> Vec<PreId> {
+      s.split('.').map(|id| match id.parse::<u64>() {
+          Ok(n) if !id.starts_with('0') || id == "0" => PreId::Num(n),
+          _ => PreId::Alpha(id.to_string()),
+      }).collect()
   }
+
+  impl PartialOrd for SemVer { fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) } }
   impl Ord for SemVer {
       fn cmp(&self, o: &Self) -> Ordering {
-          (self.major, self.minor, self.patch)
-              .cmp(&(o.major, o.minor, o.patch))
-              .then_with(|| match (self.pre.is_empty(), o.pre.is_empty()) {
-                  (true, true) => Ordering::Equal,
-                  (true, false) => Ordering::Greater, // 无预发布 > 有预发布
-                  (false, true) => Ordering::Less,
-                  (false, false) => self.pre.cmp(&o.pre),
-              })
+          self.tuple().cmp(&o.tuple()).then_with(|| cmp_pre(&self.pre, &o.pre))
       }
   }
 
-  /// npm range：解析为 (下界含, 上界不含) 的并集。
-  #[derive(Debug, Clone, PartialEq, Eq)]
-  pub struct Range {
-      /// 每个 comparator set 是 [下界, 上界)；多个 set 是并集（||）。
-      pub sets: Vec<(Option<SemVer>, Option<SemVer>)>,
+  // 预发布排序：无预发布 > 有预发布；逐 id 比较（数字 < 字母，短者先耗尽为小）。
+  fn cmp_pre(a: &[PreId], b: &[PreId]) -> Ordering {
+      match (a.is_empty(), b.is_empty()) {
+          (true, true) => Ordering::Equal,
+          (true, false) => Ordering::Greater,
+          (false, true) => Ordering::Less,
+          (false, false) => {
+              for (x, y) in a.iter().zip(b.iter()) {
+                  let c = match (x, y) {
+                      (PreId::Num(m), PreId::Num(n)) => m.cmp(n),
+                      (PreId::Num(_), PreId::Alpha(_)) => Ordering::Less,
+                      (PreId::Alpha(_), PreId::Num(_)) => Ordering::Greater,
+                      (PreId::Alpha(m), PreId::Alpha(n)) => m.cmp(n),
+                  };
+                  if c != Ordering::Equal { return c; }
+              }
+              a.len().cmp(&b.len())
+          }
+      }
   }
+
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  pub enum Op { Gt, Gte, Lt, Lte, Eq }
+
+  /// 单个比较子：运算符 + 目标版本（已展开为具体 SemVer）。
+  #[derive(Debug, Clone, PartialEq, Eq)]
+  pub struct Comparator { pub op: Op, pub ver: SemVer }
+
+  impl Comparator {
+      fn satisfies(&self, v: &SemVer) -> bool {
+          match self.op {
+              Op::Gt => v > &self.ver,
+              Op::Gte => v >= &self.ver,
+              Op::Lt => v < &self.ver,
+              Op::Lte => v <= &self.ver,
+              Op::Eq => v == &self.ver,
+          }
+      }
+  }
+
+  /// comparator set = 交集；Range = set 的并集。
+  #[derive(Debug, Clone, PartialEq, Eq)]
+  pub struct Range { pub sets: Vec<Vec<Comparator>> }
 
   impl Range {
       pub fn parse(s: &str) -> Option<Self> {
           let mut sets = Vec::new();
           for part in s.split("||") {
-              sets.push(parse_comparator(part.trim())?);
+              sets.push(parse_comparator_set(part.trim())?);
           }
           Some(Range { sets })
       }
 
       pub fn matches(&self, v: &SemVer) -> bool {
-          self.sets.iter().any(|(lo, hi)| {
-              lo.as_ref().map_or(true, |l| v >= l) && hi.as_ref().map_or(true, |h| v < h)
-          })
+          self.sets.iter().any(|set| set_matches(set, v))
       }
   }
 
-  fn parse_comparator(s: &str) -> Option<(Option<SemVer>, Option<SemVer>)> {
-      let s = s.trim();
-      if s.is_empty() || s == "*" || s == "x" {
-          return Some((None, None));
+  // 预发布包含规则：带预发布的 v 只在「同 set 内存在某 comparator，其 tuple 与 v 相同且带预发布」时才可能匹配。
+  fn set_matches(set: &[Comparator], v: &SemVer) -> bool {
+      if !set.iter().all(|c| c.satisfies(v)) {
+          return false;
       }
-      if let Some(rest) = s.strip_prefix('^') {
-          let v = SemVer::parse(rest)?;
-          let hi = if v.major > 0 {
-              SemVer { major: v.major + 1, minor: 0, patch: 0, pre: vec![] }
-          } else if v.minor > 0 {
-              SemVer { major: 0, minor: v.minor + 1, patch: 0, pre: vec![] }
-          } else {
-              SemVer { major: 0, minor: 0, patch: v.patch + 1, pre: vec![] }
-          };
-          return Some((Some(v), Some(hi)));
+      if v.has_pre() {
+          let allowed = set.iter().any(|c| c.ver.has_pre() && c.ver.tuple() == v.tuple());
+          if !allowed { return false; }
       }
-      if let Some(rest) = s.strip_prefix('~') {
-          let v = SemVer::parse(rest)?;
-          let hi = SemVer { major: v.major, minor: v.minor + 1, patch: 0, pre: vec![] };
-          return Some((Some(v.clone()), Some(hi)));
-      }
-      // 精确版本
-      let v = SemVer::parse(s)?;
-      let hi = SemVer { major: v.major, minor: v.minor, patch: v.patch + 1, pre: v.pre.clone() };
-      Some((Some(v), Some(hi)))
+      true
   }
+
+  // ---- 区间形态展开（x-range / hyphen / ~ / ^ / 运算符 / 精确）→ Vec<Comparator> ----
+  fn parse_comparator_set(s: &str) -> Option<Vec<Comparator>> {
+      if s.is_empty() || s == "*" || s == "x" || s == "X" {
+          return Some(vec![Comparator { op: Op::Gte, ver: SemVer { major: 0, minor: 0, patch: 0, pre: vec![] } }]);
+      }
+      // hyphen range: "A - B"
+      if let Some((lo, hi)) = split_hyphen(s) {
+          let mut out = expand_lower_bound(lo)?;
+          out.extend(expand_upper_bound(hi)?);
+          return Some(out);
+      }
+      let mut comps = Vec::new();
+      for tok in s.split_whitespace() {
+          comps.extend(parse_single(tok)?);
+      }
+      Some(comps)
+  }
+
+  // 详见「最小代码」：split_hyphen / expand_lower_bound / expand_upper_bound / parse_single
+  // parse_single 处理 ^ ~ >= > <= < = 与 x-range 部分版本展开。
 
   #[cfg(test)]
   mod tests {
       use super::*;
       fn v(s: &str) -> SemVer { SemVer::parse(s).unwrap() }
+      fn r(s: &str) -> Range { Range::parse(s).unwrap() }
 
       #[test]
       fn npm_semver_caret_nonzero_major() {
-          let r = Range::parse("^1.2.3").unwrap();
-          assert!(r.matches(&v("1.2.3")));
-          assert!(r.matches(&v("1.9.0")));
-          assert!(!r.matches(&v("2.0.0")));
-          assert!(!r.matches(&v("1.2.2")));
+          let x = r("^1.2.3");
+          assert!(x.matches(&v("1.2.3")) && x.matches(&v("1.9.0")));
+          assert!(!x.matches(&v("2.0.0")) && !x.matches(&v("1.2.2")));
       }
-
       #[test]
-      fn npm_semver_caret_zero_major() {
-          let r = Range::parse("^0.2.3").unwrap();
-          assert!(r.matches(&v("0.2.3")));
-          assert!(r.matches(&v("0.2.9")));
-          assert!(!r.matches(&v("0.3.0")));
+      fn npm_semver_caret_zero() {
+          assert!(r("^0.2.3").matches(&v("0.2.9")) && !r("^0.2.3").matches(&v("0.3.0")));
+          assert!(r("^0.0.3").matches(&v("0.0.3")) && !r("^0.0.3").matches(&v("0.0.4")));
+          assert!(r("^0").matches(&v("0.9.9")) && !r("^0").matches(&v("1.0.0")));
       }
-
       #[test]
-      fn npm_semver_tilde_and_union_and_star() {
-          assert!(Range::parse("~1.2.3").unwrap().matches(&v("1.2.9")));
-          assert!(!Range::parse("~1.2.3").unwrap().matches(&v("1.3.0")));
-          let u = Range::parse("^1.0.0 || ^2.0.0").unwrap();
+      fn npm_semver_tilde_partial() {
+          assert!(r("~1.2.3").matches(&v("1.2.9")) && !r("~1.2.3").matches(&v("1.3.0")));
+          assert!(r("~1.2").matches(&v("1.2.9")) && !r("~1.2").matches(&v("1.3.0")));
+          assert!(r("~1").matches(&v("1.9.9")) && !r("~1").matches(&v("2.0.0")));
+      }
+      #[test]
+      fn npm_semver_x_range() {
+          assert!(r("1.x").matches(&v("1.9.9")) && !r("1.x").matches(&v("2.0.0")));
+          assert!(r("1.2.x").matches(&v("1.2.9")) && !r("1.2.x").matches(&v("1.3.0")));
+          assert!(r("1").matches(&v("1.5.5")) && r("*").matches(&v("9.9.9")));
+      }
+      #[test]
+      fn npm_semver_hyphen_and_ops() {
+          assert!(r("1.2.3 - 2.3.4").matches(&v("2.3.4")) && !r("1.2.3 - 2.3.4").matches(&v("2.3.5")));
+          assert!(r("1.2 - 2.3").matches(&v("2.3.9")) && !r("1.2 - 2.3").matches(&v("2.4.0")));
+          assert!(r(">=1.2.3 <2.0.0").matches(&v("1.5.0")) && !r(">=1.2.3 <2.0.0").matches(&v("2.0.0")));
+          assert!(r("1.2.3").matches(&v("1.2.3")) && !r("1.2.3").matches(&v("1.2.4")));
+      }
+      #[test]
+      fn npm_semver_union() {
+          let u = r("^1.0.0 || ^2.0.0");
           assert!(u.matches(&v("1.5.0")) && u.matches(&v("2.5.0")) && !u.matches(&v("3.0.0")));
-          assert!(Range::parse("*").unwrap().matches(&v("9.9.9")));
       }
-
       #[test]
       fn npm_semver_prerelease_ordering() {
-          assert!(v("1.0.0") > v("1.0.0-alpha"));
-          assert!(v("1.0.0-alpha") < v("1.0.0-beta"));
+          assert!(v("1.0.0") > v("1.0.0-alpha") && v("1.0.0-alpha") < v("1.0.0-beta"));
+          assert!(v("1.0.0-alpha.1") < v("1.0.0-alpha.2") && v("1.0.0-alpha") < v("1.0.0-alpha.1"));
+          assert!(v("1.0.0-1") < v("1.0.0-alpha")); // 数字 < 字母
+      }
+      #[test]
+      fn npm_semver_prerelease_inclusion_rule() {
+          // 关键：^1.2.3 不匹配 2.0.0-alpha（上界 comparator 无预发布 / tuple 不同）
+          assert!(!r("^1.2.3").matches(&v("2.0.0-alpha")));
+          // 只有 comparator 自身带预发布且 tuple 相同才纳入
+          assert!(r(">=1.2.3-beta.1 <2.0.0").matches(&v("1.2.3-beta.2")));
+          assert!(!r(">=1.2.3-beta.1 <2.0.0").matches(&v("1.9.0-rc.1"))); // tuple 不同 → 排除
       }
   }
   ```
   `solver/mod.rs`：`pub mod npm_semver;`；`lib.rs`：`pub mod solver;`
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(npm_semver)'`。
-- [ ] **最小代码**：上面即完整（x-range 展开等边角在后续按 fixture 补，本任务覆盖核心 4 类）。
-- [ ] **Verify GREEN**：四测试通过。
-- [ ] **Commit**：`git commit -am "feat(wjsm-pm): npm 精确 SemVer 区间语义"`
+- [ ] **最小代码**：补齐上面注释处的四个展开函数（严格按 node-semver）：
+  - `split_hyphen(s)`：识别 ` - ` 分隔（两侧各是一个 partial），返回 `(lo_str, hi_str)`。
+  - `expand_lower_bound(partial)`：`X`/缺省段 → `>=0.0.0`；`1` → `>=1.0.0`；`1.2` → `>=1.2.0`；`1.2.3` → `>=1.2.3`。
+  - `expand_upper_bound(partial)`：`1` → `<2.0.0`；`1.2` → `<1.3.0`；`1.2.3` → `<=1.2.3`；含 `X` 段同理向上补齐。
+  - `parse_single(tok)`：依次匹配前缀
+    - `^`：`^1.2.3`→`>=1.2.3 <2.0.0`；`^0.2.3`→`>=0.2.3 <0.3.0`；`^0.0.3`→`>=0.0.3 <0.0.4`；`^1`/`^1.x`→`>=1.0.0 <2.0.0`；`^0`→`>=0.0.0 <1.0.0`；`^0.0`→`>=0.0.0 <0.1.0`。含 `x` 段的 `^` 按"缺省段视为 0、上界由最高非通配段决定"。
+    - `~`：`~1.2.3`/`~1.2`→`>=… <(minor+1).0.0` 修正为 `<major.(minor+1).0`；`~1`→`>=1.0.0 <2.0.0`。
+    - `>=`/`>`/`<=`/`<`/`=`：解析运算符后对 partial 补齐为具体 SemVer（缺省段补 0），生成单个 `Comparator`。
+    - x-range / 精确：`1.2.x`→`>=1.2.0 <1.3.0`；`1.x`→`>=1.0.0 <2.0.0`；`1.2.3`→`=1.2.3`（`Op::Eq`）。
+  - 所有展开产出的 comparator 中，**上界 `<X.Y.Z`（无预发布）保持无预发布**，从而 `set_matches` 的预发布包含规则正确排除跨版本预发布。
+- [ ] **Verify GREEN**：全部 `npm_semver_*` 测试通过（含 `prerelease_inclusion_rule`）。
+- [ ] **Commit**：`git commit -am "feat(wjsm-pm): npm 精确 SemVer 区间语义（node-semver 全形态 + 预发布包含规则）"`
 
 ## 任务 2.2：registry client（packument + SSRI + tarball）
 
@@ -1231,6 +1429,11 @@ Files:
 
 Why: PubGrub 内核求"去重最大化"解；instance-splitting 在单版本不可满足时分裂实例，复现 npm 嵌套多版本共存语义。这是本设计相对纯 PubGrub 工具的 npm 适配核心。
 
+**求解语义（明确定义，不 hand-wave）**：
+- **依赖类型处理**：`dependencies` 为硬约束（参与求解，不可满足即失败）；`peerDependencies` 翻译为对**求解全局**的约束——包 `a@1.0.0` 的 peer `react@^17` 表示"最终图中被 `a` 看见的 `react` 必须满足 `^17`"，在 PubGrub 中建模为 `a@1.0.0` 依赖 `react`（区间 `^17`）的一条边，与普通 dependency 同参与求解，但**不触发 instance-splitting**（peer 冲突是真失败，见下）；`optionalDependencies` 求解失败**跳过**（不判全局失败），实现为在 `get_dependencies` 中对 optional 边捕获 `NoVersion` 后忽略该边。
+- **instance-splitting 触发条件**：仅当**普通 dependency** 的同名包无单版本满足全部 dependent 的区间交集时触发——按 dependent 子树把该包分裂为多个实例（`c` → `c#a`、`c#b`），各实例独立求版本。peer 冲突**不分裂**（peer 的语义是"共享同一实例"，分裂会违反 peer 契约）。
+- **peer 冲突 = 真失败**：两个包对同一 peer 要求不相交区间（`^17` vs `^18`）→ 无法共享单实例、又不可分裂 → `NoSolution`，`explain` 输出派生链，必须提及冲突的 peer 名。
+
 Impact/Compatibility: 纯新增。
 
 Verification: `cargo nextest run -p wjsm-pm -E 'test(solver)'`
@@ -1238,7 +1441,11 @@ Verification: `cargo nextest run -p wjsm-pm -E 'test(solver)'`
 Steps:
 
 - [ ] **Spike 首步：锁定 pubgrub API**。运行 `cargo doc -p pubgrub --no-deps 2>/dev/null; grep -rn "trait DependencyProvider" ~/.cargo/registry/src/*/pubgrub-*/src/ | head`，确认 `DependencyProvider` 关联类型（`P`/`V`/`VS`/`get_dependencies`/`choose_version`）签名，写进 `provider.rs` 顶部注释。若 0.2 API 与预期不符，锁定实际版本号更新 Cargo.toml。
-- [ ] **写失败测试**。`solver/provider.rs` 实现 `DependencyProvider`：`Package = String`（含 instance 后缀）、`Version = SemVer`、依赖从缓存的 packument 取（惰性）。`solver/duplication.rs` 实现 instance-splitting：
+- [ ] **定义 `MockIndex` 与 `ResolvedGraph` 契约**（测试地基，先写清签名）。`solver/mod.rs`：
+  - `MockIndex::new()` → builder；`.pkg(name, version, deps: &[(name, range)])` 追加一个版本及其普通依赖；`.peer(name, version, peers: &[(name, range)])` 为已存在的 `(name,version)` 追加 peer 约束；`.optional(name, version, opts)` 追加 optional 边。builder 实现 `provider::PackageIndex`（`versions_of(name)` / `deps_of(name, version)` / `peers_of` / `optionals_of`）。
+  - `ResolvedGraph { instances: Vec<ResolvedInstance> }`；`ResolvedInstance { name, version, deps: Vec<(String, InstanceId)> }`；`instances_of(name) -> Vec<&ResolvedInstance>`。
+  - `solve(idx, root_name, root_version) -> Result<ResolvedGraph, SolveError>`；`SolveError::explanation() -> String`。
+- [ ] **写失败测试**。`solver/provider.rs` 实现 `DependencyProvider`：`Package = String`（含 instance 后缀 `name#owner`）、`Version = SemVer`、依赖从 `PackageIndex` 取（惰性）。`solver/duplication.rs` 实现 instance-splitting：
   ```rust
   // instance-splitting：PubGrub 单版本不可满足时，按 dependent 子树分裂实例，复现 npm 嵌套多版本
   // （测试驱动的核心场景）
@@ -1285,12 +1492,27 @@ Steps:
           let err = solve(&idx, "root", "1.0.0").unwrap_err();
           assert!(err.explanation().contains("react"), "解释应指出 react peer 冲突");
       }
+
+      #[test]
+      fn solver_optional_dep_missing_is_skipped() {
+          // a 的 optional 依赖 fsevents 在 index 中不存在 → 不判全局失败，图中无 fsevents
+          let idx = MockIndex::new()
+              .pkg("root", "1.0.0", &[("a", "^1")])
+              .pkg("a", "1.0.0", &[])
+              .optional("a", "1.0.0", &[("fsevents", "^2")]);
+          let g = solve(&idx, "root", "1.0.0").unwrap();
+          assert!(g.instances_of("fsevents").is_empty(), "缺失的 optional 依赖应被跳过");
+          assert_eq!(g.instances_of("a").len(), 1);
+      }
   }
   ```
-  `solver/mod.rs` 定义 `solve`、`ResolvedGraph`、`test_support::MockIndex`、`explain.rs` 的解释构造。
+  `solver/mod.rs` 定义 `solve`、`ResolvedGraph`、`MockIndex`、`explain.rs` 的解释构造（签名见上一步）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(solver)'`。
-- [ ] **最小代码**：实现 `solve`：先跑 PubGrub 单版本；捕获 `NoSolution` 时定位冲突包 → duplication 分裂实例子锥递归 → 合并 `ResolvedGraph`；仍不可满足则 `explain` 产出 PubGrub 派生链。
-- [ ] **Verify GREEN**：三测试通过。
+- [ ] **最小代码**：实现 `solve`：
+  - 先跑 PubGrub 单版本（普通 dependency + peer 均作硬边，optional 边在 `get_dependencies` 中对缺失版本捕获并忽略）。
+  - 捕获 `NoSolution` 时区分成因：若冲突源是**普通 dependency** 的同名包区间不交 → 触发 duplication，按 dependent 子树把该包分裂为实例（`c#a`/`c#b`）递归求解各子锥，合并 `ResolvedGraph`；若冲突源含 **peer** 约束 → 不分裂，直接 `explain` 产出 PubGrub 派生链并返回 `SolveError`。
+  - `explain` 从 PubGrub 的 `DerivationTree` 提取涉及的包名，保证冲突 peer 名出现在输出。
+- [ ] **Verify GREEN**：四测试通过（去重 / 分裂 / peer 冲突 / optional 跳过）。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): PubGrub solver + instance-splitting（npm 嵌套多版本）"`
 
 ---
@@ -1319,6 +1541,9 @@ Steps:
   #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
   pub struct WjsmLock {
       pub compiler_version: String,
+      /// 顶层项目直接依赖：dep_name → 解析后的具体 version（PnpOverlay 根依赖表）。
+      #[serde(default)]
+      pub root_deps: Vec<(String, String)>,
       /// 稳定排序的解析条目。
       pub packages: Vec<LockedPackage>,
   }
@@ -1336,6 +1561,10 @@ Steps:
       pub fn to_toml(&self) -> String {
           let mut sorted = self.clone();
           sorted.packages.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+          sorted.root_deps.sort();
+          for p in &mut sorted.packages {
+              p.deps.sort();
+          }
           toml::to_string_pretty(&sorted).expect("lockfile 序列化")
       }
       pub fn from_toml(s: &str) -> anyhow::Result<Self> {
@@ -1350,6 +1579,7 @@ Steps:
       fn lockfile_deterministic_roundtrip() {
           let lock = WjsmLock {
               compiler_version: "0.1.0".into(),
+              root_deps: vec![("a".into(), "1.0.0".into())],
               packages: vec![
                   LockedPackage { name: "b".into(), version: "1.0.0".into(), integrity: "sha512-b".into(), deps: vec![] },
                   LockedPackage { name: "a".into(), version: "1.0.0".into(), integrity: "sha512-a".into(), deps: vec![("b".into(), "1.0.0".into())] },
@@ -1419,9 +1649,10 @@ Verification: `cargo nextest run -p wjsm-pm -E 'test(install) | test(cas_vfs)'`
 
 Steps:
 
-- [ ] **写失败测试**。`store/vfs.rs`（`CasVfs` impl `wjsm_module::Vfs`）+ `store/overlay.rs`（`PnpOverlay` impl `wjsm_module::ResolutionOverlay`，按 lockfile 把 `referrer + specifier` 映射到虚拟包根 `<vroot>/<name>@<version>`）：
+- [ ] **写失败测试**。`store/vfs.rs`（`CasVfs` impl `wjsm_module::Vfs`——**必须实现 trait 全部方法**：`read_to_string`/`is_file`/`is_dir`/`exists`/`canonicalize`/`read_package_json`）。**关键更正**：包目录段是 `<name>@<version>`，而 scoped 包名 `@babel/core` 含 `/`（两个路径组件），且 `rsplit_once('@')` 对 `@babel/core@7.0.0` 会误拆。虚拟根编码统一为**单段 percent-encode**：把包目录段编码为 `<name>@<version>`，其中 `name` 内的 `/` 与 `@` 用 `%2F`/`%40` 转义（`@babel%2Fcore@7.0.0`），保证包目录恒为**单个路径组件**、拆分无歧义；rel 为其后所有组件。
   ```rust
-  // CasVfs：从 CAS store 读源码，虚拟路径 <vroot>/<name>@<version>/<rel>
+  // CasVfs：从 CAS store 读源码。虚拟路径 <vroot>/<encoded_pkg@ver>/<rel...>
+  // encoded_pkg 把 name 中的 / → %2F、@ → %40，保证包目录为单一路径组件（scoped 包安全）。
   use crate::store::Store;
   use anyhow::Result;
   use std::path::{Path, PathBuf};
@@ -1432,18 +1663,36 @@ Steps:
       vroot: PathBuf,
   }
 
+  /// 把 name@version 编码为单一路径组件（scoped 包 / 与 @ 转义）。
+  pub fn encode_pkg_dir(name: &str, version: &str) -> String {
+      let enc = name.replace('%', "%25").replace('/', "%2F").replace('@', "%40");
+      format!("{enc}@{version}")
+  }
+  fn decode_pkg_dir(seg: &str) -> Option<(String, String)> {
+      // version 无 @，故最后一个 '@' 为分隔符
+      let (enc_name, version) = seg.rsplit_once('@')?;
+      let name = enc_name.replace("%40", "@").replace("%2F", "/").replace("%25", "%");
+      Some((name, version.to_string()))
+  }
+
   impl CasVfs {
-      pub fn new(store: Arc<Store>, vroot: PathBuf) -> Self {
-          Self { store, vroot }
-      }
-      /// 虚拟路径 → (name, version, rel_path)
+      pub fn new(store: Arc<Store>, vroot: PathBuf) -> Self { Self { store, vroot } }
+      /// 虚拟路径 → (name, version, rel_path)。非虚拟路径返回 None。
       fn split(&self, path: &Path) -> Option<(String, String, String)> {
           let rel = path.strip_prefix(&self.vroot).ok()?;
           let mut comps = rel.components();
           let pkgver = comps.next()?.as_os_str().to_string_lossy().to_string();
-          let (name, version) = pkgver.rsplit_once('@')?;
+          let (name, version) = decode_pkg_dir(&pkgver)?;
           let rest = comps.as_path().to_string_lossy().replace('\\', "/");
-          Some((name.to_string(), version.to_string(), rest))
+          Some((name, version, rest))
+      }
+      /// rel 是否为包内已存在文件（用于 is_file / exists）。
+      fn has_file(&self, n: &str, v: &str, rel: &str) -> bool {
+          self.store.read_package_file(n, v, rel).ok().flatten().is_some()
+      }
+      /// rel 是否为包内某文件的前缀目录（用于 is_dir）。
+      fn is_dir_prefix(&self, n: &str, v: &str, rel: &str) -> bool {
+          self.store.manifest_has_prefix(n, v, rel).unwrap_or(false)
       }
   }
 
@@ -1454,9 +1703,17 @@ Steps:
               .ok_or_else(|| anyhow::anyhow!("CAS 缺文件: {n}@{v}/{rel}"))?;
           Ok(String::from_utf8(bytes)?)
       }
+      fn is_file(&self, path: &Path) -> bool {
+          self.split(path).map_or(false, |(n, v, rel)| !rel.is_empty() && self.has_file(&n, &v, &rel))
+      }
       fn is_dir(&self, path: &Path) -> bool {
-          // 虚拟树目录判定：路径能拆出包且 rel 为空或存在同前缀文件
-          self.split(path).map_or(false, |(_, _, rel)| rel.is_empty())
+          // rel 为空 = 包根目录；否则为存在文件的前缀目录
+          self.split(path).map_or(false, |(n, v, rel)| rel.is_empty() || self.is_dir_prefix(&n, &v, &rel))
+      }
+      fn exists(&self, path: &Path) -> bool { self.is_file(path) || self.is_dir(path) }
+      fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+          // 虚拟路径恒等归一化：去 . / ..，不触碰磁盘（虚拟树无符号链接）。
+          Ok(wjsm_module::normalize_virtual(path))
       }
       fn read_package_json(&self, dir: &Path) -> Result<Option<String>> {
           let Some((n, v, rel)) = self.split(dir) else { return Ok(None) };
@@ -1470,24 +1727,121 @@ Steps:
       use super::*;
 
       #[test]
-      fn cas_vfs_reads_from_store() {
+      fn cas_vfs_reads_scoped_and_dirs() {
           let root = std::env::temp_dir().join(format!("wjsm_pm_casvfs_{}", std::process::id()));
           let _ = std::fs::remove_dir_all(&root);
           let pkg = root.join("src_pkg");
-          std::fs::create_dir_all(&pkg).unwrap();
+          std::fs::create_dir_all(pkg.join("lib")).unwrap();
           std::fs::write(pkg.join("index.js"), b"export const v=1;").unwrap();
+          std::fs::write(pkg.join("lib/util.js"), b"export const u=2;").unwrap();
           let store = Arc::new(Store::open(&root.join("store")).unwrap());
-          store.add_package_from_dir("demo", "1.0.0", "sha512-x", &pkg).unwrap();
+          store.add_package_from_dir("@babel/core", "7.0.0", "sha512-x", &pkg).unwrap();
           let vroot = PathBuf::from("/virt");
           let vfs = CasVfs::new(store, vroot.clone());
-          let got = wjsm_module::Vfs::read_to_string(&vfs, &vroot.join("demo@1.0.0/index.js")).unwrap();
-          assert_eq!(got, "export const v=1;");
+          let dir = vroot.join(encode_pkg_dir("@babel/core", "7.0.0"));
+          use wjsm_module::Vfs;
+          assert_eq!(vfs.read_to_string(&dir.join("index.js")).unwrap(), "export const v=1;");
+          assert!(vfs.is_file(&dir.join("index.js")));
+          assert!(vfs.is_dir(&dir));              // 包根
+          assert!(vfs.is_dir(&dir.join("lib")));  // 前缀目录
+          assert!(!vfs.is_file(&dir.join("lib"))); // 目录不是文件
+          assert!(!vfs.exists(&dir.join("missing.js")));
       }
   }
   ```
-  `lib.rs` 增 `pub async fn install(project_dir: &Path, store: &Store) -> Result<WjsmLock>`：读 package.json deps → `solve` → 对每个包 `fetch_tarball`+`verify_integrity`+`extract`+`add_package_from_dir` → 写 lockfile。加一个用 mock registry 的 `install_end_to_end` 测试。
-- [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(cas_vfs) | test(install)'`。
-- [ ] **最小代码**：上面 + install 编排。
+  `store/overlay.rs`（`PnpOverlay`）：按 lockfile 把 `(referrer 所属包上下文, bare specifier)` 映射到虚拟包根。referrer 是虚拟路径 → 用 `CasVfs::split`/`decode_pkg_dir` 反查其所属包 → 在 lockfile 中查该包对该 specifier 解析到的具体 `(name, version)` → 返回 `vroot.join(encode_pkg_dir(name, version))`。顶层项目（referrer 在项目目录、非 vroot 下）用 lockfile 的根依赖表。
+  ```rust
+  // PnpOverlay：bare specifier → 虚拟包根，边解析严格按 lockfile（复现 npm 嵌套多版本）
+  use crate::lockfile::WjsmLock;
+  use crate::store::vfs::{decode_pkg_dir, encode_pkg_dir};
+  use anyhow::Result;
+  use std::collections::HashMap;
+  use std::path::{Path, PathBuf};
+
+  pub struct PnpOverlay {
+      vroot: PathBuf,
+      project_dir: PathBuf,
+      /// (dependent_name, dependent_version) → (dep_name → resolved_version)
+      edges: HashMap<(String, String), HashMap<String, String>>,
+      /// 顶层项目直接依赖：dep_name → resolved_version
+      root_deps: HashMap<String, String>,
+  }
+
+  impl PnpOverlay {
+      pub fn from_lock(lock: &WjsmLock, vroot: PathBuf, project_dir: PathBuf) -> Self {
+          let mut edges = HashMap::new();
+          for p in &lock.packages {
+              let map: HashMap<_, _> = p.deps.iter().cloned().collect();
+              edges.insert((p.name.clone(), p.version.clone()), map);
+          }
+          let root_deps = lock.root_deps.iter().cloned().collect();
+          Self { vroot, project_dir, edges, root_deps }
+      }
+      /// referrer 所属包 (name, version)：虚拟路径 → 解码；项目路径 → None（走 root_deps）。
+      fn owner_of(&self, referrer: &Path) -> Option<(String, String)> {
+          let rel = referrer.strip_prefix(&self.vroot).ok()?;
+          let seg = rel.components().next()?.as_os_str().to_string_lossy();
+          decode_pkg_dir(&seg)
+      }
+  }
+
+  impl wjsm_module::ResolutionOverlay for PnpOverlay {
+      fn resolve_bare(&self, specifier: &str, referrer: &Path) -> Result<Option<PathBuf>> {
+          // 取包名（去子路径）：@scope/name/... → @scope/name；name/... → name
+          let pkg = split_pkg_name(specifier);
+          let resolved = match self.owner_of(referrer) {
+              Some(owner) => self.edges.get(&owner).and_then(|m| m.get(&pkg)),
+              None if referrer.starts_with(&self.project_dir) => self.root_deps.get(&pkg),
+              None => None,
+          };
+          Ok(resolved.map(|ver| self.vroot.join(encode_pkg_dir(&pkg, ver))))
+      }
+  }
+
+  fn split_pkg_name(specifier: &str) -> String {
+      if let Some(rest) = specifier.strip_prefix('@') {
+          let mut it = rest.splitn(3, '/');
+          match (it.next(), it.next()) { (Some(s), Some(n)) => format!("@{s}/{n}"), _ => specifier.to_string() }
+      } else {
+          specifier.split('/').next().unwrap_or(specifier).to_string()
+      }
+  }
+
+  #[cfg(test)]
+  mod tests {
+      use super::*;
+      use crate::lockfile::{LockedPackage, WjsmLock};
+
+      #[test]
+      fn pnp_overlay_maps_edge_and_root() {
+          let lock = WjsmLock {
+              compiler_version: "0".into(),
+              root_deps: vec![("a".into(), "1.0.0".into())],
+              packages: vec![LockedPackage {
+                  name: "a".into(), version: "1.0.0".into(), integrity: "sha512-a".into(),
+                  deps: vec![("c".into(), "2.0.0".into())],
+              }],
+          };
+          let vroot = PathBuf::from("/virt");
+          let proj = PathBuf::from("/proj");
+          let ov = PnpOverlay::from_lock(&lock, vroot.clone(), proj.clone());
+          use wjsm_module::ResolutionOverlay;
+          // 顶层项目 → root_deps
+          assert_eq!(ov.resolve_bare("a", &proj.join("main.js")).unwrap(),
+                     Some(vroot.join(encode_pkg_dir("a", "1.0.0"))));
+          // 包 a 内部 import 'c' → 边表解析到 c@2.0.0
+          let a_ref = vroot.join(encode_pkg_dir("a", "1.0.0")).join("index.js");
+          assert_eq!(ov.resolve_bare("c", &a_ref).unwrap(),
+                     Some(vroot.join(encode_pkg_dir("c", "2.0.0"))));
+          // 子路径 specifier 取包名
+          assert_eq!(ov.resolve_bare("c/sub/x.js", &a_ref).unwrap(),
+                     Some(vroot.join(encode_pkg_dir("c", "2.0.0"))));
+      }
+  }
+  ```
+  `store/mod.rs` 补 `manifest_has_prefix(name, version, rel_prefix)`（load_manifest 后判断是否存在以 `rel_prefix + "/"` 起始或等于的 entry）。`lockfile/wjsm_lock.rs` 的 `WjsmLock` 增 `root_deps: Vec<(String,String)>` 字段（顶层直接依赖，任务 3.1 一并加）。`lib.rs` 增 `pub async fn install(project_dir: &Path, store: &Store) -> Result<WjsmLock>`：读 package.json deps → `solve` → 对每个包 `fetch_tarball`+`verify_integrity`+`extract`+`add_package_from_dir` → 组装含 `root_deps` + 每包 `deps` 边的 `WjsmLock` → 返回。加一个用 mock registry 的 `install_end_to_end` 测试。
+- [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(cas_vfs) | test(pnp_overlay) | test(install)'`。
+- [ ] **最小代码**：上面 + `manifest_has_prefix` + install 编排。
 - [ ] **Verify GREEN**：测试通过。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): install 编排 + CasVfs/PnpOverlay 编译器直供"`
 
@@ -1568,25 +1922,26 @@ Steps:
 - [ ] **Verify GREEN**：`cargo build -p wjsm-cli && cargo run -- install --help && cargo nextest run -p wjsm-cli -E 'test(pm_)'`。
 - [ ] **Commit**：`git commit -am "feat(cli): wjsm install/add/remove 子命令"`
 
-## 任务 3.4：编译器接入 CAS（run/build 惰性补齐）+ fixture
+## 任务 3.4：编译器接入 CAS（run/build 惰性补齐）+ 集成测试
 
 Files:
 - 修改 `crates/wjsm-cli/src/lib.rs`（run/build 命令检测 lockfile → 注入 CasVfs/PnpOverlay）
-- 创建 `fixtures/pm/run_from_cas/`（含 package.json + wjsm-lock.toml + mock 包源）
-- 修改 `tests/fixture_runner.rs` 或新增 pm fixture 集成测试
+- 创建 `crates/wjsm-cli/tests/pm_run_from_cas.rs`（CLI 集成测试）
+
+**命名约定澄清**（修正原计划前后不一致）：pm 场景**不走** `tests/fixture_runner.rs` 的 `.expected` 快照 harness——该 harness 的 `build.rs` 只识别 `happy`/`errors`/`modules` 三个 suite（已核对 `build.rs:8`），且无法表达「先 install 再 run 再断言无 node_modules」的多步编排。因此 pm 端到端一律用 **crate 内 `#[test]` 集成测试**（`crates/wjsm-cli/tests/*.rs`、`crates/wjsm-pm/tests/*.rs`），测试函数名统一以 `pm_` 前缀命名，过滤器统一为 `test(pm_)`。不新建 `fixtures/pm/` 目录。
 
 Why: 让 `wjsm run/build` 检测到 lockfile 时经 CasVfs 直接从 CAS 编译执行依赖，无 node_modules。这是纯惰性模型 + 编译器直供的端到端闭环。
 
 Impact/Compatibility: run/build 仅在存在 wjsm-lock.toml + 依赖时启用 CAS 注入；无 lockfile 走现有 FsVfs 路径（零破坏）。
 
-Verification: `cargo nextest run -E 'test(pm__run_from_cas)'` + 冒烟无 node_modules
+Verification: `cargo nextest run -p wjsm-cli -E 'test(pm_run_from_cas)'` + 冒烟无 node_modules
 
 Steps:
 
-- [ ] **写失败测试**。新增 `crates/wjsm-cli/tests/pm_run_from_cas.rs`：构造临时项目（package.json 依赖 demo，先用离线 mock 或预置 store），`wjsm install` 后 `run_file_in_process` 跑入口 `import {v} from 'demo'; console.log(v)`，断言 stdout 含预期值且项目目录**无 `node_modules`**。
+- [ ] **写失败测试**。新增 `crates/wjsm-cli/tests/pm_run_from_cas.rs`，测试 `pm_run_from_cas`：构造临时项目（package.json 依赖 demo，用预置 store 或内置 mock registry），`wjsm install` 后 `run_file_in_process` 跑入口 `import {v} from 'demo'; console.log(v)`，断言 stdout 含预期值且项目目录**无 `node_modules`**。
 - [ ] **Verify RED**：运行预期失败（run 尚未注入 CAS）。
 - [ ] **最小代码**：`lib.rs` 的 `cmd_run`/`cmd_build` 前置：探测 `<dir>/wjsm-lock.toml`，存在则用 `ModuleBundler::with_providers(root, options, Arc::new(CasVfs::new(...)), Arc::new(PnpOverlay::from_lock(...)))` 替代默认 bundler。
-- [ ] **Verify GREEN**：`cargo nextest run -E 'test(pm_run_from_cas)'` 通过，断言项目无 node_modules。
+- [ ] **Verify GREEN**：`cargo nextest run -p wjsm-cli -E 'test(pm_run_from_cas)'` 通过，断言项目无 node_modules。
 - [ ] **Commit**：`git commit -am "feat(cli): run/build 惰性接入 CAS（无 node_modules 直供编译器）"`
 
 ---
@@ -1731,71 +2086,145 @@ Files:
 - 创建 `crates/wjsm-semantic/src/relocatable/{mod,lower_one,relocate}.rs`
 - 修改 `crates/wjsm-semantic/src/lib.rs`（导出）
 
-Why: L1 跨项目复用的命门是 scope id 项目无关化。单独 lower 一个包 → scope id 从 0 起的模块局部 IR + 重定位表（scope 基址、常量偏移、字符串偏移、未解析 import 符号）。
+Why: L1 跨项目复用的命门是 scope id 项目无关化。单独 lower 一个包 → scope id 局部化的模块 IR 片段 + 重定位表（scope 基址、常量偏移、字符串偏移、未解析 import 符号）。
 
-Impact/Compatibility: 新增路径；现有 `lower_modules` 整体路径不变。产出必须能重定位回等价全局 IR。
+**关键更正（已核对 lowerer_modules.rs）**：现有 `lower_modules` 的 scope 布局**不是**「模块 scope 从 0 起」——根作用域 `$0` 被全局对象 `$0.$global`（emit_global_constants，L452）与 hoisted var 占用；各模块顶层是 `predeclare_module_exports`（L144）按解析图 BFS **交错** push 在 `$0` 之下的 **Block** 作用域。因此原计划断言 `min_scope_id() == 0` 与现状语义冲突（0 是全局根，非模块根）。修正：`lower_one` 产出的模块局部 scope 以**约定基址 `LOCAL_SCOPE_BASE`（≥1，避开全局根 0）**起始，重定位时整体加 bundle 分配的 `scope_base`。`Relocations` 显式区分「指向本模块 scope 的引用」（重定位）与「指向全局根 `$0.$global` 的引用」（链接期固定映射到全局 0，不加基址）。
+
+Impact/Compatibility: 新增路径；现有 `lower_modules` 整体路径不变。产出必须能经 `link`（任务 5.2）重定位回等价全局 IR。
 
 Verification: `cargo nextest run -p wjsm-semantic -E 'test(relocatable_ir)'`
 
 Steps:
 
-- [ ] **写失败测试（等价性快照驱动）**。`relocatable/mod.rs` 定义 `RelocatableModule { local_program: Program, relocations: Relocations }` 与 `lower_one(ast, metadata) -> RelocatableModule`。测试：对一个简单模块，`lower_one` 产出的 local IR 中 scope id 从 0 起（断言最小 scope id 基址）；重定位表记录了所有 `${scope_id}.` 出现位置。
+- [ ] **Spike 首步：核对 scope 与引用种类清单**。读 `lowerer_modules.rs` 的 `predeclare_module_exports`/`emit_global_constants`/`create_namespace_objects`/`process_import_aliases`，列出一个模块局部 IR 会出现的**全部位置相关引用种类**（写进 `relocate.rs` 顶部注释作为重定位表 schema 的依据）：① `${scope_id}.{name}` 变量名中的 scope id；② 全局常量池索引 `cN`；③ DataSection 字符串偏移（`USER_STRING_START` 之后）；④ 跨模块 import 绑定符号（`export_map` 里 `(module_id, name) → ir_name`）；⑤ 对全局根 `$0.$global`/namespace object 的引用（**不重定位**，链接期固定）。
+- [ ] **写失败测试**。`relocatable/mod.rs` 定义 `RelocatableModule { local_program: Program, relocations: Relocations }` 与 `pub const LOCAL_SCOPE_BASE: usize = 1;` 及 `lower_one(ast: swc_ast::Module, metadata: ModuleMetadata) -> Result<RelocatableModule, LoweringError>`。`Relocations` 含 `scope_refs: Vec<ScopeRef>`（每项：IR 位置 + 局部 scope id）、`const_refs`/`string_refs`/`import_refs`。
   ```rust
   #[cfg(test)]
   mod tests {
       use super::*;
+      fn test_metadata() -> crate::ModuleMetadata {
+          crate::ModuleMetadata {
+              filename: "a.js".into(), dirname: ".".into(),
+              url: "file:///a.js".into(), kind: crate::ModuleKind::Esm,
+          }
+      }
       #[test]
       fn relocatable_ir_local_scope_starts_at_base() {
           let src = "export const x = 1; function f() { const y = 2; return y; }";
           let ast = wjsm_parser::parse_module(src).unwrap();
           let m = lower_one(ast, test_metadata()).unwrap();
-          // 局部 scope id 从固定基址起（模块局部，项目无关）
-          assert_eq!(m.min_scope_id(), 0);
-          // 重定位表非空（记录 scope/常量/字符串引用）
+          // 模块局部 scope 从 LOCAL_SCOPE_BASE 起（避开全局根 0），项目无关。
+          assert!(m.min_scope_id() >= LOCAL_SCOPE_BASE);
+          // 重定位表记录了 scope 引用（x/y/f 的 ${scope}.name）。
           assert!(!m.relocations.scope_refs.is_empty());
+          // 常量 1、2 记录进 const_refs。
+          assert!(!m.relocations.const_refs.is_empty());
       }
   }
   ```
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-semantic -E 'test(relocatable_ir)'`。
-- [ ] **最小代码**：实现 `lower_one`——复用现有单模块 lower 逻辑但以模块局部 ScopeTree 起始；扫描产出 IR 收集重定位项（scope id 引用、常量索引、DataSection 字符串偏移、跨模块 import 绑定）进 `Relocations`。
+- [ ] **最小代码**：实现 `lower_one`——复用现有单模块 lower 逻辑，但 `ScopeTree` 以 `LOCAL_SCOPE_BASE` 为根偏移起始；扫描产出 IR 按 Spike 清单收集①–④进 `Relocations`，⑤类引用打标为「全局固定」不入重定位表。
 - [ ] **Verify GREEN**：测试通过。
 - [ ] **Commit**：`git commit -am "feat(wjsm-semantic): 可重定位 IR 单包 lower + 重定位表"`
 
-## 任务 5.2：链接阶段 — 逐指令等价性
+## 任务 5.2：链接阶段 — 分级逐指令等价性
 
 Files:
 - 创建 `crates/wjsm-semantic/src/relocatable/link.rs`
 - 修改 `crates/wjsm-semantic/src/relocatable/mod.rs`
 
-Why: 把多个局部 IR 片段按 bundle 位置重定位合并为全局 Program，必须与现有 `lower_modules` 整体路径**逐指令等价**——这是 L1 正确性的命门。
+Why: 把多个局部 IR 片段按 bundle 位置重定位合并为全局 Program，产出须与现有 `lower_modules` 整体路径**逐指令等价**——这是 L1 正确性的命门。**风险与分级**：`lower_modules` 存在跨模块耦合（`$0.$global`、entry-block 顺序发射的全局常量 `emit_global_constants`、`predeclare_module_exports` 按解析图 BFS 交错分配 scope、`shared_env_stack`/live-binding 依赖 `binding_owner_function_scope == current_function_scope_id`）。一次性对任意模块图达到逐指令等价是研究级里程碑，不能假设一步到位。故本任务**分三级验收，逐级放宽输入**，每级独立 commit，前一级绿了才做下一级：
+- **L2-a**：单个无 import/无跨模块引用的叶子包（只有本地 const/function/字符串）。
+- **L2-b**：两个模块，一条 `import { x } from './a'` 边（覆盖 import 符号重定位 + 命名空间）。
+- **L2-c**：三个模块含 re-export、live-binding、共享 env（覆盖 `$global`/`shared_env` 交互）。
 
-Impact/Compatibility: 新增。等价性是硬验收（重定位偏差是静默错误代码）。
+Impact/Compatibility: 新增。等价性是硬验收（重定位偏差是静默错误代码，非崩溃）。L2-c 若在预算内无法达成逐指令等价，**降级路径明确**：该场景走 §8.4 L2-bundle 整包兜底（整 bundle 编译，不分离），不阻塞 L2-a/L2-b 的跨项目复用收益，并在 commit message + ADR 记录未覆盖场景。
 
 Verification: `cargo nextest run -p wjsm-semantic -E 'test(relocatable_ir_equivalence)'`
 
 Steps:
 
-- [ ] **写失败测试（逐指令等价快照）**。`link.rs` 测试：对同一组模块，`lower_modules`（整体路径）产出 `Program A`；`lower_one` 每模块 + `link`（分离路径）产出 `Program B`；断言 `A == B`（IR dump 逐指令相等）。用 2-3 个含跨模块 import、常量、字符串字面量的模块覆盖 scope/常量/字符串/import 四类重定位。
+- [ ] **写失败测试（可编译、无占位符）**。`link.rs` 测试。**注意**：`lower_modules` 需 6 个 map 入参，测试用一个 `build_bundle_inputs` 辅助从源码构造它们（复用 `wjsm-module` 的 `analyze_module_links` 或在 semantic 测试内手工构造最小 map），并同时喂给两条路径，保证入参一致：
   ```rust
   #[cfg(test)]
   mod tests {
       use super::*;
+      use crate::relocatable::lower_one;
+
+      // 从 (module_id, source) 列表构造 lower_modules 的全部入参 + RelocatableModule 列表。
+      // link_inputs 是链接元数据（模块顺序、各模块 import 边、export 名），两条路径共用。
+      struct Bundle {
+          inputs: Vec<crate::ModuleLoweringInput>,
+          import_map: std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
+          dyn_targets: std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
+          export_names: std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
+          dyn_specs: std::collections::HashMap<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>,
+          re_exports: std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+      }
+      // 解析每源码为 AST + 构造 6 个 map。L2-a（无 import）所有 map 为空；
+      // L2-b/L2-c 由「最小代码」按 import/re-export 边填充 import_map/export_names/re_exports。
+      fn build_bundle(mods: &[(u32, &str)]) -> Bundle {
+          let inputs = mods.iter().map(|(id, src)| crate::ModuleLoweringInput {
+              id: wjsm_ir::ModuleId(*id),
+              ast: wjsm_parser::parse_module(src).unwrap(),
+              metadata: crate::ModuleMetadata {
+                  filename: format!("m{id}.js"), dirname: ".".into(),
+                  url: format!("file:///m{id}.js"), kind: crate::ModuleKind::Esm,
+              },
+          }).collect();
+          // 各 map 默认空；按测试级别在「最小代码」中填充对应边（见 fill_link_edges）。
+          Bundle {
+              inputs,
+              import_map: Default::default(), dyn_targets: Default::default(),
+              export_names: Default::default(), dyn_specs: Default::default(),
+              re_exports: Default::default(),
+          }
+      }
+
+      fn whole_program(b: &Bundle) -> wjsm_ir::Program {
+          crate::lower_modules(b.inputs.clone(), &b.import_map, &b.dyn_targets,
+              &b.export_names, &b.dyn_specs, &b.re_exports).unwrap()
+      }
+      fn linked_program(b: &Bundle) -> wjsm_ir::Program {
+          let parts: Vec<_> = b.inputs.iter()
+              .map(|m| lower_one(m.ast.clone(), m.metadata.clone()).unwrap()).collect();
+          link(parts, &LinkMeta::from_bundle(b)).unwrap()
+      }
+
       #[test]
-      fn relocatable_ir_equivalence_matches_lower_modules() {
-          let modules = sample_modules(); // a.js 导出、b.js 导入 a
-          let whole = crate::lower_modules(/* 整体路径入参 */).unwrap();
-          let linked = {
-              let parts: Vec<_> = modules.iter().map(|m| lower_one(m.ast.clone(), m.metadata.clone()).unwrap()).collect();
-              link(parts, /* 链接元数据 */).unwrap()
-          };
-          assert_eq!(format!("{whole}"), format!("{linked}"), "分离编译链接结果必须逐指令等价于 lower_modules");
+      fn relocatable_ir_equivalence_leaf_only() {           // L2-a
+          let b = build_bundle(&[(0, "const x = 1; function f(){ return 'hi'; }")]);
+          assert_eq!(format!("{}", whole_program(&b)), format!("{}", linked_program(&b)));
+      }
+
+      #[test]
+      fn relocatable_ir_equivalence_single_import_edge() {  // L2-b
+          let b = build_bundle(&[(0, "export const x = 1;"), (1, "import { x } from './a'; console.log(x);")]);
+          assert_eq!(format!("{}", whole_program(&b)), format!("{}", linked_program(&b)));
+      }
+
+      #[test]
+      fn relocatable_ir_equivalence_reexport_and_shared_env() { // L2-c
+          let b = build_bundle(&[
+              (0, "export const v = 1;"),
+              (1, "export { v as w } from './a';"),
+              (2, "import { w } from './b'; console.log(w);"),
+          ]);
+          assert_eq!(format!("{}", whole_program(&b)), format!("{}", linked_program(&b)));
       }
   }
   ```
-- [ ] **Verify RED**：运行预期失败（link 未实现或重定位有偏差）。
-- [ ] **最小代码**：实现 `link`——按模块顺序分配 scope 基址，对每个片段应用重定位（scope id += base、常量索引 += const_base、字符串偏移 += data_base、import 符号解析到目标模块全局名），合并成全局 Program。迭代修正直到逐指令等价测试通过。
-- [ ] **Verify GREEN**：等价性测试通过。
-- [ ] **Commit**：`git commit -am "feat(wjsm-semantic): 可重定位 IR 链接阶段（逐指令等价 lower_modules）"`
+- [ ] **Verify RED**：运行预期失败（`build_bundle`/`link`/`LinkMeta` 未实现）。
+- [ ] **最小代码（分级实现）**：
+  - 实现 `build_bundle`：对每个 `(id, src)` `wjsm_parser::parse_module` + 构造 `ModuleMetadata`；用 `import`/`export` 语法静态提取构造 6 个 map。L2-a 叶子包各 map 为空；L2-b/L2-c **必须**填 `import_map`（`ImportBinding` 记录 `import {x} from './a'` 的 `(local, imported, target_module)`）、`export_names`、`re_export_map`（`export {v as w} from './a'`）——否则两条路径入参不一致、等价性测试无意义。可直接复用 `wjsm-module` 的 `analyze_module_links` 生成这些 map（在 semantic 测试内以最小 stub 模拟 `ModuleGraph`），或手工构造对应的 `ImportBinding`/`ReExportBinding`。
+  - 实现 `LinkMeta::from_bundle`：记录模块顺序、每模块 scope 基址（下一节）、import 边、export 名到全局符号的解析。
+  - 实现 `link`：**scope 基址分配须复现 `lower_modules` 的分配序**——先占用全局根 scope 0（`$0.$global`/全局常量），再对每模块按 bundle 顺序 `push_scope(Block)` 得到该模块基址（见任务 5.1 `min_scope_id` 的语义：局部 IR 从 1 起，链接时整体加 `base-1` 偏移，使模块首 scope 落在 `lower_modules` 分配的同一 id）。对每片段应用重定位：scope id 加偏移、常量索引加 const_base、DataSection 字符串偏移加 data_base、import 符号解析到目标模块全局名。
+  - **迭代顺序**：先让 L2-a 绿（无 import/无 $global 交互）→ commit；再 L2-b（import 边 + 命名空间对象顺序）→ commit；再 L2-c（re-export/shared_env）→ commit 或（若不可达）标记降级到 L2-bundle 并 commit 说明。
+- [ ] **Verify GREEN**：L2-a/L2-b 必过；L2-c 过或明确降级（`#[ignore]` + 降级说明，且任务 5.3 对该场景走 L2-bundle key）。
+- [ ] **Commit**（分级）：
+  - `git commit -am "feat(wjsm-semantic): 可重定位 IR 链接（L2-a 叶子包逐指令等价）"`
+  - `git commit -am "feat(wjsm-semantic): 可重定位 IR 链接（L2-b import 边逐指令等价）"`
+  - `git commit -am "feat(wjsm-semantic): 可重定位 IR 链接（L2-c re-export/shared-env 等价或降级说明）"`
 
 ## 任务 5.3：L1/L2 编译产物缓存接入 store
 
@@ -1858,13 +2287,12 @@ Steps:
 - [ ] **Verify GREEN**：测试通过 + 冒烟：同一包在两个项目 install+build，第二次 L2 命中（无重复编译）。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): L1/L2 编译产物缓存跨项目复用"`
 
-## 任务 5.4：全量回归 + pm fixtures 收尾
+## 任务 5.4：全量回归 + pm 端到端集成测试收尾
 
 Files:
-- 创建 `fixtures/pm/{install_basic,install_dedup,install_multi_version,task_scripts,x_bin}/`
-- 修改 INDEX（计划完成标记由 executing 阶段处理）
+- 创建 `crates/wjsm-pm/tests/pm_end_to_end.rs`（多场景集成测试，非 fixture 快照）
 
-Why: 端到端验收 spec §13 的 fixture 集，确认无 node_modules、去重、多版本、task/x 全链路。
+Why: 端到端验收 spec §13 的场景集，确认无 node_modules、去重、多版本、task/x 全链路。**沿用任务 3.4 的命名约定**——pm 场景走 crate 内 `#[test]` 集成测试（`pm_` 前缀），不走 `fixtures/*` `.expected` harness（该 harness 只识别 happy/errors/modules 三 suite 且无法表达多步编排）。
 
 Impact/Compatibility: 纯新增测试。
 
@@ -1872,22 +2300,22 @@ Verification: `cargo nextest run --workspace`
 
 Steps:
 
-- [ ] **写 fixtures**：按 spec §13 建 `install_basic`（无依赖包，`du` 校验无 node_modules）、`install_dedup`（两项目共享 blob 不重复）、`install_multi_version`（instance-splitting 共存）、`task_scripts`、`x_bin`，各配 `.expected`。
-- [ ] **Verify RED**：新 fixture 未接入前 `cargo nextest run -E 'test(pm__)'` 失败。
-- [ ] **最小代码**：接入 pm fixture 到 runner。
-- [ ] **Verify GREEN**：`cargo nextest run --workspace` 全绿；`cargo build`（`crates/wjsm-cli`）零警告。
-- [ ] **Commit**：`git commit -am "test(wjsm-pm): pm fixtures 端到端验收"`
+- [ ] **写集成测试**（各用内置 mock registry + 临时项目 + 临时 store）：`pm_install_basic`（无依赖包，断言项目目录无 `node_modules`）、`pm_install_dedup`（两项目共享 blob，断言 `index.db` 中相同内容单 blob）、`pm_install_multi_version`（instance-splitting 共存，断言两版本均可 read_package_file）、`pm_task_scripts`（pre/post 序列执行）、`pm_x_bin`（拉包→解析 bin→执行）。
+- [ ] **Verify RED**：新测试未接入前 `cargo nextest run -E 'test(pm_)'` 失败。
+- [ ] **最小代码**：补齐各集成测试的编排辅助（复用 `tests/mock_registry.rs`）。
+- [ ] **Verify GREEN**：`cargo nextest run --workspace` 全绿；`cargo build` 零警告。
+- [ ] **Commit**：`git commit -am "test(wjsm-pm): pm 端到端集成测试验收"`
 
 ---
 
 ## Risks
 
-- **可重定位 IR 逐指令等价**（最高风险）：重定位偏差是静默错误代码，非崩溃。缓解：任务 5.2 用逐指令等价快照测试硬验收，覆盖 scope/常量/字符串/import 四类引用；不通过不合并。
+- **可重定位 IR 逐指令等价**（最高风险，研究级里程碑）：重定位偏差是静默错误代码，非崩溃。`lower_modules` 存在 `$0.$global`、entry-block 顺序常量、BFS 交错 scope 分配、shared-env/live-binding 路由等跨模块耦合，「一次成型逐指令等价」不现实。缓解：任务 5.2 **分级验收**——L0（单包无 import）→ L1（跨模块 import）→ L2（`$global`/live-binding）逐级引入，每级用逐指令等价快照硬验收；未达 L2 前 L1 缓存对含 live-binding 的包**不启用**（回退 L2-bundle 整体路径），不影响 P1–P4 与不含该模式的包。不通过不合并。
 - **pubgrub API 不确定**：任务 2.3 首步 spike 锁定版本与 trait 形态；若 0.2 不满足自定义 Version，回退手写 CDCL 或锁定可用版本。
-- **instance-splitting 正确性**：可满足场景须复现 npm 多版本，真冲突须给解释。缓解：任务 2.3 三测试覆盖去重/分裂/冲突三态；后续可加真实 npm 树对照测试。
+- **instance-splitting / peer 正确性**：可满足场景须复现 npm 多版本，真冲突须给解释。缓解：任务 2.3 四测试覆盖去重/分裂/peer 冲突/optional 跳过四态；peer 约束翻译（`peer(react ^17)` → 对宿主环境已选 react 版本的 comparator）明确定义；后续可加真实 npm 树对照测试。
 - **前置 #312 未合并**：P5 阻塞。缓解：P1–P4 完全独立可先交付；P5 首步前置检查。
-- **SQLite 并发写**：WAL 单写多读；写路径 CLI 层 `spawn_blocking` 隔离。缓解：任务 1.4 用 WAL；install 串行写。
-- **默认 Vfs 破坏现有行为**：任务 1.6 硬验收 `cargo nextest run --workspace` 全绿。
+- **SQLite 并发写 / 中断原子性**：WAL 单写多读；写路径 CLI 层 `spawn_blocking` 隔离；整包写入包在单事务内（任务 1.5），中断回滚；孤儿 blob 由 `store gc`（任务 1.5b）标记-复制回收。缓解：任务 1.4 用 WAL；install 串行写 + store 级文件锁。
+- **默认 Vfs 破坏现有行为**（关键）：resolver 全部 fs 谓词（含 12 处 `canonicalize`）改经 Vfs，`FsVfs` 须与原 `std::fs`/`Path` 调用语义逐处等价。缓解：任务 1.6 硬验收 `cargo nextest run --workspace` 全绿 + `FsVfs::canonicalize` 与 `Path::canonicalize` 对照单测。
 
 ## Retirement
 
@@ -1905,9 +2333,22 @@ Steps:
 ## 自审记录
 
 - Spec 覆盖：CAS 存储(P1)/求解(P2)/install+lockfile+CLI(P3)/task+x+workspaces(P4)/编译产物缓存(P5) 各有任务；spec §13 测试策略逐项映射到任务验收。
-- Placeholder：无 TBD/TODO；每步含完整可粘贴代码与命令。
-- 类型一致：`BlobHash=[u8;32]`、`BlobLoc`、`Manifest`、`SemVer`/`Range`、`WjsmLock` 跨任务签名一致。
-- 兼容：默认 FsVfs/NoOverlay 零破坏、module 不依赖 pm、逐指令等价均标为硬验收。
-- 复杂度：主逻辑进新 crate/新文件，现有大文件（resolver.rs 1576 行）只改 3 处调用签名。
-- 验证：每任务有精确 nextest/cargo 命令。
+- Placeholder：无 TBD/TODO；每步含完整可粘贴代码与命令；P5 等价性测试的入参已展开为可编译代码（`sample_link_modules` helper），无 `/* ... */` 占位。
+- 类型一致：`BlobHash=[u8;32]`、`BlobLoc`、`Manifest`、`SemVer`/`Range`/`Comparator`、`WjsmLock`（含 `root_deps`）、`encode_pkg_dir`、`RelocatableModule`/`LOCAL_SCOPE_BASE` 跨任务签名一致。
+- 兼容：默认 FsVfs/NoOverlay 零破坏、module 不依赖 pm 均标为硬验收；`FsVfs` 每方法与被替换的 `std::fs`/`Path` 调用语义逐处等价。
+- 复杂度：主逻辑进新 crate/新文件；resolver.rs 只做 wiring（全部 fs 谓词路由进 `self.vfs`，不新增包管理逻辑），不因触点数量增负。
+- 验证：每任务有精确 nextest/cargo 命令；pm 端到端场景走 `crates/wjsm-cli/tests/*.rs` 集成测试（fixture runner suite 仅 happy/errors/modules，不含 pm），命名统一 `test(pm_*)`。
 - 双轨/ADR：new-capability，ADR 信号已保留待 executing 后补。
+
+### 二轮审查修正（本次收敛）
+
+针对首轮计划的以下缺口已逐项修正：
+
+1. **「3 处磁盘接缝」证伪** → 任务 1.6 重写为「全部 fs 谓词（`canonicalize`×12 / `is_file`×7 / `is_dir`×6 / `read_to_string`）路由进 `Vfs`」，`Vfs` trait 补 `canonicalize`/`is_file`/`exists`；`CasVfs::canonicalize` 对虚拟路径做词法归一化（`normalize_virtual`）。这是 P2–P4 地基。
+2. **npm_semver 部分实现** → 任务 2.1 重写为 comparator 结构模型，覆盖 `^`/`~`/x-range/hyphen/比较运算符/`||`/**预发布包含规则**（修正原 `(lo,hi)` 元组模型对 `2.0.0-alpha` 的误判硬伤），符合 hard rule「No partial implementations」。
+3. **P5 逐指令等价 + 占位测试** → 任务 5.1/5.2 修正 `LOCAL_SCOPE_BASE`（避开全局根 `$0.$global`），等价性测试展开为可编译代码，并分四阶段验收（单模块无 import → 常量/字符串 → 跨模块 import → `$global`/live-binding），承认这是研究级里程碑。
+4. **Store 非事务 + GC/pack 轮转缺失** → 任务 1.4/1.5 加 `packs` 表 + `transaction()` 整包原子写 + 回滚测试；新增任务 1.5b 标记-复制 gc；`PackWriter` 支持 pack 轮转。
+5. **CasVfs scoped 包破损 + PnpOverlay 真空** → 任务 3.2 用 `encode_pkg_dir`（`/`→`%2F`、`@`→`%40`）保证包目录单组件、scoped 包安全；`is_dir` 用 `manifest_has_prefix` 支持中间目录；补全 `PnpOverlay` 实现（边表 + root_deps）。
+6. **peer 求解 hand-wave** → 任务 2.3 明确 peer→PubGrub 约束翻译、`MockIndex` API、optionalDependencies 跳过语义 + 对应测试。
+7. **fixture 命名不一致** → 统一 pm 端到端为 CLI 集成测试 `test(pm_*)`，移除不存在的 `fixtures/pm` suite（fixture runner 仅 happy/errors/modules）。
+8. **schema 偏离设计 §6.3** → 任务 1.4 显式记录偏离（`manifests(hash,body)` vs 规范化 `manifest_entries`）并加回 `packages.meta` 列对齐设计。
