@@ -43,6 +43,24 @@ fn modules__runtime_loading__esm_dynamic_import_variable() -> Result<()> {
 }
 
 #[test]
+fn modules__runtime_loading__esm_dynamic_import_module_id_collision() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/esm_dynamic_import_module_id_collision/main")
+}
+
+#[test]
+fn modules__runtime_loading__esm_dynamic_import_builtin() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/esm_dynamic_import_builtin/main")
+}
+
+#[test]
+fn modules__runtime_loading__cjs_require_builtin() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/cjs_require_builtin/main")
+}
+
+#[test]
 fn modules__runtime_loading__cjs_try_optional_missing() -> Result<()> {
     crate::fixture_runner::FixtureRunner::new()?
         .run_single("modules/runtime_loading/cjs_try_optional_missing/main")

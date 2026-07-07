@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+node:path
+node:path
+a/b
+c/d
+--- stderr ---
