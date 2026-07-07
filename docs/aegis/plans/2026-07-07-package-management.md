@@ -2089,7 +2089,13 @@ Files:
 
 Why: L1 跨项目复用的命门是 scope id 项目无关化。单独 lower 一个包 → scope id 局部化的模块 IR 片段 + 重定位表（scope 基址、常量偏移、字符串偏移、未解析 import 符号）。
 
-**关键更正（已核对 lowerer_modules.rs）**：现有 `lower_modules` 的 scope 布局**不是**「模块 scope 从 0 起」——根作用域 `$0` 被全局对象 `$0.$global`（emit_global_constants，L452）与 hoisted var 占用；各模块顶层是 `predeclare_module_exports`（L144）按解析图 BFS **交错** push 在 `$0` 之下的 **Block** 作用域。因此原计划断言 `min_scope_id() == 0` 与现状语义冲突（0 是全局根，非模块根）。修正：`lower_one` 产出的模块局部 scope 以**约定基址 `LOCAL_SCOPE_BASE`（≥1，避开全局根 0）**起始，重定位时整体加 bundle 分配的 `scope_base`。`Relocations` 显式区分「指向本模块 scope 的引用」（重定位）与「指向全局根 `$0.$global` 的引用」（链接期固定映射到全局 0，不加基址）。
+**关键更正（已逐行核对 lowerer_modules.rs / scope.rs）**：现有 `lower_modules` 的 scope 布局**不是**「模块 scope 从 0 起」，且**不是**「BFS 交错 push」——已核实真实机制是**两趟顺序分配**：
+- 根作用域 `$0`（`ScopeTree::new` 硬编码 id=0 的 Function 根）被全局对象 `$0.$global`（`emit_global_constants`，**L386**；`$0.$global` 的 `StoreVar` 在其内 L452）与 hoisted var 占用。
+- **趟 1 = 预声明**：`predeclare_module_exports`（L144）**顺序** `for module in modules` 循环——对每个模块 `push_scope(Block)`（L157）得模块顶层 Block scope、`predeclare_stmts` 递归为嵌套词法块/函数 push 子 scope，末尾 `pop_scope`。模块**顺序**由调用方传入的 `Vec<ModuleLoweringInput>`（`wjsm-module` 图按拓扑/BFS 排）决定，但 predeclare 本身是直线循环、**非** BFS 交错。
+- **趟 2 = 降级**：`lower_module_bodies`（L643）再次**顺序**遍历全部模块，`enter_scope`（scope.rs L94，复用已存在 id、不分配）回到该模块顶层 scope，再在**走查中** push **全新**的函数/块 scope（`lowerer_core.rs:221` 等）。
+- `pop_scope`（scope.rs L99）**只移动 `current` 到 parent，不截断 `arenas`**——scope id 单调递增、永不复用。
+
+**对重定位的致命后果**：因两趟都遍历**全部**模块，单个模块的全程 scope id 被拆成**两段不连续簇**（该模块趟-1 的预声明 id 段 + 趟-2 的走查 id 段），中间夹着其他模块的 id。故**当模块数 N≥2 时，「整体加单一 `base-1` 偏移」把局部 IR（id 从 1 连续）映射回全程 id 的模型机械上不成立**——单偏移只在 N=1（L2-a 单包）成立。因此原计划断言 `min_scope_id() == 0` 与现状冲突（0 是全局根），且「单偏移重定位」需订正（见任务 5.2「最小代码」的 remap 表方案）。修正：`lower_one` 产出的模块局部 scope 以**约定基址 `LOCAL_SCOPE_BASE`（=1，避开全局根 0；标准库 `ScopeTree` 根即 0，模块首 Block 自然落 1）**起始；`Relocations.scope_refs` 记录**每处** `${scope_id}.{name}` 引用的局部 id（**逐引用重映射**，非单偏移），链接期由 remap 表映射到全程 id。`Relocations` 另显式区分「指向本模块 scope 的引用」（重映射）与「指向全局根 `$0.$global` 的引用」（链接期固定映射到全局 0，不参与重映射）。
 
 Impact/Compatibility: 新增路径；现有 `lower_modules` 整体路径不变。产出必须能经 `link`（任务 5.2）重定位回等价全局 IR。
 
@@ -2098,7 +2104,7 @@ Verification: `cargo nextest run -p wjsm-semantic -E 'test(relocatable_ir)'`
 Steps:
 
 - [ ] **Spike 首步：核对 scope 与引用种类清单**。读 `lowerer_modules.rs` 的 `predeclare_module_exports`/`emit_global_constants`/`create_namespace_objects`/`process_import_aliases`，列出一个模块局部 IR 会出现的**全部位置相关引用种类**（写进 `relocate.rs` 顶部注释作为重定位表 schema 的依据）：① `${scope_id}.{name}` 变量名中的 scope id；② 全局常量池索引 `cN`；③ DataSection 字符串偏移（`USER_STRING_START` 之后）；④ 跨模块 import 绑定符号（`export_map` 里 `(module_id, name) → ir_name`）；⑤ 对全局根 `$0.$global`/namespace object 的引用（**不重定位**，链接期固定）。
-- [ ] **写失败测试**。`relocatable/mod.rs` 定义 `RelocatableModule { local_program: Program, relocations: Relocations }` 与 `pub const LOCAL_SCOPE_BASE: usize = 1;` 及 `lower_one(ast: swc_ast::Module, metadata: ModuleMetadata) -> Result<RelocatableModule, LoweringError>`。`Relocations` 含 `scope_refs: Vec<ScopeRef>`（每项：IR 位置 + 局部 scope id）、`const_refs`/`string_refs`/`import_refs`。
+- [ ] **写失败测试**。`relocatable/mod.rs` 定义 `RelocatableModule { local_program: Program, relocations: Relocations, scope_layout: ScopeLayout }` 与 `pub const LOCAL_SCOPE_BASE: usize = 1;` 及 `lower_one(ast: swc_ast::Module, metadata: ModuleMetadata) -> Result<RelocatableModule, LoweringError>`。`Relocations` 含 `scope_refs: Vec<ScopeRef>`（每项：IR 位置 + 局部 scope id）、`const_refs`/`string_refs`/`import_refs`。`ScopeLayout` 记录本片段 **predeclare 趟与 walk 趟各自的 scope push 序列（顺序 + `ScopeKind` + parent 局部 id）**——供任务 5.2 `link` 用空 `ScopeTree` 重放 `lower_modules` 的两趟分配序、逐 id 建 `local_id → global_id` 映射（因单偏移无法复现两段不连续区间，见任务 5.2）。
   ```rust
   #[cfg(test)]
   mod tests {
@@ -2134,7 +2140,7 @@ Files:
 - 创建 `crates/wjsm-semantic/src/relocatable/link.rs`
 - 修改 `crates/wjsm-semantic/src/relocatable/mod.rs`
 
-Why: 把多个局部 IR 片段按 bundle 位置重定位合并为全局 Program，产出须与现有 `lower_modules` 整体路径**逐指令等价**——这是 L1 正确性的命门。**风险与分级**：`lower_modules` 存在跨模块耦合（`$0.$global`、entry-block 顺序发射的全局常量 `emit_global_constants`、`predeclare_module_exports` 按解析图 BFS 交错分配 scope、`shared_env_stack`/live-binding 依赖 `binding_owner_function_scope == current_function_scope_id`）。一次性对任意模块图达到逐指令等价是研究级里程碑，不能假设一步到位。故本任务**分三级验收，逐级放宽输入**，每级独立 commit，前一级绿了才做下一级：
+Why: 把多个局部 IR 片段按 bundle 位置重定位合并为全局 Program，产出须与现有 `lower_modules` 整体路径**逐指令等价**——这是 L1 正确性的命门。**风险与分级**：`lower_modules` 存在跨模块耦合（`$0.$global`、entry-block 顺序发射的全局常量 `emit_global_constants`、`predeclare_module_exports`/`lower_module_bodies` 对全部模块的**两趟顺序** scope 分配（predeclare 全部 → walk 全部，单模块 id 因此分两段不连续、需逐 id 重映射而非单偏移）、`shared_env_stack`/live-binding 依赖 `binding_owner_function_scope == current_function_scope_id`）。一次性对任意模块图达到逐指令等价是研究级里程碑，不能假设一步到位。故本任务**分三级验收，逐级放宽输入**，每级独立 commit，前一级绿了才做下一级：
 - **L2-a**：单个无 import/无跨模块引用的叶子包（只有本地 const/function/字符串）。
 - **L2-b**：两个模块，一条 `import { x } from './a'` 边（覆盖 import 符号重定位 + 命名空间）。
 - **L2-c**：三个模块含 re-export、live-binding、共享 env（覆盖 `$global`/`shared_env` 交互）。
@@ -2218,8 +2224,8 @@ Steps:
 - [ ] **Verify RED**：运行预期失败（`build_bundle`/`link`/`LinkMeta` 未实现）。
 - [ ] **最小代码（分级实现）**：
   - 实现 `build_bundle`：对每个 `(id, src)` `wjsm_parser::parse_module` + 构造 `ModuleMetadata`；用 `import`/`export` 语法静态提取构造 6 个 map。L2-a 叶子包各 map 为空；L2-b/L2-c **必须**填 `import_map`（`ImportBinding { source_module, names: Vec<(local, imported)>, specifier }`，对齐 `wjsm-ir` 实际字段——核对 `crates/wjsm-ir/src/lib.rs:789`）、`export_names`、`re_export_map`（`ReExportBinding { source_module, local_name: Option<String>, exported_name: Option<String> }`，核对 `lib.rs:803`）——否则两条路径入参不一致、等价性测试无意义。**注意依赖方向**：`wjsm-module` 已 normal-depend `wjsm-semantic`（`bundler.rs:5`），故 semantic 测试**不得**反向引用 `wjsm-module::analyze_module_links`（会成 dev-dep 环，且 `analyze_module_links` 需真实 `ModuleGraph`（由磁盘文件 BFS 构建，`graph.rs:35`）无法 stub）。测试**自包含**：直接手工构造 `ImportBinding`/`ReExportBinding` 填 map，与 `whole_program`/`linked_program` 两条路径共用同一 `Bundle`。
-  - 实现 `LinkMeta::from_bundle`：记录模块顺序、每模块 scope 基址（下一节）、import 边、export 名到全局符号的解析。
-  - 实现 `link`：**scope 基址分配须复现 `lower_modules` 的分配序**——先占用全局根 scope 0（`$0.$global`/全局常量），再对每模块按 bundle 顺序 `push_scope(Block)` 得到该模块基址（见任务 5.1 `min_scope_id` 的语义：局部 IR 从 1 起，链接时整体加 `base-1` 偏移，使模块首 scope 落在 `lower_modules` 分配的同一 id）。对每片段应用重定位：scope id 加偏移、常量索引加 const_base、DataSection 字符串偏移加 data_base、import 符号解析到目标模块全局名。
+  - 实现 `LinkMeta::from_bundle`：记录模块顺序、每模块的 **scope-id 重映射表**（`local_id → global_id`，见下）、import 边、export 名到全局符号的解析。
+  - 实现 `link`：**scope-id 分配不是单一偏移，而是逐 id 重映射**（已核对 `lowerer_modules.rs` + `scope.rs`，是本任务地基）。事实：① `predeclare_module_exports`（L144）是**顺序** `for module in modules` 循环（push Block → predeclare → `pop_scope`），非「BFS 交错」；② scope 分配是**对所有模块的两趟**——先 predeclare 全部模块（L144 循环各分配「模块 Block + 其内嵌套 let/const/fn 预声明 scope」），再 `lower_module_bodies`（L643）**重新** `enter_scope(module_scope)` 并在 walk 中 push **新的**函数/块 scope；③ `pop_scope`（scope.rs:99）**不截断** `arenas`，id 单调递增、永不复用。**推论**：对 N≥2 模块，单个模块的全局 scope-id 是**两段不连续区间**（predeclare 段 + walk 段），中间交错其他模块的 id——`base-1` 单偏移**只对 N=1（L2-a）成立**，L2-b/L2-c 必然错位。故 `link` 的正确模型是：以一个**空 `ScopeTree` 重放 `lower_modules` 的确切两趟分配序**（predeclare 全部片段 → walk 全部片段），为每个模块建 `local_id → global_id` 映射表；重定位时 `scope_refs` 逐项经该表改写（非加偏移），`const_refs` 加 const_base、`string_refs` 加 data_base、`import_refs` 解析到目标模块全局名。任务 5.1 的 `RelocatableModule` 须额外产出「本片段各 scope 的 push 序列 + kind」供 `link` 重放。
   - **迭代顺序**：先让 L2-a 绿（无 import/无 $global 交互）→ commit；再 L2-b（import 边 + 命名空间对象顺序）→ commit；再 L2-c（re-export/shared_env）→ commit 或（若不可达）标记降级到 L2-bundle 并 commit 说明。
 - [ ] **Verify GREEN**：L2-a/L2-b 必过；L2-c 过或明确降级（`#[ignore]` + 降级说明，且任务 5.3 对该场景走 L2-bundle key）。
 - [ ] **Commit**（分级）：
@@ -2311,7 +2317,7 @@ Steps:
 
 ## Risks
 
-- **可重定位 IR 逐指令等价**（最高风险，研究级里程碑）：重定位偏差是静默错误代码，非崩溃。`lower_modules` 存在 `$0.$global`、entry-block 顺序常量、BFS 交错 scope 分配、shared-env/live-binding 路由等跨模块耦合，「一次成型逐指令等价」不现实。缓解：任务 5.2 **分级验收**——L0（单包无 import）→ L1（跨模块 import）→ L2（`$global`/live-binding）逐级引入，每级用逐指令等价快照硬验收；未达 L2 前 L1 缓存对含 live-binding 的包**不启用**（回退 L2-bundle 整体路径），不影响 P1–P4 与不含该模式的包。不通过不合并。
+- **可重定位 IR 逐指令等价**（最高风险，研究级里程碑）：重定位偏差是静默错误代码，非崩溃。`lower_modules` 存在 `$0.$global`、entry-block 顺序常量、**两趟顺序 scope 分配（单模块 id 拆成不连续两段，须逐 id 重映射而非单偏移）**、shared-env/live-binding 路由等跨模块耦合，「一次成型逐指令等价」不现实。缓解：任务 5.2 **分级验收**——L2-a（单包无 import）→ L2-b（跨模块 import 边）→ L2-c（re-export/`$global`/live-binding）逐级引入，每级用逐指令等价快照硬验收；L2-c 未达前，含 re-export/live-binding 的包 L1 缓存**不启用**（回退 L2-bundle 整体路径），不影响 P1–P4 与不含该模式的包。不通过不合并。
 - **pubgrub API 不确定**：任务 2.3 首步 spike 锁定版本与 trait 形态；若 0.2 不满足自定义 Version，回退手写 CDCL 或锁定可用版本。
 - **instance-splitting / peer 正确性**：可满足场景须复现 npm 多版本，真冲突须给解释。缓解：任务 2.3 四测试覆盖去重/分裂/peer 冲突/optional 跳过四态；peer 约束翻译（`peer(react ^17)` → 对宿主环境已选 react 版本的 comparator）明确定义；后续可加真实 npm 树对照测试。
 - **前置 #312 未合并**：P5 阻塞。缓解：P1–P4 完全独立可先交付；P5 首步前置检查。
@@ -2347,7 +2353,7 @@ Steps:
 
 1. **「3 处磁盘接缝」证伪** → 任务 1.6 重写为「resolver 实际路由的全部 fs 谓词（`read_to_string`×1 / `canonicalize`×12 / `is_file`×7 / `is_dir`×6，共 26 处）路由进 `Vfs`」，`Vfs` trait 提供 `canonicalize`/`is_file`/`is_dir`/`read_to_string`/`read_package_json`，另加 `exists`（resolver 不调用，仅供 `CasVfs` 内部前缀判定 + trait 完备性）；`CasVfs::canonicalize` 对虚拟路径做词法归一化（`normalize_virtual`）。这是 P2–P4 地基。
 2. **npm_semver 部分实现** → 任务 2.1 重写为 comparator 结构模型，覆盖 `^`/`~`/x-range/hyphen/比较运算符/`||`/**预发布包含规则**（修正原 `(lo,hi)` 元组模型对 `2.0.0-alpha` 的误判硬伤），符合 hard rule「No partial implementations」。
-3. **P5 逐指令等价 + 占位测试** → 任务 5.1/5.2 修正 `LOCAL_SCOPE_BASE`（避开全局根 `$0.$global`），等价性测试展开为可编译代码，并分四阶段验收（单模块无 import → 常量/字符串 → 跨模块 import → `$global`/live-binding），承认这是研究级里程碑。
+3. **P5 逐指令等价 + 占位测试 + scope 分配模型** → 任务 5.1/5.2 修正 `LOCAL_SCOPE_BASE`（避开全局根 `$0.$global`）；**逐行核对 `lowerer_modules.rs`+`scope.rs` 后订正两处硬伤**：(a) `predeclare_module_exports` 是顺序循环而非「BFS 交错」；(b) scope 分配是「对全部模块的 predeclare 趟 + walk 趟」两趟，单模块 id 拆成不连续两段，故重定位须**逐 id 重映射（空 `ScopeTree` 重放两趟分配序）**而非「整体加单一 `base-1` 偏移」（后者只对 N=1 成立）。等价性测试展开为可编译代码，分三级验收（L2-a 单包 → L2-b import 边 → L2-c re-export/`$global`/live-binding），承认这是研究级里程碑。
 4. **Store 非事务 + GC/pack 轮转缺失** → 任务 1.4/1.5 加 `packs` 表 + `with_txn(|tx| …)` 整包原子写（配套 `txn_put_blob`/`txn_put_manifest_raw`/`txn_put_package` 事务作用域自由函数，避免闭包内二次 `lock` 死锁）+ 回滚测试；新增任务 1.5b 标记-复制 gc；`PackWriter` 支持 pack 轮转。
 5. **CasVfs scoped 包破损 + PnpOverlay 真空** → 任务 3.2 用 `encode_pkg_dir`（`/`→`%2F`、`@`→`%40`）保证包目录单组件、scoped 包安全；`is_dir` 用 `manifest_has_prefix` 支持中间目录；补全 `PnpOverlay` 实现（边表 + root_deps）。
 6. **peer 求解 hand-wave** → 任务 2.3 明确 peer→PubGrub 约束翻译、`MockIndex` API、optionalDependencies 跳过语义 + 对应测试。
