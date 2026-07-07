@@ -16,6 +16,8 @@
 | 2026-07-03 | N-API Native Addon Compatibility Layer | [specs/2026-07-03-napi-native-addon-design.md](specs/2026-07-03-napi-native-addon-design.md) |
 | 2026-07-03 | Pluggable GC v2 (mark-sweep / G1 / ZGC) | [specs/2026-07-03-pluggable-gc-v2-design.md](specs/2026-07-03-pluggable-gc-v2-design.md) |
 | 2026-07-06 | Package Resolution Enhancement (issue #309) | [specs/2026-07-06-package-resolution-enhancement-design.md](specs/2026-07-06-package-resolution-enhancement-design.md) |
+| 2026-07-07 | Runtime Module Loading (issue #312) | [specs/2026-07-07-runtime-module-loading-design.md](specs/2026-07-07-runtime-module-loading-design.md) |
+| 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [specs/2026-07-07-package-management-design.md](specs/2026-07-07-package-management-design.md) |
 ## Plans
 
 | Date | Title | File |
@@ -34,6 +36,7 @@
 | 2026-07-03 | N-API Native Addon Compatibility Layer | [plans/2026-07-03-napi-native-addon.md](plans/2026-07-03-napi-native-addon.md) |
 | 2026-07-03 | Pluggable GC v2 (mark-sweep / G1 / ZGC) | [plans/2026-07-03-pluggable-gc-v2.md](plans/2026-07-03-pluggable-gc-v2.md) |
 | 2026-07-06 | Package Resolution Enhancement (issue #309) | [plans/2026-07-06-package-resolution-enhancement.md](plans/2026-07-06-package-resolution-enhancement.md) |
+| 2026-07-07 | Runtime Module Loading (issue #312) | [plans/2026-07-07-runtime-module-loading.md](plans/2026-07-07-runtime-module-loading.md) |
 
 ## Baselines
 
