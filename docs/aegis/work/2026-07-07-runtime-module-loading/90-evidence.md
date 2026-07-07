@@ -239,3 +239,14 @@ Task 7 quality-review repair — extensionless runtime CommonJS probe:
 - Wrote `docs/adr/0006-runtime-module-loading-boundary.md` documenting canonical owners, dependency boundary, alternatives, compatibility, implementation state, and references.
 - Updated `docs/aegis/INDEX.md` Baselines with ADR 0006.
 - Baseline sync: required and satisfied by ADR 0006 plus the Aegis index baseline entry; no separate baseline snapshot was created because this repository already uses project `docs/adr/` as the architecture baseline owner for runtime boundaries.
+
+### Final targeted verification — 2026-07-07
+
+- `cargo check -p wjsm-runtime -p wjsm-cli` passed — `cargo build (0 crates compiled)` and `Finished dev profile [unoptimized + debuginfo] target(s) in 0.49s`.
+- `cargo nextest run -p wjsm-module -E 'test(cjs_) | test(runtime_resolve_) | test(resolve_paths_) | test(dynamic_import) | test(runtime_commonjs_probe_)'` passed — `Summary [   0.169s] 106 tests run: 106 passed, 119 skipped`.
+- `cargo nextest run -p wjsm-semantic -E 'test(dynamic_import) | test(import_meta_resolve) | test(require_runtime)'` passed — `Summary [   0.024s] 14 tests run: 14 passed, 134 skipped`.
+- `cargo nextest run -p wjsm-runtime -E 'test(dynamic_module) | test(import_meta_resolve) | test(require_cache) | test(module_registry_) | test(require_resolve) | test(dynamic_module_loader_unavailable) | test(require_loader_unavailable)'` passed — `Summary [   0.163s] 31 tests run: 31 passed, 201 skipped`.
+- `cargo nextest run -p wjsm-backend-wasm -E 'test(builtin_registry_binding_count_matches_ir_contract) | test(import_names_are_unique) | test(builtin_bindings_are_unique) | test(host_imports_count_locked)'` passed — `Summary [   0.021s] 4 tests run: 4 passed, 59 skipped`.
+- `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__cjs_conditional_require_false) | test(modules__dynamic_import)'` passed — `Summary [   0.406s] 17 tests run: 17 passed, 777 skipped`.
+- CLI smoke `cargo run -- run fixtures/modules/runtime_loading/cjs_computed_require/main.js --root fixtures/modules/runtime_loading/cjs_computed_require` printed `computed-cjs-loaded` and `true`.
+- CLI smoke `cargo run -- run fixtures/modules/runtime_loading/esm_dynamic_import_variable/main.js --root fixtures/modules/runtime_loading/esm_dynamic_import_variable` printed `dynamic-esm-loaded`.

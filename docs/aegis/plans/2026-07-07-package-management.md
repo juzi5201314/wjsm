@@ -2073,7 +2073,8 @@ Steps:
   pub fn cmd_install(project_dir: &Path) -> Result<()> {
       let store_root = default_store_root()?;
       let store = wjsm_pm::store::Store::open(&store_root)?;
-      let rt = tokio::runtime::Runtime::new()?;
+      // 与现有 CLI 一致用 Builder::new_multi_thread（见 lib.rs:306/2153），非裸 Runtime::new。
+      let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
       let lock = rt.block_on(wjsm_pm::install(project_dir, &store))?;
       std::fs::write(project_dir.join("wjsm-lock.toml"), lock.to_toml())?;
       println!("已安装 {} 个包，无 node_modules", lock.packages.len());
@@ -2143,7 +2144,7 @@ Steps:
 
 - [ ] **写失败测试**。新增 `crates/wjsm-cli/tests/pm_run_from_cas.rs`，测试 `pm_run_from_cas`：构造临时项目（package.json 依赖 demo，用预置 store 或内置 mock registry），`wjsm install` 后 `run_file_in_process` 跑入口 `import {v} from 'demo'; console.log(v)`，断言 stdout 含预期值且项目目录**无 `node_modules`**。
 - [ ] **Verify RED**：运行预期失败（run 尚未注入 CAS）。
-- [ ] **最小代码**：`lib.rs` 的 `cmd_run`/`cmd_build` 前置：探测 `<dir>/wjsm-lock.toml`，存在则构造 `vroot = <store_root>/v1/.vroot` 哨兵根 + `CasVfs::new(store, vroot)`，用 **`RoutingVfs::new(Arc::new(cas), vroot)`**（**不是**裸 `CasVfs`——入口文件与项目本地源在真实磁盘，须经 FsVfs；见任务 3.2 RoutingVfs）作为 `Vfs`，配 `PnpOverlay::from_lock(&lock, vroot, project_dir)` 作 overlay，经 `ModuleBundler::with_providers(root, options, Arc::new(RoutingVfs::…), Arc::new(PnpOverlay::…))` 替代默认 bundler。
+- [ ] **最小代码**：`lib.rs` 的 `cmd_run`/`cmd_build` 前置：探测 `<dir>/wjsm-lock.toml` 并 `from_toml` 解析，**当且仅当存在且 `lock.packages` 非空**时（空 lockfile 等价无依赖，走默认 FsVfs 路径，兑现行 30/2139 的"有 lockfile + 依赖"不变式与零破坏）构造 `vroot = <store_root>/v1/.vroot` 哨兵根 + `CasVfs::new(store, vroot)`，用 **`RoutingVfs::new(Arc::new(cas), vroot)`**（**不是**裸 `CasVfs`——入口文件与项目本地源在真实磁盘，须经 FsVfs；见任务 3.2 RoutingVfs）作为 `Vfs`，配 `PnpOverlay::from_lock(&lock, vroot, project_dir)` 作 overlay，经 `ModuleBundler::with_providers(root, options, Arc::new(RoutingVfs::…), Arc::new(PnpOverlay::…))` 替代默认 bundler。
 - [ ] **Verify GREEN**：`cargo nextest run -p wjsm-cli -E 'test(pm_run_from_cas)'` 通过，断言项目无 node_modules。
 - [ ] **Commit**：`git commit -am "feat(cli): run/build 惰性接入 CAS（无 node_modules 直供编译器）"`
 
