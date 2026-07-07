@@ -149,6 +149,8 @@ crates/wjsm-pm/src/
   workspace.rs           # workspaces 发现、本地链接、根 lockfile
 ```
 
+**并发模型（已定）**：`reqwest`（workspace 已有，async/tokio）并发下载 packument/tarball；`rusqlite` 同步访问 SQLite，写路径用 `tokio::task::spawn_blocking` 隔离，避免阻塞 async 运行时。与现有 `wjsm-runtime` 的 tokio 栈一致，不引入第二套 async 运行时（不用 sqlx）。store 单写多读用 SQLite WAL 模式承载。
+
 ### 5.2 wjsm-module 侧改动（新增 trait，抽象三处磁盘访问）
 
 ```rust
@@ -408,7 +410,7 @@ ADR 信号（实现后需补 ADR）：
 - `npm_semver`：`^`/`~`/`x-range`/`||`/预发布规则逐条对照 node-semver 行为表。
 - `solver`：单版本收敛、instance-splitting 多版本共存、peer 冲突产出解释、optional 跳过。
 - `store`：blob 去重（相同内容单 blob）、zstd 往返、packfile 追加 + mmap 读、SQLite 事务回滚、跨版本共享文件去重计数。
-- `registry`：packument 解析、SSRI 校验失败拒绝、etag 重验证、`.npmrc` scope/token 解析。
+- `registry`：packument 解析、SSRI 校验失败拒绝、etag 重验证、`.npmrc` scope/token 解析。**统一走内置 mock registry**（本地 HTTP server 返回固定 packument + tarball），测试离线、确定、CI 可重复，覆盖 registry client 网络层。联真实 npm registry 的用例标 `#[ignore]`，不进 CI 默认集。
 - `lockfile`：自有格式确定性往返、`package-lock`/`pnpm-lock`/`yarn.lock`/`bun.lock` 迁移读取。
 - `artifact`：L1/L2 key 随 compiler_ver/abi 变更失效；同一包 manifest_hash 在不同解析图顺序下 L1 key 稳定（项目无关）。
 - `relocatable_ir`（wjsm-semantic）：单包 lower 产出模块局部 IR + 重定位表；链接后与 `lower_modules` 整体路径的全局 IR **逐指令等价**（IR 快照对照）；scope id / 常量偏移 / 字符串偏移 / import 符号重定位正确。
