@@ -826,8 +826,8 @@ Steps:
   `Store` 另需 `manifest_has_prefix(name, version, rel) -> Result<bool>`（供 CasVfs::is_dir 判定目录）：加载包 manifest，返回是否存在任一 entry 的 `rel_path` 以 `rel/` 为前缀（或等于 `rel` 的父目录链）。
   `normalize_mode(meta: &std::fs::Metadata) -> u32` 辅助：跨平台归一化文件模式——Unix 下保留可执行位（`0o755` 若 owner-exec 置位，否则 `0o644`）；非 Unix 恒 `0o644`。保证同内容文件在不同平台 manifest 一致（blob 去重不受 mode 影响，mode 只随 manifest entry）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(store_integration)'`。
-- [ ] **最小代码**：上面即完整。新增第三个测试 `store_integration_atomic_rollback`：构造一个中途 `add_package_from_dir` 失败（如注入一个不可读文件），断言失败后 `read_package_file` 返回 `None`（package 行未提交），证明事务回滚。
-- [ ] **Verify GREEN**：三测试通过。
+- [ ] **最小代码**：上面即完整。另加两个测试：① `store_integration_atomic_rollback`：构造一个中途 `add_package_from_dir` 失败（如注入一个不可读文件），断言失败后 `read_package_file` 返回 `None`（package 行未提交），证明事务回滚。② `store_integration_concurrent_writers`（兑现 Risks 段「并发写」缓解承诺）：多线程各持独立 `Store` 实例（同一 store root，模拟跨进程）并发 `add_package_from_dir` 写不同包，join 后逐包 `read_package_file` 校验内容逐字节正确——证明 `write_lock` flock + `append` 写前 `seek(End(0))` 消除 `BlobLoc.offset` 错位（原计划缓存 offset 硬伤）。
+- [ ] **Verify GREEN**：四测试通过（含 `store_integration_atomic_rollback` 与 `store_integration_concurrent_writers`）。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): Store 统一入口（写包+读文件，整包事务+pack 轮转）"`
 
 ## 任务 1.5b：store gc（回收孤儿 blob + packfile 重写）
