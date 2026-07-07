@@ -1,0 +1,7 @@
+{
+  "name": "json-fixture",
+  "count": 3,
+  "nested": {
+    "ok": true
+  }
+}

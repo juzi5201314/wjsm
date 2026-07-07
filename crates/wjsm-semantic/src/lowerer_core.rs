@@ -77,6 +77,7 @@ impl Lowerer {
             function_label_stack_stack: Vec::new(),
             function_active_finalizers_stack: Vec::new(),
             function_pending_loop_label_stack: Vec::new(),
+            function_exception_fork_suppression_stack: Vec::new(),
             captured_names_stack: Vec::new(),
             function_scope_id_stack: Vec::new(),
             is_arrow_fn_stack: Vec::new(),
@@ -143,6 +144,8 @@ impl Lowerer {
             new_expr_continue_block: None,
             await_continue_block: None,
             expr_merge_block: None,
+            exception_fork_suppression_depth: 0,
+            deferred_exception_forks_stack: Vec::new(),
             eval_completion: None,
         }
     }
@@ -251,6 +254,11 @@ impl Lowerer {
             .push(std::mem::take(&mut self.active_finalizers));
         self.function_pending_loop_label_stack
             .push(self.pending_loop_label.take());
+        self.function_exception_fork_suppression_stack.push((
+            self.exception_fork_suppression_depth,
+            std::mem::take(&mut self.deferred_exception_forks_stack),
+        ));
+        self.exception_fork_suppression_depth = 0;
         self.shared_env_stack.push(None);
         self.reset_async_context();
     }
@@ -319,6 +327,12 @@ impl Lowerer {
             .function_pending_loop_label_stack
             .pop()
             .expect("pending loop label stack underflow");
+        let (exception_fork_suppression_depth, deferred_exception_forks_stack) = self
+            .function_exception_fork_suppression_stack
+            .pop()
+            .expect("exception fork suppression stack underflow");
+        self.exception_fork_suppression_depth = exception_fork_suppression_depth;
+        self.deferred_exception_forks_stack = deferred_exception_forks_stack;
         let async_context = self
             .async_context_stack
             .pop()

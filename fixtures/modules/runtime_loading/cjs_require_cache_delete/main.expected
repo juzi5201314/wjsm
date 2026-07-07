@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+1
+true
+true
+1
+false
+true
+json-cache
+true
+json-cache
+false
+true
+--- stderr ---

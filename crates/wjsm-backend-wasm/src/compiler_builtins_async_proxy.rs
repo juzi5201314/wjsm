@@ -319,6 +319,32 @@ impl Compiler {
                 }
                 Ok(BuiltinDispatch::Handled)
             }
+            Builtin::DynamicImportRuntime => {
+                let referrer = args
+                    .first()
+                    .context("dynamic_import_runtime expects 2 args")?;
+                let specifier = args
+                    .get(1)
+                    .context("dynamic_import_runtime expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(referrer.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(specifier.0)));
+                let func_idx = self.builtin_func_idx(builtin)?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(BuiltinDispatch::Handled)
+            }
+            Builtin::ImportMetaResolve => {
+                let referrer = args.first().context("import_meta.resolve expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(referrer.0)));
+                let func_idx = self.builtin_func_idx(builtin)?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(BuiltinDispatch::Handled)
+            }
             // ── JSX builtins ───────────────────────────────────────────────────
             Builtin::JsxCreateElement => {
                 // jsx_create_element(tag: i64, props: i64, children: i64) -> i64

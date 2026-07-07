@@ -517,6 +517,16 @@ impl<'a> JsonParser<'a> {
         }
     }
 }
+
+pub(crate) fn parse_json_text(input: &str) -> Result<JsonValue, String> {
+    let mut parser = JsonParser::new(input.as_bytes());
+    let value = parser.parse_value()?;
+    parser.skip_whitespace();
+    if parser.pos < parser.input.len() {
+        return Err("Unexpected trailing content".to_string());
+    }
+    Ok(value)
+}
 /// Delete an object property by name_id using swap-remove.
 /// Based on the same pattern as `reflect_delete_property_impl`.
 fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(

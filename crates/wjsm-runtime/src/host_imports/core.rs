@@ -708,6 +708,38 @@ async fn op_instanceof_async(
     }
 }
 
+fn get_own_prop_desc_proxy(caller: &mut Caller<'_, RuntimeState>, obj: i64, key: i32) -> i64 {
+    let (target, handler) =
+        match super::proxy_traps::proxy_trap_proxy_entry(caller, obj, "getOwnPropertyDescriptor") {
+            Ok(entry) => entry,
+            Err(exception) => return exception,
+        };
+    let prop = super::proxy_traps::proxy_trap_property_key_value(caller, key);
+    let Some(trap) =
+        super::proxy_traps::proxy_trap_handler_trap(caller, handler, "getOwnPropertyDescriptor")
+    else {
+        return super::proxy_reflect::reflect_get_own_property_descriptor_impl(
+            caller, target, prop,
+        );
+    };
+    let descriptor = if value::is_native_callable(trap) {
+        call_native_callable_with_args_from_caller(caller, trap, handler, vec![target, prop])
+            .unwrap_or_else(value::encode_undefined)
+    } else {
+        return value::encode_undefined();
+    };
+    if let Err(error) = validate_proxy_get_own_property_descriptor_result(
+        caller,
+        target,
+        Some(key as u32),
+        descriptor,
+    ) {
+        set_runtime_error(caller.data(), error);
+        return value::encode_undefined();
+    }
+    descriptor
+}
+
 pub(crate) fn define_core(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -1109,6 +1141,10 @@ pub(crate) fn define_core(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32| -> i64 {
+            if value::is_proxy(obj) {
+                return get_own_prop_desc_proxy(&mut caller, obj, key);
+            }
+
             // 检查 obj 是否是对象或函数
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller

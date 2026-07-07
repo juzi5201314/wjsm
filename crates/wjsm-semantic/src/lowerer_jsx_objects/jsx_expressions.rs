@@ -169,47 +169,56 @@ impl Lowerer {
         }
     }
 
-    fn lower_import_meta(
-        &mut self,
-        meta: &swc_ast::MetaPropExpr,
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
+    pub(crate) fn import_meta_metadata(
+        &self,
+        span: Span,
+    ) -> Result<ModuleMetadata, LoweringError> {
         let Some(module_id) = self.current_module_id else {
             return Err(self.error(
-                meta.span,
+                span,
                 "SyntaxError: import.meta is only supported in ES modules",
             ));
         };
         let Some(metadata) = self.module_metadata.get(&module_id).cloned() else {
             return Err(self.error(
-                meta.span,
+                span,
                 "SyntaxError: import.meta is only supported in ES modules",
             ));
         };
         if metadata.kind != ModuleKind::Esm {
             return Err(self.error(
-                meta.span,
+                span,
                 "SyntaxError: import.meta is only supported in ES modules",
             ));
         }
         if metadata.filename.is_empty() || metadata.dirname.is_empty() || metadata.url.is_empty() {
             return Err(self.error(
-                meta.span,
+                span,
                 "SyntaxError: import.meta cannot be used for a module path that is not valid UTF-8",
             ));
         }
+        Ok(metadata)
+    }
 
+    fn lower_import_meta(
+        &mut self,
+        meta: &swc_ast::MetaPropExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let metadata = self.import_meta_metadata(meta.span)?;
+        let filename = metadata.filename.clone();
         let meta_obj = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::NewObject {
                 dest: meta_obj,
-                capacity: 3,
+                capacity: 4,
             },
         );
         self.set_import_meta_string_property(block, meta_obj, "url", metadata.url);
         self.set_import_meta_string_property(block, meta_obj, "dirname", metadata.dirname);
         self.set_import_meta_string_property(block, meta_obj, "filename", metadata.filename);
+        self.set_import_meta_resolve_property(block, meta_obj, filename);
         Ok(meta_obj)
     }
 
@@ -244,6 +253,49 @@ impl Lowerer {
                 object,
                 key: key_val,
                 value: value_val,
+            },
+        );
+    }
+
+    fn set_import_meta_resolve_property(
+        &mut self,
+        block: BasicBlockId,
+        object: ValueId,
+        filename: String,
+    ) {
+        let key_const = self.module.add_constant(Constant::String("resolve".to_string()));
+        let key_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: key_val,
+                constant: key_const,
+            },
+        );
+        let filename_const = self.module.add_constant(Constant::String(filename));
+        let filename_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: filename_val,
+                constant: filename_const,
+            },
+        );
+        let resolve_fn = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(resolve_fn),
+                builtin: Builtin::ImportMetaResolve,
+                args: vec![filename_val],
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object,
+                key: key_val,
+                value: resolve_fn,
             },
         );
     }

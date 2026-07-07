@@ -51,6 +51,82 @@ impl Lowerer {
         Ok(dest)
     }
 
+    fn is_import_meta_resolve_member(member_expr: &swc_ast::MemberExpr) -> bool {
+        matches!(
+            member_expr.obj.as_ref(),
+            swc_ast::Expr::MetaProp(meta)
+                if matches!(meta.kind, swc_ast::MetaPropKind::ImportMeta)
+        ) && matches!(
+            &member_expr.prop,
+            swc_ast::MemberProp::Ident(prop_ident) if prop_ident.sym.as_ref() == "resolve"
+        )
+    }
+
+    fn lower_import_meta_resolve_call(
+        &mut self,
+        call: &swc_ast::CallExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let metadata = self.import_meta_metadata(call.span())?;
+
+        let filename_const = self.module.add_constant(Constant::String(metadata.filename));
+        let filename_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: filename_val,
+                constant: filename_const,
+            },
+        );
+        let resolve_fn = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(resolve_fn),
+                builtin: Builtin::ImportMetaResolve,
+                args: vec![filename_val],
+            },
+        );
+
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: this_val,
+                constant: undef_const,
+            },
+        );
+
+        let mut call_block = block;
+        let mut args = Vec::with_capacity(call.args.len());
+        for arg in &call.args {
+            let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+            if self.expr_exception_fork_allowed() && self.expr_can_throw(&arg.expr) {
+                call_block = self.lower_value_exception_branch(call_block, arg_val)?;
+            }
+            args.push(arg_val);
+        }
+
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            call_block,
+            Instruction::Call {
+                dest: Some(dest),
+                callee: resolve_fn,
+                this_val,
+                args,
+            },
+        );
+        if self.expr_exception_fork_allowed() {
+            let continue_block = self.lower_value_exception_branch(call_block, dest)?;
+            self.expr_merge_block = Some(continue_block);
+        } else if call_block != block {
+            self.expr_merge_block = Some(call_block);
+        }
+        Ok(dest)
+    }
+
     pub(crate) fn lower_call_expr(
         &mut self,
         call: &swc_ast::CallExpr,
@@ -80,6 +156,10 @@ impl Lowerer {
                     callee_val = self.lower_super_prop(super_prop, block)?;
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
                 } else if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
+                    if Self::is_import_meta_resolve_member(member_expr) {
+                        return self.lower_import_meta_resolve_call(call, block);
+                    }
+
                     // 静态宿主 API（console.*, Object.*, JSON.*）不读取对象本身。
                     if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
                         && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop

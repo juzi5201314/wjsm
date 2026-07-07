@@ -40,11 +40,23 @@ pub(crate) use host_side_table::HostSideTable;
 mod runtime_json;
 mod runtime_linker;
 mod runtime_microtask;
+mod runtime_module_loader;
+mod runtime_module_registry;
 mod runtime_node_crypto;
 mod runtime_node_fs;
 mod runtime_node_globals;
 mod runtime_process;
 mod runtime_promises;
+pub use runtime_module_loader::{
+    RuntimeInstantiatedModule, RuntimeInstantiationEnv, RuntimeModuleFormat,
+    RuntimeModuleImportLink, RuntimeModuleInstantiationContext, RuntimeModuleLoadError,
+    RuntimeModuleLoadErrorCode, RuntimeModuleLoader, RuntimeModulePlacement,
+    RuntimeModuleReferrer, RuntimeModuleResolutionKind, RuntimeResolvedModule,
+};
+pub use runtime_module_registry::{
+    RuntimeModuleKey, RuntimeModuleRegistry, RuntimeModuleRequireResult, RuntimeModuleState,
+    RuntimeRequireCacheEntry,
+};
 mod runtime_regexp;
 mod runtime_source_map;
 mod runtime_startup;
@@ -122,7 +134,7 @@ use runtime_typedarray::*;
 use runtime_values::*;
 use types::*;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RuntimeOptions {
     pub max_heap_size: Option<usize>,
     pub wasmtime_memory_reservation: Option<u64>,
@@ -139,6 +151,36 @@ pub struct RuntimeOptions {
     pub fs_read_roots: Vec<PathBuf>,
     pub fs_write_roots: Vec<PathBuf>,
     pub fs_allow_write_anywhere: bool,
+    pub module_loader: Option<Arc<dyn RuntimeModuleLoader>>,
+}
+
+impl std::fmt::Debug for RuntimeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeOptions")
+            .field("max_heap_size", &self.max_heap_size)
+            .field(
+                "wasmtime_memory_reservation",
+                &self.wasmtime_memory_reservation,
+            )
+            .field("gc_algorithm", &self.gc_algorithm)
+            .field("argv", &self.argv)
+            .field("cwd", &self.cwd)
+            .field("env", &self.env)
+            .field("pid", &self.pid)
+            .field("ppid", &self.ppid)
+            .field("platform", &self.platform)
+            .field("arch", &self.arch)
+            .field("version", &self.version)
+            .field("versions", &self.versions)
+            .field("fs_read_roots", &self.fs_read_roots)
+            .field("fs_write_roots", &self.fs_write_roots)
+            .field("fs_allow_write_anywhere", &self.fs_allow_write_anywhere)
+            .field(
+                "module_loader",
+                &self.module_loader.as_ref().map(|_| "<installed>"),
+            )
+            .finish()
+    }
 }
 
 impl Default for RuntimeOptions {
@@ -163,6 +205,7 @@ impl Default for RuntimeOptions {
                 .chain(std::iter::once(std::env::temp_dir()))
                 .collect(),
             fs_allow_write_anywhere: false,
+            module_loader: None,
         }
     }
 }
@@ -880,7 +923,9 @@ impl Clone for RuntimeState {
             text_decoder_prototype: self.text_decoder_prototype,
             typedarray_prototypes: self.typedarray_prototypes,
             combinator_contexts: self.combinator_contexts.clone(),
-            module_namespace_cache: self.module_namespace_cache.clone(),
+            module_registry: self.module_registry.clone(),
+            module_loader: self.module_loader.clone(),
+            support_exports: self.support_exports.clone(),
             error_table: self.error_table.clone(),
             map_table: self.map_table.clone(),
             set_table: self.set_table.clone(),
@@ -1040,8 +1085,12 @@ struct RuntimeState {
     typedarray_prototypes: [i64; TypedArrayConstructorKind::COUNT],
     /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
-    /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
-    module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>>,
+    /// 运行时模块 registry；旧 ModuleId 快路径也通过这里的过渡 key 兼容。
+    module_registry: Arc<Mutex<RuntimeModuleRegistry>>,
+    /// 模块运行时加载器；CLI 文件系统加载器在后续任务注入。
+    module_loader: Option<Arc<dyn RuntimeModuleLoader>>,
+    /// 当前 Store 内 support module 的导出；动态 runtime loader 实例化时复用同一批 helper。
+    support_exports: Arc<Mutex<Vec<(&'static str, Extern)>>>,
     /// Error 侧表：存储 error 对象的 name 和 message
     error_table: Arc<Mutex<Vec<ErrorEntry>>>,
     /// Map 侧表：存储 Map 对象的键值对
@@ -1263,6 +1312,7 @@ impl RuntimeState {
             crate::runtime_gc::registry::create(options.gc_algorithm)
                 .map_err(anyhow::Error::msg)?,
         ));
+        state.module_loader = options.module_loader;
         Ok(state)
     }
 
@@ -1463,7 +1513,9 @@ impl RuntimeState {
             error_prototypes: crate::runtime_heap::ErrorPrototypes::default(),
             symbol_prototype: value::encode_undefined(),
             combinator_contexts: Arc::new(Mutex::new(Vec::new())),
-            module_namespace_cache: Arc::new(Mutex::new(HashMap::new())),
+            module_registry: Arc::new(Mutex::new(RuntimeModuleRegistry::new())),
+            module_loader: None,
+            support_exports: Arc::new(Mutex::new(Vec::new())),
             error_table: Arc::new(Mutex::new(Vec::new())),
             map_table: Arc::new(Mutex::new(Vec::new())),
             set_table: Arc::new(Mutex::new(Vec::new())),

@@ -7,6 +7,13 @@ use wjsm_semantic::{ModuleKind, ModuleLoweringInput, ModuleMetadata};
 use super::graph::ModuleGraph;
 use super::resolution_options::ResolutionOptions;
 use super::semantic::analyze_module_links;
+use wjsm_ir::{ModuleId, Program};
+
+pub struct RuntimeEntryBundle {
+    pub program: Program,
+    pub entry_module_id: ModuleId,
+}
+
 
 /// 模块 Bundler
 pub struct ModuleBundler {
@@ -59,6 +66,49 @@ impl ModuleBundler {
             &link_result.re_export_map,
         )
         .with_context(|| "Failed to lower modules")
+    }
+
+    /// 将运行时加载的入口模块 lower 为可实例化 IR，并为入口 ESM 创建命名空间对象。
+    pub fn lower_runtime_entry_bundle(&self, entry: &Path) -> Result<RuntimeEntryBundle> {
+        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
+            .with_context(|| "Failed to build module graph")?;
+        let entry_module_id = graph.entry_id();
+        let (order, cycles) = graph
+            .topological_order()
+            .with_context(|| "Failed to compute topological order")?;
+        let _ = cycles;
+        let mut link_result =
+            analyze_module_links(&graph).with_context(|| "Failed to analyze module links")?;
+        link_result
+            .dynamic_import_targets
+            .entry(entry_module_id)
+            .or_default()
+            .push(entry_module_id);
+
+        let mut modules = Vec::new();
+        for &id in &order {
+            let node = graph.get_module(id).unwrap();
+            modules.push(ModuleLoweringInput {
+                id: node.id,
+                ast: node.ast.clone(),
+                metadata: module_metadata_for_node(node)?,
+            });
+        }
+
+        let program = wjsm_semantic::lower_modules(
+            modules,
+            &link_result.import_map,
+            &link_result.dynamic_import_targets,
+            &link_result.export_names,
+            &link_result.dynamic_import_specifiers,
+            &link_result.re_export_map,
+        )
+        .with_context(|| "Failed to lower modules")?;
+
+        Ok(RuntimeEntryBundle {
+            program,
+            entry_module_id,
+        })
     }
 
     /// 解析入口模块 AST（含依赖图构建，用于 dump-ast 等）

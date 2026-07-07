@@ -1,4 +1,5 @@
 use super::*;
+use swc_core::ecma::visit::{Visit, VisitWith};
 use wjsm_parser;
 
 fn parse(source: &str) -> ast::Module {
@@ -30,6 +31,21 @@ fn has_let_decl(transformed: &ast::Module) -> bool {
         }
     })
 }
+fn has_require_var_decl(transformed: &ast::Module) -> bool {
+    transformed.body.iter().any(|item| {
+        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
+            var.kind == ast::VarDeclKind::Var
+                && var.decls.iter().any(|decl| {
+                    matches!(
+                        &decl.name,
+                        ast::Pat::Ident(binding) if binding.id.sym.as_ref() == "require"
+                    )
+                })
+        } else {
+            false
+        }
+    })
+}
 
 fn has_default_export(transformed: &ast::Module) -> bool {
     transformed.body.iter().any(|item| {
@@ -47,6 +63,50 @@ fn has_import_decl(transformed: &ast::Module) -> bool {
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(_))
         )
     })
+}
+
+fn import_decl_count(transformed: &ast::Module) -> usize {
+    transformed
+        .body
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(_))
+            )
+        })
+        .count()
+}
+
+fn is_require_call_expr(call: &ast::CallExpr) -> bool {
+    matches!(
+        &call.callee,
+        ast::Callee::Expr(callee)
+            if matches!(
+                callee.as_ref(),
+                ast::Expr::Ident(ident) if ident.sym.as_ref() == "require"
+            )
+    ) && call.args.len() == 1
+}
+
+struct RequireCallCounter {
+    count: usize,
+}
+
+impl Visit for RequireCallCounter {
+    fn visit_call_expr(&mut self, call: &ast::CallExpr) {
+        if is_require_call_expr(call) {
+            self.count += 1;
+            return;
+        }
+        call.visit_children_with(self);
+    }
+}
+
+fn require_call_count(transformed: &ast::Module) -> usize {
+    let mut counter = RequireCallCounter { count: 0 };
+    transformed.visit_with(&mut counter);
+    counter.count
 }
 
 #[test]
@@ -86,6 +146,12 @@ fn detects_cjs_via_assign_to_exports_ident() {
 }
 
 #[test]
+fn detects_cjs_via_require_resolve_paths_member() {
+    let module = parse(r#"console.log(require.resolve.paths('pkg'));"#);
+    assert!(is_commonjs_module(&module));
+}
+
+#[test]
 fn does_not_detect_cjs_for_member_access_only() {
     let module = parse(r#"const x = 1; console.log(x);"#);
     assert!(!is_commonjs_module(&module));
@@ -99,6 +165,97 @@ fn transforms_require() {
         has_import_decl(&transformed),
         "transformed module should have default import decl"
     );
+}
+
+#[test]
+fn top_level_literal_require_still_generates_import() {
+    let module = parse(r#"const foo = require('./foo'); console.log(foo);"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 1);
+    assert_eq!(require_call_count(&transformed), 0);
+}
+
+#[test]
+fn top_level_json_require_remains_runtime_call() {
+    let module = parse(r#"const data = require('./data.json'); console.log(data);"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+}
+
+#[test]
+fn if_false_literal_require_remains_runtime_call() {
+    let module = parse(r#"if (false) require('./foo');"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+}
+
+#[test]
+fn runtime_require_does_not_inject_global_bridge() {
+    let module = parse(r#"if (false) require('./foo');"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+    assert!(!has_require_var_decl(&transformed));
+}
+
+#[test]
+fn logical_and_require_remains_runtime_call() {
+    let module = parse(r#"false && require('./foo');"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+}
+
+#[test]
+fn logical_or_require_remains_runtime_call() {
+    let module = parse(r#"true || require('./foo');"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+}
+
+#[test]
+fn nullish_coalescing_require_remains_runtime_call() {
+    let module = parse(r#"'value' ?? require('./foo');"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+}
+
+#[test]
+fn try_literal_require_remains_runtime_call() {
+    let module = parse(r#"try { require('./optional'); } catch {}"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+}
+
+#[test]
+fn computed_require_remains_runtime_call() {
+    let module = parse(r#"const name = 'foo'; require('./mods/' + name + '.js');"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
+}
+
+#[test]
+fn function_body_literal_require_remains_runtime_call() {
+    let module = parse(r#"function load() { return require('./foo'); }"#);
+    let transformed = transform(&module);
+
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
 }
 
 #[test]
@@ -773,10 +930,9 @@ fn transform_expr_handles_call_with_super() {
 
 // ========== 修复验证测试 ==========
 
-/// 测试 require() 在函数表达式体内被正确处理
-/// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
+/// 测试 require() 在函数表达式体内保留为运行时调用。
 #[test]
-fn require_in_fn_expr_body_is_transformed() {
+fn function_expression_literal_require_remains_runtime_call() {
     let module = parse(
         r#"
         const fn = function() {
@@ -787,107 +943,13 @@ fn require_in_fn_expr_body_is_transformed() {
     );
     let transformed = transform(&module);
 
-    // 应该有 import 声明
-    assert!(
-        has_import_decl(&transformed),
-        "should have import declaration"
-    );
-
-    // 验证函数体内没有 require() 调用（var decl 被移除或转换）
-    let fn_body_ok = transformed.body.iter().any(|item| {
-        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
-            for decl in &var.decls {
-                if let ast::Pat::Ident(binding) = &decl.name
-                    && binding.id.sym == "fn"
-                    && let Some(ast::Expr::Fn(f)) = decl.init.as_deref()
-                    && let Some(body) = &f.function.body
-                {
-                    // 检查函数体内是否有 var decl
-                    for stmt in &body.stmts {
-                        if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
-                            for d in &v.decls {
-                                if let ast::Pat::Ident(b) = &d.name
-                                    && b.id.sym == "x"
-                                {
-                                    // 如果有 const x = ...，检查初始化器不是 require()
-                                    if let Some(init) = &d.init
-                                        && let ast::Expr::Call(call) = init.as_ref()
-                                        && let ast::Callee::Expr(callee) = &call.callee
-                                        && let ast::Expr::Ident(id) = callee.as_ref()
-                                        && id.sym == "require"
-                                    {
-                                        return false; // require() 未被转换
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return true; // 没有 require() 调用
-                }
-            }
-        }
-        false
-    });
-    assert!(
-        fn_body_ok,
-        "require() in function expression body should be transformed"
-    );
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
 }
 
-/// 测试 require() 在函数声明体内被正确处理
-/// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
+/// 测试 require() 在类方法体内保留为运行时调用。
 #[test]
-fn require_in_fn_decl_body_is_transformed() {
-    let module = parse(
-        r#"
-        function fn() {
-            const x = require('./foo');
-            return x;
-        }
-    "#,
-    );
-    let transformed = transform(&module);
-    assert!(
-        has_import_decl(&transformed),
-        "should have import declaration"
-    );
-
-    // 验证函数声明体内没有 require() 调用
-    let fn_body_ok = transformed.body.iter().any(|item| {
-        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl))) = item
-            && fn_decl.ident.sym == "fn"
-            && let Some(body) = &fn_decl.function.body
-        {
-            for stmt in &body.stmts {
-                if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
-                    for d in &v.decls {
-                        if let ast::Pat::Ident(b) = &d.name
-                            && b.id.sym == "x"
-                            && let Some(init) = &d.init
-                            && let ast::Expr::Call(call) = init.as_ref()
-                            && let ast::Callee::Expr(callee) = &call.callee
-                            && let ast::Expr::Ident(id) = callee.as_ref()
-                            && id.sym == "require"
-                        {
-                            return false;
-                        }
-                    }
-                }
-            }
-            return true;
-        }
-        false
-    });
-    assert!(
-        fn_body_ok,
-        "require() in function declaration body should be transformed"
-    );
-}
-
-/// 测试 require() 在类方法体内被正确处理
-/// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
-#[test]
-fn require_in_class_method_body_is_transformed() {
+fn class_method_literal_require_remains_runtime_call() {
     let module = parse(
         r#"
         class MyClass {
@@ -899,46 +961,9 @@ fn require_in_class_method_body_is_transformed() {
     "#,
     );
     let transformed = transform(&module);
-    assert!(
-        has_import_decl(&transformed),
-        "should have import declaration"
-    );
 
-    // 验证类方法体内没有 require() 调用
-    let method_body_ok = transformed.body.iter().any(|item| {
-        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(class_decl))) = item
-            && class_decl.ident.sym == "MyClass"
-        {
-            for member in &class_decl.class.body {
-                if let ast::ClassMember::Method(method) = member
-                    && let Some(body) = &method.function.body
-                {
-                    for stmt in &body.stmts {
-                        if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
-                            for d in &v.decls {
-                                if let ast::Pat::Ident(b) = &d.name
-                                    && b.id.sym == "x"
-                                    && let Some(init) = &d.init
-                                    && let ast::Expr::Call(call) = init.as_ref()
-                                    && let ast::Callee::Expr(callee) = &call.callee
-                                    && let ast::Expr::Ident(id) = callee.as_ref()
-                                    && id.sym == "require"
-                                {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-                    return true;
-                }
-            }
-        }
-        false
-    });
-    assert!(
-        method_body_ok,
-        "require() in class method body should be transformed"
-    );
+    assert_eq!(import_decl_count(&transformed), 0);
+    assert_eq!(require_call_count(&transformed), 1);
 }
 
 /// 测试 module.exports = X 后 module.exports.y = Z 同时导出两者

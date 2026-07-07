@@ -27,10 +27,31 @@ const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
 
 // ── Public API ──────────────────────────────────────────────────────────
 
+pub struct RuntimeCompiledModule {
+    pub wasm: Vec<u8>,
+    pub table_len: u32,
+    pub data_len: u32,
+}
+
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
-    let mut compiler = Compiler::new(CompileMode::Normal);
+    Ok(compile_runtime_module_at(program, 0, 0)?.wasm)
+}
+
+pub fn compile_runtime_module_at(
+    program: &Program,
+    data_base: u32,
+    table_base: u32,
+) -> Result<RuntimeCompiledModule> {
+    let mut compiler = Compiler::new_with_layout(CompileMode::Normal, data_base, table_base);
     compiler.compile_module(program)?;
-    Ok(compiler.finish())
+    let table_len = compiler.function_table.len() as u32;
+    let data_len = compiler.string_data.len() as u32;
+    let wasm = compiler.finish();
+    Ok(RuntimeCompiledModule {
+        wasm,
+        table_len,
+        data_len,
+    })
 }
 
 pub fn compile_eval(program: &Program) -> Result<Vec<u8>> {
@@ -87,6 +108,8 @@ struct Compiler {
     if_depth: u32,
     /// Function table: table index → WASM func index.
     function_table: Vec<u32>,
+    /// Imported table offset used by active element segments.
+    table_base: u32,
     /// Reverse lookup: WASM func index → table position.
     function_table_reverse: HashMap<u32, u32>,
     /// IR function name → WASM func index.

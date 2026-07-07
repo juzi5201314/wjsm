@@ -1,9 +1,9 @@
 // CJS AST 转换器：将 CommonJS 模块转换为 ESM 风格 AST
 //
 // 转换规则：
-// 1. require('./path') → import __cjs_req_N from './path'; 使用 __cjs_req_N 替换
-//    - const x = require('./path') → import x from './path'（直接使用用户变量名）
-//    - 其他 require() 调用 → import __cjs_req_N from './path'; 替换为标识符引用
+// 1. 顶层无控制流包裹的静态 require('./path') → import __cjs_req_N from './path'; 使用 __cjs_req_N 替换
+//    - 顶层 const x = require('./path') → import x from './path'（直接使用用户变量名）
+//    - 控制流、函数/类体或计算参数的 require() 保留为运行时调用
 // 2. module.exports.x = value → let {prefix}__cjs_x = value; 合成默认导出 { x: {prefix}__cjs_x }
 // 3. exports.x = value → 同上
 // 4. module.exports = obj → export default obj
@@ -11,9 +11,15 @@
 // 6. 对于带有命名导出的 CJS 模块，生成合成默认导出：export default { x: var, y: var, ... }
 
 use std::collections::{BTreeMap, HashSet};
+
 use swc_core::common::{DUMMY_SP, SyntaxContext};
 use swc_core::ecma::ast;
 use swc_core::ecma::visit::{Visit, VisitWith};
+
+use crate::cjs_require_analysis::{
+    RequireAnalysis, RequireSiteKey, analyze_require_sites, extract_require_specifier,
+    is_require_call,
+};
 
 pub fn is_commonjs_module(module: &ast::Module) -> bool {
     if module
@@ -33,16 +39,16 @@ pub fn transform(module: &ast::Module) -> ast::Module {
 }
 
 pub fn transform_with_prefix(module: &ast::Module, export_prefix: &str) -> ast::Module {
-    let mut collector = RequireCollector {
-        require_map: BTreeMap::new(),
-        next_req_id: 0,
-        direct_imports: HashSet::new(),
-    };
-    module.visit_with(&mut collector);
-
+    let RequireAnalysis {
+        hoistable,
+        direct_imports,
+        hoistable_sites,
+        ..
+    } = analyze_require_sites(module);
     let mut transformer = CjsTransformer {
-        require_map: collector.require_map,
-        direct_imports: collector.direct_imports,
+        require_map: hoistable,
+        direct_imports,
+        hoistable_require_sites: hoistable_sites,
         export_names: Vec::new(),
         has_default_export: false,
         export_prefix: export_prefix.to_string(),
@@ -96,6 +102,13 @@ pub fn transform_with_prefix(module: &ast::Module, export_prefix: &str) -> ast::
     new_module
 }
 
+fn is_require_member_expr(member: &ast::MemberExpr) -> bool {
+    matches!(
+        member.obj.as_ref(),
+        ast::Expr::Ident(ident) if ident.sym.as_ref() == "require"
+    )
+}
+
 // ── CJS 检测器（使用 Visit trait）────────────────────────────────
 
 struct CjsDetector {
@@ -116,7 +129,7 @@ impl Visit for CjsDetector {
         if self.found {
             return;
         }
-        if extract_require_specifier(n).is_some() {
+        if is_require_call(n) {
             self.found = true;
             return;
         }
@@ -127,7 +140,8 @@ impl Visit for CjsDetector {
         if self.found {
             return;
         }
-        if is_module_exports_member(&ast::Expr::Member(n.clone()))
+        if is_require_member_expr(n)
+            || is_module_exports_member(&ast::Expr::Member(n.clone()))
             || is_exports_member(&ast::Expr::Member(n.clone()))
         {
             self.found = true;
@@ -156,55 +170,12 @@ impl Visit for CjsDetector {
     }
 }
 
-// ── Require 收集器（使用 Visit trait）─────────────────────────────
-
-struct RequireCollector {
-    require_map: BTreeMap<String, String>,
-    next_req_id: u32,
-    direct_imports: HashSet<String>,
-}
-
-impl Visit for RequireCollector {
-    fn visit_var_decl(&mut self, n: &ast::VarDecl) {
-        for decl in &n.decls {
-            if let Some(init) = &decl.init
-                && let ast::Expr::Call(call) = init.as_ref()
-                && let Some(specifier) = extract_require_specifier(call)
-                && let ast::Pat::Ident(binding) = &decl.name
-            {
-                let local_name = binding.id.sym.to_string();
-                if !local_name.starts_with("__cjs_req_") {
-                    if let std::collections::btree_map::Entry::Vacant(e) =
-                        self.require_map.entry(specifier)
-                    {
-                        e.insert(local_name.clone());
-                        self.direct_imports.insert(local_name);
-                    }
-                    continue;
-                }
-            }
-        }
-        n.visit_children_with(self);
-    }
-
-    fn visit_call_expr(&mut self, n: &ast::CallExpr) {
-        if let Some(specifier) = extract_require_specifier(n) {
-            if !self.require_map.contains_key(&specifier) {
-                let local_name = format!("__cjs_req_{}", self.next_req_id);
-                self.next_req_id += 1;
-                self.require_map.insert(specifier, local_name);
-            }
-            return;
-        }
-        n.visit_children_with(self);
-    }
-}
-
 // ── CJS 转换器（手动遍历，处理语义转换）───────────────────────────
 
 struct CjsTransformer {
     require_map: BTreeMap<String, String>,
     direct_imports: HashSet<String>,
+    hoistable_require_sites: HashSet<RequireSiteKey>,
     export_names: Vec<(String, String)>,
     has_default_export: bool,
     export_prefix: String,
@@ -556,6 +527,7 @@ impl CjsTransformer {
         for decl in &var_decl.decls {
             if let Some(init) = &decl.init
                 && let ast::Expr::Call(call) = init.as_ref()
+                && self.is_hoistable_require_call(call)
                 && let Some(specifier) = extract_require_specifier(call)
                 && let ast::Pat::Ident(binding) = &decl.name
             {
@@ -696,9 +668,15 @@ impl CjsTransformer {
         }
     }
 
+    fn is_hoistable_require_call(&self, call: &ast::CallExpr) -> bool {
+        self.hoistable_require_sites
+            .contains(&RequireSiteKey::from_span(call.span))
+    }
+
     /// 转换 Call 表达式：检测 require() 并递归处理 callee/args
     fn transform_call_expr(&mut self, call: &ast::CallExpr) -> ast::Expr {
-        if let Some(specifier) = extract_require_specifier(call)
+        if self.is_hoistable_require_call(call)
+            && let Some(specifier) = extract_require_specifier(call)
             && let Some(local_name) = self.require_map.get(&specifier)
         {
             return ast::Expr::Ident(ast::Ident::new(
@@ -852,29 +830,6 @@ impl CjsTransformer {
 }
 
 // ── 辅助函数 ──────────────────────────────────────────────────────
-
-fn extract_require_specifier(call: &ast::CallExpr) -> Option<String> {
-    if let ast::Callee::Expr(expr) = &call.callee
-        && let ast::Expr::Ident(ident) = expr.as_ref()
-        && ident.sym.as_ref() == "require"
-        && call.args.len() == 1
-    {
-        return extract_static_module_specifier(&call.args[0].expr);
-    }
-    None
-}
-
-/// 从 require()/import() 参数表达式提取静态模块说明符
-fn extract_static_module_specifier(expr: &ast::Expr) -> Option<String> {
-    match expr {
-        ast::Expr::Lit(ast::Lit::Str(s)) => Some(s.value.to_string_lossy().into_owned()),
-        ast::Expr::Tpl(tpl) if tpl.quasis.len() == 1 && tpl.exprs.is_empty() => tpl.quasis[0]
-            .cooked
-            .as_ref()
-            .map(|cooked| cooked.to_string_lossy().into_owned()),
-        _ => None,
-    }
-}
 
 fn is_module_exports_member(expr: &ast::Expr) -> bool {
     match expr {

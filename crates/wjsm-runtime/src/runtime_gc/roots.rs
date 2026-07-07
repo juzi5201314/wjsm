@@ -407,8 +407,8 @@ fn collect_side_table_backed_host_values(st: &mut crate::RuntimeState, out: &mut
             out.extend(entry.reason);
         }
     }
-    if let Ok(cache) = st.module_namespace_cache.lock() {
-        out.extend(cache.values().copied());
+    if let Ok(registry) = st.module_registry.lock() {
+        out.extend(registry.roots());
     }
     if let Ok(table) = st.dataview_table.lock() {
         for entry in table.iter() {
@@ -796,6 +796,7 @@ mod tests {
         ResponseType, StreamControllerEntry, StreamState, TypedArrayEntry,
     };
     use std::collections::VecDeque;
+    use std::path::PathBuf;
 
     fn obj(handle: u32) -> i64 {
         value::encode_object_handle(handle)
@@ -879,10 +880,10 @@ mod tests {
                     duplex: String::new(),
                 });
         }
-        st.module_namespace_cache
+        st.module_registry
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(0, namespace);
+            .register_static_namespace(0, namespace);
         st.dataview_table
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -958,6 +959,53 @@ mod tests {
             typedarray_buffer,
             controller_underlying,
             controller_chunk,
+        ] {
+            assert!(out.contains(&expected), "missing {expected:#x}");
+        }
+    }
+
+    #[test]
+    fn module_registry_roots_include_exports_namespace_and_error() {
+        let mut st = crate::RuntimeState::new();
+        let loaded_module = obj(30);
+        let loaded_exports = obj(31);
+        let loaded_namespace = obj(32);
+        let loading_module = obj(33);
+        let loading_exports = obj(34);
+        let error = obj(35);
+
+        {
+            let mut registry = st.module_registry.lock().unwrap_or_else(|e| e.into_inner());
+            registry.begin_loading(
+                crate::RuntimeModuleKey::File(PathBuf::from("/project/loading.js")),
+                None,
+                loading_module,
+                loading_exports,
+            );
+            registry.finish_loaded(
+                crate::RuntimeModuleKey::File(PathBuf::from("/project/loaded.js")),
+                Some(42),
+                loaded_module,
+                loaded_exports,
+                loaded_namespace,
+            );
+            registry.finish_errored(
+                crate::RuntimeModuleKey::Json(PathBuf::from("/project/broken.json")),
+                None,
+                error,
+            );
+        }
+
+        let mut out = Vec::new();
+        collect_side_table_backed_host_values(&mut st, &mut out);
+
+        for expected in [
+            loaded_module,
+            loaded_exports,
+            loaded_namespace,
+            loading_module,
+            loading_exports,
+            error,
         ] {
             assert!(out.contains(&expected), "missing {expected:#x}");
         }

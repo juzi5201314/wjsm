@@ -174,6 +174,29 @@ impl Compiler {
                 }
                 Ok(BuiltinDispatch::Handled)
             }
+            Builtin::CjsCreateRequire => {
+                let filename = args.first().context("CjsCreateRequire expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(filename.0)));
+                let func_idx = self.builtin_func_idx(builtin)?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(BuiltinDispatch::Handled)
+            }
+            Builtin::CjsRegisterModule => {
+                if args.len() != 3 {
+                    anyhow::bail!("CjsRegisterModule expects 3 args");
+                }
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self.builtin_func_idx(builtin)?;
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(BuiltinDispatch::Handled)
+            }
             Builtin::CreateException => {
                 let value = args.first().context("CreateException expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));

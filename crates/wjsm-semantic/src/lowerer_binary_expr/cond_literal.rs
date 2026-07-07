@@ -6,9 +6,20 @@ impl Lowerer {
         cond: &swc_ast::CondExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        // 评估条件表达式
-        let test = self.lower_expr(&cond.test, block)?;
-        let branch_block = self.resolve_store_block(block);
+        // Dynamic import specifier lowering suppresses immediate exception throws so
+        // the import runtime can reject its Promise with the original reason. In that
+        // mode, collect abrupt completions before the conditional result feeds an
+        // enclosing operator such as `+`.
+        let collect_exception_forks = self.exception_fork_suppressed();
+        let mut test_block = block;
+        let test = if collect_exception_forks {
+            self.lower_expr_then_continue(cond.test.as_ref(), &mut test_block)?
+        } else {
+            let value = self.lower_expr(cond.test.as_ref(), test_block)?;
+            test_block = self.resolve_store_block(test_block);
+            value
+        };
+        let branch_block = test_block;
         // 若 resolve_store_block 返回的 block 含 Phi（来自嵌套逻辑/条件表达式），
         // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch → WASM codegen 错误。
         let branch_block = if self.current_function.block(branch_block).is_some_and(|b| {
@@ -36,13 +47,25 @@ impl Lowerer {
             },
         );
 
-        let cons_val = self.lower_expr(&cond.cons, cons_block)?;
-        let cons_end = self.resolve_store_block(cons_block);
+        let mut cons_end = cons_block;
+        let cons_val = if collect_exception_forks {
+            self.lower_expr_then_continue(cond.cons.as_ref(), &mut cons_end)?
+        } else {
+            let value = self.lower_expr(cond.cons.as_ref(), cons_end)?;
+            cons_end = self.resolve_store_block(cons_end);
+            value
+        };
         self.current_function
             .set_terminator(cons_end, Terminator::Jump { target: merge });
 
-        let alt_val = self.lower_expr(&cond.alt, alt_block)?;
-        let alt_end = self.resolve_store_block(alt_block);
+        let mut alt_end = alt_block;
+        let alt_val = if collect_exception_forks {
+            self.lower_expr_then_continue(cond.alt.as_ref(), &mut alt_end)?
+        } else {
+            let value = self.lower_expr(cond.alt.as_ref(), alt_end)?;
+            alt_end = self.resolve_store_block(alt_end);
+            value
+        };
         self.current_function
             .set_terminator(alt_end, Terminator::Jump { target: merge });
 

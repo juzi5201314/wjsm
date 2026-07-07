@@ -107,9 +107,33 @@ pub(crate) static SPECS_PART3: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "cjs_create_require",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::CjsCreateRequire)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "cjs_register_module",
+        type_idx: 23,
+        key: Some(HostImportKey::Builtin(Builtin::CjsRegisterModule)),
+        group: None,
+    },
+    HostImportSpec {
         name: "dynamic_import",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::DynamicImport)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "dynamic_import_runtime",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::DynamicImportRuntime)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "import_meta_resolve",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ImportMetaResolve)),
         group: None,
     },
     HostImportSpec {

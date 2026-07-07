@@ -116,7 +116,7 @@ impl Compiler {
             self.push_func_table(self._next_import_func);
             self._next_import_func += 1;
         }
-        let arr_proto_base = self.function_table.len() as u32;
+        let arr_proto_base = self.table_base + self.function_table.len() as u32;
         for (idx, _) in array_proto_method_specs() {
             self.push_func_table(idx as u32);
         }
@@ -379,23 +379,23 @@ impl Compiler {
             // Eval mode: 定义自己的 table
             self.table.table(TableType {
                 element_type: RefType::FUNCREF,
-                minimum: self.function_table.len() as u64,
+                minimum: (self.table_base + self.function_table.len() as u32) as u64,
                 maximum: None,
                 table64: false,
                 shared: false,
             });
             self.elements.active(
                 Some(0),
-                &ConstExpr::i32_const(0),
+                &ConstExpr::i32_const(self.table_base as i32),
                 Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
             );
         } else {
             // Normal mode: table 是 import 的（env.__table）。
-            // element section 从 table[0] 开始填充。support module 不使用 element section，
-            // 所以 table 完全由 user wasm 使用。
+            // element section 从本模块分配到的 table base 开始填充。support module 不使用 element section，
+            // 所以 table 的已分配区间完全由 user wasm 使用。
             self.elements.active(
                 Some(0),
-                &ConstExpr::i32_const(0),
+                &ConstExpr::i32_const(self.table_base as i32),
                 Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
             );
         }

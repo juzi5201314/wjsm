@@ -205,7 +205,11 @@ pub enum Builtin {
     IsJsObject,
     // ── 动态 import ──────────────────────────────────────────────────
     DynamicImport,
+    DynamicImportRuntime,
+    ImportMetaResolve,
     RegisterModuleNamespace,
+    CjsCreateRequire,
+    CjsRegisterModule,
     // ── JSX ────────────────────────────────────────────────────────────
     JsxCreateElement,
     // ── Proxy / Reflect ────────────────────────────────────────────────
@@ -678,9 +682,13 @@ impl Builtin {
             Self::IsCallable => "is_callable",
             Self::IsJsObject => "is_js_object",
 
-            // 动态 import / JSX / Proxy / Reflect / 完整字符串方法
+            // 动态 import / import.meta / JSX / Proxy / Reflect / 完整字符串方法
             Self::DynamicImport => "dynamic_import",
+            Self::DynamicImportRuntime => "dynamic_import_runtime",
+            Self::ImportMetaResolve => "import_meta.resolve",
             Self::RegisterModuleNamespace => "register_module_namespace",
+            Self::CjsCreateRequire => "cjs.create_require",
+            Self::CjsRegisterModule => "cjs.register_module",
             Self::JsxCreateElement => "jsx.create_element",
             Self::ProxyCreate => "proxy.create",
             Self::ProxyRevocable => "proxy.revocable",

@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+json-fixture
+3
+true
+true
+true
+--- stderr ---

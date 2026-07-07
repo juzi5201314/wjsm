@@ -124,14 +124,14 @@ fn setup_multi_module_lowerer(
     Ok(lowerer)
 }
 
-fn predeclare_cjs_path_bindings(
+fn predeclare_cjs_host_bindings(
     lowerer: &mut Lowerer,
     module_id: wjsm_ir::ModuleId,
 ) -> Result<(), LoweringError> {
     if lowerer.module_metadata.get(&module_id).map(|m| m.kind) != Some(ModuleKind::CommonJs) {
         return Ok(());
     }
-    for name in ["__filename", "__dirname"] {
+    for name in ["require", "module", "exports", "__filename", "__dirname"] {
         lowerer
             .scopes
             .declare(name, VarKind::Const, true)
@@ -157,7 +157,7 @@ fn predeclare_module_exports(
         lowerer.scopes.push_scope(ScopeKind::Block);
         let module_scope = lowerer.scopes.current_scope_id();
         lowerer.module_scopes.insert(module_id, module_scope);
-        predeclare_cjs_path_bindings(lowerer, module_id)?;
+        predeclare_cjs_host_bindings(lowerer, module_id)?;
         lowerer.predeclare_stmts(&module_ast.body)?;
         for item in &module_ast.body {
             match item {
@@ -505,7 +505,7 @@ fn create_namespace_objects(lowerer: &mut Lowerer, entry: BasicBlockId) {
     }
 }
 
-fn emit_cjs_path_bindings(
+fn emit_cjs_host_bindings(
     lowerer: &mut Lowerer,
     module_id: wjsm_ir::ModuleId,
     block: BasicBlockId,
@@ -520,24 +520,62 @@ fn emit_cjs_path_bindings(
         return Ok(());
     };
 
-    emit_module_path_binding(
-        lowerer,
+    let filename = emit_cjs_string_constant(lowerer, block, metadata.filename);
+    let dirname = emit_cjs_string_constant(lowerer, block, metadata.dirname);
+    emit_cjs_module_binding(lowerer, block, module_scope, "__filename", filename);
+    emit_cjs_module_binding(lowerer, block, module_scope, "__dirname", dirname);
+
+    let exports_obj = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
         block,
-        module_scope,
-        "__filename",
-        metadata.filename,
+        Instruction::NewObject {
+            dest: exports_obj,
+            capacity: 0,
+        },
     );
-    emit_module_path_binding(lowerer, block, module_scope, "__dirname", metadata.dirname);
+    emit_cjs_module_binding(lowerer, block, module_scope, "exports", exports_obj);
+
+    let module_obj = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::NewObject {
+            dest: module_obj,
+            capacity: 4,
+        },
+    );
+    emit_cjs_property(lowerer, block, module_obj, "id", filename);
+    emit_cjs_property(lowerer, block, module_obj, "filename", filename);
+    emit_cjs_property(lowerer, block, module_obj, "exports", exports_obj);
+    let loaded_val = emit_cjs_bool_constant(lowerer, block, true);
+    emit_cjs_property(lowerer, block, module_obj, "loaded", loaded_val);
+    emit_cjs_module_binding(lowerer, block, module_scope, "module", module_obj);
+
+    let require_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::CallBuiltin {
+            dest: Some(require_val),
+            builtin: Builtin::CjsCreateRequire,
+            args: vec![filename],
+        },
+    );
+    emit_cjs_module_binding(lowerer, block, module_scope, "require", require_val);
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::CallBuiltin {
+            dest: None,
+            builtin: Builtin::CjsRegisterModule,
+            args: vec![filename, module_obj, exports_obj],
+        },
+    );
     Ok(())
 }
 
-fn emit_module_path_binding(
+fn emit_cjs_string_constant(
     lowerer: &mut Lowerer,
     block: BasicBlockId,
-    module_scope: usize,
-    name: &str,
     value: String,
-) {
+) -> wjsm_ir::ValueId {
     let string_const = lowerer.module.add_constant(Constant::String(value));
     let string_val = lowerer.alloc_value();
     lowerer.current_function.append_instruction(
@@ -547,11 +585,56 @@ fn emit_module_path_binding(
             constant: string_const,
         },
     );
+    string_val
+}
+
+fn emit_cjs_bool_constant(
+    lowerer: &mut Lowerer,
+    block: BasicBlockId,
+    value: bool,
+) -> wjsm_ir::ValueId {
+    let bool_const = lowerer.module.add_constant(Constant::Bool(value));
+    let bool_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::Const {
+            dest: bool_val,
+            constant: bool_const,
+        },
+    );
+    bool_val
+}
+
+fn emit_cjs_property(
+    lowerer: &mut Lowerer,
+    block: BasicBlockId,
+    object: wjsm_ir::ValueId,
+    key: &str,
+    value: wjsm_ir::ValueId,
+) {
+    let key_val = emit_cjs_string_constant(lowerer, block, key.to_string());
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::SetProp {
+            object,
+            key: key_val,
+            value,
+        },
+    );
+}
+
+fn emit_cjs_module_binding(
+    lowerer: &mut Lowerer,
+    block: BasicBlockId,
+    module_scope: usize,
+    name: &str,
+    value: wjsm_ir::ValueId,
+) {
     lowerer.current_function.append_instruction(
         block,
         Instruction::StoreVar {
             name: format!("${module_scope}.{name}"),
-            value: string_val,
+            value,
         },
     );
 }
@@ -573,7 +656,7 @@ fn lower_module_bodies(
             lowerer.scopes.enter_scope(module_scope);
         }
         if let StmtFlow::Open(block) = flow {
-            emit_cjs_path_bindings(lowerer, module_id, block)?;
+            emit_cjs_host_bindings(lowerer, module_id, block)?;
         }
         for item in &module_ast.body {
             // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错

@@ -737,6 +737,19 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             );
             Some(value::encode_undefined())
         }
+        NativeCallable::CjsRequire { referrer } => Some(call_cjs_require(caller, referrer, args)),
+        NativeCallable::CjsRequireResolve { referrer } => {
+            Some(call_cjs_require_resolve(caller, referrer, args))
+        }
+        NativeCallable::CjsRequireResolvePaths { referrer } => {
+            Some(call_cjs_require_resolve_paths(caller, referrer, args))
+        }
+        NativeCallable::ImportMetaResolve { referrer } => {
+            Some(call_import_meta_resolve(caller, referrer, args))
+        }
+        NativeCallable::CjsRequireCacheTrap { kind } => {
+            Some(call_cjs_require_cache_trap(caller, kind, &args))
+        }
         NativeCallable::PromiseResolvingFunction {
             promise,
             already_resolved,
@@ -1446,6 +1459,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         } => Some(map_set_for_each_impl_async(caller, this_val, &args).await),
         NativeCallable::GeneratorMethod { generator, kind } => {
             Some(call_generator_method_from_caller_async(caller, generator, kind, argument).await)
+        }
+        NativeCallable::CjsRequire { referrer } => {
+            Some(call_cjs_require_async(caller, referrer, args).await)
         }
         NativeCallable::AgentStart
         | NativeCallable::AgentBroadcast

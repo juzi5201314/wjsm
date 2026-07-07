@@ -34,7 +34,7 @@ Compatibility Boundary:
 - 已知代价：首版无物化 node_modules，外部 Node 工具链看不到依赖（wjsm 自有 check/lint/fmt 走 CAS 不受影响）；`--node-modules-dir` 逃生舱不在本计划。
 - 迁移不删除原生态 lockfile（除非 `--prune`）。
 - P5 前置依赖 issue #312 已合并；可重定位 IR 分离编译产出与现有 `lower_modules` 整体路径**分级逐指令等价**（L2-a 叶子包 / L2-b import 边必过；L2-c re-export/shared-env 等价或明确降级到 L2-bundle）。
-- tarball 必须 SSRI 校验通过才入库；依赖生命周期脚本默认禁用，需 `trustedDependencies` 或 `--allow-scripts`。
+- tarball 必须 SSRI 校验通过才入库（证明字节 == registry 所发）；**且**解包必须防路径逃逸 + 拒绝链接条目（`extract_tgz` 三重守卫——SSRI 不覆盖此边界，恶意作者可发布 integrity 合法却含 `../`/符号链接的 tarball，见任务 2.2）；依赖生命周期脚本默认禁用，需 `trustedDependencies` 或 `--allow-scripts`。
 
 Verification:
 
@@ -180,7 +180,7 @@ Steps:
   rusqlite = { version = "0.32", features = ["bundled"] }
   zstd = "0.13"
   blake3 = "1"
-  tar = "0.4"
+  tar = "0.4.45"   # ≥0.4.45：修复 RUSTSEC-2026-0067（unpack_in 经符号链接 chmod 外部目录）；本项目 extract_tgz 另有独立守卫
   flate2 = "1"
   sha2 = "0.10"
   base64 = "0.22"
@@ -1198,7 +1198,7 @@ Steps:
   - `expand_upper_bound(partial)`：`1` → `<2.0.0`；`1.2` → `<1.3.0`；`1.2.3` → `<=1.2.3`；含 `X` 段同理向上补齐。
   - `parse_single(tok)`：依次匹配前缀
     - `^`：`^1.2.3`→`>=1.2.3 <2.0.0`；`^0.2.3`→`>=0.2.3 <0.3.0`；`^0.0.3`→`>=0.0.3 <0.0.4`；`^1`/`^1.x`→`>=1.0.0 <2.0.0`；`^0`→`>=0.0.0 <1.0.0`；`^0.0`→`>=0.0.0 <0.1.0`。含 `x` 段的 `^` 按"缺省段视为 0、上界由最高非通配段决定"。
-    - `~`：`~1.2.3`/`~1.2`→`>=… <(minor+1).0.0` 修正为 `<major.(minor+1).0`；`~1`→`>=1.0.0 <2.0.0`。
+    - `~`（指定 minor → 锁 minor；仅 major → 锁 major）：`~1.2.3`→`>=1.2.3 <1.3.0`；`~1.2`→`>=1.2.0 <1.3.0`（上界 `<{major}.{minor+1}.0`）；`~1`→`>=1.0.0 <2.0.0`（上界 `<{major+1}.0.0`）；`~0.2.3`→`>=0.2.3 <0.3.0`。
     - `>=`/`>`/`<=`/`<`/`=`：解析运算符后对 partial 补齐为具体 SemVer（缺省段补 0），生成单个 `Comparator`。
     - x-range / 精确：`1.2.x`→`>=1.2.0 <1.3.0`；`1.x`→`>=1.0.0 <2.0.0`；`1.2.3`→`=1.2.3`（`Op::Eq`）。
   - 所有展开产出的 comparator 中，**上界 `<X.Y.Z`（无预发布）保持无预发布**，从而 `set_matches` 的预发布包含规则正确排除跨版本预发布。
@@ -1214,7 +1214,7 @@ Files:
 
 Why: 从 registry 拉 packument 元数据、按 SSRI 校验 tarball 完整性、解包 tgz。内置离线 mock registry 保证测试确定。
 
-Impact/Compatibility: 纯新增。SSRI 校验失败必须拒绝入库（安全边界）。
+Impact/Compatibility: 纯新增。**两条独立安全边界**：① SSRI 校验失败必须拒绝入库（证明字节 == registry 所发）；② tarball 解包必须防路径逃逸 + 拒绝链接条目（`extract_tgz` 三重守卫，见下）——SSRI **不覆盖**②，因为它只证明字节一致，恶意作者可发布 integrity 合法却含 `../` 逃逸路径或符号链接的 tarball（参照 node-tar CVE 系列）。二者缺一不可。
 
 Verification: `cargo nextest run -p wjsm-pm -E 'test(registry) | test(mock_registry)'`
 
@@ -1243,17 +1243,54 @@ Steps:
   }
 
   /// 解包 tgz 到目标目录，剥离顶层 "package/" 前缀（npm 约定）。
+  ///
+  /// 安全边界（独立于 SSRI —— SSRI 只证明"字节 == registry 所发"，**不防**恶意作者
+  /// 发布 integrity 合法却含逃逸路径的 tarball；tar-slip / 符号链接逃逸是另一条必须
+  /// 独立守卫的边界，参照 node-tar CVE 系列 + RUSTSEC-2026-0067）：
+  /// 1. **仅接受 `EntryType::Regular`/`Directory`**——符号链接、硬链接、设备、FIFO 一律
+  ///    **拒绝**（`bail!`，不是静默跳过：npm 包 CAS 归档不应含链接，出现即视为攻击/异常）。
+  ///    这杜绝"先 symlink 逃逸目录，再经该链接写外部文件"的两步攻击（CVE-2021-32803 族）。
+  /// 2. **逐组件校验**：strip `package/` 后的相对路径经 `sanitize_entry_path` 校验——
+  ///    拒绝绝对路径、`..`（`Component::ParentDir`）、盘符/根前缀（Windows 盘相对路径，
+  ///    CVE-2026-31802）；仅允许 `Normal` 组件。
+  /// 3. **落盘前复核**：`dest.join(rel)` 后再断言 `out` 仍以 `dest` 为前缀（纵深防御）。
   pub fn extract_tgz(bytes: &[u8], dest: &Path) -> Result<()> {
+      use tar::EntryType;
+      std::fs::create_dir_all(dest)?;
       let gz = flate2::read::GzDecoder::new(bytes);
       let mut ar = tar::Archive::new(gz);
       for entry in ar.entries()? {
           let mut entry = entry?;
+          let etype = entry.header().entry_type();
+          // 边界 1：仅常规文件 / 目录，链接与特殊文件一律拒绝。
+          match etype {
+              EntryType::Regular | EntryType::Directory | EntryType::GNULongName
+              | EntryType::GNULongLink | EntryType::XGlobalHeader | EntryType::XHeader => {}
+              EntryType::Symlink | EntryType::Link => {
+                  bail!("tarball 含链接条目（{etype:?}），拒绝解包（防符号/硬链接逃逸）");
+              }
+              other => bail!("tarball 含不支持的条目类型 {other:?}，拒绝解包"),
+          }
+          if matches!(etype, EntryType::GNULongName | EntryType::GNULongLink
+              | EntryType::XGlobalHeader | EntryType::XHeader) {
+              continue; // 元数据扩展头，无落盘内容
+          }
           let path = entry.path()?.to_path_buf();
-          let rel = path.strip_prefix("package").unwrap_or(&path);
+          let rel_raw = path.strip_prefix("package").unwrap_or(&path);
+          // 边界 2：逐组件校验，拒绝 `..`/绝对/盘符前缀。
+          let Some(rel) = sanitize_entry_path(rel_raw) else {
+              bail!("tarball 条目路径逃逸解包根: {}", rel_raw.display());
+          };
           if rel.as_os_str().is_empty() {
               continue;
           }
-          let out = dest.join(rel);
+          let out = dest.join(&rel);
+          // 边界 3：落盘前复核 out 仍在 dest 内（纵深防御）。
+          anyhow::ensure!(out.starts_with(dest), "解包路径逃逸: {}", out.display());
+          if matches!(etype, EntryType::Directory) {
+              std::fs::create_dir_all(&out)?;
+              continue;
+          }
           if let Some(parent) = out.parent() {
               std::fs::create_dir_all(parent)?;
           }
@@ -1262,6 +1299,22 @@ Steps:
           std::fs::write(&out, buf)?;
       }
       Ok(())
+  }
+
+  /// 逐组件校验相对路径安全：仅允许 `Normal` 组件；拒绝绝对路径、`..`、盘符/根前缀。
+  /// 返回归一化后的安全相对路径，或 None（发现逃逸组件）。
+  fn sanitize_entry_path(rel: &Path) -> Option<std::path::PathBuf> {
+      use std::path::Component;
+      let mut out = std::path::PathBuf::new();
+      for comp in rel.components() {
+          match comp {
+              Component::Normal(seg) => out.push(seg),
+              Component::CurDir => {}
+              // ParentDir / RootDir / Prefix（Windows 盘符）一律视为逃逸。
+              Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+          }
+      }
+      Some(out)
   }
 
   #[cfg(test)]
@@ -1300,6 +1353,60 @@ Steps:
           let _ = std::fs::remove_dir_all(&dest);
           extract_tgz(&gz, &dest).unwrap();
           assert_eq!(std::fs::read(dest.join("index.js")).unwrap(), b"export const x=1;");
+      }
+
+      #[test]
+      fn registry_extract_rejects_path_traversal() {
+          // 构造恶意 tgz：条目 package/../../../evil.txt（tar-slip）。
+          let mut tar_buf = Vec::new();
+          {
+              let mut b = tar::Builder::new(&mut tar_buf);
+              let content = b"PWNED";
+              let mut header = tar::Header::new_gnu();
+              header.set_size(content.len() as u64);
+              header.set_cksum();
+              // append_data 会把 `..` 组件保留进 header path。
+              b.append_data(&mut header, "package/../../../evil.txt", &content[..]).unwrap();
+              b.finish().unwrap();
+          }
+          let mut gz = Vec::new();
+          {
+              use std::io::Write;
+              let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::default());
+              enc.write_all(&tar_buf).unwrap();
+              enc.finish().unwrap();
+          }
+          let dest = std::env::temp_dir().join(format!("wjsm_pm_tgz_evil_{}", std::process::id()));
+          let _ = std::fs::remove_dir_all(&dest);
+          // 必须拒绝，且外部路径无残留。
+          assert!(extract_tgz(&gz, &dest).is_err(), "含 .. 的条目必须被拒绝");
+          assert!(!dest.parent().unwrap().parent().unwrap().join("evil.txt").exists());
+      }
+
+      #[test]
+      fn registry_extract_rejects_symlink_entry() {
+          // 构造含符号链接条目的 tgz，必须整体拒绝（防两步链接逃逸）。
+          let mut tar_buf = Vec::new();
+          {
+              let mut b = tar::Builder::new(&mut tar_buf);
+              let mut header = tar::Header::new_gnu();
+              header.set_entry_type(tar::EntryType::Symlink);
+              header.set_size(0);
+              header.set_link_name("/etc/passwd").unwrap();
+              header.set_cksum();
+              b.append_data(&mut header, "package/link", std::io::empty()).unwrap();
+              b.finish().unwrap();
+          }
+          let mut gz = Vec::new();
+          {
+              use std::io::Write;
+              let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::default());
+              enc.write_all(&tar_buf).unwrap();
+              enc.finish().unwrap();
+          }
+          let dest = std::env::temp_dir().join(format!("wjsm_pm_tgz_link_{}", std::process::id()));
+          let _ = std::fs::remove_dir_all(&dest);
+          assert!(extract_tgz(&gz, &dest).is_err(), "符号链接条目必须被拒绝");
       }
   }
   ```
@@ -2323,6 +2430,7 @@ Steps:
 - **前置 #312 未合并**：P5 阻塞。缓解：P1–P4 完全独立可先交付；P5 首步前置检查。
 - **SQLite 并发写 / 中断原子性**：WAL 单写多读；写路径 CLI 层 `spawn_blocking` 隔离；整包写入包在单事务内（任务 1.5），中断回滚；孤儿 blob 由 `store gc`（任务 1.5b）标记-复制回收。缓解：任务 1.4 用 WAL；install 串行写 + store 级文件锁。
 - **默认 Vfs 破坏现有行为**（关键）：resolver 全部 fs 谓词（含 12 处 `canonicalize`）改经 Vfs，`FsVfs` 须与原 `std::fs`/`Path` 调用语义逐处等价。缓解：任务 1.6 硬验收 `cargo nextest run --workspace` 全绿 + `FsVfs::canonicalize` 与 `Path::canonicalize` 对照单测。
+- **tarball 解包路径逃逸 / 链接逃逸**（安全）：解包 registry tarball 时，恶意作者可发布 integrity 合法却含 `../` 逃逸路径或符号/硬链接的 tarball（node-tar CVE 系列 CVE-2021-32803/CVE-2026-24842、RUSTSEC-2026-0067）——SSRI **不覆盖**此面。缓解：任务 2.2 `extract_tgz` 三重守卫（逐组件拒 `..`/绝对/盘符前缀 + 拒链接与特殊条目 + 落盘前复核前缀），配 `registry_extract_rejects_path_traversal` / `registry_extract_rejects_symlink_entry` 两测试硬验收；`tar` 依赖锁 `>=0.4.45`（含 RUSTSEC-2026-0067 修复）。**不**用手写 `dest.join` 裸循环（原计划硬伤）。
 
 ## Retirement
 

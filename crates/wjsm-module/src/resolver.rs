@@ -76,7 +76,7 @@ pub struct ModuleResolver {
     modules: HashMap<ModuleId, ResolvedModule>,
 }
 
-enum ResolvedSpecifier {
+pub(crate) enum ResolvedSpecifier {
     Builtin(&'static builtin_modules::BuiltinModule),
     Path(PathBuf),
 }
@@ -126,7 +126,7 @@ impl ModuleResolver {
         self.resolve_specifier_with_conditions(specifier, parent, self.options.conditions())
     }
 
-    fn resolve_specifier_with_kind(
+    pub(crate) fn resolve_specifier_with_kind(
         &self,
         specifier: &str,
         parent: &Path,
@@ -183,7 +183,7 @@ impl ModuleResolver {
         self.resolve_mapped_file_or_directory(&resolved, specifier, parent)
     }
 
-    fn is_bare_specifier(specifier: &str) -> bool {
+    pub(crate) fn is_bare_specifier(specifier: &str) -> bool {
         !specifier.starts_with('.')
     }
 
@@ -350,7 +350,7 @@ impl ModuleResolver {
         }
     }
 
-    fn find_nearest_package(&self, start: &Path) -> Result<Option<PackageInfo>> {
+    pub(crate) fn find_nearest_package(&self, start: &Path) -> Result<Option<PackageInfo>> {
         let start_dir = if start.is_dir() {
             start
         } else {
@@ -970,14 +970,13 @@ impl ModuleResolver {
             })
             .collect()
     }
-    /// 从 AST 中提取动态 import() 的 specifier
+    /// 从 AST 中提取静态可预解析的动态 import() specifier。
     ///
-    /// 遍历 AST 中所有 CallExpr，检测 Callee::Import 的调用，
-    /// 提取静态可分析的 specifier 字符串。
+    /// 运行时表达式 import(expr) 由 runtime loader 处理；resolver 只收集能形成
+    /// AOT 图边的静态字符串，不能再把表达式路径当作编译期错误。
     /// - 字符串字面量 → 直接提取
     /// - 无插值模板字符串 → 静态求值
-    /// - 有插值模板字符串 → 编译报错
-    /// - 其他表达式类型 → 编译报错
+    /// - 其他表达式 / 有插值模板 → 跳过；语义层会降级到运行时路径
     pub fn extract_dynamic_imports(module: &ast::Module) -> Result<Vec<String>> {
         let mut specifiers = Vec::new();
         for item in &module.body {
@@ -1139,10 +1138,15 @@ impl ModuleResolver {
     ) -> Result<()> {
         match expr {
             ast::Expr::Call(call) => {
-                // 检测 import() 调用
+                // 检测 import() 调用；只有静态 specifier 形成 AOT 图边。
                 if matches!(call.callee, ast::Callee::Import(_)) {
-                    let specifier = Self::extract_import_call_specifier(call)?;
-                    specifiers.push(specifier);
+                    if let Some(specifier) = Self::extract_import_call_specifier(call)? {
+                        specifiers.push(specifier);
+                    } else {
+                        for arg in &call.args {
+                            Self::extract_dynamic_imports_from_expr(&arg.expr, specifiers)?;
+                        }
+                    }
                 } else {
                     // 递归进入被调用者和参数
                     if let ast::Callee::Expr(callee_expr) = &call.callee {
@@ -1307,38 +1311,26 @@ impl ModuleResolver {
         Ok(())
     }
 
-    fn extract_import_call_specifier(call: &ast::CallExpr) -> Result<String> {
+    fn extract_import_call_specifier(call: &ast::CallExpr) -> Result<Option<String>> {
         let first_arg = call.args.first().ok_or_else(|| {
-            anyhow::anyhow!(
-                "import() requires a module specifier; \
-                 in AOT compilation mode, only string literal specifiers are supported"
-            )
+            anyhow::anyhow!("import() requires a module specifier")
         })?;
 
         match first_arg.expr.as_ref() {
-            ast::Expr::Lit(ast::Lit::Str(s)) => Ok(s.value.to_string_lossy().into_owned()),
+            ast::Expr::Lit(ast::Lit::Str(s)) => Ok(Some(s.value.to_string_lossy().into_owned())),
             ast::Expr::Tpl(tpl) => {
                 if tpl.exprs.is_empty() {
-                    // 无插值的模板字符串：静态求值
+                    // 无插值的模板字符串：静态求值。
                     let mut result = String::new();
                     for quasi in &tpl.quasis {
                         result.push_str(&quasi.raw);
                     }
-                    Ok(result)
+                    Ok(Some(result))
                 } else {
-                    bail!(
-                        "import() with template literal containing expressions is not supported; \
-                         AOT compilation requires the specifier to be a static string literal"
-                    )
+                    Ok(None)
                 }
             }
-            _ => {
-                bail!(
-                    "import() requires a string literal specifier; \
-                     AOT compilation cannot resolve dynamic specifiers at compile time. \
-                     Use a string literal like import('./module.js') instead"
-                )
-            }
+            _ => Ok(None),
         }
     }
     /// 检测 TypeScript 特有模块语法；不支持时返回明确错误（避免静默丢弃）

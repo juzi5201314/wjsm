@@ -35,16 +35,17 @@ const ENV_GLOBAL_EXPORT_NAMES: &[&str] = &[
 
 impl Compiler {
     pub(crate) fn push_func_table(&mut self, wasm_idx: u32) {
-        let table_pos = self.function_table.len() as u32;
+        let table_pos = self.table_base + self.function_table.len() as u32;
         self.function_table_reverse.insert(wasm_idx, table_pos);
         self.function_table.push(wasm_idx);
     }
 
-    pub(crate) fn new(mode: CompileMode) -> Self {
-        Self::new_with_data_base(mode, 0)
-    }
 
     pub(crate) fn new_with_data_base(mode: CompileMode, data_base: u32) -> Self {
+        Self::new_with_layout(mode, data_base, 0)
+    }
+
+    pub(crate) fn new_with_layout(mode: CompileMode, data_base: u32, table_base: u32) -> Self {
         let types = crate::shared_types::build_shared_type_section();
         let mut imports = ImportSection::new();
         for spec in host_import_specs() {
@@ -241,6 +242,7 @@ impl Compiler {
             builtin_func_indices,
             special_host_import_indices,
             function_table: Vec::new(),
+            table_base,
             function_table_reverse: HashMap::new(),
             function_name_to_wasm_idx: HashMap::new(),
             obj_new_func_idx: 0,

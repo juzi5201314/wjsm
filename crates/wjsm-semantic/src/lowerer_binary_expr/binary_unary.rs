@@ -48,8 +48,16 @@ impl Lowerer {
     /// 表达式位置的异常检查分叉在 async / async-generator 函数体内会破坏其状态机的
     /// 基本块枚举与续延结构，故此类分叉仅在普通（非状态机）函数体及顶层代码中插入。
     /// async 函数体内的同步抛出沿用原有 promise rejection 路径（不在此处理）。
+    /// 动态 import(expr) 等规范拥有者会临时压制此分叉，让 TAG_EXCEPTION 作为表达式值
+    /// 流向 owning host builtin，由它创建 Promise rejection。
     pub(crate) fn expr_exception_fork_allowed(&self) -> bool {
-        !self.is_async_fn && !self.is_async_generator_fn
+        self.exception_fork_suppression_depth == 0
+            && !self.is_async_fn
+            && !self.is_async_generator_fn
+    }
+
+    pub(crate) fn exception_fork_suppressed(&self) -> bool {
+        self.exception_fork_suppression_depth != 0
     }
 }
 
@@ -67,7 +75,57 @@ impl Lowerer {
             }
             *block = next;
         }
+        if self.exception_fork_suppressed() && self.expr_can_throw(expr) {
+            *block = self.defer_value_exception_branch(*block, value);
+        }
         Ok(value)
+    }
+
+    pub(crate) fn lower_expr_collecting_exception_forks_then_continue(
+        &mut self,
+        expr: &swc_ast::Expr,
+        block: &mut BasicBlockId,
+    ) -> Result<(ValueId, Vec<(BasicBlockId, ValueId)>), LoweringError> {
+        self.exception_fork_suppression_depth += 1;
+        self.deferred_exception_forks_stack.push(Vec::new());
+        let result = self.lower_expr_then_continue(expr, block);
+        let forks = self
+            .deferred_exception_forks_stack
+            .pop()
+            .expect("exception fork collection frame");
+        self.exception_fork_suppression_depth -= 1;
+        result.map(|value| (value, forks))
+    }
+
+    fn defer_value_exception_branch(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> BasicBlockId {
+        let working_block = self.resolve_store_block(block);
+        let is_exception = self.alloc_value();
+        self.current_function.append_instruction(
+            working_block,
+            Instruction::IsException {
+                dest: is_exception,
+                value,
+            },
+        );
+        let continue_block = self.current_function.new_block();
+        let abrupt_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            working_block,
+            Terminator::Branch {
+                condition: is_exception,
+                true_block: abrupt_block,
+                false_block: continue_block,
+            },
+        );
+        self.deferred_exception_forks_stack
+            .last_mut()
+            .expect("exception fork collection frame")
+            .push((abrupt_block, value));
+        continue_block
     }
 
     pub(crate) fn lower_binary(

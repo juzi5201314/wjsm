@@ -198,7 +198,12 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::PerformanceNow => Self::PerformanceNow,
             NativeCallable::OsInfo { kind: _ } => Self::OsInfo,
             NativeCallable::FsMethod { kind: _ } => Self::FsMethod,
-            NativeCallable::CryptoMethod { .. }
+            NativeCallable::CjsRequire { .. }
+            | NativeCallable::CjsRequireResolve { .. }
+            | NativeCallable::CjsRequireResolvePaths { .. }
+            | NativeCallable::ImportMetaResolve { .. }
+            | NativeCallable::CjsRequireCacheTrap { .. }
+            | NativeCallable::CryptoMethod { .. }
             | NativeCallable::CryptoDigestMethod { .. }
             | NativeCallable::StringPrimitiveMethod { .. }
             | NativeCallable::BufferStatic { .. }

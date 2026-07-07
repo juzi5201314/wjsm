@@ -481,9 +481,34 @@ impl OsInfoKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CjsRequireCacheTrapKind {
+    Get,
+    Has,
+    DeleteProperty,
+    OwnKeys,
+    GetOwnPropertyDescriptor,
+}
+
 #[derive(Clone)]
 pub(crate) enum NativeCallable {
     EvalIndirect,
+
+    CjsRequire {
+        referrer: crate::RuntimeModuleReferrer,
+    },
+    CjsRequireResolve {
+        referrer: crate::RuntimeModuleReferrer,
+    },
+    CjsRequireResolvePaths {
+        referrer: crate::RuntimeModuleReferrer,
+    },
+    ImportMetaResolve {
+        referrer: crate::RuntimeModuleReferrer,
+    },
+    CjsRequireCacheTrap {
+        kind: CjsRequireCacheTrapKind,
+    },
 
     /// raw bigint handle 上 `n.toString(radix)` / `valueOf`；`method`: 0=toString, 1=valueOf
     BigIntPrimitiveMethod {

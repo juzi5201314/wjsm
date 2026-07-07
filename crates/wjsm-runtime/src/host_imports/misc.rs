@@ -38,17 +38,17 @@ pub(crate) fn define_misc(
     linker.define(&mut store, "env", "queue_microtask", queue_microtask_fn)?;
 
     // ── Import 146: register_module_namespace(i64, i64) -> () ──────────────
-    // 将模块命名空间对象注册到运行时缓存
+    // 静态 dynamic import 快路径也写入 registry，避免旧 ModuleId cache 成为第二 owner。
     let register_module_namespace_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, module_id: i64, namespace_obj: i64| {
             let mid = module_id as u32;
-            let mut cache = caller
+            let mut registry = caller
                 .data()
-                .module_namespace_cache
+                .module_registry
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            cache.insert(mid, namespace_obj);
+            registry.register_static_namespace(mid, namespace_obj);
         },
     );
     linker.define(
@@ -82,14 +82,14 @@ pub(crate) fn define_misc(
             let _ = define_host_data_property_from_caller(&mut caller, promise, "then", then_fn);
             let _ = define_host_data_property_from_caller(&mut caller, promise, "catch", catch_fn);
 
-            // 从缓存查找命名空间对象
+            // 从 registry 查找命名空间对象；未迁移的静态目标通过过渡 key 进入同一 owner。
             let namespace_obj = {
-                let cache = caller
+                let registry = caller
                     .data()
-                    .module_namespace_cache
+                    .module_registry
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                cache.get(&mid).copied()
+                registry.get_namespace_by_module_id(mid)
             };
 
             match namespace_obj {

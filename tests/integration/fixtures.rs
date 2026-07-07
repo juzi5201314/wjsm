@@ -30,6 +30,107 @@ fn modules_respects_explicit_root_flag() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn modules__runtime_loading__cjs_computed_require() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/cjs_computed_require/main")
+}
+
+#[test]
+fn modules__runtime_loading__esm_dynamic_import_variable() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/esm_dynamic_import_variable/main")
+}
+
+#[test]
+fn modules__runtime_loading__cjs_try_optional_missing() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/cjs_try_optional_missing/main")
+}
+
+#[test]
+fn modules__runtime_loading__cjs_require_json() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/cjs_require_json/main")
+}
+
+#[test]
+fn modules__runtime_loading__cjs_require_cache_delete() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/cjs_require_cache_delete/main")
+}
+
+#[test]
+fn modules__runtime_loading__cjs_circular_partial_exports() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/cjs_circular_partial_exports/main")
+}
+
+#[test]
+fn modules__runtime_loading__require_resolve_paths() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/require_resolve_paths/main")
+}
+
+#[test]
+fn modules__runtime_loading__esm_dynamic_import_json_rejected() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/esm_dynamic_import_json_rejected/main")
+}
+
+#[test]
+fn modules__runtime_loading__cjs_errored_cache_delete_retry() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/cjs_errored_cache_delete_retry/main")
+}
+
+#[test]
+fn modules__runtime_loading__rejects_runtime_ts_tsx_jsx() -> Result<()> {
+    for extension in ["ts", "tsx", "jsx"] {
+        assert_runtime_loader_rejects_extension(extension)?;
+    }
+    Ok(())
+}
+
+fn assert_runtime_loader_rejects_extension(extension: &str) -> Result<()> {
+    let root = unique_temp_dir(&format!("wjsm_runtime_reject_{extension}"));
+    fs::create_dir_all(&root)?;
+    let entry = root.join("main.js");
+    let dep = root.join(format!("dep.{extension}"));
+    fs::write(
+        &entry,
+        format!(
+            concat!(
+                "const ext = '{extension}';\n",
+                "try {{\n",
+                "  require('./dep.' + ext);\n",
+                "  console.log('not rejected');\n",
+                "}} catch (e) {{\n",
+                "  console.log(e.message.indexOf('runtime loader does not compile TypeScript/JSX modules') !== -1);\n",
+                "  console.log(e.message.indexOf('dep.{extension}') !== -1);\n",
+                "  console.log(e.message.indexOf('Cannot find module') === -1);\n",
+                "}}\n",
+            ),
+            extension = extension,
+        ),
+    )?;
+    fs::write(&dep, "export const value = 1;\n")?;
+
+    let output = Command::new(resolve_binary_path())
+        .arg("run")
+        .arg(&entry)
+        .arg("--root")
+        .arg(&root)
+        .output()?;
+
+    let stdout = normalized_stdout(&output);
+    let stderr = normalized_stderr(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert_eq!(stdout, "true\ntrue\ntrue\n");
+    assert!(stderr.is_empty());
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn run_accepts_non_utf8_file_path() -> Result<()> {

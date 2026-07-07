@@ -25,6 +25,7 @@ mod cli_config;
 mod cli_lint;
 mod ir_output;
 
+mod runtime_loader;
 use cli_args::*;
 use cli_config::parse_cli;
 use cli_lint::lint_module;
@@ -71,7 +72,15 @@ fn runtime_options_for_file(
     };
     let env = runtime_env_snapshot();
     let sandbox = fs_sandbox_for_file(input, root, &env);
-    runtime_options_with_script(cli, script, script_args, env, sandbox)
+    let module_loader = runtime_module_loader_for_file(
+        input,
+        root,
+        &sandbox,
+        module_resolution_options(cli),
+    )?;
+    let mut options = runtime_options_with_script(cli, script, script_args, env, sandbox)?;
+    options.module_loader = module_loader;
+    Ok(options)
 }
 
 fn runtime_options_for_inline(
@@ -124,6 +133,43 @@ fn runtime_options_with_argv(
         fs_allow_write_anywhere: sandbox.allow_write_anywhere,
         ..runtime::RuntimeOptions::default()
     })
+}
+
+fn runtime_module_loader_for_file(
+    input: &Path,
+    root: Option<&Path>,
+    sandbox: &FsSandbox,
+    resolution_options: wjsm_module::ResolutionOptions,
+) -> Result<Option<std::sync::Arc<dyn runtime::RuntimeModuleLoader>>> {
+    if path_is_stdin(input) {
+        return Ok(None);
+    }
+    let root = runtime_loader_root(input, root)?;
+    Ok(Some(std::sync::Arc::new(
+        runtime_loader::CliRuntimeModuleLoader::new(
+            root,
+            sandbox.read_roots.clone(),
+            resolution_options,
+        ),
+    )))
+}
+
+fn runtime_loader_root(input: &Path, root: Option<&Path>) -> Result<PathBuf> {
+    if let Some(root) = root {
+        return root
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize runtime loader root '{}'", root.display()));
+    }
+    let input = input.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize '{}' for runtime module loader",
+            input.display()
+        )
+    })?;
+    input
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("cannot infer runtime module root from '{}'", input.display()))
 }
 
 fn wjsm_argv0() -> String {
@@ -2176,6 +2222,12 @@ fn runtime_options_for_in_process(
 
     let gc_algorithm = runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?;
     let sandbox = fs_sandbox_for_in_process(input, &env, cwd_override);
+    let module_loader = runtime_module_loader_for_file(
+        input,
+        None,
+        &sandbox,
+        wjsm_module::ResolutionOptions::default(),
+    )?;
 
     Ok(runtime::RuntimeOptions {
         max_heap_size: None,
@@ -2192,6 +2244,7 @@ fn runtime_options_for_in_process(
         fs_read_roots: sandbox.read_roots,
         fs_write_roots: sandbox.write_roots,
         fs_allow_write_anywhere: sandbox.allow_write_anywhere,
+        module_loader,
         ..runtime::RuntimeOptions::default()
     })
 }

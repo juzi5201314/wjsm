@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+first:error:true
+true
+true
+second:error:true
+true
+1
+true
+retry:loaded:ok-after-retry
+ok-after-retry
+true
+2
+true
+--- stderr ---

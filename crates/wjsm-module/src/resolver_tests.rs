@@ -1,4 +1,8 @@
 use super::*;
+use crate::{
+    RuntimeModuleFormat, RuntimeModuleKey, RuntimeResolveKind, RuntimeResolvePaths,
+    resolve_runtime_paths, resolve_runtime_specifier,
+};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -755,6 +759,167 @@ fn node_prefix_still_resolves_builtin_without_node_modules() {
 }
 
 #[test]
+fn runtime_resolve_relative_file_returns_file_key() {
+    let root = create_temp_project("runtime_relative_file");
+    write_type_module_package(&root);
+    write_file(&root, "src/main.js", "import './dep.js';\n");
+    write_file(&root, "src/dep.js", "export const value = 1;\n");
+    let dep_path = root
+        .join("src/dep.js")
+        .canonicalize()
+        .expect("dep path should canonicalize");
+
+    let resolved = resolve_runtime_specifier(
+        "./dep.js",
+        &root.join("src/main.js"),
+        &root,
+        &ResolutionOptions::default(),
+        RuntimeResolveKind::Import,
+    )
+    .expect("relative runtime import should resolve");
+
+    assert_eq!(resolved.key, RuntimeModuleKey::File(dep_path.clone()));
+    assert_eq!(resolved.path.as_deref(), Some(dep_path.as_path()));
+    assert_eq!(resolved.format, RuntimeModuleFormat::Esm);
+    assert_eq!(resolved.url, url::Url::from_file_path(&dep_path).unwrap().to_string());
+}
+
+#[test]
+fn runtime_resolve_json_file_returns_json_key() {
+    let root = create_temp_project("runtime_json_file");
+    write_file(&root, "main.cjs", "require('./config.json');\n");
+    write_file(&root, "config.json", r#"{"value":1}"#);
+    let json_path = root
+        .join("config.json")
+        .canonicalize()
+        .expect("json path should canonicalize");
+
+    let resolved = resolve_runtime_specifier(
+        "./config.json",
+        &root.join("main.cjs"),
+        &root,
+        &ResolutionOptions::default(),
+        RuntimeResolveKind::Require,
+    )
+    .expect("json require should resolve");
+
+    assert_eq!(resolved.key, RuntimeModuleKey::Json(json_path.clone()));
+    assert_eq!(resolved.path.as_deref(), Some(json_path.as_path()));
+    assert_eq!(resolved.format, RuntimeModuleFormat::Json);
+    assert_eq!(resolved.url, url::Url::from_file_path(&json_path).unwrap().to_string());
+}
+
+#[test]
+fn runtime_resolve_package_uses_require_condition() {
+    let root = create_temp_project("runtime_require_condition");
+    write_file(&root, "main.cjs", "require('pkg');\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"exports":{".":{"import":"./esm.mjs","require":"./cjs.cjs","default":"./default.js"}}}"#,
+    );
+    write_file(&root, "node_modules/pkg/esm.mjs", "export const value = 'esm';\n");
+    write_file(&root, "node_modules/pkg/cjs.cjs", "module.exports = 'cjs';\n");
+    write_file(&root, "node_modules/pkg/default.js", "export default 'default';\n");
+
+    let resolved = resolve_runtime_specifier(
+        "pkg",
+        &root.join("main.cjs"),
+        &root,
+        &ResolutionOptions::default(),
+        RuntimeResolveKind::Require,
+    )
+    .expect("runtime require should resolve package");
+
+    assert!(resolved.path.as_deref().unwrap().ends_with(Path::new("node_modules/pkg/cjs.cjs")));
+    assert_eq!(resolved.format, RuntimeModuleFormat::CommonJs);
+}
+
+#[test]
+fn runtime_resolve_import_meta_uses_import_condition() {
+    let root = create_temp_project("runtime_import_condition");
+    write_type_module_package(&root);
+    write_file(&root, "main.js", "import.meta.resolve('pkg');\n");
+    write_file(
+        &root,
+        "node_modules/pkg/package.json",
+        r#"{"exports":{".":{"import":"./esm.mjs","require":"./cjs.cjs","default":"./default.js"}}}"#,
+    );
+    write_file(&root, "node_modules/pkg/esm.mjs", "export const value = 'esm';\n");
+    write_file(&root, "node_modules/pkg/cjs.cjs", "module.exports = 'cjs';\n");
+    write_file(&root, "node_modules/pkg/default.js", "export default 'default';\n");
+
+    let resolved = resolve_runtime_specifier(
+        "pkg",
+        &root.join("main.js"),
+        &root,
+        &ResolutionOptions::default(),
+        RuntimeResolveKind::Import,
+    )
+    .expect("import.meta.resolve should use import conditions");
+
+    assert!(resolved.path.as_deref().unwrap().ends_with(Path::new("node_modules/pkg/esm.mjs")));
+    assert_eq!(resolved.format, RuntimeModuleFormat::Esm);
+}
+
+#[test]
+fn runtime_resolve_builtin_returns_builtin_key() {
+    let root = create_temp_project("runtime_builtin");
+    write_file(&root, "main.js", "import 'node:path';\n");
+
+    let resolved = resolve_runtime_specifier(
+        "node:path",
+        &root.join("main.js"),
+        &root,
+        &ResolutionOptions::default(),
+        RuntimeResolveKind::Import,
+    )
+    .expect("builtin should resolve");
+
+    assert_eq!(resolved.key, RuntimeModuleKey::Builtin("node:path".to_string()));
+    assert_eq!(resolved.path, None);
+    assert_eq!(resolved.url, "node:path");
+    assert_eq!(resolved.format, RuntimeModuleFormat::Builtin);
+}
+
+#[test]
+fn resolve_paths_for_bare_package_lists_node_modules_parents() {
+    let root = create_temp_project("runtime_resolve_paths_bare");
+    let parent = root.join("packages/app/src/main.js");
+
+    let paths = resolve_runtime_paths("pkg", &parent, &root);
+
+    assert_eq!(
+        paths,
+        RuntimeResolvePaths::Search(vec![
+            root.join("packages/app/src/node_modules"),
+            root.join("packages/app/node_modules"),
+            root.join("packages/node_modules"),
+            root.join("node_modules"),
+        ])
+    );
+}
+
+#[test]
+fn resolve_paths_for_relative_returns_null_marker() {
+    let root = create_temp_project("runtime_resolve_paths_null");
+    let parent = root.join("src/main.js");
+
+    assert_eq!(
+        resolve_runtime_paths("./dep.js", &parent, &root),
+        RuntimeResolvePaths::Null
+    );
+    assert_eq!(
+        resolve_runtime_paths(&root.join("src/dep.js").display().to_string(), &parent, &root),
+        RuntimeResolvePaths::Null
+    );
+    assert_eq!(
+        resolve_runtime_paths("node:path", &parent, &root),
+        RuntimeResolvePaths::Null
+    );
+}
+
+#[test]
 fn resolve_rejects_path_outside_root() {
     let root = create_temp_project("outside_root");
     let outside = create_temp_project("outside_root_sibling");
@@ -1373,4 +1538,44 @@ fn resolve_rejects_ts_export_assignment() {
         "unexpected error: {}",
         err
     );
+}
+
+fn extracted_dynamic_imports(source: &str) -> Vec<String> {
+    let module = wjsm_parser::parse_module(source).expect("source should parse");
+    ModuleResolver::extract_dynamic_imports(&module).expect("dynamic import extraction should succeed")
+}
+
+#[test]
+fn dynamic_import_expression_is_runtime_not_resolver_diagnostic() {
+    let specifiers = extracted_dynamic_imports("const path = './dep.js'; import(path);\n");
+
+    assert!(
+        specifiers.is_empty(),
+        "runtime expression import must not create AOT graph edges: {specifiers:?}"
+    );
+}
+
+#[test]
+fn dynamic_import_template_expression_is_runtime_not_resolver_diagnostic() {
+    let specifiers = extracted_dynamic_imports("const name = 'dep'; import(`./${name}.js`);\n");
+
+    assert!(
+        specifiers.is_empty(),
+        "template expression import must not create AOT graph edges: {specifiers:?}"
+    );
+}
+
+#[test]
+fn dynamic_import_static_literal_still_creates_graph_edge() {
+    let specifiers = extracted_dynamic_imports("import('./dep.js'); import(`./other.js`);\n");
+
+    assert_eq!(specifiers, vec!["./dep.js", "./other.js"]);
+}
+
+#[test]
+fn dynamic_import_without_specifier_still_reports_malformed_call() {
+    let error = wjsm_parser::parse_module("import();\n")
+        .expect_err("zero-argument import() should remain malformed");
+
+    assert!(error.to_string().contains("exactly one or two arguments"));
 }

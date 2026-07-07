@@ -3,6 +3,7 @@ mod async_fn;
 mod async_generator;
 mod generator;
 mod misc;
+mod modules;
 mod promise;
 mod promise_combinators;
 mod proxy_reflect;
@@ -13,6 +14,11 @@ pub(crate) use async_fn::define_async_fn;
 pub(crate) use async_generator::define_async_generator;
 pub(crate) use generator::define_generator;
 pub(crate) use misc::define_misc;
+pub(crate) use modules::{
+    call_cjs_require, call_cjs_require_async, call_cjs_require_cache_trap,
+    call_cjs_require_resolve, call_cjs_require_resolve_paths, call_import_meta_resolve,
+    cjs_require_property, cjs_require_resolve_property, define_modules,
+};
 pub(crate) use promise::define_promise;
 pub(crate) use promise_combinators::define_promise_combinators;
 pub(crate) use proxy_reflect::define_proxy_reflect;

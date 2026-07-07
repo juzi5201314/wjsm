@@ -694,13 +694,19 @@ pub(super) async fn setup_shared_env_and_support(
         .await
         .map_err(|e| anyhow::anyhow!("support module instantiate failed: {:?}", e))?;
 
-    // 把 support module 的 12 个 helper exports 注册到 "wjsm_support" namespace
+    let mut support_exports = Vec::with_capacity(wjsm_runtime_support::abi::SUPPORT_EXPORTS.len());
     for export_name in wjsm_runtime_support::abi::SUPPORT_EXPORTS {
         let export = support_instance
             .get_export(&mut *store, export_name)
             .ok_or_else(|| anyhow::anyhow!("support module missing export: {}", export_name))?;
-        linker.define(&*store, "wjsm_support", export_name, export)?;
+        linker.define(&*store, "wjsm_support", export_name, export.clone())?;
+        support_exports.push((*export_name, export));
     }
+    *store
+        .data()
+        .support_exports
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = support_exports;
 
     Ok(())
 }

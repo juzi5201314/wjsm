@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+computed-cjs-loaded
+true
+--- stderr ---

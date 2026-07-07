@@ -168,8 +168,28 @@ pub(super) fn register_common_bridges(
                     .unwrap_or_else(|e| e.into_inner());
                 table.get(idx).cloned()
             };
-            if matches!(record, Some(NativeCallable::ProcessHrtime)) && prop_name == "bigint" {
-                return create_native_callable(caller.data(), NativeCallable::ProcessHrtimeBigint);
+            match &record {
+                Some(NativeCallable::ProcessHrtime) if prop_name == "bigint" => {
+                    return create_native_callable(
+                        caller.data(),
+                        NativeCallable::ProcessHrtimeBigint,
+                    );
+                }
+                Some(NativeCallable::CjsRequire { referrer }) => {
+                    if let Some(value) =
+                        cjs_require_property(&mut caller, referrer.clone(), prop_name)
+                    {
+                        return value;
+                    }
+                }
+                Some(NativeCallable::CjsRequireResolve { referrer }) => {
+                    if let Some(value) =
+                        cjs_require_resolve_property(&mut caller, referrer.clone(), prop_name)
+                    {
+                        return value;
+                    }
+                }
+                _ => {}
             }
             if prop_name != "prototype" {
                 if matches!(record, Some(NativeCallable::BufferConstructor)) {
@@ -270,6 +290,7 @@ pub(super) fn register_linker(
     define_promise(linker, store)?;
     define_promise_combinators(linker, store)?;
     define_misc(linker, store)?;
+    define_modules(linker, store)?;
     define_async_fn(linker, store)?;
     define_async_generator(linker, store)?;
     define_generator(linker, store)?;

@@ -2,6 +2,7 @@
 // 将多个模块编译为单一 WASM 二进制
 
 mod builtin_modules;
+mod cjs_require_analysis;
 mod bundler;
 pub mod cjs_transform;
 mod exports;
@@ -10,13 +11,18 @@ mod module_format;
 mod package_json;
 mod resolution_options;
 mod resolver;
+mod runtime_resolution;
 mod semantic;
 use swc_core::ecma::ast;
 
-pub use bundler::ModuleBundler;
+pub use bundler::{ModuleBundler, RuntimeEntryBundle};
 pub use graph::{ModuleGraph, ModuleId};
 pub use resolution_options::ResolutionOptions;
 pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
+pub use runtime_resolution::{
+    RuntimeModuleFormat, RuntimeModuleKey, RuntimeResolveKind, RuntimeResolvePaths,
+    RuntimeResolvedModule, resolve_runtime_paths, resolve_runtime_specifier,
+};
 pub use semantic::{ModuleLinkResult, analyze_module_links};
 
 use anyhow::{Context, Result};
@@ -35,6 +41,16 @@ pub fn lower_bundle_with_options(
 ) -> Result<wjsm_ir::Program> {
     let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
     bundler.lower_bundle(entry)
+}
+
+/// Lowers a runtime-loaded entry module and creates a namespace for that entry.
+pub fn lower_runtime_entry_bundle_with_options(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+) -> Result<RuntimeEntryBundle> {
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
+    bundler.lower_runtime_entry_bundle(entry)
 }
 
 /// 解析入口模块 AST（用于 dump-ast 等，会构建依赖图）
