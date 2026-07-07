@@ -67,11 +67,11 @@ Facts（已核对代码）:
 Assumptions:
 
 - issue #312 在 P5 开工时已合并，提供分离编译 loader 与 multi-instance shared-env（P5 任务假设其存在；若未合并，P5 阻塞，P1–P4 不受影响）。
-- `pubgrub` crate 版本支持自定义 `Version`/`VersionSet`（用于 npm SemVer 语义）。任务 2.2 首步验证其 trait 形态并锁定版本。
+- `pubgrub` crate（**0.4**，MSRV 1.92 / edition 2024，与本 workspace 一致；0.3 起为翻转式重写，引入 `get_dependencies`/`prioritize` + 关联类型 `P`/`V`/`VS`/`M`/`Priority`/`Err`，本计划 task 2.3 代码即按此形态写）支持自定义 `V`/`VS`（用于 npm SemVer 语义）。版本区间类型 `Ranges` 在 0.3+ 已拆到独立 crate `version-ranges`——但本计划**不用**其内置 `Ranges`，而是自定义 `VersionSet`（`solver/npm_semver.rs` 的 `Range`）承载 npm 语义，故不依赖 `version-ranges`。
 
 Unknowns（计划内解决）:
 
-- pubgrub crate 的确切 API 形态（`DependencyProvider` trait 签名）→ 任务 2.2 首步 spike 锁定。
+- pubgrub 0.4 `DependencyProvider` 的确切关联类型默认值与 `Dependencies::Unavailable(M)` 形态（web 已确认 0.3=0.4 trait 一致：`prioritize`+`choose_version`+`get_dependencies`，`M` 为自定义不可用原因类型）→ 任务 2.3 首步 spike 用本地 `cargo doc` 复核并锁定 `M`/`Priority` 具体类型。
 - 可重定位 IR 重定位表需覆盖的引用种类完整清单 → 任务 5.1 首步用等价性快照测试驱动发现。
 
 ## BaselineUsageDraft
@@ -80,7 +80,7 @@ Unknowns（计划内解决）:
 - Delivered context refs：pnpm/yarn/bun/deno 机制研究（DeepWiki，已在 spec §1）。
 - Acknowledged before plan refs：以上全部已在写计划前读取核对（Facts 段为证）。
 - Cited in plan refs：见各任务 Files/Why。
-- Missing refs：pubgrub crate API（任务 2.2 spike）、可重定位引用完整清单（任务 5.1 快照驱动）。
+- Missing refs：pubgrub 0.4 `DependencyProvider` 的 `M`/`Priority` 具体默认类型（任务 2.3 spike 编译期复核；trait 形态已由 web 调研确认）、可重定位引用完整清单（任务 5.1 快照驱动）。
 - Decision：continue。
 
 ## Files（owner 边界）
@@ -122,7 +122,7 @@ tests/mock_registry.rs      # 内置离线 mock registry 测试辅助
 - Owner / contract / retirement：owner 清晰（新 crate + trait 契约）；无删除现有主路径（new-capability）。
 - Architecture integrity / higher-level path：Overlay/Vfs 抽象即最高层简化，已采纳。
 - Verification scope：每阶段独立 nextest 目标 + 全量回归 + fixture 冒烟。
-- Task executability：任务含完整代码与命令；pubgrub/可重定位两处 unknown 用 spike/快照驱动首步收敛。
+- Task executability：任务含完整代码与命令；pubgrub 版本/形态已由 web 调研锁定 0.4（残余 `M`/`Priority` 具体类型由任务 2.3 spike 编译期复核）、可重定位引用清单由任务 5.1 快照驱动首步收敛。
 - Pressure result：proceed。
 
 ## Plan-Time Complexity Check
@@ -184,7 +184,8 @@ Steps:
   flate2 = "1"
   sha2 = "0.10"
   base64 = "0.22"
-  pubgrub = "0.2"
+  pubgrub = "0.4"
+  version-ranges = "0.1"
   serde_yaml = "0.9"
   ```
   创建 `crates/wjsm-pm/Cargo.toml`：
@@ -1538,7 +1539,7 @@ Files:
 Why: PubGrub 内核求"去重最大化"解；instance-splitting 在单版本不可满足时分裂实例，复现 npm 嵌套多版本共存语义。这是本设计相对纯 PubGrub 工具的 npm 适配核心。
 
 **求解语义（明确定义，不 hand-wave）**：
-- **依赖类型处理**：`dependencies` 为硬约束（参与求解，不可满足即失败）；`peerDependencies` 翻译为对**求解全局**的约束——包 `a@1.0.0` 的 peer `react@^17` 表示"最终图中被 `a` 看见的 `react` 必须满足 `^17`"，在 PubGrub 中建模为 `a@1.0.0` 依赖 `react`（区间 `^17`）的一条边，与普通 dependency 同参与求解，但**不触发 instance-splitting**（peer 冲突是真失败，见下）；`optionalDependencies` 求解失败**跳过**（不判全局失败），实现为在 `get_dependencies` 中对 optional 边捕获 `NoVersion` 后忽略该边。
+- **依赖类型处理**：`dependencies` 为硬约束（参与求解，不可满足即失败）；`peerDependencies` 翻译为对**求解全局**的约束——包 `a@1.0.0` 的 peer `react@^17` 表示"最终图中被 `a` 看见的 `react` 必须满足 `^17`"，在 PubGrub 中建模为 `a@1.0.0` 依赖 `react`（区间 `^17`）的一条边，与普通 dependency 同参与求解，但**不触发 instance-splitting**（peer 冲突是真失败，见下）；`optionalDependencies` **不进入 `get_dependencies` 的返回边**——optional 依赖在求解层直接**不建边**（pubgrub 无版本时会判 `NoSolution`，无法在 provider 内"捕获忽略"，因为 `get_dependencies` 返回的是约束集合、缺版本由内核在 `choose_version` 阶段发现）。正确做法：`get_dependencies` 只返回 `dependencies`+`peerDependencies` 边；optional 边由 `install` 编排层**在求解定稿后**单独尝试解析（能装则装、装不上静默跳过），不参与主求解的可满足性判定。pubgrub 0.4 的 `Dependencies::Unavailable(M)` 用于"该 (包,版本) 本身元数据不可得"（如平台不支持），与 optional 语义不同，本计划不用它表达 optional。
 - **instance-splitting 触发条件**：仅当**普通 dependency** 的同名包无单版本满足全部 dependent 的区间交集时触发——按 dependent 子树把该包分裂为多个实例（`c` → `c#a`、`c#b`），各实例独立求版本。peer 冲突**不分裂**（peer 的语义是"共享同一实例"，分裂会违反 peer 契约）。
 - **peer 冲突 = 真失败**：两个包对同一 peer 要求不相交区间（`^17` vs `^18`）→ 无法共享单实例、又不可分裂 → `NoSolution`，`explain` 输出派生链，必须提及冲突的 peer 名。
 
@@ -1548,7 +1549,7 @@ Verification: `cargo nextest run -p wjsm-pm -E 'test(solver)'`
 
 Steps:
 
-- [ ] **Spike 首步：锁定 pubgrub API**。运行 `cargo doc -p pubgrub --no-deps 2>/dev/null; grep -rn "trait DependencyProvider" ~/.cargo/registry/src/*/pubgrub-*/src/ | head`，确认 `DependencyProvider` 关联类型（`P`/`V`/`VS`/`get_dependencies`/`choose_version`）签名，写进 `provider.rs` 顶部注释。若 0.2 API 与预期不符，锁定实际版本号更新 Cargo.toml。
+- [ ] **Spike 首步：核对 pubgrub 0.4 API**（版本已由 web 调研锁定 0.4.0，见 Assumptions；本步是编译期确认签名，非选版）。运行 `cargo doc -p pubgrub --no-deps --open` 或 `grep -rn "trait DependencyProvider" ~/.cargo/registry/src/*/pubgrub-0.4*/src/`，把 0.4 的 `DependencyProvider` 签名抄进 `provider.rs` 顶部注释作实现依据：**关联类型** `type P: Package`、`type V: Debug+Display+Clone+Ord`、`type VS: VersionSet<V=Self::V>`、`type M: Eq+Clone+Debug+Display`（自定义不可满足元数据）、`type Priority: Ord+Clone`、`type Err: Error`；**方法** `prioritize(&self, &P, &VS, &PackageResolutionStatistics) -> Priority`、`choose_version(&self, &P, &VS) -> Result<Option<V>, Err>`、`get_dependencies(&self, &P, &V) -> Result<Dependencies<P, VS, M>, Err>`。**注意 0.2→0.3 破坏性变更**：0.2 只有 `choose_version`、无 `get_dependencies`、无这些关联类型；本计划代码用的是 0.3 引入、0.4 保持的接口，故 Cargo.toml 必须钉 `pubgrub = "0.4"`（钉 0.2 无法编译）。VersionSet 用独立 crate `version_ranges::Ranges`（0.3+ 从 `pubgrub::range::Range` 拆出），`solver` 对 `SemVer` 实现 `VersionSet` 或直接用 `Ranges<SemVer>` 承载 npm 区间。
 - [ ] **定义 `MockIndex` 与 `ResolvedGraph` 契约**（测试地基，先写清签名）。`solver/mod.rs`：
   - `MockIndex::new()` → builder；`.pkg(name, version, deps: &[(name, range)])` 追加一个版本及其普通依赖；`.peer(name, version, peers: &[(name, range)])` 为已存在的 `(name,version)` 追加 peer 约束；`.optional(name, version, opts)` 追加 optional 边。builder 实现 `provider::PackageIndex`（`versions_of(name)` / `deps_of(name, version)` / `peers_of` / `optionals_of`）。
   - `ResolvedGraph { instances: Vec<ResolvedInstance> }`；`ResolvedInstance { name, version, deps: Vec<(String, InstanceId)> }`；`instances_of(name) -> Vec<&ResolvedInstance>`。
@@ -1616,10 +1617,10 @@ Steps:
   ```
   `solver/mod.rs` 定义 `solve`、`ResolvedGraph`、`MockIndex`、`explain.rs` 的解释构造（签名见上一步）。
 - [ ] **Verify RED**：`cargo nextest run -p wjsm-pm -E 'test(solver)'`。
-- [ ] **最小代码**：实现 `solve`：
-  - 先跑 PubGrub 单版本（普通 dependency + peer 均作硬边，optional 边在 `get_dependencies` 中对缺失版本捕获并忽略）。
-  - 捕获 `NoSolution` 时区分成因：若冲突源是**普通 dependency** 的同名包区间不交 → 触发 duplication，按 dependent 子树把该包分裂为实例（`c#a`/`c#b`）递归求解各子锥，合并 `ResolvedGraph`；若冲突源含 **peer** 约束 → 不分裂，直接 `explain` 产出 PubGrub 派生链并返回 `SolveError`。
-  - `explain` 从 PubGrub 的 `DerivationTree` 提取涉及的包名，保证冲突 peer 名出现在输出。
+- [ ] **最小代码**：实现 `solve`（`pubgrub::resolve(&provider, root, version)`）：
+  - 先跑 PubGrub 单版本（普通 dependency + peer 均作硬边）。optional 边在 `get_dependencies` 中**预筛**：若 `PackageIndex` 中该 optional 目标包无任何版本满足区间，则**不把该边放进返回的 `DependencyConstraints`**（等价 npm「缺失 optional 静默跳过」）；若目标存在则作普通边参与求解。（不依赖捕获求解期错误——0.3+ 无 `NoVersion` 变体；缺席即不加约束。）
+  - `resolve` 返回 `Err(PubGrubError::NoSolution(derivation_tree))` 时区分成因：若冲突源是**普通 dependency** 的同名包区间不交 → 触发 duplication，按 dependent 子树把该包分裂为实例（`c#a`/`c#b`）递归求解各子锥，合并 `ResolvedGraph`；若冲突源含 **peer** 约束 → 不分裂，直接 `explain` 产出派生链并返回 `SolveError`。
+  - `explain`：用 `pubgrub::DefaultStringReporter::report(&derivation_tree)` 渲染派生链（0.3+ 提供），或自行遍历 `DerivationTree` 提取涉及包名，保证冲突 peer 名出现在输出。
 - [ ] **Verify GREEN**：四测试通过（去重 / 分裂 / peer 冲突 / optional 跳过）。
 - [ ] **Commit**：`git commit -am "feat(wjsm-pm): PubGrub solver + instance-splitting（npm 嵌套多版本）"`
 
@@ -2425,7 +2426,7 @@ Steps:
 ## Risks
 
 - **可重定位 IR 逐指令等价**（最高风险，研究级里程碑）：重定位偏差是静默错误代码，非崩溃。`lower_modules` 存在 `$0.$global`、entry-block 顺序常量、**两趟顺序 scope 分配（单模块 id 拆成不连续两段，须逐 id 重映射而非单偏移）**、shared-env/live-binding 路由等跨模块耦合，「一次成型逐指令等价」不现实。缓解：任务 5.2 **分级验收**——L2-a（单包无 import）→ L2-b（跨模块 import 边）→ L2-c（re-export/`$global`/live-binding）逐级引入，每级用逐指令等价快照硬验收；L2-c 未达前，含 re-export/live-binding 的包 L1 缓存**不启用**（回退 L2-bundle 整体路径），不影响 P1–P4 与不含该模式的包。不通过不合并。
-- **pubgrub API 不确定**：任务 2.3 首步 spike 锁定版本与 trait 形态；若 0.2 不满足自定义 Version，回退手写 CDCL 或锁定可用版本。
+- **pubgrub API 形态**：版本已锁定 `0.4`（web 调研确认 0.3=0.4 `DependencyProvider` 一致：`prioritize`+`choose_version`+`get_dependencies` + 关联类型 `P`/`V`/`VS`/`M`/`Priority`/`Err`；MSRV 1.92 / edition 2024 与本 workspace 一致）。残余不确定仅在 `M`/`Priority` 的具体类型选择——任务 2.3 首步 spike 用本地 `cargo doc` 复核并抄进 `provider.rs` 注释。**不再考虑 0.2**（无 `get_dependencies`、与本计划代码不兼容）。极端回退（0.4 某关联类型无法承载 npm 语义）才手写 CDCL，评估概率极低。
 - **instance-splitting / peer 正确性**：可满足场景须复现 npm 多版本，真冲突须给解释。缓解：任务 2.3 四测试覆盖去重/分裂/peer 冲突/optional 跳过四态；peer 约束翻译（`peer(react ^17)` → 对宿主环境已选 react 版本的 comparator）明确定义；后续可加真实 npm 树对照测试。
 - **前置 #312 未合并**：P5 阻塞。缓解：P1–P4 完全独立可先交付；P5 首步前置检查。
 - **SQLite 并发写 / 中断原子性**：WAL 单写多读；写路径 CLI 层 `spawn_blocking` 隔离；整包写入包在单事务内（任务 1.5），中断回滚；孤儿 blob 由 `store gc`（任务 1.5b）标记-复制回收。缓解：任务 1.4 用 WAL；install 串行写 + store 级文件锁。

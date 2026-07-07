@@ -170,7 +170,7 @@ impl RuntimeModuleLoader for CliRuntimeModuleLoader {
         let mut converted = convert_resolved_module(resolved);
         if let Some(path) = &converted.path {
             self.check_read_allowed(path)?;
-            converted.format = detect_runtime_file_format(path, converted.format);
+            converted.format = detect_runtime_file_format(path, converted.format, &self.root);
         }
         Ok(converted)
     }
@@ -315,7 +315,15 @@ fn convert_format(format: wjsm_module::RuntimeModuleFormat) -> RuntimeModuleForm
     }
 }
 
-fn detect_runtime_file_format(path: &Path, fallback: RuntimeModuleFormat) -> RuntimeModuleFormat {
+fn detect_runtime_file_format(
+    path: &Path,
+    fallback: RuntimeModuleFormat,
+    root: &Path,
+) -> RuntimeModuleFormat {
+    if !should_probe_runtime_commonjs(path, fallback, root) {
+        return fallback;
+    }
+
     let Ok(source) = std::fs::read_to_string(path) else {
         return fallback;
     };
@@ -326,6 +334,41 @@ fn detect_runtime_file_format(path: &Path, fallback: RuntimeModuleFormat) -> Run
         RuntimeModuleFormat::CommonJs
     } else {
         fallback
+    }
+}
+
+// The resolver already owns explicit extension/package goals. The AST probe is
+// only a second pass for no-package `.js`, where `detect_module_format` treats
+// source shape as the CommonJS signal.
+fn should_probe_runtime_commonjs(
+    path: &Path,
+    fallback: RuntimeModuleFormat,
+    root: &Path,
+) -> bool {
+    fallback == RuntimeModuleFormat::EsModule
+        && path.extension().and_then(|extension| extension.to_str()) == Some("js")
+        && !has_nearest_package_manifest(path, root)
+}
+
+fn has_nearest_package_manifest(path: &Path, root: &Path) -> bool {
+    let Some(mut current) = path.parent() else {
+        return false;
+    };
+
+    loop {
+        if !current.starts_with(root) {
+            return false;
+        }
+        if current.join("package.json").is_file() {
+            return true;
+        }
+        if current == root {
+            return false;
+        }
+        let Some(parent) = current.parent() else {
+            return false;
+        };
+        current = parent;
     }
 }
 

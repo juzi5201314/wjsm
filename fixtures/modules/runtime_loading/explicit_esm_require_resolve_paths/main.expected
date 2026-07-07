@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+mjs cjs bindings: undefined undefined
+type-module cjs bindings: undefined undefined
+done
+--- stderr ---

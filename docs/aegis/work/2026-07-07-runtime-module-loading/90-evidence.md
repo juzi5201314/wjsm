@@ -211,3 +211,12 @@ Task 6 quality-review repair — runtime loader diagnostics:
 - Targeted guard: `cargo nextest run -E 'test(modules__runtime_loading__esm_dynamic_import_json_rejected) | test(modules__runtime_loading__cjs_errored_cache_delete_retry)'` passed — `Summary [   0.124s] 2 tests run: 2 passed, 788 skipped`.
 - Acceptance after final helper cleanup: `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__cjs_conditional_require_false)'` passed — `Summary [   0.280s] 12 tests run: 12 passed, 778 skipped`.
 - Acceptance after final helper cleanup: `cargo nextest run -p wjsm-runtime -E 'test(require_cache) | test(module_registry_) | test(require_resolve)'` passed — `Summary [   0.144s] 16 tests run: 16 passed, 216 skipped`.
+
+Task 7 quality-review repair — explicit ESM runtime format preservation:
+
+- Added `fixtures/modules/runtime_loading/explicit_esm_require_resolve_paths`, covering runtime-loaded `.mjs` and package `type: module` `.js` files that contain `require.resolve.paths('pkg')`; the final fixture keeps the AST member access present with a local `var require` and asserts ESM execution does not receive CommonJS `module`/`exports` bindings.
+- RED before repair, using the same runtime-loaded explicit ESM targets with an initial `typeof require` assertion: `cargo nextest run -E 'test(modules__runtime_loading__explicit_esm_require_resolve_paths)'` failed with actual stdout showing `mjs require type: function` and `type-module require type: function`, proving the runtime loader downgraded explicit ESM targets to CommonJS when the CJS detector saw `require.resolve.paths`.
+- Repair: `crates/wjsm-cli/src/runtime_loader.rs` now keeps resolver-selected explicit extension/package formats authoritative and runs the CJS AST probe only for no-package `.js` files whose resolver fallback is ESM, preserving the existing ambiguous `.js` `require.resolve.paths` CommonJS path.
+- Explicit ESM regression: `cargo nextest run -E 'test(modules__runtime_loading__explicit_esm_require_resolve_paths)'` passed — `Summary [   0.082s] 1 test run: 1 passed, 791 skipped`.
+- Ambiguous `.js` guard: `cargo nextest run -E 'test(modules__runtime_loading__require_resolve_paths)'` passed — `Summary [   0.075s] 1 test run: 1 passed, 791 skipped`.
+- Acceptance: `cargo nextest run -E 'test(modules__runtime_loading__) | test(modules__cjs_conditional_require_false)'` passed — `Summary [   0.329s] 13 tests run: 13 passed, 779 skipped`.

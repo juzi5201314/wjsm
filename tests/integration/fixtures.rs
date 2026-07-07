@@ -73,6 +73,12 @@ fn modules__runtime_loading__require_resolve_paths() -> Result<()> {
 }
 
 #[test]
+fn modules__runtime_loading__explicit_esm_require_resolve_paths() -> Result<()> {
+    crate::fixture_runner::FixtureRunner::new()?
+        .run_single("modules/runtime_loading/explicit_esm_require_resolve_paths/main")
+}
+
+#[test]
 fn modules__runtime_loading__esm_dynamic_import_json_rejected() -> Result<()> {
     crate::fixture_runner::FixtureRunner::new()?
         .run_single("modules/runtime_loading/esm_dynamic_import_json_rejected/main")
