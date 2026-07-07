@@ -53,6 +53,16 @@ pub fn lower_runtime_entry_bundle_with_options(
     bundler.lower_runtime_entry_bundle(entry)
 }
 
+/// 将运行时加载的 Node 内置模块 lower 为 ESM，并为入口创建命名空间对象。
+pub fn lower_runtime_builtin_bundle_with_options(
+    specifier: &str,
+    root_path: &Path,
+    options: ResolutionOptions,
+) -> Result<RuntimeEntryBundle> {
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
+    bundler.lower_runtime_builtin_bundle(specifier)
+}
+
 /// 解析入口模块 AST（用于 dump-ast 等，会构建依赖图）
 pub fn parse_entry_ast(entry: &Path, root_path: &Path) -> Result<swc_core::ecma::ast::Module> {
     parse_entry_ast_with_options(entry, root_path, ResolutionOptions::default())

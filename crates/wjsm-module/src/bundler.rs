@@ -12,8 +12,8 @@ use wjsm_ir::{ModuleId, Program};
 pub struct RuntimeEntryBundle {
     pub program: Program,
     pub entry_module_id: ModuleId,
+    pub module_id_span: u32,
 }
-
 
 /// 模块 Bundler
 pub struct ModuleBundler {
@@ -72,43 +72,18 @@ impl ModuleBundler {
     pub fn lower_runtime_entry_bundle(&self, entry: &Path) -> Result<RuntimeEntryBundle> {
         let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
             .with_context(|| "Failed to build module graph")?;
-        let entry_module_id = graph.entry_id();
-        let (order, cycles) = graph
-            .topological_order()
-            .with_context(|| "Failed to compute topological order")?;
-        let _ = cycles;
-        let mut link_result =
-            analyze_module_links(&graph).with_context(|| "Failed to analyze module links")?;
-        link_result
-            .dynamic_import_targets
-            .entry(entry_module_id)
-            .or_default()
-            .push(entry_module_id);
+        lower_runtime_graph(&graph)
+    }
 
-        let mut modules = Vec::new();
-        for &id in &order {
-            let node = graph.get_module(id).unwrap();
-            modules.push(ModuleLoweringInput {
-                id: node.id,
-                ast: node.ast.clone(),
-                metadata: module_metadata_for_node(node)?,
-            });
-        }
-
-        let program = wjsm_semantic::lower_modules(
-            modules,
-            &link_result.import_map,
-            &link_result.dynamic_import_targets,
-            &link_result.export_names,
-            &link_result.dynamic_import_specifiers,
-            &link_result.re_export_map,
+    /// 将 Node 内置模块 lower 为运行时可实例化 ESM bundle。
+    pub fn lower_runtime_builtin_bundle(&self, specifier: &str) -> Result<RuntimeEntryBundle> {
+        let graph = ModuleGraph::build_builtin_with_options(
+            specifier,
+            &self.root_path,
+            self.options.clone(),
         )
-        .with_context(|| "Failed to lower modules")?;
-
-        Ok(RuntimeEntryBundle {
-            program,
-            entry_module_id,
-        })
+        .with_context(|| "Failed to build built-in module graph")?;
+        lower_runtime_graph(&graph)
     }
 
     /// 解析入口模块 AST（含依赖图构建，用于 dump-ast 等）
@@ -130,6 +105,55 @@ impl ModuleBundler {
 
         wjsm_backend_wasm::compile(&program).with_context(|| "Failed to compile to WASM")
     }
+}
+
+fn lower_runtime_graph(graph: &ModuleGraph) -> Result<RuntimeEntryBundle> {
+    let entry_module_id = graph.entry_id();
+    let (order, cycles) = graph
+        .topological_order()
+        .with_context(|| "Failed to compute topological order")?;
+    let _ = cycles;
+    let module_id_span = module_id_span(&order)?;
+    let mut link_result =
+        analyze_module_links(graph).with_context(|| "Failed to analyze module links")?;
+    link_result
+        .dynamic_import_targets
+        .entry(entry_module_id)
+        .or_default()
+        .push(entry_module_id);
+
+    let mut modules = Vec::new();
+    for &id in &order {
+        let node = graph.get_module(id).unwrap();
+        modules.push(ModuleLoweringInput {
+            id: node.id,
+            ast: node.ast.clone(),
+            metadata: module_metadata_for_node(node)?,
+        });
+    }
+
+    let program = wjsm_semantic::lower_modules(
+        modules,
+        &link_result.import_map,
+        &link_result.dynamic_import_targets,
+        &link_result.export_names,
+        &link_result.dynamic_import_specifiers,
+        &link_result.re_export_map,
+    )
+    .with_context(|| "Failed to lower modules")?;
+
+    Ok(RuntimeEntryBundle {
+        program,
+        entry_module_id,
+        module_id_span,
+    })
+}
+
+fn module_id_span(order: &[ModuleId]) -> Result<u32> {
+    let max_id = order.iter().map(|module_id| module_id.0).max().unwrap_or(0);
+    max_id
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("runtime module id span overflows u32"))
 }
 
 fn module_metadata_for_node(node: &super::graph::GraphNode) -> Result<ModuleMetadata> {
@@ -288,5 +312,52 @@ mod tests {
             "re_export lower should succeed: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn lower_runtime_entry_bundle_keeps_static_dynamic_import_module_ids_offsettable() {
+        let root = create_temp_project("runtime_static_dynamic_import_offset");
+        write_type_module_package(&root);
+        write_file(
+            &root,
+            "main.mjs",
+            "export function load() { let loaded; loaded = import('./dep.mjs'); return loaded; }\n",
+        );
+        write_file(&root, "dep.mjs", "export const value = 1;\n");
+
+        let bundler = ModuleBundler::new(&root).expect("bundler");
+        let mut bundle = bundler
+            .lower_runtime_entry_bundle(Path::new("main.mjs"))
+            .expect("runtime bundle should lower");
+        let module_ids = module_id_constants(&bundle.program);
+
+        assert_eq!(bundle.entry_module_id, ModuleId(0));
+        assert_eq!(bundle.module_id_span, 2);
+        assert!(
+            module_ids.contains(&ModuleId(1)),
+            "static import() fast path should retain dependency ModuleId constant: {module_ids:?}"
+        );
+
+        bundle
+            .program
+            .offset_module_ids(100)
+            .expect("runtime bundle ids should offset");
+        let offset_module_ids = module_id_constants(&bundle.program);
+
+        assert!(!offset_module_ids.contains(&ModuleId(0)));
+        assert!(!offset_module_ids.contains(&ModuleId(1)));
+        assert!(offset_module_ids.contains(&ModuleId(100)));
+        assert!(offset_module_ids.contains(&ModuleId(101)));
+    }
+
+    fn module_id_constants(program: &Program) -> Vec<ModuleId> {
+        program
+            .constants()
+            .iter()
+            .filter_map(|constant| match constant {
+                wjsm_ir::Constant::ModuleId(module_id) => Some(*module_id),
+                _ => None,
+            })
+            .collect()
     }
 }

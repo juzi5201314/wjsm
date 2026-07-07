@@ -50,7 +50,20 @@ impl ModuleGraph {
             root.join(entry)
         };
         let entry_id = resolver.resolve_entry_path(&entry_path)?;
+        Self::build_from_resolver(resolver, entry_id)
+    }
 
+    pub(crate) fn build_builtin_with_options(
+        specifier: &str,
+        root: &Path,
+        options: ResolutionOptions,
+    ) -> Result<Self> {
+        let mut resolver = ModuleResolver::with_options(root, options);
+        let entry_id = resolver.resolve_builtin_entry(specifier)?;
+        Self::build_from_resolver(resolver, entry_id)
+    }
+
+    fn build_from_resolver(mut resolver: ModuleResolver, entry_id: ModuleId) -> Result<Self> {
         // BFS 遍历所有依赖
         let mut queue = VecDeque::new();
         let mut discovered = HashSet::new();
@@ -201,9 +214,7 @@ impl ModuleGraph {
             modules.insert(id, node);
         }
 
-        let graph = Self { modules, entry_id };
-
-        Ok(graph)
+        Ok(Self { modules, entry_id })
     }
     /// 获取拓扑排序后的模块顺序
     ///

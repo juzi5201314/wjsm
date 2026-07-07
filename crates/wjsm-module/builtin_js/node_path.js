@@ -53,15 +53,64 @@ function collectPathArgs(a, b, c, d, e, f) {
   return args;
 }
 
-function posixJoin(a, b, c, d, e, f) {
-  const args = collectPathArgs(a, b, c, d, e, f);
-  let joined = '';
-  for (let i = 0; i < args.length; i = i + 1) {
-    const arg = args[i];
-    assertPath(arg);
-    if (arg.length > 0) joined = joined ? joined + '/' + arg : arg;
+function appendPathPart(joined, separator, arg) {
+  if (arg === undefined) return joined;
+  assertPath(arg);
+  if (arg.length === 0) return joined;
+  return joined ? joined + separator + arg : arg;
+}
+
+function trimLastPosixSegment(path) {
+  const slash = path.lastIndexOf('/');
+  if (slash < 0) return '';
+  if (slash === 0) return '/';
+  return path.substring(0, slash);
+}
+
+function appendNormalizedPosixPart(output, part) {
+  if (output === '' || output === '/') return output + part;
+  return output + '/' + part;
+}
+
+function posixNormalizeJoined(path) {
+  if (path.length === 0) return '.';
+  const absolute = path.charAt(0) === '/';
+  const trailing = path.length > 1 && path.charAt(path.length - 1) === '/';
+  let output = absolute ? '/' : '';
+  let part = '';
+  for (let i = 0; i <= path.length; i = i + 1) {
+    const ch = i < path.length ? path.charAt(i) : '/';
+    if (ch === '/') {
+      if (part === '' || part === '.') {
+      } else if (part === '..') {
+        if (output && output !== '/' && output !== '..' && !output.endsWith('/..')) {
+          output = trimLastPosixSegment(output);
+        } else if (!absolute) {
+          output = appendNormalizedPosixPart(output, '..');
+        }
+      } else {
+        output = appendNormalizedPosixPart(output, part);
+      }
+      part = '';
+    } else {
+      part = part + ch;
+    }
   }
-  return posixNormalize(joined);
+  if (!output && !absolute) output = '.';
+  if (trailing && output !== '/' && output !== '.') output = output + '/';
+  return output;
+}
+
+
+function posixJoin(a, b, c, d, e, f) {
+  let joined = '';
+  joined = appendPathPart(joined, '/', a);
+  joined = appendPathPart(joined, '/', b);
+  joined = appendPathPart(joined, '/', c);
+  joined = appendPathPart(joined, '/', d);
+  joined = appendPathPart(joined, '/', e);
+  joined = appendPathPart(joined, '/', f);
+  return posixNormalizeJoined(joined);
 }
 
 function posixResolve(a, b, c, d, e, f) {

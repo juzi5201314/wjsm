@@ -9,6 +9,42 @@ use std::fmt::{self, Write};
 pub use types::*;
 pub use verify::IrVerificationError;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleIdOffsetError {
+    module_id: ModuleId,
+    offset: u32,
+}
+
+impl ModuleIdOffsetError {
+    fn new(module_id: ModuleId, offset: u32) -> Self {
+        Self { module_id, offset }
+    }
+}
+
+impl fmt::Display for ModuleIdOffsetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "module id {} cannot be offset by {} without overflowing u32",
+            self.module_id, self.offset
+        )
+    }
+}
+
+impl std::error::Error for ModuleIdOffsetError {}
+
+pub fn offset_module_id(
+    module_id: ModuleId,
+    offset: u32,
+) -> Result<ModuleId, ModuleIdOffsetError> {
+    module_id
+        .0
+        .checked_add(offset)
+        .map(ModuleId)
+        .ok_or_else(|| ModuleIdOffsetError::new(module_id, offset))
+}
+
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Module {
     constants: Vec<Constant>,
@@ -59,6 +95,26 @@ impl Module {
 
     pub fn set_source_file(&mut self, file: impl Into<String>) {
         self.source_file = Some(file.into());
+    }
+
+    pub fn offset_module_ids(&mut self, offset: u32) -> Result<(), ModuleIdOffsetError> {
+        if offset == 0 {
+            return Ok(());
+        }
+
+        // 先完整校验，再写回，避免溢出时留下半迁移 IR。
+        for constant in &self.constants {
+            if let Constant::ModuleId(module_id) = constant {
+                offset_module_id(*module_id, offset)?;
+            }
+        }
+
+        for constant in &mut self.constants {
+            if let Constant::ModuleId(module_id) = constant {
+                *module_id = offset_module_id(*module_id, offset)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn verify(&self) -> Result<(), IrVerificationError> {
@@ -127,6 +183,55 @@ impl fmt::Display for Constant {
             }
             Self::ModuleId(id) => write!(formatter, "moduleid({id})"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_module_ids_rewrites_only_module_id_constants() {
+        let mut module = Module::new();
+        module.add_constant(Constant::ModuleId(ModuleId(1)));
+        module.add_constant(Constant::String("keep".to_string()));
+        module.add_constant(Constant::ModuleId(ModuleId(3)));
+
+        module
+            .offset_module_ids(10)
+            .expect("module ids should offset");
+
+        assert_eq!(
+            module.constants(),
+            &[
+                Constant::ModuleId(ModuleId(11)),
+                Constant::String("keep".to_string()),
+                Constant::ModuleId(ModuleId(13)),
+            ]
+        );
+    }
+
+    #[test]
+    fn offset_module_ids_overflow_leaves_constants_unchanged() {
+        let mut module = Module::new();
+        module.add_constant(Constant::ModuleId(ModuleId(1)));
+        module.add_constant(Constant::ModuleId(ModuleId(u32::MAX)));
+
+        let error = module
+            .offset_module_ids(1)
+            .expect_err("overflow should be reported");
+
+        assert_eq!(
+            error.to_string(),
+            "module id mod4294967295 cannot be offset by 1 without overflowing u32"
+        );
+        assert_eq!(
+            module.constants(),
+            &[
+                Constant::ModuleId(ModuleId(1)),
+                Constant::ModuleId(ModuleId(u32::MAX)),
+            ]
+        );
     }
 }
 

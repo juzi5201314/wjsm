@@ -197,6 +197,26 @@ where
         Self { caller }
     }
 
+    pub fn reserve_runtime_module_ids(
+        &mut self,
+        count: u32,
+    ) -> Result<u32, RuntimeModuleLoadError> {
+        let mut registry = self
+            .caller
+            .data()
+            .module_registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        registry
+            .reserve_runtime_module_id_range(count)
+            .ok_or_else(|| {
+                RuntimeModuleLoadError::new(
+                    RuntimeModuleLoadErrorCode::InstantiateFailed,
+                    "runtime module id reservation overflows u32",
+                )
+            })
+    }
+
     pub fn reserve_module_layout(
         &mut self,
         table_len: u32,
@@ -313,7 +333,7 @@ where
             Ok(result) => result,
             Err(error) => {
                 let message = format!("runtime module main failed: {error:?}");
-                finish_runtime_commonjs_loading_errored_with_message(
+                finish_runtime_loading_errored_with_message(
                     self.caller,
                     resolved,
                     entry_module_id,
@@ -327,7 +347,7 @@ where
         };
         if value::is_exception(result) {
             let reason = exception_reason(self.caller, result);
-            finish_runtime_commonjs_loading_errored(
+            finish_runtime_loading_errored(
                 self.caller,
                 resolved,
                 entry_module_id,
@@ -599,13 +619,16 @@ fn begin_runtime_commonjs_loading(
     );
 }
 
-fn finish_runtime_commonjs_loading_errored(
+fn finish_runtime_loading_errored(
     caller: &mut Caller<'_, RuntimeState>,
     resolved: &RuntimeResolvedModule,
     module_id: Option<u32>,
     error_value: i64,
 ) {
-    if resolved.format != RuntimeModuleFormat::CommonJs {
+    if !matches!(
+        resolved.format,
+        RuntimeModuleFormat::CommonJs | RuntimeModuleFormat::EsModule | RuntimeModuleFormat::Builtin
+    ) {
         return;
     }
     let mut registry = caller
@@ -616,18 +639,21 @@ fn finish_runtime_commonjs_loading_errored(
     registry.finish_errored(resolved.key.clone(), module_id, error_value);
 }
 
-fn finish_runtime_commonjs_loading_errored_with_message(
+fn finish_runtime_loading_errored_with_message(
     caller: &mut Caller<'_, RuntimeState>,
     resolved: &RuntimeResolvedModule,
     module_id: Option<u32>,
     message: &str,
 ) {
-    if resolved.format != RuntimeModuleFormat::CommonJs {
+    if !matches!(
+        resolved.format,
+        RuntimeModuleFormat::CommonJs | RuntimeModuleFormat::EsModule | RuntimeModuleFormat::Builtin
+    ) {
         return;
     }
     let exception = make_type_error_exception(caller, message);
     let reason = exception_reason(caller, exception);
-    finish_runtime_commonjs_loading_errored(caller, resolved, module_id, reason);
+    finish_runtime_loading_errored(caller, resolved, module_id, reason);
 }
 
 fn write_module_exports_property(
@@ -739,7 +765,7 @@ fn instantiated_from_registry(
             RuntimeModuleLoadErrorCode::InstantiateFailed,
             "runtime CommonJS module did not register itself",
         )),
-        RuntimeModuleFormat::EsModule => {
+        RuntimeModuleFormat::EsModule | RuntimeModuleFormat::Builtin => {
             let module_id = entry_module_id.ok_or_else(|| {
                 RuntimeModuleLoadError::new(
                     RuntimeModuleLoadErrorCode::InstantiateFailed,
@@ -760,19 +786,22 @@ fn instantiated_from_registry(
                     "runtime ES module did not register a namespace object",
                 )
             })?;
+            let exports_object = if resolved.format == RuntimeModuleFormat::Builtin {
+                default_export.unwrap_or_else(value::encode_undefined)
+            } else {
+                value::encode_undefined()
+            };
             Ok(RuntimeInstantiatedModule::new(
                 Some(module_id),
                 value::encode_undefined(),
-                value::encode_undefined(),
+                exports_object,
                 namespace,
             ))
         }
-        RuntimeModuleFormat::Json | RuntimeModuleFormat::Builtin => {
-            Err(RuntimeModuleLoadError::new(
-                RuntimeModuleLoadErrorCode::Unsupported,
-                "runtime loader cannot instantiate this module format",
-            ))
-        }
+        RuntimeModuleFormat::Json => Err(RuntimeModuleLoadError::new(
+            RuntimeModuleLoadErrorCode::Unsupported,
+            "runtime loader cannot instantiate this module format",
+        )),
     }
 }
 /// runtime crate 暴露的加载边界；实现方位于 CLI/编排层，而不是 runtime 内部。

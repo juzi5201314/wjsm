@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use wjsm_ir::value;
 
+const RUNTIME_MODULE_ID_BASE: u32 = 1 << 30;
+
 /// 运行时模块缓存使用的规范化 key。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -10,15 +12,23 @@ pub enum RuntimeModuleKey {
     File(PathBuf),
     Json(PathBuf),
     Builtin(String),
-    /// 过渡 key：承接现有 `register_module_namespace(module_id)` 静态快路径。
-    ///
-    /// 后续 host import 全部拿到 File/Json/Builtin key 后，应停止新写入该分支。
+    /// 初始 AOT bundle 的旧 ModuleId 兼容 key。
     PrecompiledModuleId(u32),
+    /// 运行时编译 bundle 预留后的全局 ModuleId key。
+    RuntimeModuleId(u32),
 }
 
 impl RuntimeModuleKey {
     fn can_delete_from_require_cache(&self) -> bool {
         matches!(self, Self::File(_) | Self::Json(_))
+    }
+
+    fn from_registered_module_id(module_id: u32) -> Self {
+        if module_id >= RUNTIME_MODULE_ID_BASE {
+            Self::RuntimeModuleId(module_id)
+        } else {
+            Self::PrecompiledModuleId(module_id)
+        }
     }
 }
 
@@ -28,7 +38,7 @@ fn require_cache_id_for_key(key: &RuntimeModuleKey) -> Option<String> {
             Some(path.to_string_lossy().into_owned())
         }
         RuntimeModuleKey::Builtin(specifier) => Some(specifier.clone()),
-        RuntimeModuleKey::PrecompiledModuleId(_) => None,
+        RuntimeModuleKey::PrecompiledModuleId(_) | RuntimeModuleKey::RuntimeModuleId(_) => None,
     }
 }
 
@@ -82,15 +92,32 @@ pub(crate) enum RuntimeModuleImportResult {
 }
 
 /// 运行时模块状态的唯一 owner。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RuntimeModuleRegistry {
     by_key: HashMap<RuntimeModuleKey, RuntimeModuleState>,
     by_module_id: HashMap<u32, RuntimeModuleKey>,
+    next_runtime_module_id: u32,
+}
+
+impl Default for RuntimeModuleRegistry {
+    fn default() -> Self {
+        Self {
+            by_key: HashMap::new(),
+            by_module_id: HashMap::new(),
+            next_runtime_module_id: RUNTIME_MODULE_ID_BASE,
+        }
+    }
 }
 
 impl RuntimeModuleRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn reserve_runtime_module_id_range(&mut self, count: u32) -> Option<u32> {
+        let base = self.next_runtime_module_id;
+        self.next_runtime_module_id = self.next_runtime_module_id.checked_add(count)?;
+        Some(base)
     }
 
     pub fn begin_loading(
@@ -118,6 +145,7 @@ impl RuntimeModuleRegistry {
         exports_object: i64,
         namespace_object: i64,
     ) {
+        self.remove_module_id_key_if_different(module_id, &key);
         self.remember_module_id(module_id, &key);
         self.by_key.insert(
             key,
@@ -135,6 +163,7 @@ impl RuntimeModuleRegistry {
         module_id: Option<u32>,
         error_value: i64,
     ) {
+        self.remove_module_id_key_if_different(module_id, &key);
         self.remember_module_id(module_id, &key);
         self.by_key
             .insert(key, RuntimeModuleState::Errored { error_value });
@@ -142,7 +171,7 @@ impl RuntimeModuleRegistry {
 
     pub fn register_static_namespace(&mut self, module_id: u32, namespace_object: i64) {
         self.finish_loaded(
-            RuntimeModuleKey::PrecompiledModuleId(module_id),
+            RuntimeModuleKey::from_registered_module_id(module_id),
             Some(module_id),
             value::encode_undefined(),
             namespace_object,
@@ -287,6 +316,20 @@ impl RuntimeModuleRegistry {
         roots
     }
 
+    fn remove_module_id_key_if_different(
+        &mut self,
+        module_id: Option<u32>,
+        key: &RuntimeModuleKey,
+    ) {
+        let Some(module_id) = module_id else {
+            return;
+        };
+        let module_id_key = RuntimeModuleKey::from_registered_module_id(module_id);
+        if &module_id_key != key {
+            self.by_key.remove(&module_id_key);
+        }
+    }
+
     fn remember_module_id(&mut self, module_id: Option<u32>, key: &RuntimeModuleKey) {
         if let Some(module_id) = module_id {
             self.by_module_id.insert(module_id, key.clone());
@@ -298,7 +341,10 @@ impl RuntimeModuleRegistry {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{RuntimeModuleKey, RuntimeModuleRegistry, RuntimeModuleRequireResult};
+    use super::{
+        RuntimeModuleImportResult, RuntimeModuleKey, RuntimeModuleRegistry,
+        RuntimeModuleRequireResult,
+    };
     use wjsm_ir::value;
 
     fn obj(handle: u32) -> i64 {
@@ -425,6 +471,96 @@ mod tests {
 
         registry.finish_errored(key, Some(11), error);
 
+        assert_eq!(registry.roots(), vec![error]);
+    }
+
+    #[test]
+    fn module_registry_reserves_disjoint_runtime_module_id_ranges() {
+        let mut registry = RuntimeModuleRegistry::new();
+
+        let first = registry
+            .reserve_runtime_module_id_range(2)
+            .expect("first range should reserve");
+        let second = registry
+            .reserve_runtime_module_id_range(3)
+            .expect("second range should reserve");
+
+        assert_eq!(first, super::RUNTIME_MODULE_ID_BASE);
+        assert_eq!(second, super::RUNTIME_MODULE_ID_BASE + 2);
+    }
+
+    #[test]
+    fn module_registry_keeps_runtime_module_ids_out_of_precompiled_keyspace() {
+        let mut registry = RuntimeModuleRegistry::new();
+        let runtime_base = registry
+            .reserve_runtime_module_id_range(2)
+            .expect("runtime range should reserve");
+        let static_namespace = obj(60);
+        let runtime_namespace = obj(61);
+
+        registry.register_static_namespace(1, static_namespace);
+        registry.register_static_namespace(runtime_base + 1, runtime_namespace);
+
+        assert_eq!(registry.get_namespace_by_module_id(1), Some(static_namespace));
+        assert_eq!(
+            registry.get_namespace_by_module_id(runtime_base + 1),
+            Some(runtime_namespace)
+        );
+        assert!(registry
+            .by_key
+            .contains_key(&RuntimeModuleKey::PrecompiledModuleId(1)));
+        assert!(registry
+            .by_key
+            .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base + 1)));
+    }
+
+    #[test]
+    fn module_registry_promotes_runtime_entry_id_to_canonical_key() {
+        let mut registry = RuntimeModuleRegistry::new();
+        let runtime_base = registry
+            .reserve_runtime_module_id_range(1)
+            .expect("runtime range should reserve");
+        let key = file_key("/project/runtime-entry.mjs");
+        let namespace = obj(70);
+
+        registry.register_static_namespace(runtime_base, namespace);
+        registry.finish_loaded(
+            key.clone(),
+            Some(runtime_base),
+            obj(71),
+            obj(72),
+            namespace,
+        );
+
+        assert_eq!(registry.get_namespace_by_module_id(runtime_base), Some(namespace));
+        assert!(registry.by_key.contains_key(&key));
+        assert!(!registry
+            .by_key
+            .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base)));
+    }
+
+    #[test]
+    fn module_registry_promotes_runtime_entry_id_to_canonical_errored_key() {
+        let mut registry = RuntimeModuleRegistry::new();
+        let runtime_base = registry
+            .reserve_runtime_module_id_range(1)
+            .expect("runtime range should reserve");
+        let key = file_key("/project/runtime-throw.mjs");
+        let namespace = obj(80);
+        let error = obj(81);
+
+        registry.register_static_namespace(runtime_base, namespace);
+        registry.finish_errored(key.clone(), Some(runtime_base), error);
+
+        assert_eq!(registry.get_namespace_by_module_id(runtime_base), None);
+        assert_eq!(
+            registry.get_for_import(&RuntimeModuleKey::RuntimeModuleId(runtime_base)),
+            RuntimeModuleImportResult::Missing
+        );
+        assert!(registry.by_key.contains_key(&key));
+        assert!(!registry
+            .by_key
+            .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base)));
         assert_eq!(registry.roots(), vec![error]);
     }
 }

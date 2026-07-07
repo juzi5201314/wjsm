@@ -697,6 +697,14 @@ impl ModuleResolver {
         }
     }
 
+    pub(crate) fn resolve_builtin_entry(&mut self, specifier: &str) -> Result<ModuleId> {
+        match builtin_modules::lookup(specifier) {
+            BuiltinLookup::Found(module) => self.load_builtin_module(module),
+            BuiltinLookup::UnknownNodeBuiltin(name) => bail!("Unknown built-in module 'node:{name}'"),
+            BuiltinLookup::NotBuiltin => bail!("Not a built-in module: {specifier}"),
+        }
+    }
+
     fn load_builtin_module(
         &mut self,
         module: &'static builtin_modules::BuiltinModule,

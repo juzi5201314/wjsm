@@ -44,10 +44,11 @@ impl CliRuntimeModuleLoader {
                     format!("runtime loader cannot resolve relative to builtin module {specifier}"),
                 ))
             }
-            RuntimeModuleReferrer::Module(RuntimeModuleKey::PrecompiledModuleId(_)) => {
+            RuntimeModuleReferrer::Module(RuntimeModuleKey::PrecompiledModuleId(_))
+            | RuntimeModuleReferrer::Module(RuntimeModuleKey::RuntimeModuleId(_)) => {
                 Err(RuntimeModuleLoadError::new(
                     RuntimeModuleLoadErrorCode::Unsupported,
-                    "runtime loader cannot resolve relative to a precompiled module id",
+                    "runtime loader cannot resolve relative to a compiled module id",
                 ))
             }
             _ => Err(RuntimeModuleLoadError::new(
@@ -62,23 +63,20 @@ impl CliRuntimeModuleLoader {
         resolved: &RuntimeResolvedModule,
         context: &mut RuntimeModuleInstantiationContext<'_, '_>,
     ) -> Result<(Vec<u8>, Option<u32>), RuntimeModuleLoadError> {
-        let path = resolved.path.as_deref().ok_or_else(|| {
-            RuntimeModuleLoadError::new(
-                RuntimeModuleLoadErrorCode::Unsupported,
-                "CLI runtime loader only supports file-backed modules",
-            )
-        })?;
         match resolved.format {
             RuntimeModuleFormat::CommonJs => {
+                let path = file_backed_runtime_path(resolved)?;
                 self.compile_runtime_commonjs_module(resolved, path, context)
             }
-            RuntimeModuleFormat::EsModule => self.compile_runtime_esm_module(path, context),
-            RuntimeModuleFormat::Json | RuntimeModuleFormat::Builtin => {
-                Err(RuntimeModuleLoadError::new(
-                    RuntimeModuleLoadErrorCode::Unsupported,
-                    "CLI runtime loader cannot compile this module format as WASM",
-                ))
+            RuntimeModuleFormat::EsModule => {
+                let path = file_backed_runtime_path(resolved)?;
+                self.compile_runtime_esm_module(path, context)
             }
+            RuntimeModuleFormat::Builtin => self.compile_runtime_builtin_module(resolved, context),
+            RuntimeModuleFormat::Json => Err(RuntimeModuleLoadError::new(
+                RuntimeModuleLoadErrorCode::Unsupported,
+                "CLI runtime loader cannot compile this module format as WASM",
+            )),
             _ => Err(RuntimeModuleLoadError::new(
                 RuntimeModuleLoadErrorCode::Unsupported,
                 "CLI runtime loader does not support this module format",
@@ -92,14 +90,49 @@ impl CliRuntimeModuleLoader {
         context: &mut RuntimeModuleInstantiationContext<'_, '_>,
     ) -> Result<(Vec<u8>, Option<u32>), RuntimeModuleLoadError> {
         reject_unsupported_runtime_extension(path)?;
-        let bundle = wjsm_module::lower_runtime_entry_bundle_with_options(
+        let mut bundle = wjsm_module::lower_runtime_entry_bundle_with_options(
             path,
             &self.root,
             self.resolution_options.clone(),
         )
         .map_err(invalid_module_error)?;
+        self.compile_runtime_esm_bundle(&mut bundle, context)
+    }
+
+    fn compile_runtime_builtin_module(
+        &self,
+        resolved: &RuntimeResolvedModule,
+        context: &mut RuntimeModuleInstantiationContext<'_, '_>,
+    ) -> Result<(Vec<u8>, Option<u32>), RuntimeModuleLoadError> {
+        let RuntimeModuleKey::Builtin(specifier) = &resolved.key else {
+            return Err(RuntimeModuleLoadError::new(
+                RuntimeModuleLoadErrorCode::Unsupported,
+                "CLI runtime loader requires a built-in module key",
+            ));
+        };
+        let mut bundle = wjsm_module::lower_runtime_builtin_bundle_with_options(
+            specifier,
+            &self.root,
+            self.resolution_options.clone(),
+        )
+        .map_err(invalid_module_error)?;
+        self.compile_runtime_esm_bundle(&mut bundle, context)
+    }
+
+    fn compile_runtime_esm_bundle(
+        &self,
+        bundle: &mut wjsm_module::RuntimeEntryBundle,
+        context: &mut RuntimeModuleInstantiationContext<'_, '_>,
+    ) -> Result<(Vec<u8>, Option<u32>), RuntimeModuleLoadError> {
+        let module_id_base = context.reserve_runtime_module_ids(bundle.module_id_span)?;
+        bundle
+            .program
+            .offset_module_ids(module_id_base)
+            .map_err(module_id_offset_error)?;
+        let entry_module_id = wjsm_ir::offset_module_id(bundle.entry_module_id, module_id_base)
+            .map_err(module_id_offset_error)?;
         let wasm = compile_runtime_program(&bundle.program, context)?;
-        Ok((wasm, Some(bundle.entry_module_id.0)))
+        Ok((wasm, Some(entry_module_id.0)))
     }
 
     fn compile_runtime_commonjs_module(
@@ -277,6 +310,18 @@ fn compile_runtime_program(
     Ok(compiled.wasm)
 }
 
+fn file_backed_runtime_path(
+    resolved: &RuntimeResolvedModule,
+) -> Result<&Path, RuntimeModuleLoadError> {
+    resolved.path.as_deref().ok_or_else(|| {
+        RuntimeModuleLoadError::new(
+            RuntimeModuleLoadErrorCode::Unsupported,
+            "CLI runtime loader only supports file-backed modules for this format",
+        )
+    })
+}
+
+
 fn read_runtime_source(path: &Path) -> Result<String, RuntimeModuleLoadError> {
     std::fs::read_to_string(path).map_err(|error| {
         RuntimeModuleLoadError::new(
@@ -388,6 +433,10 @@ fn reject_unsupported_runtime_extension(path: &Path) -> Result<(), RuntimeModule
 }
 
 fn invalid_module_error(error: anyhow::Error) -> RuntimeModuleLoadError {
+    RuntimeModuleLoadError::new(RuntimeModuleLoadErrorCode::InvalidModule, error.to_string())
+}
+
+fn module_id_offset_error(error: wjsm_ir::ModuleIdOffsetError) -> RuntimeModuleLoadError {
     RuntimeModuleLoadError::new(RuntimeModuleLoadErrorCode::InvalidModule, error.to_string())
 }
 
