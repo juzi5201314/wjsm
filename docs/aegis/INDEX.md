@@ -37,6 +37,7 @@
 | 2026-07-03 | Pluggable GC v2 (mark-sweep / G1 / ZGC) | [plans/2026-07-03-pluggable-gc-v2.md](plans/2026-07-03-pluggable-gc-v2.md) |
 | 2026-07-06 | Package Resolution Enhancement (issue #309) | [plans/2026-07-06-package-resolution-enhancement.md](plans/2026-07-06-package-resolution-enhancement.md) |
 | 2026-07-07 | Runtime Module Loading (issue #312) | [plans/2026-07-07-runtime-module-loading.md](plans/2026-07-07-runtime-module-loading.md) |
+| 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [plans/2026-07-07-package-management.md](plans/2026-07-07-package-management.md) |
 
 ## Baselines
 
