@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+function function
+data hello
+data  world
+ended
+--- stderr ---

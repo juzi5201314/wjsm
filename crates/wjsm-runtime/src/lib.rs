@@ -43,8 +43,11 @@ mod runtime_microtask;
 mod runtime_module_loader;
 mod runtime_module_registry;
 mod runtime_node_crypto;
+mod runtime_node_child_process;
+mod runtime_node_data;
 mod runtime_node_fs;
 mod runtime_node_globals;
+mod runtime_node_zlib;
 mod runtime_process;
 mod runtime_promises;
 pub use runtime_module_loader::{

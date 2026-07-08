@@ -399,6 +399,12 @@ pub(crate) enum Commands {
         force: bool,
     },
 
+    /// Install npm packages into node_modules
+    Install {
+        /// Package specs such as react or @scope/pkg@1.2.3
+        packages: Vec<String>,
+    },
+
     /// Show extended version information
     Version {
         /// Show extended version info

@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+true hello zlib
+hello zlib
+hello zlib
+hello zlib
+--- stderr ---

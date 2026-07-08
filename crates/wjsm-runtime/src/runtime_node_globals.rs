@@ -144,6 +144,19 @@ pub(crate) fn install_node_web_globals_from_caller(
     let crypto = crate::runtime_node_crypto::create_crypto_host_object(caller);
     let _ = caller.data().push_host_temp_roots([crypto]);
     define_global(caller, global_obj, "__wjsm_node_crypto", crypto);
+
+    let zlib = crate::runtime_node_zlib::create_zlib_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([zlib]);
+    define_global(caller, global_obj, "__wjsm_node_zlib", zlib);
+
+    let child_process = crate::runtime_node_child_process::create_child_process_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([child_process]);
+    define_global(
+        caller,
+        global_obj,
+        "__wjsm_node_child_process",
+        child_process,
+    );
     caller.data().truncate_host_temp_roots(temp_root_len);
     Ok(())
 }

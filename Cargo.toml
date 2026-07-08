@@ -51,6 +51,10 @@ encoding_rs = "0.8"
 sysinfo = "0.39.5"
 get_if_addrs = "0.5.3"
 
+flate2 = "1"
+brotli = "8"
+tar = "0.4"
+wait-timeout = "0.2"
 [dependencies]
 anyhow = { workspace = true }
 wjsm-cli = { path = "crates/wjsm-cli" }

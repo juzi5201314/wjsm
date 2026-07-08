@@ -21,6 +21,8 @@ use wjsm_runtime as runtime;
 use wjsm_semantic as semantic;
 
 mod cli_args;
+mod cli_install;
+mod cli_scripts;
 mod cli_config;
 mod cli_lint;
 mod ir_output;
@@ -429,7 +431,17 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             if let Some(code) = eval {
                 cmd_run_eval(&cli, code, script, "[run-eval]", args)
             } else if let Some(input) = input {
-                if watch {
+                let script_name = input.to_string_lossy();
+                if !path_is_stdin(input)
+                    && !input.exists()
+                    && cli_scripts::package_script_exists(root.as_deref(), &script_name)?
+                {
+                    if watch {
+                        bail!("watch mode is not supported for package scripts");
+                    }
+                    cli_scripts::run_package_script(root.as_deref(), &script_name, args)?;
+                    Ok(ExitCode::from(EXIT_SUCCESS))
+                } else if watch {
                     cmd_run_watch(&cli, input, root.as_deref(), script, args)
                 } else {
                     cmd_run(&cli, input, root.as_deref(), script, args)
@@ -518,6 +530,11 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
         } => cmd_disasm(input, func.as_deref(), skeleton),
 
         Commands::Cache { ref command } => cmd_cache(command),
+
+        Commands::Install { ref packages } => {
+            cli_install::install_packages(packages)?;
+            Ok(ExitCode::from(EXIT_SUCCESS))
+        }
 
         Commands::Completions { shell } => cmd_completions(shell),
 
@@ -803,6 +820,11 @@ fn cmd_test(
 ) -> Result<ExitCode> {
     if let Some(code) = eval {
         return cmd_run_eval(cli, code, script, "[run-eval]", &[]);
+    }
+
+    if input.is_none() && cli_scripts::package_script_exists(root, "test")? {
+        cli_scripts::run_package_script(root, "test", &[])?;
+        return Ok(ExitCode::from(EXIT_SUCCESS));
     }
 
     let input = input.as_deref().unwrap_or_else(|| Path::new("."));

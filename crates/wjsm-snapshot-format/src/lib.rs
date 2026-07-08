@@ -158,6 +158,8 @@ pub enum SnapshotNativeCallable {
     PerformanceNow = 74,
     OsInfo = 75,
     FsMethod = 76,
+    ZlibMethod = 77,
+    ChildProcessMethod = 78,
 }
 
 impl SnapshotNativeCallable {
@@ -240,6 +242,8 @@ impl SnapshotNativeCallable {
             75 => Some(Self::OsInfo),
             74 => Some(Self::PerformanceNow),
             76 => Some(Self::FsMethod),
+            77 => Some(Self::ZlibMethod),
+            78 => Some(Self::ChildProcessMethod),
             _ => None,
         }
     }
@@ -670,7 +674,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=76 {
+    for d in 0u32..=78 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);
@@ -763,7 +767,7 @@ mod tests {
             s.hash(&mut hasher);
         }
 
-        for d in 0u32..=76 {
+        for d in 0u32..=78 {
             if SnapshotNativeCallable::from_discriminant(d).is_some() {
                 d.hash(&mut hasher);
             }

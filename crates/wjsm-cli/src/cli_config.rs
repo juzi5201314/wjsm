@@ -177,6 +177,7 @@ fn apply_command_config(command: &mut Commands, matches: &clap::ArgMatches, conf
         | Commands::Disasm { .. }
         | Commands::Cache { .. }
         | Commands::Completions { .. }
+        | Commands::Install { .. }
         | Commands::Init { .. }
         | Commands::Version { .. } => {}
     }

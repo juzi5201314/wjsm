@@ -872,6 +872,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::CryptoMethod { kind } => Some(
             crate::runtime_node_crypto::call_crypto_method(caller, kind, &args),
         ),
+        NativeCallable::ZlibMethod { kind } => Some(crate::runtime_node_zlib::call_zlib_method(
+            caller, kind, &args,
+        )),
+        NativeCallable::ChildProcessMethod { kind } => Some(
+            crate::runtime_node_child_process::call_child_process_method(caller, kind, &args),
+        ),
         NativeCallable::CryptoDigestMethod { state, kind } => {
             Some(crate::runtime_node_crypto::call_crypto_digest_method(
                 caller, this_val, state, kind, &args,

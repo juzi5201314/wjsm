@@ -56,6 +56,26 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         canonical: "crypto",
         source: include_str!("../builtin_js/node_crypto.js"),
     },
+    BuiltinModule {
+        canonical: "stream",
+        source: include_str!("../builtin_js/node_stream.js"),
+    },
+    BuiltinModule {
+        canonical: "http",
+        source: include_str!("../builtin_js/node_http.js"),
+    },
+    BuiltinModule {
+        canonical: "https",
+        source: include_str!("../builtin_js/node_https.js"),
+    },
+    BuiltinModule {
+        canonical: "zlib",
+        source: include_str!("../builtin_js/node_zlib.js"),
+    },
+    BuiltinModule {
+        canonical: "child_process",
+        source: include_str!("../builtin_js/node_child_process.js"),
+    },
 ];
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {
@@ -136,6 +156,11 @@ mod tests {
             "fs",
             "fs/promises",
             "crypto",
+            "stream",
+            "http",
+            "https",
+            "zlib",
+            "child_process",
         ] {
             assert!(
                 seen.insert(virtual_path(canonical)),

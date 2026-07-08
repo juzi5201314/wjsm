@@ -32,6 +32,9 @@ fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed=../wjsm-runtime/src/runtime_node_globals.rs");
     println!("cargo:rerun-if-changed=../wjsm-runtime/src/runtime_node_fs.rs");
     println!("cargo:rerun-if-changed=../wjsm-runtime/src/runtime_node_crypto.rs");
+    println!("cargo:rerun-if-changed=../wjsm-runtime/src/runtime_node_zlib.rs");
+    println!("cargo:rerun-if-changed=../wjsm-runtime/src/runtime_node_child_process.rs");
+    println!("cargo:rerun-if-changed=../wjsm-runtime/src/runtime_node_data.rs");
     println!("cargo:rerun-if-changed=../wjsm-backend-wasm/src");
     println!("cargo:rerun-if-changed=../wjsm-snapshot-format/src");
 

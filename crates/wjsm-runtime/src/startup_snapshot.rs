@@ -138,6 +138,8 @@ pub(crate) fn capture_startup_snapshot(
                 NativeCallable::TypedArrayConstructor(kind) => kind.index() as u8,
                 NativeCallable::OsInfo { kind } => kind.method(),
                 NativeCallable::FsMethod { kind } => kind.method(),
+                NativeCallable::ZlibMethod { kind } => kind.method(),
+                NativeCallable::ChildProcessMethod { kind } => kind.method(),
                 _ => 0,
             });
         }

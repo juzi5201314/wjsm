@@ -2,7 +2,9 @@
 
 use anyhow::{Result, bail};
 
+use crate::runtime_node_child_process::ChildProcessMethodKind;
 use crate::runtime_node_fs::FsMethodKind;
+use crate::runtime_node_zlib::ZlibMethodKind;
 use crate::types::{NativeCallable, OsInfoKind, TypedArrayConstructorKind};
 use wjsm_snapshot_format::SnapshotNativeCallable;
 
@@ -108,6 +110,13 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::FsMethod => NativeCallable::FsMethod {
                 kind: FsMethodKind::from_method(method).unwrap_or(FsMethodKind::ReadFileSync),
             },
+            Self::ZlibMethod => NativeCallable::ZlibMethod {
+                kind: ZlibMethodKind::from_method(method).unwrap_or(ZlibMethodKind::GzipSync),
+            },
+            Self::ChildProcessMethod => NativeCallable::ChildProcessMethod {
+                kind: ChildProcessMethodKind::from_method(method)
+                    .unwrap_or(ChildProcessMethodKind::SpawnSync),
+            },
         }
     }
 
@@ -198,6 +207,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::PerformanceNow => Self::PerformanceNow,
             NativeCallable::OsInfo { kind: _ } => Self::OsInfo,
             NativeCallable::FsMethod { kind: _ } => Self::FsMethod,
+            NativeCallable::ZlibMethod { kind: _ } => Self::ZlibMethod,
+            NativeCallable::ChildProcessMethod { kind: _ } => Self::ChildProcessMethod,
             NativeCallable::CjsRequire { .. }
             | NativeCallable::CjsRequireResolve { .. }
             | NativeCallable::CjsRequireResolvePaths { .. }

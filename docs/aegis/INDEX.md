@@ -18,6 +18,7 @@
 | 2026-07-06 | Package Resolution Enhancement (issue #309) | [specs/2026-07-06-package-resolution-enhancement-design.md](specs/2026-07-06-package-resolution-enhancement-design.md) |
 | 2026-07-07 | Runtime Module Loading (issue #312) | [specs/2026-07-07-runtime-module-loading-design.md](specs/2026-07-07-runtime-module-loading-design.md) |
 | 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [specs/2026-07-07-package-management-design.md](specs/2026-07-07-package-management-design.md) |
+| 2026-07-08 | Node Advanced Builtins and CLI Tooling (issue #311) | [specs/2026-07-08-node-advanced-modules-issue311-design.md](specs/2026-07-08-node-advanced-modules-issue311-design.md) |
 ## Plans
 
 | Date | Title | File |
@@ -38,6 +39,7 @@
 | 2026-07-06 | Package Resolution Enhancement (issue #309) | [plans/2026-07-06-package-resolution-enhancement.md](plans/2026-07-06-package-resolution-enhancement.md) |
 | 2026-07-07 | Runtime Module Loading (issue #312) | [plans/2026-07-07-runtime-module-loading.md](plans/2026-07-07-runtime-module-loading.md) |
 | 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [plans/2026-07-07-package-management.md](plans/2026-07-07-package-management.md) |
+| 2026-07-08 | Node Advanced Builtins and CLI Tooling (issue #311) | [plans/2026-07-08-node-advanced-modules-issue311.md](plans/2026-07-08-node-advanced-modules-issue311.md) |
 
 ## Baselines
 
