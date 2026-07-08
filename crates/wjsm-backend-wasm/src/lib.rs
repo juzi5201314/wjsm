@@ -238,6 +238,7 @@ struct Compiler {
     mode: CompileMode,
     function_param_counts: Vec<u32>,
     function_names: Vec<String>,
+    function_needs_prototype: Vec<bool>,
     // ── GC safepoint spill（P2）──
     /// 当前函数的 per-instruction liveness（P1 已实现，wjsm_ir::liveness::compute_liveness）。
     /// compile_function 入口计算一次。`None` 表示当前函数无 liveness 数据（例如未调用 compile_function）。

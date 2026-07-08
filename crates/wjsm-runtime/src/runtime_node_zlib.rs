@@ -2,7 +2,9 @@ use std::io::{Cursor, Read};
 
 use brotli::{CompressorReader, Decompressor};
 use flate2::Compression;
-use flate2::read::{DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
+use flate2::read::{
+    DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder,
+};
 use wasmtime::Caller;
 
 use crate::runtime_buffer::create_buffer_from_bytes;
@@ -58,10 +60,30 @@ pub(crate) fn create_zlib_host_object(caller: &mut Caller<'_, RuntimeState>) -> 
     install_zlib_method(caller, obj, "gunzipSync", ZlibMethodKind::GunzipSync);
     install_zlib_method(caller, obj, "deflateSync", ZlibMethodKind::DeflateSync);
     install_zlib_method(caller, obj, "inflateSync", ZlibMethodKind::InflateSync);
-    install_zlib_method(caller, obj, "deflateRawSync", ZlibMethodKind::DeflateRawSync);
-    install_zlib_method(caller, obj, "inflateRawSync", ZlibMethodKind::InflateRawSync);
-    install_zlib_method(caller, obj, "brotliCompressSync", ZlibMethodKind::BrotliCompressSync);
-    install_zlib_method(caller, obj, "brotliDecompressSync", ZlibMethodKind::BrotliDecompressSync);
+    install_zlib_method(
+        caller,
+        obj,
+        "deflateRawSync",
+        ZlibMethodKind::DeflateRawSync,
+    );
+    install_zlib_method(
+        caller,
+        obj,
+        "inflateRawSync",
+        ZlibMethodKind::InflateRawSync,
+    );
+    install_zlib_method(
+        caller,
+        obj,
+        "brotliCompressSync",
+        ZlibMethodKind::BrotliCompressSync,
+    );
+    install_zlib_method(
+        caller,
+        obj,
+        "brotliDecompressSync",
+        ZlibMethodKind::BrotliDecompressSync,
+    );
     caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }

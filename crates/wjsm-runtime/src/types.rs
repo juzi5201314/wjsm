@@ -690,6 +690,15 @@ pub(crate) enum NativeCallable {
     ChildProcessMethod {
         kind: crate::runtime_node_child_process::ChildProcessMethodKind,
     },
+    NetMethod {
+        kind: crate::runtime_node_net::NetMethodKind,
+    },
+    DgramMethod {
+        kind: crate::runtime_node_dgram::DgramMethodKind,
+    },
+    TlsMethod {
+        kind: crate::runtime_node_tls::TlsMethodKind,
+    },
     CryptoDigestMethod {
         state: Arc<Mutex<crate::runtime_node_crypto::CryptoDigestState>>,
         kind: crate::runtime_node_crypto::CryptoDigestKind,

@@ -321,7 +321,6 @@ fn file_backed_runtime_path(
     })
 }
 
-
 fn read_runtime_source(path: &Path) -> Result<String, RuntimeModuleLoadError> {
     std::fs::read_to_string(path).map_err(|error| {
         RuntimeModuleLoadError::new(
@@ -385,11 +384,7 @@ fn detect_runtime_file_format(
 // The resolver already owns explicit extension/package goals. The AST probe is
 // only a second pass for ambiguous no-package `.js` and extensionless files,
 // where source shape is the CommonJS signal.
-fn should_probe_runtime_commonjs(
-    path: &Path,
-    fallback: RuntimeModuleFormat,
-    root: &Path,
-) -> bool {
+fn should_probe_runtime_commonjs(path: &Path, fallback: RuntimeModuleFormat, root: &Path) -> bool {
     let extension = path.extension().and_then(|extension| extension.to_str());
 
     fallback == RuntimeModuleFormat::EsModule
@@ -467,10 +462,8 @@ mod tests {
             Path::new("/repo"),
         ));
 
-        let root = std::env::temp_dir().join(format!(
-            "wjsm-runtime-loader-probe-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("wjsm-runtime-loader-probe-{}", std::process::id()));
         let package_root = root.join("pkg");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&package_root).expect("temp package root should be created");

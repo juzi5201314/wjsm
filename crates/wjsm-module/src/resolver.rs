@@ -700,7 +700,9 @@ impl ModuleResolver {
     pub(crate) fn resolve_builtin_entry(&mut self, specifier: &str) -> Result<ModuleId> {
         match builtin_modules::lookup(specifier) {
             BuiltinLookup::Found(module) => self.load_builtin_module(module),
-            BuiltinLookup::UnknownNodeBuiltin(name) => bail!("Unknown built-in module 'node:{name}'"),
+            BuiltinLookup::UnknownNodeBuiltin(name) => {
+                bail!("Unknown built-in module 'node:{name}'")
+            }
             BuiltinLookup::NotBuiltin => bail!("Not a built-in module: {specifier}"),
         }
     }
@@ -1320,9 +1322,10 @@ impl ModuleResolver {
     }
 
     fn extract_import_call_specifier(call: &ast::CallExpr) -> Result<Option<String>> {
-        let first_arg = call.args.first().ok_or_else(|| {
-            anyhow::anyhow!("import() requires a module specifier")
-        })?;
+        let first_arg = call
+            .args
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("import() requires a module specifier"))?;
 
         match first_arg.expr.as_ref() {
             ast::Expr::Lit(ast::Lit::Str(s)) => Ok(Some(s.value.to_string_lossy().into_owned())),

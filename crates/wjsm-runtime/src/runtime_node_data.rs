@@ -2,7 +2,9 @@ use wasmtime::Caller;
 
 use crate::runtime_buffer::{arraybuffer_visible_bytes, visible_bytes};
 use crate::runtime_encoding::js_string_lossy;
-use crate::runtime_values::{read_array_elem, read_array_length, read_object_property_by_name, resolve_handle};
+use crate::runtime_values::{
+    read_array_elem, read_array_length, read_object_property_by_name, resolve_handle,
+};
 use crate::{RuntimeState, make_type_error_exception, value};
 
 pub(crate) fn bytes_from_value(
@@ -80,7 +82,10 @@ pub(crate) fn string_array_from_value(
         return Ok(Vec::new());
     }
     if !value::is_array(value_raw) {
-        return Err(make_type_error_exception(caller, "expected an array of strings"));
+        return Err(make_type_error_exception(
+            caller,
+            "expected an array of strings",
+        ));
     }
     let Some(ptr) = resolve_handle(caller, value_raw) else {
         return Ok(Vec::new());

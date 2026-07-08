@@ -45,7 +45,7 @@ module {
     c42 = string("computed match")
     c43 = string("default computed")
 
-  fn @getValue [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @getValue [needs_prototype] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       return %0

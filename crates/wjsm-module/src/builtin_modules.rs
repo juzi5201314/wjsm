@@ -65,6 +65,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         source: include_str!("../builtin_js/node_http.js"),
     },
     BuiltinModule {
+        canonical: "net",
+        source: include_str!("../builtin_js/node_net.js"),
+    },
+    BuiltinModule {
         canonical: "https",
         source: include_str!("../builtin_js/node_https.js"),
     },
@@ -75,6 +79,14 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
     BuiltinModule {
         canonical: "child_process",
         source: include_str!("../builtin_js/node_child_process.js"),
+    },
+    BuiltinModule {
+        canonical: "dgram",
+        source: include_str!("../builtin_js/node_dgram.js"),
+    },
+    BuiltinModule {
+        canonical: "tls",
+        source: include_str!("../builtin_js/node_tls.js"),
     },
 ];
 
@@ -158,6 +170,7 @@ mod tests {
             "crypto",
             "stream",
             "http",
+            "net",
             "https",
             "zlib",
             "child_process",

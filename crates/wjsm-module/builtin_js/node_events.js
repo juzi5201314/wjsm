@@ -119,35 +119,34 @@ function eventGetMaxListeners() { return this._maxListeners; }
 function eventEventNames() { return Object.keys(this._events); }
 
 export function EventEmitter() {
-  const self = this;
-  self._events = {};
-  self._onceEvents = {};
-  self._maxListeners = EventEmitter.defaultMaxListeners;
-  self.captureRejections = false;
-  self.on = function (name, listener) { list(self, name, true).push(listener); return self; };
-  self.addListener = self.on;
-  self.prependListener = function (name, listener) { list(self, name, true).unshift(listener); return self; };
-  self.once = function (name, listener) {
-    list(self, name, true).push(listener);
-    list({ _events: self._onceEvents }, name, true).push(listener);
-    return self;
-  };
-  self.prependOnceListener = function (name, listener) {
-    list(self, name, true).unshift(listener);
-    list({ _events: self._onceEvents }, name, true).unshift(listener);
-    return self;
-  };
-  self.off = function (name, listener) { return eventRemoveListener.call(self, name, listener); };
-  self.removeListener = self.off;
-  self.removeAllListeners = function (name) { return eventRemoveAllListeners.call(self, name); };
-  self.emit = function (name, a, b, c, d, e) { return eventEmit.call(self, name, a, b, c, d, e); };
-  self.listeners = function (name) { return eventListeners.call(self, name); };
-  self.rawListeners = function (name) { return eventRawListeners.call(self, name); };
-  self.listenerCount = function (name) { return eventListenerCount.call(self, name); };
-  self.eventNames = function () { return eventEventNames.call(self); };
-  self.setMaxListeners = function (n) { return eventSetMaxListeners.call(self, n); };
-  self.getMaxListeners = function () { return eventGetMaxListeners.call(self); };
+  this._events = {};
+  this._onceEvents = {};
+  this._maxListeners = EventEmitter.defaultMaxListeners;
+  this.captureRejections = false;
 }
+EventEmitter.prototype.on = function (name, listener) { list(this, name, true).push(listener); return this; };
+EventEmitter.prototype.addListener = EventEmitter.prototype.on;
+EventEmitter.prototype.prependListener = function (name, listener) { list(this, name, true).unshift(listener); return this; };
+EventEmitter.prototype.once = function (name, listener) {
+  list(this, name, true).push(listener);
+  list({ _events: this._onceEvents }, name, true).push(listener);
+  return this;
+};
+EventEmitter.prototype.prependOnceListener = function (name, listener) {
+  list(this, name, true).unshift(listener);
+  list({ _events: this._onceEvents }, name, true).unshift(listener);
+  return this;
+};
+EventEmitter.prototype.off = function (name, listener) { return eventRemoveListener.call(this, name, listener); };
+EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
+EventEmitter.prototype.removeAllListeners = function (name) { return eventRemoveAllListeners.call(this, name); };
+EventEmitter.prototype.emit = function (name, a, b, c, d, e) { return eventEmit.call(this, name, a, b, c, d, e); };
+EventEmitter.prototype.listeners = function (name) { return eventListeners.call(this, name); };
+EventEmitter.prototype.rawListeners = function (name) { return eventRawListeners.call(this, name); };
+EventEmitter.prototype.listenerCount = function (name) { return eventListenerCount.call(this, name); };
+EventEmitter.prototype.eventNames = function () { return eventEventNames.call(this); };
+EventEmitter.prototype.setMaxListeners = function (n) { return eventSetMaxListeners.call(this, n); };
+EventEmitter.prototype.getMaxListeners = function () { return eventGetMaxListeners.call(this); };
 EventEmitter.defaultMaxListeners = 10;
 EventEmitter.captureRejections = false;
 

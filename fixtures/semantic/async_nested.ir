@@ -105,7 +105,7 @@ module {
       promise_resolve %16, %15
       return
 
-  fn @inner [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @inner [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c28
@@ -204,7 +204,7 @@ module {
     bb9:
       unreachable
 
-  fn @outer [captures: $0.inner] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @outer [needs_prototype] [captures: $0.inner] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c56

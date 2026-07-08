@@ -69,7 +69,9 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let metadata = self.import_meta_metadata(call.span())?;
 
-        let filename_const = self.module.add_constant(Constant::String(metadata.filename));
+        let filename_const = self
+            .module
+            .add_constant(Constant::String(metadata.filename));
         let filename_val = self.alloc_value();
         self.current_function.append_instruction(
             block,

@@ -15,7 +15,10 @@ pub(crate) struct PackageScript {
 impl PackageScript {
     pub(crate) fn discover(start: Option<&Path>) -> Result<Option<Self>> {
         let mut current = match start {
-            Some(path) if path.is_file() => path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
+            Some(path) if path.is_file() => path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf(),
             Some(path) => path.to_path_buf(),
             None => env::current_dir().context("failed to read current directory")?,
         };
@@ -31,7 +34,10 @@ impl PackageScript {
                     .and_then(Value::as_object)
                     .cloned()
                     .unwrap_or_default();
-                return Ok(Some(Self { root: current, scripts }));
+                return Ok(Some(Self {
+                    root: current,
+                    scripts,
+                }));
             }
             if !current.pop() {
                 return Ok(None);
@@ -77,7 +83,11 @@ impl PackageScript {
     }
 }
 
-pub(crate) fn run_package_script(start: Option<&Path>, name: &str, args: &[OsString]) -> Result<()> {
+pub(crate) fn run_package_script(
+    start: Option<&Path>,
+    name: &str,
+    args: &[OsString],
+) -> Result<()> {
     let Some(package) = PackageScript::discover(start)? else {
         bail!("package.json not found for script `{name}`");
     };

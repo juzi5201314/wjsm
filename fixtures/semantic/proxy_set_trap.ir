@@ -31,7 +31,7 @@ module {
     c28 = number(5)
     c29 = string("x")
 
-  fn @anon_0 [params: $1.$env, $1.$this, $1.t, $1.p, $1.v, $1.r] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.t, $1.p, $1.v, $1.r] [entry=bb0]:
     bb0:
       %0 = load var $1.t
       %1 = const c22

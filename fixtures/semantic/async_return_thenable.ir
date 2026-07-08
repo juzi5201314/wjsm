@@ -49,7 +49,7 @@ module {
     c46 = functionref(@3)
     c47 = undefined
 
-  fn @anon_0 [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
       %0 = const c27
       %1 = load var $2.resolve
@@ -101,7 +101,7 @@ module {
       promise_resolve %20, %15
       return
 
-  fn @foo [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @foo [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c32

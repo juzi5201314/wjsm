@@ -59,12 +59,7 @@ pub(crate) fn create_child_process_host_object(caller: &mut Caller<'_, RuntimeSt
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = alloc_host_object(caller, &env, 2);
     let temp_root_len = caller.data().push_host_temp_roots([obj]);
-    install_child_process_method(
-        caller,
-        obj,
-        "spawnSync",
-        ChildProcessMethodKind::SpawnSync,
-    );
+    install_child_process_method(caller, obj, "spawnSync", ChildProcessMethodKind::SpawnSync);
     install_child_process_method(caller, obj, "execSync", ChildProcessMethodKind::ExecSync);
     caller.data().truncate_host_temp_roots(temp_root_len);
     obj
@@ -87,7 +82,8 @@ fn install_child_process_method(
     name: &str,
     kind: ChildProcessMethodKind,
 ) {
-    let callable = create_native_callable(caller.data(), NativeCallable::ChildProcessMethod { kind });
+    let callable =
+        create_native_callable(caller.data(), NativeCallable::ChildProcessMethod { kind });
     let _ = define_host_data_property_from_caller(caller, obj, name, callable);
 }
 
@@ -124,7 +120,9 @@ fn exec_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     };
     options.shell = true;
     match run_command(caller, &command, &[], &options) {
-        Ok(outcome) if outcome.status == Some(0) => create_buffer_from_bytes(caller, outcome.stdout),
+        Ok(outcome) if outcome.status == Some(0) => {
+            create_buffer_from_bytes(caller, outcome.stdout)
+        }
         Ok(outcome) => make_child_process_error(
             caller,
             &format!(
@@ -236,7 +234,11 @@ fn run_command(
         direct.args(args);
         direct
     };
-    if let Some(cwd) = options.cwd.as_deref().or(caller.data().process.cwd.as_deref()) {
+    if let Some(cwd) = options
+        .cwd
+        .as_deref()
+        .or(caller.data().process.cwd.as_deref())
+    {
         cmd.current_dir(cwd);
     }
     if !options.env_pairs.is_empty() {
@@ -255,7 +257,9 @@ fn run_command(
     let mut child = cmd.spawn().map_err(|err| err.to_string())?;
     if !options.input.is_empty() {
         match child.stdin.as_mut() {
-            Some(stdin) => stdin.write_all(&options.input).map_err(|err| err.to_string())?,
+            Some(stdin) => stdin
+                .write_all(&options.input)
+                .map_err(|err| err.to_string())?,
             None => return Err("failed to open child stdin".to_string()),
         }
     }

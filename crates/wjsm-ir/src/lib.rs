@@ -33,17 +33,13 @@ impl fmt::Display for ModuleIdOffsetError {
 
 impl std::error::Error for ModuleIdOffsetError {}
 
-pub fn offset_module_id(
-    module_id: ModuleId,
-    offset: u32,
-) -> Result<ModuleId, ModuleIdOffsetError> {
+pub fn offset_module_id(module_id: ModuleId, offset: u32) -> Result<ModuleId, ModuleIdOffsetError> {
     module_id
         .0
         .checked_add(offset)
         .map(ModuleId)
         .ok_or_else(|| ModuleIdOffsetError::new(module_id, offset))
 }
-
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Module {
@@ -262,11 +258,13 @@ pub struct Function {
     /// 方法的 [[HomeObject]]，用于实现 super 属性访问。
     /// 普通函数为 None；箭头函数可继承外层方法的 home object。
     pub home_object: Option<HomeObject>,
+    /// 该函数是否需要 prototype 属性（普通函数声明/表达式 = true；箭头/方法/类构造器 = false）。
+    /// 后端 init_function_props 据此决定是否创建 prototype 对象。
+    needs_prototype: bool,
     /// 函数声明的 JS 源码位置（1-indexed line:col）。
     /// 语义层从 SWC span 填入，后端编码到 WASM custom section 供运行时错误映射。
     source_span: Option<SourceSpan>,
 }
-
 impl Function {
     pub fn new(name: impl Into<String>, entry: BasicBlockId) -> Self {
         Self {
@@ -278,6 +276,7 @@ impl Function {
             captured_names: Vec::new(),
             known_callee_vars: std::collections::HashMap::new(),
             home_object: None,
+            needs_prototype: false,
             source_span: None,
         }
     }
@@ -316,6 +315,14 @@ impl Function {
 
     pub fn set_source_span(&mut self, span: SourceSpan) {
         self.source_span = Some(span);
+    }
+
+    pub fn needs_prototype(&self) -> bool {
+        self.needs_prototype
+    }
+
+    pub fn set_needs_prototype(&mut self, v: bool) {
+        self.needs_prototype = v;
     }
 
     /// 返回该函数调用的"已知函数声明"变量名→FunctionId 映射（Layer 3 callee 分析）。
@@ -377,6 +384,9 @@ impl Function {
         }
         if self.has_eval {
             let _ = write!(out, " [has_eval]");
+        }
+        if self.needs_prototype {
+            let _ = write!(out, " [needs_prototype]");
         }
         if !self.captured_names.is_empty() {
             let _ = write!(out, " [captures: ");

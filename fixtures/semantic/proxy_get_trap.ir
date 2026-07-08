@@ -28,7 +28,7 @@ module {
     c25 = string("get")
     c26 = string("x")
 
-  fn @anon_0 [params: $1.$env, $1.$this, $1.t, $1.p, $1.r] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.t, $1.p, $1.r] [entry=bb0]:
     bb0:
       %0 = const c22
       return %0

@@ -42,19 +42,22 @@ mod runtime_linker;
 mod runtime_microtask;
 mod runtime_module_loader;
 mod runtime_module_registry;
-mod runtime_node_crypto;
 mod runtime_node_child_process;
+mod runtime_node_crypto;
 mod runtime_node_data;
 mod runtime_node_fs;
 mod runtime_node_globals;
+mod runtime_node_net;
+mod runtime_node_dgram;
+mod runtime_node_tls;
 mod runtime_node_zlib;
 mod runtime_process;
 mod runtime_promises;
 pub use runtime_module_loader::{
     RuntimeInstantiatedModule, RuntimeInstantiationEnv, RuntimeModuleFormat,
     RuntimeModuleImportLink, RuntimeModuleInstantiationContext, RuntimeModuleLoadError,
-    RuntimeModuleLoadErrorCode, RuntimeModuleLoader, RuntimeModulePlacement,
-    RuntimeModuleReferrer, RuntimeModuleResolutionKind, RuntimeResolvedModule,
+    RuntimeModuleLoadErrorCode, RuntimeModuleLoader, RuntimeModulePlacement, RuntimeModuleReferrer,
+    RuntimeModuleResolutionKind, RuntimeResolvedModule,
 };
 pub use runtime_module_registry::{
     RuntimeModuleKey, RuntimeModuleRegistry, RuntimeModuleRequireResult, RuntimeModuleState,
@@ -960,6 +963,11 @@ impl Clone for RuntimeState {
             scope_record_next_handle: self.scope_record_next_handle,
             new_target: AtomicI64::new(self.new_target.load(Ordering::Relaxed)),
             fetch_http_clients: self.fetch_http_clients.clone(),
+            net_socket_table: self.net_socket_table.clone(),
+            net_server_table: self.net_server_table.clone(),
+            dgram_socket_table: self.dgram_socket_table.clone(),
+            tls_socket_table: self.tls_socket_table.clone(),
+            tls_server_table: self.tls_server_table.clone(),
             host_completion_tx: self.host_completion_tx.clone(),
             async_op_counter: self.async_op_counter.clone(),
             source_map: self.source_map.clone(),
@@ -1136,6 +1144,16 @@ struct RuntimeState {
     http_response_table: Arc<Mutex<Vec<HttpResponseEntry>>>,
     /// 按 redirect 策略复用的 reqwest HTTP 客户端（连接池）
     fetch_http_clients: Arc<Mutex<HashMap<RedirectMode, reqwest::Client>>>,
+    /// TCP socket 侧表：Node `net.Socket` 持有的宿主 TCP 半连接。
+    net_socket_table: Arc<HostSideTable<runtime_node_net::NetSocketEntry>>,
+    /// TCP server 侧表：Node `net.Server` 持有的监听器与 accept 队列。
+    net_server_table: Arc<HostSideTable<runtime_node_net::NetServerEntry>>,
+    /// UDP socket 侧表：Node `dgram.Socket` 持有的宿主 UDP socket。
+    dgram_socket_table: Arc<HostSideTable<runtime_node_dgram::DgramSocketEntry>>,
+    /// TLS socket 侧表：Node `tls.TLSSocket` 持有的宿主 TLS 流半连接。
+    tls_socket_table: Arc<HostSideTable<runtime_node_tls::TlsSocketEntry>>,
+    /// TLS server 侧表：Node `tls.Server` 持有的监听器与 accept 队列。
+    tls_server_table: Arc<HostSideTable<runtime_node_tls::TlsServerEntry>>,
     /// ReadableStream 侧表：存储流状态
     readable_stream_table: Arc<HostSideTable<ReadableStreamEntry>>,
     /// Reader 侧表：存储 reader → stream 映射
@@ -1540,6 +1558,11 @@ impl RuntimeState {
             abort_signal_table: Arc::new(Mutex::new(Vec::new())),
             http_response_table: Arc::new(Mutex::new(Vec::new())),
             fetch_http_clients: Arc::new(Mutex::new(HashMap::new())),
+            net_socket_table: Arc::new(HostSideTable::new()),
+            net_server_table: Arc::new(HostSideTable::new()),
+            dgram_socket_table: Arc::new(HostSideTable::new()),
+            tls_socket_table: Arc::new(HostSideTable::new()),
+            tls_server_table: Arc::new(HostSideTable::new()),
             readable_stream_table: Arc::new(HostSideTable::new()),
             reader_table: Arc::new(HostSideTable::new()),
             stream_controller_table: Arc::new(HostSideTable::new()),

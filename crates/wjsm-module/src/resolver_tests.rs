@@ -781,7 +781,10 @@ fn runtime_resolve_relative_file_returns_file_key() {
     assert_eq!(resolved.key, RuntimeModuleKey::File(dep_path.clone()));
     assert_eq!(resolved.path.as_deref(), Some(dep_path.as_path()));
     assert_eq!(resolved.format, RuntimeModuleFormat::Esm);
-    assert_eq!(resolved.url, url::Url::from_file_path(&dep_path).unwrap().to_string());
+    assert_eq!(
+        resolved.url,
+        url::Url::from_file_path(&dep_path).unwrap().to_string()
+    );
 }
 
 #[test]
@@ -806,7 +809,10 @@ fn runtime_resolve_json_file_returns_json_key() {
     assert_eq!(resolved.key, RuntimeModuleKey::Json(json_path.clone()));
     assert_eq!(resolved.path.as_deref(), Some(json_path.as_path()));
     assert_eq!(resolved.format, RuntimeModuleFormat::Json);
-    assert_eq!(resolved.url, url::Url::from_file_path(&json_path).unwrap().to_string());
+    assert_eq!(
+        resolved.url,
+        url::Url::from_file_path(&json_path).unwrap().to_string()
+    );
 }
 
 #[test]
@@ -818,9 +824,21 @@ fn runtime_resolve_package_uses_require_condition() {
         "node_modules/pkg/package.json",
         r#"{"exports":{".":{"import":"./esm.mjs","require":"./cjs.cjs","default":"./default.js"}}}"#,
     );
-    write_file(&root, "node_modules/pkg/esm.mjs", "export const value = 'esm';\n");
-    write_file(&root, "node_modules/pkg/cjs.cjs", "module.exports = 'cjs';\n");
-    write_file(&root, "node_modules/pkg/default.js", "export default 'default';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/esm.mjs",
+        "export const value = 'esm';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/cjs.cjs",
+        "module.exports = 'cjs';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/default.js",
+        "export default 'default';\n",
+    );
 
     let resolved = resolve_runtime_specifier(
         "pkg",
@@ -831,7 +849,13 @@ fn runtime_resolve_package_uses_require_condition() {
     )
     .expect("runtime require should resolve package");
 
-    assert!(resolved.path.as_deref().unwrap().ends_with(Path::new("node_modules/pkg/cjs.cjs")));
+    assert!(
+        resolved
+            .path
+            .as_deref()
+            .unwrap()
+            .ends_with(Path::new("node_modules/pkg/cjs.cjs"))
+    );
     assert_eq!(resolved.format, RuntimeModuleFormat::CommonJs);
 }
 
@@ -845,9 +869,21 @@ fn runtime_resolve_import_meta_uses_import_condition() {
         "node_modules/pkg/package.json",
         r#"{"exports":{".":{"import":"./esm.mjs","require":"./cjs.cjs","default":"./default.js"}}}"#,
     );
-    write_file(&root, "node_modules/pkg/esm.mjs", "export const value = 'esm';\n");
-    write_file(&root, "node_modules/pkg/cjs.cjs", "module.exports = 'cjs';\n");
-    write_file(&root, "node_modules/pkg/default.js", "export default 'default';\n");
+    write_file(
+        &root,
+        "node_modules/pkg/esm.mjs",
+        "export const value = 'esm';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/cjs.cjs",
+        "module.exports = 'cjs';\n",
+    );
+    write_file(
+        &root,
+        "node_modules/pkg/default.js",
+        "export default 'default';\n",
+    );
 
     let resolved = resolve_runtime_specifier(
         "pkg",
@@ -858,7 +894,13 @@ fn runtime_resolve_import_meta_uses_import_condition() {
     )
     .expect("import.meta.resolve should use import conditions");
 
-    assert!(resolved.path.as_deref().unwrap().ends_with(Path::new("node_modules/pkg/esm.mjs")));
+    assert!(
+        resolved
+            .path
+            .as_deref()
+            .unwrap()
+            .ends_with(Path::new("node_modules/pkg/esm.mjs"))
+    );
     assert_eq!(resolved.format, RuntimeModuleFormat::Esm);
 }
 
@@ -876,7 +918,10 @@ fn runtime_resolve_builtin_returns_builtin_key() {
     )
     .expect("builtin should resolve");
 
-    assert_eq!(resolved.key, RuntimeModuleKey::Builtin("node:path".to_string()));
+    assert_eq!(
+        resolved.key,
+        RuntimeModuleKey::Builtin("node:path".to_string())
+    );
     assert_eq!(resolved.path, None);
     assert_eq!(resolved.url, "node:path");
     assert_eq!(resolved.format, RuntimeModuleFormat::Builtin);
@@ -910,7 +955,11 @@ fn resolve_paths_for_relative_returns_null_marker() {
         RuntimeResolvePaths::Null
     );
     assert_eq!(
-        resolve_runtime_paths(&root.join("src/dep.js").display().to_string(), &parent, &root),
+        resolve_runtime_paths(
+            &root.join("src/dep.js").display().to_string(),
+            &parent,
+            &root
+        ),
         RuntimeResolvePaths::Null
     );
     assert_eq!(
@@ -1542,7 +1591,8 @@ fn resolve_rejects_ts_export_assignment() {
 
 fn extracted_dynamic_imports(source: &str) -> Vec<String> {
     let module = wjsm_parser::parse_module(source).expect("source should parse");
-    ModuleResolver::extract_dynamic_imports(&module).expect("dynamic import extraction should succeed")
+    ModuleResolver::extract_dynamic_imports(&module)
+        .expect("dynamic import extraction should succeed")
 }
 
 #[test]

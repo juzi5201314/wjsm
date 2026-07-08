@@ -2,8 +2,8 @@
 // 将多个模块编译为单一 WASM 二进制
 
 mod builtin_modules;
-mod cjs_require_analysis;
 mod bundler;
+mod cjs_require_analysis;
 pub mod cjs_transform;
 mod exports;
 mod graph;

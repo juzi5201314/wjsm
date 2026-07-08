@@ -140,6 +140,9 @@ pub(crate) fn capture_startup_snapshot(
                 NativeCallable::FsMethod { kind } => kind.method(),
                 NativeCallable::ZlibMethod { kind } => kind.method(),
                 NativeCallable::ChildProcessMethod { kind } => kind.method(),
+                NativeCallable::NetMethod { kind } => kind.method(),
+                NativeCallable::DgramMethod { kind } => kind.method(),
+                NativeCallable::TlsMethod { kind } => kind.method(),
                 _ => 0,
             });
         }

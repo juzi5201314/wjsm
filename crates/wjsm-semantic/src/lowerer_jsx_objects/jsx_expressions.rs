@@ -169,10 +169,7 @@ impl Lowerer {
         }
     }
 
-    pub(crate) fn import_meta_metadata(
-        &self,
-        span: Span,
-    ) -> Result<ModuleMetadata, LoweringError> {
+    pub(crate) fn import_meta_metadata(&self, span: Span) -> Result<ModuleMetadata, LoweringError> {
         let Some(module_id) = self.current_module_id else {
             return Err(self.error(
                 span,
@@ -263,7 +260,9 @@ impl Lowerer {
         object: ValueId,
         filename: String,
     ) {
-        let key_const = self.module.add_constant(Constant::String("resolve".to_string()));
+        let key_const = self
+            .module
+            .add_constant(Constant::String("resolve".to_string()));
         let key_val = self.alloc_value();
         self.current_function.append_instruction(
             block,

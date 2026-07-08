@@ -26,7 +26,7 @@ module {
     c23 = string("deleteProperty")
     c24 = string("x")
 
-  fn @anon_0 [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
     bb0:
       %0 = const c20
       return %0

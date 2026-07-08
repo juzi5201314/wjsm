@@ -26,7 +26,7 @@ module {
     c23 = number(42)
     c24 = string("value")
 
-  fn @makeResource [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
+  fn @makeResource [needs_prototype] [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:
       %0 = new_object(capacity=4)
       %1 = load var $1.value

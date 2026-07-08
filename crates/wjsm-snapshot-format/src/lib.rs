@@ -13,9 +13,9 @@ use wjsm_ir::constants;
 use wjsm_ir::value;
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
-/// 格式版本:v8 header 显式记录 immortal objects 相对末尾。
+/// 格式版本:v9 函数属性对象新增 prototype + constructor 属性。
 /// 任何 wire 改动必须递增。
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 8;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 9;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
@@ -160,6 +160,9 @@ pub enum SnapshotNativeCallable {
     FsMethod = 76,
     ZlibMethod = 77,
     ChildProcessMethod = 78,
+    NetMethod = 79,
+    DgramMethod = 80,
+    TlsMethod = 81,
 }
 
 impl SnapshotNativeCallable {
@@ -244,6 +247,9 @@ impl SnapshotNativeCallable {
             76 => Some(Self::FsMethod),
             77 => Some(Self::ZlibMethod),
             78 => Some(Self::ChildProcessMethod),
+            79 => Some(Self::NetMethod),
+            80 => Some(Self::DgramMethod),
+            81 => Some(Self::TlsMethod),
             _ => None,
         }
     }
@@ -674,7 +680,7 @@ pub fn abi_hash() -> u64 {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=78 {
+    for d in 0u32..=81 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);
@@ -767,7 +773,7 @@ mod tests {
             s.hash(&mut hasher);
         }
 
-        for d in 0u32..=78 {
+        for d in 0u32..=81 {
             if SnapshotNativeCallable::from_discriminant(d).is_some() {
                 d.hash(&mut hasher);
             }
@@ -828,8 +834,8 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_format_version_is_v8_immortal_boundary() {
-        assert_eq!(SNAPSHOT_FORMAT_VERSION, 8);
+    fn snapshot_format_version_is_v9_prototype_boundary() {
+        assert_eq!(SNAPSHOT_FORMAT_VERSION, 9);
     }
 
     #[test]

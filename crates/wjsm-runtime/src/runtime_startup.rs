@@ -750,6 +750,17 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
         }
         ensure_no_startup_error(&bundle.store)?;
     }
+    run_current_module_function_props(bundle).await?;
+    install_array_iterator_methods(&mut bundle.store, &bundle.wasm_env);
+    crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
+    crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    crate::runtime_heap::ensure_promise_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    crate::runtime_heap::ensure_regexp_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    ensure_no_startup_error(&bundle.store)?;
+    Ok(())
+}
+
+async fn run_current_module_function_props(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
     if let Ok(function_props_fn) = bundle
         .instance
         .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_init_function_props")
@@ -762,12 +773,6 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
         }
         ensure_no_startup_error(&bundle.store)?;
     }
-    install_array_iterator_methods(&mut bundle.store, &bundle.wasm_env);
-    crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
-    crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
-    crate::runtime_heap::ensure_promise_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
-    crate::runtime_heap::ensure_regexp_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
-    ensure_no_startup_error(&bundle.store)?;
     Ok(())
 }
 
@@ -814,24 +819,40 @@ pub(super) async fn try_restore_snapshot(
             return false;
         }
     };
-    match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)
-        .and_then(|()| enforce_heap_limit(&mut bundle.store, &bundle.wasm_env))
-        .and_then(|()| {
-            let immortal_objects_end = bundle
-                .wasm_env
-                .heap_ptr
-                .get(&mut bundle.store)
-                .i32()
-                .unwrap_or(0)
-                .max(0) as usize;
-            record_and_attach_gc_heap(&mut bundle.store, &bundle.wasm_env, immortal_objects_end)
-        }) {
-        Ok(()) => true,
-        Err(e) => {
-            if startup_snapshot_debug_enabled() {
-                eprintln!("startup snapshot restore failed: {e:#}");
-            }
-            false
+    if let Err(e) =
+        startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)
+    {
+        if startup_snapshot_debug_enabled() {
+            eprintln!("startup snapshot restore failed: {e:#}");
         }
+        return false;
     }
+    if let Err(e) = enforce_heap_limit(&mut bundle.store, &bundle.wasm_env) {
+        if startup_snapshot_debug_enabled() {
+            eprintln!("startup snapshot restore failed: {e:#}");
+        }
+        return false;
+    }
+    if let Err(e) = run_current_module_function_props(bundle).await {
+        if startup_snapshot_debug_enabled() {
+            eprintln!("startup snapshot restore failed: {e:#}");
+        }
+        return false;
+    }
+    let immortal_objects_end = bundle
+        .wasm_env
+        .heap_ptr
+        .get(&mut bundle.store)
+        .i32()
+        .unwrap_or(0)
+        .max(0) as usize;
+    if let Err(e) =
+        record_and_attach_gc_heap(&mut bundle.store, &bundle.wasm_env, immortal_objects_end)
+    {
+        if startup_snapshot_debug_enabled() {
+            eprintln!("startup snapshot restore failed: {e:#}");
+        }
+        return false;
+    }
+    true
 }

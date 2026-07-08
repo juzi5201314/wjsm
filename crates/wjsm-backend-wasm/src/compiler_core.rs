@@ -40,7 +40,6 @@ impl Compiler {
         self.function_table.push(wasm_idx);
     }
 
-
     pub(crate) fn new_with_data_base(mode: CompileMode, data_base: u32) -> Self {
         Self::new_with_layout(mode, data_base, 0)
     }
@@ -308,6 +307,7 @@ impl Compiler {
             mode,
             function_param_counts: Vec::new(),
             function_names: Vec::new(),
+            function_needs_prototype: Vec::new(),
             current_fn_liveness: None,
             current_fn_value_ty: None,
             current_fn_var_liveness: None,

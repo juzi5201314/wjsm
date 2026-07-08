@@ -347,12 +347,7 @@ where
         };
         if value::is_exception(result) {
             let reason = exception_reason(self.caller, result);
-            finish_runtime_loading_errored(
-                self.caller,
-                resolved,
-                entry_module_id,
-                reason,
-            );
+            finish_runtime_loading_errored(self.caller, resolved, entry_module_id, reason);
             let message = render_value(self.caller, reason)
                 .unwrap_or_else(|_| "runtime module threw an exception".to_string());
             return Err(RuntimeModuleLoadError::new(
@@ -627,7 +622,9 @@ fn finish_runtime_loading_errored(
 ) {
     if !matches!(
         resolved.format,
-        RuntimeModuleFormat::CommonJs | RuntimeModuleFormat::EsModule | RuntimeModuleFormat::Builtin
+        RuntimeModuleFormat::CommonJs
+            | RuntimeModuleFormat::EsModule
+            | RuntimeModuleFormat::Builtin
     ) {
         return;
     }
@@ -647,7 +644,9 @@ fn finish_runtime_loading_errored_with_message(
 ) {
     if !matches!(
         resolved.format,
-        RuntimeModuleFormat::CommonJs | RuntimeModuleFormat::EsModule | RuntimeModuleFormat::Builtin
+        RuntimeModuleFormat::CommonJs
+            | RuntimeModuleFormat::EsModule
+            | RuntimeModuleFormat::Builtin
     ) {
         return;
     }

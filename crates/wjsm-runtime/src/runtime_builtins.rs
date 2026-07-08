@@ -875,9 +875,18 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ZlibMethod { kind } => Some(crate::runtime_node_zlib::call_zlib_method(
             caller, kind, &args,
         )),
-        NativeCallable::ChildProcessMethod { kind } => Some(
-            crate::runtime_node_child_process::call_child_process_method(caller, kind, &args),
-        ),
+        NativeCallable::ChildProcessMethod { kind } => {
+            Some(crate::runtime_node_child_process::call_child_process_method(caller, kind, &args))
+        }
+        NativeCallable::NetMethod { kind } => {
+            Some(crate::runtime_node_net::call_net_method(caller, kind, &args))
+        }
+        NativeCallable::DgramMethod { kind } => {
+            Some(crate::runtime_node_dgram::call_dgram_method(caller, kind, &args))
+        }
+        NativeCallable::TlsMethod { kind } => {
+            Some(crate::runtime_node_tls::call_tls_method(caller, kind, &args))
+        }
         NativeCallable::CryptoDigestMethod { state, kind } => {
             Some(crate::runtime_node_crypto::call_crypto_digest_method(
                 caller, this_val, state, kind, &args,

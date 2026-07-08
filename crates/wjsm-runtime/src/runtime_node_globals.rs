@@ -141,6 +141,18 @@ pub(crate) fn install_node_web_globals_from_caller(
     let _ = caller.data().push_host_temp_roots([fs]);
     define_global(caller, global_obj, "__wjsm_node_fs", fs);
 
+    let net = crate::runtime_node_net::create_net_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([net]);
+    define_global(caller, global_obj, "__wjsm_node_net", net);
+
+    let dgram = crate::runtime_node_dgram::create_dgram_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([dgram]);
+    define_global(caller, global_obj, "__wjsm_node_dgram", dgram);
+
+    let tls = crate::runtime_node_tls::create_tls_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([tls]);
+    define_global(caller, global_obj, "__wjsm_node_tls", tls);
+
     let crypto = crate::runtime_node_crypto::create_crypto_host_object(caller);
     let _ = caller.data().push_host_temp_roots([crypto]);
     define_global(caller, global_obj, "__wjsm_node_crypto", crypto);

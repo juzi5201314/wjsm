@@ -200,7 +200,10 @@ impl RuntimeModuleRegistry {
     }
 
     pub(crate) fn is_loading(&self, key: &RuntimeModuleKey) -> bool {
-        matches!(self.by_key.get(key), Some(RuntimeModuleState::Loading { .. }))
+        matches!(
+            self.by_key.get(key),
+            Some(RuntimeModuleState::Loading { .. })
+        )
     }
 
     pub(crate) fn loading_module(&self, key: &RuntimeModuleKey) -> Option<(i64, i64)> {
@@ -501,17 +504,24 @@ mod tests {
         registry.register_static_namespace(1, static_namespace);
         registry.register_static_namespace(runtime_base + 1, runtime_namespace);
 
-        assert_eq!(registry.get_namespace_by_module_id(1), Some(static_namespace));
+        assert_eq!(
+            registry.get_namespace_by_module_id(1),
+            Some(static_namespace)
+        );
         assert_eq!(
             registry.get_namespace_by_module_id(runtime_base + 1),
             Some(runtime_namespace)
         );
-        assert!(registry
-            .by_key
-            .contains_key(&RuntimeModuleKey::PrecompiledModuleId(1)));
-        assert!(registry
-            .by_key
-            .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base + 1)));
+        assert!(
+            registry
+                .by_key
+                .contains_key(&RuntimeModuleKey::PrecompiledModuleId(1))
+        );
+        assert!(
+            registry
+                .by_key
+                .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base + 1))
+        );
     }
 
     #[test]
@@ -524,19 +534,18 @@ mod tests {
         let namespace = obj(70);
 
         registry.register_static_namespace(runtime_base, namespace);
-        registry.finish_loaded(
-            key.clone(),
-            Some(runtime_base),
-            obj(71),
-            obj(72),
-            namespace,
-        );
+        registry.finish_loaded(key.clone(), Some(runtime_base), obj(71), obj(72), namespace);
 
-        assert_eq!(registry.get_namespace_by_module_id(runtime_base), Some(namespace));
+        assert_eq!(
+            registry.get_namespace_by_module_id(runtime_base),
+            Some(namespace)
+        );
         assert!(registry.by_key.contains_key(&key));
-        assert!(!registry
-            .by_key
-            .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base)));
+        assert!(
+            !registry
+                .by_key
+                .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base))
+        );
     }
 
     #[test]
@@ -558,9 +567,11 @@ mod tests {
             RuntimeModuleImportResult::Missing
         );
         assert!(registry.by_key.contains_key(&key));
-        assert!(!registry
-            .by_key
-            .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base)));
+        assert!(
+            !registry
+                .by_key
+                .contains_key(&RuntimeModuleKey::RuntimeModuleId(runtime_base))
+        );
         assert_eq!(registry.roots(), vec![error]);
     }
 }

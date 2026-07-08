@@ -88,7 +88,12 @@ pub fn resolve_runtime_paths(
         .parent()
         .unwrap_or(referrer_path)
         .canonicalize()
-        .unwrap_or_else(|_| referrer_path.parent().unwrap_or(referrer_path).to_path_buf());
+        .unwrap_or_else(|_| {
+            referrer_path
+                .parent()
+                .unwrap_or(referrer_path)
+                .to_path_buf()
+        });
     let mut paths = Vec::new();
 
     loop {
@@ -177,6 +182,8 @@ fn uses_node_modules_search_paths(specifier: &str) -> bool {
     if !ModuleResolver::is_bare_specifier(specifier) {
         return false;
     }
-    matches!(builtin_modules::lookup(specifier), BuiltinLookup::NotBuiltin)
+    matches!(
+        builtin_modules::lookup(specifier),
+        BuiltinLookup::NotBuiltin
+    )
 }
-

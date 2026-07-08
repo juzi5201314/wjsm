@@ -36,7 +36,7 @@ module {
     c33 = string("World")
     c34 = string("Moon")
 
-  fn @tag [params: $1.$env, $1.$this, $1.strings, $1.a, $1.b] [entry=bb0]:
+  fn @tag [needs_prototype] [params: $1.$env, $1.$this, $1.strings, $1.a, $1.b] [entry=bb0]:
     bb0:
       %0 = load var $1.strings
       %1 = const c20

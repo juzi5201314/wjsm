@@ -24,6 +24,8 @@ impl Compiler {
                 .count() as u32;
             self.function_param_counts.push(declared_param_count);
             self.function_names.push(function.name().to_string());
+            self.function_needs_prototype
+                .push(function.needs_prototype());
 
             if is_module_entry_ir_function(function.name()) {
                 if self.mode == CompileMode::Eval {

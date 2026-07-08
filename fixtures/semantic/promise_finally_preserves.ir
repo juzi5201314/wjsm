@@ -36,11 +36,11 @@ module {
     c33 = functionref(@4)
     c34 = undefined
 
-  fn @anon_0 [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+  fn @anon_1 [needs_prototype] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = load var $2.v
       %1 = call builtin.console.log(%0)
@@ -52,11 +52,11 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @anon_2 [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @anon_2 [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+  fn @anon_3 [needs_prototype] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = load var $4.v
       %1 = call builtin.console.log(%0)
@@ -68,7 +68,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @anon_4 [params: $5.$env, $5.$this, $5.e] [entry=bb0]:
+  fn @anon_4 [needs_prototype] [params: $5.$env, $5.$this, $5.e] [entry=bb0]:
     bb0:
       %0 = load var $5.e
       %1 = call builtin.console.log(%0)

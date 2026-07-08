@@ -30,14 +30,14 @@ module {
     c27 = number(3)
     c28 = number(4)
 
-  fn @target [params: $1.$env, $1.$this, $1.a, $1.b] [entry=bb0]:
+  fn @target [needs_prototype] [params: $1.$env, $1.$this, $1.a, $1.b] [entry=bb0]:
     bb0:
       %0 = load var $1.a
       %1 = load var $1.b
       %2 = add %0, %1
       return %2
 
-  fn @anon_1 [params: $2.$env, $2.$this, $2.t, $2.thisArg, $2.args] [entry=bb0]:
+  fn @anon_1 [needs_prototype] [params: $2.$env, $2.$this, $2.t, $2.thisArg, $2.args] [entry=bb0]:
     bb0:
       %0 = load var $2.args
       %1 = const c21

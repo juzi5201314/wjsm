@@ -27,7 +27,7 @@ module {
     c24 = string("double")
     c25 = number(5)
 
-  fn @double [params: $2.$env, $2.$this, $2.n] [entry=bb0]:
+  fn @double [needs_prototype] [params: $2.$env, $2.$this, $2.n] [entry=bb0]:
     bb0:
       %0 = load var $2.n
       %1 = const c21

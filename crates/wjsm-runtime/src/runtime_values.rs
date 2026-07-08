@@ -1607,7 +1607,34 @@ pub(crate) fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -
         // Symbol: 引用比较（同一 handle）
         7 => value::encode_bool(a == b),
         // object/function/iterator/enumerator/exception: 引用比较
-        _ => value::encode_bool(a == b),
+        _ => {
+            // 快速路径：相同 NaN-boxed 值
+            if a == b {
+                return value::encode_bool(true);
+            }
+            // TAG_FUNCTION vs TAG_CLOSURE 交叉比较：
+            // 闭包的 prototype.constructor 设置为 encode_function_idx(func_idx)（TAG_FUNCTION），
+            // 但用户可见的函数值是 TAG_CLOSURE。两者应视为同一函数（ECMAScript 中无区分）。
+            let a_is_func = value::is_function(a);
+            let b_is_func = value::is_function(b);
+            let a_is_closure = value::is_closure(a);
+            let b_is_closure = value::is_closure(b);
+            if (a_is_func && b_is_closure) || (a_is_closure && b_is_func) {
+                let func_idx = if a_is_func { a as u32 } else { b as u32 };
+                let closure_idx = if a_is_closure { a as u32 } else { b as u32 };
+                let closures = caller
+                    .data()
+                    .closures
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let eq = closures
+                    .get(closure_idx as usize)
+                    .map(|c| c.func_idx as u32 == func_idx)
+                    .unwrap_or(false);
+                return value::encode_bool(eq);
+            }
+            value::encode_bool(false)
+        }
     }
 }
 

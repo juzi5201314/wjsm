@@ -128,7 +128,7 @@ module {
     bb7:
       unreachable
 
-  fn @inc [captures: $0.undefined, $0.x] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @inc [needs_prototype] [captures: $0.undefined, $0.x] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c38

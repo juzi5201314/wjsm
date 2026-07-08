@@ -92,7 +92,7 @@ module {
       promise_resolve %20, %19
       return
 
-  fn @double [params: $2.$env, $2.$this, $2.x] [entry=bb0]:
+  fn @double [needs_prototype] [params: $2.$env, $2.$this, $2.x] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c29

@@ -33,7 +33,7 @@ module {
     c30 = string("y")
     c31 = string("z")
 
-  fn @anon_0 [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
     bb0:
       %0 = load var $1.p
       %1 = const c24

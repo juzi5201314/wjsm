@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+function function 4
+listening true
+connected
+closed
+--- stderr ---

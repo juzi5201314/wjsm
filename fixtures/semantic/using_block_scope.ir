@@ -33,7 +33,7 @@ module {
     c30 = number(6)
     c31 = string("after")
 
-  fn @anon_0 [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       %1 = call builtin.console.log(%0)
@@ -45,7 +45,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @makeDisposable [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
+  fn @makeDisposable [needs_prototype] [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
     bb0:
       %0 = new_object(capacity=4)
       %1 = load var $1.name

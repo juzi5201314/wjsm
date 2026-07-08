@@ -137,7 +137,7 @@ module {
     bb7:
       unreachable
 
-  fn @anon_0 [captures: $0.undefined, $1.count] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [captures: $0.undefined, $1.count] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c40
@@ -160,7 +160,7 @@ module {
       call builtin.async_function.resume(%7, %9, %12, %13, %14)
       return %4
 
-  fn @makeCounter [captures: $0.undefined] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @makeCounter [needs_prototype] [captures: $0.undefined] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       store var $1.count, %0

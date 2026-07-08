@@ -134,9 +134,10 @@ impl Lowerer {
         call: &swc_ast::CallExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        let first_arg = call.args.first().ok_or_else(|| {
-            self.error(call.span, "import() requires a module specifier")
-        })?;
+        let first_arg = call
+            .args
+            .first()
+            .ok_or_else(|| self.error(call.span, "import() requires a module specifier"))?;
 
         if call.args.len() > 1 {
             // JSON/import-attributes are outside Task 5; reject options before any
@@ -161,7 +162,9 @@ impl Lowerer {
 
     fn static_dynamic_import_specifier(&self, expr: &swc_ast::Expr) -> Option<String> {
         match expr {
-            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => Some(s.value.to_string_lossy().into_owned()),
+            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => {
+                Some(s.value.to_string_lossy().into_owned())
+            }
             swc_ast::Expr::Tpl(tpl) if tpl.exprs.is_empty() => {
                 let mut result = String::new();
                 for quasi in &tpl.quasis {
@@ -208,7 +211,10 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let mut call_block = block;
         let (specifier_val, abrupt_specifiers) = self
-            .lower_expr_collecting_exception_forks_then_continue(&first_arg.expr, &mut call_block)?;
+            .lower_expr_collecting_exception_forks_then_continue(
+                &first_arg.expr,
+                &mut call_block,
+            )?;
         let normal_promise = self.emit_runtime_dynamic_import_call(call_block, specifier_val);
 
         if abrupt_specifiers.is_empty() {
@@ -217,8 +223,12 @@ impl Lowerer {
         }
 
         let merge_block = self.current_function.new_block();
-        self.current_function
-            .set_terminator(call_block, Terminator::Jump { target: merge_block });
+        self.current_function.set_terminator(
+            call_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
         let mut sources = Vec::with_capacity(abrupt_specifiers.len() + 1);
         sources.push(PhiSource {
             predecessor: call_block,
@@ -240,13 +250,8 @@ impl Lowerer {
         }
 
         let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            merge_block,
-            Instruction::Phi {
-                dest,
-                sources,
-            },
-        );
+        self.current_function
+            .append_instruction(merge_block, Instruction::Phi { dest, sources });
         self.expr_merge_block = Some(merge_block);
         Ok(dest)
     }

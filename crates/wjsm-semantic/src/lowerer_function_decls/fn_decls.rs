@@ -91,6 +91,7 @@ impl Lowerer {
         for block in blocks {
             ir_function.push_block(block);
         }
+        ir_function.set_needs_prototype(true);
         let function_id = self.module.push_function(ir_function);
 
         // Restore the outer function context.

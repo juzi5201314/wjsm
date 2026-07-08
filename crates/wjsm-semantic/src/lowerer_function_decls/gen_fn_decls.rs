@@ -429,6 +429,7 @@ impl Lowerer {
         for b in blocks {
             wrapper_ir_function.push_block(b);
         }
+        wrapper_ir_function.set_needs_prototype(true);
         let wrapper_fn_id = self.module.push_function(wrapper_ir_function);
         self.pop_function_context();
 

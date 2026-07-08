@@ -174,7 +174,7 @@ module {
     bb21:
       unreachable
 
-  fn @run [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @run [needs_prototype] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c39

@@ -119,7 +119,7 @@ module {
     bb10:
       unreachable
 
-  fn @recover [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @recover [needs_prototype] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c35

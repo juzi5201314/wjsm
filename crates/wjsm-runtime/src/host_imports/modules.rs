@@ -5,8 +5,8 @@ use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
-use crate::*;
 use crate::runtime_module_registry::RuntimeModuleImportResult;
+use crate::*;
 
 pub(crate) fn define_modules(
     linker: &mut Linker<RuntimeState>,
@@ -231,7 +231,10 @@ pub(crate) fn create_import_meta_resolve(
         Ok(referrer) => referrer,
         Err(exception) => return exception,
     };
-    create_native_callable(caller.data(), NativeCallable::ImportMetaResolve { referrer })
+    create_native_callable(
+        caller.data(),
+        NativeCallable::ImportMetaResolve { referrer },
+    )
 }
 
 pub(crate) fn call_import_meta_resolve(
@@ -247,14 +250,12 @@ pub(crate) fn call_import_meta_resolve(
         Ok(loader) => loader,
         Err(exception) => return exception,
     };
-    let resolved = match loader.resolve_for_runtime(
-        referrer,
-        &specifier,
-        RuntimeModuleResolutionKind::Import,
-    ) {
-        Ok(resolved) => resolved,
-        Err(error) => return module_load_error_exception(caller, &specifier, error),
-    };
+    let resolved =
+        match loader.resolve_for_runtime(referrer, &specifier, RuntimeModuleResolutionKind::Import)
+        {
+            Ok(resolved) => resolved,
+            Err(error) => return module_load_error_exception(caller, &specifier, error),
+        };
     store_runtime_string(caller, resolved.url)
 }
 

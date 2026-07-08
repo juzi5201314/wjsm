@@ -105,7 +105,7 @@ impl Compiler {
     pub(super) fn compile_init_function_props_function(&mut self) {
         let previous_shadow_sp_scratch_idx = self.shadow_sp_scratch_idx;
         self.shadow_sp_scratch_idx = 0;
-        self.current_func = Some(Function::new(vec![(1, ValType::I32)]));
+        self.current_func = Some(Function::new(vec![(2, ValType::I32)]));
 
         if self.mode == CompileMode::Normal {
             self.emit(WasmInstruction::GlobalGet(
@@ -118,16 +118,36 @@ impl Compiler {
             self.emit(WasmInstruction::Return);
             self.emit(WasmInstruction::End);
 
+            // cold startup: obj_table_count == function_props_base，按旧布局从 base 分配；
+            // snapshot restore: obj_table_count 已在 restored heap 之后，不能回退覆盖 snapshot 对象。
+            // 此时把当前模块的 function_props_base 前移到 obj_table_count，再连续分配本模块函数属性对象。
+            self.emit(WasmInstruction::GlobalGet(self.obj_table_count_global_idx));
+            self.emit(WasmInstruction::GlobalGet(
+                self.function_props_base_global_idx,
+            ));
+            self.emit(WasmInstruction::I32GtU);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::GlobalGet(self.obj_table_count_global_idx));
+            self.emit(WasmInstruction::GlobalSet(
+                self.function_props_base_global_idx,
+            ));
+            self.emit(WasmInstruction::Else);
             self.emit(WasmInstruction::GlobalGet(
                 self.function_props_base_global_idx,
             ));
             self.emit(WasmInstruction::GlobalSet(self.obj_table_count_global_idx));
+            self.emit(WasmInstruction::End);
         }
 
         let length_name_id = self.intern_data_string("length");
         let name_name_id = self.intern_data_string("name");
+        let constructor_name_id = self.intern_data_string("constructor");
+        let prototype_name_id = self.intern_data_string("prototype");
         let box_base = value::BOX_BASE as i64;
         let tag_object = (value::TAG_OBJECT << 32) as i64;
+        let proto_handle_local = 1u32;
+        // Pass 1: 为所有 IR 函数分配连续的属性对象（function_props_base + i）
+        // 必须连续分配，因为 obj_get/obj_set 假设 handle = func_idx + function_props_base
         for i in 0..self.num_ir_functions as usize {
             self.emit(WasmInstruction::I32Const(8));
             self.emit(WasmInstruction::Call(self.obj_new_func_idx));
@@ -151,6 +171,49 @@ impl Compiler {
             self.emit(WasmInstruction::I64Const(value::encode_string_ptr(
                 name_ptr,
             )));
+            self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+        }
+
+        // Pass 2: 为需要 prototype 的函数创建 prototype 对象并设置 constructor 属性
+        // 此时所有 function_props 已分配完毕，prototype 对象从 function_props_base + num_ir_functions 开始
+        for i in 0..self.num_ir_functions as usize {
+            if !self.function_needs_prototype[i] {
+                continue;
+            }
+            // func_props handle = function_props_base + i（Pass 1 已分配）
+            self.emit(WasmInstruction::I32Const(i as i32));
+            self.emit(WasmInstruction::GlobalGet(
+                self.function_props_base_global_idx,
+            ));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+
+            // 1. 创建 prototype 对象
+            self.emit(WasmInstruction::I32Const(4));
+            self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+            self.emit(WasmInstruction::LocalSet(proto_handle_local));
+
+            // 2. prototype.constructor = encode_function_idx(i)
+            self.emit(WasmInstruction::LocalGet(proto_handle_local));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Const(box_base | tag_object));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::I32Const(constructor_name_id as i32));
+            self.emit(WasmInstruction::I64Const(value::encode_function_idx(
+                i as u32,
+            )));
+            self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+
+            // 3. func_props.prototype = proto 对象
+            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Const(box_base | tag_object));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::I32Const(prototype_name_id as i32));
+            self.emit(WasmInstruction::LocalGet(proto_handle_local));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Const(box_base | tag_object));
+            self.emit(WasmInstruction::I64Or);
             self.emit(WasmInstruction::Call(self.obj_set_func_idx));
         }
 

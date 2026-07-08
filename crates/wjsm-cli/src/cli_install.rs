@@ -104,7 +104,10 @@ fn select_version(metadata: &Value, requested: Option<&str>) -> Result<String> {
     {
         return Ok(version.to_string());
     }
-    bail!("unsupported package version selector `{}`", requested.unwrap_or("latest"));
+    bail!(
+        "unsupported package version selector `{}`",
+        requested.unwrap_or("latest")
+    );
 }
 
 fn registry_name(name: &str) -> String {
@@ -128,7 +131,10 @@ fn extract_package(bytes: &[u8], destination: &Path) -> Result<()> {
         .with_context(|| format!("failed to create '{}'", destination.display()))?;
     let gz = GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(gz);
-    for entry in archive.entries().context("failed to read package tarball")? {
+    for entry in archive
+        .entries()
+        .context("failed to read package tarball")?
+    {
         let mut entry = entry.context("failed to read package tarball entry")?;
         let raw_path = entry.path().context("failed to read tarball entry path")?;
         let safe_path = strip_package_prefix(&raw_path)?;

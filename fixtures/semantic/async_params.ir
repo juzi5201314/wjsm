@@ -165,7 +165,7 @@ module {
     bb10:
       unreachable
 
-  fn @add [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
+  fn @add [needs_prototype] [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c42

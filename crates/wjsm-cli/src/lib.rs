@@ -21,10 +21,10 @@ use wjsm_runtime as runtime;
 use wjsm_semantic as semantic;
 
 mod cli_args;
-mod cli_install;
-mod cli_scripts;
 mod cli_config;
+mod cli_install;
 mod cli_lint;
+mod cli_scripts;
 mod ir_output;
 
 mod runtime_loader;
@@ -74,12 +74,8 @@ fn runtime_options_for_file(
     };
     let env = runtime_env_snapshot();
     let sandbox = fs_sandbox_for_file(input, root, &env);
-    let module_loader = runtime_module_loader_for_file(
-        input,
-        root,
-        &sandbox,
-        module_resolution_options(cli),
-    )?;
+    let module_loader =
+        runtime_module_loader_for_file(input, root, &sandbox, module_resolution_options(cli))?;
     let mut options = runtime_options_with_script(cli, script, script_args, env, sandbox)?;
     options.module_loader = module_loader;
     Ok(options)
@@ -158,9 +154,12 @@ fn runtime_module_loader_for_file(
 
 fn runtime_loader_root(input: &Path, root: Option<&Path>) -> Result<PathBuf> {
     if let Some(root) = root {
-        return root
-            .canonicalize()
-            .with_context(|| format!("failed to canonicalize runtime loader root '{}'", root.display()));
+        return root.canonicalize().with_context(|| {
+            format!(
+                "failed to canonicalize runtime loader root '{}'",
+                root.display()
+            )
+        });
     }
     let input = input.canonicalize().with_context(|| {
         format!(
@@ -168,10 +167,12 @@ fn runtime_loader_root(input: &Path, root: Option<&Path>) -> Result<PathBuf> {
             input.display()
         )
     })?;
-    input
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| anyhow::anyhow!("cannot infer runtime module root from '{}'", input.display()))
+    input.parent().map(Path::to_path_buf).ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot infer runtime module root from '{}'",
+            input.display()
+        )
+    })
 }
 
 fn wjsm_argv0() -> String {

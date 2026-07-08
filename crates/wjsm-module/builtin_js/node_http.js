@@ -40,6 +40,21 @@ function headersToObject(headers) {
   return out;
 }
 
+function parseHeaders(lines) {
+  const headers = {};
+  for (var i = 1; i < lines.length; i = i + 1) {
+    const line = lines[i];
+    const colon = line.indexOf(':');
+    if (colon > 0) headers[line.slice(0, colon).toLowerCase()] = line.slice(colon + 1).trim();
+  }
+  return headers;
+}
+
+function statusText(code) {
+  const known = { '200': 'OK', '201': 'Created', '204': 'No Content', '301': 'Moved Permanently', '302': 'Found', '400': 'Bad Request', '404': 'Not Found', '500': 'Internal Server Error' };
+  return known[String(code)] || 'OK';
+}
+
 export function IncomingMessage(statusCode, headers, body, method, url) {
   EventEmitter.call(this);
   this.statusCode = statusCode || 0;
@@ -54,13 +69,6 @@ export function IncomingMessage(statusCode, headers, body, method, url) {
   this._readableFlowing = false;
   this._readablePipes = [];
   const self = this;
-  const baseOn = this.on;
-  this.on = function (name, listener) {
-    const result = baseOn.call(self, name, listener);
-    if (name === 'data') { self._readableFlowing = true; schedule(() => emitBuffered(self)); }
-    return result;
-  };
-  this.addListener = this.on;
   schedule(function () {
     if (body !== undefined && body !== null && body.length !== 0) self._readableBuffer.push(body);
     self.readableEnded = true;
@@ -77,6 +85,19 @@ function emitBuffered(stream) {
   }
 }
 
+IncomingMessage.prototype = Object.create(EventEmitter.prototype);
+IncomingMessage.prototype.constructor = IncomingMessage;
+IncomingMessage.prototype.on = function (name, listener) {
+  const result = EventEmitter.prototype.on.call(this, name, listener);
+  if (name === 'data') {
+    this._readableFlowing = true;
+    const self = this;
+    schedule(function () { emitBuffered(self); });
+  }
+  return result;
+};
+IncomingMessage.prototype.addListener = IncomingMessage.prototype.on;
+
 export function ClientRequest(input, options, callback) {
   EventEmitter.call(this);
   this._requestOptions = mergeOptions(input, options);
@@ -85,44 +106,47 @@ export function ClientRequest(input, options, callback) {
   this.finished = false;
   this.writable = true;
   this.writableEnded = false;
-  const self = this;
   if (typeof options === 'function') callback = options;
   if (callback) this.once('response', callback);
-  this.write = function (chunk) { self._chunks.push(chunk); return true; };
-  this.end = function (chunk, encoding, callback) {
-    if (typeof chunk === 'function') { callback = chunk; chunk = undefined; }
-    if (chunk !== undefined) self.write(chunk);
-    self.finished = true;
-    if (callback) callback();
-    const bodyChunks = [];
-    for (var i = 0; i < self._chunks.length; i = i + 1) bodyChunks.push(Buffer.from(self._chunks[i]));
-    const body = bodyChunks.length === 0 ? undefined : Buffer.concat(bodyChunks);
-    fetch(self._requestOptions.url, {
-      method: self._requestOptions.method,
-      headers: self._requestOptions.headers,
-      body: body
-    }).then(function (response) {
-      return response.arrayBuffer().then(function (buffer) {
-        const msg = new IncomingMessage(
-          response.status,
-          headersToObject(response.headers),
-          Buffer.from(buffer),
-          self._requestOptions.method,
-          self._requestOptions.url
-        );
-        self.emit('response', msg);
-        self.emit('finish');
-        self.emit('close');
-      });
-    }, function (error) {
-      self.emit('error', error);
+}
+
+ClientRequest.prototype = Object.create(EventEmitter.prototype);
+ClientRequest.prototype.constructor = ClientRequest;
+ClientRequest.prototype.write = function (chunk) { this._chunks.push(chunk); return true; };
+ClientRequest.prototype.end = function (chunk, encoding, callback) {
+  if (typeof chunk === 'function') { callback = chunk; chunk = undefined; }
+  if (chunk !== undefined) this.write(chunk);
+  this.finished = true;
+  if (callback) callback();
+  const self = this;
+  const bodyChunks = [];
+  for (var i = 0; i < self._chunks.length; i = i + 1) bodyChunks.push(Buffer.from(self._chunks[i]));
+  const body = bodyChunks.length === 0 ? undefined : Buffer.concat(bodyChunks);
+  fetch(self._requestOptions.url, {
+    method: self._requestOptions.method,
+    headers: self._requestOptions.headers,
+    body: body
+  }).then(function (response) {
+    return response.arrayBuffer().then(function (buffer) {
+      const msg = new IncomingMessage(
+        response.status,
+        headersToObject(response.headers),
+        Buffer.from(buffer),
+        self._requestOptions.method,
+        self._requestOptions.url
+      );
+      self.emit('response', msg);
+      self.emit('finish');
       self.emit('close');
     });
-    return self;
-  };
-  this.abort = function () { self.aborted = true; self.emit('abort'); self.emit('close'); };
-  this.destroy = function (error) { if (error) self.emit('error', error); self.abort(); return self; };
-}
+  }, function (error) {
+    self.emit('error', error);
+    self.emit('close');
+  });
+  return self;
+};
+ClientRequest.prototype.abort = function () { this.aborted = true; this.emit('abort'); this.emit('close'); };
+ClientRequest.prototype.destroy = function (error) { if (error) this.emit('error', error); this.abort(); return this; };
 
 export function request(input, options, callback) {
   return new ClientRequest(input, options, callback);
@@ -134,16 +158,111 @@ export function get(input, options, callback) {
   return req;
 }
 
-export function Server() {
+export function Server(requestListener) {
   EventEmitter.call(this);
+  this._netHandle = undefined;
+  this._address = undefined;
+  if (typeof requestListener === 'function') this._events.request = [requestListener];
 }
 
-export function createServer() {
-  const s = {};
-  EventEmitter.call(s);
-  s.listen = function () { throw new Error('http.Server requires net/TCP support tracked by issue #313'); };
-  s.close = function (callback) { if (callback) callback(); s.emit('close'); };
-  return s;
+Server.prototype = Object.create(EventEmitter.prototype);
+Server.prototype.constructor = Server;
+Server.prototype.listen = function (a, b, c) {
+  const opts = { port: a === undefined ? 0 : a, host: '127.0.0.1', callback: undefined };
+  if (typeof b === 'function') opts.callback = b;
+  else if (b !== undefined) opts.host = b;
+  if (typeof c === 'function') opts.callback = c;
+  if (opts.callback) this.once('listening', opts.callback);
+  const self = this;
+  globalThis.__wjsm_node_net.serverListen(opts.port, opts.host).then(function (handle) {
+    self._netHandle = handle;
+    self._address = { address: globalThis.__wjsm_node_net.serverAddress(handle), family: 'IPv4', port: globalThis.__wjsm_node_net.serverPort(handle) };
+    self.emit('listening');
+  }, function (error) { self.emit('error', error); });
+  return this;
+};
+Server.prototype.close = function (callback) {
+  if (callback) this.once('close', callback);
+  if (this._netHandle !== undefined) globalThis.__wjsm_node_net.serverClose(this._netHandle);
+  this._netHandle = undefined;
+  const self = this;
+  schedule(function () { self.emit('close'); });
+  return this;
+};
+Server.prototype.address = function () { return this._address; };
+
+export function ServerResponse(socket) {
+  EventEmitter.call(this);
+  this.socket = socket;
+  this.statusCode = 200;
+  this.statusMessage = 'OK';
+  this.headersSent = false;
+  this.writableEnded = false;
+  this._headers = {};
+  this._chunks = [];
+}
+
+ServerResponse.prototype = Object.create(EventEmitter.prototype);
+ServerResponse.prototype.constructor = ServerResponse;
+ServerResponse.prototype.setHeader = function (name, value) { this._headers[String(name).toLowerCase()] = String(value); };
+ServerResponse.prototype.getHeader = function (name) { return this._headers[String(name).toLowerCase()]; };
+ServerResponse.prototype.writeHead = function (statusCode, statusMessage, headers) {
+  this.statusCode = statusCode;
+  if (typeof statusMessage === 'object') { headers = statusMessage; statusMessage = undefined; }
+  if (statusMessage !== undefined) this.statusMessage = String(statusMessage);
+  const keys = headers ? Object.keys(headers) : [];
+  for (var i = 0; i < keys.length; i = i + 1) this.setHeader(keys[i], headers[keys[i]]);
+  return this;
+};
+ServerResponse.prototype.write = function (chunk, encoding, callback) {
+  this._chunks.push(Buffer.from(chunk === undefined ? '' : chunk, encoding || 'utf8'));
+  if (callback) callback();
+  return true;
+};
+ServerResponse.prototype.end = function (chunk, encoding, callback) {
+  if (typeof chunk === 'function') { callback = chunk; chunk = undefined; encoding = undefined; }
+  else if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+  if (chunk !== undefined) this.write(chunk, encoding);
+  const body = this._chunks.length === 0 ? Buffer.from('') : Buffer.concat(this._chunks);
+  if (this.getHeader('content-length') === undefined) this.setHeader('content-length', body.length);
+  if (this.getHeader('connection') === undefined) this.setHeader('connection', 'close');
+  const lines = ['HTTP/1.1 ' + this.statusCode + ' ' + (this.statusMessage || statusText(this.statusCode))];
+  const keys = Object.keys(this._headers);
+  for (var i = 0; i < keys.length; i = i + 1) lines.push(keys[i] + ': ' + this._headers[keys[i]]);
+  const payload = Buffer.concat([Buffer.from(lines.join('\r\n') + '\r\n\r\n'), body]);
+  this.headersSent = true;
+  this.writableEnded = true;
+  const self = this;
+  this.socket.end(payload, function () {
+    self.emit('finish');
+    self.emit('close');
+    if (callback) callback();
+  });
+  return this;
+};
+
+function handleHttpConnection(server, socket) {
+  const chunks = [];
+  socket.on('data', function (chunk) {
+    chunks.push(Buffer.from(chunk));
+    const raw = Buffer.concat(chunks).toString();
+    const headerEnd = raw.indexOf('\r\n\r\n');
+    if (headerEnd < 0) return;
+    const head = raw.slice(0, headerEnd);
+    const lines = head.split('\r\n');
+    const requestLine = lines[0].split(' ');
+    const method = requestLine[0] || 'GET';
+    const url = requestLine[1] || '/';
+    const body = Buffer.from(raw.slice(headerEnd + 4));
+    const req = new IncomingMessage(0, parseHeaders(lines), body, method, url);
+    const res = new ServerResponse(socket);
+    server.emit('request', req, res);
+  });
+  socket.on('error', function (error) { server.emit('clientError', error, socket); });
+}
+
+export function createServer(requestListener) {
+  return new Server(requestListener);
 }
 
 export const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];

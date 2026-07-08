@@ -273,6 +273,17 @@ impl Lowerer {
             );
         }
 
+        // 设置 prototype.constructor = ctor（ECMAScript: ClassDefinitionEvaluation）
+        let ctor_key_dest = self.emit_string_const(block, "constructor");
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: proto_dest,
+                key: ctor_key_dest,
+                value: ctor_dest,
+            },
+        );
+
         // ── 成员处理 ──
         let mut block = block;
         let mut static_init_idx = 0u32;

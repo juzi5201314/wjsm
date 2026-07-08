@@ -77,7 +77,7 @@ module {
       promise_reject %16, %15
       return
 
-  fn @boom [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @boom [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c28

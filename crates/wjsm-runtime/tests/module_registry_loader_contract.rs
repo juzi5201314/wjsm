@@ -347,7 +347,6 @@ impl RuntimeModuleLoader for MissingDynamicImportLoader {
     }
 }
 
-
 fn compile_cjs_source(source: &str) -> Result<Vec<u8>> {
     let ast = wjsm_parser::parse_module(source)?;
     let program = wjsm_semantic::lower_modules(
@@ -399,7 +398,6 @@ fn run_esm_source(source: &str, options: RuntimeOptions) -> Result<String> {
         rt.block_on(async { execute_with_writer_with_options(&wasm, Vec::new(), options).await })?;
     Ok(String::from_utf8(out)?)
 }
-
 
 fn run_cjs_source(source: &str, options: RuntimeOptions) -> Result<String> {
     let wasm = compile_cjs_source(source)?;
@@ -583,7 +581,6 @@ import(path).catch(e => {
     assert_eq!(output, "TypeError\ntrue\nfalse\n");
     Ok(())
 }
-
 
 #[test]
 fn dynamic_module_import_expression_uses_loader_namespace() -> Result<()> {
