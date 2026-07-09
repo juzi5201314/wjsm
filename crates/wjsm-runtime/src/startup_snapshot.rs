@@ -143,6 +143,7 @@ pub(crate) fn capture_startup_snapshot(
                 NativeCallable::NetMethod { kind } => kind.method(),
                 NativeCallable::DgramMethod { kind } => kind.method(),
                 NativeCallable::TlsMethod { kind } => kind.method(),
+                NativeCallable::WorkerThreadsMethod { kind } => kind.method(),
                 _ => 0,
             });
         }

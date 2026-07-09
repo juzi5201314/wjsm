@@ -451,6 +451,14 @@ pub(super) async fn instantiate_execute_bundle(
         store.epoch_deadline_async_yield_and_update(1);
     }
     let host_completion_rx = prepare_async_host_completion(&mut store);
+    // worker_threads：注册 parentPort wake，并默认 ref 住 parentPort（与 Node 一致，
+    // 防止 main 结束后 agent 立刻退出，需 terminate/close 才放行）。
+    if store.data().is_worker_thread
+        && let Some(port_id) = store.data().parent_port_id
+    {
+        crate::runtime_node_worker_threads::register_worker_port_wake(&mut store, port_id, None);
+        crate::runtime_node_worker_threads::auto_ref_port_on_store(&mut store, port_id);
+    }
     let mut linker = Linker::new(engine);
     register_startup_linker(&mut linker, &mut store)?;
 

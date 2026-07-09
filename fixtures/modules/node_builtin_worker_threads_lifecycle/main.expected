@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+error boom
+throw-exit 1
+online
+term-exit 1
+--- stderr ---

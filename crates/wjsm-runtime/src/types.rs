@@ -702,6 +702,9 @@ pub(crate) enum NativeCallable {
     TlsMethod {
         kind: crate::runtime_node_tls::TlsMethodKind,
     },
+    WorkerThreadsMethod {
+        kind: crate::runtime_node_worker_threads::WorkerThreadsMethodKind,
+    },
     CryptoDigestMethod {
         state: Arc<Mutex<crate::runtime_node_crypto::CryptoDigestState>>,
         kind: crate::runtime_node_crypto::CryptoDigestKind,

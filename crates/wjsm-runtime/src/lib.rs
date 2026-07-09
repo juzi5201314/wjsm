@@ -50,6 +50,8 @@ mod runtime_node_globals;
 mod runtime_node_net;
 mod runtime_node_dgram;
 mod runtime_node_tls;
+mod runtime_node_worker_threads;
+mod runtime_worker_message;
 mod runtime_node_zlib;
 mod runtime_process;
 mod runtime_promises;
@@ -158,6 +160,14 @@ pub struct RuntimeOptions {
     pub fs_write_roots: Vec<PathBuf>,
     pub fs_allow_write_anywhere: bool,
     pub module_loader: Option<Arc<dyn RuntimeModuleLoader>>,
+    /// worker_threads：是否为 Worker 子线程 agent。
+    pub is_worker_thread: bool,
+    /// worker_threads：本 agent 的 threadId（主线程为 0）。
+    pub worker_thread_id: u32,
+    /// worker_threads：Worker 侧 parentPort 全局 id。
+    pub parent_port_global_id: Option<u32>,
+    /// worker_threads：注入的 workerData 序列化载荷。
+    pub initial_worker_data: Option<runtime_worker_message::SerializedValue>,
 }
 
 impl std::fmt::Debug for RuntimeOptions {
@@ -212,6 +222,10 @@ impl Default for RuntimeOptions {
                 .collect(),
             fs_allow_write_anywhere: false,
             module_loader: None,
+            is_worker_thread: false,
+            worker_thread_id: 0,
+            parent_port_global_id: None,
+            initial_worker_data: None,
         }
     }
 }
@@ -485,14 +499,23 @@ pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     writer: W,
     shared_state: Arc<SharedRuntimeState>,
 ) -> Result<(W, Vec<u8>)> {
-    execute_with_writer_shared_inner(
+    execute_with_writer_shared_agent_options(
         wasm_bytes,
         writer,
-        Some(shared_state),
-        false,
+        shared_state,
         RuntimeOptions::default(),
     )
     .await
+}
+
+/// 与 `execute_with_writer_shared_agent` 相同，但允许注入 worker_threads 上下文。
+pub(crate) async fn execute_with_writer_shared_agent_options<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    shared_state: Arc<SharedRuntimeState>,
+    options: RuntimeOptions,
+) -> Result<(W, Vec<u8>)> {
+    execute_with_writer_shared_inner(wasm_bytes, writer, Some(shared_state), false, options).await
 }
 
 use runtime_startup::*;
@@ -979,6 +1002,12 @@ impl Clone for RuntimeState {
             host_completion_tx: self.host_completion_tx.clone(),
             async_op_counter: self.async_op_counter.clone(),
             source_map: self.source_map.clone(),
+            message_port_bindings: self.message_port_bindings.clone(),
+            worker_bindings: self.worker_bindings.clone(),
+            is_worker_thread: self.is_worker_thread,
+            thread_id: self.thread_id,
+            parent_port_id: self.parent_port_id,
+            worker_data_serialized: self.worker_data_serialized.clone(),
         }
     }
 }
@@ -1200,6 +1229,22 @@ struct RuntimeState {
     async_op_counter: Option<crate::scheduler::AsyncOpCounter>,
     /// WASM source map（从 "wjsm_sourcemap" custom section 解析），供 trap backtrace 格式化。
     source_map: Option<runtime_source_map::SourceMapInfo>,
+    /// MessagePort 本地绑定（deliver 回调仅本 Store 有效）。
+    message_port_bindings: Arc<
+        Mutex<HashMap<u32, runtime_node_worker_threads::LocalPortBinding>>,
+    >,
+    /// Worker 本地绑定（lifecycle 回调 + lifetime AsyncOpGuard）。
+    worker_bindings: Arc<
+        Mutex<HashMap<u32, runtime_node_worker_threads::LocalWorkerBinding>>,
+    >,
+    /// 是否主线程 agent（worker_threads.isMainThread）。
+    is_worker_thread: bool,
+    /// worker_threads.threadId（主线程 0）。
+    thread_id: u32,
+    /// Worker 侧 parentPort 全局 id。
+    parent_port_id: Option<u32>,
+    /// Worker 注入的 workerData（序列化后）。
+    worker_data_serialized: Option<runtime_worker_message::SerializedValue>,
 }
 
 impl RuntimeState {
@@ -1344,6 +1389,10 @@ impl RuntimeState {
                 .map_err(anyhow::Error::msg)?,
         ));
         state.module_loader = options.module_loader;
+        state.is_worker_thread = options.is_worker_thread;
+        state.thread_id = options.worker_thread_id;
+        state.parent_port_id = options.parent_port_global_id;
+        state.worker_data_serialized = options.initial_worker_data;
         Ok(state)
     }
 
@@ -1589,6 +1638,12 @@ impl RuntimeState {
             host_completion_tx: None,
             async_op_counter: None,
             source_map: None,
+            message_port_bindings: Arc::new(Mutex::new(HashMap::new())),
+            worker_bindings: Arc::new(Mutex::new(HashMap::new())),
+            is_worker_thread: false,
+            thread_id: 0,
+            parent_port_id: None,
+            worker_data_serialized: None,
         }
     }
 }

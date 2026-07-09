@@ -3,20 +3,44 @@ use std::collections::HashMap;
 use crate::runtime_buffer::{
     create_arraybuffer_from_bytes, create_buffer_from_bytes, visible_bytes,
 };
+use crate::runtime_worker_message::{
+    deserialize_value, serialize_value, transfer_arg_from_options, parse_transfer_list,
+};
 use crate::*;
 
 pub(crate) fn structured_clone(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
-    if let Some(options) = args.get(1).copied()
-        && has_transfer(caller, options)
-    {
-        return data_clone_error(caller, "transfer is not supported");
-    }
     let value_raw = args
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
+    // 有 transfer 选项时走跨路径序列化：detach 源 ArrayBuffer 并在同 Store 重建。
+    if let Some(options) = args.get(1).copied()
+        && let Some(transfer_arg) = transfer_arg_from_options(caller, options)
+    {
+        return structured_clone_with_transfer(caller, value_raw, transfer_arg);
+    }
     let mut cx = CloneContext::default();
     clone_value(caller, value_raw, &mut cx).unwrap_or_else(|msg| data_clone_error(caller, &msg))
+}
+
+fn structured_clone_with_transfer(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: i64,
+    transfer_arg: i64,
+) -> i64 {
+    let transfer = match parse_transfer_list(caller, transfer_arg) {
+        Ok(list) => list,
+        Err(msg) => return data_clone_error(caller, &msg),
+    };
+    let serialized = match serialize_value(caller, value_raw, &transfer) {
+        Ok(v) => v,
+        Err(msg) => return data_clone_error(caller, &msg),
+    };
+    let env = match WasmEnv::from_caller(caller) {
+        Some(env) => env,
+        None => return data_clone_error(caller, "value could not be cloned"),
+    };
+    deserialize_value(caller, &env, &serialized)
 }
 
 #[derive(Default)]
@@ -366,16 +390,6 @@ fn arraybuffer_handle(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Opti
         value::decode_f64(handle) as u32,
         value::decode_f64(byte_length) as u32,
     ))
-}
-
-fn has_transfer(caller: &mut Caller<'_, RuntimeState>, options: i64) -> bool {
-    if !value::is_object(options) {
-        return false;
-    }
-    let Some(ptr) = resolve_handle(caller, options) else {
-        return false;
-    };
-    read_object_property_by_name(caller, ptr, "transfer").is_some_and(|v| !value::is_undefined(v))
 }
 
 fn data_clone_error(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {

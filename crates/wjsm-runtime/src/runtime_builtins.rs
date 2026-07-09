@@ -887,6 +887,11 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::TlsMethod { kind } => {
             Some(crate::runtime_node_tls::call_tls_method(caller, kind, &args))
         }
+        NativeCallable::WorkerThreadsMethod { kind } => {
+            Some(crate::runtime_node_worker_threads::call_worker_threads_method(
+                caller, kind, &args,
+            ))
+        }
         NativeCallable::CryptoDigestMethod { state, kind } => {
             Some(crate::runtime_node_crypto::call_crypto_digest_method(
                 caller, this_val, state, kind, &args,

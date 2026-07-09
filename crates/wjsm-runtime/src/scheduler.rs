@@ -29,6 +29,7 @@ use crate::{RuntimeState, TimerEntry, WasmEnv};
 /// Async host completion sent on the scheduler channel.
 /// - SettleValue: simple value settle (worker can Send data)
 /// - Materialize: closure runs only on scheduler owner (&mut Store + &WasmEnv)
+/// - HostTask: 非 Promise 副作用（MessagePort 投递、Worker lifecycle 事件）
 pub(crate) enum AsyncHostCompletion {
     #[allow(dead_code)]
     SettleValue {
@@ -40,6 +41,10 @@ pub(crate) enum AsyncHostCompletion {
         promise: i64,
         materialize:
             Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) -> PromiseSettlement + Send>,
+    },
+    #[allow(clippy::type_complexity)]
+    HostTask {
+        run: Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) + Send>,
     },
 }
 
@@ -111,6 +116,9 @@ pub(crate) async fn run_post_main_scheduler_async(
             } => {
                 let settlement = materialize(store, env);
                 crate::runtime_promises::settle_promise(store.data(), promise, settlement);
+            }
+            AsyncHostCompletion::HostTask { run } => {
+                run(store, env);
             }
         }
     }

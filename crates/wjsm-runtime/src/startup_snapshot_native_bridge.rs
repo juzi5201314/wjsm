@@ -6,6 +6,7 @@ use crate::runtime_node_child_process::ChildProcessMethodKind;
 use crate::runtime_node_dgram::DgramMethodKind;
 use crate::runtime_node_fs::FsMethodKind;
 use crate::runtime_node_tls::TlsMethodKind;
+use crate::runtime_node_worker_threads::WorkerThreadsMethodKind;
 use crate::runtime_node_zlib::ZlibMethodKind;
 use crate::runtime_node_net::NetMethodKind;
 use crate::types::{NativeCallable, OsInfoKind, TypedArrayConstructorKind};
@@ -132,6 +133,10 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::TlsMethod => NativeCallable::TlsMethod {
                 kind: TlsMethodKind::from_method(method).unwrap_or(TlsMethodKind::Connect),
             },
+            Self::WorkerThreadsMethod => NativeCallable::WorkerThreadsMethod {
+                kind: WorkerThreadsMethodKind::from_method(method)
+                    .unwrap_or(WorkerThreadsMethodKind::CreateMessageChannel),
+            },
         }
     }
 
@@ -230,6 +235,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::NetMethod { kind: _ } => Self::NetMethod,
             NativeCallable::DgramMethod { kind: _ } => Self::DgramMethod,
             NativeCallable::TlsMethod { kind: _ } => Self::TlsMethod,
+            NativeCallable::WorkerThreadsMethod { kind: _ } => Self::WorkerThreadsMethod,
             NativeCallable::CjsRequire { .. }
             | NativeCallable::CjsRequireResolve { .. }
             | NativeCallable::CjsRequireResolvePaths { .. }

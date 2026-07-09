@@ -37,6 +37,8 @@ pub struct SharedRuntimeState {
     pub(crate) sab_table: Arc<Mutex<Vec<SharedArrayBufferEntry>>>,
     pub(crate) waiter_lists: Arc<Mutex<HashMap<(u32, u32), WaiterList>>>,
     pub(crate) agent_state: Arc<AgentState>,
+    /// worker_threads 集群：MessagePort + Worker 全局注册表。
+    pub(crate) worker_cluster: Arc<crate::runtime_node_worker_threads::WorkerClusterState>,
 }
 
 #[derive(Default)]
@@ -96,6 +98,7 @@ pub(crate) fn new_shared_runtime_state() -> Arc<SharedRuntimeState> {
             broadcast_callback_done_cv: Condvar::new(),
             next_agent_id: AtomicU32::new(0),
         }),
+        worker_cluster: Arc::new(crate::runtime_node_worker_threads::WorkerClusterState::new()),
     })
 }
 

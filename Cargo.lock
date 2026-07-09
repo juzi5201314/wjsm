@@ -4970,6 +4970,7 @@ dependencies = [
  "webpki-roots 0.26.11",
  "wjsm-backend-wasm",
  "wjsm-ir",
+ "wjsm-module",
  "wjsm-parser",
  "wjsm-runtime-support",
  "wjsm-semantic",

@@ -88,6 +88,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         canonical: "tls",
         source: include_str!("../builtin_js/node_tls.js"),
     },
+    BuiltinModule {
+        canonical: "worker_threads",
+        source: include_str!("../builtin_js/node_worker_threads.js"),
+    },
 ];
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {
@@ -174,6 +178,9 @@ mod tests {
             "https",
             "zlib",
             "child_process",
+            "dgram",
+            "tls",
+            "worker_threads",
         ] {
             assert!(
                 seen.insert(virtual_path(canonical)),

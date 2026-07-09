@@ -153,6 +153,16 @@ pub(crate) fn install_node_web_globals_from_caller(
     let _ = caller.data().push_host_temp_roots([tls]);
     define_global(caller, global_obj, "__wjsm_node_tls", tls);
 
+    let worker_threads =
+        crate::runtime_node_worker_threads::create_worker_threads_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([worker_threads]);
+    define_global(
+        caller,
+        global_obj,
+        "__wjsm_node_worker_threads",
+        worker_threads,
+    );
+
     let crypto = crate::runtime_node_crypto::create_crypto_host_object(caller);
     let _ = caller.data().push_host_temp_roots([crypto]);
     define_global(caller, global_obj, "__wjsm_node_crypto", crypto);
