@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+11
+17
+21
+host-bind
+host-call
+host-apply
+function
+107
+--- stderr ---

@@ -259,8 +259,26 @@ pub(crate) async fn run_post_main_scheduler_async(
             if let Some(idx) = timers.iter().position(|t| t.deadline <= now) {
                 _entry_to_fire = Some(timers.remove(idx));
             } else if let Some(next) = timers.iter().min_by_key(|t| t.deadline) {
-                // Sleep until next timer (使用 sleep_until 而非 sleep，避免不必要唤醒)
-                sleep_until(next.deadline).await;
+                // 同时等待 next timer 与 host completion：
+                // 旧逻辑只 sleep_until(timer)，会在 setTimeout 存活期间饿死 in-flight
+                // dgram/net/tls bind 等异步完成（嵌套 .then 里启动的第二次 bind 永不 settle）。
+                let deadline = next.deadline;
+                drop(timers);
+                drop(cancelled);
+                tokio::select! {
+                    _ = sleep_until(deadline) => {}
+                    completion = completion_rx.recv() => {
+                        if let Some(completion) = completion {
+                            process_one_completion(store, env, completion);
+                            drain_microtasks_async(store, env).await;
+                            if process_exit_pending(store) {
+                                return Ok(());
+                            }
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                }
                 continue;
             } else {
                 continue;

@@ -165,10 +165,28 @@ impl Lowerer {
         block: BasicBlockId,
         captured: &[CapturedBinding],
     ) -> ValueId {
-        if captured
+        let has_current_binding = captured
+            .iter()
+            .any(|binding| self.binding_belongs_to_current_function(binding));
+
+        // 捕获了当前函数参数/局部时，必须新建 env 对象。
+        // 旧逻辑在存在外层绑定时复用父 env，并把当前调用的参数 set_prop 进父 env，
+        // 导致同一函数多次调用（如 makeArmRecv(0)/makeArmRecv(1)）互相覆盖 handle 等槽位。
+        if has_current_binding {
+            let env_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::NewObject {
+                    dest: env_val,
+                    capacity: captured.len() as u32,
+                },
+            );
+            env_val
+        } else if captured
             .iter()
             .any(|binding| !self.binding_belongs_to_current_function(binding))
         {
+            // 仅外层绑定：复用父 env，保持可变 let 的 live binding
             self.load_env_object(block)
         } else {
             let env_val = self.alloc_value();
@@ -176,7 +194,7 @@ impl Lowerer {
                 block,
                 Instruction::NewObject {
                     dest: env_val,
-                    capacity: captured.len() as u32,
+                    capacity: 0,
                 },
             );
             env_val

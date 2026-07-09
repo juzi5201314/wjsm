@@ -183,6 +183,7 @@ impl RootProvider for RuntimeRoots {
         let (
             regexp_proto,
             promise_proto,
+            function_proto,
             symbol_proto,
             buffer_proto,
             text_encoder_proto,
@@ -192,6 +193,7 @@ impl RootProvider for RuntimeRoots {
             (
                 st.regexp_prototype,
                 st.promise_prototype,
+                st.function_prototype,
                 st.symbol_prototype,
                 st.buffer_prototype,
                 st.text_encoder_prototype,
@@ -201,6 +203,7 @@ impl RootProvider for RuntimeRoots {
         });
         push_value_roots(ctx, regexp_proto, visit);
         push_value_roots(ctx, promise_proto, visit);
+        push_value_roots(ctx, function_proto, visit);
         push_value_roots(ctx, symbol_proto, visit);
         push_value_roots(ctx, buffer_proto, visit);
         push_value_roots(ctx, text_encoder_proto, visit);

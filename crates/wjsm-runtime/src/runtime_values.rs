@@ -1905,9 +1905,16 @@ pub(crate) async fn func_apply_impl_async(
     caller: &mut Caller<'_, RuntimeState>,
     func: i64,
     this_val: i64,
-    _args_array: i64,
+    args_array: i64,
 ) -> i64 {
-    Box::pin(resolve_and_call_async(caller, func, this_val, 0, 0)).await
+    let args = match crate::host_imports::extract_array_like_elements(caller, args_array).await {
+        Ok(v) => v,
+        Err(_) => Vec::new(),
+    };
+    Box::pin(crate::host_imports::reflect_apply_impl_async(
+        caller, func, this_val, &args,
+    ))
+    .await
 }
 
 pub(crate) fn func_bind_impl(

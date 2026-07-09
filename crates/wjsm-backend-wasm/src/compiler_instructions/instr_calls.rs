@@ -66,6 +66,24 @@ impl Compiler {
         ));
         self.emit(WasmInstruction::Else);
 
+        // TAG_BOUND: 绑定函数走宿主 resolve_and_call（展开 boundThis/boundArgs）
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_BOUND as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::Else);
+
         // TAG_PROXY 检测: 代理调用走 ProxyApply/ProxyConstruct 宿主函数
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
@@ -130,6 +148,7 @@ impl Compiler {
             table_index: 0,
         });
         self.emit(WasmInstruction::End); // close proxy if/else
+        self.emit(WasmInstruction::End); // close bound if/else
         self.emit(WasmInstruction::End); // close native callable if/else
 
         self.emit(WasmInstruction::LocalSet(result_scratch));
@@ -216,6 +235,28 @@ impl Compiler {
         ));
         self.emit(WasmInstruction::Else);
 
+        // TAG_BOUND: 绑定函数走宿主 resolve_and_call
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_BOUND as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        if forward_args {
+            self.emit(WasmInstruction::LocalGet(3));
+        } else {
+            self.emit(WasmInstruction::I32Const(args.len() as i32));
+        }
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::Else);
+
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
@@ -278,8 +319,9 @@ impl Compiler {
             type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
-        self.emit(WasmInstruction::End);
-        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End); // close proxy
+        self.emit(WasmInstruction::End); // close bound
+        self.emit(WasmInstruction::End); // close native
         self.emit(WasmInstruction::LocalSet(result_scratch));
 
         self.emit(WasmInstruction::LocalGet(saved_new_target));

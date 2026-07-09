@@ -755,6 +755,8 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_promise_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    crate::runtime_heap::ensure_function_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
+    crate::runtime_heap::install_function_props_prototypes(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_regexp_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
     ensure_no_startup_error(&bundle.store)?;
     Ok(())
@@ -839,6 +841,11 @@ pub(super) async fn try_restore_snapshot(
         }
         return false;
     }
+    crate::runtime_heap::ensure_function_prototype_initialized(
+        &mut bundle.store,
+        &bundle.wasm_env,
+    );
+    crate::runtime_heap::install_function_props_prototypes(&mut bundle.store, &bundle.wasm_env);
     let immortal_objects_end = bundle
         .wasm_env
         .heap_ptr

@@ -213,15 +213,26 @@ fn recv(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         },
         |store, env, result| match result {
             Ok(Some(packet)) => {
+                // Node dgram 'message' 的 msg 是 Buffer，而不是裸 ArrayBuffer。
+                // 直接构造 Buffer 视图，避免 JS 侧 Buffer.from(ArrayBuffer) 在 host 结算
+                // 路径上因 property 读取细节失败。
+                let data_val = crate::runtime_buffer::create_buffer_from_bytes_with_env(
+                    store,
+                    env,
+                    packet.data,
+                );
                 let obj = alloc_host_object(store, env, 3);
-                let data_val = arraybuffer_with_bytes(store, env, &packet.data);
                 let _ = define_host_data_property_with_env(store, env, obj, "data", data_val);
                 let addr_val = crate::runtime_render::store_runtime_string_in_state(
-                    store.data(), packet.remote_addr.ip().to_string(),
+                    store.data(),
+                    packet.remote_addr.ip().to_string(),
                 );
                 let _ = define_host_data_property_with_env(store, env, obj, "address", addr_val);
                 let _ = define_host_data_property_with_env(
-                    store, env, obj, "port",
+                    store,
+                    env,
+                    obj,
+                    "port",
                     value::encode_f64(f64::from(packet.remote_addr.port())),
                 );
                 PromiseSettlement::Fulfill(obj)
@@ -391,38 +402,3 @@ fn error_from_caller(caller: &mut Caller<'_, RuntimeState>, message: String) -> 
     create_error_object(caller, "Error", msg_val, value::encode_undefined())
 }
 
-fn arraybuffer_with_bytes<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    bytes: &[u8],
-) -> i64 {
-    let ab = alloc_host_object(ctx, env, 1);
-    let handle = {
-        let mut ctx_mut = ctx.as_context_mut();
-        let mut table = ctx_mut
-            .data_mut()
-            .arraybuffer_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(ArrayBufferEntry {
-            data: bytes.to_vec(),
-        });
-        handle
-    };
-    let _ = define_host_data_property_with_env(
-        ctx,
-        env,
-        ab,
-        "__arraybuffer_handle__",
-        value::encode_f64(handle as f64),
-    );
-    let _ = define_host_data_property_with_env(
-        ctx,
-        env,
-        ab,
-        "byteLength",
-        value::encode_f64(bytes.len() as f64),
-    );
-    ab
-}

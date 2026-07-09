@@ -352,14 +352,6 @@ pub(crate) fn builtin_from_array_proto_method(name: &str) -> Option<Builtin> {
     }
 }
 
-pub(crate) fn builtin_from_function_proto_method(name: &str) -> Option<Builtin> {
-    match name {
-        "call" => Some(Builtin::FuncCall),
-        "apply" => Some(Builtin::FuncApply),
-        "bind" => Some(Builtin::FuncBind),
-        _ => None,
-    }
-}
 /// 将 Object.prototype 方法名映射到 Builtin 变体，用于语义层优化。
 ///
 /// 只拦截无需读取同名函数值的 `hasOwnProperty`。`toString` / `valueOf` 必须走运行时属性

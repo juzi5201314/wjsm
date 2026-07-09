@@ -589,6 +589,93 @@ pub(crate) fn ensure_promise_prototype_initialized<C: AsContextMut<Data = Runtim
     ctx.as_context_mut().data_mut().promise_prototype = promise_proto;
 }
 
+/// 在 bootstrap 后建立 %FunctionPrototype%，挂载 call/apply/bind，
+/// 供 Function.prototype 与所有函数属性对象的原型链查找使用。
+pub(crate) fn ensure_function_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if value::is_object(ctx.as_context().data().function_prototype) {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let object_proto = value::encode_object_handle(object_proto_handle as u32);
+    let function_proto = alloc_host_object(ctx, env, 8);
+    set_object_proto_header(ctx, env, function_proto, object_proto);
+
+    let ctor = create_native_callable(ctx.as_context().data(), NativeCallable::FunctionConstructor);
+    let call = create_native_callable(ctx.as_context().data(), NativeCallable::FunctionProtoCall);
+    let apply = create_native_callable(ctx.as_context().data(), NativeCallable::FunctionProtoApply);
+    let bind = create_native_callable(ctx.as_context().data(), NativeCallable::FunctionProtoBind);
+    let _ = define_host_data_property_with_env(ctx, env, function_proto, "constructor", ctor);
+    let _ = define_host_data_property_with_env(ctx, env, function_proto, "call", call);
+    let _ = define_host_data_property_with_env(ctx, env, function_proto, "apply", apply);
+    let _ = define_host_data_property_with_env(ctx, env, function_proto, "bind", bind);
+
+    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Function".to_string());
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        function_proto,
+        encode_symbol_name_id(2),
+        tag,
+        constants::FLAG_CONFIGURABLE,
+    );
+
+    ctx.as_context_mut().data_mut().function_prototype = function_proto;
+}
+
+pub(crate) fn native_callable_function_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+) -> Option<i64> {
+    if !matches!(record, NativeCallable::FunctionConstructor) {
+        return None;
+    }
+    if !value::is_object(caller.data().function_prototype) {
+        if let Some(env) = WasmEnv::from_caller(caller) {
+            ensure_function_prototype_initialized(caller, &env);
+        }
+    }
+    let proto = caller.data().function_prototype;
+    if value::is_object(proto) {
+        Some(proto)
+    } else {
+        None
+    }
+}
+
+/// 将当前模块 function_props 区间对象的 [[Prototype]] 设为 %FunctionPrototype%。
+/// 必须在 `ensure_function_prototype_initialized` 与 `__wjsm_init_function_props` 之后调用。
+pub(crate) fn install_function_props_prototypes<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    ensure_function_prototype_initialized(ctx, env);
+    let function_proto = ctx.as_context().data().function_prototype;
+    if !value::is_object(function_proto) {
+        return;
+    }
+    let proto_handle = value::decode_object_handle(function_proto);
+    let base = env
+        .function_props_base
+        .and_then(|g| g.get(&mut *ctx).i32())
+        .unwrap_or(0)
+        .max(0) as u32;
+    let count = env
+        .num_ir_functions
+        .and_then(|g| g.get(&mut *ctx).i32())
+        .unwrap_or(0)
+        .max(0) as u32;
+    for i in 0..count {
+        let handle = base.saturating_add(i);
+        let _ = crate::runtime_gc::heap_access::write_proto(ctx, env, handle, proto_handle);
+    }
+}
+
 pub(crate) fn native_callable_promise_prototype(
     caller: &mut Caller<'_, RuntimeState>,
     record: &NativeCallable,
@@ -1040,6 +1127,17 @@ pub(crate) fn native_callable_buffer_prototype(
     value::is_object(proto).then_some(proto)
 }
 
+pub(crate) fn native_callable_buffer_prototype_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) -> Option<i64> {
+    if !value::is_object(ctx.as_context().data().buffer_prototype) {
+        ensure_buffer_prototype_initialized(ctx, env);
+    }
+    let proto = ctx.as_context().data().buffer_prototype;
+    value::is_object(proto).then_some(proto)
+}
+
 pub(crate) fn ensure_text_encoder_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -1162,6 +1260,7 @@ pub(crate) fn native_callable_prototype(
             (handle >= 0).then(|| value::encode_object_handle(handle as u32))
         }
         NativeCallable::SymbolConstructor => native_callable_symbol_prototype(caller, record),
+        NativeCallable::FunctionConstructor => native_callable_function_prototype(caller, record),
         NativeCallable::PromiseConstructor => native_callable_promise_prototype(caller, record),
         NativeCallable::RegExpConstructor => native_callable_regexp_prototype(caller, record),
         NativeCallable::DateConstructorGlobal => native_callable_date_prototype(caller, record),

@@ -342,109 +342,42 @@ impl Lowerer {
                         return Ok(dest);
                     }
 
-                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
-                        // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
-                        if let Some(func_builtin) =
-                            builtin_from_function_proto_method(&prop_ident.sym)
-                        {
-                            // 特殊优化: Object.prototype.toString.call(obj) → CallBuiltin(ObjectProtoToString, obj)
-                            // 跳过运行时原型链查找
-                            if matches!(func_builtin, Builtin::FuncCall)
-                                && let Some(object_proto_builtin) =
-                                    self.is_object_proto_method_access(&member_expr.obj)
-                            {
-                                // Object.prototype.toString.call(thisArg) → ObjectProtoToString(thisArg)
-                                let this_arg = if let Some(first_arg) = call.args.first() {
-                                    self.lower_expr(&first_arg.expr, block)?
-                                } else {
-                                    let undef_const = self.module.add_constant(Constant::Undefined);
-                                    let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(
-                                        block,
-                                        Instruction::Const {
-                                            dest: undef_val,
-                                            constant: undef_const,
-                                        },
-                                    );
-                                    undef_val
-                                };
-                                let dest = self.alloc_value();
-                                self.current_function.append_instruction(
-                                    block,
-                                    Instruction::CallBuiltin {
-                                        dest: Some(dest),
-                                        builtin: object_proto_builtin,
-                                        args: vec![this_arg],
-                                    },
-                                );
-                                return Ok(dest);
-                            }
-
-                            let func_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![func_val];
-
-                            if matches!(func_builtin, Builtin::FuncApply) {
-                                // func.apply(thisArg, argsArray)
-                                if let Some(first_arg) = call.args.first() {
-                                    builtin_args.push(self.lower_expr(&first_arg.expr, block)?);
-                                } else {
-                                    let undef_const = self.module.add_constant(Constant::Undefined);
-                                    let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(
-                                        block,
-                                        Instruction::Const {
-                                            dest: undef_val,
-                                            constant: undef_const,
-                                        },
-                                    );
-                                    builtin_args.push(undef_val);
-                                }
-                                if call.args.len() > 1 {
-                                    builtin_args.push(self.lower_expr(&call.args[1].expr, block)?);
-                                } else {
-                                    let undef_const = self.module.add_constant(Constant::Undefined);
-                                    let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(
-                                        block,
-                                        Instruction::Const {
-                                            dest: undef_val,
-                                            constant: undef_const,
-                                        },
-                                    );
-                                    builtin_args.push(undef_val);
-                                }
-                            } else {
-                                // func.call(thisArg, ...restArgs) / func.bind(thisArg, ...boundArgs)
-                                for arg in &call.args {
-                                    builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                                }
-                                // Ensure at least thisArg (first arg after func) exists
-                                if call.args.is_empty() {
-                                    let undef_const = self.module.add_constant(Constant::Undefined);
-                                    let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(
-                                        block,
-                                        Instruction::Const {
-                                            dest: undef_val,
-                                            constant: undef_const,
-                                        },
-                                    );
-                                    builtin_args.push(undef_val);
-                                }
-                            }
-
-                            let dest = self.alloc_value();
+                    // 仅优化 Object.prototype.xxx.call(thisArg) 形态：
+                    // Object.prototype.toString.call(obj) → CallBuiltin(ObjectProtoToString, obj)
+                    // 禁止把任意 .call/.apply/.bind 静态改写为 Function.prototype 方法，
+                    // 否则会劫持 dgram.Socket.prototype.bind 等普通对象方法名。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && prop_ident.sym.as_ref() == "call"
+                        && let Some(object_proto_builtin) =
+                            self.is_object_proto_method_access(&member_expr.obj)
+                    {
+                        let this_arg = if let Some(first_arg) = call.args.first() {
+                            self.lower_expr(&first_arg.expr, block)?
+                        } else {
+                            let undef_const = self.module.add_constant(Constant::Undefined);
+                            let undef_val = self.alloc_value();
                             self.current_function.append_instruction(
                                 block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: func_builtin,
-                                    args: builtin_args,
+                                Instruction::Const {
+                                    dest: undef_val,
+                                    constant: undef_const,
                                 },
                             );
-                            return Ok(dest);
-                        }
+                            undef_val
+                        };
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: object_proto_builtin,
+                                args: vec![this_arg],
+                            },
+                        );
+                        return Ok(dest);
+                    }
 
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
                         // Object.prototype 方法调用优化：hasOwnProperty
                         if let Some(obj_proto_builtin) =
                             builtin_from_object_proto_method(&prop_ident.sym)

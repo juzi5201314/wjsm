@@ -165,6 +165,111 @@ pub(crate) fn create_buffer_from_bytes(
     create_buffer_view(caller, ab_handle, Some(ab_obj), 0, len)
 }
 
+/// 在 `Store`/`AsContextMut` 结算路径中创建 Buffer（不依赖 Caller 专用 API）。
+pub(crate) fn create_buffer_from_bytes_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    bytes: Vec<u8>,
+) -> i64 {
+    let len = bytes.len() as u32;
+    let ab_handle = {
+        let mut table = ctx
+            .as_context()
+            .data()
+            .arraybuffer_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let handle = table.len() as u32;
+        table.push(ArrayBufferEntry { data: bytes });
+        handle
+    };
+    let ab_obj = {
+        let obj = alloc_host_object(ctx, env, 2);
+        let _ = define_host_data_property_with_env(
+            ctx,
+            env,
+            obj,
+            "__arraybuffer_handle__",
+            value::encode_f64(ab_handle as f64),
+        );
+        let _ = define_host_data_property_with_env(
+            ctx,
+            env,
+            obj,
+            "byteLength",
+            value::encode_f64(len as f64),
+        );
+        obj
+    };
+    let ta_handle = {
+        let mut table = ctx
+            .as_context()
+            .data()
+            .typedarray_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let handle = table.len() as u32;
+        table.push(TypedArrayEntry {
+            buffer_handle: ab_handle,
+            buffer_object: Some(ab_obj),
+            byte_offset: 0,
+            length: len,
+            element_size: 1,
+            element_kind: 1,
+            is_shared: false,
+        });
+        handle
+    };
+    let obj = alloc_host_object(ctx, env, 7);
+    if let Some(proto) = crate::runtime_heap::native_callable_buffer_prototype_with_env(ctx, env) {
+        crate::runtime_heap::set_object_proto_header(ctx, env, obj, proto);
+    }
+    let _ = define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "__typedarray_handle__",
+        value::encode_f64(ta_handle as f64),
+    );
+    let _ = define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "__arraybuffer_handle__",
+        value::encode_f64(ab_handle as f64),
+    );
+    let _ = define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "__buffer_brand__",
+        value::encode_bool(true),
+    );
+    let _ = define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "length",
+        value::encode_f64(len as f64),
+    );
+    let _ = define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "byteLength",
+        value::encode_f64(len as f64),
+    );
+    let _ = define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "byteOffset",
+        value::encode_f64(0.0),
+    );
+    let _ = define_host_data_property_with_env(ctx, env, obj, "buffer", ab_obj);
+    obj
+}
+
 pub(crate) fn create_arraybuffer_from_bytes(
     caller: &mut Caller<'_, RuntimeState>,
     bytes: Vec<u8>,

@@ -947,6 +947,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ErrorProtoToString => Some(error_proto_to_string_impl(caller, this_val)),
         NativeCallable::ObjectProtoToString => Some(obj_proto_to_string_impl(caller, this_val)),
         NativeCallable::ObjectProtoValueOf => Some(this_val),
+        NativeCallable::FunctionProtoCall
+        | NativeCallable::FunctionProtoApply
+        | NativeCallable::FunctionProtoBind => {
+            // call/apply 需要 shadow stack / reentry，走 async 分派。
+            None
+        }
         NativeCallable::StringConstructor => {
             let arg = args
                 .first()
@@ -1464,6 +1470,68 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         }
         NativeCallable::RegExpPrimitiveMethod { method } => {
             Some(invoke_regexp_primitive_method_async(caller, this_val, method, &args).await)
+        }
+        NativeCallable::FunctionProtoCall => {
+            let this_arg = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let call_args = if args.len() > 1 { &args[1..] } else { &[] };
+            Some(
+                crate::host_imports::reflect_apply_impl_async(
+                    caller, this_val, this_arg, call_args,
+                )
+                .await,
+            )
+        }
+        NativeCallable::FunctionProtoApply => {
+            let this_arg = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let arr_like = args
+                .get(1)
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let call_args =
+                match crate::host_imports::extract_array_like_elements(caller, arr_like).await {
+                    Ok(v) => v,
+                    Err(msg) => {
+                        return Some(make_type_error_exception(
+                            caller,
+                            &format!("TypeError: {msg}"),
+                        ));
+                    }
+                };
+            Some(
+                crate::host_imports::reflect_apply_impl_async(
+                    caller, this_val, this_arg, &call_args,
+                )
+                .await,
+            )
+        }
+        NativeCallable::FunctionProtoBind => {
+            let this_arg = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let bound_args = if args.len() > 1 {
+                args[1..].to_vec()
+            } else {
+                Vec::new()
+            };
+            let mut bound = caller
+                .data()
+                .bound_objects
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let idx = bound.len() as u32;
+            bound.push(BoundRecord {
+                target_func: this_val,
+                bound_this: this_arg,
+                bound_args,
+            });
+            Some(value::encode_bound_idx(idx))
         }
         NativeCallable::RegExpStringIteratorNext { iter_handle } => Some(
             crate::runtime_regexp::regexp_string_iterator_step(caller, iter_handle),

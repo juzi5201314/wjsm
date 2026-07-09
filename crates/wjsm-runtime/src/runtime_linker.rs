@@ -191,6 +191,30 @@ pub(super) fn register_common_bridges(
                 }
                 _ => {}
             }
+            if prop_name == "call" || prop_name == "apply" || prop_name == "bind" {
+                if !value::is_object(caller.data().function_prototype) {
+                    if let Some(env) = WasmEnv::from_caller(&mut caller) {
+                        crate::runtime_heap::ensure_function_prototype_initialized(
+                            &mut caller, &env,
+                        );
+                    }
+                }
+                let proto = caller.data().function_prototype;
+                if value::is_object(proto) {
+                    if let Some(env) = WasmEnv::from_caller(&mut caller)
+                        && let Some(ptr) = resolve_handle_idx_with_env(
+                            &mut caller,
+                            &env,
+                            value::decode_object_handle(proto) as usize,
+                        )
+                        && let Some(val) =
+                            read_object_property_by_name_with_env(&mut caller, &env, ptr, prop_name)
+                    {
+                        return val;
+                    }
+                }
+                return value::encode_undefined();
+            }
             if prop_name != "prototype" {
                 if matches!(record, Some(NativeCallable::BufferConstructor)) {
                     let kind = match prop_name {

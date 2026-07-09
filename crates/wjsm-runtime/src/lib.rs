@@ -578,9 +578,16 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     {
         let _ = bootstrap_fn.call_async(&mut store, ()).await;
     }
+    if let Ok(function_props_fn) =
+        instance.get_typed_func::<(), i64>(&mut store, "__wjsm_init_function_props")
+    {
+        let _ = function_props_fn.call_async(&mut store, ()).await;
+    }
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut store, &wasm_env);
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut store, &wasm_env);
     crate::runtime_heap::ensure_promise_prototype_initialized(&mut store, &wasm_env);
+    crate::runtime_heap::ensure_function_prototype_initialized(&mut store, &wasm_env);
+    crate::runtime_heap::install_function_props_prototypes(&mut store, &wasm_env);
     crate::runtime_heap::ensure_regexp_prototype_initialized(&mut store, &wasm_env);
     timings.bootstrap_cold = start.elapsed();
 
@@ -922,6 +929,7 @@ impl Clone for RuntimeState {
             array_proto_values: AtomicI64::new(self.array_proto_values.load(Ordering::Relaxed)),
             array_named_props: self.array_named_props.clone(),
             promise_prototype: self.promise_prototype,
+            function_prototype: self.function_prototype,
             regexp_prototype: self.regexp_prototype,
             date_prototype: self.date_prototype,
             buffer_prototype: self.buffer_prototype,
@@ -1082,6 +1090,8 @@ struct RuntimeState {
     symbol_prototype: i64,
     /// %PromisePrototype% 对象
     promise_prototype: i64,
+    /// %FunctionPrototype% 对象（Function.prototype.call/apply/bind 与函数原型链）
+    function_prototype: i64,
     /// %RegExpPrototype% 对象（供 RegExp 构造函数 .prototype + instanceof 原型链遍历）
     regexp_prototype: i64,
     /// %DatePrototype% 对象（供 Date 构造函数 .prototype + instanceof 原型链遍历）。
@@ -1524,6 +1534,7 @@ impl RuntimeState {
             generator_prototype: value::encode_undefined(),
             async_iterator_prototype: value::encode_undefined(),
             promise_prototype: value::encode_undefined(),
+            function_prototype: value::encode_undefined(),
             regexp_prototype: value::encode_undefined(),
             date_prototype: value::encode_undefined(),
             async_gen_prototype: value::encode_undefined(),
