@@ -141,6 +141,8 @@ fn clone_runtime_options_for_worker(caller: &Caller<'_, RuntimeState>) -> Runtim
         argv: process.argv.iter().cloned().collect(),
         cwd: process.cwd.clone(),
         env: process.env.iter().cloned().collect(),
+        exec_path: Some(process.exec_path.clone()),
+        exec_argv: process.exec_argv.iter().cloned().collect(),
         pid: process.pid,
         ppid: process.ppid,
         platform: process.platform,

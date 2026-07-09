@@ -646,10 +646,15 @@ pub(super) async fn setup_shared_env_and_support(
         shadow_memory,
     )?;
 
-    // 创建 shared table (minimum 256, 覆盖 support 12 + user ~200 函数)
+    // 创建 shared funcref table。
+    // 间接调用 / 闭包 / 方法表会写入 element section；cluster+net 等大型 builtin
+    // 组合可超过 256（实测 ~261+）。min 过小会在 instantiate 时
+    // trap: undefined element: out of bounds table access。
+    // 上限不封顶（None），初始给足常用组合 + support 预留余量。
+    const SHARED_FUNCREF_TABLE_MIN: u32 = 2048;
     let table = Table::new(
         &mut *store,
-        TableType::new(RefType::FUNCREF, 256, None),
+        TableType::new(RefType::FUNCREF, SHARED_FUNCREF_TABLE_MIN, None),
         Ref::Func(None),
     )?;
     linker.define(&*store, "env", "__table", table)?;

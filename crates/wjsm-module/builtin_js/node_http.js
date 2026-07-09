@@ -167,25 +167,77 @@ export function Server(requestListener) {
 
 Server.prototype = Object.create(EventEmitter.prototype);
 Server.prototype.constructor = Server;
+function httpOnBound(server, handle) {
+  const netHost = globalThis.__wjsm_node_net;
+  server._netHandle = handle;
+  server._address = {
+    address: netHost.serverAddress(handle),
+    family: 'IPv4',
+    port: netHost.serverPort(handle),
+  };
+  server.__listening = true;
+  server.emit('listening');
+  httpAcceptLoop(server);
+}
+
+function httpAcceptLoop(server) {
+  if (!server.__listening || server._netHandle === undefined) return;
+  const netHost = globalThis.__wjsm_node_net;
+  const handle = server._netHandle;
+  netHost.serverAccept(handle).then(function (socketHandle) {
+    if (socketHandle === null || socketHandle === undefined || !server.__listening) return;
+    // 最小 socket 适配
+    const sock = { __handle: socketHandle };
+    sock.on = function (ev, fn) {
+      if (ev === 'data') {
+        function readLoop() {
+          netHost.read(socketHandle).then(function (buf) {
+            if (buf === null || buf === undefined) return;
+            fn(Buffer.from(buf));
+            schedule(readLoop);
+          });
+        }
+        schedule(readLoop);
+      }
+      return sock;
+    };
+    sock.end = function (data, cb) {
+      if (data !== undefined) netHost.write(socketHandle, data);
+      netHost.end(socketHandle);
+      if (cb) schedule(cb);
+      return sock;
+    };
+    handleHttpConnection(server, sock);
+    schedule(function () { httpAcceptLoop(server); });
+  });
+}
+
 Server.prototype.listen = function (a, b, c) {
-  const opts = { port: a === undefined ? 0 : a, host: '127.0.0.1', callback: undefined };
-  if (typeof b === 'function') opts.callback = b;
-  else if (b !== undefined) opts.host = b;
-  if (typeof c === 'function') opts.callback = c;
-  if (opts.callback) this.once('listening', opts.callback);
-  const self = this;
-  globalThis.__wjsm_node_net.serverListen(opts.port, opts.host).then(function (handle) {
-    self._netHandle = handle;
-    self._address = { address: globalThis.__wjsm_node_net.serverAddress(handle), family: 'IPv4', port: globalThis.__wjsm_node_net.serverPort(handle) };
-    self.emit('listening');
-  }, function (error) { self.emit('error', error); });
+  const port = a === undefined ? 0 : a;
+  let hostName = '127.0.0.1';
+  let callback = undefined;
+  if (typeof b === 'function') callback = b;
+  else if (b !== undefined) hostName = b;
+  if (typeof c === 'function') callback = c;
+  if (callback) this.once('listening', callback);
+  const server = this;
+  const netHost = globalThis.__wjsm_node_net;
+  const p = Number(port) || 0;
+  const h = String(hostName || '127.0.0.1');
+  netHost.serverListen(p, h).then(function (handle) {
+    httpOnBound(server, handle);
+  });
   return this;
 };
+
 Server.prototype.close = function (callback) {
   if (callback) this.once('close', callback);
-  if (this._netHandle !== undefined) globalThis.__wjsm_node_net.serverClose(this._netHandle);
-  this._netHandle = undefined;
   const self = this;
+  self.__listening = false;
+  if (self._netHandle !== undefined) {
+    globalThis.__wjsm_node_net.serverClose(self._netHandle);
+  }
+  self._netHandle = undefined;
   schedule(function () { self.emit('close'); });
   return this;
 };

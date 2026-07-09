@@ -271,6 +271,9 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::ProcessCwd
             | NativeCallable::ProcessExit
             | NativeCallable::ProcessNextTick
+            | NativeCallable::ProcessSend
+            | NativeCallable::ProcessDisconnect
+            | NativeCallable::ProcessOn
             | NativeCallable::ProcessStreamWrite { .. }
             | NativeCallable::ProcessEnvTrap { .. }
             | NativeCallable::ProcessStreamEnd { .. }

@@ -96,6 +96,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         canonical: "inspector",
         source: include_str!("../builtin_js/node_inspector.js"),
     },
+    BuiltinModule {
+        canonical: "cluster",
+        source: include_str!("../builtin_js/node_cluster.js"),
+    },
 ];
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {
@@ -186,6 +190,7 @@ mod tests {
             "tls",
             "worker_threads",
             "inspector",
+            "cluster",
         ] {
             assert!(
                 seen.insert(virtual_path(canonical)),

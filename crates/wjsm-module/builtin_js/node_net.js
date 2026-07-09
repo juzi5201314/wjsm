@@ -13,6 +13,18 @@ function schedule(fn) {
   else setTimeout(fn, 0);
 }
 
+/** cluster 模块加载时挂到 globalThis，避免 net↔cluster 循环依赖。 */
+function getCluster() {
+  return globalThis.__wjsm_cluster || null;
+}
+
+function reportClusterListening(server) {
+  const cluster = getCluster();
+  if (!cluster || !cluster.isWorker || typeof process.send !== 'function') return;
+  const addr = server.address();
+  process.send({ cmd: 'NODE_CLUSTER', act: 'listening', address: addr });
+}
+
 function normalizeConnectArgs(a, b, c) {
   const out = { port: undefined, host: '127.0.0.1', callback: undefined };
   if (typeof a === 'object' && a !== null) {
@@ -213,19 +225,75 @@ export function Server(options, connectionListener) {
 Server.prototype = Object.create(EventEmitter.prototype);
 Server.prototype.constructor = Server;
 
+function netServerOnBound(server, handle) {
+  server.__handle = handle;
+  server.__listening = true;
+  server.__closing = false;
+  server.emit('listening');
+  reportClusterListening(server);
+  server.__acceptLoop();
+}
+
+function netServerBindLocal(server, port, hostName, reusePort) {
+  const p = Number(port) || 0;
+  const h = String(hostName || '127.0.0.1');
+  // 注意：仅单参数 .then(onFulfilled)。双参数 .then(ok, err) 在当前 lowerer
+  // 下会生成错误控制流（promise.then 落在不可达 bb，听不到 listening）。
+  if (reusePort) {
+    host.serverListen(p, h, { reusePort: true }).then(function (handle) {
+      netServerOnBound(server, handle);
+    });
+  } else {
+    host.serverListen(p, h).then(function (handle) {
+      netServerOnBound(server, handle);
+    });
+  }
+}
+
+function netServerOnClusterPlan(server, opts, plan) {
+  if (plan.act === 'rr' || plan.mode === 'rr') {
+    server.__listening = true;
+    server.__closing = false;
+    server.__rrMode = true;
+    server.__address = plan.address || { address: opts.host, port: opts.port, family: 'IPv4' };
+    const cluster = getCluster();
+    if (cluster && typeof cluster.registerConnectionHandler === 'function') {
+      cluster.registerConnectionHandler(function (socketHandle) {
+        if (server.__closing) return;
+        const socket = new Socket({ handle: socketHandle });
+        server.connections = server.connections + 1;
+        socket.once('close', function () {
+          server.connections = Math.max(0, server.connections - 1);
+        });
+        server.emit('connection', socket);
+        socket._startReadLoop();
+      });
+    }
+    server.emit('listening');
+    reportClusterListening(server);
+    return;
+  }
+  const sharePort = plan.port !== undefined ? plan.port : opts.port;
+  let shareHost = opts.host;
+  if (plan.address && plan.address.address) shareHost = plan.address.address;
+  else if (typeof plan.address === 'string') shareHost = plan.address;
+  const reuse = plan.act === 'share' || plan.mode === 'share' || plan.reusePort;
+  netServerBindLocal(server, sharePort, shareHost, reuse);
+}
+
 Server.prototype.listen = function (a, b, c) {
   const opts = normalizeListenArgs(a, b, c);
   if (opts.callback) this.once('listening', opts.callback);
-  const self = this;
-  host.serverListen(opts.port, opts.host).then(function (handle) {
-    self.__handle = handle;
-    self.__listening = true;
-    self.__closing = false;
-    self.emit('listening');
-    self.__acceptLoop();
-  }, function (error) {
-    self.emit('error', error);
-  });
+  const server = this;
+  const exclusive = opts.exclusive === true;
+  const cluster = getCluster();
+  if (cluster && cluster.isWorker && !exclusive && typeof cluster.queryServerListen === 'function') {
+    cluster.queryServerListen(opts).then(function (plan) {
+      netServerOnClusterPlan(server, opts, plan);
+    });
+    return this;
+  }
+  netServerBindLocal(server, opts.port, opts.host, false);
   return this;
 };
 
@@ -240,8 +308,6 @@ Server.prototype.__acceptLoop = function () {
     self.emit('connection', socket);
     socket._startReadLoop();
     schedule(function () { self.__acceptLoop(); });
-  }, function (error) {
-    if (!self.__closing) self.emit('error', error);
   });
 };
 
@@ -263,6 +329,7 @@ Server.prototype.close = function (callback) {
 };
 
 Server.prototype.address = function () {
+  if (this.__rrMode && this.__address) return this.__address;
   if (this.__handle === undefined) return null;
   return makeAddress(host.serverAddress(this.__handle), host.serverPort(this.__handle));
 };

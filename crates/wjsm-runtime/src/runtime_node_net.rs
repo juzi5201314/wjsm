@@ -31,6 +31,10 @@ pub(crate) enum NetMethodKind {
     SocketLocalAddress,
     SocketRemotePort,
     SocketRemoteAddress,
+    /// 从 raw fd 构造 socket 侧表（cluster RR / SCM_RIGHTS）。
+    SocketFromFd,
+    /// accept 后返回 raw fd（不进入 socket 侧表；供 primary 转发）。
+    ServerAcceptRawFd,
 }
 
 impl NetMethodKind {
@@ -50,6 +54,8 @@ impl NetMethodKind {
             Self::SocketLocalAddress => 11,
             Self::SocketRemotePort => 12,
             Self::SocketRemoteAddress => 13,
+            Self::SocketFromFd => 14,
+            Self::ServerAcceptRawFd => 15,
         }
     }
 
@@ -69,6 +75,8 @@ impl NetMethodKind {
             11 => Some(Self::SocketLocalAddress),
             12 => Some(Self::SocketRemotePort),
             13 => Some(Self::SocketRemoteAddress),
+            14 => Some(Self::SocketFromFd),
+            15 => Some(Self::ServerAcceptRawFd),
             _ => None,
         }
     }
@@ -98,7 +106,7 @@ struct AcceptedTcpStream {
 
 pub(crate) fn create_net_host_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 14);
+    let obj = alloc_host_object(caller, &env, 16);
     let temp_root_len = caller.data().push_host_temp_roots([obj]);
     install_net_method(caller, obj, "connect", NetMethodKind::Connect);
     install_net_method(caller, obj, "read", NetMethodKind::Read);
@@ -114,6 +122,8 @@ pub(crate) fn create_net_host_object(caller: &mut Caller<'_, RuntimeState>) -> i
     install_net_method(caller, obj, "socketLocalAddress", NetMethodKind::SocketLocalAddress);
     install_net_method(caller, obj, "socketRemotePort", NetMethodKind::SocketRemotePort);
     install_net_method(caller, obj, "socketRemoteAddress", NetMethodKind::SocketRemoteAddress);
+    install_net_method(caller, obj, "socketFromFd", NetMethodKind::SocketFromFd);
+    install_net_method(caller, obj, "serverAcceptRawFd", NetMethodKind::ServerAcceptRawFd);
     caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }
@@ -138,6 +148,8 @@ pub(crate) fn call_net_method(
         NetMethodKind::SocketLocalAddress => socket_addr_string(caller, args, false),
         NetMethodKind::SocketRemotePort => socket_addr_number(caller, args, true, true),
         NetMethodKind::SocketRemoteAddress => socket_addr_string(caller, args, true),
+        NetMethodKind::SocketFromFd => socket_from_fd(caller, args),
+        NetMethodKind::ServerAcceptRawFd => server_accept_raw_fd(caller, args),
     }
 }
 
@@ -339,12 +351,25 @@ fn server_listen(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             return promise;
         }
     };
+    let reuse_port = args
+        .get(2)
+        .copied()
+        .and_then(|raw| {
+            if value::is_object(raw) {
+                crate::runtime_node_data::object_bool_property(caller, raw, "reusePort")
+            } else if value::is_bool(raw) {
+                Some(value::decode_bool(raw))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(false);
     let address = format!("{host}:{port}");
     enqueue_async_result(
         caller,
         promise,
         async move {
-            let listener = TcpListener::bind(address)
+            let listener = bind_tcp_listener(&address, reuse_port)
                 .await
                 .map_err(|err| format!("listen {host}:{port} failed: {err}"))?;
             let local_addr = listener
@@ -390,6 +415,206 @@ fn server_listen(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
                 let handle = store.data().net_server_table.alloc(entry);
                 PromiseSettlement::Fulfill(value::encode_f64(handle as f64))
             }
+            Err(message) => PromiseSettlement::Reject(error_with_env(store, _env, message)),
+        },
+    );
+    promise
+}
+
+async fn bind_tcp_listener(address: &str, reuse_port: bool) -> Result<TcpListener, String> {
+    if !reuse_port {
+        return TcpListener::bind(address)
+            .await
+            .map_err(|err| err.to_string());
+    }
+    #[cfg(unix)]
+    {
+        bind_with_reuse_port(address).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = reuse_port;
+        TcpListener::bind(address)
+            .await
+            .map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(unix)]
+async fn bind_with_reuse_port(address: &str) -> Result<TcpListener, String> {
+    use std::net::ToSocketAddrs;
+    use std::os::fd::{FromRawFd, RawFd};
+
+    let addr = address
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or_else(|| format!("invalid listen address {address}"))?;
+
+    // 先用阻塞 std bind 拿到 fd，再设 SO_REUSEPORT 需要在 bind 前——因此全走 libc。
+    let domain = if addr.is_ipv4() {
+        libc::AF_INET
+    } else {
+        libc::AF_INET6
+    };
+    let fd: RawFd = unsafe { libc::socket(domain, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let yes: libc::c_int = 1;
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &yes as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&yes) as libc::socklen_t,
+        );
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEPORT,
+            &yes as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&yes) as libc::socklen_t,
+        );
+    }
+
+    let bind_rc = match addr {
+        std::net::SocketAddr::V4(v4) => {
+            let mut sa: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            sa.sin_family = libc::AF_INET as _;
+            sa.sin_port = u16::to_be(v4.port());
+            sa.sin_addr = libc::in_addr {
+                s_addr: u32::from_ne_bytes(v4.ip().octets()),
+            };
+            unsafe {
+                libc::bind(
+                    fd,
+                    &sa as *const _ as *const libc::sockaddr,
+                    std::mem::size_of_val(&sa) as libc::socklen_t,
+                )
+            }
+        }
+        std::net::SocketAddr::V6(v6) => {
+            let mut sa: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+            sa.sin6_family = libc::AF_INET6 as _;
+            sa.sin6_port = u16::to_be(v6.port());
+            sa.sin6_addr = libc::in6_addr {
+                s6_addr: v6.ip().octets(),
+            };
+            unsafe {
+                libc::bind(
+                    fd,
+                    &sa as *const _ as *const libc::sockaddr,
+                    std::mem::size_of_val(&sa) as libc::socklen_t,
+                )
+            }
+        }
+    };
+    if bind_rc != 0 {
+        let err = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(fd);
+        }
+        return Err(err.to_string());
+    }
+    if unsafe { libc::listen(fd, 128) } != 0 {
+        let err = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(fd);
+        }
+        return Err(err.to_string());
+    }
+
+    let std_listener = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+    std_listener
+        .set_nonblocking(true)
+        .map_err(|e| e.to_string())?;
+    TcpListener::from_std(std_listener).map_err(|e| e.to_string())
+}
+
+#[cfg(unix)]
+fn socket_from_fd(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    use std::os::fd::{FromRawFd, RawFd};
+    let Some(raw) = args.first().copied() else {
+        return error_from_caller(caller, "socketFromFd requires fd".to_string());
+    };
+    if !value::is_f64(raw) {
+        return error_from_caller(caller, "socketFromFd fd must be a number".to_string());
+    }
+    let fd = value::decode_f64(raw) as RawFd;
+    if fd < 0 {
+        return error_from_caller(caller, "socketFromFd invalid fd".to_string());
+    }
+    let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+    if let Err(err) = std_stream.set_nonblocking(true) {
+        return error_from_caller(caller, format!("socketFromFd set_nonblocking: {err}"));
+    }
+    let stream = match TcpStream::from_std(std_stream) {
+        Ok(s) => s,
+        Err(err) => return error_from_caller(caller, format!("socketFromFd: {err}")),
+    };
+    let local_addr = stream
+        .local_addr()
+        .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
+    let peer_addr = stream
+        .peer_addr()
+        .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
+    let handle = alloc_socket_entry_from_stream(caller.data(), stream, local_addr, peer_addr);
+    value::encode_f64(handle as f64)
+}
+
+#[cfg(not(unix))]
+fn socket_from_fd(caller: &mut Caller<'_, RuntimeState>, _args: &[i64]) -> i64 {
+    error_from_caller(caller, "socketFromFd is only supported on Unix".to_string())
+}
+
+fn server_accept_raw_fd(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+    let Some(entry) = server_entry(caller, args.first().copied()) else {
+        reject_promise_from_caller(caller, promise, "net.Server handle is invalid".to_string());
+        return promise;
+    };
+    let accept_rx = Arc::clone(&entry.accept_rx);
+    let closed = Arc::clone(&entry.closed);
+    let close_notify = Arc::clone(&entry.close_notify);
+    enqueue_async_result(
+        caller,
+        promise,
+        async move {
+            if closed.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
+            let mut rx = accept_rx.lock().await;
+            let accepted = tokio::select! {
+                accepted = rx.recv() => accepted,
+                _ = close_notify.notified() => None,
+            };
+            match accepted {
+                Some(accepted) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::fd::IntoRawFd;
+                        let std_stream = accepted
+                            .stream
+                            .into_std()
+                            .map_err(|e| format!("into_std: {e}"))?;
+                        // into_std 可能变阻塞；保持 fd 所有权交给对端
+                        let fd = std_stream.into_raw_fd();
+                        Ok(Some(fd as i64))
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = accepted;
+                        Err("serverAcceptRawFd is only supported on Unix".to_string())
+                    }
+                }
+                None => Ok(None),
+            }
+        },
+        |store, _env, result| match result {
+            Ok(Some(fd)) => PromiseSettlement::Fulfill(value::encode_f64(fd as f64)),
+            Ok(None) => PromiseSettlement::Fulfill(value::encode_null()),
             Err(message) => PromiseSettlement::Reject(error_with_env(store, _env, message)),
         },
     );

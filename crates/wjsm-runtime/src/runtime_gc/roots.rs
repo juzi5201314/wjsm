@@ -486,6 +486,40 @@ fn collect_host_table_values(
         if let Ok(temp_roots) = st.host_temp_roots.lock() {
             out.extend(temp_roots.iter().copied());
         }
+        // JS 全局对象单例（create_global_object）
+        let js_global = st
+            .js_global_object
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if !crate::value::is_undefined(js_global) {
+            out.push(js_global);
+        }
+        // process IPC message / disconnect 回调（否则 GC 会清掉 process.on('message')）
+        if let Some(ipc) = st.process_ipc.as_ref() {
+            if let Ok(cb) = ipc.message_cb.lock() {
+                if let Some(v) = *cb {
+                    out.push(v);
+                }
+            }
+            if let Ok(cb) = ipc.disconnect_cb.lock() {
+                if let Some(v) = *cb {
+                    out.push(v);
+                }
+            }
+        }
+        // child_process 本地 message/exit/disconnect 回调
+        if let Ok(bindings) = st.child_bindings.lock() {
+            for b in bindings.values() {
+                if let Some(v) = b.message_cb {
+                    out.push(v);
+                }
+                if let Some(v) = b.exit_cb {
+                    out.push(v);
+                }
+                if let Some(v) = b.disconnect_cb {
+                    out.push(v);
+                }
+            }
+        }
 
         // microtask_queue
         if let Ok(microtasks) = st.microtask_queue.lock() {

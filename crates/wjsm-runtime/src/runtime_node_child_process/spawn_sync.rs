@@ -1,3 +1,5 @@
+//! `spawnSync` / `execSync` 同步子进程路径。
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -14,37 +16,16 @@ use crate::runtime_node_data::{
 };
 use crate::*;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ChildProcessMethodKind {
-    SpawnSync,
-    ExecSync,
-}
-
-impl ChildProcessMethodKind {
-    pub(crate) fn from_method(method: u8) -> Option<Self> {
-        match method {
-            0 => Some(Self::SpawnSync),
-            1 => Some(Self::ExecSync),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn method(self) -> u8 {
-        match self {
-            Self::SpawnSync => 0,
-            Self::ExecSync => 1,
-        }
-    }
-}
-
 #[derive(Debug)]
-struct CommandOptions {
-    cwd: Option<String>,
-    env_pairs: Vec<(String, String)>,
-    shell: bool,
-    timeout_ms: Option<u64>,
-    max_buffer: usize,
-    input: Vec<u8>,
+pub(super) struct CommandOptions {
+    pub cwd: Option<String>,
+    pub env_pairs: Vec<(String, String)>,
+    pub shell: bool,
+    pub timeout_ms: Option<u64>,
+    pub max_buffer: usize,
+    pub input: Vec<u8>,
+    /// 是否建立 IPC（仅异步 spawn/fork 使用；sync 忽略）。
+    pub ipc: bool,
 }
 
 #[derive(Debug)]
@@ -55,39 +36,7 @@ struct CommandOutcome {
     signal: Option<String>,
 }
 
-pub(crate) fn create_child_process_host_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 2);
-    let temp_root_len = caller.data().push_host_temp_roots([obj]);
-    install_child_process_method(caller, obj, "spawnSync", ChildProcessMethodKind::SpawnSync);
-    install_child_process_method(caller, obj, "execSync", ChildProcessMethodKind::ExecSync);
-    caller.data().truncate_host_temp_roots(temp_root_len);
-    obj
-}
-
-pub(crate) fn call_child_process_method(
-    caller: &mut Caller<'_, RuntimeState>,
-    kind: ChildProcessMethodKind,
-    args: &[i64],
-) -> i64 {
-    match kind {
-        ChildProcessMethodKind::SpawnSync => spawn_sync(caller, args),
-        ChildProcessMethodKind::ExecSync => exec_sync(caller, args),
-    }
-}
-
-fn install_child_process_method(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-    name: &str,
-    kind: ChildProcessMethodKind,
-) {
-    let callable =
-        create_native_callable(caller.data(), NativeCallable::ChildProcessMethod { kind });
-    let _ = define_host_data_property_from_caller(caller, obj, name, callable);
-}
-
-fn spawn_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+pub(super) fn spawn_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let Some(command) = args.first().copied() else {
         return make_type_error_exception(caller, "spawnSync command is required");
     };
@@ -109,7 +58,7 @@ fn spawn_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     }
 }
 
-fn exec_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+pub(super) fn exec_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let Some(command) = args.first().copied() else {
         return make_type_error_exception(caller, "execSync command is required");
     };
@@ -134,7 +83,7 @@ fn exec_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     }
 }
 
-fn parse_options(
+pub(super) fn parse_options(
     caller: &mut Caller<'_, RuntimeState>,
     raw: Option<i64>,
 ) -> Result<CommandOptions, i64> {
@@ -169,6 +118,11 @@ fn parse_options(
     } else {
         1024 * 1024
     };
+    let ipc = if value::is_object(raw) {
+        object_bool_property(caller, raw, "ipc").unwrap_or(false)
+    } else {
+        false
+    };
     let input = if value::is_object(raw) {
         let Some(ptr) = resolve_handle(caller, raw) else {
             return Ok(CommandOptions {
@@ -178,6 +132,7 @@ fn parse_options(
                 timeout_ms,
                 max_buffer,
                 input: Vec::new(),
+                ipc,
             });
         };
         match read_object_property_by_name(caller, ptr, "input") {
@@ -196,6 +151,7 @@ fn parse_options(
         timeout_ms,
         max_buffer,
         input,
+        ipc,
     })
 }
 
@@ -224,7 +180,7 @@ fn run_command(
     args: &[String],
     options: &CommandOptions,
 ) -> Result<CommandOutcome, String> {
-    validate_command_allowed(caller, command, options.shell)?;
+    validate_command_allowed(caller, command, options.shell, false)?;
     let mut cmd = if options.shell {
         let mut shell = Command::new("sh");
         shell.arg("-c").arg(command);
@@ -299,11 +255,28 @@ fn run_command(
     })
 }
 
-fn validate_command_allowed(
+/// `allow_self_exec`：IPC fork 本二进制时跳过 allowlist。
+pub(super) fn validate_command_allowed(
     caller: &mut Caller<'_, RuntimeState>,
     command: &str,
     shell: bool,
+    allow_self_exec: bool,
 ) -> Result<(), String> {
+    if allow_self_exec {
+        let exec_path = caller.data().process.exec_path.as_str();
+        if !exec_path.is_empty() && paths_match(Path::new(command), Path::new(exec_path)) {
+            return Ok(());
+        }
+        if Path::new(command)
+            .file_name()
+            .is_some_and(|n| n == Path::new(exec_path).file_name().unwrap_or_default())
+        {
+            // 允许仅文件名匹配当前 exec（测试/相对路径）
+            if command == "wjsm" || command.ends_with("/wjsm") {
+                return Ok(());
+            }
+        }
+    }
     let raw = caller
         .data()
         .process
@@ -365,13 +338,13 @@ fn canonicalize(path: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn signal_from_status(status: &std::process::ExitStatus) -> Option<String> {
+pub(super) fn signal_from_status(status: &std::process::ExitStatus) -> Option<String> {
     use std::os::unix::process::ExitStatusExt;
     status.signal().map(|signal| format!("SIG{signal}"))
 }
 
 #[cfg(not(unix))]
-fn signal_from_status(_status: &std::process::ExitStatus) -> Option<String> {
+pub(super) fn signal_from_status(_status: &std::process::ExitStatus) -> Option<String> {
     None
 }
 
@@ -398,7 +371,7 @@ fn create_spawn_result(caller: &mut Caller<'_, RuntimeState>, outcome: CommandOu
     obj
 }
 
-fn make_child_process_error(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
+pub(super) fn make_child_process_error(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
     let error_obj = create_error_object(caller, "Error", msg_val, value::encode_undefined());
     let mut errors = caller

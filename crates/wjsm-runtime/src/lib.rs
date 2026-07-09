@@ -154,6 +154,10 @@ pub struct RuntimeOptions {
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
+    /// `process.execPath`；默认 `current_exe()`。
+    pub exec_path: Option<String>,
+    /// `process.execArgv`（如 `["run"]`）；fork 时拼在脚本路径前。
+    pub exec_argv: Vec<String>,
     pub pid: u32,
     pub ppid: u32,
     pub platform: &'static str,
@@ -189,6 +193,8 @@ impl std::fmt::Debug for RuntimeOptions {
             .field("argv", &self.argv)
             .field("cwd", &self.cwd)
             .field("env", &self.env)
+            .field("exec_path", &self.exec_path)
+            .field("exec_argv", &self.exec_argv)
             .field("pid", &self.pid)
             .field("ppid", &self.ppid)
             .field("platform", &self.platform)
@@ -217,6 +223,8 @@ impl Default for RuntimeOptions {
             argv: Vec::new(),
             cwd: None,
             env: Vec::new(),
+            exec_path: None,
+            exec_argv: vec!["run".to_string()],
             pid: std::process::id(),
             ppid: 0,
             platform: std::env::consts::OS,
@@ -970,6 +978,7 @@ impl Clone for RuntimeState {
             shadow_stack_max: self.shadow_stack_max,
             inspect: self.inspect.clone(),
             host_temp_roots: self.host_temp_roots.clone(),
+            js_global_object: AtomicI64::new(self.js_global_object.load(Ordering::Relaxed)),
             process: self.process.clone(),
             next_tick_queue: self.next_tick_queue.clone(),
             process_exit_signal: self.process_exit_signal.clone(),
@@ -1062,6 +1071,9 @@ impl Clone for RuntimeState {
             dgram_socket_table: self.dgram_socket_table.clone(),
             tls_socket_table: self.tls_socket_table.clone(),
             tls_server_table: self.tls_server_table.clone(),
+            child_process_table: self.child_process_table.clone(),
+            child_bindings: self.child_bindings.clone(),
+            process_ipc: None, // 不跨 clone 共享 IPC 端点
             host_completion_tx: self.host_completion_tx.clone(),
             async_op_counter: self.async_op_counter.clone(),
             source_map: self.source_map.clone(),
@@ -1088,6 +1100,10 @@ struct RuntimeState {
     /// Host import 直接参数的临时 root；WASM 直接入参不在 shadow stack 中，
     /// host import 若在消费入参前分配 JS 对象，必须短暂保护这些值。
     host_temp_roots: Arc<Mutex<Vec<i64>>>,
+    /// JS 全局对象单例（create_global_object）。嵌套函数也会 LoadVar `$0.$global` 并
+    /// 再次调用 create_global_object；必须返回同一对象，否则 globalThis 属性（如
+    /// `__wjsm_cluster`）在函数间不可见。encode_undefined 表示尚未创建。
+    js_global_object: AtomicI64,
     /// 用户配置的 JS 堆预算（字节）。None 表示只受 wasm32 地址空间和宿主内存约束。
     max_heap_size: Option<usize>,
     /// 影子栈软上限（字节）。
@@ -1261,6 +1277,14 @@ struct RuntimeState {
     tls_socket_table: Arc<HostSideTable<runtime_node_tls::TlsSocketEntry>>,
     /// TLS server 侧表：Node `tls.Server` 持有的监听器与 accept 队列。
     tls_server_table: Arc<HostSideTable<runtime_node_tls::TlsServerEntry>>,
+    /// 异步 child_process 侧表。
+    child_process_table: Arc<HostSideTable<runtime_node_child_process::ChildProcessEntry>>,
+    /// 子进程本地回调绑定（message/exit）。
+    child_bindings: Arc<
+        Mutex<HashMap<u32, runtime_node_child_process::LocalChildBinding>>,
+    >,
+    /// 本进程作为 IPC child 时的通道（NODE_CHANNEL_FD）。
+    process_ipc: Option<runtime_node_child_process::ProcessIpcState>,
     /// ReadableStream 侧表：存储流状态
     readable_stream_table: Arc<HostSideTable<ReadableStreamEntry>>,
     /// Reader 侧表：存储 reader → stream 映射
@@ -1456,6 +1480,7 @@ impl RuntimeState {
         state.shadow_stack_max = options.shadow_stack_max.max(wjsm_ir::SHADOW_STACK_INITIAL_SIZE as usize);
         state.inspect = options.inspect.clone();
         state.process = ProcessState::from_options(&options);
+        runtime_node_child_process::try_init_process_ipc_from_env(&mut state);
         state.gc_algorithm = Arc::new(Mutex::new(
             crate::runtime_gc::registry::create(options.gc_algorithm)
                 .map_err(anyhow::Error::msg)?,
@@ -1551,6 +1576,7 @@ impl RuntimeState {
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
             host_temp_roots: Arc::new(Mutex::new(Vec::new())),
+            js_global_object: AtomicI64::new(value::encode_undefined()),
             max_heap_size: None,
             shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
             inspect: None,
@@ -1701,6 +1727,9 @@ impl RuntimeState {
             dgram_socket_table: Arc::new(HostSideTable::new()),
             tls_socket_table: Arc::new(HostSideTable::new()),
             tls_server_table: Arc::new(HostSideTable::new()),
+            child_process_table: Arc::new(HostSideTable::new()),
+            child_bindings: Arc::new(Mutex::new(HashMap::new())),
+            process_ipc: None,
             readable_stream_table: Arc::new(HostSideTable::new()),
             reader_table: Arc::new(HostSideTable::new()),
             stream_controller_table: Arc::new(HostSideTable::new()),

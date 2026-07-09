@@ -31,7 +31,7 @@ swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common"
 thiserror = "2.0.18"
 wasm-encoder = "0.246.2"
 wasmtime = { version = "43.0.0", features = ["async", "winch", "debug"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "io-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "io-util", "process"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake", "connect"] }
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }

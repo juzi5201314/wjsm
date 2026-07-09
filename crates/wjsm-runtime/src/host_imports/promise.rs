@@ -171,6 +171,7 @@ pub(crate) fn define_promise(
                             queued = Some((ReactionType::Reject, on_rejected, reason));
                         }
                     }
+                } else {
                 }
             }
             if let Some((reaction_type, handler, argument)) = queued {

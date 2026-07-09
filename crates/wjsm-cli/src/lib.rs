@@ -137,6 +137,8 @@ fn runtime_options_with_argv(
         argv,
         cwd: runtime_cwd_string(),
         env,
+        exec_path: Some(wjsm_argv0()),
+        exec_argv: vec!["run".to_string()],
         pid: std::process::id(),
         ppid: 0,
         platform: node_platform(),
@@ -2366,6 +2368,8 @@ fn runtime_options_for_in_process(
             .map(|cwd| cwd.to_string_lossy().into_owned())
             .or_else(runtime_cwd_string),
         env,
+        exec_path: Some(wjsm_argv0()),
+        exec_argv: vec!["run".to_string()],
         pid: std::process::id(),
         ppid: 0,
         platform: node_platform(),

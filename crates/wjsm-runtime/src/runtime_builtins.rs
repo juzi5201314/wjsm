@@ -866,6 +866,21 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ProcessCpuUsage => Some(crate::runtime_process::call_process_cpu_usage(
             caller, &args,
         )),
+        NativeCallable::ProcessSend => Some(
+            crate::runtime_node_child_process::call_child_process_method(
+                caller,
+                crate::runtime_node_child_process::ChildProcessMethodKind::ProcessSend,
+                &args,
+            ),
+        ),
+        NativeCallable::ProcessDisconnect => Some(
+            crate::runtime_node_child_process::call_child_process_method(
+                caller,
+                crate::runtime_node_child_process::ChildProcessMethodKind::ProcessDisconnect,
+                &args,
+            ),
+        ),
+        NativeCallable::ProcessOn => Some(crate::runtime_process::call_process_on(caller, &args)),
         NativeCallable::FsMethod { kind } => {
             Some(crate::runtime_node_fs::call_fs_method(caller, kind, &args))
         }

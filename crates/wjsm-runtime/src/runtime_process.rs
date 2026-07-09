@@ -24,10 +24,25 @@ pub(crate) struct ProcessState {
     pub(crate) fs_read_roots: Arc<[std::path::PathBuf]>,
     pub(crate) fs_write_roots: Arc<[std::path::PathBuf]>,
     pub(crate) fs_allow_write_anywhere: bool,
+    /// 当前可执行文件路径（`process.execPath`）。
+    pub(crate) exec_path: String,
+    /// 传给子进程的 exec 参数（如 `["run"]`），不含脚本路径。
+    pub(crate) exec_argv: Arc<[String]>,
 }
 
 impl ProcessState {
     pub(crate) fn from_options(options: &RuntimeOptions) -> Self {
+        let exec_path = options.exec_path.clone().unwrap_or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "wjsm".to_string())
+        });
+        let exec_argv = if options.exec_argv.is_empty() {
+            Arc::from(vec!["run".to_string()])
+        } else {
+            Arc::from(options.exec_argv.clone())
+        };
         Self {
             argv: Arc::from(options.argv.clone()),
             cwd: options.cwd.clone(),
@@ -41,6 +56,8 @@ impl ProcessState {
             fs_read_roots: Arc::from(options.fs_read_roots.clone()),
             fs_write_roots: Arc::from(options.fs_write_roots.clone()),
             fs_allow_write_anywhere: options.fs_allow_write_anywhere,
+            exec_path,
+            exec_argv,
         }
     }
 }
@@ -167,6 +184,32 @@ pub(crate) fn install_process_global_from_caller(
     );
     let _ = define_host_data_property_from_caller(caller, process_obj, "version", version);
 
+    let exec_path = store_runtime_string(caller, process.exec_path.clone());
+    let _ = define_host_data_property_from_caller(caller, process_obj, "execPath", exec_path);
+    let exec_argv = alloc_string_array(caller, &process.exec_argv);
+    let _ = caller.data().push_host_temp_roots([exec_argv]);
+    let _ = define_host_data_property_from_caller(caller, process_obj, "execArgv", exec_argv);
+
+    // process.send / disconnect / on：IPC 子进程侧必须由 host 安装（process 为 host 对象，JS 赋值无效）
+    let connected = caller.data().process_ipc.is_some();
+    let _ = define_host_data_property_from_caller(
+        caller,
+        process_obj,
+        "connected",
+        value::encode_bool(connected),
+    );
+    if connected {
+        define_native_method(caller, process_obj, "send", NativeCallable::ProcessSend);
+        define_native_method(
+            caller,
+            process_obj,
+            "disconnect",
+            NativeCallable::ProcessDisconnect,
+        );
+        define_native_method(caller, process_obj, "on", NativeCallable::ProcessOn);
+        define_native_method(caller, process_obj, "addListener", NativeCallable::ProcessOn);
+    }
+
     define_native_method(caller, process_obj, "cwd", NativeCallable::ProcessCwd);
     define_native_method(caller, process_obj, "exit", NativeCallable::ProcessExit);
     define_native_method(
@@ -219,6 +262,34 @@ pub(crate) fn install_process_global_from_caller(
     let result = define_host_data_property_from_caller(caller, global_obj, "process", process_obj);
     caller.data().truncate_host_temp_roots(temp_root_len);
     result
+}
+
+/// `process.on(event, listener)` — 支持 message / disconnect（IPC）。
+pub(crate) fn call_process_on(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    let event = args
+        .first()
+        .copied()
+        .map(|v| crate::runtime_encoding::js_string_lossy(caller, v))
+        .unwrap_or_default();
+    let listener = args
+        .get(1)
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    if event == "message" {
+        return crate::runtime_node_child_process::call_child_process_method(
+            caller,
+            crate::runtime_node_child_process::ChildProcessMethodKind::ProcessOnMessage,
+            &[listener],
+        );
+    }
+    if event == "disconnect" {
+        if let Some(ipc) = caller.data().process_ipc.as_ref() {
+            *ipc.disconnect_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
+        }
+        return value::encode_undefined();
+    }
+    // 其它事件：no-op（保持链式 this）
+    value::encode_undefined()
 }
 
 pub(crate) fn call_process_cwd(caller: &mut Caller<'_, RuntimeState>) -> i64 {

@@ -718,6 +718,12 @@ pub(crate) enum NativeCallable {
     ProcessCwd,
     ProcessExit,
     ProcessNextTick,
+    /// IPC：`process.send(message[, sendHandle])`
+    ProcessSend,
+    /// IPC：`process.disconnect()`
+    ProcessDisconnect,
+    /// IPC / 事件：`process.on(event, listener)`（message/disconnect）
+    ProcessOn,
     ProcessStreamWrite {
         kind: crate::runtime_process::ProcessStreamKind,
     },

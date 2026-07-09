@@ -1876,6 +1876,15 @@ pub(crate) fn define_collections_buffers(
 
     let create_global_object_fn =
         Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
+            // 单例：嵌套函数入口会再次调用 create_global_object 填充 `$0.$global` local。
+            // 若每次新建，globalThis 上的 JS 属性（如 `__wjsm_cluster`）在函数间不可见。
+            let existing = caller
+                .data()
+                .js_global_object
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if !value::is_undefined(existing) {
+                return existing;
+            }
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                 alloc_host_object(&mut caller, &_wjsm_env, 80)
@@ -2047,6 +2056,11 @@ pub(crate) fn define_collections_buffers(
             let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", harness_obj);
 
             caller.data().truncate_host_temp_roots(temp_root_len);
+            // 永久 root：事件循环回调之间 main local 可能不在栈上。
+            caller.data().js_global_object.store(
+                obj,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             obj
         });
     linker.define(
