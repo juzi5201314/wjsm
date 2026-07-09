@@ -49,7 +49,18 @@ pub fn lower_runtime_entry_bundle_with_options(
     root_path: &Path,
     options: ResolutionOptions,
 ) -> Result<RuntimeEntryBundle> {
-    let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
+    lower_runtime_entry_bundle_with_debug(entry, root_path, options, false)
+}
+
+/// 同 [`lower_runtime_entry_bundle_with_options`]，可开启 debug 插桩。
+pub fn lower_runtime_entry_bundle_with_debug(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<RuntimeEntryBundle> {
+    let bundler =
+        ModuleBundler::with_resolution_options(root_path, options)?.with_emit_debug_checks(emit_debug_checks);
     bundler.lower_runtime_entry_bundle(entry)
 }
 
@@ -59,7 +70,18 @@ pub fn lower_runtime_builtin_bundle_with_options(
     root_path: &Path,
     options: ResolutionOptions,
 ) -> Result<RuntimeEntryBundle> {
-    let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
+    lower_runtime_builtin_bundle_with_debug(specifier, root_path, options, false)
+}
+
+/// 同 [`lower_runtime_builtin_bundle_with_options`]，可开启 debug 插桩。
+pub fn lower_runtime_builtin_bundle_with_debug(
+    specifier: &str,
+    root_path: &Path,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<RuntimeEntryBundle> {
+    let bundler =
+        ModuleBundler::with_resolution_options(root_path, options)?.with_emit_debug_checks(emit_debug_checks);
     bundler.lower_runtime_builtin_bundle(specifier)
 }
 

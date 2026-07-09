@@ -772,6 +772,7 @@ fn require_runtime_cjs_scope_uses_module_local_binding() {
                 url: "file:///project/main.cjs".to_string(),
                 kind: ModuleKind::CommonJs,
             },
+            source: None,
         }],
         &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
@@ -810,6 +811,7 @@ fn esm_input(id: u32, filename: &str, source: &str) -> ModuleLoweringInput {
             url: format!("file://{filename}"),
             kind: ModuleKind::Esm,
         },
+        source: Some(std::sync::Arc::<str>::from(source)),
     }
 }
 

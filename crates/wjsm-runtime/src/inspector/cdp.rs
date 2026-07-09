@@ -1,9 +1,10 @@
 //! CDP JSON-RPC 请求分发。
 
 use super::remote_object::evaluate_simple_expression;
-use super::state::{MAIN_SCRIPT_ID, ResumeAction};
+use super::state::{MAIN_SCRIPT_ID, PauseCommand, ResumeAction};
 use super::InspectorHandle;
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 
 /// 处理单条 CDP 文本消息，返回需要写回会话的 JSON 文本列表。
 pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<String> {
@@ -12,7 +13,6 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
     };
     let id = msg.get("id").cloned();
     let Some(method) = msg.get("method").and_then(|m| m.as_str()) else {
-        // 事件回执或无 method 消息忽略。
         return Vec::new();
     };
     let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -30,13 +30,15 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
                 };
                 let ev = if !inner.script_parsed_sent {
                     inner.script_parsed_sent = true;
-                    Some(script_parsed_event(&inner.debug_info.source_url))
+                    Some(script_parsed_event(
+                        &inner.debug_info.source_url,
+                        inner.debug_info.source_text.len(),
+                    ))
                 } else {
                     None
                 };
                 (ev, dbg_count)
             };
-            // debuggerStatementCount 为扩展字段，便于诊断插桩是否生效。
             out.push(ok_response(
                 id,
                 json!({ "debuggerStatementCount": debugger_statement_count }),
@@ -59,19 +61,7 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
                 .get("columnNumber")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
-            let url = params
-                .get("url")
-                .and_then(|v| v.as_str())
-                .or_else(|| params.get("urlRegex").and_then(|v| v.as_str()))
-                .unwrap_or("");
             let mut inner = handle.inner.lock().await;
-            // url / urlRegex 任一匹配当前脚本或空（任意）时接受。
-            let matches = url.is_empty()
-                || inner.debug_info.source_url.contains(url)
-                || url.contains(&inner.debug_info.source_url);
-            if !matches {
-                // 仍记录断点，便于后续 script 对齐。
-            }
             let bp_id = inner.set_breakpoint(MAIN_SCRIPT_ID, line, column);
             let locations = json!([{
                 "scriptId": MAIN_SCRIPT_ID,
@@ -114,10 +104,11 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
             let source = handle.inner.lock().await.debug_info.source_text.clone();
             vec![ok_response(id, json!({ "scriptSource": source }))]
         }
-        "Debugger.setPauseOnExceptions" | "Debugger.setAsyncCallStackDepth"
-        | "Debugger.setBlackboxPatterns" | "Debugger.skipAllPauses" => {
-            vec![ok_response(id, json!({}))]
-        }
+        "Debugger.setPauseOnExceptions"
+        | "Debugger.setAsyncCallStackDepth"
+        | "Debugger.setBlackboxPatterns"
+        | "Debugger.skipAllPauses"
+        | "Debugger.setBreakpointsActive" => vec![ok_response(id, json!({}))],
         "Runtime.enable" => {
             handle.inner.lock().await.runtime_enabled = true;
             vec![ok_response(id, json!({}))]
@@ -127,7 +118,6 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
             vec![ok_response(id, json!({}))]
         }
         "Runtime.runIfWaitingForDebugger" => {
-            // break_on_start 等待连接时，客户端连上后发此方法放行。
             handle.request_resume(ResumeAction::Continue).await;
             vec![ok_response(id, json!({}))]
         }
@@ -135,105 +125,191 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
             let object_id = params
                 .get("objectId")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let mut inner = handle.inner.lock().await;
-            // scope:frame-N → 返回该帧可见局部（优先 pause 时捕获的真实 NaN-box 值）。
-            if let Some(frame_id) = object_id.strip_prefix("scope:") {
-                let locals = scope_locals_for_frame(&mut inner, frame_id);
-                vec![ok_response(id, json!({ "result": locals }))]
-            } else if inner.remote_objects.get(object_id).is_some() {
-                // 已注册 remote object：暂无深度展开。
-                vec![ok_response(id, json!({ "result": [] }))]
-            } else {
-                vec![ok_response(id, json!({ "result": [] }))]
+                .unwrap_or("")
+                .to_string();
+            match send_pause_command(handle, |reply| PauseCommand::GetProperties {
+                object_id: object_id.clone(),
+                reply,
+            })
+            .await
+            {
+                Ok(result) => vec![ok_response(id, result)],
+                Err(_) => {
+                    // 未暂停：scope 用缓存 locals 描述。
+                    let mut inner = handle.inner.lock().await;
+                    let props = offline_scope_props(&mut inner, &object_id);
+                    vec![ok_response(id, json!({ "result": props }))]
+                }
             }
         }
         "Debugger.evaluateOnCallFrame" => {
             let expression = params
                 .get("expression")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let mut inner = handle.inner.lock().await;
-            // 先尝试简单字面量；再从当前帧 locals 按标识符查找。
-            match evaluate_simple_expression(expression, &mut inner.remote_objects) {
-                Ok(remote) => vec![ok_response(id, json!({ "result": remote }))],
-                Err(_) => {
-                    let name = expression.trim();
-                    let mut found = None;
-                    for (_frame, pairs) in &inner.frame_locals {
-                        if let Some((_, raw)) = pairs.iter().find(|(n, _)| n == name) {
-                            found = Some(*raw);
-                            break;
-                        }
-                    }
-                    if let Some(raw) = found {
-                        let remote = inner.remote_objects.describe(raw);
-                        vec![ok_response(id, json!({ "result": remote }))]
-                    } else {
-                        vec![ok_response(
-                            id,
-                            json!({
-                                "result": {
-                                    "type": "object",
-                                    "subtype": "error",
-                                    "className": "Error",
-                                    "description": format!("ReferenceError: {name} is not defined"),
-                                },
-                                "exceptionDetails": {
-                                    "text": format!("ReferenceError: {name} is not defined"),
-                                    "exceptionId": 1,
-                                    "lineNumber": 0,
-                                    "columnNumber": 0,
-                                },
-                            }),
-                        )]
-                    }
-                }
+                .unwrap_or("")
+                .to_string();
+            let frame_id = params
+                .get("callFrameId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("frame-0")
+                .to_string();
+            // 未暂停时回退：字面量 / 缓存 locals。
+            if !handle.paused.load(std::sync::atomic::Ordering::SeqCst) {
+                let mut inner = handle.inner.lock().await;
+                return vec![ok_response(
+                    id,
+                    offline_evaluate(&mut inner, &frame_id, &expression),
+                )];
+            }
+            match send_pause_command(handle, |reply| PauseCommand::EvaluateOnFrame {
+                frame_id,
+                expression,
+                reply,
+            })
+            .await
+            {
+                Ok(result) => vec![ok_response(id, result)],
+                Err(fallback) => vec![ok_response(id, fallback)],
             }
         }
         "Runtime.evaluate" => {
             let expression = params
                 .get("expression")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .unwrap_or("")
+                .to_string();
+            if handle.paused.load(std::sync::atomic::Ordering::SeqCst) {
+                match send_pause_command(handle, |reply| PauseCommand::EvaluateGlobal {
+                    expression: expression.clone(),
+                    reply,
+                })
+                .await
+                {
+                    Ok(result) => return vec![ok_response(id, result)],
+                    Err(_) => {}
+                }
+            }
             let mut inner = handle.inner.lock().await;
-            match evaluate_simple_expression(expression, &mut inner.remote_objects) {
-                Ok(remote) => vec![ok_response(
-                    id,
-                    json!({
-                        "result": remote,
-                    }),
-                )],
-                Err(msg) => vec![ok_response(
-                    id,
-                    json!({
-                        "result": {
-                            "type": "object",
-                            "subtype": "error",
-                            "className": "Error",
-                            "description": msg,
-                        },
-                        "exceptionDetails": {
-                            "text": msg,
-                            "exceptionId": 1,
-                            "lineNumber": 0,
-                            "columnNumber": 0,
-                        },
-                    }),
-                )],
+            match evaluate_simple_expression(&expression, &mut inner.remote_objects) {
+                Ok(remote) => vec![ok_response(id, json!({ "result": remote }))],
+                Err(msg) => vec![ok_response(id, eval_error_payload(&msg))],
             }
         }
         "Runtime.releaseObject" | "Runtime.releaseObjectGroup" | "Runtime.compileScript"
-        | "Runtime.discardConsoleEntries" | "Profiler.enable" | "HeapProfiler.enable"
-        | "Debugger.setBreakpointsActive" => vec![ok_response(id, json!({}))],
-        _ => {
-            // 未知方法：返回 -32601，避免客户端卡死。
-            vec![error_response(id, -32601, &format!("Method not found: {method}"))]
+        | "Runtime.discardConsoleEntries" | "Profiler.enable" | "HeapProfiler.enable" => {
+            vec![ok_response(id, json!({}))]
         }
+        _ => vec![error_response(
+            id,
+            -32601,
+            &format!("Method not found: {method}"),
+        )],
     }
 }
 
-fn script_parsed_event(url: &str) -> String {
+/// 向暂停循环发送命令；若未暂停则返回缓存回退结果。
+async fn send_pause_command<F>(
+    handle: &InspectorHandle,
+    make: F,
+) -> Result<Value, Value>
+where
+    F: FnOnce(oneshot::Sender<Value>) -> PauseCommand,
+{
+    let (tx, rx) = oneshot::channel();
+    let cmd = make(tx);
+    let sent = {
+        let inner = handle.inner.lock().await;
+        if let Some(cmd_tx) = &inner.pause_cmd_tx {
+            cmd_tx.send(cmd).is_ok()
+        } else {
+            false
+        }
+    };
+    if !sent {
+        // 未暂停：scope 走缓存；对象返回空。
+        return Err(json!({ "result": [] }));
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        Ok(Ok(v)) => Ok(v),
+        _ => Err(json!({
+            "result": {
+                "type": "object",
+                "subtype": "error",
+                "className": "Error",
+                "description": "Inspector command timed out or cancelled",
+            },
+            "exceptionDetails": {
+                "text": "Inspector command timed out or cancelled",
+                "exceptionId": 1,
+                "lineNumber": 0,
+                "columnNumber": 0,
+            },
+        })),
+    }
+}
+
+fn offline_scope_props(
+    inner: &mut super::state::InspectorInner,
+    object_id: &str,
+) -> Vec<Value> {
+    let Some(frame_id) = object_id.strip_prefix("scope:") else {
+        return Vec::new();
+    };
+    let Some(pairs) = inner.frame_locals.get(frame_id).cloned() else {
+        return Vec::new();
+    };
+    pairs
+        .into_iter()
+        .map(|(name, raw)| {
+            let value = inner.remote_objects.describe(raw);
+            json!({
+                "name": name,
+                "value": value,
+                "writable": true,
+                "configurable": true,
+                "enumerable": true,
+                "isOwn": true,
+            })
+        })
+        .collect()
+}
+
+fn offline_evaluate(
+    inner: &mut super::state::InspectorInner,
+    frame_id: &str,
+    expression: &str,
+) -> Value {
+    let expr = expression.trim();
+    if let Ok(remote) = evaluate_simple_expression(expr, &mut inner.remote_objects) {
+        return json!({ "result": remote });
+    }
+    if let Some(pairs) = inner.frame_locals.get(frame_id)
+        && let Some((_, raw)) = pairs.iter().find(|(n, _)| n == expr)
+    {
+        let remote = inner.remote_objects.describe(*raw);
+        return json!({ "result": remote });
+    }
+    eval_error_payload(&format!("ReferenceError: {expr} is not defined"))
+}
+
+fn eval_error_payload(msg: &str) -> Value {
+    json!({
+        "result": {
+            "type": "object",
+            "subtype": "error",
+            "className": "Error",
+            "description": msg,
+        },
+        "exceptionDetails": {
+            "text": msg,
+            "exceptionId": 1,
+            "lineNumber": 0,
+            "columnNumber": 0,
+        },
+    })
+}
+
+fn script_parsed_event(url: &str, length: usize) -> String {
     json!({
         "method": "Debugger.scriptParsed",
         "params": {
@@ -246,7 +322,7 @@ fn script_parsed_event(url: &str) -> String {
             "executionContextId": 1,
             "hash": "",
             "isModule": false,
-            "length": 0,
+            "length": length,
         }
     })
     .to_string()
@@ -282,65 +358,6 @@ pub(crate) fn encode_request(id: u64, method: &str, params: Value) -> String {
         "params": params,
     })
     .to_string()
-}
-
-/// 根据 callFrameId 构造 scope 属性列表：优先 `frame_locals` 真值，否则回退名字表。
-fn scope_locals_for_frame(
-    inner: &mut super::state::InspectorInner,
-    frame_id: &str,
-) -> Vec<Value> {
-    if let Some(pairs) = inner.frame_locals.get(frame_id).cloned() {
-        return pairs
-            .into_iter()
-            .map(|(name, raw)| {
-                let value = inner.remote_objects.describe(raw);
-                json!({
-                    "name": name,
-                    "value": value,
-                    "writable": true,
-                    "configurable": true,
-                    "enumerable": true,
-                    "isOwn": true,
-                })
-            })
-            .collect();
-    }
-
-    // 回退：仅名字，值 undefined。
-    let mut props = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut funcs: Vec<u32> = inner
-        .debug_info
-        .local_entries
-        .iter()
-        .map(|e| e.func_idx)
-        .collect();
-    funcs.sort_unstable();
-    funcs.dedup();
-    for func_idx in funcs {
-        let mut locals: Vec<_> = inner.debug_info.locals_for_func(func_idx).collect();
-        locals.sort_by_key(|l| l.local_idx);
-        for local in locals {
-            let display = local
-                .name
-                .rsplit('.')
-                .next()
-                .unwrap_or(local.name.as_str())
-                .to_string();
-            if display.starts_with('$') || !seen.insert(display.clone()) {
-                continue;
-            }
-            props.push(json!({
-                "name": display,
-                "value": { "type": "undefined" },
-                "writable": true,
-                "configurable": true,
-                "enumerable": true,
-                "isOwn": true,
-            }));
-        }
-    }
-    props
 }
 
 #[cfg(test)]

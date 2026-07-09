@@ -6,10 +6,11 @@
 
 mod cdp;
 mod debug_info;
-mod pause;
+pub(crate) mod pause;
+pub(crate) mod pause_ops;
 mod remote_object;
 mod server;
-mod state;
+pub(crate) mod state;
 
 pub(crate) use debug_info::DebugInfo;
 pub(crate) use pause::{capture_frame_locals, snapshot_call_frames};
@@ -52,7 +53,7 @@ impl InspectConfig {
 }
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc};
 
 /// 跨 Store/任务共享的 Inspector 句柄（`RuntimeState` 需保持 `Send`）。
 #[derive(Clone)]
@@ -148,58 +149,6 @@ impl InspectorHandle {
     /// 注册会话出站通道。
     pub(crate) async fn register_session(&self, tx: mpsc::UnboundedSender<String>) {
         self.event_txs.lock().await.push(tx);
-    }
-
-    /// 进入暂停：广播 `Debugger.paused` 并等待 resume。
-    pub(crate) async fn enter_pause_and_wait(
-        &self,
-        reason: PauseReason,
-        call_frames: Vec<serde_json::Value>,
-        hit_breakpoints: Vec<String>,
-    ) -> ResumeAction {
-        self.paused.store(true, Ordering::SeqCst);
-        {
-            let mut inner = self.inner.lock().await;
-            inner.paused = true;
-            inner.last_pause_reason = Some(reason);
-            // 每次 pause 刷新 call frames 缓存，供 Runtime.getProperties 等使用。
-            inner.cached_call_frames = call_frames.clone();
-        }
-
-        let params = pause::build_paused_params(reason, call_frames, hit_breakpoints);
-        self.broadcast_event("Debugger.paused", params).await;
-
-        // 使用 oneshot 精确等待本次 resume 动作。
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut inner = self.inner.lock().await;
-            inner.resume_tx = Some(tx);
-        }
-
-        let action = rx.await.unwrap_or(ResumeAction::Continue);
-        self.paused.store(false, Ordering::SeqCst);
-        {
-            let mut inner = self.inner.lock().await;
-            inner.paused = false;
-            match action {
-                ResumeAction::Continue => {
-                    inner.step_mode = StepMode::None;
-                }
-                ResumeAction::StepOver => {
-                    inner.step_mode = StepMode::Over;
-                }
-                ResumeAction::StepInto => {
-                    inner.step_mode = StepMode::Into;
-                }
-                ResumeAction::StepOut => {
-                    inner.step_mode = StepMode::Out;
-                }
-            }
-        }
-        let _ = self
-            .broadcast_event("Debugger.resumed", serde_json::json!({}))
-            .await;
-        action
     }
 
     /// 由 CDP 方法触发 resume。

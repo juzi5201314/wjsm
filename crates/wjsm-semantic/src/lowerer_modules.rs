@@ -10,6 +10,8 @@ pub struct ModuleLoweringInput {
     pub id: wjsm_ir::ModuleId,
     pub ast: swc_ast::Module,
     pub metadata: ModuleMetadata,
+    /// 源码文本（可选）：`emit_debug_checks` 时用于行/列映射。
+    pub source: Option<std::sync::Arc<str>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +47,30 @@ pub fn lower_modules(
     >,
     re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
 ) -> Result<Program, LoweringError> {
+    lower_modules_with_debug(
+        modules,
+        import_map,
+        dynamic_import_targets,
+        export_names,
+        dynamic_import_specifiers,
+        re_export_map,
+        false,
+    )
+}
+
+/// 多模块 lowering；`emit_debug_checks` 为 true 时在各模块 body 语句入口插桩。
+pub fn lower_modules_with_debug(
+    modules: Vec<ModuleLoweringInput>,
+    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
+    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
+    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
+    dynamic_import_specifiers: &std::collections::HashMap<
+        wjsm_ir::ModuleId,
+        Vec<(String, wjsm_ir::ModuleId)>,
+    >,
+    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    emit_debug_checks: bool,
+) -> Result<Program, LoweringError> {
     // 多模块编译路径
     // 早错误：对每个模块运行私有名静态校验（与单模块路径一致）。
     for module in &modules {
@@ -63,6 +89,7 @@ pub fn lower_modules(
         dynamic_import_specifiers,
         re_export_map,
     )?;
+    lowerer.emit_debug_checks = emit_debug_checks;
 
     predeclare_module_exports(&mut lowerer, &modules)?;
 
@@ -650,6 +677,9 @@ fn lower_module_bodies(
         let module_id = module.id;
         let module_ast = &module.ast;
         lowerer.current_module_id = Some(module_id);
+        // 每模块源码：供 DebugCheck 行/列解析。
+        lowerer.diagnostic_source = module.source.clone();
+        lowerer.diagnostic_filename = module.metadata.filename.clone();
         // 进入该模块的顶层作用域（#43）：模块体中的标识符解析必须命中模块自己的作用域，
         // 而非根作用域，否则同名顶层变量会跨模块互相解析错位。
         if let Some(&module_scope) = lowerer.module_scopes.get(&module_id) {

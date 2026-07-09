@@ -19,6 +19,8 @@ pub struct RuntimeEntryBundle {
 pub struct ModuleBundler {
     root_path: std::path::PathBuf,
     options: ResolutionOptions,
+    /// inspect 路径：在语句入口发射 DebugCheck。
+    emit_debug_checks: bool,
 }
 
 impl ModuleBundler {
@@ -31,7 +33,14 @@ impl ModuleBundler {
         Ok(Self {
             root_path: root_path.to_path_buf(),
             options,
+            emit_debug_checks: false,
         })
+    }
+
+    /// 启用语句级 debug 插桩（`--inspect`）。
+    pub fn with_emit_debug_checks(mut self, enable: bool) -> Self {
+        self.emit_debug_checks = enable;
+        self
     }
 
     /// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
@@ -54,16 +63,18 @@ impl ModuleBundler {
                 id: node.id,
                 ast: node.ast.clone(),
                 metadata: module_metadata_for_node(node)?,
+                source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
             });
         }
 
-        wjsm_semantic::lower_modules(
+        wjsm_semantic::lower_modules_with_debug(
             modules,
             &link_result.import_map,
             &link_result.dynamic_import_targets,
             &link_result.export_names,
             &link_result.dynamic_import_specifiers,
             &link_result.re_export_map,
+            self.emit_debug_checks,
         )
         .with_context(|| "Failed to lower modules")
     }
@@ -72,7 +83,7 @@ impl ModuleBundler {
     pub fn lower_runtime_entry_bundle(&self, entry: &Path) -> Result<RuntimeEntryBundle> {
         let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
             .with_context(|| "Failed to build module graph")?;
-        lower_runtime_graph(&graph)
+        lower_runtime_graph(&graph, self.emit_debug_checks)
     }
 
     /// 将 Node 内置模块 lower 为运行时可实例化 ESM bundle。
@@ -83,7 +94,7 @@ impl ModuleBundler {
             self.options.clone(),
         )
         .with_context(|| "Failed to build built-in module graph")?;
-        lower_runtime_graph(&graph)
+        lower_runtime_graph(&graph, self.emit_debug_checks)
     }
 
     /// 解析入口模块 AST（含依赖图构建，用于 dump-ast 等）
@@ -103,11 +114,17 @@ impl ModuleBundler {
             .lower_bundle(entry)
             .with_context(|| "Failed to lower modules")?;
 
-        wjsm_backend_wasm::compile(&program).with_context(|| "Failed to compile to WASM")
+        wjsm_backend_wasm::compile_with_options(
+            &program,
+            wjsm_backend_wasm::CompileOptions {
+                debug: self.emit_debug_checks,
+            },
+        )
+        .with_context(|| "Failed to compile to WASM")
     }
 }
 
-fn lower_runtime_graph(graph: &ModuleGraph) -> Result<RuntimeEntryBundle> {
+fn lower_runtime_graph(graph: &ModuleGraph, emit_debug_checks: bool) -> Result<RuntimeEntryBundle> {
     let entry_module_id = graph.entry_id();
     let (order, cycles) = graph
         .topological_order()
@@ -129,16 +146,18 @@ fn lower_runtime_graph(graph: &ModuleGraph) -> Result<RuntimeEntryBundle> {
             id: node.id,
             ast: node.ast.clone(),
             metadata: module_metadata_for_node(node)?,
+            source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
         });
     }
 
-    let program = wjsm_semantic::lower_modules(
+    let program = wjsm_semantic::lower_modules_with_debug(
         modules,
         &link_result.import_map,
         &link_result.dynamic_import_targets,
         &link_result.export_names,
         &link_result.dynamic_import_specifiers,
         &link_result.re_export_map,
+        emit_debug_checks,
     )
     .with_context(|| "Failed to lower modules")?;
 

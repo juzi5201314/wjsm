@@ -74,8 +74,13 @@ fn runtime_options_for_file(
     };
     let env = runtime_env_snapshot();
     let sandbox = fs_sandbox_for_file(input, root, &env);
-    let module_loader =
-        runtime_module_loader_for_file(input, root, &sandbox, module_resolution_options(cli))?;
+    let module_loader = runtime_module_loader_for_file(
+        input,
+        root,
+        &sandbox,
+        module_resolution_options(cli),
+        cli.wants_debug_codegen(),
+    )?;
     let mut options = runtime_options_with_script(cli, script, script_args, env, sandbox)?;
     options.module_loader = module_loader;
     Ok(options)
@@ -140,16 +145,18 @@ fn runtime_module_loader_for_file(
     root: Option<&Path>,
     sandbox: &FsSandbox,
     resolution_options: wjsm_module::ResolutionOptions,
+    debug_codegen: bool,
 ) -> Result<Option<std::sync::Arc<dyn runtime::RuntimeModuleLoader>>> {
     if path_is_stdin(input) {
         return Ok(None);
     }
     let root = runtime_loader_root(input, root)?;
     Ok(Some(std::sync::Arc::new(
-        runtime_loader::CliRuntimeModuleLoader::new(
+        runtime_loader::CliRuntimeModuleLoader::with_debug(
             root,
             sandbox.read_roots.clone(),
             resolution_options,
+            debug_codegen,
         ),
     )))
 }
@@ -2320,6 +2327,7 @@ fn runtime_options_for_in_process(
         None,
         &sandbox,
         wjsm_module::ResolutionOptions::default(),
+        false,
     )?;
 
     Ok(runtime::RuntimeOptions {

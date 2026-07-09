@@ -44,7 +44,15 @@ wjsm 需要 Node 风格的 `--inspect` / `--inspect-brk` 与 Chrome DevTools Pro
   无 inspector 时立即返回。
 - 启动 snapshot **不**包含 debugger 会话状态。
 - CDP 未实现 Profiler/Network/DOM 等域；未知 method 返回 `-32601`。
-- 步进采用简化模型：step 模式下下一次 `debug_break` 即停。
+- 步进语义：
+  - **step over**：`depth <= start_depth` 且离开原 `(line,col)`
+  - **step into**：进入更深帧，或同层换行
+  - **step out**：`depth < start_depth`
+- 暂停期间 CDP `Runtime.getProperties` / `Debugger.evaluateOnCallFrame` /
+  `Runtime.evaluate` 经 **pause command channel** 在持有 `Caller` 的
+  `debug_break` 循环中执行（对象属性枚举、ScopeRecord 编译 eval）。
+- 多模块 / 动态加载：`CliRuntimeModuleLoader` 与 bundler 透传
+  `emit_debug_checks` + `CompileOptions { debug }`。
 
 ## 备选方案（未采纳）
 

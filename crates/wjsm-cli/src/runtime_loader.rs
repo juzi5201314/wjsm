@@ -14,6 +14,8 @@ pub(crate) struct CliRuntimeModuleLoader {
     root: PathBuf,
     read_roots: Vec<PathBuf>,
     resolution_options: wjsm_module::ResolutionOptions,
+    /// `--inspect`：动态加载模块也发射 debug 插桩。
+    debug_codegen: bool,
 }
 
 impl CliRuntimeModuleLoader {
@@ -22,10 +24,20 @@ impl CliRuntimeModuleLoader {
         read_roots: Vec<PathBuf>,
         resolution_options: wjsm_module::ResolutionOptions,
     ) -> Self {
+        Self::with_debug(root, read_roots, resolution_options, false)
+    }
+
+    pub(crate) fn with_debug(
+        root: PathBuf,
+        read_roots: Vec<PathBuf>,
+        resolution_options: wjsm_module::ResolutionOptions,
+        debug_codegen: bool,
+    ) -> Self {
         Self {
             root,
             read_roots,
             resolution_options,
+            debug_codegen,
         }
     }
 
@@ -90,10 +102,11 @@ impl CliRuntimeModuleLoader {
         context: &mut RuntimeModuleInstantiationContext<'_, '_>,
     ) -> Result<(Vec<u8>, Option<u32>), RuntimeModuleLoadError> {
         reject_unsupported_runtime_extension(path)?;
-        let mut bundle = wjsm_module::lower_runtime_entry_bundle_with_options(
+        let mut bundle = wjsm_module::lower_runtime_entry_bundle_with_debug(
             path,
             &self.root,
             self.resolution_options.clone(),
+            self.debug_codegen,
         )
         .map_err(invalid_module_error)?;
         self.compile_runtime_esm_bundle(&mut bundle, context)
@@ -110,10 +123,11 @@ impl CliRuntimeModuleLoader {
                 "CLI runtime loader requires a built-in module key",
             ));
         };
-        let mut bundle = wjsm_module::lower_runtime_builtin_bundle_with_options(
+        let mut bundle = wjsm_module::lower_runtime_builtin_bundle_with_debug(
             specifier,
             &self.root,
             self.resolution_options.clone(),
+            self.debug_codegen,
         )
         .map_err(invalid_module_error)?;
         self.compile_runtime_esm_bundle(&mut bundle, context)
@@ -131,7 +145,7 @@ impl CliRuntimeModuleLoader {
             .map_err(module_id_offset_error)?;
         let entry_module_id = wjsm_ir::offset_module_id(bundle.entry_module_id, module_id_base)
             .map_err(module_id_offset_error)?;
-        let wasm = compile_runtime_program(&bundle.program, context)?;
+        let wasm = compile_runtime_program(&bundle.program, context, self.debug_codegen)?;
         Ok((wasm, Some(entry_module_id.0)))
     }
 
@@ -151,7 +165,7 @@ impl CliRuntimeModuleLoader {
             .unwrap_or_else(|| Path::new(""))
             .to_string_lossy()
             .into_owned();
-        let program = wjsm_semantic::lower_modules(
+        let program = wjsm_semantic::lower_modules_with_debug(
             vec![wjsm_semantic::ModuleLoweringInput {
                 id: module_id,
                 ast,
@@ -161,15 +175,17 @@ impl CliRuntimeModuleLoader {
                     url: resolved.url.clone(),
                     kind: wjsm_semantic::ModuleKind::CommonJs,
                 },
+                source: Some(std::sync::Arc::<str>::from(source.as_str())),
             }],
             &HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>::new(),
             &HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>::new(),
             &HashMap::<wjsm_ir::ModuleId, BTreeSet<String>>::new(),
             &HashMap::<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>::new(),
             &HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>::new(),
+            self.debug_codegen,
         )
         .map_err(|error| invalid_module_error(error.into()))?;
-        let wasm = compile_runtime_program(&program, context)?;
+        let wasm = compile_runtime_program(&program, context, self.debug_codegen)?;
         Ok((wasm, None))
     }
 }
@@ -297,14 +313,18 @@ fn backend_runtime_import_links() -> impl Iterator<Item = RuntimeModuleImportLin
 fn compile_runtime_program(
     program: &wjsm_ir::Program,
     context: &mut RuntimeModuleInstantiationContext<'_, '_>,
+    debug: bool,
 ) -> Result<Vec<u8>, RuntimeModuleLoadError> {
-    let measured = wjsm_backend_wasm::compile_runtime_module_at(program, 0, 0)
-        .map_err(invalid_module_error)?;
+    let options = wjsm_backend_wasm::CompileOptions { debug };
+    let measured =
+        wjsm_backend_wasm::compile_runtime_module_at_with_options(program, 0, 0, options)
+            .map_err(invalid_module_error)?;
     let placement = context.reserve_module_layout(measured.table_len, measured.data_len)?;
-    let compiled = wjsm_backend_wasm::compile_runtime_module_at(
+    let compiled = wjsm_backend_wasm::compile_runtime_module_at_with_options(
         program,
         placement.data_base,
         placement.table_base,
+        options,
     )
     .map_err(invalid_module_error)?;
     Ok(compiled.wasm)
