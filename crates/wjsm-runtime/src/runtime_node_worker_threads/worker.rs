@@ -154,6 +154,8 @@ fn clone_runtime_options_for_worker(caller: &Caller<'_, RuntimeState>) -> Runtim
         worker_thread_id: 0,
         parent_port_global_id: None,
         initial_worker_data: None,
+        // Worker 不继承主线程 CDP 服务；需要时由 Worker 独立 `--inspect` 启动。
+        inspect: None,
     }
 }
 

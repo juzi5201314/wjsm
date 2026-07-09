@@ -316,6 +316,7 @@ fn dest_and_kind(ins: &Instruction, constants: &[Constant]) -> Option<(ValueId, 
         | PromiseResolve { .. }
         | PromiseReject { .. }
         | Suspend { .. }
-        | GeneratorSuspend { .. } => return None,
+        | GeneratorSuspend { .. }
+        | DebugCheck { .. } => return None,
     })
 }

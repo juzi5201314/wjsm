@@ -248,6 +248,7 @@ impl Compiler {
         } else {
             0
         };
+        self.begin_function_debug(function.name());
         // Pass 1: direct eval 函数的变量改由 shadow stack frame 承载。
         self.assign_eval_var_memory(function);
         // Pass 2: assign WASM local indices to non-eval variable names.
@@ -328,6 +329,9 @@ impl Compiler {
                 .context("current function missing after compile")?,
         );
 
+        // 在清空 var_locals 前收集调试局部变量映射。
+        self.collect_debug_locals();
+
         // Clean up per-function state.
         self.var_locals.clear();
         self.var_memory_offsets.clear();
@@ -350,6 +354,7 @@ impl Compiler {
         self.current_func_returns_value = true;
         self.current_home_object = function.home_object;
         self.current_function_id = Some(function_id);
+        self.begin_function_debug(function.name());
         // WASM params: local 0 = env_obj (i64), local 1 = this_val (i64),
         //              local 2 = args_base_ptr (i32), local 3 = args_count (i32)
         self.assign_eval_var_memory(function);
@@ -541,6 +546,9 @@ impl Compiler {
                 .as_ref()
                 .context("current function missing after compile")?,
         );
+
+        // 在清空 var_locals 前收集调试局部变量映射。
+        self.collect_debug_locals();
 
         // Clean up per-function state.
         self.var_locals.clear();

@@ -342,10 +342,38 @@ impl Compiler {
     }
 
     pub(crate) fn emit(&mut self, instruction: WasmInstruction<'_>) {
+        if self.debug {
+            self.debug_emit_counter = self.debug_emit_counter.saturating_add(1);
+        }
         self.current_func
             .as_mut()
             .expect("compiler function should be initialized before emission")
             .instruction(&instruction);
+    }
+
+    /// 记录当前函数 var_locals 到 debug_local_entries（finish 前调用）。
+    pub(crate) fn collect_debug_locals(&mut self) {
+        if !self.debug {
+            return;
+        }
+        let func_idx = self.current_wasm_func_idx;
+        for (name, &local_idx) in &self.var_locals {
+            self.debug_local_entries
+                .push((func_idx, local_idx, name.clone()));
+        }
+    }
+
+    /// 进入函数编译时重置 debug 状态并绑定 wasm 函数索引。
+    pub(crate) fn begin_function_debug(&mut self, function_name: &str) {
+        if !self.debug {
+            return;
+        }
+        self.current_wasm_func_idx = self
+            .function_name_to_wasm_idx
+            .get(function_name)
+            .copied()
+            .unwrap_or(0);
+        self.debug_emit_counter = 0;
     }
 
     pub(crate) fn finish(mut self) -> Vec<u8> {
@@ -404,6 +432,49 @@ impl Compiler {
             }
             self.module.section(&wasm_encoder::CustomSection {
                 name: "wjsm_sourcemap".into(),
+                data: data.into(),
+            });
+        }
+
+        // 发射 "wjsm_debug" 自定义段（Inspector 行映射 / 局部变量名 / debugger PC）。
+        // 格式（version=1）：
+        //   version u32 LE
+        //   source_file_len u32 + bytes
+        //   num_line_entries u32 + [func, wasm_pc, line, col] * N
+        //   num_local_entries u32 + [func, local_idx, name_len, name_utf8] * M
+        //   num_debugger_pcs u32 + [func, wasm_pc] * K
+        if self.debug && self.mode == CompileMode::Normal {
+            let mut data = Vec::new();
+            data.extend_from_slice(&1u32.to_le_bytes());
+            if let Some(file) = &self.source_file {
+                let bytes = file.as_bytes();
+                data.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                data.extend_from_slice(bytes);
+            } else {
+                data.extend_from_slice(&0u32.to_le_bytes());
+            }
+            data.extend_from_slice(&(self.debug_line_entries.len() as u32).to_le_bytes());
+            for &(func_idx, wasm_pc, line, col) in &self.debug_line_entries {
+                data.extend_from_slice(&func_idx.to_le_bytes());
+                data.extend_from_slice(&wasm_pc.to_le_bytes());
+                data.extend_from_slice(&line.to_le_bytes());
+                data.extend_from_slice(&col.to_le_bytes());
+            }
+            data.extend_from_slice(&(self.debug_local_entries.len() as u32).to_le_bytes());
+            for (func_idx, local_idx, name) in &self.debug_local_entries {
+                data.extend_from_slice(&func_idx.to_le_bytes());
+                data.extend_from_slice(&local_idx.to_le_bytes());
+                let bytes = name.as_bytes();
+                data.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                data.extend_from_slice(bytes);
+            }
+            data.extend_from_slice(&(self.debug_debugger_pcs.len() as u32).to_le_bytes());
+            for &(func_idx, wasm_pc) in &self.debug_debugger_pcs {
+                data.extend_from_slice(&func_idx.to_le_bytes());
+                data.extend_from_slice(&wasm_pc.to_le_bytes());
+            }
+            self.module.section(&wasm_encoder::CustomSection {
+                name: "wjsm_debug".into(),
                 data: data.into(),
             });
         }

@@ -39,6 +39,8 @@ impl Compiler {
                 | Instruction::SetElem { .. }
                 | Instruction::OptionalGetProp { .. }
                 | Instruction::OptionalGetElem { .. }
+                // debug 模式下会调用 env.debug_break（可能让出/触发 GC）；非 debug 为 no-op。
+                | Instruction::DebugCheck { .. }
         )
     }
 

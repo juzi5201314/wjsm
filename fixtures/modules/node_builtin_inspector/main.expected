@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+function function function
+function function
+true
+true
+ok
+--- stderr ---

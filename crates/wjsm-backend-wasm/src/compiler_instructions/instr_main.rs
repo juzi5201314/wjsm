@@ -844,6 +844,28 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
+            Instruction::DebugCheck { line, col } => {
+                if self.debug {
+                    let wasm_pc = self.debug_emit_counter;
+                    self.debug_line_entries.push((
+                        self.current_wasm_func_idx,
+                        wasm_pc,
+                        *line,
+                        *col,
+                    ));
+                    // host debug_break 可能让出/触发 GC：按 safepoint  spill live handles。
+                    let spill = self.current_spill_locals();
+                    self.emit_safepoint_spill_prologue(&spill);
+                    self.emit(WasmInstruction::I32Const(*line as i32));
+                    self.emit(WasmInstruction::I32Const(*col as i32));
+                    self.emit(WasmInstruction::I32Const(0)); // flags: 条件/行检查点
+                    let func_idx = self.special_host_import_indices
+                        [&crate::host_import_registry::SpecialHostImport::DebugBreak];
+                    self.emit(WasmInstruction::Call(func_idx));
+                    self.emit_safepoint_spill_epilogue(spill.len());
+                }
+                Ok(false)
+            }
         }
     }
 }

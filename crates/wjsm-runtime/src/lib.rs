@@ -115,11 +115,13 @@ pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
 
 mod host_imports;
+mod inspector;
 mod runtime_render;
 mod runtime_values;
 mod wasm_env;
 use host_imports::*;
 use property_key::*;
+pub use inspector::InspectConfig;
 pub(crate) use wasm_env::WasmEnv;
 
 use runtime_arguments::*;
@@ -168,6 +170,8 @@ pub struct RuntimeOptions {
     pub parent_port_global_id: Option<u32>,
     /// worker_threads：注入的 workerData 序列化载荷。
     pub initial_worker_data: Option<runtime_worker_message::SerializedValue>,
+    /// 启用 CDP inspector 时的监听配置；`None` 表示关闭调试。
+    pub inspect: Option<InspectConfig>,
 }
 
 impl std::fmt::Debug for RuntimeOptions {
@@ -195,6 +199,7 @@ impl std::fmt::Debug for RuntimeOptions {
                 "module_loader",
                 &self.module_loader.as_ref().map(|_| "<installed>"),
             )
+            .field("inspect", &self.inspect)
             .finish()
     }
 }
@@ -226,6 +231,7 @@ impl Default for RuntimeOptions {
             worker_thread_id: 0,
             parent_port_global_id: None,
             initial_worker_data: None,
+            inspect: None,
         }
     }
 }
@@ -336,6 +342,23 @@ pub fn compile_source(source: &str) -> Result<Vec<u8>> {
     wjsm_backend_wasm::compile(&program)
 }
 
+/// 带调试插桩的编译（语句 `DebugCheck` + `wjsm_debug` 段 + `debug_break` 调用）。
+/// 供 `--inspect` / 测试路径使用。
+pub fn compile_source_with_debug(source: &str, filename: &str) -> Result<Vec<u8>> {
+    let module = wjsm_parser::parse_module(source)?;
+    let program = wjsm_semantic::lower_module_with_debug_source(
+        module,
+        false,
+        Some(std::sync::Arc::<str>::from(source)),
+        filename,
+        true,
+    )?;
+    wjsm_backend_wasm::compile_with_options(
+        &program,
+        wjsm_backend_wasm::CompileOptions { debug: true },
+    )
+}
+
 /// 编译缓存统计信息，供 CLI `wjsm cache` 命令展示和清理。
 pub struct ModuleCacheStats {
     pub path: Option<std::path::PathBuf>,
@@ -405,7 +428,7 @@ pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
 }
 
 async fn build_embedded_startup_snapshot_bytes_async(wasm: &[u8]) -> Result<Vec<u8>> {
-    let config = startup_engine_config(true, None);
+    let config = startup_engine_config(true, None, false);
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
     let module = Module::new(&engine, wasm)
@@ -542,7 +565,7 @@ struct StartupBenchTimings {
 async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTimings> {
     let mut timings = StartupBenchTimings::default();
 
-    let config = startup_engine_config(true, None);
+    let config = startup_engine_config(true, None, false);
     let start = std::time::Instant::now();
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
@@ -658,7 +681,7 @@ async fn execute_for_startup_bench(
 ) -> Result<StartupBenchTimings> {
     let mut timings = StartupBenchTimings::default();
     let total_start = std::time::Instant::now();
-    let config = startup_engine_config(true, None);
+    let config = startup_engine_config(true, None, false);
 
     let start = std::time::Instant::now();
     let engine = Engine::new(&config)
@@ -740,15 +763,30 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
     use_epoch_async_yield: bool,
     options: RuntimeOptions,
 ) -> Result<(W, Vec<u8>, GcExecutionStats)> {
-    let config = startup_engine_config(use_epoch_async_yield, options.wasmtime_memory_reservation);
+    let inspect_cfg = options.inspect.clone();
+    let guest_debug = inspect_cfg.is_some();
+    let config = startup_engine_config(
+        use_epoch_async_yield,
+        options.wasmtime_memory_reservation,
+        guest_debug,
+    );
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
 
     let module = compile_or_load_cached(&engine, wasm_bytes)?;
     // 解析 "wjsm_sourcemap" custom section，供 trap backtrace 格式化。
     let source_map = runtime_source_map::SourceMapInfo::parse_from_wasm(wasm_bytes);
+    // 解析 debug info（wjsm_debug 优先，回退 sourcemap），供 inspector 使用。
+    let debug_info = inspector::DebugInfo::parse_from_wasm(wasm_bytes);
     let snapshot_bytes = if startup_snapshot_enabled() {
         embedded_startup_snapshot_view()
+    } else {
+        None
+    };
+
+    // 在 instantiate 前启动 inspector（打印 listening 地址），以便客户端尽早连接。
+    let inspector_handle = if let Some(cfg) = inspect_cfg.as_ref() {
+        Some(inspector::InspectorHandle::start(cfg, debug_info).await?)
     } else {
         None
     };
@@ -762,6 +800,7 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
     )
     .await?;
     bundle.store.data_mut().source_map = source_map.clone();
+    attach_inspector(&mut bundle.store, inspector_handle.clone(), guest_debug);
 
     let mut snapshot_restored = false;
     if let Some(bytes) = snapshot_bytes {
@@ -777,6 +816,7 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
             )
             .await?;
             bundle.store.data_mut().source_map = source_map.clone();
+            attach_inspector(&mut bundle.store, inspector_handle.clone(), guest_debug);
         }
     }
 
@@ -795,6 +835,22 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
         &mut bundle.host_completion_rx,
     )
     .await
+}
+
+/// 将 inspector 句柄挂到 Store，并在 guest_debug 时安装 DebugHandler。
+fn attach_inspector(
+    store: &mut Store<RuntimeState>,
+    inspector_handle: Option<inspector::InspectorHandle>,
+    guest_debug: bool,
+) {
+    if let Some(handle) = inspector_handle {
+        if guest_debug {
+            store.set_debug_handler(inspector::WjsmDebugHandler {
+                inspector: handle.clone(),
+            });
+        }
+        store.data_mut().inspector = Some(handle);
+    }
 }
 const GC_PAUSE_HIST_CAP: usize = 256;
 const GC_MEMORY_FOOTPRINT_HIST_CAP: usize = 256;
@@ -906,6 +962,7 @@ impl Clone for RuntimeState {
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
+            inspect: self.inspect.clone(),
             host_temp_roots: self.host_temp_roots.clone(),
             process: self.process.clone(),
             next_tick_queue: self.next_tick_queue.clone(),
@@ -1002,6 +1059,7 @@ impl Clone for RuntimeState {
             host_completion_tx: self.host_completion_tx.clone(),
             async_op_counter: self.async_op_counter.clone(),
             source_map: self.source_map.clone(),
+            inspector: self.inspector.clone(),
             message_port_bindings: self.message_port_bindings.clone(),
             worker_bindings: self.worker_bindings.clone(),
             is_worker_thread: self.is_worker_thread,
@@ -1026,6 +1084,8 @@ struct RuntimeState {
     host_temp_roots: Arc<Mutex<Vec<i64>>>,
     /// 用户配置的 JS 堆预算（字节）。None 表示只受 wasm32 地址空间和宿主内存约束。
     max_heap_size: Option<usize>,
+    /// CDP inspector 监听配置（来自 CLI `--inspect` / `--inspect-brk`）。
+    inspect: Option<InspectConfig>,
     /// 注入的 Node `process` 宿主快照。
     process: ProcessState,
     /// Node next tick queue；drain 时优先级高于普通 microtask queue。
@@ -1229,6 +1289,8 @@ struct RuntimeState {
     async_op_counter: Option<crate::scheduler::AsyncOpCounter>,
     /// WASM source map（从 "wjsm_sourcemap" custom section 解析），供 trap backtrace 格式化。
     source_map: Option<runtime_source_map::SourceMapInfo>,
+    /// CDP Inspector 句柄；`None` 表示未启用 inspect。
+    inspector: Option<inspector::InspectorHandle>,
     /// MessagePort 本地绑定（deliver 回调仅本 Store 有效）。
     message_port_bindings: Arc<
         Mutex<HashMap<u32, runtime_node_worker_threads::LocalPortBinding>>,
@@ -1383,6 +1445,7 @@ impl RuntimeState {
         let mut state = Self::new();
         state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
         state.max_heap_size = options.max_heap_size;
+        state.inspect = options.inspect.clone();
         state.process = ProcessState::from_options(&options);
         state.gc_algorithm = Arc::new(Mutex::new(
             crate::runtime_gc::registry::create(options.gc_algorithm)
@@ -1476,6 +1539,7 @@ impl RuntimeState {
             runtime_error: Arc::new(Mutex::new(None)),
             host_temp_roots: Arc::new(Mutex::new(Vec::new())),
             max_heap_size: None,
+            inspect: None,
             process: ProcessState::from_options(&RuntimeOptions::default()),
             next_tick_queue: Arc::new(Mutex::new(VecDeque::new())),
             process_exit_signal: Arc::new(Mutex::new(None)),
@@ -1638,6 +1702,7 @@ impl RuntimeState {
             host_completion_tx: None,
             async_op_counter: None,
             source_map: None,
+            inspector: None,
             message_port_bindings: Arc::new(Mutex::new(HashMap::new())),
             worker_bindings: Arc::new(Mutex::new(HashMap::new())),
             is_worker_thread: false,
@@ -2057,7 +2122,7 @@ mod tests {
             std::env::set_var("WJSM_CACHE_DIR", &cache_dir);
         }
 
-        let config = startup_engine_config(true, None);
+        let config = startup_engine_config(true, None, false);
         let engine = Engine::new(&config).map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
 
         // ── 1. WASM 缓存 warm 命中 ──────────────────────────────────
@@ -2126,7 +2191,7 @@ mod tests {
                 let mut total = Duration::ZERO;
                 for _ in 0..iters {
                     rt.block_on(async {
-                        let config = startup_engine_config(true, None);
+                        let config = startup_engine_config(true, None, false);
                         let engine = Engine::new(&config).expect("engine");
                         let module = Module::new(&engine, &wasm).expect("module");
                         let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));

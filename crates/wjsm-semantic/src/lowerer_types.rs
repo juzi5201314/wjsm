@@ -117,6 +117,8 @@ pub(crate) struct Lowerer {
     /// 当前函数形参个数，供 emit_arguments_init 使用。
     pub(crate) arguments_param_count: u32,
     pub(crate) script_mode: bool,
+    /// 是否在语句入口发射 `Instruction::DebugCheck`（默认关闭，不影响现有 IR 快照）。
+    pub(crate) emit_debug_checks: bool,
     pub(crate) diagnostic_source: Option<std::sync::Arc<str>>,
     pub(crate) diagnostic_filename: String,
     pub(crate) eval_mode: bool,

@@ -93,10 +93,14 @@ pub(super) fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Resu
 pub(super) fn startup_engine_config(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
+    guest_debug: bool,
 ) -> Config {
     let mut config = Config::new();
-    // WJSM_COMPILER=winch 使用 Winch 基线编译器
-    if std::env::var("WJSM_COMPILER").as_deref() == Ok("winch") {
+    // guest_debug 与 Winch 不兼容：inspect 启用时强制 Cranelift。
+    if guest_debug {
+        config.guest_debug(true);
+    } else if std::env::var("WJSM_COMPILER").as_deref() == Ok("winch") {
+        // WJSM_COMPILER=winch 使用 Winch 基线编译器
         config.strategy(Strategy::Winch);
     }
     // WJSM_OPT_LEVEL=none|speed_and_size 控制 Cranelift 优化等级

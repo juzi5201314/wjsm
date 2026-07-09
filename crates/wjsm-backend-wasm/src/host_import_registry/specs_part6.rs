@@ -580,4 +580,11 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         key: Some(HostImportKey::Builtin(Builtin::ObjectDefineProperties)),
         group: None,
     },
+    // 调试宿主：type 18 = (i32, i32, i32) -> () — line, col, flags
+    HostImportSpec {
+        name: "debug_break",
+        type_idx: 18,
+        key: Some(HostImportKey::Special(SpecialHostImport::DebugBreak)),
+        group: None,
+    },
 ];

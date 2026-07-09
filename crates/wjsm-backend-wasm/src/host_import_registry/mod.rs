@@ -70,6 +70,9 @@ pub enum SpecialHostImport {
     GcBarrierFlush,
     /// gc_take_freed_handle() -> handle（-1 表空）：从 host handle_free_list pop 复用。
     GcTakeFreedHandle,
+    /// debug_break(line, col, flags) -> ()：调试检查点 / debugger 语句。
+    /// flags bit0=1 表示 unconditional debugger 断点。
+    DebugBreak,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

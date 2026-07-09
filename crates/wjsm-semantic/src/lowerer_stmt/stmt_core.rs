@@ -6,6 +6,18 @@ impl Lowerer {
         stmt: &swc_ast::Stmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        // Empty 不产生用户可见执行点，跳过 debug_check。
+        if matches!(stmt, swc_ast::Stmt::Empty(_)) {
+            return self.lower_empty(flow);
+        }
+
+        // 用户可见语句入口：在真正 lowering 前发射 DebugCheck（供单步/断点映射）。
+        let flow = if self.emit_debug_checks {
+            self.emit_stmt_debug_check(stmt, flow)?
+        } else {
+            flow
+        };
+
         match stmt {
             swc_ast::Stmt::Expr(expr_stmt) => self.lower_expr_stmt(expr_stmt, flow),
             // N.B.: exhaustive match — new swc_ast::Decl variants must be handled here.
@@ -33,10 +45,29 @@ impl Lowerer {
             swc_ast::Stmt::Switch(switch_stmt) => self.lower_switch(switch_stmt, flow),
             swc_ast::Stmt::Throw(throw_stmt) => self.lower_throw(throw_stmt, flow),
             swc_ast::Stmt::Try(try_stmt) => self.lower_try(try_stmt, flow),
-            swc_ast::Stmt::Empty(_) => self.lower_empty(flow),
+            swc_ast::Stmt::Empty(_) => unreachable!("Empty 已在 lower_stmt 入口处理"),
             swc_ast::Stmt::Debugger(_) => self.lower_debugger(flow),
             swc_ast::Stmt::With(with_stmt) => self.lower_with(with_stmt, flow),
         }
+    }
+
+    /// 在语句入口发射 `debug_check line=N col=M`；无源码上下文时跳过。
+    fn emit_stmt_debug_check(
+        &mut self,
+        stmt: &swc_ast::Stmt,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        let block = self.ensure_open(flow)?;
+        if let Some(span) = self.span_to_source_span(stmt.span()) {
+            self.current_function.append_instruction(
+                block,
+                Instruction::DebugCheck {
+                    line: span.line,
+                    col: span.col,
+                },
+            );
+        }
+        Ok(StmtFlow::Open(self.resolve_store_block(block)))
     }
 
     // ── Expression statements ───────────────────────────────────────────────

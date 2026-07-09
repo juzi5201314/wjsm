@@ -314,6 +314,7 @@ pub(super) fn register_linker(
     define_promise(linker, store)?;
     define_promise_combinators(linker, store)?;
     define_misc(linker, store)?;
+    define_inspector_host(linker, store)?;
     define_modules(linker, store)?;
     define_async_fn(linker, store)?;
     define_async_generator(linker, store)?;

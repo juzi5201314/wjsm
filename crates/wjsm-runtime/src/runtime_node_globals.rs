@@ -179,6 +179,27 @@ pub(crate) fn install_node_web_globals_from_caller(
         "__wjsm_node_child_process",
         child_process,
     );
+
+    // CLI `--inspect` 启用时写入 inspector URL，供 node:inspector.url() 读取。
+    // 优先使用已 bind 的 InspectorHandle.ws_url（含临时端口）；否则退回配置占位 URL。
+    let inspector_url = caller
+        .data()
+        .inspector
+        .as_ref()
+        .map(|handle| handle.ws_url())
+        .or_else(|| {
+            caller
+                .data()
+                .inspect
+                .as_ref()
+                .and_then(|cfg| cfg.provisional_url())
+        });
+    if let Some(url) = inspector_url {
+        let url_val = store_runtime_string(caller, url);
+        let _ = caller.data().push_host_temp_roots([url_val]);
+        define_global(caller, global_obj, "__wjsm_inspector_url", url_val);
+    }
+
     caller.data().truncate_host_temp_roots(temp_root_len);
     Ok(())
 }

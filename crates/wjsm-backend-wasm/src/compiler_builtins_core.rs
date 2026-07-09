@@ -54,7 +54,18 @@ impl Compiler {
                 Ok(BuiltinDispatch::Handled)
             }
             Builtin::Debugger => {
-                // No-op in Phase 3
+                // debug 模式：无条件断点（flags=1）；否则保持编译期 no-op。
+                if self.debug {
+                    let wasm_pc = self.debug_emit_counter;
+                    self.debug_debugger_pcs
+                        .push((self.current_wasm_func_idx, wasm_pc));
+                    self.emit(WasmInstruction::I32Const(0)); // line
+                    self.emit(WasmInstruction::I32Const(0)); // col
+                    self.emit(WasmInstruction::I32Const(1)); // flags: unconditional
+                    let func_idx = self.special_host_import_indices
+                        [&crate::host_import_registry::SpecialHostImport::DebugBreak];
+                    self.emit(WasmInstruction::Call(func_idx));
+                }
                 Ok(BuiltinDispatch::Handled)
             }
             Builtin::F64Mod | Builtin::F64Exp => {

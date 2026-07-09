@@ -94,7 +94,8 @@ fn instr_dest(ins: &Instruction) -> Option<ValueId> {
         | PromiseResolve { .. }
         | PromiseReject { .. }
         | Suspend { .. }
-        | GeneratorSuspend { .. } => return None,
+        | GeneratorSuspend { .. }
+        | DebugCheck { .. } => return None,
     })
 }
 
@@ -181,6 +182,7 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         Phi { .. } => vec![], // Phi use 经边分发，不计入块 use 集
         Const { .. } => vec![],
         StoreVar { value, .. } => vec![*value],
+        DebugCheck { .. } => vec![],
     }
 }
 

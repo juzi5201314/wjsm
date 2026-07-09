@@ -41,10 +41,24 @@ pub fn lower_module_with_source(
     source: Option<std::sync::Arc<str>>,
     filename: impl Into<String>,
 ) -> Result<Program, LoweringError> {
+    lower_module_with_debug_source(module, script, source, filename, false)
+}
+
+/// 与 [`lower_module_with_source`] 相同，并可选在语句入口发射 `debug_check`。
+///
+/// `emit_debug_checks` 为 true 时需要提供 `source`，否则行/列无法解析，指令会被跳过。
+pub fn lower_module_with_debug_source(
+    module: swc_ast::Module,
+    script: bool,
+    source: Option<std::sync::Arc<str>>,
+    filename: impl Into<String>,
+    emit_debug_checks: bool,
+) -> Result<Program, LoweringError> {
     let mut lowerer = Lowerer::new();
     lowerer.script_mode = script;
     lowerer.diagnostic_source = source;
     lowerer.diagnostic_filename = filename.into();
+    lowerer.emit_debug_checks = emit_debug_checks;
     lowerer.lower_module(&module)
 }
 

@@ -659,6 +659,11 @@ pub enum Instruction {
         dest: ValueId,
         value: ValueId,
     },
+    /// 调试检查点：源码行/列位置，供 inspector 单步与断点使用。无 dest、无 uses。
+    DebugCheck {
+        line: u32,
+        col: u32,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -880,6 +885,9 @@ impl fmt::Display for Instruction {
             }
             Self::ExceptionToObject { dest, value } => {
                 write!(formatter, "{dest} = exception_to_object {value}")
+            }
+            Self::DebugCheck { line, col } => {
+                write!(formatter, "debug_check line={line} col={col}")
             }
         }
     }

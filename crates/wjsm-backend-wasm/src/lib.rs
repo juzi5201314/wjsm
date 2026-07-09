@@ -33,8 +33,19 @@ pub struct RuntimeCompiledModule {
     pub data_len: u32,
 }
 
+/// 编译选项。`debug` 开启时发射 `wjsm_debug` 自定义段，并将 DebugCheck/debugger
+/// 编译为对 `env.debug_break` 的调用。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CompileOptions {
+    pub debug: bool,
+}
+
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
-    Ok(compile_runtime_module_at(program, 0, 0)?.wasm)
+    compile_with_options(program, CompileOptions::default())
+}
+
+pub fn compile_with_options(program: &Program, options: CompileOptions) -> Result<Vec<u8>> {
+    Ok(compile_runtime_module_at_with_options(program, 0, 0, options)?.wasm)
 }
 
 pub fn compile_runtime_module_at(
@@ -42,7 +53,17 @@ pub fn compile_runtime_module_at(
     data_base: u32,
     table_base: u32,
 ) -> Result<RuntimeCompiledModule> {
+    compile_runtime_module_at_with_options(program, data_base, table_base, CompileOptions::default())
+}
+
+pub fn compile_runtime_module_at_with_options(
+    program: &Program,
+    data_base: u32,
+    table_base: u32,
+    options: CompileOptions,
+) -> Result<RuntimeCompiledModule> {
     let mut compiler = Compiler::new_with_layout(CompileMode::Normal, data_base, table_base);
+    compiler.debug = options.debug;
     compiler.compile_module(program)?;
     let table_len = compiler.function_table.len() as u32;
     let data_len = compiler.string_data.len() as u32;
@@ -269,6 +290,19 @@ struct Compiler {
     /// 函数源码位置映射：(WASM 函数索引, line, col)。
     /// compile_module 收集，finish() 编码到 "wjsm_sourcemap" custom section。
     source_map_entries: Vec<(u32, u32, u32)>,
+    // ── Inspector / Debugger ──
+    /// 是否编译调试信息（`wjsm_debug` 段 + debug_break 调用）。
+    debug: bool,
+    /// 当前正在编译的 WASM 函数索引（debug 映射用）。
+    current_wasm_func_idx: u32,
+    /// 当前函数内相对 emit 序（wasm_pc 占位，非真实字节偏移）。
+    debug_emit_counter: u32,
+    /// 行映射：(func_wasm_idx, wasm_pc, line, col)
+    debug_line_entries: Vec<(u32, u32, u32, u32)>,
+    /// 局部变量名映射：(func_wasm_idx, local_idx, name)
+    debug_local_entries: Vec<(u32, u32, String)>,
+    /// debugger 语句 PC：(func_wasm_idx, wasm_pc)
+    debug_debugger_pcs: Vec<(u32, u32)>,
 }
 
 /// Normal mode 下需要初始化的 globals 编译期值。
@@ -685,6 +719,7 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::EncodeException { dest, value } => dest.0.max(value.0),
         Instruction::ExceptionToObject { dest, value } => dest.0.max(value.0),
         Instruction::CollectRestArgs { dest, .. } => dest.0,
+        Instruction::DebugCheck { .. } => 0,
     }
 }
 
@@ -692,7 +727,7 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile, compile_eval};
+    use super::{CompileOptions, compile, compile_eval, compile_with_options};
     use anyhow::Result;
     use wasmparser::{Parser, Payload, Validator};
 
@@ -700,6 +735,34 @@ mod tests {
         let module = wjsm_parser::parse_module(source)?;
         let program = wjsm_semantic::lower_module(module, false)?;
         compile(&program)
+    }
+
+    #[test]
+    fn compile_with_debug_includes_wjsm_debug_section() -> Result<()> {
+        let source = "let x = 1;\ndebugger;\nconsole.log(x);";
+        let module = wjsm_parser::parse_module(source)?;
+        let program = wjsm_semantic::lower_module_with_debug_source(
+            module,
+            false,
+            Some(std::sync::Arc::from(source)),
+            "debug.js",
+            true,
+        )?;
+        let wasm = compile_with_options(&program, CompileOptions { debug: true })?;
+        assert!(
+            wasm.windows(b"wjsm_debug".len())
+                .any(|window| window == b"wjsm_debug"),
+            "debug 编译应包含 wjsm_debug 自定义段"
+        );
+        // 非 debug 路径不应附带该段
+        let wasm_plain = compile(&program)?;
+        assert!(
+            !wasm_plain
+                .windows(b"wjsm_debug".len())
+                .any(|window| window == b"wjsm_debug"),
+            "默认 compile 不应包含 wjsm_debug 自定义段"
+        );
+        Ok(())
     }
 
     /// 与 compile_source 相同，但使用 eval 语义

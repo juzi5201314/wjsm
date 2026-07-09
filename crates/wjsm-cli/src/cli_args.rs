@@ -33,6 +33,54 @@ pub(crate) fn parse_heap_size(raw: &str) -> Result<usize, String> {
     Ok(bytes)
 }
 
+/// 解析 Node 风格 inspector 地址。
+///
+/// - `"9229"` → `127.0.0.1:9229`
+/// - `"127.0.0.1:9229"` → 原样
+/// - `":0"` / `"127.0.0.1:0"` → 临时端口
+/// - `"0"` → `127.0.0.1:0`
+pub(crate) fn parse_inspect_address(raw: &str) -> Result<(String, u16), String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("inspect address must not be empty".to_string());
+    }
+
+    // 仅端口：纯数字（含 "0"）
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        let port = trimmed
+            .parse::<u16>()
+            .map_err(|_| format!("invalid inspect port `{trimmed}`"))?;
+        return Ok(("127.0.0.1".to_string(), port));
+    }
+
+    // 以 `:` 开头：`:PORT`
+    if let Some(port_part) = trimmed.strip_prefix(':') {
+        let port = port_part
+            .parse::<u16>()
+            .map_err(|_| format!("invalid inspect address `{trimmed}`"))?;
+        return Ok(("127.0.0.1".to_string(), port));
+    }
+
+    // HOST:PORT（IPv4 / hostname；IPv6 未支持 bracket 形式时按最后一个 `:` 切分）
+    let (host, port_part) = match trimmed.rsplit_once(':') {
+        Some(parts) => parts,
+        None => {
+            return Err(format!(
+                "invalid inspect address `{trimmed}` (expected HOST:PORT or PORT)"
+            ));
+        }
+    };
+    if host.is_empty() {
+        return Err(format!("invalid inspect address `{trimmed}` (empty host)"));
+    }
+    let port = port_part
+        .parse::<u16>()
+        .map_err(|_| format!("invalid inspect port `{port_part}` in `{trimmed}`"))?;
+    Ok((host.to_string(), port))
+}
+
+const DEFAULT_INSPECT_ADDR: &str = "127.0.0.1:9229";
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
@@ -94,6 +142,29 @@ pub struct Cli {
     /// Select JavaScript GC algorithm (mark-sweep, g1, or zgc). Overrides WJSM_GC/WJSM_TEST_GC.
     #[arg(long, value_name = "GC", global = true)]
     pub(crate) gc: Option<String>,
+
+    /// 启用 CDP inspector（可选 `=HOST:PORT`，默认 127.0.0.1:9229）。
+    /// 必须用 `=` 传参（`--inspect=9229`），避免吞掉后续子命令名。
+    #[arg(
+        long,
+        value_name = "HOST:PORT",
+        global = true,
+        num_args = 0..=1,
+        default_missing_value = DEFAULT_INSPECT_ADDR,
+        require_equals = true
+    )]
+    pub(crate) inspect: Option<String>,
+
+    /// 启用 CDP inspector 并在入口暂停（可选 `=HOST:PORT`，默认 127.0.0.1:9229）
+    #[arg(
+        long = "inspect-brk",
+        value_name = "HOST:PORT",
+        global = true,
+        num_args = 0..=1,
+        default_missing_value = DEFAULT_INSPECT_ADDR,
+        require_equals = true
+    )]
+    pub(crate) inspect_brk: Option<String>,
 }
 
 impl Cli {
@@ -107,6 +178,85 @@ impl Cli {
 
     pub(crate) fn should_verify_ir(&self) -> bool {
         self.verify_ir
+    }
+
+    /// `--inspect` / `--inspect-brk` 任一出现即启用调试代码生成。
+    pub(crate) fn wants_debug_codegen(&self) -> bool {
+        self.inspect.is_some() || self.inspect_brk.is_some()
+    }
+
+    /// 合并 inspect / inspect-brk 为 runtime 配置。
+    /// `inspect-brk` 优先于 `inspect`（含地址），并强制 `break_on_start`。
+    pub(crate) fn inspect_config(&self) -> Result<Option<wjsm_runtime::InspectConfig>, String> {
+        if let Some(raw) = self.inspect_brk.as_deref() {
+            let (host, port) = parse_inspect_address(raw)?;
+            return Ok(Some(wjsm_runtime::InspectConfig {
+                host,
+                port,
+                break_on_start: true,
+            }));
+        }
+        if let Some(raw) = self.inspect.as_deref() {
+            let (host, port) = parse_inspect_address(raw)?;
+            return Ok(Some(wjsm_runtime::InspectConfig {
+                host,
+                port,
+                break_on_start: false,
+            }));
+        }
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod inspect_address_tests {
+    use super::*;
+
+    #[test]
+    fn parse_port_only() {
+        assert_eq!(
+            parse_inspect_address("9229").unwrap(),
+            ("127.0.0.1".to_string(), 9229)
+        );
+        assert_eq!(
+            parse_inspect_address("0").unwrap(),
+            ("127.0.0.1".to_string(), 0)
+        );
+    }
+
+    #[test]
+    fn parse_host_port() {
+        assert_eq!(
+            parse_inspect_address("127.0.0.1:9229").unwrap(),
+            ("127.0.0.1".to_string(), 9229)
+        );
+        assert_eq!(
+            parse_inspect_address("0.0.0.0:0").unwrap(),
+            ("0.0.0.0".to_string(), 0)
+        );
+        assert_eq!(
+            parse_inspect_address("localhost:9230").unwrap(),
+            ("localhost".to_string(), 9230)
+        );
+    }
+
+    #[test]
+    fn parse_colon_port() {
+        assert_eq!(
+            parse_inspect_address(":0").unwrap(),
+            ("127.0.0.1".to_string(), 0)
+        );
+        assert_eq!(
+            parse_inspect_address(":9229").unwrap(),
+            ("127.0.0.1".to_string(), 9229)
+        );
+    }
+
+    #[test]
+    fn parse_rejects_empty_and_garbage() {
+        assert!(parse_inspect_address("").is_err());
+        assert!(parse_inspect_address("host").is_err());
+        assert!(parse_inspect_address("host:notaport").is_err());
     }
 }
 

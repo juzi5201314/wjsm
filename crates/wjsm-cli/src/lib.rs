@@ -115,6 +115,7 @@ fn runtime_options_with_argv(
         Some(raw) if !raw.is_empty() => raw.parse().map_err(anyhow::Error::msg)?,
         _ => runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?,
     };
+    let inspect = cli.inspect_config().map_err(anyhow::Error::msg)?;
     Ok(runtime::RuntimeOptions {
         max_heap_size: cli.max_heap_size,
         wasmtime_memory_reservation: cli.wasmtime_memory_reservation.map(|value| value as u64),
@@ -129,6 +130,7 @@ fn runtime_options_with_argv(
         fs_read_roots: sandbox.read_roots,
         fs_write_roots: sandbox.write_roots,
         fs_allow_write_anywhere: sandbox.allow_write_anywhere,
+        inspect,
         ..runtime::RuntimeOptions::default()
     })
 }
@@ -606,6 +608,7 @@ fn cmd_build(
                     cli.target,
                     script,
                     cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
                 )?,
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
@@ -619,6 +622,7 @@ fn cmd_build(
                             cli.target,
                             script,
                             cli.should_verify_ir(),
+                            cli.wants_debug_codegen(),
                         )?
                     } else {
                         run_file_input_pipeline(&path, root, stage, cli, script)?
@@ -655,12 +659,26 @@ fn cmd_build(
 
             let wasm = match resolve_input(input, eval)? {
                 InputSource::Inline(code) => {
-                    compile_source(&code, None, cli.target, script, cli.should_verify_ir())?
+                    compile_source(
+                        &code,
+                        None,
+                        cli.target,
+                        script,
+                        cli.should_verify_ir(),
+                        cli.wants_debug_codegen(),
+                    )?
                 }
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
-                        compile_source(&source, None, cli.target, script, cli.should_verify_ir())?
+                        compile_source(
+                            &source,
+                            None,
+                            cli.target,
+                            script,
+                            cli.should_verify_ir(),
+                            cli.wants_debug_codegen(),
+                        )?
                     } else {
                         compile_from_file_input(
                             &path,
@@ -668,6 +686,7 @@ fn cmd_build(
                             cli.target,
                             script,
                             cli.should_verify_ir(),
+                            cli.wants_debug_codegen(),
                             &module_resolution_options(cli),
                         )?
                     }
@@ -703,6 +722,7 @@ fn cmd_build(
                         script,
                         cli.verbose_enabled(1),
                         cli.should_verify_ir(),
+                        cli.wants_debug_codegen(),
                     )?,
                     runtime_options_for_inline(cli, "[run-eval]", &[])?,
                 ),
@@ -717,6 +737,7 @@ fn cmd_build(
                                 script,
                                 cli.verbose_enabled(1),
                                 cli.should_verify_ir(),
+                                cli.wants_debug_codegen(),
                             )?,
                             runtime_options_for_file(cli, &path, root, &[])?,
                         )
@@ -729,6 +750,7 @@ fn cmd_build(
                                 script,
                                 cli.verbose_enabled(1),
                                 cli.should_verify_ir(),
+                                cli.wants_debug_codegen(),
                                 &module_resolution_options(cli),
                             )?,
                             runtime_options_for_file(cli, &path, root, &[])?,
@@ -776,6 +798,7 @@ fn cmd_run(
             script,
             verbose_compile,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
         )?
     } else {
         compile_file_input_to_pipeline_result(
@@ -785,6 +808,7 @@ fn cmd_run(
             script,
             verbose_compile,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
             &module_resolution_options(cli),
         )?
     };
@@ -807,6 +831,7 @@ fn cmd_run_eval(
         script,
         cli.verbose_enabled(1),
         cli.should_verify_ir(),
+        cli.wants_debug_codegen(),
     )?;
     let options = runtime_options_for_inline(cli, mode_tag, script_args)?;
     run_compile_then_execute(cli, result, options)
@@ -912,6 +937,7 @@ fn cmd_lint(
             cli.target,
             script,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -925,6 +951,7 @@ fn cmd_lint(
                     cli.target,
                     script,
                     cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
@@ -1093,6 +1120,7 @@ fn cmd_check(
             cli.target,
             script,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1106,6 +1134,7 @@ fn cmd_check(
                     cli.target,
                     script,
                     cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
@@ -1152,6 +1181,7 @@ fn cmd_dump_ir(
             cli.target,
             script,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1165,6 +1195,7 @@ fn cmd_dump_ir(
                     cli.target,
                     script,
                     cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
@@ -1203,6 +1234,7 @@ fn cmd_dump_ast(
             cli.target,
             script,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1216,6 +1248,7 @@ fn cmd_dump_ast(
                     cli.target,
                     script,
                     cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
@@ -1317,6 +1350,7 @@ fn cmd_dump_wat(
             cli.target,
             script,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1331,6 +1365,7 @@ fn cmd_dump_wat(
                     cli.target,
                     script,
                     cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
                 )?
             } else {
                 let pipeline = compile_file_input_to_pipeline_result(
@@ -1340,6 +1375,7 @@ fn cmd_dump_wat(
                     script,
                     cli.verbose_enabled(1),
                     cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
                     &module_resolution_options(cli),
                 )?;
                 if cli.time {
@@ -1582,6 +1618,7 @@ fn lower_parsed_module(
     module: swc_core::ecma::ast::Module,
     script: bool,
     verify_ir: bool,
+    debug_codegen: bool,
 ) -> Result<Program> {
     let display_name = filename.map(str::to_string).unwrap_or_else(|| {
         if script {
@@ -1590,15 +1627,33 @@ fn lower_parsed_module(
             "input.ts".into()
         }
     });
-    let program = semantic::lower_module_with_source(
+    // debug_codegen 时在语句入口发射 DebugCheck，供 inspector 单步/断点映射。
+    let program = semantic::lower_module_with_debug_source(
         module,
         script,
         Some(std::sync::Arc::from(source)),
         display_name,
+        debug_codegen,
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     verify_ir_for_pipeline(&program, verify_ir)?;
     Ok(program)
+}
+
+fn compile_program_to_wasm(
+    program: &Program,
+    target: Target,
+    debug_codegen: bool,
+) -> Result<Vec<u8>> {
+    match target {
+        Target::Wasm => backend_wasm::compile_with_options(
+            program,
+            backend_wasm::CompileOptions {
+                debug: debug_codegen,
+            },
+        ),
+        Target::Jit => bail!("JIT backend is not implemented yet"),
+    }
 }
 
 fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
@@ -1617,6 +1672,7 @@ fn run_pipeline(
     target: Target,
     script: bool,
     verify_ir: bool,
+    debug_codegen: bool,
 ) -> Result<PipelineResult> {
     let mut result = PipelineResult {
         ast: None,
@@ -1658,6 +1714,7 @@ fn run_pipeline(
         result.ast.take().unwrap(),
         script,
         verify_ir,
+        debug_codegen,
     )?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     if verbose >= 2 {
@@ -1678,12 +1735,7 @@ fn run_pipeline(
         eprintln!("Compiling to WASM...");
     }
     let start = Instant::now();
-    let wasm = match target {
-        Target::Wasm => backend_wasm::compile(result.program.as_ref().unwrap())?,
-        Target::Jit => {
-            bail!("JIT backend is not implemented yet");
-        }
-    };
+    let wasm = compile_program_to_wasm(result.program.as_ref().unwrap(), target, debug_codegen)?;
     result.timings.compile_us = start.elapsed().as_micros() as u64;
     if verbose >= 2 {
         eprintln!("Compiled WASM bytes: {}", wasm.len());
@@ -1745,6 +1797,7 @@ fn run_file_input_pipeline(
                         &root,
                         cli.target,
                         cli.should_verify_ir(),
+                        cli.wants_debug_codegen(),
                         &resolution_options,
                     )?;
                     result.timings.compile_us = start.elapsed().as_micros() as u64;
@@ -1765,6 +1818,7 @@ fn run_file_input_pipeline(
             cli.target,
             script,
             cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
         ),
     }
 }
@@ -1973,6 +2027,7 @@ fn compile_source_to_pipeline_result(
     script: bool,
     verbose: bool,
     verify_ir: bool,
+    debug_codegen: bool,
 ) -> Result<PipelineResult> {
     let mut result = PipelineResult {
         ast: None,
@@ -2005,6 +2060,7 @@ fn compile_source_to_pipeline_result(
         result.ast.take().unwrap(),
         script,
         verify_ir,
+        debug_codegen,
     )?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     result.program = Some(program);
@@ -2013,10 +2069,7 @@ fn compile_source_to_pipeline_result(
         eprintln!("Compiling to WASM...");
     }
     let start = Instant::now();
-    let wasm = match target {
-        Target::Wasm => backend_wasm::compile(result.program.as_ref().unwrap())?,
-        Target::Jit => bail!("JIT backend is not implemented yet"),
-    };
+    let wasm = compile_program_to_wasm(result.program.as_ref().unwrap(), target, debug_codegen)?;
     result.timings.compile_us = start.elapsed().as_micros() as u64;
     result.wasm = Some(wasm);
 
@@ -2030,6 +2083,7 @@ fn compile_file_input_to_pipeline_result(
     script: bool,
     verbose: bool,
     verify_ir: bool,
+    debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<PipelineResult> {
     let plan = build_compile_plan(input, root)?;
@@ -2039,7 +2093,14 @@ fn compile_file_input_to_pipeline_result(
                 eprintln!("Bundling modules...");
             }
             let start = Instant::now();
-            let wasm = compile_bundle(&entry, &root, target, verify_ir, resolution_options)?;
+            let wasm = compile_bundle(
+                &entry,
+                &root,
+                target,
+                verify_ir,
+                debug_codegen,
+                resolution_options,
+            )?;
             let mut result = PipelineResult {
                 ast: None,
                 program: None,
@@ -2060,6 +2121,7 @@ fn compile_file_input_to_pipeline_result(
             script,
             verbose,
             verify_ir,
+            debug_codegen,
         ),
     }
 }
@@ -2070,16 +2132,27 @@ fn compile_from_file_input(
     target: Target,
     script: bool,
     verify_ir: bool,
+    debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<Vec<u8>> {
     let plan = build_compile_plan(input, root)?;
     match plan {
-        CompilePlan::Bundle { entry, root } => {
-            compile_bundle(&entry, &root, target, verify_ir, resolution_options)
-        }
-        CompilePlan::SingleSource { source, filename } => {
-            compile_source(&source, Some(filename.as_str()), target, script, verify_ir)
-        }
+        CompilePlan::Bundle { entry, root } => compile_bundle(
+            &entry,
+            &root,
+            target,
+            verify_ir,
+            debug_codegen,
+            resolution_options,
+        ),
+        CompilePlan::SingleSource { source, filename } => compile_source(
+            &source,
+            Some(filename.as_str()),
+            target,
+            script,
+            verify_ir,
+            debug_codegen,
+        ),
     }
 }
 
@@ -2089,6 +2162,7 @@ fn compile_source(
     target: Target,
     script: bool,
     verify_ir: bool,
+    debug_codegen: bool,
 ) -> Result<Vec<u8>> {
     let module = if script {
         parser::parse_script_as_module(source)?
@@ -2097,11 +2171,8 @@ fn compile_source(
     } else {
         parser::parse_module(source)?
     };
-    let program = lower_parsed_module(source, filename, module, script, verify_ir)?;
-    match target {
-        Target::Wasm => backend_wasm::compile(&program),
-        Target::Jit => bail!("JIT backend is not implemented yet"),
-    }
+    let program = lower_parsed_module(source, filename, module, script, verify_ir, debug_codegen)?;
+    compile_program_to_wasm(&program, target, debug_codegen)
 }
 
 fn compile_bundle(
@@ -2109,21 +2180,19 @@ fn compile_bundle(
     root: &Path,
     target: Target,
     verify_ir: bool,
+    debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<Vec<u8>> {
     match target {
         Target::Wasm => {
+            // 多模块 lowering 暂未透传 emit_debug_checks；debug 仍控制后端
+            // CompileOptions（wjsm_debug 段 / debug 断点宿主调用）。
+            let program =
+                wjsm_module::lower_bundle_with_options(entry, root, resolution_options.clone())?;
             if verify_ir {
-                let program = wjsm_module::lower_bundle_with_options(
-                    entry,
-                    root,
-                    resolution_options.clone(),
-                )?;
                 verify_ir_for_pipeline(&program, true)?;
-                backend_wasm::compile(&program)
-            } else {
-                wjsm_module::bundle_with_options(entry, root, resolution_options.clone())
             }
+            compile_program_to_wasm(&program, target, debug_codegen)
         }
         Target::Jit => bail!("JIT backend is not implemented yet"),
     }
@@ -2156,6 +2225,7 @@ pub fn run_file_in_process_with_options(
         input,
         None,
         Target::Wasm,
+        false,
         false,
         false,
         false,
@@ -2323,6 +2393,78 @@ mod tests {
 
     fn parse_cli_for_test(args: &[&str]) -> Cli {
         parse_cli(args).expect("CLI args should parse")
+    }
+
+    #[test]
+    fn cli_inspect_flag_defaults_and_parses_address() {
+        // `--inspect` 无值：default_missing_value → 127.0.0.1:9229
+        let bare = parse_cli_for_test(&["wjsm", "--inspect", "eval", "1"]);
+        let cfg = bare.inspect_config().expect("inspect parse");
+        assert_eq!(
+            cfg,
+            Some(runtime::InspectConfig {
+                host: "127.0.0.1".into(),
+                port: 9229,
+                break_on_start: false,
+            })
+        );
+        assert!(bare.wants_debug_codegen());
+
+        // 必须用 `=` 传自定义地址，避免吞子命令
+        let custom = parse_cli_for_test(&["wjsm", "--inspect=0.0.0.0:0", "eval", "1"]);
+        let cfg = custom.inspect_config().expect("inspect parse");
+        assert_eq!(
+            cfg,
+            Some(runtime::InspectConfig {
+                host: "0.0.0.0".into(),
+                port: 0,
+                break_on_start: false,
+            })
+        );
+
+        let port_only = parse_cli_for_test(&["wjsm", "--inspect=9230", "eval", "1"]);
+        let cfg = port_only.inspect_config().expect("inspect parse");
+        assert_eq!(
+            cfg,
+            Some(runtime::InspectConfig {
+                host: "127.0.0.1".into(),
+                port: 9230,
+                break_on_start: false,
+            })
+        );
+    }
+
+    #[test]
+    fn cli_inspect_brk_implies_break_on_start() {
+        let brk = parse_cli_for_test(&["wjsm", "--inspect-brk", "eval", "1"]);
+        let cfg = brk.inspect_config().expect("inspect-brk parse");
+        assert_eq!(
+            cfg,
+            Some(runtime::InspectConfig {
+                host: "127.0.0.1".into(),
+                port: 9229,
+                break_on_start: true,
+            })
+        );
+        assert!(brk.wants_debug_codegen());
+
+        // inspect-brk 优先于 inspect 的地址，并强制 break_on_start
+        let both = parse_cli_for_test(&[
+            "wjsm",
+            "--inspect=127.0.0.1:1111",
+            "--inspect-brk=127.0.0.1:2222",
+            "eval",
+            "1",
+        ]);
+        let cfg = both.inspect_config().expect("both flags");
+        assert_eq!(
+            cfg,
+            Some(runtime::InspectConfig {
+                host: "127.0.0.1".into(),
+                port: 2222,
+                break_on_start: true,
+            })
+        );
     }
 
     #[test]

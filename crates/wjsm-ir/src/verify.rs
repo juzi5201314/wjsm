@@ -465,7 +465,8 @@ fn verify_instruction_uses(
         | Instruction::GetSuperBase { .. }
         | Instruction::GetSuperConstructor { .. }
         | Instruction::NewPromise { .. }
-        | Instruction::CollectRestArgs { .. } => {}
+        | Instruction::CollectRestArgs { .. }
+        | Instruction::DebugCheck { .. } => {}
     }
     Ok(())
 }
@@ -712,7 +713,8 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::PromiseResolve { .. }
         | Instruction::PromiseReject { .. }
         | Instruction::Suspend { .. }
-        | Instruction::GeneratorSuspend { .. } => None,
+        | Instruction::GeneratorSuspend { .. }
+        | Instruction::DebugCheck { .. } => None,
     }
 }
 

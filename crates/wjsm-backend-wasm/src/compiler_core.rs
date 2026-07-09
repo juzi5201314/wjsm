@@ -318,6 +318,12 @@ impl Compiler {
             normal_init_values: None,
             source_file: None,
             source_map_entries: Vec::new(),
+            debug: false,
+            current_wasm_func_idx: 0,
+            debug_emit_counter: 0,
+            debug_line_entries: Vec::new(),
+            debug_local_entries: Vec::new(),
+            debug_debugger_pcs: Vec::new(),
         }
     }
 }
