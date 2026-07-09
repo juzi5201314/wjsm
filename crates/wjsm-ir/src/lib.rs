@@ -933,9 +933,13 @@ pub struct ReExportBinding {
 }
 
 // ── Shadow Stack Constants ──────────────────────────────────────────────
-/// 影子栈大小（64KiB = 8192 个 i64 槽位）。
+/// 影子栈大小（256KiB = 32768 个 i64 槽位）。
 /// runtime 和 backend-wasm 共享此值，编译期保证一致性。
-pub const SHADOW_STACK_SIZE: u32 = 65536;
+///
+/// 64KiB/128KiB 在 `await` + Promise 反应链 + 大模块（node:assert 等）下会在
+/// 合法嵌套深度内触顶（见 `node_builtin_assert_async_errors`）。256KiB 覆盖
+/// 实测水位；配合 runtime 初始 memory ≥ 8 页。
+pub const SHADOW_STACK_SIZE: u32 = 256 * 1024;
 /// 影子栈与对象堆之间的隔离带大小（字节）。
 pub const SHADOW_STACK_HEAP_GUARD_SIZE: u32 = 64;
 

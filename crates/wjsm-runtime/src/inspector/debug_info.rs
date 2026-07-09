@@ -174,6 +174,7 @@ impl DebugInfo {
             .or_else(|| self.lookup_func(func_idx))
     }
 
+    #[allow(dead_code)] // CDP Scope 枚举局部变量时使用
     pub fn locals_for_func(&self, func_idx: u32) -> impl Iterator<Item = &LocalEntry> {
         self.local_entries
             .iter()

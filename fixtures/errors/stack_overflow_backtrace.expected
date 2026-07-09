@@ -1,5 +1,6 @@
 exit_code: 2
 --- stdout ---
 --- stderr ---
-Runtime error: shadow stack overflow: sp=98904 + 40 > end=98920
-    at recurse (errors/stack_overflow_backtrace.js:2:1) (x50)
+Runtime error: Uncaught WASM trap: wasm trap: call stack exhausted
+    at <anonymous> (errors/stack_overflow_backtrace.js:0)
+    at recurse (errors/stack_overflow_backtrace.js:2:1) (x49)

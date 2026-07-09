@@ -617,7 +617,7 @@ pub(super) async fn setup_shared_env_and_support(
     engine: &Engine,
 ) -> Result<()> {
     // 创建 shared memory (4 pages = 256KB)
-    let memory = Memory::new(&mut *store, MemoryType::new(4, None))?;
+    let memory = Memory::new(&mut *store, MemoryType::new(8, None))?;
     linker.define(&*store, "env", "memory", memory)?;
 
     // 创建 shared table (minimum 256, 覆盖 support 12 + user ~200 函数)

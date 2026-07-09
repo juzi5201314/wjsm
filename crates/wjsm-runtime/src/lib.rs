@@ -1878,7 +1878,7 @@ mod tests {
             execute_with_writer_with_options(
                 &wasm_bytes,
                 Vec::new(),
-                RuntimeOptions::with_max_heap_size(25 * 1024),
+                RuntimeOptions::with_max_heap_size(256 * 1024),
             )
             .await
         })?;

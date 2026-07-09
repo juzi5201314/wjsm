@@ -1,4 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: bundle entry main.js from root modules/missing_export: Failed to lower modules: Failed to analyze module links: Missing export 'missing' in module 'modules/missing_export/dep.js' (imported by 'modules/missing_export/main.js')
+Error: bundle entry main.js from root modules/missing_export: Failed to analyze module links: Missing export 'missing' in module 'modules/missing_export/dep.js' (imported by 'modules/missing_export/main.js')

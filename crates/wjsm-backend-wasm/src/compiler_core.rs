@@ -55,7 +55,7 @@ impl Compiler {
                 "env",
                 "memory",
                 EntityType::Memory(MemoryType {
-                    minimum: 4,
+                    minimum: 8,
                     maximum: None,
                     memory64: false,
                     shared: false,
@@ -100,7 +100,7 @@ impl Compiler {
                 "env",
                 "memory",
                 EntityType::Memory(MemoryType {
-                    minimum: 4,
+                    minimum: 8,
                     maximum: None,
                     memory64: false,
                     shared: false,

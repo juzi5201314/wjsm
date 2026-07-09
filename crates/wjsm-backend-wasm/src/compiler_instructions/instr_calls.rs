@@ -638,7 +638,8 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
         self.emit(WasmInstruction::I64Const(value::TAG_UNDEFINED as i64));
         self.emit(WasmInstruction::I64Eq);
-        self.emit(WasmInstruction::I64Or);
+        // i64.eq 结果是 i32，必须用 i32.or（与 emit_is_nullish_i32 一致）
+        self.emit(WasmInstruction::I32Or);
 
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
         // null/undefined → 返回 encode_undefined()
@@ -688,7 +689,8 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
         self.emit(WasmInstruction::I64Const(value::TAG_UNDEFINED as i64));
         self.emit(WasmInstruction::I64Eq);
-        self.emit(WasmInstruction::I64Or);
+        // i64.eq 结果是 i32，必须用 i32.or（与 emit_is_nullish_i32 一致）
+        self.emit(WasmInstruction::I32Or);
 
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
@@ -805,13 +807,14 @@ impl Compiler {
             type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
-        self.emit(WasmInstruction::End);
+        // 关闭 bound / proxy / native 三层 if（closure 分支已在上方 End）
         self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
 
+        // 关闭 nullish 检查 if
         self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
         Ok(())

@@ -2192,10 +2192,19 @@ fn compile_bundle(
 ) -> Result<Vec<u8>> {
     match target {
         Target::Wasm => {
-            // 多模块 lowering 暂未透传 emit_debug_checks；debug 仍控制后端
-            // CompileOptions（wjsm_debug 段 / debug 断点宿主调用）。
-            let program =
-                wjsm_module::lower_bundle_with_options(entry, root, resolution_options.clone())?;
+            let program = wjsm_module::lower_bundle_with_debug(
+                entry,
+                root,
+                resolution_options.clone(),
+                debug_codegen,
+            )
+            .with_context(|| {
+                format!(
+                    "bundle entry {} from root {}",
+                    entry.display(),
+                    root.display()
+                )
+            })?;
             if verify_ir {
                 verify_ir_for_pipeline(&program, true)?;
             }

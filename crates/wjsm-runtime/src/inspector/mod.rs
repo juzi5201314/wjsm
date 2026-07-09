@@ -14,7 +14,7 @@ pub(crate) mod state;
 
 pub(crate) use debug_info::DebugInfo;
 pub(crate) use pause::{capture_frame_locals, snapshot_call_frames};
-pub(crate) use state::{InspectorInner, PauseReason, ResumeAction, StepMode};
+pub(crate) use state::{InspectorInner, ResumeAction};
 
 use anyhow::{Context, Result};
 

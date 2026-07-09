@@ -547,6 +547,83 @@ impl Lowerer {
         Ok(dest)
     }
 
+    /// 可选调用 `callee?.(args)`：
+    /// - 静态宿主 API（`console.log` 等）与普通调用一样走 `CallBuiltin`（属性不存在于对象图，
+    ///   只能靠编译期识别；`?.` 在静态已知方法上恒存在，与 V8 优化路径一致）。
+    /// - 其它 callee 发射 `OptionalCall`，由 backend 对 null/undefined 短路。
+    pub(crate) fn lower_optional_call_expr(
+        &mut self,
+        call: &swc_ast::CallExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        if let swc_ast::Callee::Expr(expr) = &call.callee
+            && let swc_ast::Expr::Member(member_expr) = expr.as_ref()
+            && let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
+            && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+            && let Some(builtin) = builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
+            && self.scopes.lookup(&obj_ident.sym).is_err()
+        {
+            // 静态方法在引擎中恒存在；可选链只是语法糖，语义等于直接 CallBuiltin。
+            return self.lower_host_builtin_call_expr(call, block, builtin);
+        }
+
+        let callee_val: ValueId;
+        let this_val: ValueId;
+        let mut callee_block = block;
+
+        match &call.callee {
+            swc_ast::Callee::Expr(expr) => {
+                if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
+                    let obj = self.lower_expr(&member_expr.obj, block)?;
+                    this_val = obj;
+                    callee_val = self.lower_member_expr(member_expr, block)?;
+                    if let Some(mb) = self.expr_merge_block.take() {
+                        callee_block = mb;
+                    }
+                } else {
+                    this_val = self.alloc_value();
+                    let undef = self.module.add_constant(Constant::Undefined);
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: this_val,
+                            constant: undef,
+                        },
+                    );
+                    callee_val = self.lower_expr(expr, block)?;
+                    if let Some(mb) = self.expr_merge_block.take() {
+                        callee_block = mb;
+                    }
+                }
+            }
+            other => {
+                let _ = other;
+                return self.lower_call_expr(call, block);
+            }
+        }
+
+        let mut call_block = self.resolve_store_block(callee_block);
+        let mut args = Vec::with_capacity(call.args.len());
+        for arg in &call.args {
+            args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+        }
+
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            call_block,
+            Instruction::OptionalCall {
+                dest,
+                callee: callee_val,
+                this_val,
+                args,
+            },
+        );
+        if call_block != block {
+            self.expr_merge_block = Some(call_block);
+        }
+        Ok(dest)
+    }
+
     pub(crate) fn lower_direct_eval_call(
         &mut self,
         call: &swc_ast::CallExpr,

@@ -500,6 +500,8 @@ impl Lowerer {
         match oc.base.as_ref() {
             swc_ast::OptChainBase::Member(member) => self.lower_member_expr(member, block),
             swc_ast::OptChainBase::Call(ocall) => {
+                // 可选调用 `f?.()`：必须发射 OptionalCall，不能降为普通 Call
+                // （否则 null/undefined 会被当成可调用对象）。
                 let call_expr = swc_ast::CallExpr {
                     span: ocall.span,
                     ctxt: ocall.ctxt,
@@ -507,7 +509,7 @@ impl Lowerer {
                     args: ocall.args.to_vec(),
                     type_args: ocall.type_args.clone(),
                 };
-                self.lower_call_expr(&call_expr, block)
+                self.lower_optional_call_expr(&call_expr, block)
             }
         }
     }

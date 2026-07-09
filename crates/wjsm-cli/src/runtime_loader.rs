@@ -19,14 +19,6 @@ pub(crate) struct CliRuntimeModuleLoader {
 }
 
 impl CliRuntimeModuleLoader {
-    pub(crate) fn new(
-        root: PathBuf,
-        read_roots: Vec<PathBuf>,
-        resolution_options: wjsm_module::ResolutionOptions,
-    ) -> Self {
-        Self::with_debug(root, read_roots, resolution_options, false)
-    }
-
     pub(crate) fn with_debug(
         root: PathBuf,
         read_roots: Vec<PathBuf>,

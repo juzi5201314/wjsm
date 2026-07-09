@@ -169,7 +169,7 @@ module {
       %2 = const c49
       %3 = const c50
       store var $1.$shared_env, %3
-      %4 = load var $env
+      %4 = new_object(capacity=2)
       store var $1.$shared_env, %4
       %5 = load var $env
       %6 = const c51

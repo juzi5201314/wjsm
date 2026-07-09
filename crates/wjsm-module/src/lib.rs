@@ -39,7 +39,18 @@ pub fn lower_bundle_with_options(
     root_path: &Path,
     options: ResolutionOptions,
 ) -> Result<wjsm_ir::Program> {
-    let bundler = ModuleBundler::with_resolution_options(root_path, options)?;
+    lower_bundle_with_debug(entry, root_path, options, false)
+}
+
+/// 同 [`lower_bundle_with_options`]，可开启语句级 debug 插桩。
+pub fn lower_bundle_with_debug(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<wjsm_ir::Program> {
+    let bundler =
+        ModuleBundler::with_resolution_options(root_path, options)?.with_emit_debug_checks(emit_debug_checks);
     bundler.lower_bundle(entry)
 }
 

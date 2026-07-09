@@ -1,7 +1,8 @@
 exit_code: 0
 --- stdout ---
 native_optional
+bound_optional
 regular_ok
-false false
+true true
 closure_ok
 --- stderr ---

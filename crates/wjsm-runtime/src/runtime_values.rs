@@ -1715,6 +1715,8 @@ pub(crate) async fn resolve_and_call_async(
             .and_then(|e| e.into_global())
             .unwrap();
         let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
+        // 在当前 shadow_sp 处拼装「bound 前缀 + 调用时参数」。
+        // `args_base` 是绝对地址（与 read_shadow_arg 一致），不可再加 shadow_sp。
         let ptr = shadow_sp;
 
         for (i, arg) in bound_args_ref.iter().enumerate() {
@@ -1731,7 +1733,7 @@ pub(crate) async fn resolve_and_call_async(
             memory
                 .read(
                     &mut *caller,
-                    (shadow_sp + args_base + i * 8) as usize,
+                    (args_base + i * 8) as usize,
                     &mut buf,
                 )
                 .unwrap();
@@ -1744,14 +1746,20 @@ pub(crate) async fn resolve_and_call_async(
                 .unwrap();
         }
 
-        Box::pin(resolve_callable_and_call_async(
+        // 推进 shadow_sp，避免嵌套调用覆盖本帧拼接区。
+        let _ = shadow_sp_global.set(&mut *caller, Val::I32(ptr + total_count * 8));
+
+        let result = Box::pin(resolve_callable_and_call_async(
             caller,
             target_func,
             bound_this,
             ptr,
             total_count,
         ))
-        .await
+        .await;
+
+        let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+        result
     } else {
         Box::pin(resolve_callable_and_call_async(
             caller, func, this_val, args_base, args_count,

@@ -1,7 +1,7 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: bundle entry main.js from root modules/cjs_syntax_error: Failed to lower modules: Failed to build module graph: Failed to parse module: modules/cjs_syntax_error/bad.js: error: Expected ident
+Error: bundle entry main.js from root modules/cjs_syntax_error: Failed to build module graph: Failed to parse module: modules/cjs_syntax_error/bad.js: error: Expected ident
  --> modules/cjs_syntax_error/bad.js:2:10
 2 | function {{{ invalid
   |          ^
