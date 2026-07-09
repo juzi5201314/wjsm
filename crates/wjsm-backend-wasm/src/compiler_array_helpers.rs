@@ -12,7 +12,7 @@ impl Compiler {
         let function_props_done_global = self.function_props_done_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
-        let shadow_stack_end_global = self.shadow_stack_end_global_idx;
+        let handle_table_limit_global = self.barrier_buf_ptr_global_idx;
         let array_proto_global = self.array_proto_handle_global_idx;
 
         // ── $arr_new (param $capacity i32) (result i32) — Type 7 ──
@@ -62,7 +62,7 @@ impl Compiler {
             Self::emit_handle_table_alloc_check(
                 &mut func,
                 obj_table_global,
-                shadow_stack_end_global,
+                handle_table_limit_global,
                 3,
             );
             func.instruction(&WasmInstruction::I32Const(1));

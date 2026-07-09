@@ -22,8 +22,17 @@ pub mod support_module;
 pub use support_module::{GcFlavor, emit_support_module};
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
-use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_CANARY, SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_SIZE};
+use wjsm_ir::{SHADOW_MEMORY_INDEX, SHADOW_MEMORY_NAME, SHADOW_STACK_INITIAL_SIZE};
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
+
+/// 影子栈 load/store 的 MemArg（独立 shadow memory，index 1）。
+pub(crate) fn shadow_mem_arg(offset: u64) -> MemArg {
+    MemArg {
+        offset,
+        align: 3,
+        memory_index: SHADOW_MEMORY_INDEX,
+    }
+}
 
 // ── Public API ──────────────────────────────────────────────────────────
 

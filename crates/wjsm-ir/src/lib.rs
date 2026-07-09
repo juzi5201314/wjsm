@@ -933,18 +933,19 @@ pub struct ReExportBinding {
 }
 
 // ── Shadow Stack Constants ──────────────────────────────────────────────
-/// 影子栈大小（256KiB = 32768 个 i64 槽位）。
-/// runtime 和 backend-wasm 共享此值，编译期保证一致性。
-///
-/// 64KiB/128KiB 在 `await` + Promise 反应链 + 大模块（node:assert 等）下会在
-/// 合法嵌套深度内触顶（见 `node_builtin_assert_async_errors`）。256KiB 覆盖
-/// 实测水位；配合 runtime 初始 memory ≥ 8 页。
-pub const SHADOW_STACK_SIZE: u32 = 256 * 1024;
-/// 影子栈与对象堆之间的隔离带大小（字节）。
-pub const SHADOW_STACK_HEAP_GUARD_SIZE: u32 = 64;
+/// 影子栈位于独立 WASM 线性内存 `env.__shadow_memory`（memory index 1）。
+/// 主内存不再预留影子区；冷启动只提交 INITIAL，按需 grow 到 soft max。
 
-/// 隔离带 canary 图案（按字节重复填充整个 guard 区）。
-pub const SHADOW_STACK_HEAP_GUARD_CANARY: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
+/// 影子栈初始容量（1 页 = 64KiB = 8192 个 i64 槽位）。
+pub const SHADOW_STACK_INITIAL_SIZE: u32 = 64 * 1024;
+/// 向后兼容别名：表示冷启动初始容量，而非硬上限。
+pub const SHADOW_STACK_SIZE: u32 = SHADOW_STACK_INITIAL_SIZE;
+/// 默认软上限（16MiB）。超过时 ensure 返回失败并写入 RangeError。
+pub const SHADOW_STACK_DEFAULT_MAX_SIZE: u32 = 16 * 1024 * 1024;
+/// 影子内存在 multi-memory 模块中的 index（`env.memory`=0，`env.__shadow_memory`=1）。
+pub const SHADOW_MEMORY_INDEX: u32 = 1;
+/// 影子内存 import/export 名。
+pub const SHADOW_MEMORY_NAME: &str = "__shadow_memory";
 
 // ── Well-Known Symbol 索引 ─────────────────────────────────────────────
 /// Well-known symbol 索引常量，semantic 和 runtime 共享。

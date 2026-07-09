@@ -513,6 +513,7 @@ where
     I: IntoIterator<Item = RuntimeModuleImportLink>,
 {
     define_caller_export(linker, caller, "env", "memory")?;
+    define_caller_export(linker, caller, "env", wjsm_ir::SHADOW_MEMORY_NAME)?;
     define_caller_export(linker, caller, "env", "__table")?;
     for global in wjsm_runtime_support::abi::ENV_GLOBALS {
         define_caller_export(linker, caller, "env", global.name)?;

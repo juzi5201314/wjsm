@@ -6,6 +6,8 @@ use wasmtime::*;
 #[derive(Clone, Copy)]
 pub(crate) struct WasmEnv {
     pub memory: Memory,
+    /// 独立影子栈线性内存（`env.__shadow_memory`）。
+    pub shadow_memory: Memory,
     pub func_table: Table,
     pub shadow_sp: Global,
     pub heap_ptr: Global,
@@ -39,6 +41,9 @@ impl WasmEnv {
     pub fn from_caller(caller: &mut Caller<'_, RuntimeState>) -> Option<Self> {
         Some(Self {
             memory: caller.get_export("memory")?.into_memory()?,
+            shadow_memory: caller
+                .get_export(wjsm_ir::SHADOW_MEMORY_NAME)?
+                .into_memory()?,
             func_table: caller.get_export("__table")?.into_table()?,
             shadow_sp: caller.get_export("__shadow_sp")?.into_global()?,
             heap_ptr: caller.get_export("__heap_ptr")?.into_global()?,

@@ -125,8 +125,8 @@ impl Compiler {
             Builtin::DateConstructorNew => {
                 self.compile_date_constructor_new(dest, args).map(|_| BuiltinDispatch::Handled)
             }
-            Builtin::AbortShadowStackOverflow => {
-                bail!("AbortShadowStackOverflow should not appear in compile_builtin_call");
+            Builtin::EnsureShadowStackCapacity => {
+                bail!("EnsureShadowStackCapacity should not appear in compile_builtin_call");
             }
             Builtin::FuncCall | Builtin::FuncBind => {
                 // These use shadow stack: compile like array proto methods
@@ -345,11 +345,7 @@ impl Compiler {
                 for arg in shadow_args {
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                    self.emit(WasmInstruction::I64Store(MemArg {
-                        offset: 0,
-                        align: 3,
-                        memory_index: 0,
-                    }));
+                    self.emit(WasmInstruction::I64Store(crate::shadow_mem_arg(0)));
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::I32Const(8));
                     self.emit(WasmInstruction::I32Add);

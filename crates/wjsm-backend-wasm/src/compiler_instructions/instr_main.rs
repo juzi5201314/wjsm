@@ -244,11 +244,7 @@ impl Compiler {
             Instruction::LoadVar { dest, name } => {
                 if let Some(offset) = self.var_memory_offsets.get(name).copied() {
                     self.emit_eval_var_address(offset);
-                    self.emit(WasmInstruction::I64Load(MemArg {
-                        offset: 0,
-                        align: 3,
-                        memory_index: 0,
-                    }));
+                    self.emit(WasmInstruction::I64Load(crate::shadow_mem_arg(0)));
                 } else {
                     let local_idx = self
                         .var_locals
@@ -263,11 +259,7 @@ impl Compiler {
                 if let Some(offset) = self.var_memory_offsets.get(name).copied() {
                     self.emit_eval_var_address(offset);
                     self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                    self.emit(WasmInstruction::I64Store(MemArg {
-                        offset: 0,
-                        align: 3,
-                        memory_index: 0,
-                    }));
+                    self.emit(WasmInstruction::I64Store(crate::shadow_mem_arg(0)));
                 } else {
                     let local_idx = *self
                         .var_locals
@@ -759,11 +751,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I32Const(3)); // * 8
                 self.emit(WasmInstruction::I32Shl);
                 self.emit(WasmInstruction::I32Add);
-                self.emit(WasmInstruction::I64Load(MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
+                self.emit(WasmInstruction::I64Load(crate::shadow_mem_arg(0)));
                 // Stack: [arg_value]
                 // Save arg_value
                 self.emit(WasmInstruction::LocalSet(self.call_env_obj_scratch()));

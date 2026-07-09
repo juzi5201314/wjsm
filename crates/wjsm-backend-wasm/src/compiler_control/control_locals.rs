@@ -42,11 +42,7 @@ impl Compiler {
             self.emit(WasmInstruction::LocalSet(self.string_concat_scratch_idx));
             self.emit_eval_var_address(offset);
             self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
-            self.emit(WasmInstruction::I64Store(MemArg {
-                offset: 0,
-                align: 3,
-                memory_index: 0,
-            }));
+            self.emit(WasmInstruction::I64Store(crate::shadow_mem_arg(0)));
         } else if let Some(local_idx) = local_idx {
             self.emit(WasmInstruction::LocalSet(local_idx));
         }

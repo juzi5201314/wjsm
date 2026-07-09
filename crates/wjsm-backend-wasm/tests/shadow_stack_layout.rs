@@ -1,15 +1,35 @@
+//! 独立 shadow memory 布局断言：主内存不再预留 shadow/guard；
+//! `__shadow_sp=0`，`__shadow_stack_end=INITIAL`。
+
 use std::collections::HashMap;
 
 use wasmparser::{Operator, Parser, Payload};
 use wjsm_ir::constants::{GC_BARRIER_EVENT_BUFFER_SIZE, GC_REGION_SIZE};
-use wjsm_ir::{SHADOW_STACK_HEAP_GUARD_CANARY, SHADOW_STACK_HEAP_GUARD_SIZE, SHADOW_STACK_SIZE};
+use wjsm_ir::SHADOW_STACK_INITIAL_SIZE;
 
 #[test]
-fn shadow_stack_heap_guard_layout_and_canary() {
-    let wasm = compile("console.log('guard');");
+fn independent_shadow_memory_layout() {
+    let wasm = compile("console.log('shadow');");
     let globals = extract_init_globals_i32_sets(&wasm);
-    let data = extract_active_data_bytes(&wasm);
+    let memories = extract_memory_imports(&wasm);
 
+    assert_eq!(
+        memories.len(),
+        2,
+        "user module must import main memory + __shadow_memory, got {memories:?}"
+    );
+    assert!(
+        memories.iter().any(|(m, n)| m == "env" && n == "memory"),
+        "missing env.memory import"
+    );
+    assert!(
+        memories
+            .iter()
+            .any(|(m, n)| m == "env" && n == wjsm_ir::SHADOW_MEMORY_NAME),
+        "missing env.__shadow_memory import"
+    );
+
+    let shadow_sp = *globals.get(&4).expect("__shadow_sp (global 4)");
     let shadow_stack_end = *globals
         .get(&7)
         .expect("__shadow_stack_end (global 7) in __wjsm_init_globals");
@@ -19,49 +39,43 @@ fn shadow_stack_heap_guard_layout_and_canary() {
     let heap_ptr = *globals
         .get(&1)
         .expect("__heap_ptr (global 1) in __wjsm_init_globals");
+    let obj_table_ptr = *globals.get(&2).expect("__obj_table_ptr");
+    let barrier_buf_ptr = *globals.get(&25).expect("__barrier_buf_ptr");
 
-    let guard_start = shadow_stack_end as usize;
-    let guard_end = guard_start + SHADOW_STACK_HEAP_GUARD_SIZE as usize;
-    let barrier_event_buf_end = guard_end + GC_BARRIER_EVENT_BUFFER_SIZE as usize;
-
+    assert_eq!(shadow_sp, 0, "independent shadow stack starts at 0");
+    assert_eq!(
+        shadow_stack_end, SHADOW_STACK_INITIAL_SIZE as i32,
+        "shadow_stack_end must be INITIAL capacity"
+    );
+    assert!(
+        barrier_buf_ptr as u32 >= obj_table_ptr as u32,
+        "barrier must start at/after handle table base"
+    );
+    assert!(
+        object_heap_start as usize
+            >= barrier_buf_ptr as usize + GC_BARRIER_EVENT_BUFFER_SIZE as usize,
+        "object heap must start after barrier event buffer"
+    );
     assert_eq!(
         object_heap_start % GC_REGION_SIZE as i32,
         0,
         "object heap must start at a GC region boundary"
-    );
-    assert!(
-        object_heap_start as usize >= barrier_event_buf_end,
-        "object heap must start after shadow-stack guard and barrier event buffer"
     );
     assert_eq!(
         heap_ptr, object_heap_start,
         "initial heap_ptr must equal object_heap_start"
     );
 
+    // 主内存 data 段不应再包含 256KiB 影子洞（object_heap 紧跟 barrier 对齐后即可）。
+    let data = extract_active_data_bytes(&wasm);
     assert!(
-        guard_end <= data.len(),
-        "data segment must cover guard region (len={}, guard_end={})",
-        data.len(),
-        guard_end
+        data.len() >= object_heap_start as usize,
+        "data segment must cover up to object heap start"
     );
-    let guard_slice = &data[guard_start..guard_end];
-    assert_eq!(guard_slice.len(), SHADOW_STACK_HEAP_GUARD_SIZE as usize);
-
-    let pattern = SHADOW_STACK_HEAP_GUARD_CANARY;
-    for (i, byte) in guard_slice.iter().enumerate() {
-        assert_eq!(
-            *byte,
-            pattern[i % pattern.len()],
-            "guard canary mismatch at guard offset {i} (mem {})",
-            guard_start + i
-        );
-    }
-
-    let shadow_sp = *globals.get(&4).expect("__shadow_sp");
-    assert_eq!(
-        shadow_stack_end - shadow_sp,
-        SHADOW_STACK_SIZE as i32,
-        "shadow stack span must remain SHADOW_STACK_SIZE"
+    // 不再填充 0xDEADBEEF guard canary。
+    assert!(
+        !data.windows(4).any(|w| w == [0xDE, 0xAD, 0xBE, 0xEF]),
+        "guard canary must not appear in main memory data"
     );
 }
 
@@ -69,6 +83,23 @@ fn compile(source: &str) -> Vec<u8> {
     let module = wjsm_parser::parse_module(source).expect("parse");
     let program = wjsm_semantic::lower_module(module, false).expect("lower");
     wjsm_backend_wasm::compile(&program).expect("compile")
+}
+
+fn extract_memory_imports(wasm: &[u8]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for payload in Parser::new(0).parse_all(wasm) {
+        let Payload::ImportSection(section) = payload.expect("valid wasm") else {
+            continue;
+        };
+        for import in section.into_imports() {
+            let import = import.expect("import");
+            if matches!(import.ty, wasmparser::TypeRef::Memory(_)) {
+                out.push((import.module.to_string(), import.name.to_string()));
+            }
+        }
+        break;
+    }
+    out
 }
 
 fn extract_active_data_bytes(wasm: &[u8]) -> Vec<u8> {
@@ -87,7 +118,7 @@ fn extract_active_data_bytes(wasm: &[u8]) -> Vec<u8> {
     Vec::new()
 }
 
-/// 解析 `__wjsm_init_globals` 中 `i32.const` + `global.set` 序列（按 wasm 字节码，不依赖 WAT 文本）。
+/// 解析 `__wjsm_init_globals` 中 `i32.const` + `global.set` 序列。
 fn extract_init_globals_i32_sets(wasm: &[u8]) -> HashMap<u32, i32> {
     let mut import_func_count = 0u32;
     let mut init_globals_func_idx = None;
@@ -149,7 +180,7 @@ fn extract_init_globals_i32_sets(wasm: &[u8]) -> HashMap<u32, i32> {
             && out.contains_key(&5)
             && out.contains_key(&1)
             && out.contains_key(&26),
-        "init_globals did not set expected v2 layout globals: {out:?}"
+        "init_globals did not set expected layout globals: {out:?}"
     );
     out
 }

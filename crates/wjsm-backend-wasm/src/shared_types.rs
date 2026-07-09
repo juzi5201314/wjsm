@@ -74,7 +74,7 @@ pub fn build_shared_type_section() -> TypeSection {
         vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64],
         vec![ValType::I64],
     );
-    // Type 18: (i32, i32, i32) -> () — abort_shadow_stack_overflow
+    // Type 18: (i32, i32, i32) -> () — debug_break
     types
         .ty()
         .function(vec![ValType::I32, ValType::I32, ValType::I32], vec![]);

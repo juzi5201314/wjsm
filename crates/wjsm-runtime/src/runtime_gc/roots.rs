@@ -21,10 +21,10 @@
 //!
 //! ## Shadow Stack 布局
 //!
-//! Shadow stack 位于 WASM 线性内存的前 64KB（由 `SHADOW_STACK_SIZE` 定义）。
-//! 编译器通过 `global.set $shadow_sp` 维护栈指针（以字节为单位）。
+//! Shadow stack 位于独立 WASM 线性内存 `env.__shadow_memory`（memory index 1）。
+//! 编译器通过 `global.set $shadow_sp` 维护栈指针（以字节为单位，从 0 增长）。
 //!
-//! **不变量 INV-SP**：在任何 GC 安全点（safepoint），shadow stack 的 `[stack_base, sp)` 区间
+//! **不变量 INV-SP**：在任何 GC 安全点（safepoint），shadow stack 的 `[0, sp)` 区间
 //! 包含所有活跃的 root 值。GC 通过 `tag_needs_root` 过滤标量值（如 smallint、bool），
 //! 只保留真正的 handle。
 //!
@@ -75,7 +75,7 @@
 use crate::runtime_gc::GcContext;
 use crate::runtime_gc::api::{Handle, RootProvider};
 use crate::runtime_gc::object_walker::{self, ObjectWalker};
-use wjsm_ir::{SHADOW_STACK_SIZE, value};
+use wjsm_ir::value;
 
 /// 运行时 root 提供者：扫描 shadow stack + host 侧表（fixed-point 友好）。
 pub struct RuntimeRoots;
@@ -83,20 +83,16 @@ pub struct RuntimeRoots;
 impl RootProvider for RuntimeRoots {
     fn for_each_shadow_stack_root(&mut self, ctx: &mut GcContext, visit: &mut dyn FnMut(Handle)) {
         let sp = ctx.shadow_sp();
-        let end = ctx.shadow_stack_end();
-        // shadow stack 区间：[stack_base, sp)；位于 handle table 之后，非从地址 0 起扫。
-        if end == 0 {
+        // 独立 shadow memory：活跃区为 [0, sp)。
+        if sp == 0 {
             return;
         }
-        let stack_base = end.saturating_sub(SHADOW_STACK_SIZE as usize);
-        if sp <= stack_base || sp > end {
-            return;
-        }
-        // 先快照所有 raw 值（with_memory 借用周期短），再解析（解析可能 with_state）。
-        let vals: Vec<i64> = ctx.with_memory(|data| {
+        // 先快照所有 raw 值（with_shadow_memory 借用周期短），再解析（解析可能 with_state）。
+        let vals: Vec<i64> = ctx.with_shadow_memory(|data| {
             let mut out = Vec::new();
-            let mut addr = stack_base;
-            while addr + 8 <= sp.min(data.len()) {
+            let mut addr = 0usize;
+            let limit = sp.min(data.len());
+            while addr + 8 <= limit {
                 let val = i64::from_le_bytes([
                     data[addr],
                     data[addr + 1],

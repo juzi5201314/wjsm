@@ -321,6 +321,7 @@ impl Compiler {
             .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1))
     }
 
+    /// 影子栈容量检查：不足时调用 host ensure 增长独立 shadow memory。
     pub(crate) fn emit_shadow_stack_overflow_check(&mut self, arg_count_bytes: i32) {
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(arg_count_bytes));
@@ -330,14 +331,17 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Empty));
         let func_idx = self
             .builtin_func_indices
-            .get(&Builtin::AbortShadowStackOverflow)
+            .get(&Builtin::EnsureShadowStackCapacity)
             .copied()
-            .expect("AbortShadowStackOverflow import must be registered");
+            .expect("EnsureShadowStackCapacity import must be registered");
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(arg_count_bytes));
         self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
         self.emit(WasmInstruction::Call(func_idx));
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::Unreachable);
+        self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::End);
     }
 

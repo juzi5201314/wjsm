@@ -567,11 +567,7 @@ impl Compiler {
         for (i, &local) in spill.iter().enumerate() {
             self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
             self.emit(WasmInstruction::LocalGet(local));
-            self.emit(WasmInstruction::I64Store(MemArg {
-                offset: (i as u64) * 8,
-                align: 3,
-                memory_index: 0,
-            }));
+            self.emit(WasmInstruction::I64Store(crate::shadow_mem_arg((i as u64) * 8)));
         }
         // 一次性推进 shadow_sp = base + N*8，让 GC 扫到 spilled 值（4 条 wasm：get/add/set）
         self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));

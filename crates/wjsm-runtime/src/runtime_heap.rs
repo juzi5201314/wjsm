@@ -1,18 +1,102 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
-use wjsm_ir::{SHADOW_STACK_SIZE, constants};
+use wjsm_ir::constants;
 
-/// handle 表上界（止于 shadow stack 基址），与 WASM emit_handle_table_alloc_check 一致。
+/// handle 表上界（止于 barrier 基址），与 WASM emit_handle_table_alloc_check 一致。
 fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     ctx: &mut C,
 ) -> usize {
-    let Some(g) = env.shadow_stack_end else {
-        return env.memory.data(&*ctx).len();
+    if let Some(g) = env.barrier_buf_ptr {
+        return g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
+    }
+    if let Some(g) = env.object_heap_start {
+        return g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
+    }
+    env.memory.data(&*ctx).len()
+}
+
+/// 确保影子栈（独立 shadow memory）有足够容量。
+/// 成功时可能 grow shadow memory 并更新 `__shadow_stack_end`；失败写 RangeError 返回 false。
+pub(crate) fn ensure_shadow_stack_capacity<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    shadow_sp: i32,
+    needed_bytes: i32,
+) -> bool {
+    let Ok(sp) = usize::try_from(shadow_sp) else {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, 0);
+        return false;
     };
-    let end = g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-    end.saturating_sub(SHADOW_STACK_SIZE as usize)
+    let Ok(needed) = usize::try_from(needed_bytes) else {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, 0);
+        return false;
+    };
+    let Some(need_end) = sp.checked_add(needed) else {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, usize::MAX);
+        return false;
+    };
+
+    let soft_max = ctx.as_context().data().shadow_stack_max();
+    if need_end > soft_max {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, soft_max);
+        return false;
+    }
+
+    let current_len = env.shadow_memory.data_size(&*ctx);
+    if need_end > current_len {
+        // 翻倍策略：max(page-ceil(need), min(2*current, soft_max))
+        let doubled = current_len.saturating_mul(2).max(need_end).min(soft_max);
+        let target = need_end.max(doubled);
+        let page = 65536usize;
+        let target_pages = target.div_ceil(page);
+        let current_pages = current_len.div_ceil(page);
+        let grow_pages = target_pages.saturating_sub(current_pages) as u64;
+        if grow_pages > 0 && env.shadow_memory.grow(&mut *ctx, grow_pages).is_err() {
+            set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, soft_max);
+            return false;
+        }
+    }
+
+    let new_len = env.shadow_memory.data_size(&*ctx).min(soft_max);
+    if need_end > new_len {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, new_len);
+        return false;
+    }
+
+    let Some(end_global) = env.shadow_stack_end else {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, new_len);
+        return false;
+    };
+    if new_len > i32::MAX as usize {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, soft_max);
+        return false;
+    }
+    if end_global
+        .set(&mut *ctx, wasmtime::Val::I32(new_len as i32))
+        .is_err()
+    {
+        set_shadow_stack_overflow(ctx, shadow_sp, needed_bytes, new_len);
+        return false;
+    }
+    true
+}
+
+fn set_shadow_stack_overflow<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    shadow_sp: i32,
+    needed_bytes: i32,
+    limit: usize,
+) {
+    let message = format!(
+        "RangeError: Maximum call stack size exceeded (shadow stack: sp={shadow_sp} + {needed_bytes} > limit={limit})"
+    );
+    *ctx.as_context()
+        .data()
+        .runtime_error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(message);
 }
 
 pub(crate) fn host_handle_slot_fits<C: AsContextMut<Data = RuntimeState>>(
@@ -1728,4 +1812,104 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
         set_object_proto_header(ctx, env, obj, proto);
     }
     obj
+}
+
+#[cfg(test)]
+mod shadow_stack_capacity_tests {
+    use super::*;
+    use crate::{RuntimeState, WasmEnv};
+    use wasmtime::{
+        Engine, Global, GlobalType, Memory, MemoryType, Mutability, Ref, RefType, Store, Table,
+        TableType, Val, ValType,
+    };
+
+    fn i32_global(store: &mut Store<RuntimeState>, val: i32) -> Global {
+        Global::new(
+            &mut *store,
+            GlobalType::new(ValType::I32, Mutability::Var),
+            Val::I32(val),
+        )
+        .unwrap()
+    }
+
+    fn test_env(soft_max: usize) -> (Store<RuntimeState>, WasmEnv) {
+        let engine = Engine::default();
+        let mut state = RuntimeState::new();
+        state.shadow_stack_max = soft_max;
+        let mut store = Store::new(&engine, state);
+        let memory = Memory::new(&mut store, MemoryType::new(1, None)).unwrap();
+        let shadow_memory = Memory::new(
+            &mut store,
+            MemoryType::new(1, Some((soft_max as u64).div_ceil(65536).max(1) as u32)),
+        )
+        .unwrap();
+        let table = Table::new(
+            &mut store,
+            TableType::new(RefType::FUNCREF, 1, None),
+            Ref::Func(None),
+        )
+        .unwrap();
+        let end = wjsm_ir::SHADOW_STACK_INITIAL_SIZE as i32;
+        let env = WasmEnv {
+            memory,
+            shadow_memory,
+            func_table: table,
+            shadow_sp: i32_global(&mut store, 0),
+            heap_ptr: i32_global(&mut store, 0),
+            obj_table_ptr: i32_global(&mut store, 0),
+            obj_table_count: i32_global(&mut store, 0),
+            shadow_stack_end: Some(i32_global(&mut store, end)),
+            object_proto_handle: i32_global(&mut store, -1),
+            array_proto_handle: i32_global(&mut store, -1),
+            object_heap_start: Some(i32_global(&mut store, 1024)),
+            bootstrap_done: None,
+            function_props_done: None,
+            function_props_base: None,
+            num_ir_functions: None,
+            arr_proto_table_base: None,
+            arr_proto_table_len: None,
+            arr_proto_table_hash: None,
+            heap_limit: None,
+            alloc_ptr: None,
+            alloc_end: None,
+            gc_alloc_bytes: None,
+            gc_trigger_bytes: None,
+            gc_phase: None,
+            good_color: None,
+            barrier_buf_ptr: Some(i32_global(&mut store, 512)),
+            barrier_buf_end: Some(i32_global(&mut store, 1024)),
+        };
+        (store, env)
+    }
+
+    #[test]
+    fn ensure_grows_past_initial() {
+        let (mut store, env) = test_env(16 * 1024 * 1024);
+        let need = wjsm_ir::SHADOW_STACK_INITIAL_SIZE as i32 + 64;
+        assert!(ensure_shadow_stack_capacity(&mut store, &env, 0, need));
+        let end = env
+            .shadow_stack_end
+            .unwrap()
+            .get(&mut store)
+            .i32()
+            .unwrap() as usize;
+        assert!(end >= need as usize);
+        assert!(env.shadow_memory.data_size(&store) >= need as usize);
+    }
+
+    #[test]
+    fn ensure_soft_max_overflow() {
+        let soft = wjsm_ir::SHADOW_STACK_INITIAL_SIZE as usize;
+        let (mut store, env) = test_env(soft);
+        let need = soft as i32 + 8;
+        assert!(!ensure_shadow_stack_capacity(&mut store, &env, 0, need));
+        let err = store
+            .data()
+            .runtime_error
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("error set");
+        assert!(err.contains("Maximum call stack size exceeded"), "{err}");
+    }
 }

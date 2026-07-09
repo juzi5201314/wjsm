@@ -2281,24 +2281,40 @@ pub(crate) fn define_array_object(
         arr_static_is_array_fn,
     )?;
 
-    // ── abort_shadow_stack_overflow (#76) ─────────────────────────────
-    let abort_shadow_stack_overflow_fn = Func::wrap(
+    // ── ensure_shadow_stack_capacity ──────────────────────────────────
+    let ensure_shadow_stack_capacity_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, shadow_sp: i32, args_bytes: i32, stack_end: i32| {
-            *caller
-                .data()
-                .runtime_error
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(format!(
-                "shadow stack overflow: sp={shadow_sp} + {args_bytes} > end={stack_end}"
-            ));
+        |mut caller: Caller<'_, RuntimeState>,
+         shadow_sp: i32,
+         needed_bytes: i32,
+         _stack_end: i32|
+         -> i32 {
+            let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
+                    Some("RangeError: Maximum call stack size exceeded (no WasmEnv)".into());
+                return 0;
+            };
+            if crate::runtime_heap::ensure_shadow_stack_capacity(
+                &mut caller,
+                &env,
+                shadow_sp,
+                needed_bytes,
+            ) {
+                1
+            } else {
+                0
+            }
         },
     );
     linker.define(
         &mut store,
         "env",
-        "abort_shadow_stack_overflow",
-        abort_shadow_stack_overflow_fn,
+        "ensure_shadow_stack_capacity",
+        ensure_shadow_stack_capacity_fn,
     )?;
 
     // ── func_bind (#80): Function.prototype.bind ────────────────────────────

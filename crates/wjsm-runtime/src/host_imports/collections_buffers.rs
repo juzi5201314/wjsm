@@ -2103,23 +2103,9 @@ pub(crate) fn define_collections_buffers(
          args_count: i32|
          -> i64 {
             let args: Vec<i64> = if args_count > 0 {
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return value::encode_undefined();
-                };
-                let data = memory.data(&caller);
-                let base = args_base as usize;
-                let mut result = Vec::with_capacity(args_count as usize);
-                for i in 0..args_count as usize {
-                    let offset = base + i * 8;
-                    if offset + 8 <= data.len() {
-                        let mut bytes = [0u8; 8];
-                        bytes.copy_from_slice(&data[offset..offset + 8]);
-                        result.push(i64::from_le_bytes(bytes));
-                    } else {
-                        result.push(value::encode_undefined());
-                    }
-                }
-                result
+                (0..args_count.max(0) as u32)
+                    .map(|i| read_shadow_arg(&mut caller, args_base, i))
+                    .collect()
             } else {
                 vec![]
             };
@@ -2512,21 +2498,9 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
             let args: Vec<i64> = if args_count > 0 {
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return value::encode_f64(f64::NAN);
-                };
-                let data = memory.data(&caller);
-                let base = args_base as usize;
-                let mut result = Vec::with_capacity(args_count as usize);
-                for i in 0..args_count as usize {
-                    let offset = base + i * 8;
-                    if offset + 8 <= data.len() {
-                        let mut bytes = [0u8; 8];
-                        bytes.copy_from_slice(&data[offset..offset + 8]);
-                        result.push(i64::from_le_bytes(bytes));
-                    }
-                }
-                result
+                (0..args_count.max(0) as u32)
+                    .map(|i| read_shadow_arg(&mut caller, args_base, i))
+                    .collect()
             } else {
                 vec![]
             };

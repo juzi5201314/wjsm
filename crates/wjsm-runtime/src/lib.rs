@@ -147,6 +147,8 @@ use types::*;
 #[derive(Clone)]
 pub struct RuntimeOptions {
     pub max_heap_size: Option<usize>,
+    /// 影子栈软上限（字节）。默认 `SHADOW_STACK_DEFAULT_MAX_SIZE`。
+    pub shadow_stack_max: usize,
     pub wasmtime_memory_reservation: Option<u64>,
     pub gc_algorithm: GcAlgorithmKind,
     pub argv: Vec<String>,
@@ -178,6 +180,7 @@ impl std::fmt::Debug for RuntimeOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeOptions")
             .field("max_heap_size", &self.max_heap_size)
+            .field("shadow_stack_max", &self.shadow_stack_max)
             .field(
                 "wasmtime_memory_reservation",
                 &self.wasmtime_memory_reservation,
@@ -208,6 +211,7 @@ impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
             max_heap_size: None,
+            shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
             wasmtime_memory_reservation: None,
             gc_algorithm: GcAlgorithmKind::MarkSweep,
             argv: Vec::new(),
@@ -240,6 +244,7 @@ impl RuntimeOptions {
     pub fn with_max_heap_size(max_heap_size: usize) -> Self {
         Self {
             max_heap_size: Some(max_heap_size),
+            shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
             ..Self::default()
         }
     }
@@ -962,6 +967,7 @@ impl Clone for RuntimeState {
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
+            shadow_stack_max: self.shadow_stack_max,
             inspect: self.inspect.clone(),
             host_temp_roots: self.host_temp_roots.clone(),
             process: self.process.clone(),
@@ -1084,6 +1090,8 @@ struct RuntimeState {
     host_temp_roots: Arc<Mutex<Vec<i64>>>,
     /// 用户配置的 JS 堆预算（字节）。None 表示只受 wasm32 地址空间和宿主内存约束。
     max_heap_size: Option<usize>,
+    /// 影子栈软上限（字节）。
+    shadow_stack_max: usize,
     /// CDP inspector 监听配置（来自 CLI `--inspect` / `--inspect-brk`）。
     inspect: Option<InspectConfig>,
     /// 注入的 Node `process` 宿主快照。
@@ -1445,6 +1453,7 @@ impl RuntimeState {
         let mut state = Self::new();
         state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
         state.max_heap_size = options.max_heap_size;
+        state.shadow_stack_max = options.shadow_stack_max.max(wjsm_ir::SHADOW_STACK_INITIAL_SIZE as usize);
         state.inspect = options.inspect.clone();
         state.process = ProcessState::from_options(&options);
         state.gc_algorithm = Arc::new(Mutex::new(
@@ -1461,6 +1470,10 @@ impl RuntimeState {
 
     pub(crate) fn max_heap_size(&self) -> Option<usize> {
         self.max_heap_size
+    }
+
+    pub(crate) fn shadow_stack_max(&self) -> usize {
+        self.shadow_stack_max
     }
 
     pub(crate) fn set_heap_oom_error(&self, used: usize, requested: usize) {
@@ -1539,6 +1552,7 @@ impl RuntimeState {
             runtime_error: Arc::new(Mutex::new(None)),
             host_temp_roots: Arc::new(Mutex::new(Vec::new())),
             max_heap_size: None,
+            shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
             inspect: None,
             process: ProcessState::from_options(&RuntimeOptions::default()),
             next_tick_queue: Arc::new(Mutex::new(VecDeque::new())),

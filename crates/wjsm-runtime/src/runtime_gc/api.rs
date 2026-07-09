@@ -145,7 +145,13 @@ impl<'a> GcContext<'a> {
         }
     }
 
-    /// 读 memory。借用 store，离开作用域后可再 grow / data_mut。
+    /// 读取独立影子栈 memory。
+    pub fn with_shadow_memory<R>(&mut self, f: impl FnOnce(&[u8]) -> R) -> R {
+        let data = self.env.shadow_memory.data(&self.store);
+        f(data)
+    }
+
+    /// 读主 memory。借用 store，离开作用域后可再 grow / data_mut。
     pub fn with_memory<R>(&mut self, f: impl FnOnce(&[u8]) -> R) -> R {
         let data = self.env.memory.data(&self.store);
         f(data)

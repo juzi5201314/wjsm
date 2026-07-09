@@ -11,7 +11,7 @@ impl Compiler {
         let function_props_done_global = self.function_props_done_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
-        let shadow_stack_end_global = self.shadow_stack_end_global_idx;
+        let handle_table_limit_global = self.barrier_buf_ptr_global_idx;
         let num_ir_functions_global = self.num_ir_functions_global_idx;
         let function_props_base_global = self.function_props_base_global_idx;
 
@@ -63,7 +63,7 @@ impl Compiler {
             Self::emit_handle_table_alloc_check(
                 &mut func,
                 obj_table_global,
-                shadow_stack_end_global,
+                handle_table_limit_global,
                 3,
             );
             func.instruction(&WasmInstruction::I32Const(1));
@@ -849,7 +849,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Store(MemArg {
                 offset: 0,
                 align: 3,
-                memory_index: 0,
+                memory_index: wjsm_ir::SHADOW_MEMORY_INDEX,
             }));
             // shadow_sp += 8 (虽然这里只有1个参数，但保持一致性)
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -1012,7 +1012,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Store(MemArg {
                 offset: 0,
                 align: 3,
-                memory_index: 0,
+                memory_index: wjsm_ir::SHADOW_MEMORY_INDEX,
             }));
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::I32Const(8));
@@ -1041,7 +1041,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Store(MemArg {
                 offset: 0,
                 align: 3,
-                memory_index: 0,
+                memory_index: wjsm_ir::SHADOW_MEMORY_INDEX,
             }));
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::I32Const(8));

@@ -62,6 +62,18 @@ impl Compiler {
                     page_size_log2: None,
                 }),
             );
+            // 独立影子栈 memory（index 1）。
+            imports.import(
+                "env",
+                crate::SHADOW_MEMORY_NAME,
+                EntityType::Memory(MemoryType {
+                    minimum: 1,
+                    maximum: None,
+                    memory64: false,
+                    shared: false,
+                    page_size_log2: None,
+                }),
+            );
             // P2.2 后父模块把 memory/table/globals 全部作为 mutable env import
             // 再 re-export；compiled eval 手动实例化时导入同一批 global，mutability
             // 必须与父模块 export 完全一致，否则 wasmtime 会拒绝实例化并退回解释器路径。
@@ -101,6 +113,18 @@ impl Compiler {
                 "memory",
                 EntityType::Memory(MemoryType {
                     minimum: 8,
+                    maximum: None,
+                    memory64: false,
+                    shared: false,
+                    page_size_log2: None,
+                }),
+            );
+            // 独立影子栈 memory（index 1）。
+            imports.import(
+                "env",
+                crate::SHADOW_MEMORY_NAME,
+                EntityType::Memory(MemoryType {
+                    minimum: 1,
                     maximum: None,
                     memory64: false,
                     shared: false,
@@ -186,15 +210,16 @@ impl Compiler {
             // WasmEnv::from_caller 取 memory/table/global，因此 eval module 必须
             // 重新 export 父模块传入的 memory 和本模块 table。
             exports.export("memory", ExportKind::Memory, 0);
+            exports.export(crate::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
             exports.export("__table", ExportKind::Table, 0);
             for (index, spec) in host_import_specs().iter().enumerate() {
                 exports.export(spec.name, ExportKind::Func, index as u32);
             }
         } else {
-            // Normal mode (P2.2)：re-export imported memory (idx 0) + table (idx 0) +
-            // 27 globals (idx 0..26)，使 WasmEnv::from_caller 仍能从 user instance
-            // 的 exports 获取它们（零改动 host 函数）。
+            // Normal mode (P2.2)：re-export imported memory (idx 0) + shadow memory (idx 1)
+            // + table (idx 0) + 27 globals (idx 0..26)。
             exports.export("memory", ExportKind::Memory, 0);
+            exports.export(crate::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
             exports.export("__table", ExportKind::Table, 0);
             for (g, name) in ENV_GLOBAL_EXPORT_NAMES.iter().enumerate() {
                 exports.export(name, ExportKind::Global, g as u32);

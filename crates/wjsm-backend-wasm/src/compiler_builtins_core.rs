@@ -29,11 +29,7 @@ impl Compiler {
                 for arg in args {
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                    self.emit(WasmInstruction::I64Store(MemArg {
-                        offset: 0,
-                        align: 3,
-                        memory_index: 0,
-                    }));
+                    self.emit(WasmInstruction::I64Store(crate::shadow_mem_arg(0)));
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::I32Const(8));
                     self.emit(WasmInstruction::I32Add);

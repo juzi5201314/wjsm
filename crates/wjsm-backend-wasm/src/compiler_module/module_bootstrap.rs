@@ -499,15 +499,11 @@ impl Compiler {
             self.emit(WasmInstruction::I32LtU); // i < args_count (unsigned)
 
             self.emit(WasmInstruction::If(BlockType::Empty));
-            // Load from shadow stack: memory[args_base_ptr + i*8]
+            // Load from shadow stack: shadow_memory[args_base_ptr + i*8]
             self.emit(WasmInstruction::LocalGet(2)); // args_base_ptr
             self.emit(WasmInstruction::I32Const((i * 8) as i32));
             self.emit(WasmInstruction::I32Add);
-            self.emit(WasmInstruction::I64Load(MemArg {
-                offset: 0,
-                align: 3,
-                memory_index: 0,
-            }));
+            self.emit(WasmInstruction::I64Load(crate::shadow_mem_arg(0)));
             self.emit_store_stacked_binding(param_memory_offset, param_local);
             self.emit(WasmInstruction::Else);
             // Out of bounds: set to undefined

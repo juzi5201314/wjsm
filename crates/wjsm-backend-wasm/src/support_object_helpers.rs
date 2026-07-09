@@ -648,7 +648,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I64Store(MemArg {
         offset: 0,
         align: 3,
-        memory_index: 0,
+        memory_index: wjsm_ir::SHADOW_MEMORY_INDEX,
     }));
     // shadow_sp += 8 (虽然这里只有1个参数，但保持一致性)
     func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_SP));
@@ -806,7 +806,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I64Store(MemArg {
         offset: 0,
         align: 3,
-        memory_index: 0,
+        memory_index: wjsm_ir::SHADOW_MEMORY_INDEX,
     }));
     func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_SP));
     func.instruction(&WasmInstruction::I32Const(8));
@@ -816,9 +816,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::LocalGet(0)); // this_val
     func.instruction(&WasmInstruction::LocalGet(12)); // args_base
     func.instruction(&WasmInstruction::I32Const(1)); // args_count
-    func.instruction(&WasmInstruction::Call(
-        HOST_NATIVE_CALL,
-    ));
+    func.instruction(&WasmInstruction::Call(HOST_NATIVE_CALL));
     // 恢复 shadow_sp
     func.instruction(&WasmInstruction::LocalGet(12));
     func.instruction(&WasmInstruction::GlobalSet(G_SHADOW_SP));
@@ -835,7 +833,7 @@ fn emit_obj_set(flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::I64Store(MemArg {
         offset: 0,
         align: 3,
-        memory_index: 0,
+        memory_index: wjsm_ir::SHADOW_MEMORY_INDEX,
     }));
     func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_SP));
     func.instruction(&WasmInstruction::I32Const(8));

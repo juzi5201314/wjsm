@@ -20,9 +20,11 @@ pub const SUPPORT_MODULE_NAME: &str = "wjsm_support";
 pub const ENV_MODULE_NAME: &str = "env";
 pub const TABLE_IMPORT_NAME: &str = "__table";
 pub const MEMORY_IMPORT_NAME: &str = "memory";
+/// 独立影子栈线性内存（multi-memory index 1）。
+pub const SHADOW_MEMORY_IMPORT_NAME: &str = "__shadow_memory";
 
 /// Support module ABI 版本；任何不兼容改动必须 +1。
-pub const SUPPORT_VERSION: u32 = 6;
+pub const SUPPORT_VERSION: u32 = 7;
 
 /// Support module 在共享 table 起始保留的 slot 数：
 /// 12 helper exports + 约 30 个 Array.prototype 方法 + 22 个 headroom = 64。
@@ -223,6 +225,8 @@ pub fn support_abi_union_hash() -> u64 {
     let mut h = DefaultHasher::new();
     SUPPORT_VERSION.hash(&mut h);
     SUPPORT_TABLE_RESERVED_LEN.hash(&mut h);
+    MEMORY_IMPORT_NAME.hash(&mut h);
+    SHADOW_MEMORY_IMPORT_NAME.hash(&mut h);
     for flavor in AVAILABLE_SUPPORT_GC_FLAVORS {
         flavor.hash(&mut h);
     }

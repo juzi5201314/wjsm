@@ -106,9 +106,10 @@ pub(crate) static SPECS_PART2: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
-        name: "abort_shadow_stack_overflow",
-        type_idx: 18,
-        key: Some(HostImportKey::Builtin(Builtin::AbortShadowStackOverflow)),
+        // 与 gc_alloc_slow 同签名 (i32,i32,i32)->i32 → Type 35
+        name: "ensure_shadow_stack_capacity",
+        type_idx: 35,
+        key: Some(HostImportKey::Builtin(Builtin::EnsureShadowStackCapacity)),
         group: None,
     },
     HostImportSpec {

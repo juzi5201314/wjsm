@@ -1688,11 +1688,6 @@ pub(crate) async fn resolve_and_call_async(
     args_base: i32,
     args_count: i32,
 ) -> i64 {
-    let memory = caller
-        .get_export("memory")
-        .and_then(|e| e.into_memory())
-        .unwrap();
-
     if value::is_bound(func) {
         let bound_idx = value::decode_bound_idx(func);
         let (target_func, bound_this, bound_args_ref) = {
@@ -1710,17 +1705,19 @@ pub(crate) async fn resolve_and_call_async(
         };
 
         let total_count = bound_args_ref.len() as i32 + args_count;
-        let shadow_sp_global = caller
-            .get_export("__shadow_sp")
-            .and_then(|e| e.into_global())
-            .unwrap();
-        let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
-        // 在当前 shadow_sp 处拼装「bound 前缀 + 调用时参数」。
-        // `args_base` 是绝对地址（与 read_shadow_arg 一致），不可再加 shadow_sp。
+        let Some(env) = WasmEnv::from_caller(caller) else {
+            return value::encode_undefined();
+        };
+        let shadow_sp = env.shadow_sp.get(&mut *caller).i32().unwrap_or(0);
+        let needed = total_count.saturating_mul(8);
+        if !crate::runtime_heap::ensure_shadow_stack_capacity(caller, &env, shadow_sp, needed) {
+            return value::encode_undefined();
+        }
+        // 在当前 shadow_sp 处拼装「bound 前缀 + 调用时参数」（写独立 shadow memory）。
         let ptr = shadow_sp;
 
         for (i, arg) in bound_args_ref.iter().enumerate() {
-            memory
+            env.shadow_memory
                 .write(
                     &mut *caller,
                     (ptr + i as i32 * 8) as usize,
@@ -1730,14 +1727,14 @@ pub(crate) async fn resolve_and_call_async(
         }
         for i in 0..args_count {
             let mut buf = [0u8; 8];
-            memory
+            env.shadow_memory
                 .read(
                     &mut *caller,
                     (args_base + i * 8) as usize,
                     &mut buf,
                 )
                 .unwrap();
-            memory
+            env.shadow_memory
                 .write(
                     &mut *caller,
                     (ptr + (bound_args_ref.len() as i32 + i) * 8) as usize,
@@ -1747,7 +1744,9 @@ pub(crate) async fn resolve_and_call_async(
         }
 
         // 推进 shadow_sp，避免嵌套调用覆盖本帧拼接区。
-        let _ = shadow_sp_global.set(&mut *caller, Val::I32(ptr + total_count * 8));
+        let _ = env
+            .shadow_sp
+            .set(&mut *caller, Val::I32(ptr + total_count * 8));
 
         let result = Box::pin(resolve_callable_and_call_async(
             caller,
@@ -1758,7 +1757,7 @@ pub(crate) async fn resolve_and_call_async(
         ))
         .await;
 
-        let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+        let _ = env.shadow_sp.set(&mut *caller, Val::I32(shadow_sp));
         result
     } else {
         Box::pin(resolve_callable_and_call_async(
@@ -1826,13 +1825,17 @@ pub(crate) async fn resolve_callable_and_call_async(
                 if !value::is_undefined(trap) && !value::is_null(trap) {
                     let args_arr =
                         crate::runtime_host_helpers::alloc_array(caller, args_count as u32);
-                    let memory = caller
-                        .get_export("memory")
+                    let shadow_memory = caller
+                        .get_export(wjsm_ir::SHADOW_MEMORY_NAME)
                         .and_then(|e| e.into_memory())
                         .unwrap();
                     for i in 0..args_count {
                         let mut buf = [0u8; 8];
-                        let _ = memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
+                        let _ = shadow_memory.read(
+                            &mut *caller,
+                            (args_base + i * 8) as usize,
+                            &mut buf,
+                        );
                         let arg_val = i64::from_le_bytes(buf);
                         crate::runtime_host_helpers::define_host_data_property(
                             caller,
@@ -1862,14 +1865,15 @@ pub(crate) async fn resolve_callable_and_call_async(
         }
         return value::encode_undefined();
     } else if value::is_native_callable(callee) {
-        let memory = caller
-            .get_export("memory")
+        let shadow_memory = caller
+            .get_export(wjsm_ir::SHADOW_MEMORY_NAME)
             .and_then(|e| e.into_memory())
             .unwrap();
         let mut collected_args = Vec::with_capacity(args_count as usize);
         for i in 0..args_count {
             let mut buf = [0u8; 8];
-            let _ = memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
+            let _ =
+                shadow_memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
             collected_args.push(i64::from_le_bytes(buf));
         }
         return call_native_callable_with_args_from_caller_async(
@@ -1932,14 +1936,14 @@ pub(crate) fn func_bind_impl(
     args_base: i32,
     args_count: i32,
 ) -> i64 {
-    let memory = caller
-        .get_export("memory")
+    let shadow_memory = caller
+        .get_export(wjsm_ir::SHADOW_MEMORY_NAME)
         .and_then(|e| e.into_memory())
         .unwrap();
     let mut bound_args = Vec::with_capacity(args_count as usize);
     for i in 0..args_count {
         let mut buf = [0u8; 8];
-        memory
+        shadow_memory
             .read(&mut *caller, (args_base + i * 8) as usize, &mut buf)
             .unwrap();
         bound_args.push(i64::from_le_bytes(buf));

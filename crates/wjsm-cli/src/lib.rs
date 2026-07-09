@@ -121,8 +121,17 @@ fn runtime_options_with_argv(
         _ => runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?,
     };
     let inspect = cli.inspect_config().map_err(anyhow::Error::msg)?;
+    let shadow_stack_max = cli
+        .shadow_stack_max
+        .or_else(|| {
+            env.iter()
+                .find(|(k, _)| k == "WJSM_SHADOW_STACK_MAX")
+                .and_then(|(_, v)| parse_shadow_stack_max_env(v))
+        })
+        .unwrap_or(wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize);
     Ok(runtime::RuntimeOptions {
         max_heap_size: cli.max_heap_size,
+        shadow_stack_max,
         wasmtime_memory_reservation: cli.wasmtime_memory_reservation.map(|value| value as u64),
         gc_algorithm,
         argv,
@@ -138,6 +147,15 @@ fn runtime_options_with_argv(
         inspect,
         ..runtime::RuntimeOptions::default()
     })
+}
+
+fn parse_shadow_stack_max_env(raw: &str) -> Option<usize> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // 复用 CLI 同款后缀解析：纯数字 / K/M/G。
+    crate::cli_args::parse_heap_size(s).ok()
 }
 
 fn runtime_module_loader_for_file(
@@ -2341,6 +2359,7 @@ fn runtime_options_for_in_process(
 
     Ok(runtime::RuntimeOptions {
         max_heap_size: None,
+        shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
         gc_algorithm,
         argv,
         cwd: cwd_override

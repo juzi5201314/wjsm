@@ -158,6 +158,10 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
         .get_export(&mut *store, "memory")
         .and_then(|e| e.into_memory())
         .expect("memory");
+    let shadow_memory = instance
+        .get_export(&mut *store, wjsm_ir::SHADOW_MEMORY_NAME)
+        .and_then(|e| e.into_memory())
+        .expect("shadow_memory");
     let heap_ptr_global = instance
         .get_export(&mut *store, "__heap_ptr")
         .and_then(|e| e.into_global())
@@ -189,6 +193,7 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
 
     wasm_env::WasmEnv {
         memory,
+        shadow_memory,
         func_table,
         shadow_sp: shadow_sp_global,
         heap_ptr: heap_ptr_global,
@@ -564,14 +569,19 @@ fn record_and_attach_gc_heap(
     wasm_env
         .heap_ptr
         .set(&mut *store, Val::I32(dynamic_heap_start as i32))?;
-    let shadow_stack_end = wasm_env
-        .shadow_stack_end
+    // barrier 位于主内存 handle table 之后（不再嵌在 shadow 区后）。
+    let barrier_event_buf_base = wasm_env
+        .barrier_buf_ptr
         .and_then(|g| g.get(&mut *store).i32())
         .unwrap_or(0)
         .max(0) as usize;
-    let barrier_event_buf_base = shadow_stack_end + wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE as usize;
-    let barrier_event_buf_end =
-        barrier_event_buf_base + wjsm_ir::constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize;
+    let barrier_event_buf_end = wasm_env
+        .barrier_buf_end
+        .and_then(|g| g.get(&mut *store).i32())
+        .map(|v| v.max(0) as usize)
+        .unwrap_or_else(|| {
+            barrier_event_buf_base + wjsm_ir::constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize
+        });
     if barrier_event_buf_end > i32::MAX as usize {
         anyhow::bail!("GC barrier buffer end exceeds wasm32 signed global range");
     }
@@ -616,9 +626,25 @@ pub(super) async fn setup_shared_env_and_support(
     store: &mut Store<RuntimeState>,
     engine: &Engine,
 ) -> Result<()> {
-    // 创建 shared memory (4 pages = 256KB)
+    // 创建 shared main memory (8 pages)
     let memory = Memory::new(&mut *store, MemoryType::new(8, None))?;
     linker.define(&*store, "env", "memory", memory)?;
+
+    // 独立影子栈 memory：冷启动 1 页，软上限来自 RuntimeOptions。
+    let soft_max = store.data().shadow_stack_max();
+    let initial_pages =
+        (wjsm_ir::SHADOW_STACK_INITIAL_SIZE as u64).div_ceil(65536).max(1) as u32;
+    let max_pages = ((soft_max as u64).div_ceil(65536).max(initial_pages as u64)) as u32;
+    let shadow_memory = Memory::new(
+        &mut *store,
+        MemoryType::new(initial_pages, Some(max_pages.max(initial_pages))),
+    )?;
+    linker.define(
+        &*store,
+        "env",
+        wjsm_ir::SHADOW_MEMORY_NAME,
+        shadow_memory,
+    )?;
 
     // 创建 shared table (minimum 256, 覆盖 support 12 + user ~200 函数)
     let table = Table::new(

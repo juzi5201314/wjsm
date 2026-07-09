@@ -18,11 +18,12 @@ impl Compiler {
         func.instruction(&WasmInstruction::LocalGet(handle_local));
     }
 
-    /// 新 handle 分配前检查：candidate 槽位不得越过 handle 表（止于 shadow stack 基址）。
+    /// 新 handle 分配前检查：candidate 槽位不得越过 handle 表。
+    /// `handle_table_limit_global`：上界 global（`__barrier_buf_ptr` 或 `__object_heap_start`）。
     pub(crate) fn emit_handle_table_alloc_check(
         func: &mut Function,
         obj_table_ptr_global: u32,
-        shadow_stack_end_global: u32,
+        handle_table_limit_global: u32,
         candidate_local: u32,
     ) {
         func.instruction(&WasmInstruction::GlobalGet(obj_table_ptr_global));
@@ -36,9 +37,7 @@ impl Compiler {
             constants::HANDLE_TABLE_ENTRY_SIZE as i32,
         ));
         func.instruction(&WasmInstruction::I32Add);
-        func.instruction(&WasmInstruction::GlobalGet(shadow_stack_end_global));
-        func.instruction(&WasmInstruction::I32Const(crate::SHADOW_STACK_SIZE as i32));
-        func.instruction(&WasmInstruction::I32Sub);
+        func.instruction(&WasmInstruction::GlobalGet(handle_table_limit_global));
         func.instruction(&WasmInstruction::I32GtU);
         func.instruction(&WasmInstruction::If(BlockType::Empty));
         func.instruction(&WasmInstruction::Unreachable);

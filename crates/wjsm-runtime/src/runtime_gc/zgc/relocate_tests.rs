@@ -21,6 +21,7 @@ fn test_store_env() -> (Store<RuntimeState>, WasmEnv) {
     let engine = Engine::default();
     let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));
     let memory = Memory::new(&mut store, MemoryType::new(4, None)).unwrap();
+    let shadow_memory = Memory::new(&mut store, MemoryType::new(1, None)).unwrap();
     let table = Table::new(
         &mut store,
         TableType::new(RefType::FUNCREF, 1, None),
@@ -42,6 +43,7 @@ fn test_store_env() -> (Store<RuntimeState>, WasmEnv) {
     store.data().store_heap_layout_boundaries(0, ZPAGE_SIZE, 0);
     let env = WasmEnv {
         memory,
+        shadow_memory,
         func_table: table,
         shadow_sp,
         heap_ptr,

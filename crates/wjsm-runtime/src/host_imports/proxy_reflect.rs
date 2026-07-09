@@ -1,6 +1,6 @@
 use anyhow::Result;
 use wasmtime::Store;
-use wasmtime::{Caller, Extern, Func, Linker, Val};
+use wasmtime::{Caller, Extern, Func, Linker};
 
 use super::proxy_traps::proxy_trap_property_key_value;
 use crate::*;
@@ -482,32 +482,15 @@ pub(crate) async fn reflect_apply_impl_async(
     this_arg: i64,
     args: &[i64],
 ) -> i64 {
-    let shadow_sp_global = caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-        .unwrap();
-    let saved_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
-    let memory = caller
-        .get_export("memory")
-        .and_then(|e| e.into_memory())
-        .unwrap();
-    for (i, &arg) in args.iter().enumerate() {
-        memory
-            .write(
-                &mut *caller,
-                (saved_sp + i as i32 * 8) as usize,
-                &arg.to_le_bytes(),
-            )
-            .unwrap();
-    }
-    shadow_sp_global
-        .set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8))
-        .unwrap();
+    let Some(env) = WasmEnv::from_caller(caller) else {
+        return value::encode_undefined();
+    };
+    let Some(saved_sp) = push_args_to_shadow_stack(caller, &env, args) else {
+        return value::encode_undefined();
+    };
     let result =
         resolve_and_call_async(caller, target, this_arg, saved_sp, args.len() as i32).await;
-    shadow_sp_global
-        .set(&mut *caller, Val::I32(saved_sp))
-        .unwrap();
+    restore_shadow_sp(caller, &env, saved_sp);
     result
 }
 
@@ -532,35 +515,15 @@ pub(crate) async fn reflect_construct_impl_async(
         let _ = reflect_set_prototype_of_fn_impl(caller, this_obj, proto_val).await;
     }
 
-    let shadow_sp_global = caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-        .expect("__shadow_sp in reflect_construct_impl_async");
-    let saved_sp = shadow_sp_global
-        .get(&mut *caller)
-        .i32()
-        .expect("shadow_sp i32 in reflect_construct_impl_async");
-    let memory = caller
-        .get_export("memory")
-        .and_then(|e| e.into_memory())
-        .expect("memory in reflect_construct_impl_async");
-    for (i, &arg) in args.iter().enumerate() {
-        memory
-            .write(
-                &mut *caller,
-                (saved_sp + i as i32 * 8) as usize,
-                &arg.to_le_bytes(),
-            )
-            .expect("shadow stack write in reflect_construct_impl_async");
-    }
-    shadow_sp_global
-        .set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8))
-        .expect("shadow_sp set in reflect_construct_impl_async");
+    let Some(env) = WasmEnv::from_caller(caller) else {
+        return this_obj;
+    };
+    let Some(saved_sp) = push_args_to_shadow_stack(caller, &env, args) else {
+        return this_obj;
+    };
     let result =
         resolve_and_call_async(caller, target, this_obj, saved_sp, args.len() as i32).await;
-    shadow_sp_global
-        .set(&mut *caller, Val::I32(saved_sp))
-        .expect("shadow_sp restore in reflect_construct_impl_async");
+    restore_shadow_sp(caller, &env, saved_sp);
 
     if value::is_js_object(result) {
         result

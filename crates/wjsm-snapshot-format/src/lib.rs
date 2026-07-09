@@ -713,9 +713,11 @@ pub fn abi_hash() -> u64 {
         name.hash(&mut hasher);
         value.hash(&mut hasher);
     }
-    wjsm_ir::SHADOW_STACK_SIZE.hash(&mut hasher);
-    wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE.hash(&mut hasher);
-    wjsm_ir::SHADOW_STACK_HEAP_GUARD_CANARY.hash(&mut hasher);
+    // 独立 shadow memory 布局：初始容量 + memory index + 名称。
+    wjsm_ir::SHADOW_STACK_INITIAL_SIZE.hash(&mut hasher);
+    wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE.hash(&mut hasher);
+    wjsm_ir::SHADOW_MEMORY_INDEX.hash(&mut hasher);
+    wjsm_ir::SHADOW_MEMORY_NAME.hash(&mut hasher);
     // Embedded support module / builtin JS bundle hash（运行时通过
     // `register_abi_hash_external_input` 注入；未注入时为 0，不参与 hash 改变）。
     if let Some(extra) = ABI_HASH_EXTERNAL_INPUT.get() {
@@ -803,9 +805,10 @@ mod tests {
             name.hash(&mut hasher);
             value.hash(&mut hasher);
         }
-        wjsm_ir::SHADOW_STACK_SIZE.hash(&mut hasher);
-        wjsm_ir::SHADOW_STACK_HEAP_GUARD_SIZE.hash(&mut hasher);
-        wjsm_ir::SHADOW_STACK_HEAP_GUARD_CANARY.hash(&mut hasher);
+        wjsm_ir::SHADOW_STACK_INITIAL_SIZE.hash(&mut hasher);
+        wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE.hash(&mut hasher);
+        wjsm_ir::SHADOW_MEMORY_INDEX.hash(&mut hasher);
+        wjsm_ir::SHADOW_MEMORY_NAME.hash(&mut hasher);
 
         hasher.finish()
     }

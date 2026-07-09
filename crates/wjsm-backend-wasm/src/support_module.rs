@@ -409,6 +409,17 @@ pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
     );
     imports.import(
         "env",
+        wjsm_ir::SHADOW_MEMORY_NAME,
+        EntityType::Memory(MemoryType {
+            minimum: 1,
+            maximum: None,
+            memory64: false,
+            shared: false,
+            page_size_log2: None,
+        }),
+    );
+    imports.import(
+        "env",
         "__table",
         EntityType::Table(TableType {
             element_type: RefType::FUNCREF,
@@ -449,6 +460,7 @@ pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
     // 重新 export 共享 env 句柄，保证 support-origin callback 与 user wasm
     // callback 看到同一份 memory/table/global contract。
     exports.export("memory", ExportKind::Memory, 0);
+    exports.export(wjsm_ir::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
     exports.export("__table", ExportKind::Table, 0);
     for (idx, (name, _, _)) in ENV_GLOBAL_IMPORTS.iter().enumerate() {
         exports.export(name, ExportKind::Global, idx as u32);
@@ -509,7 +521,7 @@ fn emit_handle_bounds_check(func: &mut Function, handle_local: u32, sentinel: Op
     func.instruction(&WasmInstruction::LocalGet(handle_local));
 }
 
-/// 新 handle 分配前检查：candidate 槽位不得越过 handle 表（止于 shadow stack 基址）。
+/// 新 handle 分配前检查：candidate 槽位不得越过 handle 表（止于 barrier 基址）。
 fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::LocalGet(candidate_local));
@@ -518,11 +530,7 @@ fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_STACK_END));
-    func.instruction(&WasmInstruction::I32Const(
-        wjsm_ir::SHADOW_STACK_SIZE as i32,
-    ));
-    func.instruction(&WasmInstruction::I32Sub);
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
     func.instruction(&WasmInstruction::I32GtU);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::Unreachable);

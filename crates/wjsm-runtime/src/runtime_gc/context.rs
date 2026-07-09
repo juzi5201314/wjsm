@@ -191,7 +191,8 @@ impl<'a> GcContext<'a> {
             .max(0) as usize
     }
 
-    /// 读 shadow_stack_end global。
+    /// 读 shadow_stack_end global（影子 memory 当前已提交容量）。
+    #[allow(dead_code)]
     pub fn shadow_stack_end(&mut self) -> usize {
         self.env
             .shadow_stack_end

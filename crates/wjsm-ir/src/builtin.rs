@@ -10,7 +10,9 @@ pub enum Builtin {
     ConsoleTrace,
     Debugger,
     Throw,
-    AbortShadowStackOverflow,
+    /// 影子栈容量不足时由 guest 调用：尝试 grow 独立 shadow memory 并更新
+    /// `__shadow_stack_end`；成功返回 1，失败写 runtime_error 并返回 0。
+    EnsureShadowStackCapacity,
     F64Mod,
     F64Exp,
     IteratorFrom,
@@ -498,7 +500,7 @@ impl Builtin {
             Self::ConsoleTrace => "console.trace",
             Self::Debugger => "debugger",
             Self::Throw => "throw",
-            Self::AbortShadowStackOverflow => "abort_shadow_stack_overflow",
+            Self::EnsureShadowStackCapacity => "ensure_shadow_stack_capacity",
             Self::F64Mod => "f64.mod",
             Self::F64Exp => "f64.exp",
             Self::IteratorFrom => "iterator.from",

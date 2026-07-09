@@ -89,7 +89,7 @@ pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
     args_base: i32,
     index: u32,
 ) -> i64 {
-    let data = env.memory.data(ctx);
+    let data = env.shadow_memory.data(ctx);
     checked_shadow_arg_offset(args_base, index)
         .and_then(|offset| read_i64_le(data, offset))
         .unwrap_or_else(value::encode_undefined)
@@ -165,11 +165,15 @@ pub(crate) fn push_args_to_shadow_stack<C: AsContextMut<Data = RuntimeState>>(
     args: &[i64],
 ) -> Option<i32> {
     let saved_sp = env.shadow_sp.get(&mut *ctx).i32().unwrap_or(0);
-    let args_bytes = args.len().checked_mul(8)?;
+    let args_bytes = (args.len() as i32).checked_mul(8)?;
+    if !crate::runtime_heap::ensure_shadow_stack_capacity(ctx, env, saved_sp, args_bytes) {
+        return None;
+    }
+    let args_bytes_usize = args.len().checked_mul(8)?;
     {
-        let data = env.memory.data_mut(&mut *ctx);
+        let data = env.shadow_memory.data_mut(&mut *ctx);
         let offset = saved_sp as usize;
-        if offset + args_bytes > data.len() {
+        if offset + args_bytes_usize > data.len() {
             return None;
         }
         for (index, arg) in args.iter().enumerate() {

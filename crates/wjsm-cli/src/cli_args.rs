@@ -135,6 +135,10 @@ pub struct Cli {
     #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
     pub(crate) max_heap_size: Option<usize>,
 
+    /// 影子栈软上限（字节，或 K/M/G 后缀；默认 16M，可用 env `WJSM_SHADOW_STACK_MAX`）
+    #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
+    pub(crate) shadow_stack_max: Option<usize>,
+
     /// 覆盖 Wasmtime 线性内存虚拟地址预留（字节，或 K/M/G 后缀）
     #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
     pub(crate) wasmtime_memory_reservation: Option<usize>,

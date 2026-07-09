@@ -320,11 +320,8 @@ impl Compiler {
             num_functions * constants::HANDLE_TABLE_FUNCTION_ENTRY_FACTOR,
         );
         let handle_table_size = handle_table_entries * constants::HANDLE_TABLE_ENTRY_SIZE;
-        let shadow_stack_base = heap_start + handle_table_size;
-        let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
-        let guard_start = shadow_stack_end;
-        let guard_end = guard_start + SHADOW_STACK_HEAP_GUARD_SIZE;
-        let barrier_event_buf_base = guard_end;
+        // 独立 shadow memory：主内存布局为 handle table → barrier → object heap。
+        let barrier_event_buf_base = heap_start + handle_table_size;
         let barrier_event_buf_end =
             barrier_event_buf_base + constants::GC_BARRIER_EVENT_BUFFER_SIZE;
         let object_heap_start = (barrier_event_buf_end + (constants::GC_REGION_SIZE - 1))
@@ -334,18 +331,15 @@ impl Compiler {
             if self.string_data.len() < needed_len {
                 self.string_data.resize(needed_len, 0);
             }
-            let pattern = SHADOW_STACK_HEAP_GUARD_CANARY;
-            for i in 0..SHADOW_STACK_HEAP_GUARD_SIZE as usize {
-                self.string_data[guard_start as usize + i] = pattern[i % pattern.len()];
-            }
             self.data_offset = self.data_offset.max(object_heap_start);
             self.normal_init_values = Some(NormalGlobalsInit {
                 heap_ptr: object_heap_start as i32,
                 obj_table_ptr: heap_start as i32,
-                shadow_sp: shadow_stack_base as i32,
+                // 影子栈在独立 memory：sp 从 0 增长，end 为当前已提交容量。
+                shadow_sp: 0,
                 object_heap_start: object_heap_start as i32,
                 num_ir_functions: num_functions as i32,
-                shadow_stack_end: shadow_stack_end as i32,
+                shadow_stack_end: SHADOW_STACK_INITIAL_SIZE as i32,
                 eval_var_map_ptr: self.eval_var_map_ptr as i32,
                 eval_var_map_count: self.eval_var_map_count as i32,
                 arr_proto_table_base: self.arr_proto_table_base as i32,

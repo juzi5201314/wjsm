@@ -110,6 +110,7 @@ fn observe_algorithms(runtime: &Runtime, wasm: &[u8]) -> Vec<Observation> {
 fn execute_once(runtime: &Runtime, wasm: &[u8], algorithm: GcAlgorithmKind) -> Observation {
     let options = RuntimeOptions {
         max_heap_size: Some(MAX_HEAP_SIZE),
+        shadow_stack_max: 16 * 1024 * 1024,
         gc_algorithm: algorithm,
         ..RuntimeOptions::default()
     };
