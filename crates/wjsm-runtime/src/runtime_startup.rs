@@ -52,7 +52,7 @@ pub(super) fn module_cache_dir() -> Option<std::path::PathBuf> {
 /// （与 wasmtime 内置 cache 的 debug_assertions mtime keying 不同）。
 /// 命中时走 `Module::deserialize`（mmap + 直接加载），跳过 Cranelift 编译。
 /// 未命中时 `Module::new` 编译，再 `precompile_module` 持久化到磁盘。
-pub(super) fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Result<Module> {
+pub(crate) fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Result<Module> {
     let Some(cache_dir) = module_cache_dir() else {
         return Module::new(engine, wasm_bytes)
             .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e));
@@ -90,7 +90,7 @@ pub(super) fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Resu
     Ok(module)
 }
 
-pub(super) fn startup_engine_config(
+pub(crate) fn startup_engine_config(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
     guest_debug: bool,
@@ -430,10 +430,10 @@ pub(super) fn initialize_host_post_bootstrap(
     Ok(())
 }
 
-pub(super) struct ExecuteInstanceBundle {
-    pub(super) store: Store<RuntimeState>,
-    pub(super) instance: Instance,
-    pub(super) wasm_env: WasmEnv,
+pub(crate) struct ExecuteInstanceBundle {
+    pub(crate) store: Store<RuntimeState>,
+    pub(crate) instance: Instance,
+    pub(crate) wasm_env: WasmEnv,
     pub(super) output: Arc<Mutex<Vec<u8>>>,
     pub(super) runtime_error: Arc<Mutex<Option<String>>>,
     pub(super) diagnostics: Arc<Mutex<Vec<u8>>>,
@@ -441,7 +441,7 @@ pub(super) struct ExecuteInstanceBundle {
         tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
 }
 
-pub(super) async fn instantiate_execute_bundle(
+pub(crate) async fn instantiate_execute_bundle(
     engine: &Engine,
     module: &Module,
     shared_state: Option<Arc<SharedRuntimeState>>,
@@ -838,7 +838,7 @@ pub(super) async fn run_init_globals_only(bundle: &mut ExecuteInstanceBundle) ->
 }
 
 /// 执行 cold startup：跑 bootstrap 后划定 immortal/dynamic 边界，不在客户机器上 capture/write snapshot。
-pub(super) async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
+pub(crate) async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
     run_bootstrap_only(bundle).await?;
     let immortal_objects_end = bundle
         .wasm_env

@@ -45,6 +45,16 @@ impl HandleMap {
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    /// 迭代 (old, new) 对。
+    pub fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.map.iter().map(|(&k, &v)| (k, v))
+    }
+
+    /// 迭代 new handle。
+    pub fn values(&self) -> impl Iterator<Item = u32> + '_ {
+        self.map.values().copied()
+    }
 }
 
 /// 对象图槽位改写策略。

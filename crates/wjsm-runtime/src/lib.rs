@@ -21,9 +21,11 @@ mod array_named_props;
 mod handle_remap;
 mod host_side_table;
 pub mod realm;
+mod realm_clone;
 pub use handle_remap::{
     FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
 };
+pub use realm_clone::{RealmCloneProbe, probe_clone_pristine_realm};
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
