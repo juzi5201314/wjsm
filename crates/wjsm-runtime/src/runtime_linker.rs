@@ -83,8 +83,8 @@ pub(super) fn register_common_bridges(
     // eval_has_binding
     let f = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
-            eval_has_binding(caller, record, name)
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+            eval_has_binding(&mut caller, record, name)
         },
     );
     linker.define(&mut *store, "env", "eval_has_binding", f)?;
@@ -234,6 +234,15 @@ pub(super) fn register_common_bridges(
                     let idx = table.len() as u32;
                     table.push(NativeCallable::BufferStatic { kind });
                     return value::encode_native_callable_idx(idx);
+                }
+                // EvalFunction（含 vm.compileFunction）：暴露 length / name
+                if let Some(NativeCallable::EvalFunction(func)) = record.as_ref() {
+                    if prop_name == "length" {
+                        return value::encode_f64(func.params.len() as f64);
+                    }
+                    if prop_name == "name" {
+                        return store_runtime_string(&mut caller, String::new());
+                    }
                 }
                 return value::encode_undefined();
             }

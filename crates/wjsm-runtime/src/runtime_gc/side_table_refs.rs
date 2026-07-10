@@ -64,7 +64,7 @@ pub(crate) fn collect_iterator_refs(st: &mut crate::RuntimeState, idx: usize) ->
     }
 }
 
-/// TAG_SCOPE_RECORD: scope_records[&handle] → binding values, home_object, new_target
+/// TAG_SCOPE_RECORD: scope_records[&handle] → binding values, home_object, new_target, outer, object_env
 pub(crate) fn collect_scope_record_refs(st: &mut crate::RuntimeState, handle: u32) -> Vec<i64> {
     let Some(rec) = st.scope_records.get(&handle) else {
         return vec![];
@@ -74,6 +74,12 @@ pub(crate) fn collect_scope_record_refs(st: &mut crate::RuntimeState, handle: u3
         out.push(v);
     }
     if let Some(v) = rec.new_target {
+        out.push(v);
+    }
+    if let Some(v) = rec.outer {
+        out.push(v);
+    }
+    if let Some(v) = rec.object_env {
         out.push(v);
     }
     out
@@ -159,6 +165,8 @@ mod tests {
                 new_target: Some(new_target),
                 has_arguments_binding: false,
                 is_strict: false,
+                outer: None,
+                object_env: None,
             },
         );
         let refs = collect_scope_record_refs(&mut st, 0);

@@ -28,6 +28,10 @@ pub(crate) fn make_type_error_exception(caller: &mut Caller<'_, RuntimeState>, m
 pub(crate) fn make_range_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
     make_error_exception(caller, "RangeError", msg)
 }
+/// 构造可捕获的 SyntaxError（如 compileFunction 函数体解析失败）。
+pub(crate) fn make_syntax_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
+    make_error_exception(caller, "SyntaxError", msg)
+}
 
 fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());

@@ -131,13 +131,250 @@ pub(crate) async fn call_vm_method_async(
         VmMethodKind::RunInContext => run_in_context(caller, args).await,
         VmMethodKind::RunInNewContext => run_in_new_context(caller, args).await,
         VmMethodKind::RunInThisContext => run_in_this_context(caller, args).await,
-        VmMethodKind::CompileFunction => {
-            make_type_error_exception(caller, "Error: vm.compileFunction not fully wired yet")
-        }
+        VmMethodKind::CompileFunction => compile_function(caller, args),
         VmMethodKind::ScriptRunInContext => run_in_context(caller, args).await,
         VmMethodKind::ScriptRunInNewContext => run_in_new_context(caller, args).await,
         VmMethodKind::ScriptRunInThisContext => run_in_this_context(caller, args).await,
     }
+}
+
+/// `vm.compileFunction(code, params?, options?)` → 可复用 EvalFunction。
+///
+/// - `params`：字符串形参数组（仅 Ident）
+/// - `options.parsingContext`：contextified sandbox；未传时绑定当前全局对象
+/// - `options.contextExtensions`：对象环境链（后入者更靠近函数）
+fn compile_function(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    let code_val = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let params_val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+    let options_val = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+
+    let code = if value::is_string(code_val) {
+        js_string_lossy(caller, code_val)
+    } else {
+        js_string_lossy(caller, code_val)
+    };
+
+    let params = match read_compile_function_params(caller, params_val) {
+        Ok(p) => p,
+        Err(msg) => return make_type_error_exception(caller, &msg),
+    };
+
+    let parsing_context = read_options_object_prop(caller, options_val, "parsingContext");
+    let context_extensions = read_options_object_prop(caller, options_val, "contextExtensions");
+
+    // parsingContext 必须是 contextified sandbox（若提供）
+    let (scope_env, realm_id) = match resolve_compile_scope_env(
+        caller,
+        parsing_context,
+        context_extensions,
+    ) {
+        Ok(v) => v,
+        Err(msg) => return make_type_error_exception(caller, &msg),
+    };
+
+    // codeGeneration.strings 限制（与 runIn* 一致）
+    if !realm_allows_strings(caller, realm_id) {
+        return make_type_error_exception(
+            caller,
+            "EvalError: Code generation from strings disallowed for this context",
+        );
+    }
+
+    let body_stmts = match parse_function_body_stmts(&code) {
+        Ok(stmts) => stmts,
+        Err(msg) => {
+            return make_syntax_error_exception(caller, &msg);
+        }
+    };
+
+    let function = EvalFunction {
+        params,
+        body: body_stmts,
+        scope_env: Some(scope_env),
+    };
+    create_eval_function(caller.data(), function)
+}
+
+fn read_compile_function_params(
+    caller: &mut Caller<'_, RuntimeState>,
+    params_val: i64,
+) -> Result<Vec<String>, String> {
+    if value::is_undefined(params_val) || value::is_null(params_val) {
+        return Ok(Vec::new());
+    }
+    if !value::is_array(params_val) {
+        return Err("params must be an array of strings".to_string());
+    }
+    let Some(ptr) = resolve_array_ptr(caller, params_val) else {
+        return Err("params must be an array of strings".to_string());
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let elem = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
+        if !value::is_string(elem) {
+            return Err("params must be an array of strings".to_string());
+        }
+        let name = js_string_lossy(caller, elem);
+        if name.is_empty() || !is_simple_ident(&name) {
+            return Err(format!("Invalid parameter name '{name}' for compileFunction"));
+        }
+        out.push(name);
+    }
+    Ok(out)
+}
+
+fn is_simple_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c == '$' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric())
+}
+
+fn read_options_object_prop(
+    caller: &mut Caller<'_, RuntimeState>,
+    options_val: i64,
+    name: &str,
+) -> i64 {
+    if !value::is_object(options_val) {
+        return value::encode_undefined();
+    }
+    let Some(ptr) = resolve_handle(caller, options_val) else {
+        return value::encode_undefined();
+    };
+    read_object_property_by_name(caller, ptr, name).unwrap_or_else(value::encode_undefined)
+}
+
+fn resolve_compile_scope_env(
+    caller: &mut Caller<'_, RuntimeState>,
+    parsing_context: i64,
+    context_extensions: i64,
+) -> Result<(i64, RealmId), String> {
+    // 解析 parsingContext → (object_env, realm_id)
+    let (base_object_env, realm_id) = if value::is_undefined(parsing_context)
+        || value::is_null(parsing_context)
+    {
+        let global = caller
+            .data()
+            .js_global_object
+            .load(Ordering::Relaxed);
+        let env = if value::is_object(global) || value::is_array(global) {
+            global
+        } else {
+            // 尚无全局对象时退回 undefined object env
+            value::encode_undefined()
+        };
+        (env, RealmId(0))
+    } else if value::is_object(parsing_context) || value::is_array(parsing_context) {
+        let Some(h) = object_handle_idx(parsing_context) else {
+            return Err("sandbox argument must be an object".to_string());
+        };
+        let realm_id = {
+            let table = caller
+                .data()
+                .contextified
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            match table.get(&h).copied() {
+                Some(id) => id,
+                None => {
+                    return Err(
+                        "The second argument must be of type object which has been contextified."
+                            .to_string(),
+                    );
+                }
+            }
+        };
+        (parsing_context, realm_id)
+    } else {
+        return Err(
+            "The second argument must be of type object which has been contextified.".to_string(),
+        );
+    };
+
+    // 收集 contextExtensions（从后往前包，后入者更靠近函数）
+    let mut extension_objs: Vec<i64> = Vec::new();
+    if value::is_array(context_extensions) {
+        if let Some(ptr) = resolve_array_ptr(caller, context_extensions) {
+            let len = read_array_length(caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                let elem =
+                    read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
+                if !value::is_object(elem) && !value::is_array(elem) {
+                    return Err("contextExtensions must be an array of objects".to_string());
+                }
+                extension_objs.push(elem);
+            }
+        }
+    } else if !value::is_undefined(context_extensions) && !value::is_null(context_extensions) {
+        return Err("contextExtensions must be an array of objects".to_string());
+    }
+
+    // 环境链：base object_env → ext[0] → ext[1] → ... → ext[n-1]（最后一项最内层）
+    // 用 ScopeRecord 链表示：最外层 ScopeRecord.object_env = base
+    let mut current_outer: Option<i64>;
+    // 先 base
+    {
+        let data = caller.data_mut();
+        let handle = data.scope_record_next_handle;
+        data.scope_record_next_handle += 1;
+        data.scope_records.insert(
+            handle,
+            crate::runtime_eval::ScopeRecord {
+                bindings: Vec::new(),
+                home_object: None,
+                new_target: None,
+                has_arguments_binding: false,
+                is_strict: false,
+                outer: None,
+                object_env: if value::is_object(base_object_env) || value::is_array(base_object_env)
+                {
+                    Some(base_object_env)
+                } else {
+                    None
+                },
+            },
+        );
+        current_outer = Some(value::encode_scope_record_handle(handle));
+    }
+    for obj in extension_objs {
+        let data = caller.data_mut();
+        let handle = data.scope_record_next_handle;
+        data.scope_record_next_handle += 1;
+        data.scope_records.insert(
+            handle,
+            crate::runtime_eval::ScopeRecord {
+                bindings: Vec::new(),
+                home_object: None,
+                new_target: None,
+                has_arguments_binding: false,
+                is_strict: false,
+                outer: current_outer,
+                object_env: Some(obj),
+            },
+        );
+        current_outer = Some(value::encode_scope_record_handle(handle));
+    }
+
+    let scope_env = current_outer.ok_or_else(|| "Error: failed to build compile scope".to_string())?;
+    Ok((scope_env, realm_id))
+}
+
+fn parse_function_body_stmts(code: &str) -> Result<Vec<swc_core::ecma::ast::Stmt>, String> {
+    // 用 script 模式解析 body 语句序列
+    let module = wjsm_parser::parse_script_as_module(code).map_err(|e| e.to_string())?;
+    let mut stmts = Vec::with_capacity(module.body.len());
+    for item in module.body {
+        match item {
+            swc_core::ecma::ast::ModuleItem::Stmt(stmt) => stmts.push(stmt),
+            swc_core::ecma::ast::ModuleItem::ModuleDecl(_) => {
+                return Err("import/export not allowed in compileFunction body".to_string());
+            }
+        }
+    }
+    Ok(stmts)
 }
 
 fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {

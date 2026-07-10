@@ -771,6 +771,23 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
             return val;
         }
         if prop_name != "prototype" {
+            let idx = value::decode_native_callable_idx(target) as usize;
+            let record = {
+                let table = caller
+                    .data()
+                    .native_callables
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                table.get(idx).cloned()
+            };
+            if let Some(NativeCallable::EvalFunction(func)) = record {
+                if prop_name == "length" {
+                    return value::encode_f64(func.params.len() as f64);
+                }
+                if prop_name == "name" {
+                    return store_runtime_string(caller, String::new());
+                }
+            }
             return value::encode_undefined();
         }
         let idx = value::decode_native_callable_idx(target) as usize;

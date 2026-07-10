@@ -1,0 +1,17 @@
+exit_code: 0
+--- stdout ---
+basic 3
+length 2
+reuse 7 30
+multi 3
+free_main 99
+ctx 15
+ctx_live 101
+ext 7
+exts 3
+typeof_missing undefined
+miss_err ReferenceError missing is not defined
+badparam TypeError params must be an array of strings
+notctx TypeError
+syntax SyntaxError
+--- stderr ---

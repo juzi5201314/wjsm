@@ -8,6 +8,10 @@ pub(crate) struct ScopeRecord {
     pub(crate) new_target: Option<i64>,
     pub(crate) has_arguments_binding: bool,
     pub(crate) is_strict: bool,
+    /// 外层环境：另一个 `ScopeRecord` 句柄，或 object/array environment。
+    pub(crate) outer: Option<i64>,
+    /// 对象环境记录：本层 bindings 未命中时回落到该对象的数据属性。
+    pub(crate) object_env: Option<i64>,
 }
 
 /// 与 linker `create_exception` 宿主导入一致：将抛出值编码为 TAG_EXCEPTION。
@@ -344,8 +348,8 @@ pub(crate) fn compiled_eval_import(
         "eval_has_binding" => {
             return Func::wrap(
                 &mut *caller,
-                |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
-                    eval_has_binding(caller, record, name)
+                |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+                    eval_has_binding(&mut caller, record, name)
                 },
             );
         }
@@ -651,7 +655,19 @@ fn eval_exception_from_message(caller: &mut Caller<'_, RuntimeState>, msg: Strin
         .strip_prefix("Uncaught exception: ")
         .unwrap_or(msg.as_str())
         .to_string();
-    let value = store_runtime_string(caller, thrown.clone());
+    // 解析 "Name: message" 前缀，构造真 Error 对象供 catch 使用
+    let (error_name, message) = if let Some((name, rest)) = thrown.split_once(": ") {
+        match name {
+            "TypeError" | "ReferenceError" | "SyntaxError" | "RangeError" | "EvalError"
+            | "URIError" | "Error" => (name, rest.to_string()),
+            _ => ("Error", thrown.clone()),
+        }
+    } else {
+        ("Error", thrown.clone())
+    };
+    let msg_val = store_runtime_string(caller, message.clone());
+    let error_obj =
+        create_error_object(caller, error_name, msg_val, value::encode_undefined());
     let mut errors = caller
         .data()
         .error_table
@@ -659,11 +675,11 @@ fn eval_exception_from_message(caller: &mut Caller<'_, RuntimeState>, msg: Strin
         .unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(crate::ErrorEntry {
-        name: "Error".to_string(),
-        message: thrown,
-        value,
+        name: error_name.to_string(),
+        message,
+        value: error_obj,
     });
-    value::encode_exception(idx)
+    value::encode_handle(value::TAG_EXCEPTION, idx)
 }
 
 pub(crate) fn runtime_module_has_use_strict_directive(module: &swc_ast::Module) -> bool {
@@ -1273,12 +1289,22 @@ pub(crate) fn eval_expr(
     match expr {
         swc_ast::Expr::Lit(lit) => eval_lit(caller, lit),
         swc_ast::Expr::Ident(ident) => {
-            let val = eval_read_binding(caller, scope_env, eval_locals, ident.sym.as_ref())
-                .unwrap_or_else(value::encode_undefined);
-            if value::is_exception(val) {
-                return Err("ReferenceError".to_string());
+            let name = ident.sym.as_ref();
+            match eval_read_binding(caller, scope_env, eval_locals, name) {
+                None => Err(format!("ReferenceError: {name} is not defined")),
+                Some(val) if value::is_exception(val) => {
+                    let idx = value::decode_handle(val) as u32;
+                    let msg = caller
+                        .data()
+                        .error_table
+                        .lock()
+                        .ok()
+                        .and_then(|e| e.get(idx as usize).map(|x| x.message.clone()))
+                        .unwrap_or_else(|| "ReferenceError".to_string());
+                    Err(msg)
+                }
+                Some(val) => Ok(val),
             }
-            Ok(val)
         }
         swc_ast::Expr::Paren(paren) => eval_expr(caller, &paren.expr, scope_env, eval_locals),
         swc_ast::Expr::Seq(seq) => {
@@ -1302,6 +1328,17 @@ pub(crate) fn eval_expr(
             eval_binary(caller, bin.op, lhs, rhs)
         }
         swc_ast::Expr::Unary(unary) => {
+            // typeof 未解析标识符 → "undefined"，不抛 ReferenceError
+            if matches!(unary.op, swc_ast::UnaryOp::TypeOf)
+                && let swc_ast::Expr::Ident(ident) = unary.arg.as_ref()
+            {
+                let name = ident.sym.as_ref();
+                return match eval_read_binding(caller, scope_env, eval_locals, name) {
+                    None => Ok(value::encode_typeof_undefined()),
+                    Some(val) if value::is_exception(val) => Ok(value::encode_typeof_undefined()),
+                    Some(val) => eval_typeof_value(caller, val),
+                };
+            }
             let val = eval_expr(caller, &unary.arg, scope_env, eval_locals)?;
             eval_unary(caller, unary.op, val)
         }
@@ -1430,8 +1467,42 @@ pub(crate) fn eval_unary(
         swc_ast::UnaryOp::Plus => Ok(value::encode_f64(eval_to_number(caller, val))),
         swc_ast::UnaryOp::Bang => Ok(value::encode_bool(value::is_falsy(val))),
         swc_ast::UnaryOp::Void => Ok(value::encode_undefined()),
+        swc_ast::UnaryOp::TypeOf => eval_typeof_value(caller, val),
+        swc_ast::UnaryOp::Tilde => {
+            let n = eval_to_number(caller, val) as i32;
+            Ok(value::encode_f64((!n) as f64))
+        }
         _ => Err("SyntaxError: unsupported eval unary operator".to_string()),
     }
+}
+
+fn eval_typeof_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<i64, String> {
+    let _ = caller;
+    Ok(if value::is_undefined(val) {
+        value::encode_typeof_undefined()
+    } else if value::is_null(val) {
+        value::encode_typeof_object()
+    } else if value::is_bool(val) {
+        value::encode_typeof_boolean()
+    } else if value::is_string(val) {
+        value::encode_typeof_string()
+    } else if value::is_callable(val) {
+        value::encode_typeof_function()
+    } else if value::is_object(val)
+        || value::is_iterator(val)
+        || value::is_enumerator(val)
+        || value::is_array(val)
+        || value::is_proxy(val)
+        || value::is_regexp(val)
+    {
+        value::encode_typeof_object()
+    } else if value::is_bigint(val) {
+        value::encode_typeof_bigint()
+    } else if value::is_symbol(val) {
+        value::encode_typeof_symbol()
+    } else {
+        value::encode_typeof_number()
+    })
 }
 
 pub(crate) fn eval_assign(
@@ -1593,9 +1664,13 @@ pub(crate) fn eval_read_binding(
         && value::is_scope_record(env)
     {
         let name_val = store_runtime_string(caller, name.to_string());
+        // 未解析标识符：has_binding 为 false 时返回 None，由 typeof / Ident 分支分别处理
+        let has = eval_has_binding(caller, env, name_val);
+        if !value::is_bool(has) || !value::decode_bool(has) {
+            return None;
+        }
         let got = eval_get_binding(caller, env, name_val);
         if value::is_exception(got) {
-            // TDZ 或其他错误：直接抛出而非返回 None
             return Some(got);
         }
         return Some(got);
@@ -1723,10 +1798,7 @@ pub(crate) async fn call_eval_function_from_caller_async(
 ) -> i64 {
     match eval_call_function_async(caller, &function, args).await {
         Ok(value) => value,
-        Err(message) => {
-            set_runtime_error(caller.data(), message);
-            value::encode_handle(value::TAG_EXCEPTION, 0)
-        }
+        Err(message) => eval_exception_from_message(caller, message),
     }
 }
 
@@ -1923,6 +1995,8 @@ pub(crate) fn scope_record_create(mut caller: Caller<'_, RuntimeState>, capacity
             new_target: None,
             has_arguments_binding: false,
             is_strict: false,
+            outer: None,
+            object_env: None,
         },
     );
     value::encode_scope_record_handle(handle)
@@ -1990,36 +2064,58 @@ pub(crate) fn eval_get_binding(
         }
         return value::encode_undefined();
     }
-    if let Some(rec) = caller.data().scope_records.get(&handle) {
+    let (binding_hit, object_env, outer) = {
+        let Some(rec) = caller.data().scope_records.get(&handle) else {
+            return value::encode_undefined();
+        };
+        let mut hit: Option<(i64, bool)> = None; // (value, initialized)
         for (n, v, init, _) in &rec.bindings {
             if n == &name_str {
-                if !init {
-                    let msg = format!("Cannot access '{}' before initialization", name_str);
-                    let msg_val = store_runtime_string(caller, msg.clone());
-                    let error_obj = create_error_object(
-                        caller,
-                        "ReferenceError",
-                        msg_val,
-                        value::encode_undefined(),
-                    );
-                    {
-                        let mut errors = caller
-                            .data()
-                            .error_table
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        let idx = errors.len() as u32;
-                        errors.push(crate::ErrorEntry {
-                            name: "ReferenceError".to_string(),
-                            message: msg,
-                            value: error_obj,
-                        });
-                        return value::encode_handle(value::TAG_EXCEPTION, idx);
-                    }
-                }
-                return *v;
+                hit = Some((*v, *init));
+                break;
             }
         }
+        (hit, rec.object_env, rec.outer)
+    };
+    if let Some((v, init)) = binding_hit {
+        if !init {
+            let msg = format!("Cannot access '{}' before initialization", name_str);
+            let msg_val = store_runtime_string(caller, msg.clone());
+            let error_obj = create_error_object(
+                caller,
+                "ReferenceError",
+                msg_val,
+                value::encode_undefined(),
+            );
+            {
+                let mut errors = caller
+                    .data()
+                    .error_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let idx = errors.len() as u32;
+                errors.push(crate::ErrorEntry {
+                    name: "ReferenceError".to_string(),
+                    message: msg,
+                    value: error_obj,
+                });
+                return value::encode_handle(value::TAG_EXCEPTION, idx);
+            }
+        }
+        return v;
+    }
+    if let Some(obj_env) = object_env {
+        if let Some(ptr) = resolve_handle(caller, obj_env) {
+            let mut visited = std::collections::HashSet::new();
+            if let Some(v) =
+                read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
+            {
+                return v;
+            }
+        }
+    }
+    if let Some(outer) = outer {
+        return eval_get_binding(caller, outer, name);
     }
     value::encode_undefined()
 }
@@ -2044,85 +2140,141 @@ pub(crate) fn eval_set_binding(
     }
 
     let handle = value::decode_scope_record_handle(record);
-    if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
-        for (n, v, init, is_const) in rec.bindings.iter_mut() {
-            if n == &name_str {
-                if *is_const && *init {
-                    let msg = format!("assignment to constant `{}`", name_str);
-                    let msg_val = store_runtime_string(caller, msg.clone());
-                    let error_obj = create_error_object(
-                        caller,
-                        "TypeError",
-                        msg_val,
-                        value::encode_undefined(),
-                    );
-                    {
-                        let mut errors = caller
-                            .data()
-                            .error_table
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        let idx = errors.len() as u32;
-                        errors.push(crate::ErrorEntry {
-                            name: "TypeError".to_string(),
-                            message: msg,
-                            value: error_obj,
-                        });
-                        return value::encode_handle(value::TAG_EXCEPTION, idx);
+    // 先在本层 bindings；再 object_env；再 outer；本层无且 strict 才报错。
+    let (found_here, object_env, outer, is_strict) = {
+        let Some(rec) = caller.data().scope_records.get(&handle) else {
+            return value::encode_undefined();
+        };
+        let found = rec.bindings.iter().any(|(n, _, _, _)| n == &name_str);
+        (found, rec.object_env, rec.outer, rec.is_strict)
+    };
+    if found_here {
+        if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
+            for (n, v, init, is_const) in rec.bindings.iter_mut() {
+                if n == &name_str {
+                    if *is_const && *init {
+                        let msg = format!("assignment to constant `{}`", name_str);
+                        let msg_val = store_runtime_string(caller, msg.clone());
+                        let error_obj = create_error_object(
+                            caller,
+                            "TypeError",
+                            msg_val,
+                            value::encode_undefined(),
+                        );
+                        {
+                            let mut errors = caller
+                                .data()
+                                .error_table
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            let idx = errors.len() as u32;
+                            errors.push(crate::ErrorEntry {
+                                name: "TypeError".to_string(),
+                                message: msg,
+                                value: error_obj,
+                            });
+                            return value::encode_handle(value::TAG_EXCEPTION, idx);
+                        }
                     }
+                    *v = val;
+                    *init = true;
+                    return val;
                 }
-                *v = val;
-                *init = true;
-                return val;
-            }
-        }
-        if rec.is_strict {
-            let msg = format!("assignment to undeclared variable `{}`", name_str);
-            let msg_val = store_runtime_string(caller, msg.clone());
-            let error_obj =
-                create_error_object(caller, "ReferenceError", msg_val, value::encode_undefined());
-            {
-                let mut errors = caller
-                    .data()
-                    .error_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let idx = errors.len() as u32;
-                errors.push(crate::ErrorEntry {
-                    name: "ReferenceError".to_string(),
-                    message: msg,
-                    value: error_obj,
-                });
-                return value::encode_handle(value::TAG_EXCEPTION, idx);
             }
         }
         return val;
     }
-    value::encode_undefined()
+    if let Some(obj_env) = object_env {
+        if value::is_object(obj_env) || value::is_array(obj_env) {
+            if let Some(ptr) = resolve_handle(caller, obj_env) {
+                let mut visited = std::collections::HashSet::new();
+                if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
+                    .is_some()
+                {
+                    let _ = set_host_data_property_from_caller(caller, obj_env, &name_str, val);
+                    return val;
+                }
+            } else {
+                let _ = set_host_data_property_from_caller(caller, obj_env, &name_str, val);
+                return val;
+            }
+        }
+    }
+    if let Some(outer) = outer {
+        return eval_set_binding(caller, outer, name, val);
+    }
+    if let Some(obj_env) = object_env {
+        // 非 strict：对象环境可创建新属性
+        let _ = set_host_data_property_from_caller(caller, obj_env, &name_str, val);
+        return val;
+    }
+    if is_strict {
+        let msg = format!("assignment to undeclared variable `{}`", name_str);
+        let msg_val = store_runtime_string(caller, msg.clone());
+        let error_obj =
+            create_error_object(caller, "ReferenceError", msg_val, value::encode_undefined());
+        {
+            let mut errors = caller
+                .data()
+                .error_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let idx = errors.len() as u32;
+            errors.push(crate::ErrorEntry {
+                name: "ReferenceError".to_string(),
+                message: msg,
+                value: error_obj,
+            });
+            return value::encode_handle(value::TAG_EXCEPTION, idx);
+        }
+    }
+    val
 }
 
 pub(crate) fn eval_has_binding(
-    mut caller: Caller<'_, RuntimeState>,
+    caller: &mut Caller<'_, RuntimeState>,
     record: i64,
     name: i64,
 ) -> i64 {
-    let name_str = read_value_string_bytes(&mut caller, name)
+    let name_str = read_value_string_bytes(caller, name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     if name_str.is_empty() {
         return value::encode_bool(false);
     }
     if !value::is_scope_record(record) && (value::is_object(record) || value::is_array(record)) {
-        if let Some(ptr) = resolve_handle(&mut caller, record) {
-            let found = read_object_property_by_name(&mut caller, ptr, &name_str).is_some();
+        if let Some(ptr) = resolve_handle(caller, record) {
+            let mut visited = std::collections::HashSet::new();
+            let found =
+                read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
+                    .is_some();
             return value::encode_bool(found);
         }
         return value::encode_bool(false);
     }
     let handle = value::decode_scope_record_handle(record);
-    if let Some(rec) = caller.data().scope_records.get(&handle) {
+    let (found_binding, object_env, outer) = {
+        let Some(rec) = caller.data().scope_records.get(&handle) else {
+            return value::encode_bool(false);
+        };
         let found = rec.bindings.iter().any(|(n, _, _, _)| n == &name_str);
-        return value::encode_bool(found);
+        (found, rec.object_env, rec.outer)
+    };
+    if found_binding {
+        return value::encode_bool(true);
+    }
+    if let Some(obj_env) = object_env {
+        if let Some(ptr) = resolve_handle(caller, obj_env) {
+            let mut visited = std::collections::HashSet::new();
+            if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
+                .is_some()
+            {
+                return value::encode_bool(true);
+            }
+        }
+    }
+    if let Some(outer) = outer {
+        return eval_has_binding(caller, outer, name);
     }
     value::encode_bool(false)
 }

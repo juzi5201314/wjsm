@@ -269,6 +269,8 @@ fn create_scope_from_locals(
             new_target: None,
             has_arguments_binding: false,
             is_strict: true,
+            outer: None,
+            object_env: None,
         },
     );
     value::encode_scope_record_handle(handle)

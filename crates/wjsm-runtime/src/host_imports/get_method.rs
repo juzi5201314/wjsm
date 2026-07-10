@@ -96,18 +96,28 @@ pub(crate) fn get_by_name_id_sync(
         return value::encode_undefined();
     }
     if value::is_native_callable(obj) {
-        if !name_id_matches_utf8(caller, name_id, "bigint") {
-            return value::encode_undefined();
-        }
         let idx = value::decode_native_callable_idx(obj) as usize;
-        let is_hrtime = caller
-            .data()
-            .native_callables
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(idx)
-            .is_some_and(|record| matches!(record, NativeCallable::ProcessHrtime));
-        if is_hrtime {
+        let record = {
+            let table = caller
+                .data()
+                .native_callables
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            table.get(idx).cloned()
+        };
+        if let Some(NativeCallable::EvalFunction(func)) = record.as_ref() {
+            if name_id_matches_utf8(caller, name_id, "length") {
+                return value::encode_f64(func.params.len() as f64);
+            }
+            if name_id_matches_utf8(caller, name_id, "name") {
+                return crate::runtime_render::store_runtime_string(caller, String::new());
+            }
+        }
+        if name_id_matches_utf8(caller, name_id, "bigint")
+            && record
+                .as_ref()
+                .is_some_and(|r| matches!(r, NativeCallable::ProcessHrtime))
+        {
             return crate::create_native_callable(
                 caller.data(),
                 NativeCallable::ProcessHrtimeBigint,
