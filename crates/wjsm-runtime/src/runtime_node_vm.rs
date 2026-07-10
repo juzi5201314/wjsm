@@ -4,14 +4,16 @@
 //! runInContext 在 execution_realm 帧内 eval，scope_env = sandbox。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use wasmtime::Caller;
+use wasmtime::{AsContextMut, Caller};
 
 use crate::realm::RealmId;
 use crate::realm_clone::clone_pristine_realm;
-use crate::runtime_eval::perform_eval_from_caller_async;
 use crate::runtime_encoding::js_string_lossy;
+use crate::runtime_eval::perform_eval_from_caller_async;
 use crate::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -215,6 +217,7 @@ async fn run_in_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> 
         .get(1)
         .copied()
         .unwrap_or_else(value::encode_undefined);
+    let options = args.get(2).copied();
 
     let Some(h) = object_handle_idx(sandbox) else {
         return make_type_error_exception(
@@ -236,7 +239,8 @@ async fn run_in_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> 
         );
     };
 
-    eval_in_realm(caller, code_val, Some(sandbox), realm_id).await
+    let timeout_ms = parse_timeout_ms(caller, options);
+    eval_in_realm(caller, code_val, Some(sandbox), realm_id, timeout_ms).await
 }
 
 async fn run_in_new_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
@@ -244,17 +248,45 @@ async fn run_in_new_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
-    // sandbox 可选：args[1]
-    let sandbox_arg = args.get(1).copied();
+    // sandbox 可选：args[1]；options 可能在 args[1]（无 sandbox）或 args[2]
+    let (sandbox_arg, options) = match args.get(1).copied() {
+        Some(s) if value::is_object(s) || value::is_array(s) || value::is_undefined(s) || value::is_null(s) => {
+            // 若看起来像 options（含 timeout 字段）且未 contextify，仍当 sandbox 用
+            (Some(s), args.get(2).copied())
+        }
+        Some(s) => (None, Some(s)),
+        None => (None, None),
+    };
     let create_args: Vec<i64> = match sandbox_arg {
-        Some(s) => vec![s],
-        None => vec![],
+        Some(s) if !value::is_undefined(s) && !value::is_null(s) => vec![s],
+        _ => vec![],
     };
     let sandbox = create_context(caller, &create_args);
     if value::is_exception(sandbox) {
         return sandbox;
     }
-    run_in_context(caller, &[code_val, sandbox]).await
+    let timeout_ms = parse_timeout_ms(caller, options);
+    // 若 options 在 args[1] 且无独立 sandbox 对象
+    let timeout_ms = timeout_ms.or_else(|| parse_timeout_ms(caller, sandbox_arg));
+    eval_in_realm(
+        caller,
+        code_val,
+        Some(sandbox),
+        // realm from create_context side table
+        {
+            let h = object_handle_idx(sandbox).unwrap_or(0);
+            caller
+                .data()
+                .contextified
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&h)
+                .copied()
+                .unwrap_or(RealmId(0))
+        },
+        timeout_ms,
+    )
+    .await
 }
 
 async fn run_in_this_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
@@ -262,8 +294,31 @@ async fn run_in_this_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
-    // 主 realm，不绑 sandbox
-    eval_in_realm(caller, code_val, None, RealmId(0)).await
+    let options = args.get(1).copied();
+    let timeout_ms = parse_timeout_ms(caller, options);
+    eval_in_realm(caller, code_val, None, RealmId(0), timeout_ms).await
+}
+
+/// 从 options 对象读取 `timeout` 毫秒（Node 兼容）。
+fn parse_timeout_ms(caller: &mut Caller<'_, RuntimeState>, options: Option<i64>) -> Option<u64> {
+    let Some(opts) = options else {
+        return None;
+    };
+    if !value::is_object(opts) {
+        return None;
+    }
+    let Some(ptr) = resolve_handle(caller, opts) else {
+        return None;
+    };
+    let raw = read_object_property_by_name(caller, ptr, "timeout")?;
+    if value::is_undefined(raw) || value::is_null(raw) {
+        return None;
+    }
+    let n = value::decode_f64(raw);
+    if !n.is_finite() || n < 0.0 {
+        return None;
+    }
+    Some(n as u64)
 }
 
 async fn eval_in_realm(
@@ -271,6 +326,7 @@ async fn eval_in_realm(
     code_val: i64,
     scope_env: Option<i64>,
     realm_id: RealmId,
+    timeout_ms: Option<u64>,
 ) -> i64 {
     let env = match WasmEnv::from_caller(caller) {
         Some(e) => e,
@@ -286,12 +342,10 @@ async fn eval_in_realm(
     };
 
     // 帧内 eval：swap proto globals + execution_realm
-    // with_execution_realm_frame 是同步的，内部用 block_on 不合适；
-    // 手动 enter/exit 包住 await。
     let prev_realm = caller
         .data()
         .execution_realm
-        .swap(realm_id.0, std::sync::atomic::Ordering::Relaxed);
+        .swap(realm_id.0, Ordering::Relaxed);
     let prev_array = env
         .array_proto_handle
         .get(&mut *caller)
@@ -312,7 +366,15 @@ async fn eval_in_realm(
             .set(&mut *caller, wasmtime::Val::I32(obj));
     }
 
+    // timeout：epoch trap 作用域 + 解释器 Instant deadline
+    let timeout_guard = timeout_ms.map(|ms| arm_vm_timeout(caller, ms));
+
     let result = perform_eval_from_caller_async(caller, code_val, scope_env).await;
+
+    // 必定恢复 epoch 策略与 deadline（含 trap 路径）
+    if let Some(g) = timeout_guard {
+        g.disarm(caller);
+    }
 
     let _ = env
         .array_proto_handle
@@ -323,9 +385,110 @@ async fn eval_in_realm(
     caller
         .data()
         .execution_realm
-        .store(prev_realm, std::sync::atomic::Ordering::Relaxed);
+        .store(prev_realm, Ordering::Relaxed);
 
+    // 将 epoch interrupt trap 映射为 Node 风格 timeout 错误
+    if value::is_undefined(result) {
+        let err = caller
+            .data()
+            .runtime_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(msg) = err {
+            if msg.contains("epoch")
+                || msg.contains("interrupt")
+                || msg.contains("timed out")
+                || msg.contains("timeout")
+            {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = None;
+                return make_type_error_exception(caller, "Error: Script execution timed out.");
+            }
+        }
+    }
+    if value::is_exception(result) {
+        // 解释器路径可能以 exception 抛出 timeout 文案
+        return result;
+    }
     result
+}
+
+/// 武装 vm timeout：切换 epoch 为 trap + 后台 increment_epoch；设置解释器 deadline。
+struct VmTimeoutGuard {
+    cancel: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+fn arm_vm_timeout(caller: &mut Caller<'_, RuntimeState>, timeout_ms: u64) -> VmTimeoutGuard {
+    // 解释器 deadline
+    {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
+        *caller
+            .data()
+            .vm_deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(deadline);
+    }
+
+    // 编译路径：临时把 epoch 策略改为 trap（退出时恢复 async_yield）
+    {
+        let mut store = caller.as_context_mut();
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(1);
+    }
+
+    let engine = caller.engine().clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_bg = Arc::clone(&cancel);
+    let join = std::thread::spawn(move || {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(timeout_ms.max(1)) {
+            if cancel_bg.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        if !cancel_bg.load(Ordering::Relaxed) {
+            engine.increment_epoch();
+        }
+    });
+
+    VmTimeoutGuard {
+        cancel,
+        join: Some(join),
+    }
+}
+
+impl VmTimeoutGuard {
+    fn disarm(mut self, caller: &mut Caller<'_, RuntimeState>) {
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+        *caller
+            .data()
+            .vm_deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        // 恢复 async-yield epoch 策略
+        let mut store = caller.as_context_mut();
+        store.epoch_deadline_async_yield_and_update(1);
+        store.set_epoch_deadline(1);
+    }
+}
+
+impl Drop for VmTimeoutGuard {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+        // Drop 路径无法拿 Caller 恢复 epoch；正常路径必须走 disarm。
+    }
 }
 
 fn resolve_realm_proto_i32(

@@ -1109,6 +1109,12 @@ impl Clone for RuntimeState {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone(),
             ),
+            vm_deadline: Mutex::new(
+                self.vm_deadline
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
         }
     }
 }
@@ -1373,6 +1379,8 @@ struct RuntimeState {
     pub(crate) execution_realm: AtomicU32,
     /// contextified sandbox handle → RealmId（node:vm side table）。
     pub(crate) contextified: crate::runtime_node_vm::ContextifiedTable,
+    /// vm 解释器路径 deadline（wall-clock）；None 表示无 timeout。
+    pub(crate) vm_deadline: Mutex<Option<std::time::Instant>>,
 }
 
 impl RuntimeState {
@@ -1790,6 +1798,7 @@ impl RuntimeState {
             next_realm_id: AtomicU32::new(1),
             execution_realm: AtomicU32::new(0),
             contextified: crate::runtime_node_vm::empty_contextified_table(),
+            vm_deadline: Mutex::new(None),
         }
     }
 

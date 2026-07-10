@@ -896,6 +896,7 @@ pub(crate) fn eval_stmt(
             }
             let mut completion = None;
             loop {
+                check_vm_deadline(caller)?;
                 if let Some(test) = &for_stmt.test {
                     let test_val = eval_expr(caller, test, scope_env, eval_locals)?;
                     if value::is_falsy(test_val) {
@@ -949,6 +950,7 @@ pub(crate) fn eval_stmt(
         swc_ast::Stmt::While(while_stmt) => {
             let mut completion = None;
             loop {
+                check_vm_deadline(caller)?;
                 let test = eval_expr(caller, &while_stmt.test, scope_env, eval_locals)?;
                 if value::is_falsy(test) {
                     break;
@@ -968,6 +970,7 @@ pub(crate) fn eval_stmt(
         swc_ast::Stmt::DoWhile(dw) => {
             let mut completion = None;
             loop {
+                check_vm_deadline(caller)?;
                 if let Some(value) = eval_stmt(
                     caller,
                     &dw.body,
@@ -1131,11 +1134,27 @@ pub(crate) fn eval_block(
 ) -> Result<Option<i64>, String> {
     let mut completion = None;
     for stmt in stmts {
+        check_vm_deadline(caller)?;
         if let Some(value) = eval_stmt(caller, stmt, scope_env, var_writes_to_scope, eval_locals)? {
             completion = Some(value);
         }
     }
     Ok(completion)
+}
+
+/// 解释器路径：vm timeout 的 wall-clock deadline 检查。
+pub(crate) fn check_vm_deadline(caller: &Caller<'_, RuntimeState>) -> Result<(), String> {
+    let deadline = *caller
+        .data()
+        .vm_deadline
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(d) = deadline
+        && std::time::Instant::now() >= d
+    {
+        return Err("Error: Script execution timed out.".to_string());
+    }
+    Ok(())
 }
 
 fn eval_array_lit(
