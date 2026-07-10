@@ -4,9 +4,6 @@
  * Worker: NODE_UNIQUE_ID；listen 走 RR / SO_REUSEPORT。
  */
 import { EventEmitter } from 'events';
-// ChildProcess 类用于包装 host spawn 结果（不经 child_process.spawn，因 net 同捆时
-// spawn 包装层存在回归：host 正常但 JS wrapper 返回无 id）。
-import { ChildProcess } from 'child_process';
 
 const SCHED_NONE = 1;
 const SCHED_RR = 2;
@@ -114,6 +111,66 @@ Worker.prototype.isConnected = function () {
   return this.process && this.process.connected;
 };
 
+function installClusterInternalDispatch(child) {
+  let internalHandler = null;
+  const pendingInternal = [];
+  Object.defineProperty(child, '__wjsm_internal_message', {
+    get: function () { return internalHandler; },
+    set: function (handler) {
+      internalHandler = handler;
+      if (typeof internalHandler !== 'function') return;
+      const pending = pendingInternal.slice();
+      pendingInternal.length = 0;
+      for (var i = 0; i < pending.length; i = i + 1) {
+        internalHandler(pending[i].msg, pending[i].fd);
+      }
+    },
+    configurable: true,
+  });
+  child.__dispatchInternal = function (msg, fd) {
+    if (typeof internalHandler === 'function') internalHandler(msg, fd);
+    else pendingInternal.push({ msg: msg, fd: fd });
+  };
+}
+
+function sendHandleFd(sendHandle) {
+  if (typeof sendHandle === 'number') return sendHandle;
+  if (sendHandle && sendHandle.__rawFd !== undefined) return sendHandle.__rawFd;
+  return undefined;
+}
+
+function installClusterProcessMethods(child, created, host) {
+  child.send = function (message, sendHandle) {
+    if (!child.connected) return false;
+    host.send(created.id, message, sendHandleFd(sendHandle));
+    return true;
+  };
+  child.kill = function (signal) {
+    child.killed = true;
+    host.kill(created.id, signal || 'SIGTERM');
+    return true;
+  };
+  child.disconnect = function () {
+    if (!child.connected) return;
+    host.disconnect(created.id);
+    child.connected = false;
+    child.emit('disconnect');
+  };
+}
+
+function createClusterProcess(created, host) {
+  const child = new EventEmitter();
+  child.__id = created.id;
+  child.pid = created.pid;
+  child.connected = true;
+  child.killed = false;
+  child.exitCode = null;
+  child.signalCode = null;
+  installClusterInternalDispatch(child);
+  installClusterProcessMethods(child, created, host);
+  return child;
+}
+
 // ── cluster EventEmitter ──────────────────────────────────────────────
 const clusterEE = new EventEmitter();
 function clusterEmit() {
@@ -144,6 +201,7 @@ function makeRrEntry(key, msg) {
     key: key,
     address: msg.address || '0.0.0.0',
     port: msg.port === undefined || msg.port === null ? 0 : msg.port,
+    primaryWorker: null,
     workers: [],
     rrIndex: 0,
     listening: false,
@@ -199,12 +257,7 @@ function handleQueryServer(worker, msg) {
       rrHandleList.push(entry);
     }
   }
-  const wid = worker.id;
-  var foundW = false;
-  for (var wi = 0; wi < entry.workers.length; wi = wi + 1) {
-    if (entry.workers[wi] && entry.workers[wi].id === wid) foundW = true;
-  }
-  if (!foundW) entry.workers.push(worker);
+  registerServerWorker(entry, worker);
 
   if (schedulingPolicy === SCHED_NONE) {
     if (!entry.listening && !entry.binding) {
@@ -295,7 +348,17 @@ function notifyShare(entry, seq, worker) {
   }
 }
 
+function registerServerWorker(entry, worker) {
+  for (var i = 0; i < entry.workers.length; i = i + 1) {
+    if (entry.workers[i] && entry.workers[i].id === worker.id) return;
+  }
+  entry.workers[entry.workers.length] = worker;
+}
+
 function startRoundRobin(entry, firstWorker, firstSeq) {
+  registerServerWorker(entry, firstWorker);
+  // 捕获的 workers 数组尚未 materialize 时，首个 listener 仍可接收连接。
+  entry.primaryWorker = firstWorker;
   const netHost = globalThis.__wjsm_node_net;
   if (!netHost) {
     if (firstWorker && firstWorker.process) {
@@ -338,27 +401,28 @@ function startRoundRobin(entry, firstWorker, firstSeq) {
 }
 
 function acceptLoop(entry, netHost) {
-  if (!entry.serverHandle) return;
-  const acceptFn = netHost.serverAcceptRawFd || netHost.serverAccept;
-  acceptFn.call(netHost, entry.serverHandle).then(function (rawOrHandle) {
+  if (entry.serverHandle === undefined || entry.serverHandle === null) return;
+  const acceptPromise = netHost.serverAcceptRawFd
+    ? netHost.serverAcceptRawFd(entry.serverHandle)
+    : netHost.serverAccept(entry.serverHandle);
+  acceptPromise.then(function (rawOrHandle) {
     if (rawOrHandle === null || rawOrHandle === undefined) {
       scheduleAccept(entry, netHost);
       return;
     }
-    if (entry.workers.length === 0) {
-      scheduleAccept(entry, netHost);
-      return;
-    }
-    const idx = entry.rrIndex % entry.workers.length;
-    entry.rrIndex = entry.rrIndex + 1;
-    const worker = entry.workers[idx];
+    const workerCount = entry.workers.length;
+    const worker = workerCount > 0
+      ? entry.workers[entry.rrIndex % workerCount]
+      : entry.primaryWorker;
     if (!worker || !worker.process || !worker.process.connected) {
       scheduleAccept(entry, netHost);
       return;
     }
-    // raw fd 经 IPC SCM_RIGHTS 发给 worker
+    entry.rrIndex = entry.rrIndex + 1;
     worker.process.send({ cmd: 'NODE_CLUSTER', act: 'newconn' }, rawOrHandle);
     scheduleAccept(entry, netHost);
+  }, function (error) {
+    clusterEmit('error', error);
   });
 }
 
@@ -369,12 +433,16 @@ function scheduleAccept(entry, netHost) {
 }
 
 // ── Worker 侧 ─────────────────────────────────────────────────────────
-let workerObj = null;
+function createCurrentWorker() {
+  if (!isWorker) return null;
+  return new Worker({ id: Number(uniqueId), process: process });
+}
+
+let workerObj = createCurrentWorker();
 const pendingListens = Object.create(null);
 let listenSeq = 0;
 
 if (isWorker) {
-  workerObj = new Worker({ id: Number(uniqueId), process: process });
   workerObj.state = 'online';
   // host process.on：注册唯一 message_cb，分流 NODE_* / 用户消息
   if (typeof process.on === 'function') {
@@ -518,27 +586,22 @@ export function fork(env) {
   for (var ei = 0; ei < envKeys.length; ei = ei + 1) {
     envPairs.push(envKeys[ei] + '=' + String(childEnv[envKeys[ei]]));
   }
-  const created = cpHost['spawn'].call(cpHost, execPath, commandArgs, {
+  const created = cpHost['spawn'](execPath, commandArgs, {
     envPairs: envPairs,
     ipc: true,
   });
   if (!created || typeof created.id !== 'number') {
     throw new Error('cluster.fork: host spawn failed');
   }
-  const child = new ChildProcess();
-  child.__id = created.id;
-  child.pid = created.pid;
-  child.connected = true;
-  cpHost['onMessage'].call(cpHost, created.id, function (msg, fd) {
+  const child = createClusterProcess(created, cpHost);
+  cpHost['onMessage'](created.id, function (msg, fd) {
     if (msg && typeof msg === 'object' && typeof msg.cmd === 'string' && msg.cmd.indexOf('NODE_') === 0) {
-      if (typeof child.__wjsm_internal_message === 'function') {
-        child.__wjsm_internal_message(msg, fd);
-      }
+      child.__dispatchInternal(msg, fd);
       return;
     }
     child.emit('message', msg, fd);
   });
-  cpHost['onExit'].call(cpHost, created.id, function (code, signal) {
+  cpHost['onExit'](created.id, function (code, signal) {
     child.connected = false;
     child.exitCode = code;
     child.signalCode = signal;

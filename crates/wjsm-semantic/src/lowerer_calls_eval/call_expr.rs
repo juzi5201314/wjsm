@@ -403,9 +403,12 @@ impl Lowerer {
                                     self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
                                 );
                             }
-                            if builtin_args.len() < 3
-                                && matches!(promise_proto_builtin, Builtin::PromiseThen)
-                            {
+                            let required_args = match promise_proto_builtin {
+                                Builtin::PromiseThen => 3,
+                                Builtin::PromiseCatch | Builtin::PromiseFinally => 2,
+                                _ => builtin_args.len(),
+                            };
+                            while builtin_args.len() < required_args {
                                 let undef_const = self.module.add_constant(Constant::Undefined);
                                 let undef_val = self.alloc_value();
                                 self.current_function.append_instruction(
@@ -426,6 +429,9 @@ impl Lowerer {
                                     args: builtin_args,
                                 },
                             );
+                            if call_block != block {
+                                self.expr_merge_block = Some(call_block);
+                            }
                             return Ok(dest);
                         }
 

@@ -8,3 +8,20 @@ status-level = "pass"
 final-status-level = "all"
 fail-fast = false
 slow-timeout = { period = "3s", terminate-after = 3 }
+
+[test-groups]
+cluster-ipc = { max-threads = 1 }
+runtime-cache-delete = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(cluster_ipc)'
+test-group = 'cluster-ipc'
+slow-timeout = { period = "30s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
+test-group = 'runtime-cache-delete'
+
+[[profile.default.overrides]]
+filter = 'test(/modules__node_builtin_|dgram_udp_loopback|inspector_|promise_pending_catch_chain|node_builtin_require_resolve_paths|node_fs_write_file_async|errors__console_methods/)'
+slow-timeout = { period = "30s", terminate-after = 2 }

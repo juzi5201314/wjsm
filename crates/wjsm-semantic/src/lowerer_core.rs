@@ -514,7 +514,9 @@ impl Lowerer {
                 },
             );
 
+            let key_val = self.append_env_key_const(current_block, binding);
             let local_block = self.current_function.new_block();
+            let has_key_block = self.current_function.new_block();
             let env_block = self.current_function.new_block();
             let merge = self.current_function.new_block();
             self.current_function.set_terminator(
@@ -522,7 +524,25 @@ impl Lowerer {
                 Terminator::Branch {
                     condition: env_missing,
                     true_block: local_block,
-                    false_block: env_block,
+                    false_block: has_key_block,
+                },
+            );
+
+            let env_has_key = self.alloc_value();
+            self.current_function.append_instruction(
+                has_key_block,
+                Instruction::CallBuiltin {
+                    dest: Some(env_has_key),
+                    builtin: Builtin::ObjectHasOwn,
+                    args: vec![shared_env, key_val],
+                },
+            );
+            self.current_function.set_terminator(
+                has_key_block,
+                Terminator::Branch {
+                    condition: env_has_key,
+                    true_block: env_block,
+                    false_block: local_block,
                 },
             );
 
@@ -537,7 +557,6 @@ impl Lowerer {
             self.current_function
                 .set_terminator(local_block, Terminator::Jump { target: merge });
 
-            let key_val = self.append_env_key_const(env_block, binding);
             let env_val = self.alloc_value();
             self.current_function.append_instruction(
                 env_block,

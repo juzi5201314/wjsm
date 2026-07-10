@@ -1,6 +1,8 @@
 //! Node.js `child_process` host：同步 spawnSync/execSync + 异步 spawn/fork + IPC。
 
 #[cfg(unix)]
+mod child_message_callbacks;
+#[cfg(unix)]
 mod ipc;
 mod spawn_async;
 mod spawn_sync;
@@ -13,8 +15,12 @@ use wasmtime::Caller;
 
 use crate::*;
 
+#[cfg(unix)]
+use child_message_callbacks::child_on_message;
+#[cfg(not(unix))]
+use spawn_async::child_on_message;
 use spawn_async::{
-    child_disconnect, child_kill, child_on_exit, child_on_message, child_send, process_connected,
+    child_disconnect, child_kill, child_on_exit, child_send, process_connected,
     process_disconnect, process_on_message, process_send, spawn_async,
 };
 use spawn_sync::{exec_sync, spawn_sync};

@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+rejected cluster-error
+fulfilled cluster-ok
+chained 2
+--- stderr ---

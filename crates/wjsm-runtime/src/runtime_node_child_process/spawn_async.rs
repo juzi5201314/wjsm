@@ -15,6 +15,10 @@ use crate::scheduler::AsyncHostCompletion;
 use crate::*;
 
 #[cfg(unix)]
+use super::child_message_callbacks::{
+    drain_child_messages, ipc_payload_to_js, ipc_payload_to_js_caller,
+};
+#[cfg(unix)]
 use super::ipc::{IpcEndpoint, connect_ipc_path, create_parent_ipc};
 use super::spawn_sync::{
     make_child_process_error, parse_options, signal_from_status, validate_command_allowed,
@@ -39,6 +43,10 @@ pub(crate) struct LocalChildBinding {
     pub exit_cb: Option<i64>,
     pub disconnect_cb: Option<i64>,
     pub ref_guard: Option<crate::scheduler::AsyncOpGuard>,
+    #[cfg(unix)]
+    pub pending_messages: Vec<super::ipc::IpcMessage>,
+    #[cfg(unix)]
+    pub message_cb_ready: bool,
 }
 
 /// 本进程作为 IPC child 时的通道状态。
@@ -202,6 +210,8 @@ fn spawn_unix(
                 exit_cb: None,
                 disconnect_cb: None,
                 ref_guard,
+                pending_messages: Vec::new(),
+                message_cb_ready: false,
             },
         );
     }
@@ -493,26 +503,23 @@ pub(super) fn child_disconnect(caller: &mut Caller<'_, RuntimeState>, args: &[i6
     value::encode_undefined()
 }
 
+#[cfg(not(unix))]
 pub(super) fn child_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let Some(handle) = handle_arg(args.first().copied()) else {
         return make_type_error_exception(caller, "childOnMessage: invalid id");
     };
-    let cb = args
+    let callback = args
         .get(1)
         .copied()
         .unwrap_or_else(value::encode_undefined);
-    {
-        let mut map = caller
-            .data()
-            .child_bindings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(b) = map.get_mut(&handle) {
-            b.message_cb = Some(cb);
-        }
+    let mut bindings = caller
+        .data()
+        .child_bindings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(binding) = bindings.get_mut(&handle) {
+        binding.message_cb = Some(callback);
     }
-    // 不在此处 wait_endpoint（会阻塞 host 调用、拖死父进程事件循环）。
-    // 在第一次 childSend 时 wait + 启动 reader。
     value::encode_undefined()
 }
 
@@ -577,75 +584,8 @@ pub(super) fn child_on_exit(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
     value::encode_undefined()
 }
 
-pub(crate) fn drain_child_messages(
-    store: &mut Store<RuntimeState>,
-    env: &WasmEnv,
-    handle: u32,
-) {
-    let (messages, cb) = {
-        let endpoint = {
-            let inner = store
-                .data()
-                .child_process_table
-                .inner
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            inner
-                .entries
-                .get(handle as usize)
-                .and_then(|e| e.as_ref())
-                .and_then(|e| e.ipc.as_ref())
-                .and_then(|h| h.try_endpoint())
-        };
-        let messages = endpoint.map(|e| e.drain_inbox()).unwrap_or_default();
-        let cb = store
-            .data()
-            .child_bindings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&handle)
-            .and_then(|b| b.message_cb);
-        (messages, cb)
-    };
-    let Some(cb) = cb else {
-        return;
-    };
-    for msg in messages {
-        let payload = ipc_payload_to_js(store, env, &msg.payload);
-        let fd_val = msg
-            .fd
-            .map(|fd| value::encode_f64(fd as f64))
-            .unwrap_or_else(value::encode_undefined);
-        store
-            .data()
-            .next_tick_queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push_back(ProcessNextTickTask {
-                callback: cb,
-                args: vec![payload, fd_val],
-            });
-    }
-}
 
-fn ipc_payload_to_js(store: &mut Store<RuntimeState>, env: &WasmEnv, text: &str) -> i64 {
-    match crate::runtime_json::parse_json_text(text) {
-        Ok(jv) => crate::runtime_json::build_wasm_value_with_env(store, env, &jv),
-        Err(_) => store_runtime_string_in_state(store.data(), text.to_string()),
-    }
-}
-
-fn ipc_payload_to_js_caller(caller: &mut Caller<'_, RuntimeState>, text: &str) -> i64 {
-    match crate::runtime_json::parse_json_text(text) {
-        Ok(jv) => {
-            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-            crate::runtime_json::build_wasm_value_with_env(caller, &env, &jv)
-        }
-        Err(_) => store_runtime_string(caller, text.to_string()),
-    }
-}
-
-fn handle_arg(raw: Option<i64>) -> Option<u32> {
+pub(super) fn handle_arg(raw: Option<i64>) -> Option<u32> {
     let raw = raw?;
     if !value::is_f64(raw) {
         return None;

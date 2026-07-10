@@ -363,32 +363,42 @@ fn wake_with(
 
 fn send_framed(sock: RawFd, payload: &[u8], send_fd: Option<RawFd>) -> io::Result<()> {
     let len = (payload.len() as u32).to_le_bytes();
+    if let Some(fd) = send_fd {
+        if payload.is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "ipc fd payload must not be empty",
+            ));
+        }
+        write_all_fd(sock, &len)?;
+        return send_with_fd(sock, payload, fd);
+    }
+
     let mut data = Vec::with_capacity(4 + payload.len());
     data.extend_from_slice(&len);
     data.extend_from_slice(payload);
+    write_all_fd(sock, &data)
+}
 
-    if let Some(fd) = send_fd {
-        send_with_fd(sock, &data, fd)
-    } else {
-        let mut written = 0;
-        while written < data.len() {
-            let n = unsafe {
-                libc::write(
-                    sock,
-                    data[written..].as_ptr() as *const libc::c_void,
-                    data.len() - written,
-                )
-            };
-            if n < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if n == 0 {
-                return Err(io::Error::new(ErrorKind::WriteZero, "ipc write zero"));
-            }
-            written += n as usize;
+fn write_all_fd(sock: RawFd, data: &[u8]) -> io::Result<()> {
+    let mut written = 0;
+    while written < data.len() {
+        let n = unsafe {
+            libc::write(
+                sock,
+                data[written..].as_ptr() as *const libc::c_void,
+                data.len() - written,
+            )
+        };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
         }
-        Ok(())
+        if n == 0 {
+            return Err(io::Error::new(ErrorKind::WriteZero, "ipc write zero"));
+        }
+        written += n as usize;
     }
+    Ok(())
 }
 
 fn send_with_fd(sock: RawFd, data: &[u8], fd: RawFd) -> io::Result<()> {

@@ -36,7 +36,6 @@ const { fork } = require('child_process');
 if (process.env.IS_CHILD === '1') {
   process.on('message', (m) => {
     process.send({ pong: m.ping });
-    process.exit(0);
   });
 } else {
   const child = fork(__filename, [], {
@@ -69,10 +68,54 @@ if (process.env.IS_CHILD === '1') {
         "status={:?} stdout={stdout} stderr={stderr}",
         output.status
     );
+    assert!(stdout.contains("got 42"), "stdout={stdout} stderr={stderr}");
+}
+
+#[test]
+fn child_process_spawn_with_net_keeps_host_id() {
+    let script = write_temp_script(
+        "spawn_net_id",
+        r#"
+const net = require('net');
+const { spawn } = require('child_process');
+
+const server = net.createServer();
+const child = spawn(process.execPath, ['eval', '1 + 1'], {
+  stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+});
+
+console.log('spawn-id', typeof child.__id, child.__id >= 0, child.connected);
+child.on('error', function (error) {
+  console.log('spawn-error', error.message);
+  process.exit(2);
+});
+child.on('exit', function (code) {
+  console.log('spawn-exit', code);
+  process.exit(code === 0 ? 0 : 3);
+});
+setTimeout(function () { process.exit(4); }, 7000);
+"#,
+    );
+
+    let output = Command::new(wjsm_bin())
+        .arg("run")
+        .arg(&script)
+        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
+        .output()
+        .expect("spawn wjsm");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("got 42"),
+        output.status.success(),
+        "status={:?} stdout={stdout} stderr={stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("spawn-id number true true"),
         "stdout={stdout} stderr={stderr}"
     );
+    assert!(stdout.contains("spawn-exit 0"), "stdout={stdout}");
 }
 
 #[test]
@@ -189,6 +232,80 @@ if (cluster.isPrimary) {
     assert!(
         stdout.contains("shared-port"),
         "expected shared-port in stdout={stdout} stderr={stderr}"
+    );
+}
+
+#[test]
+fn cluster_rr_primary_net_connect() {
+    let script = write_temp_script(
+        "cluster_net_client",
+        r#"
+const cluster = require('cluster');
+const net = require('net');
+
+if (cluster.isPrimary) {
+  cluster.schedulingPolicy = cluster.SCHED_RR;
+  const worker = cluster.fork();
+
+  worker.on('message', function (message) {
+    if (message && message.kind === 'handled') console.log('worker-handled');
+  });
+
+  cluster.on('listening', function (_worker, address) {
+    console.log('listening-port', address.port);
+    const client = net.connect(address.port, '127.0.0.1');
+    client.on('end', function () {
+      console.log('client-end');
+      setTimeout(function () {
+        worker.kill();
+        process.exit(0);
+      }, 300);
+    });
+    client.on('error', function (error) {
+      console.log('client-error', error.message);
+      process.exit(7);
+    });
+  });
+
+  setTimeout(function () {
+    console.log('timeout');
+    process.exit(4);
+  }, 7000);
+} else {
+  net.createServer(function (socket) {
+    process.send({ kind: 'handled' });
+    socket.end();
+  }).listen(0, '127.0.0.1');
+}
+"#,
+    );
+
+    let output = Command::new(wjsm_bin())
+        .arg("run")
+        .arg(&script)
+        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
+        .env("NODE_CLUSTER_SCHED_POLICY", "rr")
+        .output()
+        .expect("spawn wjsm");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={stdout} stderr={stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("listening-port"),
+        "stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("worker-handled"),
+        "stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("client-end"),
+        "stdout={stdout} stderr={stderr}"
     );
 }
 
