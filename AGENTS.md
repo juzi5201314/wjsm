@@ -40,7 +40,8 @@ Do **not** debug by inserting `console.log` or other temporary instrumentation i
 4. **Backend static analysis** (GC spill, liveness, value tags): use `wjsm-backend-wasm` helpers `infer_value_ty`, `compute_var_liveness` in crate tests—see `tests/var_slot_liveness_gc_long_loop.rs`, `tests/compiler_gc_analysis_spill.rs`. Prefer new targeted tests over runtime logging.
 5. **Runtime / host**: Read trap message (`Runtime error:` exit 2). Startup snapshot issues only: `WJSM_STARTUP_SNAPSHOT_DEBUG=1`.
 6. **Inspector / CDP** (`--inspect` / `--inspect-brk`, issue #313 / ADR 0007): enables statement-level `debug_break` host safepoints + wasmtime `guest_debug` (Cranelift only; Winch rejected). JS `debugger;` is a real pause under inspect; without `--inspect` it remains a compile-time no-op. Chrome DevTools connects via `ws://127.0.0.1:9229/...` (see stderr `Debugger listening on …`). `require('inspector')` exposes `url()` / `open` / `close`.
-7. **Stage isolation**: `cargo run -- build <file> --stage parse|lower|compile` and `cargo run -- check <file>` to stop before execute.
+7. **node:vm multi-realm** (`require('vm')` / `node:vm`, issue #313 / ADR 0008): single Store multi-realm — pristine reachable-graph clone, `execution_realm` + `__array_proto_handle`/`__object_proto_handle` swap (no TLS), conditional GC roots, `timeout` via scoped epoch trap + interpreter `Instant` deadline. Owners: `realm.rs`, `realm_clone.rs`, `handle_remap.rs`, `runtime_node_vm.rs`, `node_vm.js`.
+8. **Stage isolation**: `cargo run -- build <file> --stage parse|lower|compile` and `cargo run -- check <file>` to stop before execute.
 
 **Evidence before fix**: state which layer failed (parse / lower / compile / runtime) with the exact command output or snapshot diff. **Tests**: lowering changes → semantic snapshots; observable behavior → `fixtures/happy` or `fixtures/errors` + `.expected` (`WJSM_UPDATE_FIXTURES=1` after review).
 

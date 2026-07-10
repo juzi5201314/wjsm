@@ -49,3 +49,4 @@
 | 2026-06-19 | Build-Time Embedded Runtime (ADR 0004; partial supersede 0003) | [../../docs/adr/0004-build-time-embedded-runtime.md](../../docs/adr/0004-build-time-embedded-runtime.md) |
 | 2026-07-05 | Pluggable GC v2 Boundary (ADR 0005) | [../../docs/adr/0005-pluggable-gc-v2.md](../../docs/adr/0005-pluggable-gc-v2.md) |
 | 2026-07-07 | Runtime Module Loading Boundary (ADR 0006) | [../../docs/adr/0006-runtime-module-loading-boundary.md](../../docs/adr/0006-runtime-module-loading-boundary.md) |
+| 2026-07-11 | node:vm Multi-Realm Sandbox (ADR 0008) | [../../docs/adr/0008-node-vm-multi-realm.md](../../docs/adr/0008-node-vm-multi-realm.md) |

@@ -58,6 +58,19 @@ Script.prototype.runInThisContext = function (options) {
   return host.scriptRunInThisContext(this.__code, options);
 };
 
+// 非目标：明确抛错，不留 no-op
+export function measureMemory() {
+  throw new Error('not implemented in wjsm: vm.measureMemory');
+}
+
+export function SourceTextModule() {
+  throw new Error('not implemented in wjsm: vm.SourceTextModule');
+}
+
+export function SyntheticModule() {
+  throw new Error('not implemented in wjsm: vm.SyntheticModule');
+}
+
 export default {
   Script,
   createContext,
@@ -67,4 +80,7 @@ export default {
   runInThisContext,
   compileFunction,
   constants,
+  measureMemory,
+  SourceTextModule,
+  SyntheticModule,
 };

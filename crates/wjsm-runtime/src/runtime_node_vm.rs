@@ -158,6 +158,7 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         }
         None => alloc_host_object(caller, &env, 16),
     };
+    let options = args.get(1).copied();
 
     // 已 contextified 则幂等返回
     if let Some(h) = object_handle_idx(sandbox) {
@@ -171,7 +172,7 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         }
     }
 
-    let realm = match clone_pristine_realm(caller, &env, sandbox) {
+    let mut realm = match clone_pristine_realm(caller, &env, sandbox) {
         Ok(r) => r,
         Err(e) => {
             return make_type_error_exception(
@@ -180,6 +181,21 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             );
         }
     };
+
+    // contextCodeGeneration / codeGeneration flags
+    apply_codegen_options(caller, &mut realm, options);
+
+    // 写回 active_realms 中刚 push 的条目
+    {
+        let mut realms = caller
+            .data()
+            .active_realms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(slot) = realms.iter_mut().find(|r| r.id == realm.id) {
+            slot.code_generation = realm.code_generation;
+        }
+    }
 
     if let Some(h) = object_handle_idx(sandbox) {
         caller
@@ -190,6 +206,44 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             .insert(h, realm.id);
     }
     sandbox
+}
+
+fn apply_codegen_options(
+    caller: &mut Caller<'_, RuntimeState>,
+    realm: &mut crate::realm::Realm,
+    options: Option<i64>,
+) {
+    let Some(opts) = options else {
+        return;
+    };
+    if !value::is_object(opts) {
+        return;
+    }
+    let Some(ptr) = resolve_handle(caller, opts) else {
+        return;
+    };
+    // Node: contextCodeGeneration 或 codeGeneration: { strings, wasm }
+    let cg = read_object_property_by_name(caller, ptr, "contextCodeGeneration")
+        .or_else(|| read_object_property_by_name(caller, ptr, "codeGeneration"));
+    let Some(cg) = cg else {
+        return;
+    };
+    if !value::is_object(cg) {
+        return;
+    }
+    let Some(cg_ptr) = resolve_handle(caller, cg) else {
+        return;
+    };
+    if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "strings") {
+        if value::is_bool(raw) {
+            realm.code_generation.strings = value::decode_bool(raw);
+        }
+    }
+    if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "wasm") {
+        if value::is_bool(raw) {
+            realm.code_generation.wasm = value::decode_bool(raw);
+        }
+    }
 }
 
 fn is_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
@@ -341,6 +395,22 @@ async fn eval_in_realm(
         store_runtime_string(caller, s)
     };
 
+    // codeGeneration.strings === false → eval/Function 抛 EvalError
+    if !realm_allows_strings(caller, realm_id) {
+        return make_type_error_exception(
+            caller,
+            "EvalError: Code generation from strings disallowed for this context",
+        );
+    }
+
+    // microtaskMode: afterEvaluate — 记录队列长度，run 后 drain 新增
+    let microtask_base = caller
+        .data()
+        .microtask_queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .len();
+
     // 帧内 eval：swap proto globals + execution_realm
     let prev_realm = caller
         .data()
@@ -410,11 +480,51 @@ async fn eval_in_realm(
             }
         }
     }
+    // afterEvaluate：尽量排空本轮新增 microtask（稳态）
+    if let Some(env) = WasmEnv::from_caller(caller) {
+        let _ = drain_microtasks_after_eval(caller, &env, microtask_base).await;
+    }
+
     if value::is_exception(result) {
         // 解释器路径可能以 exception 抛出 timeout 文案
         return result;
     }
     result
+}
+
+fn realm_allows_strings(caller: &Caller<'_, RuntimeState>, realm_id: RealmId) -> bool {
+    let realms = caller
+        .data()
+        .active_realms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let r = if realm_id.0 == 0 {
+        realms.first()
+    } else {
+        realms.iter().find(|r| r.id == realm_id)
+    };
+    r.map(|r| r.code_generation.strings).unwrap_or(true)
+}
+
+async fn drain_microtasks_after_eval(
+    caller: &mut Caller<'_, RuntimeState>,
+    env: &WasmEnv,
+    base_len: usize,
+) -> anyhow::Result<()> {
+    // 简单稳态：队列长度回到 base 或排空；上限防止死循环
+    for _ in 0..10_000 {
+        let len = caller
+            .data()
+            .microtask_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
+        if len <= base_len {
+            break;
+        }
+        crate::runtime_microtask::drain_microtasks_async(caller, env).await;
+    }
+    Ok(())
 }
 
 /// 武装 vm timeout：切换 epoch 为 trap + 后台 increment_epoch；设置解释器 deadline。
