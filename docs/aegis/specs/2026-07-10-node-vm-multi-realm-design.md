@@ -2,7 +2,8 @@
 
 - 日期：2026-07-10
 - 状态：已按用户本轮“无需审批 spec、直接进入 writing-plans”授权进入实现
-- 关联 issue：#313（`vm.runInNewContext` 原为非目标，本轮用户明确要求完整落地，取代该非目标条目）
+- 关联 issue：#313（`vm.runInNewContext` 原为非目标，本轮用户明确要求完整落地，**覆盖**该非目标条目；与 Inspector/net 等 #313 其它条目正交）
+- **实现权威**：`docs/aegis/plans/2026-07-10-node-vm-multi-realm.md`（2026-07-10 源码对照审查修正后）。下文若与 plan 冲突（尤其：remap 函数表索引 vs object handle、TLS 注入、epoch 直接做 timeout、`eval_cache` 纯 code 键、无条件 root realm global），**以 plan 为准**，实现完成后回写本 spec + ADR 0008。
 - 输入：issue #313 正文、`AGENTS.md` 运行时/snapshot/handle/GC 约束、`docs/adr/0003-startup-snapshot-boundary.md`、`docs/adr/0004-build-time-embedded-runtime.md`、`docs/adr/0002-runtimestate-stays-flat.md`、`crates/wjsm-runtime/src/runtime_eval.rs`、`crates/wjsm-runtime/src/startup_snapshot.rs` / `startup_snapshot_remap.rs`、`crates/wjsm-runtime/src/runtime_gc/roots.rs`、`crates/wjsm-runtime/src/host_imports/collections_buffers.rs`、`crates/wjsm-snapshot-format/src/lib.rs`、`crates/wjsm-module/src/builtin_modules.rs`、`crates/wjsm-module/src/resolver.rs`、`crates/wjsm-runtime/src/scheduler.rs` 以及三份子系统探底报告
 
 ## 1. 背景与当前事实
