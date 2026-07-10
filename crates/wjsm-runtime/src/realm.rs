@@ -200,6 +200,101 @@ pub fn with_execution_realm_slot<R>(
     }
 }
 
+/// 执行帧：保存/恢复 `execution_realm` + `__array_proto_handle` / `__object_proto_handle`。
+///
+/// compiled eval 与 support `arr_new` 读父模块同一 mutable global；进入非 0 realm 时
+/// 必须 swap 为该 realm 的 intrinsic handle，退出时嵌套安全地 restore。
+///
+/// 正常路径必定 restore。若 `f` panic，global 可能残留（与多数 host 回调一致）；
+/// vm 入口应避免在帧内 panic。
+pub(crate) fn with_execution_realm_frame<C, R>(
+    ctx: &mut C,
+    env: &crate::wasm_env::WasmEnv,
+    realm_id: RealmId,
+    f: impl FnOnce(&mut C) -> R,
+) -> R
+where
+    C: wasmtime::AsContextMut<Data = crate::RuntimeState>,
+{
+    use wasmtime::{AsContext, Val};
+
+    let prev_realm = ctx
+        .as_context()
+        .data()
+        .execution_realm
+        .swap(realm_id.0, Ordering::Relaxed);
+    let prev_array = env
+        .array_proto_handle
+        .get(&mut *ctx)
+        .i32()
+        .unwrap_or(-1);
+    let prev_object = env
+        .object_proto_handle
+        .get(&mut *ctx)
+        .i32()
+        .unwrap_or(-1);
+
+    if let Some((target_array, target_object)) = resolve_proto_global_handles(ctx, realm_id) {
+        let _ = env
+            .array_proto_handle
+            .set(&mut *ctx, Val::I32(target_array));
+        let _ = env
+            .object_proto_handle
+            .set(&mut *ctx, Val::I32(target_object));
+    }
+
+    let result = f(ctx);
+
+    let _ = env
+        .array_proto_handle
+        .set(&mut *ctx, Val::I32(prev_array));
+    let _ = env
+        .object_proto_handle
+        .set(&mut *ctx, Val::I32(prev_object));
+    ctx.as_context()
+        .data()
+        .execution_realm
+        .store(prev_realm, Ordering::Relaxed);
+
+    result
+}
+
+/// 解析目标 realm 的 array/object proto 裸 handle。
+/// 返回 `None` 表示保持当前 global（主 realm 未登记时）。
+fn resolve_proto_global_handles<C>(ctx: &mut C, realm_id: RealmId) -> Option<(i32, i32)>
+where
+    C: wasmtime::AsContextMut<Data = crate::RuntimeState>,
+{
+    use wasmtime::AsContext;
+
+    let realms = ctx
+        .as_context()
+        .data()
+        .active_realms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let r = if realm_id.0 == 0 {
+        realms.first()
+    } else {
+        realms.iter().find(|r| r.id == realm_id)
+    }?;
+    let arr = nanbox_to_proto_i32(r.intrinsics.array_proto);
+    let obj = nanbox_to_proto_i32(r.intrinsics.object_proto);
+    if arr < 0 || obj < 0 {
+        return None;
+    }
+    Some((arr, obj))
+}
+
+fn nanbox_to_proto_i32(raw: i64) -> i32 {
+    use wjsm_ir::value;
+    if value::is_object(raw) || value::is_array(raw) {
+        value::decode_object_handle(raw) as i32
+    } else {
+        -1
+    }
+}
+
 /// 读取 `WJSM_VM_MAX_REALMS`（默认 1024）。
 pub fn max_realms_limit() -> u32 {
     std::env::var("WJSM_VM_MAX_REALMS")

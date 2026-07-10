@@ -487,6 +487,73 @@ pub struct RealmCloneProbe {
     pub roots_covered: bool,
 }
 
+/// 执行帧探针：enter 克隆 realm 后 WASM global 是否切到新 array/object proto，exit 是否恢复。
+#[derive(Debug, Clone)]
+pub struct ExecutionRealmFrameProbe {
+    pub main_array: i32,
+    pub main_object: i32,
+    pub inside_array: i32,
+    pub inside_object: i32,
+    pub after_array: i32,
+    pub after_object: i32,
+    pub inside_execution_realm: u32,
+    pub after_execution_realm: u32,
+}
+
+/// Bootstrap + clone 后验证 `with_execution_realm_frame` 的 global swap。
+pub async fn probe_execution_realm_frame() -> Result<ExecutionRealmFrameProbe> {
+    use crate::realm::{RealmId, with_execution_realm_frame};
+
+    let wasm = compile_source("/* execution realm frame probe */")?;
+    let config = startup_engine_config(true, None, false);
+    let engine =
+        Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
+    let module = compile_or_load_cached(&engine, &wasm)?;
+    let mut bundle =
+        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default())
+            .await?;
+    run_startup_cold_path(&mut bundle).await?;
+
+    let env = bundle.wasm_env;
+    let store = &mut bundle.store;
+
+    let sandbox = alloc_host_object(store, &env, 4);
+    if !value::is_object(sandbox) {
+        bail!("sandbox alloc failed");
+    }
+    let realm = clone_pristine_realm(store, &env, sandbox)?;
+
+    let main_array = env.array_proto_handle.get(&mut *store).i32().unwrap_or(-1);
+    let main_object = env.object_proto_handle.get(&mut *store).i32().unwrap_or(-1);
+
+    let mut inside_array = -1;
+    let mut inside_object = -1;
+    let mut inside_execution_realm = 0u32;
+
+    with_execution_realm_frame(store, &env, realm.id, |store| {
+        inside_array = env.array_proto_handle.get(&mut *store).i32().unwrap_or(-1);
+        inside_object = env.object_proto_handle.get(&mut *store).i32().unwrap_or(-1);
+        inside_execution_realm = store.data().execution_realm.load(Ordering::Relaxed);
+    });
+
+    let after_array = env.array_proto_handle.get(&mut *store).i32().unwrap_or(-1);
+    let after_object = env.object_proto_handle.get(&mut *store).i32().unwrap_or(-1);
+    let after_execution_realm = store.data().execution_realm.load(Ordering::Relaxed);
+
+    let _ = RealmId(0); // 保留类型可见性
+
+    Ok(ExecutionRealmFrameProbe {
+        main_array,
+        main_object,
+        inside_array,
+        inside_object,
+        after_array,
+        after_object,
+        inside_execution_realm,
+        after_execution_realm,
+    })
+}
+
 /// Bootstrap 空模块、克隆 pristine realm，返回 handle 对照（集成测试入口）。
 pub async fn probe_clone_pristine_realm() -> Result<RealmCloneProbe> {
     let wasm = compile_source("/* realm clone probe */")?;

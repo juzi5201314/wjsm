@@ -25,7 +25,10 @@ mod realm_clone;
 pub use handle_remap::{
     FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
 };
-pub use realm_clone::{RealmCloneProbe, probe_clone_pristine_realm};
+pub use realm_clone::{
+    ExecutionRealmFrameProbe, RealmCloneProbe, probe_clone_pristine_realm,
+    probe_execution_realm_frame,
+};
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
@@ -1780,9 +1783,8 @@ impl RuntimeState {
         }
     }
 
-    /// 在指定 realm 执行帧内运行闭包；嵌套安全，panic 也会 restore。
-    /// Phase 2+ vm/eval 入口统一调用；当前阶段由单测覆盖。
-    #[allow(dead_code)]
+    /// 仅切换 `execution_realm` 原子（无 WASM global swap）。
+    #[allow(dead_code)] // Phase 2+ 与单测共用；带 global swap 见 with_execution_realm_frame
     pub(crate) fn with_execution_realm<R>(
         &self,
         realm_id: crate::realm::RealmId,
