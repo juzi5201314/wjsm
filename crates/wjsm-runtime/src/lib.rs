@@ -26,8 +26,8 @@ pub use handle_remap::{
     FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
 };
 pub use realm_clone::{
-    ExecutionRealmFrameProbe, RealmCloneProbe, probe_clone_pristine_realm,
-    probe_execution_realm_frame,
+    EvalRealmArrayProbe, ExecutionRealmFrameProbe, RealmCloneProbe, probe_clone_pristine_realm,
+    probe_eval_array_literal_in_realm, probe_execution_realm_frame,
 };
 mod property_key;
 mod runtime_arguments;

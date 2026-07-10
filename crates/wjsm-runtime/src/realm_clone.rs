@@ -554,6 +554,63 @@ pub async fn probe_execution_realm_frame() -> Result<ExecutionRealmFrameProbe> {
     })
 }
 
+/// 在克隆 realm 执行帧内分配 `[]` 同源数组，对照 proto handle。
+///
+/// 解释器 `eval_array_lit` 与 compiled `arr_new` / `ArrayConstructor` 均经
+/// `alloc_array_with_env` 读 `__array_proto_handle`；帧 swap 后三者同源。
+#[derive(Debug, Clone)]
+pub struct EvalRealmArrayProbe {
+    pub realm_array_proto: u32,
+    pub result_proto: u32,
+    pub main_array_proto: u32,
+}
+
+/// Task 2.1/2.2：执行帧内数组分配 [[Prototype]] === realm.array_proto。
+pub async fn probe_eval_array_literal_in_realm() -> Result<EvalRealmArrayProbe> {
+    use crate::realm::with_execution_realm_frame;
+
+    let wasm = compile_source("/* eval realm array probe */")?;
+    let config = startup_engine_config(true, None, false);
+    let engine =
+        Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
+    let module = compile_or_load_cached(&engine, &wasm)?;
+    let mut bundle =
+        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default())
+            .await?;
+    run_startup_cold_path(&mut bundle).await?;
+
+    let env = bundle.wasm_env;
+    let store = &mut bundle.store;
+
+    let main_array_proto = env.array_proto_handle.get(&mut *store).i32().unwrap_or(-1) as u32;
+    let sandbox = alloc_host_object(store, &env, 4);
+    let realm = clone_pristine_realm(store, &env, sandbox)?;
+    let realm_array_proto = value::decode_object_handle(realm.intrinsics.array_proto);
+    let realm_id = realm.id;
+
+    let mut result_proto = u32::MAX;
+    with_execution_realm_frame(store, &env, realm_id, |store| {
+        let arr = crate::runtime_host_helpers::alloc_array_with_env(store, &env, 1);
+        if value::is_array(arr) {
+            let h = value::decode_array_handle(arr);
+            let obj_table_ptr =
+                env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+            let obj_table_count =
+                env.obj_table_count.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+            let data = env.memory.data(&*store);
+            if let Some(ptr) = resolve_handle(data, h, obj_table_ptr, obj_table_count) {
+                result_proto = u32::from_le_bytes(data[ptr..ptr + 4].try_into().unwrap());
+            }
+        }
+    });
+
+    Ok(EvalRealmArrayProbe {
+        realm_array_proto,
+        result_proto,
+        main_array_proto,
+    })
+}
+
 /// Bootstrap 空模块、克隆 pristine realm，返回 handle 对照（集成测试入口）。
 pub async fn probe_clone_pristine_realm() -> Result<RealmCloneProbe> {
     let wasm = compile_source("/* realm clone probe */")?;
