@@ -696,6 +696,9 @@ pub(crate) enum NativeCallable {
     NetMethod {
         kind: crate::runtime_node_net::NetMethodKind,
     },
+    VmMethod {
+        kind: crate::runtime_node_vm::VmMethodKind,
+    },
     DgramMethod {
         kind: crate::runtime_node_dgram::DgramMethodKind,
     },

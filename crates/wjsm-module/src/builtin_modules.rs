@@ -100,6 +100,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         canonical: "cluster",
         source: include_str!("../builtin_js/node_cluster.js"),
     },
+    BuiltinModule {
+        canonical: "vm",
+        source: include_str!("../builtin_js/node_vm.js"),
+    },
 ];
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {

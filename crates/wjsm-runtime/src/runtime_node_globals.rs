@@ -145,6 +145,10 @@ pub(crate) fn install_node_web_globals_from_caller(
     let _ = caller.data().push_host_temp_roots([net]);
     define_global(caller, global_obj, "__wjsm_node_net", net);
 
+    let vm = crate::runtime_node_vm::create_vm_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([vm]);
+    define_global(caller, global_obj, "__wjsm_node_vm", vm);
+
     let dgram = crate::runtime_node_dgram::create_dgram_host_object(caller);
     let _ = caller.data().push_host_temp_roots([dgram]);
     define_global(caller, global_obj, "__wjsm_node_dgram", dgram);

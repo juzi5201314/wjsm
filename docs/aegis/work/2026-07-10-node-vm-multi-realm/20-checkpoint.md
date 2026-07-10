@@ -1,28 +1,31 @@
 # TodoCheckpointDraft
 
-- current todo: Task 2.0 with_execution_realm + WASM global swap
-- active slice: Phase 2
+- current todo: Task 3.3 Script + compileFunction + runInThisContext polish
+- active slice: Phase 3 partial → Phase 4 next after 3.3
 - completed todos:
-  - Task 0.1 Realm registry → e0a87ca8
-  - Task 0.2 handle_remap → 6a2f71df
-  - Task 1.1 + 1.2 pristine clone + closure → (this commit)
+  - 0.1 Realm registry → e0a87ca8
+  - 0.2 handle_remap → 6a2f71df
+  - 1.1+1.2 clone + closure → 3c191f02
+  - 2.0 execution frame → 1ade9359
+  - 2.1+2.2 array paths → 02b1429b
+  - 3.1+3.2 vm builtin + runIn* → (this commit)
 - evidence refs:
-  - binary(realm_registry) + realm unit → 7 passed
-  - binary(handle_remap_kernel)|startup_snapshot_gc_fixes → 7 passed
-  - binary(realm_clone) → 3 passed
+  - binary(realm_clone) 3 passed
+  - binary(execution_realm_frame) 1 passed
+  - binary(eval_realm_interp) 1 passed
+  - happy__vm_* + modules__node_builtin_vm 4 passed
 - blocked-on: none
-- next step: Task 2.0 execution_realm frame with array/object proto global swap
+- next step: Task 3.3 Script reuse / compileFunction; then Phase 4 GC roots
 
 # ResumeStateHint
 
 - branch: feat/node-vm-multi-realm
 - plan: docs/aegis/plans/2026-07-10-node-vm-multi-realm.md
-- clone owner: crates/wjsm-runtime/src/realm_clone.rs
-- probe API: wjsm_runtime::probe_clone_pristine_realm
+- key owners: realm.rs, handle_remap.rs, realm_clone.rs, runtime_node_vm.rs, node_vm.js
 
 # DriftCheckDraft
 
-- scope: on-plan Phase 0–1 complete
-- compatibility: non-vm path unchanged; clone only on explicit probe/vm path
-- retirement: none new
+- scope: on-plan through Phase 3.2; Script/compileFunction skeleton exists, full reuse not done
+- compatibility: execution_realm=0 unchanged; sandbox free-var via eval_*_binding object path
+- retirement: none
 - decision: continue

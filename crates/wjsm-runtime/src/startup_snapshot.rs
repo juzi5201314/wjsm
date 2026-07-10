@@ -141,6 +141,7 @@ pub(crate) fn capture_startup_snapshot(
                 NativeCallable::ZlibMethod { kind } => kind.method(),
                 NativeCallable::ChildProcessMethod { kind } => kind.method(),
                 NativeCallable::NetMethod { kind } => kind.method(),
+                NativeCallable::VmMethod { kind } => kind.method(),
                 NativeCallable::DgramMethod { kind } => kind.method(),
                 NativeCallable::TlsMethod { kind } => kind.method(),
                 NativeCallable::WorkerThreadsMethod { kind } => kind.method(),

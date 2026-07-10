@@ -167,6 +167,7 @@ pub enum SnapshotNativeCallable {
     FunctionProtoApply = 83,
     FunctionProtoBind = 84,
     WorkerThreadsMethod = 85,
+    VmMethod = 86,
 }
 
 impl SnapshotNativeCallable {
@@ -258,6 +259,7 @@ impl SnapshotNativeCallable {
             83 => Some(Self::FunctionProtoApply),
             84 => Some(Self::FunctionProtoBind),
             85 => Some(Self::WorkerThreadsMethod),
+            86 => Some(Self::VmMethod),
             _ => None,
         }
     }

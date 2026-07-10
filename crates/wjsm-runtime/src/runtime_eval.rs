@@ -1937,13 +1937,23 @@ pub(crate) fn eval_get_binding(
     record: i64,
     name: i64,
 ) -> i64 {
-    let handle = value::decode_scope_record_handle(record);
     let name_str = read_value_string_bytes(caller, name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     if name_str.is_empty() {
         return value::encode_undefined();
     }
+
+    // contextify：scope_env 可为普通 object，按属性读
+    if !value::is_scope_record(record) && (value::is_object(record) || value::is_array(record)) {
+        if let Some(ptr) = resolve_handle(caller, record) {
+            return read_object_property_by_name(caller, ptr, &name_str)
+                .unwrap_or_else(value::encode_undefined);
+        }
+        return value::encode_undefined();
+    }
+
+    let handle = value::decode_scope_record_handle(record);
     if name_str == "__wjsm_new_target" {
         if let Some(rec) = caller.data().scope_records.get(&handle) {
             if let Some(nt) = rec.new_target.filter(|v| !value::is_undefined(*v)) {
@@ -2001,13 +2011,20 @@ pub(crate) fn eval_set_binding(
     name: i64,
     val: i64,
 ) -> i64 {
-    let handle = value::decode_scope_record_handle(record);
     let name_str = read_value_string_bytes(caller, name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     if name_str.is_empty() {
         return value::encode_undefined();
     }
+
+    // contextify：普通 object sandbox 上的 free-var 赋值 → 数据属性
+    if !value::is_scope_record(record) && (value::is_object(record) || value::is_array(record)) {
+        let _ = set_host_data_property_from_caller(caller, record, &name_str, val);
+        return val;
+    }
+
+    let handle = value::decode_scope_record_handle(record);
     if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
         for (n, v, init, is_const) in rec.bindings.iter_mut() {
             if n == &name_str {
@@ -2070,13 +2087,20 @@ pub(crate) fn eval_has_binding(
     record: i64,
     name: i64,
 ) -> i64 {
-    let handle = value::decode_scope_record_handle(record);
     let name_str = read_value_string_bytes(&mut caller, name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     if name_str.is_empty() {
         return value::encode_bool(false);
     }
+    if !value::is_scope_record(record) && (value::is_object(record) || value::is_array(record)) {
+        if let Some(ptr) = resolve_handle(&mut caller, record) {
+            let found = read_object_property_by_name(&mut caller, ptr, &name_str).is_some();
+            return value::encode_bool(found);
+        }
+        return value::encode_bool(false);
+    }
+    let handle = value::decode_scope_record_handle(record);
     if let Some(rec) = caller.data().scope_records.get(&handle) {
         let found = rec.bindings.iter().any(|(n, _, _, _)| n == &name_str);
         return value::encode_bool(found);

@@ -9,6 +9,7 @@ use crate::runtime_node_tls::TlsMethodKind;
 use crate::runtime_node_worker_threads::WorkerThreadsMethodKind;
 use crate::runtime_node_zlib::ZlibMethodKind;
 use crate::runtime_node_net::NetMethodKind;
+use crate::runtime_node_vm::VmMethodKind;
 use crate::types::{NativeCallable, OsInfoKind, TypedArrayConstructorKind};
 use wjsm_snapshot_format::SnapshotNativeCallable;
 
@@ -127,6 +128,9 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::NetMethod => NativeCallable::NetMethod {
                 kind: NetMethodKind::from_method(method).unwrap_or(NetMethodKind::Connect),
             },
+            Self::VmMethod => NativeCallable::VmMethod {
+                kind: VmMethodKind::from_method(method).unwrap_or(VmMethodKind::CreateContext),
+            },
             Self::DgramMethod => NativeCallable::DgramMethod {
                 kind: DgramMethodKind::from_method(method).unwrap_or(DgramMethodKind::Bind),
             },
@@ -233,6 +237,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::ZlibMethod { kind: _ } => Self::ZlibMethod,
             NativeCallable::ChildProcessMethod { kind: _ } => Self::ChildProcessMethod,
             NativeCallable::NetMethod { kind: _ } => Self::NetMethod,
+            NativeCallable::VmMethod { kind: _ } => Self::VmMethod,
             NativeCallable::DgramMethod { kind: _ } => Self::DgramMethod,
             NativeCallable::TlsMethod { kind: _ } => Self::TlsMethod,
             NativeCallable::WorkerThreadsMethod { kind: _ } => Self::WorkerThreadsMethod,

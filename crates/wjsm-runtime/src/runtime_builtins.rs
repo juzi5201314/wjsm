@@ -896,6 +896,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::NetMethod { kind } => {
             Some(crate::runtime_node_net::call_net_method(caller, kind, &args))
         }
+        NativeCallable::VmMethod { kind } => {
+            Some(crate::runtime_node_vm::call_vm_method(caller, kind, &args))
+        }
         NativeCallable::DgramMethod { kind } => {
             Some(crate::runtime_node_dgram::call_dgram_method(caller, kind, &args))
         }
@@ -1565,6 +1568,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         }
         NativeCallable::CjsRequire { referrer } => {
             Some(call_cjs_require_async(caller, referrer, args).await)
+        }
+        NativeCallable::VmMethod { kind } => {
+            Some(crate::runtime_node_vm::call_vm_method_async(caller, kind, &args).await)
         }
         NativeCallable::AgentStart
         | NativeCallable::AgentBroadcast

@@ -58,6 +58,7 @@ mod runtime_node_data;
 mod runtime_node_fs;
 mod runtime_node_globals;
 mod runtime_node_net;
+mod runtime_node_vm;
 mod runtime_node_dgram;
 mod runtime_node_tls;
 mod runtime_node_worker_threads;
@@ -1102,6 +1103,12 @@ impl Clone for RuntimeState {
             ),
             next_realm_id: AtomicU32::new(self.next_realm_id.load(Ordering::Relaxed)),
             execution_realm: AtomicU32::new(self.execution_realm.load(Ordering::Relaxed)),
+            contextified: Mutex::new(
+                self.contextified
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
         }
     }
 }
@@ -1364,6 +1371,8 @@ struct RuntimeState {
     pub(crate) next_realm_id: AtomicU32,
     /// 当前执行帧目标 realm；分配 / 构造 / 字面量 intrinsic 解析读此字段。默认 0。
     pub(crate) execution_realm: AtomicU32,
+    /// contextified sandbox handle → RealmId（node:vm side table）。
+    pub(crate) contextified: crate::runtime_node_vm::ContextifiedTable,
 }
 
 impl RuntimeState {
@@ -1780,6 +1789,7 @@ impl RuntimeState {
             active_realms: Mutex::new(Vec::new()),
             next_realm_id: AtomicU32::new(1),
             execution_realm: AtomicU32::new(0),
+            contextified: crate::runtime_node_vm::empty_contextified_table(),
         }
     }
 
