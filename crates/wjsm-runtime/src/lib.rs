@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
@@ -19,6 +19,7 @@ use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
 mod array_named_props;
 mod host_side_table;
+pub mod realm;
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
@@ -1084,6 +1085,14 @@ impl Clone for RuntimeState {
             thread_id: self.thread_id,
             parent_port_id: self.parent_port_id,
             worker_data_serialized: self.worker_data_serialized.clone(),
+            active_realms: Mutex::new(
+                self.active_realms
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
+            next_realm_id: AtomicU32::new(self.next_realm_id.load(Ordering::Relaxed)),
+            execution_realm: AtomicU32::new(self.execution_realm.load(Ordering::Relaxed)),
         }
     }
 }
@@ -1339,6 +1348,13 @@ struct RuntimeState {
     parent_port_id: Option<u32>,
     /// Worker 注入的 workerData（序列化后）。
     worker_data_serialized: Option<runtime_worker_message::SerializedValue>,
+
+    /// 活跃 realm。`0` = 主 realm（惰性登记）。登记本身不因条目存在而强持有 global（见 Phase 4）。
+    pub(crate) active_realms: Mutex<Vec<crate::realm::Realm>>,
+    /// 下一个可分配 realm id；从 1 起，0 留给主 realm。
+    pub(crate) next_realm_id: AtomicU32,
+    /// 当前执行帧目标 realm；分配 / 构造 / 字面量 intrinsic 解析读此字段。默认 0。
+    pub(crate) execution_realm: AtomicU32,
 }
 
 impl RuntimeState {
@@ -1752,7 +1768,27 @@ impl RuntimeState {
             thread_id: 0,
             parent_port_id: None,
             worker_data_serialized: None,
+            active_realms: Mutex::new(Vec::new()),
+            next_realm_id: AtomicU32::new(1),
+            execution_realm: AtomicU32::new(0),
         }
+    }
+
+    /// 在指定 realm 执行帧内运行闭包；嵌套安全，panic 也会 restore。
+    /// Phase 2+ vm/eval 入口统一调用；当前阶段由单测覆盖。
+    #[allow(dead_code)]
+    pub(crate) fn with_execution_realm<R>(
+        &self,
+        realm_id: crate::realm::RealmId,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        crate::realm::with_execution_realm_slot(&self.execution_realm, realm_id, f)
+    }
+
+    /// 当前执行帧 realm id。
+    #[allow(dead_code)]
+    pub(crate) fn current_execution_realm(&self) -> crate::realm::RealmId {
+        crate::realm::RealmId(self.execution_realm.load(Ordering::Relaxed))
     }
 }
 
@@ -1762,11 +1798,36 @@ mod tests {
         GcAlgorithmKind, RuntimeOptions, execute_with_writer, execute_with_writer_with_options,
         gc_algorithm_from_env,
     };
+    use crate::realm::RealmId;
     use crate::runtime_gc::api::{CycleKind, GcStats};
     use anyhow::Result;
     use std::ffi::OsStr;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use tokio::runtime::Runtime;
+
+    #[test]
+    fn execution_realm_frame_nested_on_runtime_state() {
+        let state = super::RuntimeState::new();
+        assert_eq!(state.current_execution_realm(), RealmId(0));
+        state.with_execution_realm(RealmId(3), || {
+            assert_eq!(state.current_execution_realm(), RealmId(3));
+            state.with_execution_realm(RealmId(5), || {
+                assert_eq!(state.current_execution_realm(), RealmId(5));
+            });
+            assert_eq!(state.current_execution_realm(), RealmId(3));
+        });
+        assert_eq!(state.current_execution_realm(), RealmId(0));
+        assert_eq!(state.execution_realm.load(Ordering::Relaxed), 0);
+        assert_eq!(state.next_realm_id.load(Ordering::Relaxed), 1);
+        assert!(
+            state
+                .active_realms
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
+    }
 
     #[test]
     fn pause_hist_ring_wraps_at_256_entries() {
