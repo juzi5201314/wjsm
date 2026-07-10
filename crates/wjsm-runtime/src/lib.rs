@@ -18,8 +18,12 @@ use wjsm_ir::{constants, value};
 use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
 mod array_named_props;
+mod handle_remap;
 mod host_side_table;
 pub mod realm;
+pub use handle_remap::{
+    FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
+};
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
