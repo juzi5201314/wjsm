@@ -41,6 +41,7 @@
 | 2026-07-07 | Runtime Module Loading (issue #312) | [plans/2026-07-07-runtime-module-loading.md](plans/2026-07-07-runtime-module-loading.md) |
 | 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [plans/2026-07-07-package-management.md](plans/2026-07-07-package-management.md) |
 | 2026-07-08 | Node Advanced Builtins and CLI Tooling (issue #311) | [plans/2026-07-08-node-advanced-modules-issue311.md](plans/2026-07-08-node-advanced-modules-issue311.md) |
+| 2026-07-10 | node:vm Multi-Realm Sandbox | [plans/2026-07-10-node-vm-multi-realm.md](plans/2026-07-10-node-vm-multi-realm.md) |
 
 ## Baselines
 
