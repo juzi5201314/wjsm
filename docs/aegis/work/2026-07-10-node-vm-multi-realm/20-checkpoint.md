@@ -1,31 +1,27 @@
 # TodoCheckpointDraft
 
-- current todo: Task 3.3 Script + compileFunction + runInThisContext polish
-- active slice: Phase 3 partial → Phase 4 next after 3.3
+- current todo: Task 6.2 full workspace regression (partial: targeted done)
+- active slice: completion candidate
 - completed todos:
-  - 0.1 Realm registry → e0a87ca8
-  - 0.2 handle_remap → 6a2f71df
-  - 1.1+1.2 clone + closure → 3c191f02
-  - 2.0 execution frame → 1ade9359
-  - 2.1+2.2 array paths → 02b1429b
-  - 3.1+3.2 vm builtin + runIn* → (this commit)
+  - Phase 0–5 full
+  - 6.1 codegen/non-goals/microtask afterEvaluate
+  - 6.3 ADR 0008 + INDEX + AGENTS
 - evidence refs:
-  - binary(realm_clone) 3 passed
-  - binary(execution_realm_frame) 1 passed
-  - binary(eval_realm_interp) 1 passed
-  - happy__vm_* + modules__node_builtin_vm 4 passed
-- blocked-on: none
-- next step: Task 3.3 Script reuse / compileFunction; then Phase 4 GC roots
+  - happy__vm_* 6 passed
+  - errors__vm_unsupported passed
+  - modules__node_builtin_vm passed
+  - reclaim_dead_realms unit + realm_clone probes
+- blocked-on: optional full `cargo nextest run --workspace` (long)
+- next step: optional full workspace GC matrix; finishing branch
 
 # ResumeStateHint
 
 - branch: feat/node-vm-multi-realm
-- plan: docs/aegis/plans/2026-07-10-node-vm-multi-realm.md
-- key owners: realm.rs, handle_remap.rs, realm_clone.rs, runtime_node_vm.rs, node_vm.js
+- tip: 6abaef6b feat(vm): codegen flags, non-goal errors, ADR 0008
 
 # DriftCheckDraft
 
-- scope: on-plan through Phase 3.2; Script/compileFunction skeleton exists, full reuse not done
-- compatibility: execution_realm=0 unchanged; sandbox free-var via eval_*_binding object path
-- retirement: none
-- decision: continue
+- scope: plan essentially complete; compileFunction full wiring deferred
+- compatibility: single-realm path unchanged
+- retirement: remap walker dual-policy
+- decision: continue (completion candidate)
