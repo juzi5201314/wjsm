@@ -1848,6 +1848,62 @@ mod tests {
     }
 
     #[test]
+    fn reclaim_dead_realms_keeps_main_and_live_sandbox_only() {
+        use crate::realm::{Realm, RealmId, RealmIntrinsics, reclaim_dead_realms};
+        use crate::value;
+
+        let state = super::RuntimeState::new();
+        let main_global = value::encode_object_handle(1);
+        let live_sandbox = value::encode_object_handle(10);
+        let dead_sandbox = value::encode_object_handle(20);
+
+        {
+            let mut realms = state
+                .active_realms
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            realms.push(Realm::new(RealmId(0), main_global, RealmIntrinsics::empty()));
+            realms.push(Realm::new(
+                RealmId(1),
+                live_sandbox,
+                RealmIntrinsics::empty(),
+            ));
+            realms.push(Realm::new(
+                RealmId(2),
+                dead_sandbox,
+                RealmIntrinsics::empty(),
+            ));
+        }
+        {
+            let mut table = state
+                .contextified
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            table.insert(10, RealmId(1));
+            table.insert(20, RealmId(2));
+        }
+
+        // handle 1 (main) 与 10 (live sandbox) 存活；20 已死
+        reclaim_dead_realms(&state, |h| h == 1 || h == 10);
+
+        let realms = state
+            .active_realms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(realms.len(), 2);
+        assert!(realms.iter().any(|r| r.id == RealmId(0)));
+        assert!(realms.iter().any(|r| r.id == RealmId(1)));
+        assert!(!realms.iter().any(|r| r.id == RealmId(2)));
+
+        let table = state
+            .contextified
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert!(table.contains_key(&10));
+        assert!(!table.contains_key(&20));
+    }
+
+    #[test]
     fn pause_hist_ring_wraps_at_256_entries() {
         let state = super::RuntimeState::new();
         for idx in 0..260u64 {

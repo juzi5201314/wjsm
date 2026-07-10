@@ -442,6 +442,7 @@ fn release_dead_handles(ctx: &mut GcContext<'_>, dead_handles: &[Handle]) {
             DeadHandleCleanupStage::ReclaimOwnerSideTables => {
                 ctx.with_state(|st| {
                     st.reclaim_unmarked_collection_entries(|h| !dead_set.contains(&h));
+                    crate::realm::reclaim_dead_realms(st, |h| !dead_set.contains(&h));
                 });
             }
             DeadHandleCleanupStage::ProcessWeakRefs => {

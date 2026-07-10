@@ -756,6 +756,7 @@ fn release_freed_handles(ctx: &mut GcContext<'_>, freed_handles: &[Handle]) {
     let freed = freed_handles.iter().copied().collect::<HashSet<_>>();
     ctx.with_state(|st| {
         st.reclaim_unmarked_collection_entries(|h| !freed.contains(&h));
+        crate::realm::reclaim_dead_realms(st, |h| !freed.contains(&h));
     });
     weak_refs::process_weak_refs_after_sweep(ctx, freed_handles);
     weak_refs::cleanup_stream_tables_after_sweep(ctx, freed_handles);

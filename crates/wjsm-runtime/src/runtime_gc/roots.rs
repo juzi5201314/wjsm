@@ -207,11 +207,54 @@ impl RootProvider for RuntimeRoots {
         for proto in typedarray_protos {
             push_value_roots(ctx, proto, visit);
         }
+
+        // node:vm 条件 root（Plan Task 4.1）：
+        // - realm 0：主 primordial 已由上方路径 root，不因 active_realms[0] 额外强持有 global
+        // - realm ≥1：仅当 sandbox global handle 已被其它 root 标记 live 时，再 root 其 intrinsics
+        //   （fixed-point 多轮 host root 会在 sandbox 本轮被 mark 后下一轮注入 intrinsic）
+        let realm_entries: Vec<(u32, i64, Vec<i64>)> = ctx.with_state(|st| {
+            let realms = st
+                .active_realms
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            realms
+                .iter()
+                .filter(|r| r.id.0 != 0)
+                .map(|r| {
+                    (
+                        r.id.0,
+                        r.global_object,
+                        r.intrinsics.iter_roots().collect::<Vec<_>>(),
+                    )
+                })
+                .collect()
+        });
+        for (_id, global, intrinsic_roots) in realm_entries {
+            let Some(gh) = nanbox_obj_handle(global) else {
+                continue;
+            };
+            if !is_marked(gh) {
+                continue;
+            }
+            for raw in intrinsic_roots {
+                push_value_roots(ctx, raw, visit);
+            }
+        }
+
         // 动态 root：host 侧表快照 → 解析每个 raw 值为 handle。
         let snapshot = collect_host_table_values(ctx, is_marked);
         for val in snapshot {
             push_value_roots(ctx, val, visit);
         }
+    }
+}
+
+/// 从 NaN-box 值提取 obj_table handle（object/array）；非对象返回 None。
+fn nanbox_obj_handle(val: i64) -> Option<Handle> {
+    if crate::value::is_object(val) || crate::value::is_array(val) {
+        Some(crate::value::decode_object_handle(val) as Handle)
+    } else {
+        None
     }
 }
 

@@ -304,6 +304,54 @@ pub fn max_realms_limit() -> u32 {
         .unwrap_or(DEFAULT_MAX_REALMS)
 }
 
+/// GC 后回收 sandbox 不可达的 realm（Task 4.2）。
+///
+/// - realm 0 恒留
+/// - 其它仅当 `global_object` handle 仍 live（`is_live`）
+/// - 同步清理 `contextified` side table
+pub(crate) fn reclaim_dead_realms(
+    state: &crate::RuntimeState,
+    mut is_live: impl FnMut(u32) -> bool,
+) {
+    use wjsm_ir::value;
+
+    let mut live_ids = std::collections::HashSet::new();
+    {
+        let mut realms = state
+            .active_realms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        realms.retain(|r| {
+            if r.id.0 == 0 {
+                live_ids.insert(r.id);
+                return true;
+            }
+            let live = if value::is_object(r.global_object) || value::is_array(r.global_object) {
+                is_live(value::decode_object_handle(r.global_object))
+            } else {
+                false
+            };
+            if live {
+                live_ids.insert(r.id);
+            }
+            live
+        });
+    }
+    {
+        let mut table = state
+            .contextified
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        table.retain(|handle, realm_id| {
+            if realm_id.0 == 0 {
+                return true;
+            }
+            // handle 本身仍 live 且 realm 仍在表中
+            is_live(*handle) && live_ids.contains(realm_id)
+        });
+    }
+}
+
 /// 从主 realm 的 RuntimeState 字段装配 intrinsics（object/array proto 由调用方从 WASM global 填入）。
 /// Phase 1 克隆入口使用；当前阶段由单测覆盖。
 #[allow(dead_code)]

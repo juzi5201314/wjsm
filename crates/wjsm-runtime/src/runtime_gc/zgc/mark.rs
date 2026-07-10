@@ -578,6 +578,9 @@ fn release_dead_handles(ctx: &mut GcContext<'_>, dead_handles: &[Handle]) {
                     st.reclaim_unmarked_collection_entries(|h| {
                         dead_handles.binary_search(&h).is_err()
                     });
+                    crate::realm::reclaim_dead_realms(st, |h| {
+                        dead_handles.binary_search(&h).is_err()
+                    });
                 });
             }
             DeadHandleCleanupStage::ProcessWeakRefs => {
