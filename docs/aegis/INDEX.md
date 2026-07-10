@@ -19,6 +19,7 @@
 | 2026-07-07 | Runtime Module Loading (issue #312) | [specs/2026-07-07-runtime-module-loading-design.md](specs/2026-07-07-runtime-module-loading-design.md) |
 | 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [specs/2026-07-07-package-management-design.md](specs/2026-07-07-package-management-design.md) |
 | 2026-07-08 | Node Advanced Builtins and CLI Tooling (issue #311) | [specs/2026-07-08-node-advanced-modules-issue311-design.md](specs/2026-07-08-node-advanced-modules-issue311-design.md) |
+| 2026-07-10 | node:vm Multi-Realm Sandbox | [specs/2026-07-10-node-vm-multi-realm-design.md](specs/2026-07-10-node-vm-multi-realm-design.md) |
 ## Plans
 
 | Date | Title | File |
