@@ -791,10 +791,7 @@ pub(super) fn process_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[
     }
     let endpoint = match ipc.ensure_endpoint() {
         Ok(ep) => ep,
-        Err(err) => {
-            eprintln!("[wjsm-ipc] child connect failed: {err} path={}", ipc.path);
-            return value::encode_undefined();
-        }
+        Err(_) => return value::encode_undefined(),
     };
     ensure_process_ipc_reader(caller, &endpoint);
     drain_process_messages_from_caller(caller);
