@@ -14,6 +14,8 @@ use crate::realm::RealmId;
 use crate::realm_clone::clone_pristine_realm;
 use crate::runtime_encoding::js_string_lossy;
 use crate::runtime_eval::perform_eval_from_caller_async;
+use crate::realm::MicrotaskMode;
+
 use crate::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,7 +165,7 @@ fn compile_function(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 
     let context_extensions = read_options_object_prop(caller, options_val, "contextExtensions");
 
     // parsingContext 必须是 contextified sandbox（若提供）
-    let (scope_env, realm_id) = match resolve_compile_scope_env(
+    let (scope_env, _realm_id) = match resolve_compile_scope_env(
         caller,
         parsing_context,
         context_extensions,
@@ -172,13 +174,8 @@ fn compile_function(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 
         Err(msg) => return make_type_error_exception(caller, &msg),
     };
 
-    // codeGeneration.strings 限制（与 runIn* 一致）
-    if !realm_allows_strings(caller, realm_id) {
-        return make_type_error_exception(
-            caller,
-            "EvalError: Code generation from strings disallowed for this context",
-        );
-    }
+    // Node: compileFunction 不受 codeGeneration.strings 限制（仅 eval/Function 构造器）
+
 
     let body_stmts = match parse_function_body_stmts(&code) {
         Ok(stmts) => stmts,
@@ -419,8 +416,9 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         }
     };
 
-    // contextCodeGeneration / codeGeneration flags
+    // contextCodeGeneration / codeGeneration + microtaskMode
     apply_codegen_options(caller, &mut realm, options);
+    apply_microtask_mode_option(caller, &mut realm, options);
 
     // 写回 active_realms 中刚 push 的条目
     {
@@ -431,7 +429,16 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             .unwrap_or_else(|e| e.into_inner());
         if let Some(slot) = realms.iter_mut().find(|r| r.id == realm.id) {
             slot.code_generation = realm.code_generation;
+            slot.microtask_mode = realm.microtask_mode;
         }
+    }
+
+    // sandbox 即该 realm 的 globalThis：安装构造器 / eval / queueMicrotask 等
+    if let Err(e) = install_realm_global_builtins(caller, sandbox) {
+        return make_type_error_exception(
+            caller,
+            &format!("Error: vm.createContext failed to install globals: {e}"),
+        );
     }
 
     if let Some(h) = object_handle_idx(sandbox) {
@@ -443,6 +450,7 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             .insert(h, realm.id);
     }
     sandbox
+
 }
 
 fn apply_codegen_options(
@@ -482,6 +490,33 @@ fn apply_codegen_options(
         }
     }
 }
+
+fn apply_microtask_mode_option(
+    caller: &mut Caller<'_, RuntimeState>,
+    realm: &mut crate::realm::Realm,
+    options: Option<i64>,
+) {
+    let Some(opts) = options else {
+        return;
+    };
+    if !value::is_object(opts) {
+        return;
+    }
+    let Some(ptr) = resolve_handle(caller, opts) else {
+        return;
+    };
+    let Some(raw) = read_object_property_by_name(caller, ptr, "microtaskMode") else {
+        return;
+    };
+    if !value::is_string(raw) {
+        return;
+    }
+    let mode = js_string_lossy(caller, raw);
+    if mode == "afterEvaluate" {
+        realm.microtask_mode = MicrotaskMode::AfterEvaluate;
+    }
+}
+
 
 fn is_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let Some(sandbox) = args.first().copied() else {
@@ -529,7 +564,6 @@ async fn run_in_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> 
             "TypeError: contextifiedSandbox must be a contextified object",
         );
     };
-
     let timeout_ms = parse_timeout_ms(caller, options);
     eval_in_realm(caller, code_val, Some(sandbox), realm_id, timeout_ms).await
 }
@@ -541,8 +575,12 @@ async fn run_in_new_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
         .unwrap_or_else(value::encode_undefined);
     // sandbox 可选：args[1]；options 可能在 args[1]（无 sandbox）或 args[2]
     let (sandbox_arg, options) = match args.get(1).copied() {
-        Some(s) if value::is_object(s) || value::is_array(s) || value::is_undefined(s) || value::is_null(s) => {
-            // 若看起来像 options（含 timeout 字段）且未 contextify，仍当 sandbox 用
+        Some(s)
+            if value::is_object(s)
+                || value::is_array(s)
+                || value::is_undefined(s)
+                || value::is_null(s) =>
+        {
             (Some(s), args.get(2).copied())
         }
         Some(s) => (None, Some(s)),
@@ -557,28 +595,124 @@ async fn run_in_new_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
         return sandbox;
     }
     let timeout_ms = parse_timeout_ms(caller, options);
-    // 若 options 在 args[1] 且无独立 sandbox 对象
     let timeout_ms = timeout_ms.or_else(|| parse_timeout_ms(caller, sandbox_arg));
-    eval_in_realm(
-        caller,
-        code_val,
-        Some(sandbox),
-        // realm from create_context side table
-        {
-            let h = object_handle_idx(sandbox).unwrap_or(0);
-            caller
-                .data()
-                .contextified
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(&h)
-                .copied()
-                .unwrap_or(RealmId(0))
-        },
-        timeout_ms,
-    )
-    .await
+    let realm_id = {
+        let h = object_handle_idx(sandbox).unwrap_or(0);
+        caller
+            .data()
+            .contextified
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&h)
+            .copied()
+            .unwrap_or(RealmId(0))
+    };
+    eval_in_realm(caller, code_val, Some(sandbox), realm_id, timeout_ms).await
 }
+
+/// 将主 realm 全局上的内建装到 sandbox，并覆盖需门控的 `eval` / `Function`。
+///
+/// multi-realm free-var 解析依赖 sandbox 上的 Promise/Object/queueMicrotask 等；
+/// 主 global 上的构造器带完整静态方法表（`Promise.resolve` / `Object.keys`）。
+/// 执行期仍读 `execution_realm` 选 intrinsic（见 `new Array()` 等）。
+fn install_realm_global_builtins(
+    caller: &mut Caller<'_, RuntimeState>,
+    sandbox: i64,
+) -> Result<(), String> {
+    if !(value::is_object(sandbox) || value::is_array(sandbox)) {
+        return Err("sandbox is not an object".into());
+    }
+
+    let main_global = caller.data().js_global_object.load(Ordering::Relaxed);
+    if value::is_object(main_global) || value::is_array(main_global) {
+        if let Some(main_ptr) = resolve_handle(caller, main_global) {
+            // 从主 global 拷贝标准内建（共享函数值；不拷贝用户属性）
+            const NAMES: &[&str] = &[
+                "Array",
+                "Object",
+                "String",
+                "Boolean",
+                "Number",
+                "Symbol",
+                "BigInt",
+                "RegExp",
+                "Error",
+                "TypeError",
+                "RangeError",
+                "SyntaxError",
+                "ReferenceError",
+                "URIError",
+                "EvalError",
+                "AggregateError",
+                "Map",
+                "Set",
+                "WeakMap",
+                "WeakSet",
+                "Promise",
+                "Proxy",
+                "Date",
+                "ArrayBuffer",
+                "DataView",
+                "JSON",
+                "Math",
+                "Reflect",
+                "console",
+                "queueMicrotask",
+                "setTimeout",
+                "clearTimeout",
+                "setInterval",
+                "clearInterval",
+            ];
+            for name in NAMES {
+                if let Some(val) = read_object_property_by_name(caller, main_ptr, name) {
+                    if !value::is_undefined(val) {
+                        let _ = define_host_data_property_from_caller(caller, sandbox, name, val);
+                    }
+                }
+            }
+        }
+    }
+
+    // Function：用可门控的构造器覆盖（codeGeneration.strings）
+    let function_val = {
+        let mut native_callables = caller
+            .data()
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let idx = native_callables.len() as u32;
+        native_callables.push(NativeCallable::FunctionConstructor);
+        value::encode_native_callable_idx(idx)
+    };
+    let _ = define_host_data_property_from_caller(caller, sandbox, "Function", function_val);
+
+    // eval：间接 eval，受 codeGeneration.strings 门控
+    let eval_val = {
+        let mut native_callables = caller
+            .data()
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let idx = native_callables.len() as u32;
+        native_callables.push(NativeCallable::EvalIndirect);
+        value::encode_native_callable_idx(idx)
+    };
+    let _ = define_host_data_property_from_caller(caller, sandbox, "eval", eval_val);
+
+    let _ = define_host_data_property_from_caller(caller, sandbox, "globalThis", sandbox);
+
+    // 补齐 node web globals（若主 global 尚未带上）
+    if let Some(ptr) = resolve_handle(caller, sandbox) {
+        if read_object_property_by_name(caller, ptr, "queueMicrotask").is_none() {
+            let _ =
+                crate::runtime_node_globals::install_node_web_globals_from_caller(caller, sandbox);
+        }
+    }
+
+    Ok(())
+}
+
+
 
 async fn run_in_this_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let code_val = args
@@ -632,21 +766,9 @@ async fn eval_in_realm(
         store_runtime_string(caller, s)
     };
 
-    // codeGeneration.strings === false → eval/Function 抛 EvalError
-    if !realm_allows_strings(caller, realm_id) {
-        return make_type_error_exception(
-            caller,
-            "EvalError: Code generation from strings disallowed for this context",
-        );
-    }
-
-    // microtaskMode: afterEvaluate — 记录队列长度，run 后 drain 新增
-    let microtask_base = caller
-        .data()
-        .microtask_queue
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .len();
+    // 注意：runIn* / Script 不受 codeGeneration.strings 限制；
+    // strings:false 只拦截 context 内 eval / Function 构造器。
+    let drain_after = realm_microtask_mode(caller, realm_id) == MicrotaskMode::AfterEvaluate;
 
     // 帧内 eval：swap proto globals + execution_realm
     let prev_realm = caller
@@ -717,9 +839,11 @@ async fn eval_in_realm(
             }
         }
     }
-    // afterEvaluate：尽量排空本轮新增 microtask（稳态）
-    if let Some(env) = WasmEnv::from_caller(caller) {
-        let _ = drain_microtasks_after_eval(caller, &env, microtask_base).await;
+    // 仅 microtaskMode === "afterEvaluate" 时在 run 边界 drain 到稳态
+    if drain_after {
+        if let Some(env) = WasmEnv::from_caller(caller) {
+            let _ = drain_microtasks_after_eval(caller, &env).await;
+        }
     }
 
     if value::is_exception(result) {
@@ -743,12 +867,31 @@ fn realm_allows_strings(caller: &Caller<'_, RuntimeState>, realm_id: RealmId) ->
     r.map(|r| r.code_generation.strings).unwrap_or(true)
 }
 
+fn realm_microtask_mode(caller: &Caller<'_, RuntimeState>, realm_id: RealmId) -> MicrotaskMode {
+    let realms = caller
+        .data()
+        .active_realms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let r = if realm_id.0 == 0 {
+        realms.first()
+    } else {
+        realms.iter().find(|r| r.id == realm_id)
+    };
+    r.map(|r| r.microtask_mode).unwrap_or_default()
+}
+
+/// 当前 execution_realm 是否允许从字符串生成代码（eval / Function）。
+pub(crate) fn current_realm_allows_string_codegen(caller: &Caller<'_, RuntimeState>) -> bool {
+    let rid = caller.data().execution_realm.load(Ordering::Relaxed);
+    realm_allows_strings(caller, RealmId(rid))
+}
+
 async fn drain_microtasks_after_eval(
     caller: &mut Caller<'_, RuntimeState>,
     env: &WasmEnv,
-    base_len: usize,
 ) -> anyhow::Result<()> {
-    // 简单稳态：队列长度回到 base 或排空；上限防止死循环
+    // 稳态：排空整个 microtask 队列；上限防止死循环
     for _ in 0..10_000 {
         let len = caller
             .data()
@@ -756,8 +899,8 @@ async fn drain_microtasks_after_eval(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .len();
-        if len <= base_len {
-            break;
+        if len == 0 {
+            return Ok(());
         }
         crate::runtime_microtask::drain_microtasks_async(caller, env).await;
     }

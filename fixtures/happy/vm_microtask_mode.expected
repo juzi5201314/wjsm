@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+default_after_run 0
+afterEvaluate_after_run 1
+afterEvaluate_nested 2
+--- stderr ---

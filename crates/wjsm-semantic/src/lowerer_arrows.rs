@@ -124,12 +124,20 @@ impl Lowerer {
             },
         );
 
-        let callee_val = if captured.is_empty() {
+        let callee_val = if captured.is_empty() && !self.eval_scope_bridge_active() {
             func_ref_val
         } else {
             let mut closure_block = block;
-            let env_val = self.ensure_shared_env(closure_block, &captured, arrow.span)?;
-            closure_block = self.resolve_store_block(closure_block);
+            let env_val = if captured.is_empty() {
+                // eval / vm 上下文：把 sandbox 传入闭包 env
+                let e = self.load_eval_scope_env(closure_block);
+                closure_block = self.resolve_store_block(closure_block);
+                e
+            } else {
+                let e = self.ensure_shared_env(closure_block, &captured, arrow.span)?;
+                closure_block = self.resolve_store_block(closure_block);
+                e
+            };
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,
@@ -776,12 +784,19 @@ impl Lowerer {
             },
         );
 
-        let callee_val = if captured.is_empty() {
+        let callee_val = if captured.is_empty() && !self.eval_scope_bridge_active() {
             wrapper_ref_val
         } else {
             let mut closure_block = block;
-            let env_val = self.ensure_shared_env(closure_block, &captured, arrow.span)?;
-            closure_block = self.resolve_store_block(closure_block);
+            let env_val = if captured.is_empty() {
+                let e = self.load_eval_scope_env(closure_block);
+                closure_block = self.resolve_store_block(closure_block);
+                e
+            } else {
+                let e = self.ensure_shared_env(closure_block, &captured, arrow.span)?;
+                closure_block = self.resolve_store_block(closure_block);
+                e
+            };
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,

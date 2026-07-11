@@ -32,6 +32,11 @@ pub(crate) fn make_range_error_exception(caller: &mut Caller<'_, RuntimeState>, 
 pub(crate) fn make_syntax_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
     make_error_exception(caller, "SyntaxError", msg)
 }
+/// 构造可捕获的 EvalError（如 codeGeneration.strings === false）。
+pub(crate) fn make_eval_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
+    make_error_exception(caller, "EvalError", msg)
+}
+
 
 fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());

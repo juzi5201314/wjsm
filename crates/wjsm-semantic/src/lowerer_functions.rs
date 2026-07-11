@@ -144,16 +144,24 @@ impl Lowerer {
         // 始终 materialize 为闭包，保证 func_idx 经 closure_create 解析（含无捕获箭头/函数表达式）
         let mut closure_block = block;
         let env_val = if captured.is_empty() {
-            let undef = self.alloc_value();
-            self.current_function.append_instruction(
-                closure_block,
-                Instruction::Const {
-                    dest: undef,
-                    constant: self.module.add_constant(Constant::Undefined),
-                },
-            );
-            closure_block = self.resolve_store_block(closure_block);
-            undef
+            if self.eval_scope_bridge_active() {
+                // eval / vm 上下文：把 sandbox（$eval_env / outer $env）传入闭包 env，
+                // 使嵌套函数 free-var 的 EvalGet/SetBinding 能写回 context。
+                let e = self.load_eval_scope_env(closure_block);
+                closure_block = self.resolve_store_block(closure_block);
+                e
+            } else {
+                let undef = self.alloc_value();
+                self.current_function.append_instruction(
+                    closure_block,
+                    Instruction::Const {
+                        dest: undef,
+                        constant: self.module.add_constant(Constant::Undefined),
+                    },
+                );
+                closure_block = self.resolve_store_block(closure_block);
+                undef
+            }
         } else {
             let e = self.ensure_shared_env(closure_block, &captured, fn_expr.span())?;
             closure_block = self.resolve_store_block(closure_block);

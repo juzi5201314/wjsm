@@ -6,12 +6,19 @@ impl Lowerer {
     }
 
     pub(crate) fn load_eval_scope_env(&mut self, block: BasicBlockId) -> ValueId {
+        // 嵌套函数：闭包 env 参数即为 sandbox / outer shared env
+        // 模块主函数：参数名为 $eval_env
+        let name = if let Ok((scope_id, _)) = self.scopes.lookup("$env") {
+            format!("${scope_id}.$env")
+        } else {
+            EVAL_SCOPE_ENV_PARAM.to_string()
+        };
         let env = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::LoadVar {
                 dest: env,
-                name: EVAL_SCOPE_ENV_PARAM.to_string(),
+                name,
             },
         );
         env

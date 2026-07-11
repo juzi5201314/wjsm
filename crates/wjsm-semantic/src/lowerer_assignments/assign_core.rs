@@ -56,6 +56,12 @@ impl Lowerer {
             return Ok(dest);
         }
 
+        // eval 作用域桥接优先：自由变量（含 builtin / eval 标识符）走 EvalGetBinding，
+        // 由 runtime 经 sandbox → realm.global 原型链解析（多 realm 正确性）。
+        if self.eval_scope_bridge_active() && self.scopes.lookup(&name).is_err() {
+            return self.lower_eval_env_read(&name, block);
+        }
+
         if name == "eval" && self.scopes.lookup("eval").is_err() {
             let constant = self.module.add_constant(Constant::NativeCallableEval);
             let dest = self.alloc_value();
@@ -96,11 +102,6 @@ impl Lowerer {
                     },
                 );
                 return Ok(dest);
-            }
-            Err(msg)
-                if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
-            {
-                return self.lower_eval_env_read(&name, block);
             }
             Err(msg) => return Err(self.error(ident.span, msg)),
         };

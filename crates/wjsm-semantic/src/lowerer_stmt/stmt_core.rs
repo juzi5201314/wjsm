@@ -79,9 +79,12 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
         if self.eval_mode {
-            let value = self.lower_expr(&expr_stmt.expr, block)?;
+            // 必须用 lower_expr_then_continue：EvalGetBinding 等会分叉异常块，
+            // 若仅 lower_expr 再 resolve 起始 block，会丢掉 continue 并把 Return 盖掉 Branch。
+            let mut current_block = block;
+            let value = self.lower_expr_then_continue(&expr_stmt.expr, &mut current_block)?;
             self.eval_completion = Some(value);
-            return Ok(StmtFlow::Open(self.resolve_store_block(block)));
+            return Ok(StmtFlow::Open(current_block));
         }
 
         let result_block = match expr_stmt.expr.as_ref() {

@@ -1,9 +1,11 @@
 # node:vm 多 Realm 沙箱实现计划
 
 - 日期：2026-07-10
-- 状态：已按用户授权（无需审批 spec）进入实现；**2026-07-10 代码对照审查后修正**
-- 关联 issue：#313（issue 正文原将「通用 `vm.runInNewContext`」列为**非目标**；本轮用户明确要求完整落地，作为对该非目标的**范围覆盖**，非 Inspector/net 既有条目的替代）
-- 设计 spec：`docs/aegis/specs/2026-07-10-node-vm-multi-realm-design.md`（与本 plan 冲突处**以本 plan 审查修正为准**，实现后回填 design + ADR）
+- **执行状态：已完成**（2026-07-11 closeout；Task 6.1/6.2 + residual option 语义收口）
+- 关联 issue：#313（issue 正文原将「通用 `vm.runInNewContext`」列为**非目标**；本轮用户明确要求完整落地，作为对该非目标的**范围覆盖**，非 Inspector/net 既有条目的替代）。**本 plan 完成不 close #313**（大 roadmap 仍 open）。
+- 设计 spec：`docs/aegis/specs/2026-07-10-node-vm-multi-realm-design.md`
+- 工作记录：`docs/aegis/work/2026-07-10-node-vm-multi-realm/`（checkpoint complete + evidence）
+- ADR：`docs/adr/0008-node-vm-multi-realm.md`
 
 ## Goal
 

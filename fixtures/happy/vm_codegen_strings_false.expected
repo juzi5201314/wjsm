@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+runInContext 42
+script 43
+compileFunction 41
+typeof_Promise function
+typeof_eval function
+eval_blocked EvalError
+function_blocked EvalError
+alias_eval EvalError
+--- stderr ---

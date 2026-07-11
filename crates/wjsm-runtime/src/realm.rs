@@ -150,7 +150,7 @@ mod tests {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CodeGenFlags {
-    /// false → 该 realm 内 eval / Function 抛 EvalError
+    /// false → 该 realm 内 eval / Function 抛 EvalError（不拦截 runIn* / Script）
     pub strings: bool,
     pub wasm: bool,
 }
@@ -164,12 +164,23 @@ impl Default for CodeGenFlags {
     }
 }
 
+/// `createContext` / `runInNewContext` 的 `microtaskMode`。
+///
+/// Node 默认在 run 结束时不排空本轮 microtask；`afterEvaluate` 则 drain 到稳态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MicrotaskMode {
+    #[default]
+    Default,
+    AfterEvaluate,
+}
+
 #[derive(Debug, Clone)]
 pub struct Realm {
     pub id: RealmId,
     pub global_object: i64,
     pub intrinsics: RealmIntrinsics,
     pub code_generation: CodeGenFlags,
+    pub microtask_mode: MicrotaskMode,
 }
 
 impl Realm {
@@ -179,6 +190,7 @@ impl Realm {
             global_object,
             intrinsics,
             code_generation: CodeGenFlags::default(),
+            microtask_mode: MicrotaskMode::default(),
         }
     }
 }

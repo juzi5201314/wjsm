@@ -597,6 +597,11 @@ impl Lowerer {
                         args: vec![arg],
                     },
                 );
+                // EvalGetBinding 等会把后续指令放到 continue block；
+                // lower_expr 只返回 ValueId，必须把 continue 写回给外层 resolve_store_block。
+                if current_block != block {
+                    self.eval_continue_block = Some(current_block);
+                }
                 Ok(dest)
             }
             Delete => {

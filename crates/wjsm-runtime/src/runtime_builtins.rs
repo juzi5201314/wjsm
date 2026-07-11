@@ -728,6 +728,14 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::SymbolProtoToPrimitive => {
             Some(symbol_proto_value_of_impl(caller, this_val))
         }
+        NativeCallable::FunctionConstructor => {
+            // Function 构造器仅走 async 分派（需解析 body）。
+            set_runtime_error(
+                caller.data(),
+                "Function constructor unsupported on sync NativeCallable path".to_string(),
+            );
+            Some(value::encode_undefined())
+        }
         NativeCallable::EvalIndirect | NativeCallable::EvalFunction(_) => {
             // sync 路径已退役（参见 docs/async-scheduler.md / async_reentry_audit）；
             // 唯一进入点是 sync eval 解释器内嵌套 eval，本身已改为错误返回。
@@ -737,6 +745,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             );
             Some(value::encode_undefined())
         }
+
         NativeCallable::CjsRequire { referrer } => Some(call_cjs_require(caller, referrer, args)),
         NativeCallable::CjsRequireResolve { referrer } => {
             Some(call_cjs_require_resolve(caller, referrer, args))
@@ -990,10 +999,10 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 Some(store_runtime_string(caller, s))
             }
         }
-        NativeCallable::FunctionConstructor
-        | NativeCallable::BooleanConstructor
+        NativeCallable::BooleanConstructor
         | NativeCallable::NumberConstructor
         | NativeCallable::BigIntConstructor => Some(value::encode_undefined()),
+        // Function 构造器在 async 分派中实现（需解析 body 并建 EvalFunction）
         NativeCallable::RegExpConstructor => Some(regexp_constructor_impl(caller, this_val, &args)),
         NativeCallable::SymbolConstructor => Some({
             let desc = args
@@ -1425,9 +1434,20 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         NativeCallable::ArgumentsStrictCalleeGetter => Some(
             crate::runtime_arguments::arguments_strict_callee_getter(caller, this_val),
         ),
+        NativeCallable::FunctionConstructor => {
+            Some(function_constructor_impl_async(caller, &args).await)
+        }
+
         NativeCallable::EvalIndirect => {
+            if !crate::runtime_node_vm::current_realm_allows_string_codegen(caller) {
+                return Some(make_eval_error_exception(
+                    caller,
+                    "EvalError: Code generation from strings disallowed for this context",
+                ));
+            }
             Some(perform_eval_from_caller_async(caller, argument, None).await)
         }
+
         NativeCallable::EvalFunction(function) => {
             Some(call_eval_function_from_caller_async(caller, function, args).await)
         }
@@ -2142,4 +2162,90 @@ pub(crate) fn fr_register_impl_with_args(
         }
     }
     value::encode_undefined()
+}
+
+/// `new Function(...args, body)` / `Function(...args, body)`。
+///
+/// 受当前 execution_realm 的 `codeGeneration.strings` 约束；false 时抛 EvalError。
+async fn function_constructor_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    args: &[i64],
+) -> i64 {
+    if !crate::runtime_node_vm::current_realm_allows_string_codegen(caller) {
+        return make_eval_error_exception(
+            caller,
+            "EvalError: Code generation from strings disallowed for this context",
+        );
+    }
+
+    let (param_names, body_src) = split_function_ctor_args(caller, args);
+
+    for name in &param_names {
+        if name.is_empty() || !is_simple_js_ident(name) {
+            return make_syntax_error_exception(
+                caller,
+                "SyntaxError: Unexpected identifier in Function parameter list",
+            );
+        }
+    }
+
+    let body_stmts = match parse_function_body_as_stmts(&body_src) {
+        Ok(s) => s,
+        Err(e) => {
+            return make_syntax_error_exception(caller, &format!("SyntaxError: {e}"));
+        }
+    };
+
+    let function = EvalFunction {
+        params: param_names,
+        body: body_stmts,
+        scope_env: None,
+    };
+    create_eval_function(caller.data(), function)
+}
+
+fn split_function_ctor_args(
+    caller: &mut Caller<'_, RuntimeState>,
+    args: &[i64],
+) -> (Vec<String>, String) {
+    if args.is_empty() {
+        return (Vec::new(), String::new());
+    }
+    let body = function_ctor_arg_to_string(caller, *args.last().unwrap());
+    let mut params = Vec::with_capacity(args.len().saturating_sub(1));
+    for arg in &args[..args.len() - 1] {
+        params.push(function_ctor_arg_to_string(caller, *arg));
+    }
+    (params, body)
+}
+
+fn function_ctor_arg_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+    if value::is_string(val) {
+        get_string_utf8_lossy(caller, val)
+    } else {
+        render_value(caller, val).unwrap_or_default()
+    }
+}
+
+fn is_simple_js_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c == '$' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric())
+}
+
+fn parse_function_body_as_stmts(code: &str) -> Result<Vec<swc_core::ecma::ast::Stmt>, String> {
+    let module = wjsm_parser::parse_script_as_module(code).map_err(|e| e.to_string())?;
+    let mut stmts = Vec::with_capacity(module.body.len());
+    for item in module.body {
+        match item {
+            swc_core::ecma::ast::ModuleItem::Stmt(stmt) => stmts.push(stmt),
+            swc_core::ecma::ast::ModuleItem::ModuleDecl(_) => {
+                return Err("import/export not allowed in Function body".to_string());
+            }
+        }
+    }
+    Ok(stmts)
 }

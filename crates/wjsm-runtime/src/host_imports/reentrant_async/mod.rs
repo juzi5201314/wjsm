@@ -225,6 +225,12 @@ pub(crate) fn define_misc_async(
         "eval_direct",
         |mut caller: Caller<'_, RuntimeState>, (code, scope_env): (i64, i64)| {
             Box::new(async move {
+                if !crate::runtime_node_vm::current_realm_allows_string_codegen(&caller) {
+                    return make_eval_error_exception(
+                        &mut caller,
+                        "EvalError: Code generation from strings disallowed for this context",
+                    );
+                }
                 perform_eval_from_caller_async(&mut caller, code, Some(scope_env)).await
             })
         },
@@ -234,7 +240,15 @@ pub(crate) fn define_misc_async(
         "env",
         "eval_indirect",
         |mut caller: Caller<'_, RuntimeState>, (code,): (i64,)| {
-            Box::new(async move { perform_eval_from_caller_async(&mut caller, code, None).await })
+            Box::new(async move {
+                if !crate::runtime_node_vm::current_realm_allows_string_codegen(&caller) {
+                    return make_eval_error_exception(
+                        &mut caller,
+                        "EvalError: Code generation from strings disallowed for this context",
+                    );
+                }
+                perform_eval_from_caller_async(&mut caller, code, None).await
+            })
         },
     )?;
 

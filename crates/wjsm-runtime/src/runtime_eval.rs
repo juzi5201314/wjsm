@@ -2037,10 +2037,11 @@ pub(crate) fn eval_get_binding(
         return value::encode_undefined();
     }
 
-    // contextify：scope_env 可为普通 object，按属性读
+    // contextify：scope_env 可为普通 object；按原型链读（sandbox → realm.global）
     if !value::is_scope_record(record) && (value::is_object(record) || value::is_array(record)) {
         if let Some(ptr) = resolve_handle(caller, record) {
-            return read_object_property_by_name(caller, ptr, &name_str)
+            let mut visited = std::collections::HashSet::new();
+            return read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
                 .unwrap_or_else(value::encode_undefined);
         }
         return value::encode_undefined();
