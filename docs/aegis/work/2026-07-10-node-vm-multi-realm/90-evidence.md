@@ -68,27 +68,45 @@ cargo nextest run -p wjsm-semantic -E 'test(eval_scope)'
 | `contextCodeGeneration` 别名 | 同上 |
 | free `typeof Promise` / `typeof eval` 在 context 为 `function` | 同上（eval_scope_bridge + sandbox builtins） |
 | default microtaskMode：run 结束不 drain | `vm_microtask_mode` `default_after_run 0` |
-| `afterEvaluate`：run 边界 drain 含 nested | `afterEvaluate_after_run 1` / `nested 2` |
-| 既有 compileFunction / timeout / isolation / Script | 原 9 fixtures 仍 PASS |
+| `afterEvaluate`：run 边界 drain 含 nested 与 function 表达式 | `afterEvaluate_after_run 1` / `nested 2` / `fn 3` |
+| context 内嵌套箭头/函数 microtask 写 free-var | 同上（主 `__table` + `live_eval_instances`） |
+| `Object.keys` / `Promise.resolve` 属性可获取且可调用 | `vm_builtin_statics` |
+| 既有 compileFunction / timeout / isolation / Script | 原 fixtures 仍 PASS |
 | GC 根 / reclaim | runtime `realm` unit 4 passed + workspace green |
 
-## Known residual (non-blocking for plan acceptance)
+## Residual closeout (2026-07-11 后续切片)
 
-1. **临时 eval Instance 上的嵌套函数**不能作为跨 `runInContext` 边界的 durable microtask 回调（table 绑定在临时 Instance）。`compileFunction`（主表 / EvalFunction 解释器路径）与主 realm 函数可跨边界。fixture 用主 `queueMicrotask` + sandbox 属性验证 drain 边界，与 Node 的 afterEvaluate 语义一致。
-2. 从主 global **拷贝** 的构造器函数值，其 **静态方法表**（如 `Promise.resolve` / `Object.keys`）在部分启动路径上可能尚未挂到导出属性上；isolation / typeof / codegen / compileFunction 契约不依赖这些静态方法。若后续要严格 Node 静态方法可用性，应在 bootstrap 后保证主 global 构造器静态槽完整，或 per-realm 克隆静态表。
-3. `#313` 是更大 roadmap（Network/Worker/…）；本 plan 只关闭 `node:vm multi-realm` 子范围，不 close issue。
+先前「非阻塞残留」已关闭：
 
-## Files touched (this closeout)
+1. **eval 嵌套函数 durable**：compiled-eval 导入父 `__table`，`compile_eval_at_data_base(..., table_base)` 用当前 `func_table.size` 编址；instantiate 后 `live_eval_instances` 保活 Instance。  
+   验证：`vm_microtask_mode` 中 `queueMicrotask(() => { n = 1 })` / `function(){ n = 3 }` 写回 sandbox。
+2. **Object/Promise 静态方法函数值**：`native_callable_get_property` 对 `ObjectConstructor`/`PromiseConstructor` 返回 `ObjectStatic`/`PromiseStatic`；eval_scope_bridge 下 `Object.keys(...)` 仍优先 Builtin。  
+   验证：`vm_builtin_statics`。
 
-- `crates/wjsm-runtime/src/realm.rs` — `MicrotaskMode`
-- `crates/wjsm-runtime/src/runtime_node_vm.rs` — options, drain, sandbox builtins, Function/eval install
-- `crates/wjsm-runtime/src/runtime_builtins.rs` — FunctionConstructor + strings gate on EvalIndirect
-- `crates/wjsm-runtime/src/host_imports/reentrant_async/mod.rs` — strings gate on eval hosts
-- `crates/wjsm-runtime/src/runtime_eval.rs` — object-env proto walk
-- `crates/wjsm-runtime/src/runtime_host_helpers.rs` — `make_eval_error_exception`
-- `crates/wjsm-semantic/...` — eval free-var bridge priority, typeof continue block, empty-capture env, eval_mode expr completion
-- fixtures: `vm_codegen_strings_false`, `vm_microtask_mode`
+### Residual closeout 验证
+
+```text
+cargo nextest run -E 'test(happy__vm_) | test(errors__vm_) | test(modules__node_builtin_vm)'
+Summary … 12 tests run: 12 passed
+
+cargo nextest run --workspace
+Summary [69.707s] 1602 tests run: 1602 passed, 2 skipped
+
+WJSM_TEST_GC={mark-sweep,g1,zgc} → 各 12/12 passed
+```
+
+### 仍 open（非本 plan 阻塞）
+
+- `#313` 大 roadmap（Network/Worker/…）；本 plan 只关闭 `node:vm multi-realm` 子范围。
+- `Promise.all` 等 combinator 的 **property-path** 仍为可调用桩；完整语义走 `Builtin::Promise*`。
+
+## Files touched (this closeout + residual)
+
+- runtime: `runtime_eval.rs`（table_base / live instances）、`runtime_linker.rs`（Object/Promise static props）、`runtime_builtins.rs`（static dispatch）、`types.rs`、`lib.rs`
+- backend: `compiler_core.rs`（eval import `__table`）、`compiler_module/module_compile.rs`（shared table elements）、`lib.rs`（`compile_eval_at_data_base` 返回 `table_len`）
+- semantic: `call_expr.rs`（eval_scope_bridge 下静态 Builtin）
+- fixtures: `vm_microtask_mode`、`vm_builtin_statics`、`vm_codegen_strings_false`
 
 ## ADR
 
-`docs/adr/0008-node-vm-multi-realm.md` 已存在；本切片未改架构边界（仍 single Store multi-realm + clone_pristine）。
+`docs/adr/0008-node-vm-multi-realm.md` 已存在；本切片未改架构边界（仍 single Store multi-realm + clone_pristine）。共享主 `__table` 是该边界内的实现细节收紧，不是新 owner。

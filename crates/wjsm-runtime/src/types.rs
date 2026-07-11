@@ -852,6 +852,14 @@ pub(crate) enum NativeCallable {
     QueuingStrategySize {
         kind: QueuingStrategySizeKind,
     },
+    /// Object.* 静态方法（作为可获取函数值）
+    ObjectStatic {
+        kind: ObjectStaticKind,
+    },
+    /// Promise.* 静态方法（作为可获取函数值）
+    PromiseStatic {
+        kind: PromiseStaticKind,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TypedArrayConstructorKind {
@@ -945,6 +953,32 @@ pub(crate) enum BufferStaticKind {
     Concat,
     IsBuffer,
     ByteLength,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ObjectStaticKind {
+    Keys,
+    Values,
+    Entries,
+    Assign,
+    Create,
+    GetPrototypeOf,
+    SetPrototypeOf,
+    GetOwnPropertyNames,
+    Is,
+    HasOwn,
+    FromEntries,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PromiseStaticKind {
+    Resolve,
+    Reject,
+    All,
+    Race,
+    AllSettled,
+    Any,
+    WithResolvers,
 }
 
 #[derive(Clone, Copy)]

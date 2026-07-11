@@ -167,7 +167,8 @@ impl Lowerer {
                         && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(builtin) =
                             builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
-                        && self.scopes.lookup(&obj_ident.sym).is_err()
+                        && (self.scopes.lookup(&obj_ident.sym).is_err()
+                            || self.eval_scope_bridge_active())
                     {
                         // Promise 静态方法需要传递构造器作为第一个参数（species-aware）
                         if matches!(

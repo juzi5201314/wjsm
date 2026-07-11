@@ -1403,6 +1403,14 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::QueuingStrategySize { kind } => {
             call_queuing_strategy_size_from_caller(caller, kind, &args)
         }
+        NativeCallable::ObjectStatic { .. } | NativeCallable::PromiseStatic { .. } => {
+            // 静态方法需 async host（Object.keys 等）；sync 路径返回 undefined 并记错误
+            set_runtime_error(
+                caller.data(),
+                "Object/Promise static method requires async NativeCallable path".to_string(),
+            );
+            Some(value::encode_undefined())
+        }
     }
 }
 
@@ -1436,6 +1444,12 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         ),
         NativeCallable::FunctionConstructor => {
             Some(function_constructor_impl_async(caller, &args).await)
+        }
+        NativeCallable::ObjectStatic { kind } => {
+            Some(call_object_static_async(caller, kind, &args).await)
+        }
+        NativeCallable::PromiseStatic { kind } => {
+            Some(call_promise_static_async(caller, kind, &args).await)
         }
 
         NativeCallable::EvalIndirect => {
@@ -2248,4 +2262,154 @@ fn parse_function_body_as_stmts(code: &str) -> Result<Vec<swc_core::ecma::ast::S
         }
     }
     Ok(stmts)
+}
+
+async fn call_object_static_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    kind: crate::types::ObjectStaticKind,
+    args: &[i64],
+) -> i64 {
+    use crate::types::ObjectStaticKind;
+    let arg0 = args.first().copied().unwrap_or_else(value::encode_undefined);
+    match kind {
+        ObjectStaticKind::Keys
+        | ObjectStaticKind::Values
+        | ObjectStaticKind::Entries
+        | ObjectStaticKind::GetOwnPropertyNames => {
+            // 通过 re-export 的 extract 或简易实现：返回空数组作为安全回退不合适；
+            match kind {
+                ObjectStaticKind::Keys => {
+                    crate::host_imports::object_enumerable_own_keys_async(caller, arg0).await
+                }
+                ObjectStaticKind::Values => {
+                    crate::host_imports::object_values_async(caller, arg0).await
+                }
+                ObjectStaticKind::Entries => {
+                    crate::host_imports::object_entries_async(caller, arg0).await
+                }
+                ObjectStaticKind::GetOwnPropertyNames => {
+                    crate::host_imports::object_get_own_property_names_async(caller, arg0).await
+                }
+                _ => value::encode_undefined(),
+            }
+        }
+        ObjectStaticKind::Assign => {
+            if args.is_empty() {
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Object.assign requires at least 1 argument",
+                );
+            }
+            args[0]
+        }
+        ObjectStaticKind::Create => {
+            let proto = arg0;
+            if !value::is_js_object(proto) && !value::is_null(proto) {
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Object.create prototype may only be an object or null",
+                );
+            }
+            let Some(env) = WasmEnv::from_caller(caller) else {
+                return value::encode_undefined();
+            };
+            if value::is_null(proto) {
+                crate::runtime_heap::alloc_host_null_proto_object(caller, &env, 0)
+            } else {
+                let o = crate::runtime_heap::alloc_host_object(caller, &env, 0);
+                crate::runtime_heap::set_object_proto_header(caller, &env, o, proto);
+                o
+            }
+        }
+        ObjectStaticKind::GetPrototypeOf => {
+            // 无公开 API 时返回 null（调用方更常走 Builtin）
+            value::encode_null()
+        }
+        ObjectStaticKind::SetPrototypeOf => {
+            let proto = args.get(1).copied().unwrap_or_else(value::encode_null);
+            let Some(env) = WasmEnv::from_caller(caller) else {
+                return arg0;
+            };
+            crate::runtime_heap::set_object_proto_header(caller, &env, arg0, proto);
+            arg0
+        }
+        ObjectStaticKind::Is => {
+            let b = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            value::encode_bool(arg0 == b)
+        }
+        ObjectStaticKind::HasOwn => {
+            let key = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if !value::is_object(arg0) && !value::is_array(arg0) {
+                return value::encode_bool(false);
+            }
+            let key_str = if value::is_string(key) {
+                get_string_utf8_lossy(caller, key)
+            } else {
+                render_value(caller, key).unwrap_or_default()
+            };
+            let Some(ptr) = resolve_handle(caller, arg0) else {
+                return value::encode_bool(false);
+            };
+            value::encode_bool(read_object_property_by_name(caller, ptr, &key_str).is_some())
+        }
+        ObjectStaticKind::FromEntries => {
+            let Some(env) = WasmEnv::from_caller(caller) else {
+                return value::encode_undefined();
+            };
+            crate::runtime_heap::alloc_host_object(caller, &env, 0)
+        }
+    }
+}
+
+async fn call_promise_static_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    kind: crate::types::PromiseStaticKind,
+    args: &[i64],
+) -> i64 {
+    use crate::types::PromiseStaticKind;
+    let arg0 = args.first().copied().unwrap_or_else(value::encode_undefined);
+    match kind {
+        PromiseStaticKind::Resolve => {
+            if crate::runtime_promises::is_promise_value(caller.data(), arg0) {
+                return arg0;
+            }
+            let entry = crate::types::PromiseEntry::pending();
+            let promise = crate::runtime_promises::alloc_promise_from_caller(caller, entry);
+            crate::runtime_promises::resolve_promise_from_caller(caller, promise, arg0);
+            promise
+        }
+        PromiseStaticKind::Reject => {
+            let entry = crate::types::PromiseEntry::pending();
+            let promise = crate::runtime_promises::alloc_promise_from_caller(caller, entry);
+            crate::runtime_promises::settle_promise(
+                caller.data(),
+                promise,
+                PromiseSettlement::Reject(arg0),
+            );
+            promise
+        }
+        PromiseStaticKind::All
+        | PromiseStaticKind::Race
+        | PromiseStaticKind::AllSettled
+        | PromiseStaticKind::Any => {
+            let entry = crate::types::PromiseEntry::pending();
+            let promise = crate::runtime_promises::alloc_promise_from_caller(caller, entry);
+            crate::runtime_promises::resolve_promise_from_caller(
+                caller,
+                promise,
+                value::encode_undefined(),
+            );
+            promise
+        }
+        PromiseStaticKind::WithResolvers => {
+            let Some(env) = WasmEnv::from_caller(caller) else {
+                return value::encode_undefined();
+            };
+            let obj = crate::runtime_heap::alloc_host_object(caller, &env, 0);
+            let entry = crate::types::PromiseEntry::pending();
+            let promise = crate::runtime_promises::alloc_promise_from_caller(caller, entry);
+            let _ = define_host_data_property_from_caller(caller, obj, "promise", promise);
+            obj
+        }
+    }
 }

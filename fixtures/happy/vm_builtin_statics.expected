@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+typeof_keys function
+typeof_resolve function
+keys a,b
+inside function|x|function
+--- stderr ---

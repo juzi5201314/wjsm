@@ -235,6 +235,117 @@ pub(super) fn register_common_bridges(
                     table.push(NativeCallable::BufferStatic { kind });
                     return value::encode_native_callable_idx(idx);
                 }
+                // Object / Promise 静态方法：可获取函数值（typeof === "function"）
+                if matches!(
+                    record,
+                    Some(NativeCallable::ObjectConstructor)
+                        | Some(NativeCallable::PromiseConstructor)
+                ) {
+                    use crate::types::{ObjectStaticKind, PromiseStaticKind};
+                    let static_nc = match (&record, prop_name) {
+                        (Some(NativeCallable::ObjectConstructor), "keys") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::Keys,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "values") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::Values,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "entries") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::Entries,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "assign") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::Assign,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "create") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::Create,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "getPrototypeOf") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::GetPrototypeOf,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "setPrototypeOf") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::SetPrototypeOf,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "getOwnPropertyNames") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::GetOwnPropertyNames,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "is") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::Is,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "hasOwn") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::HasOwn,
+                            })
+                        }
+                        (Some(NativeCallable::ObjectConstructor), "fromEntries") => {
+                            Some(NativeCallable::ObjectStatic {
+                                kind: ObjectStaticKind::FromEntries,
+                            })
+                        }
+                        (Some(NativeCallable::PromiseConstructor), "resolve") => {
+                            Some(NativeCallable::PromiseStatic {
+                                kind: PromiseStaticKind::Resolve,
+                            })
+                        }
+                        (Some(NativeCallable::PromiseConstructor), "reject") => {
+                            Some(NativeCallable::PromiseStatic {
+                                kind: PromiseStaticKind::Reject,
+                            })
+                        }
+                        (Some(NativeCallable::PromiseConstructor), "all") => {
+                            Some(NativeCallable::PromiseStatic {
+                                kind: PromiseStaticKind::All,
+                            })
+                        }
+                        (Some(NativeCallable::PromiseConstructor), "race") => {
+                            Some(NativeCallable::PromiseStatic {
+                                kind: PromiseStaticKind::Race,
+                            })
+                        }
+                        (Some(NativeCallable::PromiseConstructor), "allSettled") => {
+                            Some(NativeCallable::PromiseStatic {
+                                kind: PromiseStaticKind::AllSettled,
+                            })
+                        }
+                        (Some(NativeCallable::PromiseConstructor), "any") => {
+                            Some(NativeCallable::PromiseStatic {
+                                kind: PromiseStaticKind::Any,
+                            })
+                        }
+                        (Some(NativeCallable::PromiseConstructor), "withResolvers") => {
+                            Some(NativeCallable::PromiseStatic {
+                                kind: PromiseStaticKind::WithResolvers,
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some(nc) = static_nc {
+                        let mut table = caller
+                            .data()
+                            .native_callables
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        let idx = table.len() as u32;
+                        table.push(nc);
+                        return value::encode_native_callable_idx(idx);
+                    }
+                }
                 // EvalFunction（含 vm.compileFunction）：暴露 length / name
                 if let Some(NativeCallable::EvalFunction(func)) = record.as_ref() {
                     if prop_name == "length" {

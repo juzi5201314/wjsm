@@ -308,7 +308,9 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::WritableStreamDefaultWriterMethod { .. }
             | NativeCallable::WritableStreamDefaultControllerMethod { .. }
             | NativeCallable::TransformStreamMethod { .. }
-            | NativeCallable::QueuingStrategySize { .. } => {
+            | NativeCallable::QueuingStrategySize { .. }
+            | NativeCallable::ObjectStatic { .. }
+            | NativeCallable::PromiseStatic { .. } => {
                 bail!("SnapshotNativeCallable: unsupported runtime-state-carrying variant")
             }
         };

@@ -40,9 +40,6 @@ impl Compiler {
         self.function_table.push(wasm_idx);
     }
 
-    pub(crate) fn new_with_data_base(mode: CompileMode, data_base: u32) -> Self {
-        Self::new_with_layout(mode, data_base, 0)
-    }
 
     pub(crate) fn new_with_layout(mode: CompileMode, data_base: u32, table_base: u32) -> Self {
         let types = crate::shared_types::build_shared_type_section();
@@ -104,6 +101,18 @@ impl Compiler {
             import_eval_global(&mut imports, "__good_color", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_end", ValType::I32, true);
+            // 与 runtime module 一样导入父模块 __table，使 FunctionRef 使用主表下标。
+            imports.import(
+                "env",
+                "__table",
+                EntityType::Table(TableType {
+                    element_type: RefType::FUNCREF,
+                    minimum: 0,
+                    maximum: None,
+                    table64: false,
+                    shared: false,
+                }),
+            );
         } else {
             // Normal mode: import memory + table + 27 globals from env，
             // 与 support module 共享同一份运行时状态。runtime 在 instantiate 前创建

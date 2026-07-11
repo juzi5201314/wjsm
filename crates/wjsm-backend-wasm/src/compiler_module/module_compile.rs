@@ -371,30 +371,13 @@ impl Compiler {
             self.compile_bootstrap_once_function();
             self.compile_init_function_props_function();
         }
-        if self.mode == CompileMode::Eval {
-            // Eval mode: 定义自己的 table
-            self.table.table(TableType {
-                element_type: RefType::FUNCREF,
-                minimum: (self.table_base + self.function_table.len() as u32) as u64,
-                maximum: None,
-                table64: false,
-                shared: false,
-            });
-            self.elements.active(
-                Some(0),
-                &ConstExpr::i32_const(self.table_base as i32),
-                Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
-            );
-        } else {
-            // Normal mode: table 是 import 的（env.__table）。
-            // element section 从本模块分配到的 table base 开始填充。support module 不使用 element section，
-            // 所以 table 的已分配区间完全由 user wasm 使用。
-            self.elements.active(
-                Some(0),
-                &ConstExpr::i32_const(self.table_base as i32),
-                Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
-            );
-        }
+        // Eval / Normal 均把函数填入父模块 __table（eval 现在 import 同一张表）。
+        // 私有 table + element 会在临时 Instance 销毁后让 FunctionRef 失效。
+        self.elements.active(
+            Some(0),
+            &ConstExpr::i32_const(self.table_base as i32),
+            Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
+        );
 
         if self.mode == CompileMode::Eval {
             let globals = [

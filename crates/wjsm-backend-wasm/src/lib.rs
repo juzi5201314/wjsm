@@ -84,14 +84,26 @@ pub fn compile_runtime_module_at_with_options(
     })
 }
 
-pub fn compile_eval(program: &Program) -> Result<Vec<u8>> {
-    compile_eval_at_data_base(program, 0)
+pub fn compile_eval(program: &Program) -> Result<RuntimeCompiledModule> {
+    compile_eval_at_data_base(program, 0, 0)
 }
 
-pub fn compile_eval_at_data_base(program: &Program, data_base: u32) -> Result<Vec<u8>> {
-    let mut compiler = Compiler::new_with_data_base(CompileMode::Eval, data_base);
+/// 编译 eval 模块：导入父 `memory`/`globals`/`__table`，`function_table` 下标从 `table_base` 起。
+pub fn compile_eval_at_data_base(
+    program: &Program,
+    data_base: u32,
+    table_base: u32,
+) -> Result<RuntimeCompiledModule> {
+    let mut compiler = Compiler::new_with_layout(CompileMode::Eval, data_base, table_base);
     compiler.compile_module(program)?;
-    Ok(compiler.finish())
+    let table_len = compiler.function_table.len() as u32;
+    let data_len = compiler.string_data.len() as u32;
+    let wasm = compiler.finish();
+    Ok(RuntimeCompiledModule {
+        wasm,
+        table_len,
+        data_len,
+    })
 }
 
 // ── Compiler ────────────────────────────────────────────────────────────
@@ -778,7 +790,7 @@ mod tests {
     fn compile_eval_source(source: &str) -> Result<Vec<u8>> {
         let module = wjsm_parser::parse_script_as_module(source)?;
         let program = wjsm_semantic::lower_eval_module(module)?;
-        compile_eval(&program)
+        Ok(compile_eval(&program)?.wasm)
     }
 
     #[test]

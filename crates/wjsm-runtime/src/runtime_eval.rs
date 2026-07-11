@@ -81,14 +81,38 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
     var_writes_to_scope: bool,
 ) -> Result<i64> {
     let data_base = reserve_eval_data_segment(caller, code.len() as u32)?;
-    let wasm_bytes = cached_eval_wasm(
+    let env = WasmEnv::from_caller(caller)
+        .ok_or_else(|| anyhow::anyhow!("eval parent missing runtime environment"))?;
+    let table_base = u32::try_from(env.func_table.size(&mut *caller))
+        .map_err(|_| anyhow::anyhow!("runtime function table too large"))?;
+
+    let (wasm_bytes, table_len) = cached_eval_wasm(
         caller.data(),
         code,
         module,
         scope_env.is_some(),
         var_writes_to_scope,
         data_base,
+        table_base,
     )?;
+
+    // 预留主表槽位；element section 在 instantiate 时填充导入的父 table
+    let table_end = table_base
+        .checked_add(table_len)
+        .ok_or_else(|| anyhow::anyhow!("eval function table reservation overflows"))?;
+    {
+        let current = env.func_table.size(&mut *caller);
+        if u64::from(table_end) > current {
+            env.func_table
+                .grow(
+                    &mut *caller,
+                    u64::from(table_end) - current,
+                    wasmtime::Ref::Func(None),
+                )
+                .map_err(|e| anyhow::anyhow!("failed to grow function table for eval: {e:?}"))?;
+        }
+    }
+
     let eval_module = Module::new(caller.engine(), &wasm_bytes)?;
     let mut imports = Vec::with_capacity(eval_module.imports().count());
 
@@ -114,6 +138,18 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
                     })?;
                 imports.push(global.into());
             }
+            ExternType::Table(_) => {
+                // 与 parent 共享主 __table
+                let table = caller
+                    .get_export(import.name())
+                    .and_then(Extern::into_table)
+                    .or_else(|| {
+                        // 有时 export 名是 __table
+                        caller.get_export("__table").and_then(Extern::into_table)
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("eval parent missing table import"))?;
+                imports.push(table.into());
+            }
             _ => {
                 anyhow::bail!("unsupported eval import `{}`", import.name());
             }
@@ -122,6 +158,13 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
 
     sync_eval_new_target_from_scope_record(caller, scope_env);
     let instance = Instance::new_async(&mut *caller, &eval_module, &imports).await?;
+    // 保活 Instance：嵌套函数 FunctionRef 指向本模块 funcref 槽
+    caller
+        .data()
+        .live_eval_instances
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(instance);
     let entry = instance.get_typed_func::<i64, i64>(&mut *caller, "__eval_entry")?;
     Ok(entry
         .call_async(
@@ -176,24 +219,27 @@ pub(crate) fn cached_eval_wasm(
     has_scope_bridge: bool,
     var_writes_to_scope: bool,
     data_base: u32,
-) -> Result<Vec<u8>> {
+    table_base: u32,
+) -> Result<(Vec<u8>, u32)> {
     let mut hasher = DefaultHasher::new();
     code.hash(&mut hasher);
     has_scope_bridge.hash(&mut hasher);
     var_writes_to_scope.hash(&mut hasher);
     data_base.hash(&mut hasher);
-    const SCOPE_RECORD_CACHE_VERSION: u64 = 5;
+    table_base.hash(&mut hasher);
+    // v6: eval 导入父 __table + table_base 编址
+    const SCOPE_RECORD_CACHE_VERSION: u64 = 6;
     SCOPE_RECORD_CACHE_VERSION.hash(&mut hasher);
     let key = hasher.finish();
 
-    if let Some(bytes) = state
+    if let Some(entry) = state
         .eval_cache
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&key)
         .cloned()
     {
-        return Ok(bytes);
+        return Ok(entry);
     }
 
     let program = wjsm_semantic::lower_eval_module_with_scope(
@@ -201,13 +247,15 @@ pub(crate) fn cached_eval_wasm(
         has_scope_bridge,
         var_writes_to_scope,
     )?;
-    let bytes = wjsm_backend_wasm::compile_eval_at_data_base(&program, data_base)?;
+    let compiled =
+        wjsm_backend_wasm::compile_eval_at_data_base(&program, data_base, table_base)?;
+    let entry = (compiled.wasm, compiled.table_len);
     state
         .eval_cache
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(key, bytes.clone());
-    Ok(bytes)
+        .insert(key, entry.clone());
+    Ok(entry)
 }
 
 pub(crate) fn compiled_eval_import(

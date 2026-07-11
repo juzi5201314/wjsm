@@ -1115,6 +1115,8 @@ impl Clone for RuntimeState {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone(),
             ),
+            // 不跨 store 共享 Instance
+            live_eval_instances: Mutex::new(Vec::new()),
         }
     }
 }
@@ -1197,7 +1199,7 @@ struct RuntimeState {
     /// combinator context 侧表空闲槽位。
     combinator_context_free_slots: Arc<Mutex<Vec<usize>>>,
     /// eval 编译缓存：code string hash → eval 模式 WASM bytes。
-    eval_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
+    eval_cache: Arc<Mutex<HashMap<u64, (Vec<u8>, u32)>>>,
     /// BigInt 侧表：存储任意精度 BigInt 值
     bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>>,
     /// Symbol 侧表：存储 symbol 条目（description + global_key）
@@ -1381,6 +1383,9 @@ struct RuntimeState {
     pub(crate) contextified: crate::runtime_node_vm::ContextifiedTable,
     /// vm 解释器路径 deadline（wall-clock）；None 表示无 timeout。
     pub(crate) vm_deadline: Mutex<Option<std::time::Instant>>,
+    /// 保活已安装到主 `__table` 的 compiled-eval Instance（嵌套函数 FunctionRef 依赖）。
+    pub(crate) live_eval_instances: Mutex<Vec<wasmtime::Instance>>,
+
 }
 
 impl RuntimeState {
@@ -1799,6 +1804,7 @@ impl RuntimeState {
             execution_realm: AtomicU32::new(0),
             contextified: crate::runtime_node_vm::empty_contextified_table(),
             vm_deadline: Mutex::new(None),
+            live_eval_instances: Mutex::new(Vec::new()),
         }
     }
 
