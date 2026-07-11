@@ -442,6 +442,25 @@ let workerObj = createCurrentWorker();
 const pendingListens = Object.create(null);
 let listenSeq = 0;
 
+function clearPendingListen(seq, settle) {
+  const pending = pendingListens[seq];
+  if (!pending) return false;
+  delete pendingListens[seq];
+  clearTimeout(pending.timeout);
+  if (typeof settle === 'function') settle(pending);
+  return true;
+}
+
+function clearAllPendingListens(reason) {
+  const keys = Object.keys(pendingListens);
+  for (let i = 0; i < keys.length; i = i + 1) {
+    const seq = keys[i];
+    clearPendingListen(seq, function (pending) {
+      pending.reject(new Error(reason || 'cluster listen cancelled'));
+    });
+  }
+}
+
 if (isWorker) {
   workerObj.state = 'online';
   // host process.on：注册唯一 message_cb，分流 NODE_* / 用户消息
@@ -453,6 +472,13 @@ if (isWorker) {
       }
       if (workerObj) workerObj.emit('message', msg, fd);
     });
+    // disconnect / 进程退出时清掉未完成的 queryServer
+    process.on('disconnect', function () {
+      clearAllPendingListens('worker disconnect');
+    });
+    process.on('exit', function () {
+      clearAllPendingListens('process exit');
+    });
   }
   // 通知 primary online（process_send 会 ensure endpoint + reader）
   if (typeof process.send === 'function') {
@@ -463,11 +489,9 @@ if (isWorker) {
 function handleWorkerInternal(msg, fd) {
   if (!msg || msg.cmd !== 'NODE_CLUSTER') return;
   if (msg.act === 'share' || msg.act === 'rr') {
-    const pending = pendingListens[msg.seq];
-    if (pending) {
-      delete pendingListens[msg.seq];
+    clearPendingListen(msg.seq, function (pending) {
       pending.resolve(msg);
-    }
+    });
     return;
   }
   if (msg.act === 'newconn') {
@@ -482,15 +506,14 @@ function handleWorkerInternal(msg, fd) {
     return;
   }
   if (msg.act === 'disconnect') {
+    clearAllPendingListens('worker disconnect');
     if (typeof process.disconnect === 'function') process.disconnect();
     return;
   }
   if (msg.act === 'error') {
-    const pending = pendingListens[msg.seq];
-    if (pending) {
-      delete pendingListens[msg.seq];
+    clearPendingListen(msg.seq, function (pending) {
       pending.reject(new Error(msg.message || 'cluster listen error'));
-    }
+    });
   }
 }
 
@@ -504,7 +527,12 @@ export function queryServerListen(opts) {
   }
   const seq = (listenSeq = listenSeq + 1);
   return new Promise(function (resolve, reject) {
-    pendingListens[seq] = { resolve: resolve, reject: reject };
+    const timeout = setTimeout(function () {
+      clearPendingListen(seq, function (pending) {
+        pending.reject(new Error('cluster queryServer timeout'));
+      });
+    }, 10000);
+    pendingListens[seq] = { resolve: resolve, reject: reject, timeout: timeout };
     process.send({
       cmd: 'NODE_CLUSTER',
       act: 'queryServer',
@@ -515,12 +543,6 @@ export function queryServerListen(opts) {
       fd: -1,
       flags: 0,
     });
-    setTimeout(function () {
-      if (pendingListens[seq]) {
-        delete pendingListens[seq];
-        reject(new Error('cluster queryServer timeout'));
-      }
-    }, 10000);
   });
 }
 

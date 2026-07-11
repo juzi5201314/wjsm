@@ -171,6 +171,7 @@ fn apply_command_config(command: &mut Commands, matches: &clap::ArgMatches, conf
         }
         Commands::Repl { script, .. } => apply_script(script, matches, config),
         Commands::Eval { .. }
+        | Commands::RunPrecompiled { .. }
         | Commands::Fmt { .. }
         | Commands::Validate { .. }
         | Commands::Size { .. }

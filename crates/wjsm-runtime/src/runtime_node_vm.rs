@@ -4,8 +4,8 @@
 //! runInContext 在 execution_realm 帧内 eval，scope_env = sandbox。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use wasmtime::{AsContextMut, Caller};
@@ -892,77 +892,66 @@ async fn drain_microtasks_after_eval(
     Ok(())
 }
 
-/// 武装 vm timeout：切换 epoch 为 trap + 后台 increment_epoch；设置解释器 deadline。
+/// 武装 vm timeout：设置解释器 deadline 并 arm 共享 EpochController。
+/// Store 的 epoch callback 会在到期时 Interrupt，否则 Yield。
 struct VmTimeoutGuard {
-    cancel: Arc<AtomicBool>,
-    join: Option<std::thread::JoinHandle<()>>,
+    /// 是否在 arm 时从 None→Some（决定 disarm 是否减引用）。
+    did_arm: bool,
 }
 
 fn arm_vm_timeout(caller: &mut Caller<'_, RuntimeState>, timeout_ms: u64) -> VmTimeoutGuard {
-    // 解释器 deadline
-    {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
-        *caller
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
+    let did_arm = {
+        let mut slot = caller
             .data()
             .vm_deadline
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(deadline);
+            .unwrap_or_else(|e| e.into_inner());
+        let was_none = slot.is_none();
+        *slot = Some(deadline);
+        was_none
+    };
+    if did_arm
+        && let Some(ctrl) = caller.data().epoch_controller.as_ref()
+    {
+        ctrl.arm();
     }
-
-    // 编译路径：临时把 epoch 策略改为 trap（退出时恢复 async_yield）
+    // 确保下一 epoch tick 立刻检查本 Store。
     {
         let mut store = caller.as_context_mut();
-        store.epoch_deadline_trap();
         store.set_epoch_deadline(1);
     }
-
-    let engine = caller.engine().clone();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_bg = Arc::clone(&cancel);
-    let join = std::thread::spawn(move || {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(timeout_ms.max(1)) {
-            if cancel_bg.load(Ordering::Relaxed) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        if !cancel_bg.load(Ordering::Relaxed) {
-            engine.increment_epoch();
-        }
-    });
-
-    VmTimeoutGuard {
-        cancel,
-        join: Some(join),
-    }
+    VmTimeoutGuard { did_arm }
 }
 
 impl VmTimeoutGuard {
-    fn disarm(mut self, caller: &mut Caller<'_, RuntimeState>) {
-        self.cancel.store(true, Ordering::Relaxed);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
+    fn disarm(self, caller: &mut Caller<'_, RuntimeState>) {
+        let was_some = {
+            let mut slot = caller
+                .data()
+                .vm_deadline
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let was = slot.is_some();
+            *slot = None;
+            was
+        };
+        if was_some && self.did_arm
+            && let Some(ctrl) = caller.data().epoch_controller.as_ref()
+        {
+            ctrl.disarm();
         }
-        *caller
-            .data()
-            .vm_deadline
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
-        // 恢复 async-yield epoch 策略
+        // callback 始终安装；无需恢复 epoch 策略。
         let mut store = caller.as_context_mut();
-        store.epoch_deadline_async_yield_and_update(1);
         store.set_epoch_deadline(1);
     }
 }
 
 impl Drop for VmTimeoutGuard {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
-        }
-        // Drop 路径无法拿 Caller 恢复 epoch；正常路径必须走 disarm。
+        // Drop 路径无法拿 Caller 清 deadline / disarm；正常路径必须走 disarm。
+        // 若 panic 越过 disarm，deadline 残留仅影响本 Store；armed 引用泄漏
+        // 会让 ticker 继续跑（安全但多耗一点 CPU），可接受。
     }
 }
 

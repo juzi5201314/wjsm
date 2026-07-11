@@ -95,38 +95,31 @@ pub(crate) fn startup_engine_config(
     wasmtime_memory_reservation: Option<u64>,
     guest_debug: bool,
 ) -> Config {
-    let mut config = Config::new();
-    // guest_debug 与 Winch 不兼容：inspect 启用时强制 Cranelift。
-    if guest_debug {
-        config.guest_debug(true);
-    } else if std::env::var("WJSM_COMPILER").as_deref() == Ok("winch") {
-        // WJSM_COMPILER=winch 使用 Winch 基线编译器
-        config.strategy(Strategy::Winch);
-    }
-    // WJSM_OPT_LEVEL=none|speed_and_size 控制 Cranelift 优化等级
-    match std::env::var("WJSM_OPT_LEVEL").as_deref() {
-        Ok("none") => {
-            config.cranelift_opt_level(OptLevel::None);
-        }
-        Ok("speed_and_size") => {
-            config.cranelift_opt_level(OptLevel::SpeedAndSize);
-        }
-        _ => {}
-    }
-    if use_epoch_async_yield {
-        config.epoch_interruption(true);
-    }
-    if let Some(bytes) = wasmtime_memory_reservation {
-        config.memory_reservation(bytes);
-        config.memory_reservation_for_growth(bytes.clamp(1 << 20, 64 << 20));
-        config.memory_guard_size(64 << 10);
-        config.guard_before_linear_memory(false);
-    }
-    // 启用 WASM backtrace 捕获，供运行时错误堆栈映射到 JS 函数名和源码位置。
-    config.wasm_backtrace_max_frames(std::num::NonZero::new(50));
-    config.generate_address_map(true);
-    config.wasm_bulk_memory(true);
-    config
+    // 冷路径兼容：从环境解析 compiler，构造 Config（不经池）。
+    let key = crate::runtime_engine_pool::engine_config_key(
+        None,
+        use_epoch_async_yield,
+        wasmtime_memory_reservation,
+        guest_debug,
+    );
+    crate::runtime_engine_pool::build_engine_config(&key)
+}
+
+/// 与 `startup_engine_config` 相同，但接受显式 compiler。
+#[allow(dead_code)]
+pub(crate) fn startup_engine_config_with_compiler(
+    compiler: Option<crate::RuntimeCompiler>,
+    use_epoch_async_yield: bool,
+    wasmtime_memory_reservation: Option<u64>,
+    guest_debug: bool,
+) -> Config {
+    let key = crate::runtime_engine_pool::engine_config_key(
+        compiler,
+        use_epoch_async_yield,
+        wasmtime_memory_reservation,
+        guest_debug,
+    );
+    crate::runtime_engine_pool::build_engine_config(&key)
 }
 
 pub(super) fn register_startup_linker(
@@ -448,16 +441,33 @@ pub(crate) async fn instantiate_execute_bundle(
     use_epoch_async_yield: bool,
     options: RuntimeOptions,
 ) -> Result<ExecuteInstanceBundle> {
-    let mut store = Store::new(
+    instantiate_execute_bundle_with_epoch(
         engine,
-        RuntimeState::new_with_shared_and_options(shared_state, options)?,
-    );
+        module,
+        shared_state,
+        use_epoch_async_yield,
+        options,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn instantiate_execute_bundle_with_epoch(
+    engine: &Engine,
+    module: &Module,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+    use_epoch_async_yield: bool,
+    options: RuntimeOptions,
+    epoch: Option<Arc<crate::runtime_engine_pool::EpochController>>,
+) -> Result<ExecuteInstanceBundle> {
+    let mut state = RuntimeState::new_with_shared_and_options(shared_state, options)?;
+    state.epoch_controller = epoch;
+    let mut store = Store::new(engine, state);
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);
     let diagnostics = Arc::clone(&store.data().diagnostics);
     if use_epoch_async_yield {
-        store.set_epoch_deadline(1);
-        store.epoch_deadline_async_yield_and_update(1);
+        crate::runtime_engine_pool::install_epoch_deadline_callback(&mut store);
     }
     let host_completion_rx = prepare_async_host_completion(&mut store);
     // worker_threads：注册 parentPort wake，并默认 ref 住 parentPort（与 Node 一致，

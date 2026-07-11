@@ -7,9 +7,9 @@ use std::io::{self, ErrorKind};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::scheduler::AsyncHostCompletion;
 
@@ -156,6 +156,8 @@ struct ParentIpcInner {
     endpoint: Mutex<Option<Arc<IpcEndpoint>>>,
     pending: Mutex<Vec<(String, Option<RawFd>)>>,
     error: Mutex<Option<String>>,
+    /// accept 完成（endpoint 或 error）时唤醒 wait_endpoint。
+    ready: Condvar,
 }
 
 impl ParentIpcHandle {
@@ -214,10 +216,15 @@ impl ParentIpcHandle {
 
     /// 阻塞 wait（仅后台线程使用，绝不能在 host 调用路径上调用）。
     pub(crate) fn wait_endpoint(&self) -> io::Result<Arc<IpcEndpoint>> {
-        let start = std::time::Instant::now();
+        let mut guard = self
+            .inner
+            .endpoint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if let Some(ep) = self.try_endpoint() {
-                return Ok(ep);
+            if let Some(ep) = guard.as_ref() {
+                return Ok(Arc::clone(ep));
             }
             if let Some(err) = self
                 .inner
@@ -228,20 +235,44 @@ impl ParentIpcHandle {
             {
                 return Err(io::Error::other(err));
             }
-            if start.elapsed() > Duration::from_secs(15) {
+            let now = Instant::now();
+            if now >= deadline {
                 return Err(io::Error::new(ErrorKind::TimedOut, "ipc accept timeout"));
             }
-            thread::sleep(Duration::from_millis(2));
+            let (next, wait_result) = self
+                .inner
+                .ready
+                .wait_timeout(guard, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
+            guard = next;
+            if wait_result.timed_out() {
+                if let Some(ep) = guard.as_ref() {
+                    return Ok(Arc::clone(ep));
+                }
+                if let Some(err) = self
+                    .inner
+                    .error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+                {
+                    return Err(io::Error::other(err));
+                }
+                return Err(io::Error::new(ErrorKind::TimedOut, "ipc accept timeout"));
+            }
         }
     }
 
     fn set_endpoint(&self, ep: Arc<IpcEndpoint>) {
-        // 先挂 endpoint，再循环 drain pending，避免与 send_nonblocking 丢消息
-        *self
-            .inner
-            .endpoint
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&ep));
+        // 先挂 endpoint 并唤醒 waiters，再循环 drain pending，避免与 send_nonblocking 丢消息
+        {
+            *self
+                .inner
+                .endpoint
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&ep));
+        }
+        self.inner.ready.notify_all();
         loop {
             let batch = std::mem::take(
                 &mut *self
@@ -258,6 +289,15 @@ impl ParentIpcHandle {
             }
         }
     }
+
+    fn set_error(&self, err: String) {
+        *self
+            .inner
+            .error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(err);
+        self.inner.ready.notify_all();
+    }
 }
 
 pub(crate) fn create_parent_ipc() -> io::Result<ParentIpcHandle> {
@@ -271,6 +311,7 @@ pub(crate) fn create_parent_ipc() -> io::Result<ParentIpcHandle> {
     ));
     let _ = std::fs::remove_file(&path);
     let listener = std::os::unix::net::UnixListener::bind(&path)?;
+    // 非阻塞 + poll：无连接时阻塞在 poll，而非 2ms 忙等
     listener.set_nonblocking(true)?;
 
     let handle = ParentIpcHandle {
@@ -279,6 +320,7 @@ pub(crate) fn create_parent_ipc() -> io::Result<ParentIpcHandle> {
             endpoint: Mutex::new(None),
             pending: Mutex::new(Vec::new()),
             error: Mutex::new(None),
+            ready: Condvar::new(),
         }),
     };
     let handle_t = handle.clone();
@@ -287,7 +329,7 @@ pub(crate) fn create_parent_ipc() -> io::Result<ParentIpcHandle> {
     thread::Builder::new()
         .name("wjsm-ipc-accept".into())
         .spawn(move || {
-            let start = std::time::Instant::now();
+            let deadline = Instant::now() + Duration::from_secs(15);
             let result = loop {
                 match listener.accept() {
                     Ok((stream, _)) => {
@@ -297,24 +339,33 @@ pub(crate) fn create_parent_ipc() -> io::Result<ParentIpcHandle> {
                         )
                         .map(Arc::new);
                     }
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                        if start.elapsed() > Duration::from_secs(15) {
+                    Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => {
+                        let now = Instant::now();
+                        if now >= deadline {
                             break Err(io::Error::new(ErrorKind::TimedOut, "ipc accept timeout"));
                         }
-                        thread::sleep(Duration::from_millis(2));
+                        let remaining_ms =
+                            (deadline - now).as_millis().min(i32::MAX as u128) as libc::c_int;
+                        let mut pfd = libc::pollfd {
+                            fd: listener.as_raw_fd(),
+                            events: libc::POLLIN,
+                            revents: 0,
+                        };
+                        let n = unsafe { libc::poll(&mut pfd, 1, remaining_ms) };
+                        if n < 0 {
+                            let err = io::Error::last_os_error();
+                            if err.kind() == ErrorKind::Interrupted {
+                                continue;
+                            }
+                            break Err(err);
+                        }
                     }
                     Err(e) => break Err(e),
                 }
             };
             match result {
                 Ok(ep) => handle_t.set_endpoint(ep),
-                Err(e) => {
-                    *handle_t
-                        .inner
-                        .error
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
-                }
+                Err(e) => handle_t.set_error(e.to_string()),
             }
         })
         .expect("ipc accept thread");

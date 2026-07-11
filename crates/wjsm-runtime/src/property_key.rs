@@ -1,8 +1,45 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use wasmtime::{AsContext, Caller};
 use wjsm_ir::{constants, value};
 
 use crate::runtime_string::RuntimeString;
 use crate::{RuntimeState, WasmEnv};
+
+/// 运行时属性键表：Vec 保序 + HashMap 做 O(1) intern。
+#[derive(Default)]
+pub(crate) struct PropertyKeyTable {
+    by_index: Vec<RuntimeString>,
+    index_of: HashMap<RuntimeString, u32>,
+}
+
+impl PropertyKeyTable {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn index_of(&self, key: &RuntimeString) -> Option<u32> {
+        self.index_of.get(key).copied()
+    }
+
+    pub(crate) fn push(&mut self, key: RuntimeString) -> u32 {
+        if let Some(&idx) = self.index_of.get(&key) {
+            return idx;
+        }
+        let index = self.by_index.len() as u32;
+        self.index_of.insert(key.clone(), index);
+        self.by_index.push(key);
+        index
+    }
+
+    pub(crate) fn get(&self, index: u32) -> Option<&RuntimeString> {
+        self.by_index.get(index as usize)
+    }
+}
+
+pub(crate) type SharedPropertyKeyTable = Arc<Mutex<PropertyKeyTable>>;
+
 
 /// 属性槽 `name_id` 的三种存储来源。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,12 +96,12 @@ pub(crate) fn intern_runtime_property_key(state: &RuntimeState, key: RuntimeStri
         .runtime_property_keys
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    if let Some(index) = keys.iter().position(|existing| existing == &key) {
-        return index as u32;
+    // 先查 index map（按 UTF-16 内容）；无则 append。
+    // RuntimeString 实现 Eq/Hash 走 units。
+    if let Some(index) = keys.index_of(&key) {
+        return index;
     }
-    let index = keys.len() as u32;
-    keys.push(key);
-    index
+    keys.push(key)
 }
 
 pub(crate) fn runtime_property_key_units(
@@ -75,7 +112,7 @@ pub(crate) fn runtime_property_key_units(
         .runtime_property_keys
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .get(index as usize)
+        .get(index)
         .cloned()
 }
 
@@ -108,6 +145,8 @@ pub(crate) fn property_key_value_to_name_id(
     }
     if value::is_runtime_string_handle(prop) {
         let key = crate::runtime_values::get_string_value(caller, prop);
+        // 优先 intern 到 memory c-string（与编译期 name_id 同形态），
+        // 使用 find 缓存避免全堆 memmem；失败再走 runtime property key 表。
         if let Some(key_utf8) = key.to_utf8()
             && !key_utf8.as_bytes().contains(&0)
             && let Some(memory_id) = if allocate_memory_string {

@@ -43,6 +43,7 @@ colored = "2"
 notify = "8.0"
 wasmprinter = "0.245"
 wasmparser = "0.246"
+sha2 = "0.10"
 regress = "0.11"
 regex = "1"
 toml = "0.9.12"
@@ -98,4 +99,46 @@ opt-level = 3
 # memchr 的 SIMD 子串搜索（find_memory_c_string 用）在未优化 debug 下
 # 带大量 UB 检查 + 未内联，实测占 bootstrap ~35% 指令；opt 后大幅收缩。
 [profile.dev.package.memchr]
+opt-level = 3
+# 测试 profile：保留行号表（debug=1），并复制 dev 的关键 package opt-level
+# （Cargo 不继承 package-specific 设置）。
+[profile.test]
+debug = 1
+
+[profile.test.package.cranelift-codegen]
+opt-level = 3
+[profile.test.package.wasmtime-internal-cranelift]
+opt-level = 3
+[profile.test.package.cranelift-frontend]
+opt-level = 3
+[profile.test.package.cranelift-codegen-meta]
+opt-level = 3
+[profile.test.package.cranelift-assembler-x64]
+opt-level = 3
+[profile.test.package.wasmtime-internal-core]
+opt-level = 3
+[profile.test.package.wasmtime-environ]
+opt-level = 3
+[profile.test.package.wjsm-runtime]
+opt-level = 3
+[profile.test.package.memchr]
+opt-level = 3
+[profile.test.package.wasmtime]
+opt-level = 3
+[profile.test.package.wasmtime-internal-winch]
+opt-level = 3
+[profile.test.package.winch-codegen]
+opt-level = 3
+[profile.test.package.wjsm-cli]
+opt-level = 3
+[profile.test.package.wjsm-module]
+opt-level = 3
+[profile.test.package.wjsm-backend-wasm]
+opt-level = 3
+# dev 同样补上 wasmtime 本体
+[profile.dev.package.wasmtime]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-winch]
+opt-level = 3
+[profile.dev.package.winch-codegen]
 opt-level = 3

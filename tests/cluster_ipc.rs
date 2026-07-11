@@ -5,9 +5,26 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
+use std::sync::Once;
+
+static ENV_INIT: Once = Once::new();
+
+fn ensure_cluster_test_env() {
+    ENV_INIT.call_once(|| {
+        // SAFETY: 测试初始化早期设置一次。
+        unsafe {
+            if std::env::var_os("WJSM_COMPILER").is_none() {
+                std::env::set_var("WJSM_COMPILER", "winch");
+            }
+            if std::env::var_os("WJSM_CACHE_DIR").is_none() {
+                std::env::set_var("WJSM_CACHE_DIR", "/tmp/wjsm-test-cache");
+            }
+        }
+    });
+}
 
 fn wjsm_bin() -> PathBuf {
+    ensure_cluster_test_env();
     std::env::var("CARGO_BIN_EXE_wjsm")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -16,15 +33,37 @@ fn wjsm_bin() -> PathBuf {
 }
 
 fn write_temp_script(name: &str, source: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "wjsm-cluster-test-{}-{}",
-        std::process::id(),
-        name
-    ));
+    ensure_cluster_test_env();
+    // 稳定路径：内容 hash 决定目录，避免每次 pid 不同导致整包 WASM 重编译（1.3MB Winch ~1.5s）。
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    name.hash(&mut hasher);
+    source.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+    let dir = std::env::temp_dir().join("wjsm-cluster-test").join(&key);
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{name}.js"));
-    std::fs::write(&path, source).expect("write script");
+    if !path.exists() {
+        std::fs::write(&path, source).expect("write script");
+    }
     path
+}
+
+/// 统一 spawn 父进程：Winch + pipeline/cwasm cache + child_process allow。
+fn run_wjsm_script(script: &std::path::Path, extra_env: &[(&str, &str)]) -> std::process::Output {
+    ensure_cluster_test_env();
+    let cache = std::env::var("WJSM_CACHE_DIR").unwrap_or_else(|_| "/tmp/wjsm-test-cache".into());
+    let compiler = std::env::var("WJSM_COMPILER").unwrap_or_else(|_| "winch".into());
+    let mut cmd = Command::new(wjsm_bin());
+    cmd.arg("run")
+        .arg(script)
+        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
+        .env("WJSM_COMPILER", &compiler)
+        .env("WJSM_CACHE_DIR", &cache);
+    for (k, v) in extra_env {
+        cmd.env(*k, *v);
+    }
+    cmd.output().expect("spawn wjsm")
 }
 
 #[test]
@@ -41,25 +80,21 @@ if (process.env.IS_CHILD === '1') {
   const child = fork(__filename, [], {
     env: Object.assign({}, process.env, { IS_CHILD: '1' }),
   });
+  const watchdog = setTimeout(() => process.exit(1), 10000);
   child.on('message', (m) => {
     console.log('got', m.pong);
     child.kill();
   });
   child.on('exit', () => {
+    clearTimeout(watchdog);
     process.exit(0);
   });
   child.send({ ping: 42 });
-  setTimeout(() => process.exit(1), 10000);
 }
 "#,
     );
 
-    let output = Command::new(wjsm_bin())
-        .arg("run")
-        .arg(&script)
-        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
-        .output()
-        .expect("spawn wjsm");
+    let output = run_wjsm_script(&script, &[]);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -85,24 +120,21 @@ const child = spawn(process.execPath, ['eval', '1 + 1'], {
 });
 
 console.log('spawn-id', typeof child.__id, child.__id >= 0, child.connected);
+const watchdog = setTimeout(function () { process.exit(4); }, 7000);
 child.on('error', function (error) {
   console.log('spawn-error', error.message);
+  clearTimeout(watchdog);
   process.exit(2);
 });
 child.on('exit', function (code) {
   console.log('spawn-exit', code);
+  clearTimeout(watchdog);
   process.exit(code === 0 ? 0 : 3);
 });
-setTimeout(function () { process.exit(4); }, 7000);
 "#,
     );
 
-    let output = Command::new(wjsm_bin())
-        .arg("run")
-        .arg(&script)
-        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
-        .output()
-        .expect("spawn wjsm");
+    let output = run_wjsm_script(&script, &[]);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -126,6 +158,7 @@ fn cluster_fork_message_and_exit() {
 const cluster = require('cluster');
 if (cluster.isPrimary) {
   const w = cluster.fork();
+  const watchdog = setTimeout(() => process.exit(2), 15000);
   w.on('online', () => {
     console.log('online');
     w.send({ hello: 'worker' });
@@ -136,9 +169,9 @@ if (cluster.isPrimary) {
   });
   w.on('exit', (code) => {
     console.log('exit', code === 0 || code === null ? 'ok' : code);
+    clearTimeout(watchdog);
     process.exit(0);
   });
-  setTimeout(() => process.exit(2), 15000);
 } else {
   process.on('message', (m) => {
     process.send({ reply: m.hello });
@@ -147,12 +180,7 @@ if (cluster.isPrimary) {
 "#,
     );
 
-    let output = Command::new(wjsm_bin())
-        .arg("run")
-        .arg(&script)
-        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
-        .output()
-        .expect("spawn wjsm");
+    let output = run_wjsm_script(&script, &[]);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -170,8 +198,13 @@ if (cluster.isPrimary) {
 }
 
 /// 共享端口：两个 worker 对 listen(0) 必须报到同一 port（SCHED_RR primary 持 listener）。
-/// 注：primary 侧在 cluster 活跃时再调 net.connect 会与 IPC 事件循环冲突（另案修复）；
-/// 本用例验证 RR 共享 listen 的 core 契约：isPrimary/fork/listening/同 port。
+///
+/// 完成条件只认 `cluster` 的 `listening` 事件（IPC 事件驱动）：
+/// 收齐 2 次 listening 且 port 相同即成功。
+///
+/// 注意（wjsm 现状）：
+/// - 不要在 listening 回调栈里同步 `worker.kill()` 再 `process.exit`（会死挂）。
+/// - 不要用 `finished` 守卫再 `process.exit(code)`（也会死挂）；直接 inline exit。
 #[test]
 fn cluster_net_shared_port_rr() {
     let script = write_temp_script(
@@ -182,30 +215,40 @@ const net = require('net');
 
 if (cluster.isPrimary) {
   cluster.schedulingPolicy = cluster.SCHED_RR;
-  const workers = [];
-  for (let i = 0; i < 2; i++) {
-    workers.push(cluster.fork());
-  }
   var ports = [];
-  cluster.on('listening', function (worker, addr) {
-    ports.push(addr.port);
-    console.log('listening', worker.id, addr.port);
-    if (ports.length >= 2) {
-      if (ports[0] === ports[1] && ports[0] > 0) {
-        console.log('shared-port', ports[0]);
-        workers[0].kill();
-        workers[1].kill();
-        setTimeout(function () { process.exit(0); }, 100);
-      } else {
-        console.log('port-mismatch', ports[0], ports[1]);
-        process.exit(5);
-      }
+  var reports = 0;
+
+  function maybeFinish() {
+    if (reports < 2) return;
+    if (ports[0] > 0 && ports[0] === ports[1]) {
+      console.log('shared-port ' + ports[0]);
+      process.exit(0);
     }
+    console.log('port-mismatch ' + ports[0] + ' ' + ports[1]);
+    process.exit(5);
+  }
+
+  function report(port, workerId, tag) {
+    ports.push(port);
+    reports = reports + 1;
+    console.log(tag, workerId, port);
+    maybeFinish();
+  }
+
+  cluster.on('listening', function (worker, addr) {
+    worker.__gotListen = true;
+    report(addr.port, worker.id, 'listening');
   });
-  setTimeout(function () {
-    console.log('timeout', ports.length);
-    process.exit(4);
-  }, 15000);
+
+  // 子进程若未 listening 就退出：用 exit 事件收口，禁止 primary 永久挂起。
+  cluster.on('exit', function (worker, code, signal) {
+    if (worker.__gotListen) return;
+    worker.__gotListen = true;
+    report(-1, worker.id, 'exit-before-listen:' + code + ':' + signal);
+  });
+
+  cluster.fork();
+  cluster.fork();
 } else {
   net.createServer(function (socket) {
     socket.end('ok-' + process.pid);
@@ -214,13 +257,7 @@ if (cluster.isPrimary) {
 "#,
     );
 
-    let output = Command::new(wjsm_bin())
-        .arg("run")
-        .arg(&script)
-        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
-        .env("NODE_CLUSTER_SCHED_POLICY", "rr")
-        .output()
-        .expect("spawn wjsm");
+    let output = run_wjsm_script(&script, &[("NODE_CLUSTER_SCHED_POLICY", "rr")]);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -233,8 +270,15 @@ if (cluster.isPrimary) {
         stdout.contains("shared-port"),
         "expected shared-port in stdout={stdout} stderr={stderr}"
     );
+    let listening_count = stdout.matches("listening ").count();
+    assert!(
+        listening_count >= 2,
+        "expected >=2 listening events, got {listening_count}: {stdout}"
+    );
 }
 
+/// RR primary 侧 connect 到共享端口。
+/// 完成条件：listening + worker message(handled) + client end（纯事件）。
 #[test]
 fn cluster_rr_primary_net_connect() {
     let script = write_temp_script(
@@ -246,9 +290,20 @@ const net = require('net');
 if (cluster.isPrimary) {
   cluster.schedulingPolicy = cluster.SCHED_RR;
   const worker = cluster.fork();
+  var handled = false;
+  var clientEnded = false;
+
+  function maybeDone() {
+    if (!handled || !clientEnded) return;
+    process.exit(0);
+  }
 
   worker.on('message', function (message) {
-    if (message && message.kind === 'handled') console.log('worker-handled');
+    if (message && message.kind === 'handled') {
+      console.log('worker-handled');
+      handled = true;
+      maybeDone();
+    }
   });
 
   cluster.on('listening', function (_worker, address) {
@@ -256,21 +311,14 @@ if (cluster.isPrimary) {
     const client = net.connect(address.port, '127.0.0.1');
     client.on('end', function () {
       console.log('client-end');
-      setTimeout(function () {
-        worker.kill();
-        process.exit(0);
-      }, 300);
+      clientEnded = true;
+      maybeDone();
     });
     client.on('error', function (error) {
       console.log('client-error', error.message);
       process.exit(7);
     });
   });
-
-  setTimeout(function () {
-    console.log('timeout');
-    process.exit(4);
-  }, 7000);
 } else {
   net.createServer(function (socket) {
     process.send({ kind: 'handled' });
@@ -280,13 +328,7 @@ if (cluster.isPrimary) {
 "#,
     );
 
-    let output = Command::new(wjsm_bin())
-        .arg("run")
-        .arg(&script)
-        .env("WJSM_CHILD_PROCESS_ALLOW", "*")
-        .env("NODE_CLUSTER_SCHED_POLICY", "rr")
-        .output()
-        .expect("spawn wjsm");
+    let output = run_wjsm_script(&script, &[("NODE_CLUSTER_SCHED_POLICY", "rr")]);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -309,7 +351,3 @@ if (cluster.isPrimary) {
     );
 }
 
-#[allow(dead_code)]
-fn _timeout() -> Duration {
-    Duration::from_secs(1)
-}

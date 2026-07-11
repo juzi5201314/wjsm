@@ -334,11 +334,19 @@ fn node_arch() -> &'static str {
     }
 }
 
+/// 进程内复用的 Tokio multi-thread runtime（避免每个 in-process 测试重建）。
+fn shared_execution_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to create shared Tokio runtime for WASM execution")
+    });
+    &RT
+}
+
 fn block_on_wasm_execute(wasm: &[u8], options: runtime::RuntimeOptions) -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("failed to create Tokio runtime for WASM execution")?
+    shared_execution_runtime()
         .block_on(runtime::execute_with_options(wasm, options))
 }
 
@@ -480,6 +488,12 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
                 bail!("Either an input file or -e <code> is required");
             }
         }
+
+        Commands::RunPrecompiled {
+            ref wasm,
+            ref source,
+            ref args,
+        } => cmd_run_precompiled(&cli, wasm, source, args),
 
         Commands::Test {
             ref input,
@@ -840,6 +854,99 @@ fn cmd_run(
     let options = runtime_options_for_file(cli, input, root, script_args)?;
 
     run_compile_then_execute(cli, result, options)
+}
+
+/// 直接加载预编译 raw WASM 并执行；缺失/损坏返回 compile exit 1，不静默重编译。
+fn cmd_run_precompiled(
+    cli: &Cli,
+    wasm_path: &Path,
+    source: &Path,
+    script_args: &[OsString],
+) -> Result<ExitCode> {
+    let wasm_bytes = match std::fs::read(wasm_path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!(
+                "Error: failed to read precompiled wasm {}: {e}",
+                wasm_path.display()
+            );
+            return Ok(ExitCode::from(EXIT_COMPILE_ERROR));
+        }
+    };
+    // 快速 magic/version 头校验；完整校验由 Module 加载失败承接。
+    if wasm_bytes.len() < 8
+        || &wasm_bytes[0..4] != b"\0asm"
+        || wasm_bytes[4..8] != [1, 0, 0, 0]
+    {
+        eprintln!(
+            "Error: precompiled wasm {} has invalid WASM header",
+            wasm_path.display()
+        );
+        return Ok(ExitCode::from(EXIT_COMPILE_ERROR));
+    }
+
+    let mut options = runtime_options_for_file(cli, source, None, script_args)?;
+    options.current_entry = Some(runtime::PrecompiledEntry {
+        source: source.to_path_buf(),
+        wasm: wasm_path.to_path_buf(),
+    });
+
+    let start = Instant::now();
+    let exec_result = block_on_wasm_execute(&wasm_bytes, options);
+    if cli.time {
+        eprintln!("execute: {}µs", start.elapsed().as_micros());
+    }
+    if let Err(e) = exec_result {
+        if let Some(code) = process_exit_code_from_error(&e) {
+            return Ok(code);
+        }
+        eprintln!("Runtime error: {:#}", e);
+        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
+    }
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+/// 将 raw WASM 原子写入 `${WJSM_CACHE_DIR}/pipeline/<sha256>.wasm`；返回路径。
+fn write_pipeline_wasm_cache(wasm: &[u8]) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let cache_dir = std::env::var_os("WJSM_CACHE_DIR")?;
+    let pipeline_dir = PathBuf::from(cache_dir).join("pipeline");
+    std::fs::create_dir_all(&pipeline_dir).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(wasm);
+    let digest = hasher.finalize();
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let final_path = pipeline_dir.join(format!("{hex}.wasm"));
+    if final_path.exists() {
+        return Some(final_path);
+    }
+    // create_new temp + rename 原子落盘
+    let tmp_path = pipeline_dir.join(format!(
+        ".{hex}.{}.tmp",
+        std::process::id()
+    ));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .ok()?;
+        f.write_all(wasm).ok()?;
+        f.sync_all().ok()?;
+    }
+    match std::fs::rename(&tmp_path, &final_path) {
+        Ok(()) => Some(final_path),
+        Err(_) => {
+            // 竞态：另一进程已写好
+            let _ = std::fs::remove_file(&tmp_path);
+            if final_path.exists() {
+                Some(final_path)
+            } else {
+                None
+            }
+        }
+    }
 }
 
 fn cmd_run_eval(
@@ -2016,12 +2123,22 @@ fn bundle_plan_from_root(input: &Path, root: &Path) -> Result<CompilePlan> {
 fn run_compile_then_execute(
     cli: &Cli,
     mut result: PipelineResult,
-    options: runtime::RuntimeOptions,
+    mut options: runtime::RuntimeOptions,
 ) -> Result<ExitCode> {
     let wasm = result
         .wasm
         .as_ref()
         .context("compile stage produced no WASM")?;
+
+    // 同入口 fork AOT：把 raw WASM 写入 pipeline cache 并设置 current_entry。
+    if let Some(source) = options.argv.get(1).map(PathBuf::from) {
+        if let Some(wasm_path) = write_pipeline_wasm_cache(wasm) {
+            options.current_entry = Some(runtime::PrecompiledEntry {
+                source,
+                wasm: wasm_path,
+            });
+        }
+    }
 
     if cli.stats {
         print_stats(&result);
@@ -2279,19 +2396,7 @@ pub fn run_file_in_process_with_options(
         }
     };
 
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            return (
-                EXIT_COMPILE_ERROR as i32,
-                Vec::new(),
-                format!("Error: {e:#}\n").into_bytes(),
-            );
-        }
-    };
+    let rt = shared_execution_runtime();
 
     let options =
         match runtime_options_for_in_process(input, script_args, env_overrides, cwd_override) {
@@ -2359,10 +2464,28 @@ fn runtime_options_for_in_process(
         false,
     )?;
 
+    // 测试 in-process 默认 Winch；显式 WJSM_COMPILER 优先。
+    let compiler = match env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "WJSM_COMPILER")
+        .map(|(_, v)| v.as_str())
+    {
+        Some("winch") | Some("Winch") | Some("WINCH") => {
+            Some(runtime::RuntimeCompiler::Winch)
+        }
+        Some("cranelift") | Some("Cranelift") | Some("CRANELIFT") => {
+            Some(runtime::RuntimeCompiler::Cranelift)
+        }
+        Some(_) => None,
+        None => Some(runtime::RuntimeCompiler::Winch),
+    };
+
     Ok(runtime::RuntimeOptions {
         max_heap_size: None,
         shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
         gc_algorithm,
+        compiler,
         argv,
         cwd: cwd_override
             .map(|cwd| cwd.to_string_lossy().into_owned())

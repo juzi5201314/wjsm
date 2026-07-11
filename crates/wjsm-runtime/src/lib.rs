@@ -78,6 +78,8 @@ pub use runtime_module_registry::{
 };
 mod runtime_regexp;
 mod runtime_source_map;
+mod runtime_engine_pool;
+
 mod runtime_startup;
 mod runtime_string;
 mod runtime_string_to_number;
@@ -155,6 +157,24 @@ use runtime_typedarray::*;
 use runtime_values::*;
 use types::*;
 
+/// 预编译入口 handoff：同入口 fork 时子进程直接加载 raw WASM，跳过再编译。
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct PrecompiledEntry {
+    pub source: PathBuf,
+    pub wasm: PathBuf,
+}
+
+/// 显式选择的 Wasmtime 编译器后端。
+///
+/// `RuntimeOptions.compiler = None` 时回退到 `WJSM_COMPILER` 环境变量，
+/// 再回退到 Cranelift。guest_debug / inspector 强制 Cranelift。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RuntimeCompiler {
+    Cranelift,
+    Winch,
+}
+
 #[derive(Clone)]
 pub struct RuntimeOptions {
     pub max_heap_size: Option<usize>,
@@ -162,6 +182,10 @@ pub struct RuntimeOptions {
     pub shadow_stack_max: usize,
     pub wasmtime_memory_reservation: Option<u64>,
     pub gc_algorithm: GcAlgorithmKind,
+    /// 显式编译器；`None` 走环境变量 → Cranelift。
+    pub compiler: Option<RuntimeCompiler>,
+    /// 当前入口的预编译产物（fork AOT handoff）；测试/内部用。
+    pub current_entry: Option<PrecompiledEntry>,
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
@@ -201,6 +225,13 @@ impl std::fmt::Debug for RuntimeOptions {
                 &self.wasmtime_memory_reservation,
             )
             .field("gc_algorithm", &self.gc_algorithm)
+            .field("compiler", &self.compiler)
+            .field(
+                "current_entry",
+                &self.current_entry.as_ref().map(|e| {
+                    format!("source={} wasm={}", e.source.display(), e.wasm.display())
+                }),
+            )
             .field("argv", &self.argv)
             .field("cwd", &self.cwd)
             .field("env", &self.env)
@@ -231,6 +262,8 @@ impl Default for RuntimeOptions {
             shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
             wasmtime_memory_reservation: None,
             gc_algorithm: GcAlgorithmKind::MarkSweep,
+            compiler: None,
+            current_entry: None,
             argv: Vec::new(),
             cwd: None,
             env: Vec::new(),
@@ -788,15 +821,18 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
 ) -> Result<(W, Vec<u8>, GcExecutionStats)> {
     let inspect_cfg = options.inspect.clone();
     let guest_debug = inspect_cfg.is_some();
-    let config = startup_engine_config(
+    let key = runtime_engine_pool::engine_config_key(
+        options.compiler,
         use_epoch_async_yield,
         options.wasmtime_memory_reservation,
         guest_debug,
     );
-    let engine = Engine::new(&config)
+    let pooled = runtime_engine_pool::acquire_engine(key)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+    let engine = &pooled.engine;
+    let epoch = Arc::clone(&pooled.epoch);
 
-    let module = compile_or_load_cached(&engine, wasm_bytes)?;
+    let module = compile_or_load_cached(engine, wasm_bytes)?;
     // 解析 "wjsm_sourcemap" custom section，供 trap backtrace 格式化。
     let source_map = runtime_source_map::SourceMapInfo::parse_from_wasm(wasm_bytes);
     // 解析 debug info（wjsm_debug 优先，回退 sourcemap），供 inspector 使用。
@@ -814,12 +850,13 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
         None
     };
 
-    let mut bundle = instantiate_execute_bundle(
-        &engine,
+    let mut bundle = runtime_startup::instantiate_execute_bundle_with_epoch(
+        engine,
         &module,
         shared_state.clone(),
         use_epoch_async_yield,
         options.clone(),
+        Some(Arc::clone(&epoch)),
     )
     .await?;
     bundle.store.data_mut().source_map = source_map.clone();
@@ -830,12 +867,13 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
         let _ = run_init_globals_only(&mut bundle).await;
         snapshot_restored = try_restore_snapshot(&mut bundle, bytes).await;
         if !snapshot_restored {
-            bundle = instantiate_execute_bundle(
-                &engine,
+            bundle = runtime_startup::instantiate_execute_bundle_with_epoch(
+                engine,
                 &module,
                 shared_state.clone(),
                 use_epoch_async_yield,
                 options,
+                Some(epoch),
             )
             .await?;
             bundle.store.data_mut().source_map = source_map.clone();
@@ -982,6 +1020,7 @@ impl Clone for RuntimeState {
             enumerators: self.enumerators.clone(),
             runtime_strings: self.runtime_strings.clone(),
             runtime_property_keys: self.runtime_property_keys.clone(),
+            memory_string_cache: self.memory_string_cache.clone(),
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
@@ -1109,10 +1148,14 @@ impl Clone for RuntimeState {
                     .clone(),
             ),
             vm_deadline: Mutex::new(
-                *self.vm_deadline
+                *self
+                    .vm_deadline
                     .lock()
                     .unwrap_or_else(|e| e.into_inner()),
             ),
+            epoch_controller: self.epoch_controller.clone(),
+            compiler: self.compiler,
+            current_entry: self.current_entry.clone(),
             // 不跨 store 共享 Instance
             live_eval_instances: Mutex::new(Vec::new()),
         }
@@ -1127,7 +1170,9 @@ struct RuntimeState {
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
     runtime_strings: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
-    runtime_property_keys: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
+    runtime_property_keys: crate::property_key::SharedPropertyKeyTable,
+    /// 线性内存 c-string 偏移缓存：避免 find_memory_c_string 反复全堆 memmem。
+    memory_string_cache: Arc<Mutex<HashMap<String, u32>>>,
     /// 进程内可捕获的诊断输出（如 unhandled rejection 警告）；真实 CLI 由 execute 刷到 stderr。
     diagnostics: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
@@ -1144,6 +1189,10 @@ struct RuntimeState {
     shadow_stack_max: usize,
     /// CDP inspector 监听配置（来自 CLI `--inspect` / `--inspect-brk`）。
     inspect: Option<InspectConfig>,
+    /// 显式编译器选择（worker 继承用）。
+    compiler: Option<RuntimeCompiler>,
+    /// 当前入口预编译产物（fork AOT handoff）。
+    current_entry: Option<PrecompiledEntry>,
     /// 注入的 Node `process` 宿主快照。
     process: ProcessState,
     /// Node next tick queue；drain 时优先级高于普通 microtask queue。
@@ -1384,6 +1433,8 @@ struct RuntimeState {
     pub(crate) contextified: crate::runtime_node_vm::ContextifiedTable,
     /// vm 解释器路径 deadline（wall-clock）；None 表示无 timeout。
     pub(crate) vm_deadline: Mutex<Option<std::time::Instant>>,
+    /// 本 Store 所属 Engine 的 epoch controller（timeout 武装用）。
+    pub(crate) epoch_controller: Option<Arc<runtime_engine_pool::EpochController>>,
     /// 保活已安装到主 `__table` 的 compiled-eval Instance（嵌套函数 FunctionRef 依赖）。
     pub(crate) live_eval_instances: Mutex<Vec<wasmtime::Instance>>,
 
@@ -1527,6 +1578,8 @@ impl RuntimeState {
         state.max_heap_size = options.max_heap_size;
         state.shadow_stack_max = options.shadow_stack_max.max(wjsm_ir::SHADOW_STACK_INITIAL_SIZE as usize);
         state.inspect = options.inspect.clone();
+        state.compiler = options.compiler;
+        state.current_entry = options.current_entry.clone();
         state.process = ProcessState::from_options(&options);
         runtime_node_child_process::try_init_process_ipc_from_env(&mut state);
         state.gc_algorithm = Arc::new(Mutex::new(
@@ -1619,7 +1672,8 @@ impl RuntimeState {
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
             runtime_strings: Arc::new(Mutex::new(Vec::new())),
-            runtime_property_keys: Arc::new(Mutex::new(Vec::new())),
+            runtime_property_keys: Arc::new(Mutex::new(crate::property_key::PropertyKeyTable::new())),
+            memory_string_cache: Arc::new(Mutex::new(HashMap::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
             host_temp_roots: Arc::new(Mutex::new(Vec::new())),
@@ -1627,6 +1681,8 @@ impl RuntimeState {
             max_heap_size: None,
             shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
             inspect: None,
+            compiler: None,
+            current_entry: None,
             process: ProcessState::from_options(&RuntimeOptions::default()),
             next_tick_queue: Arc::new(Mutex::new(VecDeque::new())),
             process_exit_signal: Arc::new(Mutex::new(None)),
@@ -1804,6 +1860,7 @@ impl RuntimeState {
             execution_realm: AtomicU32::new(0),
             contextified: crate::runtime_node_vm::empty_contextified_table(),
             vm_deadline: Mutex::new(None),
+            epoch_controller: None,
             live_eval_instances: Mutex::new(Vec::new()),
         }
     }

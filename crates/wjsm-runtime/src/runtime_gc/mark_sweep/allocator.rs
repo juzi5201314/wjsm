@@ -1,10 +1,11 @@
 //! Segregated free list（spec §9）。
 //!
-//! 分离适配（segregated-fit）分配器：size class table + 每 class 一个 free list。
-//! 分配 O(class 数)；sweep 在写入前按 ptr 邻接合并，再 rebuild_from_coalesced_regions。
+//! 分离适配（segregated-fit）分配器：size class table + 每 class 一个按实际 size
+//! 分桶的 `BTreeMap` free list。分配在 class 内 O(log n) best-fit；
+//! sweep 在写入前按 ptr 邻接合并，再 rebuild_from_coalesced_regions。
 //!
 //! size class table 冻结初始值（spec §9.1，P0 验证覆盖率）。
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 /// 冻结的 size class table（spec §9.1）。
 /// 依据：对象 = 16 + cap*32（cap 4..16 → 144..528B）；数组 = 16 + len*8（len 0..128 → 16..1040B）。
@@ -26,27 +27,33 @@ pub fn size_class(size: usize) -> usize {
         .unwrap_or_else(|i| i.min(BIG_CLASS))
 }
 
-/// 分离适配 free list。每 class 一个 VecDeque<(ptr, size)>，外加 big_list。
+/// 按实际 size 分桶的 free 表：key = 块真实字节数，value = 该 size 的 ptr 队列。
+type SizeBuckets = BTreeMap<usize, VecDeque<usize>>;
+
+/// 分离适配 free list。
+///
+/// 每 size class 一张 `BTreeMap`（实际 size → ptr 队列），外加 big list 同结构。
+/// 分配用 `range(requested..)` 取最小可用桶（best-fit），避免桶内线性扫描。
 #[derive(Debug, Clone, Default)]
 pub struct SegregatedFreeList {
-    /// index = size_class。每元素是该 class 的空闲块队列。
-    lists: Vec<VecDeque<(usize, usize)>>,
-    /// 大块（> 16384）队列。
-    big_list: VecDeque<(usize, usize)>,
+    /// index = size_class。每 class 内按实际 size 分桶。
+    lists: Vec<SizeBuckets>,
+    /// 大块（> 16384）按实际 size 分桶。
+    big_list: SizeBuckets,
 }
 
 impl SegregatedFreeList {
     pub fn new() -> Self {
         Self {
-            lists: vec![VecDeque::new(); SIZE_CLASSES.len()],
-            big_list: VecDeque::new(),
+            lists: vec![BTreeMap::new(); SIZE_CLASSES.len()],
+            big_list: BTreeMap::new(),
         }
     }
 
     /// 清空所有 class + big list（sweep 入口调用）。
     pub fn clear(&mut self) {
-        for q in &mut self.lists {
-            q.clear();
+        for map in &mut self.lists {
+            map.clear();
         }
         self.big_list.clear();
     }
@@ -55,15 +62,15 @@ impl SegregatedFreeList {
     /// 邻接合并由 sweep 在写入前完成（#116）；此处仅入表。
     pub fn add_free_region(&mut self, ptr: usize, size: usize) {
         if size < MIN_BLOCK {
-            // 太小不入表（碎片，等同泄漏直到下次 sweep）；保守起见仍记录到最小 class
+            // 太小不入表（碎片，等同泄漏直到下次 sweep）；
             // 实际：size < 16 无法装 header，直接丢弃（sweep 不应产生这种块）
             return;
         }
         let cls = size_class(size);
         if cls == BIG_CLASS {
-            self.big_list.push_back((ptr, size));
+            push_bucket(&mut self.big_list, size, ptr);
         } else {
-            self.lists[cls].push_back((ptr, size));
+            push_bucket(&mut self.lists[cls], size, ptr);
         }
     }
 
@@ -75,38 +82,24 @@ impl SegregatedFreeList {
         }
     }
 
-    /// best-fit in class：精确 class 或更大的 class 取第一个可用块，可分割（spec §9.3）。
-    /// 返回分配到的 ptr，剩余部分经 add_free_region 回灌到对应 class。
+    /// best-fit：从请求 size 对应 class 起向上找，class 内 `range(size..)` 取最小可用桶，
+    /// 可分割（spec §9.3）。返回分配到的 ptr，剩余部分经 add_free_region 回灌。
     pub fn alloc(&mut self, size: usize) -> Option<usize> {
         if size == 0 {
             return None;
         }
         let cls = size_class(size);
-        // 从 cls..BIG_CLASS 找第一个实际大小足够的块；同一 class 只是上界桶，
-        // 不能假设桶内所有块都满足本次请求。
+        // 从 cls..BIG_CLASS 找第一个有足够大块的 class；class 内 O(log n) best-fit。
         if cls < BIG_CLASS {
             for c in cls..BIG_CLASS {
-                if let Some(i) = self.lists[c]
-                    .iter()
-                    .position(|&(_, block_size)| block_size >= size)
-                {
-                    let (ptr, block_size) = self.lists[c].remove(i).expect("just found");
+                if let Some((ptr, block_size)) = take_best_fit(&mut self.lists[c], size) {
                     self.maybe_split(ptr, size, block_size);
                     return Some(ptr);
                 }
             }
         }
-        // big list：找第一个 >= size 的块（first-fit；big 块稀疏，first-fit 足够）
-        // 从前向后找，取下标
-        let mut chosen: Option<usize> = None;
-        for (i, &(_, bs)) in self.big_list.iter().enumerate() {
-            if bs >= size {
-                chosen = Some(i);
-                break;
-            }
-        }
-        if let Some(i) = chosen {
-            let (ptr, block_size) = self.big_list.remove(i).expect("just found");
+        // big list：同样按实际 size 做 best-fit
+        if let Some((ptr, block_size)) = take_best_fit(&mut self.big_list, size) {
             self.maybe_split(ptr, size, block_size);
             Some(ptr)
         } else {
@@ -128,7 +121,11 @@ impl SegregatedFreeList {
     /// debug：总空闲块数。
     #[allow(dead_code)]
     pub fn total_free_regions(&self) -> usize {
-        self.lists.iter().map(|q| q.len()).sum::<usize>() + self.big_list.len()
+        self.lists
+            .iter()
+            .map(bucket_count)
+            .sum::<usize>()
+            + bucket_count(&self.big_list)
     }
 
     /// debug：总空闲字节数。
@@ -136,11 +133,37 @@ impl SegregatedFreeList {
     pub fn total_free_bytes(&self) -> usize {
         self.lists
             .iter()
-            .flat_map(|q| q.iter())
-            .map(|&(_, s)| s)
+            .map(bucket_bytes)
             .sum::<usize>()
-            + self.big_list.iter().map(|&(_, s)| s).sum::<usize>()
+            + bucket_bytes(&self.big_list)
     }
+}
+
+/// 将 ptr 压入 size 桶；桶不存在则新建。
+fn push_bucket(map: &mut SizeBuckets, size: usize, ptr: usize) {
+    map.entry(size).or_default().push_back(ptr);
+}
+
+/// best-fit：`range(requested..)` 取最小可用 size 桶，pop 一块；空桶删除。
+/// 返回 `(ptr, block_size)`。
+fn take_best_fit(map: &mut SizeBuckets, requested: usize) -> Option<(usize, usize)> {
+    let block_size = *map.range(requested..).next()?.0;
+    let queue = map.get_mut(&block_size)?;
+    let ptr = queue.pop_front()?;
+    if queue.is_empty() {
+        map.remove(&block_size);
+    }
+    Some((ptr, block_size))
+}
+
+fn bucket_count(map: &SizeBuckets) -> usize {
+    map.values().map(VecDeque::len).sum()
+}
+
+fn bucket_bytes(map: &SizeBuckets) -> usize {
+    map.iter()
+        .map(|(&size, q)| size.saturating_mul(q.len()))
+        .sum()
 }
 
 #[cfg(test)]
@@ -161,21 +184,22 @@ mod tests {
         fl.add_free_region(2000, 272); // class 272
         let p = fl.alloc(144).unwrap(); // 从 class 272 取，分割
         assert_eq!(p, 2000);
-        // 剩余 128 进 class 112（向上取：128 >= 112 class）
-        // 128 的 class = SIZE_CLASSES 中第一个 >= 128 → 144。验证可再 alloc 112
+        // 剩余 128 进 class 144（128 向上取到 144）。验证可再 alloc 112
         let p2 = fl.alloc(112);
         assert!(p2.is_some(), "剩余块应可再分配");
+        assert_eq!(p2, Some(2000 + 144));
     }
 
     #[test]
     fn alloc_skips_too_small_blocks_in_same_size_class() {
         let mut fl = SegregatedFreeList::new();
-        // 2680 与 3856 都落在 4096 桶；桶命中后仍必须检查真实块大小。
+        // 2680 与 3856 都落在 4096 桶；BTreeMap.range 必须跳过过小键。
         fl.add_free_region(246328, 2680);
 
         assert_eq!(fl.alloc(3856), None);
         assert_eq!(fl.alloc(2680), Some(246328));
     }
+
     #[test]
     fn alloc_falls_back_to_higher_class() {
         let mut fl = SegregatedFreeList::new();
@@ -211,5 +235,88 @@ mod tests {
         assert_eq!(size_class(145), 5); // 向上取到 176
         assert_eq!(size_class(16385), BIG_CLASS);
         assert_eq!(size_class(20000), BIG_CLASS);
+    }
+
+    /// 大量过小块后仍能 O(log n) 命中更大块，且不误取过小桶。
+    #[test]
+    fn alloc_best_fit_skips_many_undersized_then_hits_larger() {
+        let mut fl = SegregatedFreeList::new();
+        // 同属 4096 class：先塞 50 个 2000 字节块，再塞一个 3856。
+        for i in 0..50 {
+            fl.add_free_region(10_000 + i * 4096, 2000);
+        }
+        fl.add_free_region(999_000, 3856);
+
+        assert_eq!(fl.alloc(3000), Some(999_000)); // best-fit 直取 3856，跳过 2000
+        // 剩余 3856-3000=856 → class 1024；2000 块仍在
+        assert_eq!(fl.total_free_regions(), 51);
+        assert_eq!(fl.alloc(2000), Some(10_000));
+    }
+
+    /// best-fit：同 class 内有 80/112/144 时，alloc(80) 取 80 而非更大块。
+    #[test]
+    fn alloc_best_fit_prefers_smallest_sufficient_block() {
+        let mut fl = SegregatedFreeList::new();
+        // 80/112/144 分属不同 class；从 80 class 起应精确命中 80。
+        fl.add_free_region(3000, 144);
+        fl.add_free_region(2000, 112);
+        fl.add_free_region(1000, 80);
+
+        assert_eq!(fl.alloc(80), Some(1000));
+        // 112/144 仍在
+        assert_eq!(fl.total_free_regions(), 2);
+        assert_eq!(fl.alloc(112), Some(2000));
+        assert_eq!(fl.alloc(144), Some(3000));
+    }
+
+    /// free 后可 reuse；split 回灌的 remainder 可再次分配。
+    #[test]
+    fn free_reuse_and_split_remainder_reinsert() {
+        let mut fl = SegregatedFreeList::new();
+        fl.add_free_region(4000, 528);
+        let p = fl.alloc(144).unwrap();
+        assert_eq!(p, 4000);
+        // 528-144=384 → 进 class 432
+        assert_eq!(fl.total_free_bytes(), 384);
+        assert_eq!(fl.alloc(336), Some(4000 + 144));
+        // 384-336=48 回灌
+        assert_eq!(fl.alloc(48), Some(4000 + 144 + 336));
+        assert_eq!(fl.total_free_regions(), 0);
+
+        // free 回灌后可再次 reuse
+        fl.add_free_region(4000, 144);
+        assert_eq!(fl.alloc(144), Some(4000));
+    }
+
+    /// rebuild 已合并区间：空闲字节/块数与输入一致，可整块取出。
+    #[test]
+    fn rebuild_from_coalesced_preserves_bytes_and_regions() {
+        let regions = [(1000, 224), (2000, 80), (3000, 20000)];
+        let mut fl = SegregatedFreeList::new();
+        fl.rebuild_from_coalesced_regions(&regions);
+
+        assert_eq!(fl.total_free_regions(), 3);
+        assert_eq!(fl.total_free_bytes(), 224 + 80 + 20000);
+
+        assert_eq!(fl.alloc(224), Some(1000));
+        assert_eq!(fl.alloc(80), Some(2000));
+        assert_eq!(fl.alloc(20000), Some(3000));
+        assert_eq!(fl.total_free_regions(), 0);
+        assert_eq!(fl.total_free_bytes(), 0);
+    }
+
+    /// big list 也走 best-fit：优先取刚好够用的最小大块。
+    #[test]
+    fn big_list_best_fit() {
+        let mut fl = SegregatedFreeList::new();
+        fl.add_free_region(10_000, 50_000);
+        fl.add_free_region(20_000, 20_000);
+        fl.add_free_region(30_000, 30_000);
+
+        // 请求 25000 → 应取 30000 而非 50000
+        assert_eq!(fl.alloc(25_000), Some(30_000));
+        // 剩余 5000 回灌到 class 8192（非 big）
+        assert_eq!(fl.alloc(20_000), Some(20_000));
+        assert_eq!(fl.alloc(50_000), Some(10_000));
     }
 }

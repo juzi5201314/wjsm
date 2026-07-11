@@ -6,12 +6,19 @@ use std::time::Duration;
 
 use anyhow::Result;
 use tokio::runtime::Builder;
-use wjsm_runtime::{compile_source, execute_with_writer};
+use wjsm_runtime::{
+    RuntimeCompiler, RuntimeOptions, compile_source, execute_with_writer_with_options,
+};
 
 fn run_async(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
     let rt = Builder::new_current_thread().enable_all().build()?;
-    let (out, _) = rt.block_on(async { execute_with_writer(&wasm, Vec::new()).await })?;
+    let options = RuntimeOptions {
+        compiler: Some(RuntimeCompiler::Winch),
+        ..RuntimeOptions::default()
+    };
+    let (out, _) =
+        rt.block_on(async { execute_with_writer_with_options(&wasm, Vec::new(), options).await })?;
     Ok(String::from_utf8(out)?)
 }
 

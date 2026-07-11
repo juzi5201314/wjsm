@@ -260,6 +260,18 @@ pub(crate) fn find_memory_c_string_with_env<C: AsContextMut<Data = RuntimeState>
     env: &WasmEnv,
     name: &str,
 ) -> Option<u32> {
+    // 命中缓存直接返回（alloc 时写入；find 命中后也写入）。
+    {
+        let cache = ctx
+            .as_context()
+            .data()
+            .memory_string_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(&offset) = cache.get(name) {
+            return Some(offset);
+        }
+    }
     let mut needle = Vec::with_capacity(name.len() + 1);
     needle.extend_from_slice(name.as_bytes());
     needle.push(0);
@@ -270,9 +282,16 @@ pub(crate) fn find_memory_c_string_with_env<C: AsContextMut<Data = RuntimeState>
     // 紧凑排布、每个串前一字节是上一个串的 nul 终止符，因此合法起点必满足
     // `offset == 0 || data[offset-1] == 0`。否则形如 "Array" 会错误匹配进
     // "isArray" 内部（offset+2），导致 name_id 与编译期 intern 偏移不一致。
-    memchr::memmem::find_iter(&data[..scan_end], &needle)
+    let found = memchr::memmem::find_iter(&data[..scan_end], &needle)
         .find(|&offset| offset == 0 || data[offset - 1] == 0)
-        .map(|offset| offset as u32)
+        .map(|offset| offset as u32)?;
+    ctx.as_context()
+        .data()
+        .memory_string_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(name.to_string(), found);
+    Some(found)
 }
 
 pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>(
@@ -302,5 +321,12 @@ pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>
     if let Some(alloc_ptr) = env.alloc_ptr {
         let _ = alloc_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
     }
-    Some(heap_ptr as u32)
+    let offset = heap_ptr as u32;
+    ctx.as_context()
+        .data()
+        .memory_string_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(name.to_string(), offset);
+    Some(offset)
 }

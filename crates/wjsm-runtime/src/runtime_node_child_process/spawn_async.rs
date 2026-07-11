@@ -1,6 +1,7 @@
 //! 异步 `spawn` / `fork`：长生命周期子进程 + IPC + exit 事件。
 
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -111,6 +112,59 @@ pub(super) fn spawn_async(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -
     }
 }
 
+/// 同入口 IPC fork → `__run-precompiled <wasm> <source> -- <user args>`。
+/// 条件：ipc + command==exec_path + args 前缀==exec_argv + module==entry.source。
+#[cfg(unix)]
+fn rewrite_fork_to_precompiled(
+    caller: &Caller<'_, RuntimeState>,
+    command: &str,
+    spawn_args: &[String],
+    options: &super::spawn_sync::CommandOptions,
+) -> (String, Vec<String>) {
+    if !options.ipc || options.shell {
+        return (command.to_string(), spawn_args.to_vec());
+    }
+    let Some(entry) = caller.data().current_entry.as_ref() else {
+        return (command.to_string(), spawn_args.to_vec());
+    };
+    let process = &caller.data().process;
+    let cmd_canon = std::fs::canonicalize(command).unwrap_or_else(|_| PathBuf::from(command));
+    let exec_canon = std::fs::canonicalize(&process.exec_path)
+        .unwrap_or_else(|_| PathBuf::from(process.exec_path.as_str()));
+    if cmd_canon != exec_canon {
+        return (command.to_string(), spawn_args.to_vec());
+    }
+    let exec_argv: &[String] = process.exec_argv.as_ref();
+    if spawn_args.len() < exec_argv.len() + 1 {
+        return (command.to_string(), spawn_args.to_vec());
+    }
+    if spawn_args[..exec_argv.len()] != *exec_argv {
+        return (command.to_string(), spawn_args.to_vec());
+    }
+    let module_arg = &spawn_args[exec_argv.len()];
+    let module_canon =
+        std::fs::canonicalize(module_arg).unwrap_or_else(|_| PathBuf::from(module_arg));
+    let source_canon =
+        std::fs::canonicalize(&entry.source).unwrap_or_else(|_| entry.source.clone());
+    if module_canon != source_canon {
+        return (command.to_string(), spawn_args.to_vec());
+    }
+    if !entry.wasm.exists() {
+        return (command.to_string(), spawn_args.to_vec());
+    }
+    // 预热 page cache：父进程先读 pipeline wasm，子进程加载时命中 OS 缓存。
+    let _ = std::fs::read(&entry.wasm);
+    let user_args = &spawn_args[exec_argv.len() + 1..];
+    let mut new_args = vec![
+        "__run-precompiled".to_string(),
+        entry.wasm.to_string_lossy().into_owned(),
+        entry.source.to_string_lossy().into_owned(),
+        "--".to_string(),
+    ];
+    new_args.extend(user_args.iter().cloned());
+    (command.to_string(), new_args)
+}
+
 #[cfg(unix)]
 fn spawn_unix(
     caller: &mut Caller<'_, RuntimeState>,
@@ -129,13 +183,16 @@ fn spawn_unix(
         None
     };
 
+    // 同入口 IPC fork AOT handoff：跳过子进程再编译。
+    let (command, spawn_args) = rewrite_fork_to_precompiled(caller, command, spawn_args, options);
+
     let mut cmd = if options.shell {
         let mut shell = Command::new("sh");
-        shell.arg("-c").arg(command);
+        shell.arg("-c").arg(&command);
         shell
     } else {
-        let mut direct = Command::new(command);
-        direct.args(spawn_args);
+        let mut direct = Command::new(&command);
+        direct.args(&spawn_args);
         direct
     };
     if let Some(cwd) = options
@@ -166,9 +223,13 @@ fn spawn_unix(
         cmd.env("NODE_CHANNEL_FD", "ipc");
     }
 
+
     cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::inherit());
-    cmd.stderr(Stdio::inherit());
+    // 不用 inherit：nextest 捕获父 stdout 时 inherit 会让子进程写满管道后阻塞。
+    // 不用 piped+drain：与 wait 线程/IPC 组合下曾出现挂死。
+    // null：子进程 console 输出丢弃；IPC 走独立 channel，不受影响。
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
 
     let child = match cmd.spawn() {
         Ok(child) => child,

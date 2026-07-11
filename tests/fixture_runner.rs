@@ -21,6 +21,12 @@ fn ensure_test_env() {
         unsafe {
             env::set_var("TZ", "UTC");
             env::set_var("WJSM_CACHE_DIR", "/tmp/wjsm-test-cache");
+            // OS child（cluster/child_process）继承 Winch + cache。
+            if env::var_os("WJSM_COMPILER").is_none() {
+                env::set_var("WJSM_COMPILER", "winch");
+            }
+            // 默认禁用 child_process，避免会话环境污染 fixture 期望。
+            env::remove_var("WJSM_CHILD_PROCESS_ALLOW");
         }
     });
 }

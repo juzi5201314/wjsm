@@ -354,6 +354,18 @@ pub(crate) enum Commands {
         args: Vec<OsString>,
     },
 
+    /// 内部：直接执行预编译 raw WASM（同入口 fork AOT handoff）
+    #[command(name = "__run-precompiled", hide = true)]
+    RunPrecompiled {
+        /// 预编译 raw WASM 路径
+        wasm: PathBuf,
+        /// 对应源入口路径（用于 argv / module-loader / sandbox）
+        source: PathBuf,
+        /// 用户参数（透传 process.argv）
+        #[arg(last = true)]
+        args: Vec<OsString>,
+    },
+
     /// Run JS/TS test files or an inline test snippet
     Test {
         /// File or directory to test. Directories run *.test.js/*.test.ts and *_test.js/*_test.ts.
