@@ -191,11 +191,10 @@ mod registry_consistency {
     fn builtin_bindings_are_unique() {
         let mut seen: HashMap<Builtin, &'static str> = HashMap::new();
         for spec in HOST_IMPORT_SPECS.iter() {
-            if let Some(HostImportKey::Builtin(b)) = spec.key {
-                if let Some(prev) = seen.insert(b, spec.name) {
+            if let Some(HostImportKey::Builtin(b)) = spec.key
+                && let Some(prev) = seen.insert(b, spec.name) {
                     panic!("Builtin::{b:?} bound to both {prev:?} and {:?}", spec.name);
                 }
-            }
         }
     }
 
@@ -204,14 +203,13 @@ mod registry_consistency {
     fn special_bindings_are_unique() {
         let mut seen: HashMap<SpecialHostImport, &'static str> = HashMap::new();
         for spec in HOST_IMPORT_SPECS.iter() {
-            if let Some(HostImportKey::Special(s)) = spec.key {
-                if let Some(prev) = seen.insert(s, spec.name) {
+            if let Some(HostImportKey::Special(s)) = spec.key
+                && let Some(prev) = seen.insert(s, spec.name) {
                     panic!(
                         "SpecialHostImport::{s:?} bound to both {prev:?} and {:?}",
                         spec.name
                     );
                 }
-            }
         }
     }
 

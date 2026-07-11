@@ -11,8 +11,8 @@ pub(crate) fn define_promise(
     let promise_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
-            let promise = alloc_promise(&mut caller, PromiseEntry::pending());
-            promise
+            
+            alloc_promise(&mut caller, PromiseEntry::pending())
         },
     );
     linker.define(&mut store, "env", "promise_create", promise_create_fn)?;
@@ -171,8 +171,7 @@ pub(crate) fn define_promise(
                             queued = Some((ReactionType::Reject, on_rejected, reason));
                         }
                     }
-                } else {
-                }
+                } 
             }
             if let Some((reaction_type, handler, argument)) = queued {
                 let mut queue = caller

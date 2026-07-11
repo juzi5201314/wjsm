@@ -171,14 +171,13 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
             .unwrap_or_else(|e| e.into_inner());
         set.insert(target as u64);
     }
-    if let Some(ptr) = resolve_handle(caller, target) {
-        if let Some(Extern::Memory(memory)) = caller.get_export("memory") {
+    if let Some(ptr) = resolve_handle(caller, target)
+        && let Some(Extern::Memory(memory)) = caller.get_export("memory") {
             let data = memory.data_mut(&mut *caller);
             if ptr + 6 <= data.len() {
                 data[ptr + 5] = 1;
             }
         }
-    }
     true
 }
 pub(crate) fn prototype_handle_to_value(

@@ -12,6 +12,7 @@ use crate::runtime_node_data::bytes_from_value;
 use crate::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum ZlibMethodKind {
     GzipSync,
     GunzipSync,

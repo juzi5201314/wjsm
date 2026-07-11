@@ -34,8 +34,8 @@ pub(crate) fn render_unhandled_rejection_reason_with_env<
         return read_runtime_string_with_env_lossy(ctx, env, val);
     }
     if value::is_object(val) || value::is_array(val) {
-        if let Some(op) = resolve_handle_with_env(ctx, env, val) {
-            if let Some(brand_val) =
+        if let Some(op) = resolve_handle_with_env(ctx, env, val)
+            && let Some(brand_val) =
                 read_object_property_by_name_with_env(ctx, env, op, "__error_brand__")
                 && value::is_bool(brand_val)
                 && value::decode_bool(brand_val)
@@ -53,7 +53,6 @@ pub(crate) fn render_unhandled_rejection_reason_with_env<
                 }
                 return format!("{name}: {message}");
             }
-        }
         return "[object Object]".to_string();
     }
     if value::is_undefined(val) {

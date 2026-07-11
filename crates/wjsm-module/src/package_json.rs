@@ -19,16 +19,13 @@ pub(crate) struct PackageInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub(crate) enum PackageType {
+    #[default]
     CommonJs,
     Module,
 }
 
-impl Default for PackageType {
-    fn default() -> Self {
-        Self::CommonJs
-    }
-}
 
 impl PackageType {
     fn from_package_json(value: Option<&Value>) -> Self {

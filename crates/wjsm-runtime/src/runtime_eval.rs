@@ -2153,8 +2153,8 @@ pub(crate) fn eval_get_binding(
         }
         return v;
     }
-    if let Some(obj_env) = object_env {
-        if let Some(ptr) = resolve_handle(caller, obj_env) {
+    if let Some(obj_env) = object_env
+        && let Some(ptr) = resolve_handle(caller, obj_env) {
             let mut visited = std::collections::HashSet::new();
             if let Some(v) =
                 read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
@@ -2162,7 +2162,6 @@ pub(crate) fn eval_get_binding(
                 return v;
             }
         }
-    }
     if let Some(outer) = outer {
         return eval_get_binding(caller, outer, name);
     }
@@ -2233,8 +2232,8 @@ pub(crate) fn eval_set_binding(
         }
         return val;
     }
-    if let Some(obj_env) = object_env {
-        if value::is_object(obj_env) || value::is_array(obj_env) {
+    if let Some(obj_env) = object_env
+        && (value::is_object(obj_env) || value::is_array(obj_env)) {
             if let Some(ptr) = resolve_handle(caller, obj_env) {
                 let mut visited = std::collections::HashSet::new();
                 if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
@@ -2248,7 +2247,6 @@ pub(crate) fn eval_set_binding(
                 return val;
             }
         }
-    }
     if let Some(outer) = outer {
         return eval_set_binding(caller, outer, name, val);
     }
@@ -2312,8 +2310,8 @@ pub(crate) fn eval_has_binding(
     if found_binding {
         return value::encode_bool(true);
     }
-    if let Some(obj_env) = object_env {
-        if let Some(ptr) = resolve_handle(caller, obj_env) {
+    if let Some(obj_env) = object_env
+        && let Some(ptr) = resolve_handle(caller, obj_env) {
             let mut visited = std::collections::HashSet::new();
             if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
                 .is_some()
@@ -2321,7 +2319,6 @@ pub(crate) fn eval_has_binding(
                 return value::encode_bool(true);
             }
         }
-    }
     if let Some(outer) = outer {
         return eval_has_binding(caller, outer, name);
     }

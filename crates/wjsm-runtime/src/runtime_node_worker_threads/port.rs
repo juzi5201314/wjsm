@@ -182,11 +182,10 @@ pub(super) fn port_start(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) ->
         if let Some(binding) = map.get_mut(&port_id) {
             binding.deliver_cb = Some(deliver);
             binding.started = true;
-            if binding.ref_guard.is_none() {
-                if let Some(counter) = caller.data().async_op_counter.clone() {
+            if binding.ref_guard.is_none()
+                && let Some(counter) = caller.data().async_op_counter.clone() {
                     binding.ref_guard = Some(counter.begin());
                 }
-            }
         }
     }
     if let Some(cluster) = cluster_of(caller)

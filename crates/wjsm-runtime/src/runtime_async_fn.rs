@@ -387,6 +387,7 @@ pub(crate) async fn resume_async_function_async<
 /// Per strict instructions: ONLY the main invocation line was altered (to call_async + .await).
 /// All other logic, comments, Chinese messages, error handling, drain, timer loop etc. are
 /// identical to the sync version. This is the required top-level async main.call_async site.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_main_completion_block_async<W: Write>(
     instance: &Instance,
     mut store: Store<RuntimeState>,

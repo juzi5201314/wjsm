@@ -2130,14 +2130,14 @@ pub(crate) fn define_collections_buffers(
             if value::is_undefined(new_target) {
                 let now_ms = chrono::Utc::now().timestamp_millis() as f64;
                 if now_ms.is_nan() {
-                    return store_runtime_string(&mut caller, "Invalid Date".to_string());
+                    return store_runtime_string(&caller, "Invalid Date".to_string());
                 }
                 return match ms_to_datetime_local(now_ms) {
                     Some(dt) => {
                         let s = dt.format("%a %b %e %Y %H:%M:%S GMT%:z").to_string();
-                        store_runtime_string(&mut caller, s)
+                        store_runtime_string(&caller, s)
                     }
-                    None => store_runtime_string(&mut caller, "Invalid Date".to_string()),
+                    None => store_runtime_string(&caller, "Invalid Date".to_string()),
                 };
             }
 

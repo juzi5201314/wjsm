@@ -593,16 +593,14 @@ fn setup_colors(choice: Option<ColorChoice>, no_color: bool) {
 
 /// 自动颜色：尊重 NO_COLOR / CLICOLOR_FORCE，并检测 stdout、stderr 是否为 TTY。
 fn resolve_auto_colors() -> bool {
-    if let Ok(v) = std::env::var("CLICOLOR_FORCE") {
-        if !v.is_empty() && v != "0" {
+    if let Ok(v) = std::env::var("CLICOLOR_FORCE")
+        && !v.is_empty() && v != "0" {
             return true;
         }
-    }
-    if let Ok(v) = std::env::var("NO_COLOR") {
-        if !v.is_empty() {
+    if let Ok(v) = std::env::var("NO_COLOR")
+        && !v.is_empty() {
             return false;
         }
-    }
     io::stdout().is_terminal() || io::stderr().is_terminal()
 }
 
@@ -1575,7 +1573,7 @@ fn cmd_init(path: &Path, force: bool) -> Result<ExitCode> {
         .ok_or_else(|| anyhow::anyhow!("Invalid path"))?
         .to_string_lossy();
 
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(dir)?;
 
     let main_path = dir.join("main.js");
     let package_path = dir.join("package.json");
@@ -1690,6 +1688,7 @@ fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_pipeline(
     source: &str,
     filename: Option<&str>,
@@ -2103,6 +2102,7 @@ fn compile_source_to_pipeline_result(
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_file_input_to_pipeline_result(
     input: &Path,
     root: Option<&Path>,

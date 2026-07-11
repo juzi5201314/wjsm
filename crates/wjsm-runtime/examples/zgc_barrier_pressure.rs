@@ -11,7 +11,6 @@ const ANCHOR_COUNT: usize = 192;
 const ALLOCATION_BURST: usize = 3300;
 const READ_ROUNDS: usize = 512;
 const CYCLES: usize = 2;
-const WARMUP_RUNS: usize = 0;
 const MEASURED_RUNS: usize = 3;
 const MAX_HEAP_SIZE: usize = 16 * 1024 * 1024;
 
@@ -32,10 +31,6 @@ fn main() -> Result<()> {
 
     let mut summaries = Vec::with_capacity(ALGORITHMS.len());
     for algorithm in ALGORITHMS {
-        for _ in 0..WARMUP_RUNS {
-            let _ = execute_once(&runtime, &wasm, algorithm)?;
-        }
-
         let mut runs = Vec::with_capacity(MEASURED_RUNS);
         for _ in 0..MEASURED_RUNS {
             runs.push(execute_once(&runtime, &wasm, algorithm)?);

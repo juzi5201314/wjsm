@@ -77,6 +77,7 @@ impl Compiler {
 
     /// 对象扩容路径：size = 16 + capacity_local * 32；fast-path 使用 alloc window，
     /// 否则走 gc_alloc_slow（free list → GC → grow/受控 OOM），并把返回 ptr 写入 new_ptr_local。
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_heap_bump_for_object_resize(
         func: &mut Function,
         heap_global: u32,

@@ -6,12 +6,15 @@ use wjsm_ir::wk_symbol;
 use crate::host_imports::get_method::get_by_name_id_sync;
 use crate::property_key::encode_symbol_name_id;
 use crate::*;
-/// Maximum array length per ECMAScript (2^32 - 1).
+/// Maximum array length per ECMAScript（2^32 - 1），即 `u32` 的全部值域。
+/// 因此“超过上限”只能通过 `checked_add` / `checked_mul` 的溢出路径表达，
+/// 不能再写 `n > u32::MAX` 这类对 `u32` 恒假的比较。
 const MAX_ARRAY_LENGTH: u32 = u32::MAX;
 const ARRAY_LENGTH_RANGE_ERROR: &str = "Invalid array length";
 
 fn array_length_would_overflow(len: u32, add: u32) -> bool {
-    len.checked_add(add).is_none_or(|n| n > MAX_ARRAY_LENGTH)
+    // u32 上任意合法 length 都 ≤ MAX_ARRAY_LENGTH；仅加法溢出才是越界。
+    len.checked_add(add).is_none()
 }
 
 /// ToUint32（ECMAScript §6.1.6），用于 ArraySetLength 步骤 3。
@@ -83,15 +86,11 @@ fn doubled_capacity_u32(cap: u32) -> Option<u32> {
     cap.max(1).checked_mul(2)
 }
 
-/// 数组扩容目标容量：翻倍后与 needed 取较大值，且不超过 ECMAScript 数组长度上限。
+/// 数组扩容目标容量：翻倍后与 needed 取较大值。
+/// 容量本身是 `u32`，已天然 ≤ ECMAScript 数组长度上限（2^32-1）。
 fn array_grow_capacity_u32(cap: u32, needed: u32) -> Option<u32> {
     let doubled = doubled_capacity_u32(cap)?;
-    let grown = needed.max(doubled);
-    if grown > MAX_ARRAY_LENGTH {
-        None
-    } else {
-        Some(grown)
-    }
+    Some(needed.max(doubled))
 }
 
 /// ECMAScript §20.1.2.2 / §20.1.2.21：将 proto 值编码为对象头中的 handle。
@@ -484,7 +483,7 @@ pub(crate) fn array_includes_from(
     let start = array_relative_start(len, from_index);
     for i in start..len {
         if let Some(elem) = read_array_elem(caller, ptr, i)
-            && same_value_zero(&caller, elem, search)
+            && same_value_zero(caller, elem, search)
         {
             return value::encode_bool(true);
         }
@@ -1107,8 +1106,8 @@ async fn collect_array_from_values_async(
         return collect_iterator_values_async(caller, iterator).await;
     }
     // 类数组：读取 length + 索引属性
-    if value::is_object(source) || value::is_function(source) {
-        if let Some(ptr) = resolve_handle(caller, source) {
+    if (value::is_object(source) || value::is_function(source))
+        && let Some(ptr) = resolve_handle(caller, source) {
             let len_val = read_object_property_by_name(caller, ptr, "length")
                 .unwrap_or_else(value::encode_undefined);
             let len = array_concat_to_length(caller, len_val).unwrap_or(0);
@@ -1122,7 +1121,6 @@ async fn collect_array_from_values_async(
             }
             return Some(out);
         }
-    }
     None
 }
 /// 抽干裸 TAG_ITERATOR 的非 reentrant 内部状态为值序列（供 Array.from 处理

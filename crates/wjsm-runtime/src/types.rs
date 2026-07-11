@@ -1257,6 +1257,7 @@ pub(crate) struct TimerEntry {
     pub(crate) interval: Duration,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum IteratorState {
     StringIter {
         string: RuntimeString,

@@ -388,8 +388,8 @@ pub(crate) async fn construct_writable_stream(
     }
 
     // 6.5 保存 underlyingSink 与 write/close/abort 回调
-    if value::is_object(sink) {
-        if let Some(ptr) = resolve_handle(caller, sink) {
+    if value::is_object(sink)
+        && let Some(ptr) = resolve_handle(caller, sink) {
             let write_fn = read_object_property_by_name(caller, ptr, "write")
                 .unwrap_or_else(value::encode_undefined);
             let close_fn = read_object_property_by_name(caller, ptr, "close")
@@ -415,7 +415,6 @@ pub(crate) async fn construct_writable_stream(
                 }
             }
         }
-    }
 
     // 7. 标记 controller.started = true
     {

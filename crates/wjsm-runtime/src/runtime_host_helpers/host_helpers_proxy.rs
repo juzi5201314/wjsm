@@ -397,11 +397,10 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
     // 不能走 resolve_handle（会得到 null）；与 ordinary_has_instance_async 同构地
     // 确保原型就绪后直接返回。
     if value::is_regexp(target) {
-        if !value::is_object(caller.data().regexp_prototype) {
-            if let Some(env) = WasmEnv::from_caller(caller) {
+        if !value::is_object(caller.data().regexp_prototype)
+            && let Some(env) = WasmEnv::from_caller(caller) {
                 crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
             }
-        }
         let proto = caller.data().regexp_prototype;
         return if value::is_object(proto) {
             proto

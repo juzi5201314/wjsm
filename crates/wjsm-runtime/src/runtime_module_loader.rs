@@ -842,7 +842,7 @@ pub trait RuntimeModuleLoader: Send + Sync {
     where
         'b: 'a,
     {
-        drop(context);
+        let _ = context;
         Box::pin(async move { self.instantiate_runtime_module(resolved, env) })
     }
 }

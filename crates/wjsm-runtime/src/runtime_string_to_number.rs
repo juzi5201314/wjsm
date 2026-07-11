@@ -61,10 +61,7 @@ pub(crate) fn string_to_f64(trimmed: &str) -> f64 {
         (2, rest)
     } else {
         let s = trimmed.strip_prefix('+').unwrap_or(trimmed);
-        return match s.parse::<f64>() {
-            Ok(n) => n,
-            Err(_) => f64::NAN,
-        };
+        return s.parse::<f64>().unwrap_or(f64::NAN);
     };
 
     if digits.is_empty() {
@@ -106,7 +103,7 @@ mod tests {
         assert_eq!(js_string_content_to_f64(""), 0.0);
         assert_eq!(js_string_content_to_f64("  \t\n  "), 0.0);
         assert!(js_string_content_to_f64("abc").is_nan());
-        assert_eq!(js_string_content_to_f64("3.14"), 3.14);
+        assert_eq!(js_string_content_to_f64("3.25"), 3.25);
         assert_eq!(js_string_content_to_f64("1e3"), 1000.0);
         assert_eq!(js_string_content_to_f64("  42  "), 42.0);
         assert_eq!(js_string_content_to_f64("Infinity"), f64::INFINITY);

@@ -204,7 +204,9 @@ impl<'a> GcContext<'a> {
 
 // ── GC 统计 ──
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum CycleKind {
+    #[default]
     Full,
     Young,
     Mixed,
@@ -224,11 +226,6 @@ impl CycleKind {
     }
 }
 
-impl Default for CycleKind {
-    fn default() -> Self {
-        Self::Full
-    }
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct GcStats {

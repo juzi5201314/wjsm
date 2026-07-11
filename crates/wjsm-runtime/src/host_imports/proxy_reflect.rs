@@ -130,10 +130,9 @@ pub(crate) async fn define_value_on_receiver(
             return false;
         }
         let desc_obj = make_data_descriptor_object_for_define(caller, val);
-        return match define_property_internal_async(caller, receiver, prop_key, desc_obj).await {
-            Ok(ok) => ok,
-            Err(_) => false,
-        };
+        return define_property_internal_async(caller, receiver, prop_key, desc_obj)
+            .await
+            .unwrap_or_default();
     }
 
     if !is_extensible_impl(caller, receiver) {
@@ -141,10 +140,9 @@ pub(crate) async fn define_value_on_receiver(
     }
 
     let desc_obj = make_data_descriptor_object_for_define(caller, val);
-    match define_property_internal_async(caller, receiver, prop_key, desc_obj).await {
-        Ok(ok) => ok,
-        Err(_) => false,
-    }
+    define_property_internal_async(caller, receiver, prop_key, desc_obj)
+        .await
+        .unwrap_or_default()
 }
 
 /// ECMAScript OrdinarySet / OrdinarySetWithOwnDescriptor (§10.1.9, §10.1.9.2).
@@ -329,12 +327,11 @@ pub(crate) fn reflect_delete_property_impl(
         return value::encode_bool(true);
     };
     // 数组元素删除：将对应 slot 置 hole
-    if value::is_array(target) {
-        if let Ok(index) = prop_name.parse::<u32>() {
+    if value::is_array(target)
+        && let Ok(index) = prop_name.parse::<u32>() {
             crate::runtime_values::write_array_hole(caller, ptr, index);
             return value::encode_bool(true);
         }
-    }
     delete_property_by_name_id(caller, target, name_id)
 }
 
@@ -610,11 +607,10 @@ pub(crate) async fn reflect_get_prototype_of_impl(
     // TAG_REGEXP 无 obj_table 条目，其 [[Prototype]] 是 RegExp.prototype 对象，
     // 不能走 resolve_handle（会得到 null）；与 ordinary_has_instance_async 同构。
     if value::is_regexp(target) {
-        if !value::is_object(caller.data().regexp_prototype) {
-            if let Some(env) = WasmEnv::from_caller(caller) {
+        if !value::is_object(caller.data().regexp_prototype)
+            && let Some(env) = WasmEnv::from_caller(caller) {
                 crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
             }
-        }
         let proto = caller.data().regexp_prototype;
         return if value::is_object(proto) {
             proto
@@ -954,7 +950,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
             for &tk in &target_keys_sym {
                 if !trap_keys_sym
                     .iter()
-                    .any(|&s| same_value_zero(&caller, s, tk))
+                    .any(|&s| same_value_zero(caller, s, tk))
                 {
                     match_all = false;
                     break;
@@ -996,7 +992,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
                 if !configurable
                     && !trap_keys_sym
                         .iter()
-                        .any(|&s| same_value_zero(&caller, s, sym_key))
+                        .any(|&s| same_value_zero(caller, s, sym_key))
                 {
                     return make_type_error_exception(
                         caller,

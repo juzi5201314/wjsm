@@ -150,11 +150,7 @@ fn compile_function(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 
     let params_val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let options_val = args.get(2).copied().unwrap_or_else(value::encode_undefined);
 
-    let code = if value::is_string(code_val) {
-        js_string_lossy(caller, code_val)
-    } else {
-        js_string_lossy(caller, code_val)
-    };
+    let code = js_string_lossy(caller, code_val);
 
     let params = match read_compile_function_params(caller, params_val) {
         Ok(p) => p,
@@ -479,16 +475,14 @@ fn apply_codegen_options(
     let Some(cg_ptr) = resolve_handle(caller, cg) else {
         return;
     };
-    if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "strings") {
-        if value::is_bool(raw) {
+    if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "strings")
+        && value::is_bool(raw) {
             realm.code_generation.strings = value::decode_bool(raw);
         }
-    }
-    if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "wasm") {
-        if value::is_bool(raw) {
+    if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "wasm")
+        && value::is_bool(raw) {
             realm.code_generation.wasm = value::decode_bool(raw);
         }
-    }
 }
 
 fn apply_microtask_mode_option(
@@ -624,8 +618,8 @@ fn install_realm_global_builtins(
     }
 
     let main_global = caller.data().js_global_object.load(Ordering::Relaxed);
-    if value::is_object(main_global) || value::is_array(main_global) {
-        if let Some(main_ptr) = resolve_handle(caller, main_global) {
+    if (value::is_object(main_global) || value::is_array(main_global))
+        && let Some(main_ptr) = resolve_handle(caller, main_global) {
             // 从主 global 拷贝标准内建（共享函数值；不拷贝用户属性）
             const NAMES: &[&str] = &[
                 "Array",
@@ -664,14 +658,12 @@ fn install_realm_global_builtins(
                 "clearInterval",
             ];
             for name in NAMES {
-                if let Some(val) = read_object_property_by_name(caller, main_ptr, name) {
-                    if !value::is_undefined(val) {
+                if let Some(val) = read_object_property_by_name(caller, main_ptr, name)
+                    && !value::is_undefined(val) {
                         let _ = define_host_data_property_from_caller(caller, sandbox, name, val);
                     }
-                }
             }
         }
-    }
 
     // Function：用可门控的构造器覆盖（codeGeneration.strings）
     let function_val = {
@@ -702,12 +694,11 @@ fn install_realm_global_builtins(
     let _ = define_host_data_property_from_caller(caller, sandbox, "globalThis", sandbox);
 
     // 补齐 node web globals（若主 global 尚未带上）
-    if let Some(ptr) = resolve_handle(caller, sandbox) {
-        if read_object_property_by_name(caller, ptr, "queueMicrotask").is_none() {
+    if let Some(ptr) = resolve_handle(caller, sandbox)
+        && read_object_property_by_name(caller, ptr, "queueMicrotask").is_none() {
             let _ =
                 crate::runtime_node_globals::install_node_web_globals_from_caller(caller, sandbox);
         }
-    }
 
     Ok(())
 }
@@ -726,15 +717,11 @@ async fn run_in_this_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]
 
 /// 从 options 对象读取 `timeout` 毫秒（Node 兼容）。
 fn parse_timeout_ms(caller: &mut Caller<'_, RuntimeState>, options: Option<i64>) -> Option<u64> {
-    let Some(opts) = options else {
-        return None;
-    };
+    let opts = options?;
     if !value::is_object(opts) {
         return None;
     }
-    let Some(ptr) = resolve_handle(caller, opts) else {
-        return None;
-    };
+    let ptr = resolve_handle(caller, opts)?;
     let raw = read_object_property_by_name(caller, ptr, "timeout")?;
     if value::is_undefined(raw) || value::is_null(raw) {
         return None;
@@ -824,11 +811,11 @@ async fn eval_in_realm(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if let Some(msg) = err {
-            if msg.contains("epoch")
+        if let Some(msg) = err
+            && (msg.contains("epoch")
                 || msg.contains("interrupt")
                 || msg.contains("timed out")
-                || msg.contains("timeout")
+                || msg.contains("timeout"))
             {
                 *caller
                     .data()
@@ -837,14 +824,12 @@ async fn eval_in_realm(
                     .unwrap_or_else(|e| e.into_inner()) = None;
                 return make_type_error_exception(caller, "Error: Script execution timed out.");
             }
-        }
     }
     // 仅 microtaskMode === "afterEvaluate" 时在 run 边界 drain 到稳态
-    if drain_after {
-        if let Some(env) = WasmEnv::from_caller(caller) {
+    if drain_after
+        && let Some(env) = WasmEnv::from_caller(caller) {
             let _ = drain_microtasks_after_eval(caller, &env).await;
         }
-    }
 
     if value::is_exception(result) {
         // 解释器路径可能以 exception 抛出 timeout 文案

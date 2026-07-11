@@ -178,17 +178,12 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if handle.paused.load(std::sync::atomic::Ordering::SeqCst) {
-                match send_pause_command(handle, |reply| PauseCommand::EvaluateGlobal {
+            if handle.paused.load(std::sync::atomic::Ordering::SeqCst)
+                && let Ok(result) = send_pause_command(handle, |reply| PauseCommand::EvaluateGlobal {
                     expression: expression.clone(),
                     reply,
                 })
-                .await
-                {
-                    Ok(result) => return vec![ok_response(id, result)],
-                    Err(_) => {}
-                }
-            }
+                .await { return vec![ok_response(id, result)] }
             let mut inner = handle.inner.lock().await;
             match evaluate_simple_expression(&expression, &mut inner.remote_objects) {
                 Ok(remote) => vec![ok_response(id, json!({ "result": remote }))],

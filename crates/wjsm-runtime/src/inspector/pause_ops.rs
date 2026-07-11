@@ -95,8 +95,8 @@ fn expand_value_properties(
         return props;
     }
 
-    if value::is_array(raw) {
-        if let Some(ptr) = resolve_array_ptr(caller, raw) {
+    if value::is_array(raw)
+        && let Some(ptr) = resolve_array_ptr(caller, raw) {
             let len = read_array_length(caller, ptr).unwrap_or(0);
             props.push(property_descriptor(
                 "length",
@@ -125,7 +125,6 @@ fn expand_value_properties(
             }
             return props;
         }
-    }
 
     if let Some(ptr) = resolve_handle(caller, raw) {
         let names = collect_own_property_names_from_value(caller, raw, false);

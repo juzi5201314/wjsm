@@ -9,6 +9,7 @@ use crate::runtime_encoding::{
 use crate::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum FsMethodKind {
     ReadFileSync,
     WriteFileSync,
@@ -489,11 +490,11 @@ fn chown_sync(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         };
         // SAFETY: `c_path` is a NUL-terminated path buffer valid for this call.
         let rc = unsafe { libc::chown(c_path.as_ptr(), uid, gid) };
-        return if rc == 0 {
+        if rc == 0 {
             value::encode_undefined()
         } else {
             io_error(caller, std::io::Error::last_os_error(), "chown", &path)
-        };
+        }
     }
     #[cfg(not(unix))]
     {

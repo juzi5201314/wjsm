@@ -262,9 +262,8 @@ async fn e2e_inspect_brk_debugger_pause_resume() {
         })
         .await
         .unwrap()
-        {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(url) = v
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(url) = v
                     .as_array()
                     .and_then(|a| a.first())
                     .and_then(|o| o.get("webSocketDebuggerUrl"))
@@ -273,8 +272,6 @@ async fn e2e_inspect_brk_debugger_pause_resume() {
                     ws_url = Some(url.to_string());
                     break;
                 }
-            }
-        }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let ws_url = ws_url.expect("inspector discovery should publish webSocketDebuggerUrl");

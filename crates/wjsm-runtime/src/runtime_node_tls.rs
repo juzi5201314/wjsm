@@ -539,21 +539,18 @@ fn server_listen(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
                             let acceptor = acceptor.clone();
                             let tx = accept_tx.clone();
                             tokio::spawn(async move {
-                                match acceptor.accept(tcp_stream).await {
-                                    Ok(tls_stream) => {
-                                        let alpn = tls_stream
-                                            .get_ref()
-                                            .1
-                                            .alpn_protocol()
-                                            .map(|p| String::from_utf8_lossy(p).to_string());
-                                        let _ = tx.send(AcceptedTlsStream {
-                                            stream: TlsStream::Server(tls_stream),
-                                            local_addr,
-                                            peer_addr,
-                                            alpn_protocol: alpn,
-                                        });
-                                    }
-                                    Err(_) => {}
+                                if let Ok(tls_stream) = acceptor.accept(tcp_stream).await {
+                                    let alpn = tls_stream
+                                        .get_ref()
+                                        .1
+                                        .alpn_protocol()
+                                        .map(|p| String::from_utf8_lossy(p).to_string());
+                                    let _ = tx.send(AcceptedTlsStream {
+                                        stream: TlsStream::Server(tls_stream),
+                                        local_addr,
+                                        peer_addr,
+                                        alpn_protocol: alpn,
+                                    });
                                 }
                             });
                         }

@@ -16,7 +16,7 @@ use super::page::{ZPAGE_SIZE, ZPageSpace};
 pub(super) enum RelocateStep {
     Idle,
     Progress { remaining_estimate: usize },
-    Complete { stats: GcStats },
+    Complete { stats: Box<GcStats> },
 }
 
 #[derive(Debug, Default)]
@@ -240,7 +240,12 @@ impl ZRelocateState {
         self.candidates.clear();
         self.cursor = 0;
         pages.clear_relocation_set();
-        let stats = stats_for_result(ctx, pages, self.started_at.take(), &self.cycle_result);
+        let stats = Box::new(stats_for_result(
+            ctx,
+            pages,
+            self.started_at.take(),
+            &self.cycle_result,
+        ));
         self.cycle_result = RelocateResult::default();
         RelocateStep::Complete { stats }
     }

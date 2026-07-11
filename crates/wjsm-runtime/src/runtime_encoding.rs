@@ -139,7 +139,7 @@ pub(crate) fn decode_base64_string(input: &str, url_safe: bool) -> Result<Vec<u8
             other => other,
         });
     }
-    while normalized.len() % 4 != 0 {
+    while !normalized.len().is_multiple_of(4) {
         normalized.push('=');
     }
     let _ = url_safe;

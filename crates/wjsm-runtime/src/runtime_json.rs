@@ -936,7 +936,7 @@ mod tests {
     fn test_parse_numbers() {
         assert_eq!(parse("0").unwrap(), JsonValue::Number(0.0));
         assert_eq!(parse("-42").unwrap(), JsonValue::Number(-42.0));
-        assert_eq!(parse("3.14").unwrap(), JsonValue::Number(3.14));
+        assert_eq!(parse("3.25").unwrap(), JsonValue::Number(3.25));
         assert_eq!(parse("1e3").unwrap(), JsonValue::Number(1000.0));
         assert_eq!(parse("1.5e-2").unwrap(), JsonValue::Number(0.015));
         assert!(parse("01").is_err()); // leading zero

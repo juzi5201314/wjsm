@@ -81,7 +81,7 @@ fn floor_ms_to_secs(ms: f64) -> i64 {
 
 /// Non-negative millisecond fraction for ISO strings and sub-second preservation.
 fn ms_fraction_nonnegative(ms: f64) -> u32 {
-    ms_within_second(ms).round().max(0.0).min(999.0) as u32
+    ms_within_second(ms).round().clamp(0.0, 999.0) as u32
 }
 
 pub(crate) fn ms_to_datetime_utc(ms: f64) -> Option<DateTime<Utc>> {
@@ -90,7 +90,7 @@ pub(crate) fn ms_to_datetime_utc(ms: f64) -> Option<DateTime<Utc>> {
     }
     let secs = floor_ms_to_secs(ms);
     let sub_ms = ms_within_second(ms);
-    if sub_ms < 0.0 || sub_ms >= 1000.0 {
+    if !(0.0..1000.0).contains(&sub_ms) {
         return None;
     }
     let nanos = (sub_ms * 1_000_000.0).round() as u32;
@@ -134,11 +134,10 @@ pub(crate) fn parse_date_string(s: &str) -> Option<f64> {
         if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
             return Some(ndt.and_utc().timestamp_millis() as f64);
         }
-        if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, fmt) {
-            if let Some(ndt) = nd.and_hms_opt(0, 0, 0) {
+        if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, fmt)
+            && let Some(ndt) = nd.and_hms_opt(0, 0, 0) {
                 return Some(ndt.and_utc().timestamp_millis() as f64);
             }
-        }
     }
 
     // `Date.prototype.toUTCString()`: "Wed, 22 Jun 2026 12:00:00 GMT"
@@ -243,6 +242,7 @@ fn utc_ms_from_ymd_hms_ms(
     utc_dt.timestamp_millis() as f64
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_local_date_setter(
     ms: f64,
     year: Option<f64>,
@@ -268,6 +268,7 @@ fn apply_local_date_setter(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_utc_date_setter(
     ms: f64,
     year: Option<f64>,
@@ -871,23 +872,23 @@ pub(crate) fn call_date_method_from_caller(
             }
         }
         DateMethodKind::ToLocaleString => {
-            return call_date_method_from_caller(caller, this_val, DateMethodKind::ToString, args);
+            call_date_method_from_caller(caller, this_val, DateMethodKind::ToString, args)
         }
         DateMethodKind::ToLocaleDateString => {
-            return call_date_method_from_caller(
+            call_date_method_from_caller(
                 caller,
                 this_val,
                 DateMethodKind::ToDateString,
                 args,
-            );
+            )
         }
         DateMethodKind::ToLocaleTimeString => {
-            return call_date_method_from_caller(
+            call_date_method_from_caller(
                 caller,
                 this_val,
                 DateMethodKind::ToTimeString,
                 args,
-            );
+            )
         }
         DateMethodKind::ToISOString => {
             if ms.is_nan() {

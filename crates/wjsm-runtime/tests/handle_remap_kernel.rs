@@ -139,7 +139,7 @@ fn policy_b_object_handle_map_rewrites_proto_value_getter_setter() -> anyhow::Re
         value::encode_object_handle(8),
         value::encode_object_handle(9),
     );
-    write_data_prop(&mut heap, 2, value::encode_f64(3.14));
+    write_data_prop(&mut heap, 2, value::encode_f64(3.25));
     write_data_prop(&mut heap, 3, value::encode_object_handle(11)); // 未映射
 
     walk_and_remap_heap(&mut heap, &ObjectHandleMapPolicy { map: &map })?;
@@ -158,7 +158,7 @@ fn policy_b_object_handle_map_rewrites_proto_value_getter_setter() -> anyhow::Re
         109
     );
     assert!(
-        (value::decode_f64(read_i64(&heap, slot_value_off(2))) - 3.14).abs() < 1e-9,
+        (value::decode_f64(read_i64(&heap, slot_value_off(2))) - 3.25).abs() < 1e-9,
         "number 不变"
     );
     assert_eq!(

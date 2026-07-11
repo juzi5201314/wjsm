@@ -781,7 +781,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.keys.len() {
-                        if same_value_zero(&caller, entry.keys[i], key) {
+                        if same_value_zero(caller, entry.keys[i], key) {
                             entry.values[i] = val;
                             return this_val;
                         }
@@ -812,7 +812,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.keys.len() {
-                        if same_value_zero(&caller, entry.keys[i], key) {
+                        if same_value_zero(caller, entry.keys[i], key) {
                             return entry.values[i];
                         }
                     }
@@ -840,7 +840,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.values.len() {
-                        if same_value_zero(&caller, entry.values[i], val) {
+                        if same_value_zero(caller, entry.values[i], val) {
                             return this_val;
                         }
                     }
@@ -869,7 +869,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.keys.len() {
-                        if same_value_zero(&caller, entry.keys[i], key) {
+                        if same_value_zero(caller, entry.keys[i], key) {
                             return value::encode_bool(true);
                         }
                     }
@@ -886,7 +886,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 if handle < table.len() {
                     let entry = &table[handle];
                     for i in 0..entry.values.len() {
-                        if same_value_zero(&caller, entry.values[i], key) {
+                        if same_value_zero(caller, entry.values[i], key) {
                             return value::encode_bool(true);
                         }
                     }
@@ -915,7 +915,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.keys.len() {
-                        if same_value_zero(&caller, entry.keys[i], key) {
+                        if same_value_zero(caller, entry.keys[i], key) {
                             entry.keys.remove(i);
                             entry.values.remove(i);
                             return value::encode_bool(true);
@@ -934,7 +934,7 @@ pub(crate) fn call_map_set_method_from_caller(
                 if handle < table.len() {
                     let entry = &mut table[handle];
                     for i in 0..entry.values.len() {
-                        if same_value_zero(&caller, entry.values[i], key) {
+                        if same_value_zero(caller, entry.values[i], key) {
                             entry.values.remove(i);
                             return value::encode_bool(true);
                         }

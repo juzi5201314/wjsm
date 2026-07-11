@@ -37,8 +37,8 @@ pub(crate) fn array_species_constructor(
     };
     let mut constructor = read_object_property_by_name(caller, exemplar_ptr, "constructor")
         .unwrap_or_else(value::encode_undefined);
-    if value::is_object(constructor) {
-        if let Some(ctor_ptr) = resolve_handle(caller, constructor) {
+    if value::is_object(constructor)
+        && let Some(ctor_ptr) = resolve_handle(caller, constructor) {
             let species = read_object_property_by_name_id(
                 caller,
                 ctor_ptr,
@@ -51,7 +51,6 @@ pub(crate) fn array_species_constructor(
                 constructor = species;
             }
         }
-    }
     if value::is_undefined(constructor) {
         default_ctor
     } else {

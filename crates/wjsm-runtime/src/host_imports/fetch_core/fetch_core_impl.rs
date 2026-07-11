@@ -1,4 +1,14 @@
 use super::*;
+
+/// `fetch` / `Request` 解析后的请求参数元组。
+type FetchRequestParams = (
+    String,
+    String,
+    u32,
+    Option<Vec<u8>>,
+    RedirectMode,
+    Option<u32>,
+);
 pub(crate) fn push_native_callable(
     caller: &mut Caller<'_, RuntimeState>,
     callable: NativeCallable,
@@ -386,23 +396,12 @@ pub(crate) fn construct_headers(
     init_headers_object(caller, obj, handle);
     Some(obj)
 }
-
 /// `fetch(input, init)` 与 `new Request(input, init)` 共用的请求参数解析。
 pub(crate) fn resolve_fetch_request_params(
     caller: &mut Caller<'_, RuntimeState>,
     input: i64,
     init: i64,
-) -> std::result::Result<
-    (
-        String,
-        String,
-        u32,
-        Option<Vec<u8>>,
-        RedirectMode,
-        Option<u32>,
-    ),
-    i64,
-> {
+) -> std::result::Result<FetchRequestParams, i64> {
     let (mut method, url, mut headers, mut body, mut redirect, mut signal_handle) =
         if let Some(request_handle) = get_request_handle_from_object(caller, input) {
             let copied = {
@@ -482,21 +481,21 @@ pub(crate) fn resolve_fetch_request_params(
         if let Some(init_headers) = object_property(caller, init, "headers")
             && !value::is_undefined(init_headers)
         {
-            match create_headers_from_init(caller, init_headers) {
-                Ok(handle) => headers = handle,
-                Err(exception) => return Err(exception),
+            {
+                let handle = create_headers_from_init(caller, init_headers)?;
+                headers = handle
             }
         }
         if let Some(init_body) = object_property(caller, init, "body") {
-            match body_bytes_from_value(caller, init_body) {
-                Ok(parsed_body) => body = parsed_body,
-                Err(exception) => return Err(exception),
+            {
+                let parsed_body = body_bytes_from_value(caller, init_body)?;
+                body = parsed_body
             }
         }
         match string_property(caller, init, "redirect") {
-            Ok(Some(init_redirect)) => match parse_redirect_mode(caller, &init_redirect) {
-                Ok(mode) => redirect = mode,
-                Err(exception) => return Err(exception),
+            Ok(Some(init_redirect)) => {
+                let mode = parse_redirect_mode(caller, &init_redirect)?;
+                redirect = mode
             },
             Ok(None) => {}
             Err(exception) => return Err(exception),

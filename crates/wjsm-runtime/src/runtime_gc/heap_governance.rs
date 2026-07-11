@@ -55,6 +55,7 @@ pub struct TailReclaimResult {
 /// 2. 找到最高地址的连续空闲区间末尾。
 /// 3. 若该末尾 == heap_ptr，则 heap_ptr 回退到该区间起始。
 /// 4. 返回 new_heap_ptr；调用方据此过滤 free list 与碎片指标输入。
+///
 /// 安全性：
 /// - 只回收**物理上连续到 heap_ptr**的尾部空闲区——中间有活对象则不回退。
 /// - 不移动任何对象，不修改 obj_table。

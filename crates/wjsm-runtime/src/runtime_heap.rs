@@ -719,11 +719,10 @@ pub(crate) fn native_callable_function_prototype(
     if !matches!(record, NativeCallable::FunctionConstructor) {
         return None;
     }
-    if !value::is_object(caller.data().function_prototype) {
-        if let Some(env) = WasmEnv::from_caller(caller) {
+    if !value::is_object(caller.data().function_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller) {
             ensure_function_prototype_initialized(caller, &env);
         }
-    }
     let proto = caller.data().function_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -767,11 +766,10 @@ pub(crate) fn native_callable_promise_prototype(
     if !matches!(record, NativeCallable::PromiseConstructor) {
         return None;
     }
-    if !value::is_object(caller.data().promise_prototype) {
-        if let Some(env) = WasmEnv::from_caller(caller) {
+    if !value::is_object(caller.data().promise_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller) {
             ensure_promise_prototype_initialized(caller, &env);
         }
-    }
     let proto = caller.data().promise_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -787,11 +785,10 @@ pub(crate) fn native_callable_symbol_prototype(
     if !matches!(record, NativeCallable::SymbolConstructor) {
         return None;
     }
-    if !value::is_object(caller.data().symbol_prototype) {
-        if let Some(env) = WasmEnv::from_caller(caller) {
+    if !value::is_object(caller.data().symbol_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller) {
             ensure_symbol_prototype_initialized(caller, &env);
         }
-    }
     let proto = caller.data().symbol_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -802,9 +799,9 @@ pub(crate) fn native_callable_symbol_prototype(
 
 /// 在 bootstrap 后建立 %RegExpPrototype% 并挂到 RuntimeState（供 RegExp 构造函数 .prototype
 /// + instanceof 原型链遍历）。与 `ensure_promise_prototype_initialized` 同构：
-/// proto = Object.prototype，定义 constructor + [Symbol.toStringTag] = "RegExp"。
-/// RegExp 实例（TAG_REGEXP）的方法由 `primitive_regexp_get_property_impl` 分派，
-/// 不经过原型链查找，故此处不定义 exec/test 等方法。
+/// - proto = Object.prototype，定义 constructor + [Symbol.toStringTag] = "RegExp"。
+/// - RegExp 实例（TAG_REGEXP）的方法由 `primitive_regexp_get_property_impl` 分派，
+///   不经过原型链查找，故此处不定义 exec/test 等方法。
 pub(crate) fn ensure_regexp_prototype_initialized<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -843,11 +840,10 @@ pub(crate) fn native_callable_regexp_prototype(
     if !matches!(record, NativeCallable::RegExpConstructor) {
         return None;
     }
-    if !value::is_object(caller.data().regexp_prototype) {
-        if let Some(env) = WasmEnv::from_caller(caller) {
+    if !value::is_object(caller.data().regexp_prototype)
+        && let Some(env) = WasmEnv::from_caller(caller) {
             ensure_regexp_prototype_initialized(caller, &env);
         }
-    }
     let proto = caller.data().regexp_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -908,11 +904,10 @@ pub(crate) fn native_callable_error_prototype(
     record: &NativeCallable,
 ) -> Option<i64> {
     let protos = {
-        if !caller.data().error_prototypes.is_initialized() {
-            if let Some(env) = WasmEnv::from_caller(caller) {
+        if !caller.data().error_prototypes.is_initialized()
+            && let Some(env) = WasmEnv::from_caller(caller) {
                 ensure_error_prototypes_initialized(caller, &env);
             }
-        }
         caller.data().error_prototypes
     };
     if !protos.is_initialized() {

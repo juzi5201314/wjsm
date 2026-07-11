@@ -13,15 +13,13 @@ fn primordial_string_offsets_consistent_across_compilations() {
         let end = *offset as usize + s.len();
         assert!(
             data1
-                .get(*offset as usize..end)
-                .map_or(false, |b| b == needle),
+                .get(*offset as usize..end) == Some(needle),
             "primordial string \"{s}\" missing/wrong at offset {offset} in compilation 1 (data len={})",
             data1.len(),
         );
         assert!(
             data2
-                .get(*offset as usize..end)
-                .map_or(false, |b| b == needle),
+                .get(*offset as usize..end) == Some(needle),
             "primordial string \"{s}\" missing/wrong at offset {offset} in compilation 2 (data len={})",
             data2.len(),
         );
@@ -46,8 +44,7 @@ fn primordial_strings_start_before_user_region() {
         let needle = s.as_bytes();
         let end = *offset as usize + s.len();
         assert!(
-            data.get(*offset as usize..end)
-                .map_or(false, |b| b == needle),
+            data.get(*offset as usize..end) == Some(needle),
             "primordial string \"{s}\" missing at offset {offset}"
         );
         assert!(

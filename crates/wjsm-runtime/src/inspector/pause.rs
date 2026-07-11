@@ -35,17 +35,15 @@ pub(crate) fn snapshot_call_frames(
     line: u32,
     col: u32,
 ) -> Vec<serde_json::Value> {
-    if let Some(frames) = try_guest_debug_frames(caller, debug_info, line, col) {
-        if !frames.is_empty() {
+    if let Some(frames) = try_guest_debug_frames(caller, debug_info, line, col)
+        && !frames.is_empty() {
             return frames;
         }
-    }
 
-    if let Some(frames) = try_wasm_backtrace_frames(caller, debug_info, line, col) {
-        if !frames.is_empty() {
+    if let Some(frames) = try_wasm_backtrace_frames(caller, debug_info, line, col)
+        && !frames.is_empty() {
             return frames;
         }
-    }
 
     vec![synthetic_top_frame(debug_info, line, col)]
 }
@@ -219,15 +217,14 @@ fn display_local_name(name: &str) -> Option<String> {
     if name == "$0.$global" || name.ends_with(".$global") {
         return Some("globalThis".to_string());
     }
-    if let Some(rest) = name.strip_prefix('$') {
-        if let Some(dot) = rest.find('.') {
+    if let Some(rest) = name.strip_prefix('$')
+        && let Some(dot) = rest.find('.') {
             let user = &rest[dot + 1..];
             if user.is_empty() || user.starts_with('$') {
                 return None;
             }
             return Some(user.to_string());
         }
-    }
     if name.starts_with('$') {
         return None;
     }

@@ -139,8 +139,8 @@ pub(crate) fn define_async_fn(
                                 .unwrap_or_else(|e| e.into_inner());
                             c_table.get(cont_handle).map(|e| e.outer_promise)
                         };
-                        if let Some(outer_promise) = outer_promise {
-                            if is_promise_settled(caller.data(), outer_promise) {
+                        if let Some(outer_promise) = outer_promise
+                            && is_promise_settled(caller.data(), outer_promise) {
                                 let mut c_table = caller
                                     .data()
                                     .continuation_table
@@ -150,7 +150,6 @@ pub(crate) fn define_async_fn(
                                     entry.completed = true;
                                 }
                             }
-                        }
                         return;
                     }
                 }

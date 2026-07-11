@@ -62,30 +62,24 @@ pub(crate) fn pump_readable_stream_pipe_to_with_env<
     env: &WasmEnv,
     readable_handle: u32,
 ) {
-    loop {
-        let next = next_pipe_to_step(ctx, env, readable_handle);
-        match next {
-            PipeToStep::Write { destination, chunk } => {
-                let write_promise = alloc_promise_with_env(ctx, env, PromiseEntry::pending());
-                attach_pipe_to_write_reactions(ctx, write_promise, readable_handle);
-                call_transform_from_writable_with_env(ctx, env, destination, chunk, write_promise);
-                return;
-            }
-            PipeToStep::Close {
-                destination,
-                promise,
-            } => {
-                let close_deferred =
-                    call_flush_from_writable_close_with_env(ctx, env, destination, promise);
-                if !close_deferred {
-                    finish_writable_stream_close(ctx, destination, promise);
-                    clear_pipe_to(ctx, readable_handle);
-                }
-                return;
-            }
-            PipeToStep::WaitForMore => return,
-            PipeToStep::Done => return,
+    match next_pipe_to_step(ctx, env, readable_handle) {
+        PipeToStep::Write { destination, chunk } => {
+            let write_promise = alloc_promise_with_env(ctx, env, PromiseEntry::pending());
+            attach_pipe_to_write_reactions(ctx, write_promise, readable_handle);
+            call_transform_from_writable_with_env(ctx, env, destination, chunk, write_promise);
         }
+        PipeToStep::Close {
+            destination,
+            promise,
+        } => {
+            let close_deferred =
+                call_flush_from_writable_close_with_env(ctx, env, destination, promise);
+            if !close_deferred {
+                finish_writable_stream_close(ctx, destination, promise);
+                clear_pipe_to(ctx, readable_handle);
+            }
+        }
+        PipeToStep::WaitForMore | PipeToStep::Done => {}
     }
 }
 

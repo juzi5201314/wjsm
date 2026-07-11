@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_to_number_f64() {
-        assert_eq!(to_number(value::encode_f64(3.14)), 3.14);
+        assert_eq!(to_number(value::encode_f64(3.25)), 3.25);
         assert_eq!(to_number(value::encode_f64(-0.0)), -0.0);
         assert!(to_number(value::encode_f64(f64::NAN)).is_nan());
     }
@@ -143,16 +143,16 @@ mod tests {
 
     #[test]
     fn test_to_bool() {
-        assert_eq!(to_bool(value::encode_bool(true)), true);
-        assert_eq!(to_bool(value::encode_bool(false)), false);
-        assert_eq!(to_bool(value::encode_f64(1.0)), true);
-        assert_eq!(to_bool(value::encode_f64(0.0)), false);
-        assert_eq!(to_bool(value::encode_f64(f64::NAN)), false);
+        assert!(to_bool(value::encode_bool(true)));
+        assert!(!to_bool(value::encode_bool(false)));
+        assert!(to_bool(value::encode_f64(1.0)));
+        assert!(!to_bool(value::encode_f64(0.0)));
+        assert!(!to_bool(value::encode_f64(f64::NAN)));
     }
 
     #[test]
     fn test_as_f64() {
-        let val = value::encode_f64(2.718);
-        assert_eq!(as_f64(val), 2.718);
+        let val = value::encode_f64(2.5);
+        assert_eq!(as_f64(val), 2.5);
     }
 }

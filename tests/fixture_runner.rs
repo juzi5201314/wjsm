@@ -269,8 +269,8 @@ fn normalize_for_oracle(text: &str) -> String {
     let mut i = 0;
 
     while i < len {
-        if i + 8 <= len && bytes[i] == b'[' && &bytes[i + 1..i + 8] == b"object " {
-            if let Some(close) = bytes[i..].iter().position(|&b| b == b']') {
+        if i + 8 <= len && bytes[i] == b'[' && &bytes[i + 1..i + 8] == b"object "
+            && let Some(close) = bytes[i..].iter().position(|&b| b == b']') {
                 let close_abs = i + close;
                 let inner = &text[i + 1..close_abs];
                 if let Some(colon) = inner.rfind(':') {
@@ -284,7 +284,6 @@ fn normalize_for_oracle(text: &str) -> String {
                     }
                 }
             }
-        }
         result.push(bytes[i] as char);
         i += 1;
     }
@@ -485,8 +484,8 @@ fn normalize_object_handles(text: &str) -> String {
     let mut i = 0;
 
     while i < text.len() {
-        if text[i..].starts_with("[object ") {
-            if let Some(close_rel) = text[i..].find(']') {
+        if text[i..].starts_with("[object ")
+            && let Some(close_rel) = text[i..].find(']') {
                 let close_abs = i + close_rel;
                 let inner = &text[i + 1..close_abs];
                 if let Some(colon) = inner.rfind(':') {
@@ -500,7 +499,6 @@ fn normalize_object_handles(text: &str) -> String {
                     }
                 }
             }
-        }
 
         let ch = text[i..].chars().next().expect("valid UTF-8 boundary");
         result.push(ch);

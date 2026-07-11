@@ -450,11 +450,10 @@ fn buffer_from(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             .min(default_len);
         return create_buffer_view(caller, handle, Some(first), offset as u32, length as u32);
     }
-    if typedarray_entry_from_value(caller, first).is_some() {
-        if let Some(bytes) = visible_bytes(caller, first) {
+    if typedarray_entry_from_value(caller, first).is_some()
+        && let Some(bytes) = visible_bytes(caller, first) {
             return create_buffer_from_bytes(caller, bytes);
         }
-    }
     if let Some(length) = array_like_length(caller, first) {
         let mut bytes = Vec::with_capacity(length as usize);
         for index in 0..length {

@@ -1,5 +1,8 @@
 use super::*;
 
+/// 异常分叉抑制栈帧：深度 + 被延迟的 (continue_block, exception_value) 列表。
+pub(crate) type ExceptionForkSuppressionFrame = (u32, Vec<Vec<(BasicBlockId, ValueId)>>);
+
 pub(crate) struct Lowerer {
     pub(crate) module: Module,
     pub(crate) next_value: u32,
@@ -31,7 +34,7 @@ pub(crate) struct Lowerer {
     pub(crate) function_active_finalizers_stack: Vec<Vec<PendingFinalizer>>,
     pub(crate) function_pending_loop_label_stack: Vec<Option<String>>,
     pub(crate) function_exception_fork_suppression_stack:
-        Vec<(u32, Vec<Vec<(BasicBlockId, ValueId)>>)>,
+        Vec<ExceptionForkSuppressionFrame>,
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
     pub(crate) captured_names_stack: Vec<Vec<CapturedBinding>>,

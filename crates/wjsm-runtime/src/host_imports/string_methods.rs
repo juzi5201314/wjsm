@@ -263,7 +263,7 @@ pub(crate) fn define_string_methods(
                 || WasmEnv::from_caller(&mut caller).is_some_and(|env| {
                     let expected = RuntimeString::from_utf8_str("length");
                     crate::property_key::name_id_matches_runtime_string(
-                        &mut caller,
+                        &caller,
                         &env,
                         name_id,
                         &expected,

@@ -103,7 +103,11 @@ impl ZgcCollector {
         primary.merge_from(extra);
     }
 
-    fn finish_relocate_step(&mut self, ctx: &mut GcContext<'_>, mut stats: GcStats) -> StepOutcome {
+    fn finish_relocate_step(
+        &mut self,
+        ctx: &mut GcContext<'_>,
+        mut stats: Box<GcStats>,
+    ) -> StepOutcome {
         self.colors.finish_cycle();
         self.sync_wasm_color_phase(ctx);
         stats.load_barrier_relocate_hits = self.load_barrier_relocate_hits;

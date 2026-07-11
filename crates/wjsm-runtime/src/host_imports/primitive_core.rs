@@ -502,7 +502,7 @@ pub(crate) fn define_primitive_core(
             let key_to_return = table.get(handle).and_then(|entry| entry.global_key.clone());
             drop(table);
             if let Some(key) = key_to_return {
-                return store_runtime_string(&mut caller, key);
+                return store_runtime_string(&caller, key);
             }
             value::encode_undefined()
         },

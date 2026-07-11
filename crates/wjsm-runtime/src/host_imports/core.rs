@@ -325,7 +325,8 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .map_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let val = if *map_handle < table.len() as u32 {
+                
+                if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
                     let idx = *index as usize;
                     if idx < entry.keys.len() {
@@ -347,8 +348,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 } else {
                     drop(table);
                     value::encode_undefined()
-                };
-                val
+                }
             }
             IteratorState::HeadersKeyIter {
                 headers_handle,
@@ -359,7 +359,8 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .headers_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let val = if *headers_handle < table.len() as u32 {
+                
+                if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
                     if idx < entry.pairs.len() {
@@ -374,8 +375,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 } else {
                     drop(table);
                     value::encode_undefined()
-                };
-                val
+                }
             }
             IteratorState::HeadersValueIter {
                 headers_handle,
@@ -386,7 +386,8 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .headers_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let val = if *headers_handle < table.len() as u32 {
+                
+                if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
                     if idx < entry.pairs.len() {
@@ -401,8 +402,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 } else {
                     drop(table);
                     value::encode_undefined()
-                };
-                val
+                }
             }
             IteratorState::HeadersEntryIter {
                 headers_handle,
@@ -413,7 +413,8 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .headers_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let val = if *headers_handle < table.len() as u32 {
+                
+                if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
                     if idx < entry.pairs.len() {
@@ -445,8 +446,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 } else {
                     drop(table);
                     value::encode_undefined()
-                };
-                val
+                }
             }
             IteratorState::SetValueIter {
                 set_handle, index, ..
@@ -478,7 +478,8 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .set_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let val = if *set_handle < table.len() as u32 {
+                
+                if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
                     let idx = *index as usize;
                     if idx < entry.values.len() {
@@ -499,8 +500,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 } else {
                     drop(table);
                     value::encode_undefined()
-                };
-                val
+                }
             }
             IteratorState::IndexValueIter { values, index } => {
                 if (*index as usize) < values.len() {
@@ -617,11 +617,10 @@ async fn ordinary_has_instance_async(
     // TAG_REGEXP 无 obj_table 条目，其 [[Prototype]] 是 RegExp.prototype 对象；
     // 普通对象从 obj_table 条目偏移 0 读取 [[Prototype]] handle。
     let mut current_proto: u32 = if value::is_regexp(value) {
-        if !value::is_object(caller.data().regexp_prototype) {
-            if let Some(env) = WasmEnv::from_caller(caller) {
+        if !value::is_object(caller.data().regexp_prototype)
+            && let Some(env) = WasmEnv::from_caller(caller) {
                 crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
             }
-        }
         let regexp_proto = caller.data().regexp_prototype;
         if !value::is_object(regexp_proto) {
             return value::encode_bool(false);
@@ -1576,14 +1575,13 @@ pub(crate) fn define_core(
             gc.barrier_flush(&mut ctx);
         }
         let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
-        if barrier_event_buf_base != 0 {
-            if let Some(global) = env.barrier_buf_ptr {
+        if barrier_event_buf_base != 0
+            && let Some(global) = env.barrier_buf_ptr {
                 let _ = global.set(
                     &mut caller,
                     wasmtime::Val::I32(barrier_event_buf_base as i32),
                 );
             }
-        }
         if let Some(global) = env.gc_alloc_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(0));
         }
@@ -1640,14 +1638,13 @@ pub(crate) fn define_core(
             gc.barrier_flush(&mut ctx);
         }
         let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
-        if barrier_event_buf_base != 0 {
-            if let Some(global) = env.barrier_buf_ptr {
+        if barrier_event_buf_base != 0
+            && let Some(global) = env.barrier_buf_ptr {
                 let _ = global.set(
                     &mut caller,
                     wasmtime::Val::I32(barrier_event_buf_base as i32),
                 );
             }
-        }
     });
     linker.define(&mut store, "env", "gc_barrier_flush", f)?;
 

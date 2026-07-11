@@ -13,6 +13,13 @@ use std::time::Duration;
 
 use crate::scheduler::AsyncHostCompletion;
 
+/// 构造 owner 线程上的 wake 任务（IPC reader 线程通过 channel 投递）。
+pub(crate) type IpcWakeTaskFactory = Arc<
+    dyn Fn() -> Box<dyn FnOnce(&mut wasmtime::Store<crate::RuntimeState>, &crate::WasmEnv) + Send>
+        + Send
+        + Sync,
+>;
+
 /// 单条 IPC 消息：文本载荷 + 可选 ancillary fd。
 #[derive(Debug)]
 pub(crate) struct IpcMessage {
@@ -92,15 +99,7 @@ impl IpcEndpoint {
         }
     }
 
-    pub(crate) fn ensure_reader(
-        self: &Arc<Self>,
-        make_wake_task: Arc<
-            dyn Fn() -> Box<
-                    dyn FnOnce(&mut wasmtime::Store<crate::RuntimeState>, &crate::WasmEnv) + Send,
-                > + Send
-                + Sync,
-        >,
-    ) {
+    pub(crate) fn ensure_reader(self: &Arc<Self>, make_wake_task: IpcWakeTaskFactory) {
         if self.reading.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -341,15 +340,7 @@ pub(crate) fn connect_ipc_path(path: &str) -> io::Result<Arc<IpcEndpoint>> {
     IpcEndpoint::from_raw_connected(fd, None).map(Arc::new)
 }
 
-fn wake_with(
-    endpoint: &IpcEndpoint,
-    make_wake_task: &Arc<
-        dyn Fn() -> Box<
-                dyn FnOnce(&mut wasmtime::Store<crate::RuntimeState>, &crate::WasmEnv) + Send,
-            > + Send
-            + Sync,
-    >,
-) {
+fn wake_with(endpoint: &IpcEndpoint, make_wake_task: &IpcWakeTaskFactory) {
     if let Some(tx) = endpoint
         .wake_tx
         .lock()

@@ -56,13 +56,11 @@ impl RuntimeString {
 
     pub(crate) fn code_point_at(&self, index: usize) -> Option<u32> {
         let unit = self.code_unit_at(index)?;
-        if is_high_surrogate(unit) {
-            if let Some(next) = self.code_unit_at(index + 1) {
-                if is_low_surrogate(next) {
+        if is_high_surrogate(unit)
+            && let Some(next) = self.code_unit_at(index + 1)
+                && is_low_surrogate(next) {
                     return Some(decode_surrogate_pair(unit, next));
                 }
-            }
-        }
         Some(unit as u32)
     }
 

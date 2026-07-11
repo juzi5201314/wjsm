@@ -495,11 +495,10 @@ pub(super) fn child_disconnect(caller: &mut Caller<'_, RuntimeState>, args: &[i6
             .and_then(|e| e.ipc.clone())
     };
     // 不阻塞 host：仅关闭已就绪的 endpoint；未 accept 的由 drop 清理
-    if let Some(ipc) = ipc {
-        if let Some(ep) = ipc.try_endpoint() {
+    if let Some(ipc) = ipc
+        && let Some(ep) = ipc.try_endpoint() {
             ep.close();
         }
-    }
     value::encode_undefined()
 }
 
@@ -784,11 +783,9 @@ pub(super) fn process_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .is_none()
-    {
-        if let Some(counter) = caller.data().async_op_counter.clone() {
+        && let Some(counter) = caller.data().async_op_counter.clone() {
             *ipc.ref_guard.lock().unwrap_or_else(|e| e.into_inner()) = Some(counter.begin());
         }
-    }
     let endpoint = match ipc.ensure_endpoint() {
         Ok(ep) => ep,
         Err(_) => return value::encode_undefined(),

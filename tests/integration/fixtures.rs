@@ -1,3 +1,6 @@
+// fixture 路径用 `__` 分段映射到测试名，刻意保留非 snake_case。
+#![allow(non_snake_case)]
+
 use anyhow::Result;
 use std::fs;
 use std::path::PathBuf;

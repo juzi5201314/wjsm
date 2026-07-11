@@ -1433,7 +1433,8 @@ pub(crate) fn number_less_than_bigint(
     // Fallback: f64 超出精确整数范围或非整数很大值
     // 用 BigInt 的 to_f64 近似比较
     let bi_f64_op = bi.to_f64();
-    let result = match bi_f64_op {
+    
+    match bi_f64_op {
         Some(bi_f64) => {
             if bigint_is_left {
                 bi_f64 < num_f
@@ -1451,8 +1452,7 @@ pub(crate) fn number_less_than_bigint(
                 !bigint_is_left
             }
         }
-    };
-    result
+    }
 }
 
 /// ToPrimitive 抽象操作 (ECMAScript §7.1.1)
@@ -1487,8 +1487,8 @@ pub(crate) fn to_primitive_with_hint(
             encode_symbol_name_id(WELL_KNOWN_SYMBOL_TO_PRIMITIVE),
         )
         .or_else(|| read_object_property_by_name(caller, ptr, "Symbol.toPrimitive"));
-        if let Some(method) = exotic {
-            if is_callable_in_runtime(caller, method) {
+        if let Some(method) = exotic
+            && is_callable_in_runtime(caller, method) {
                 let result = invoke_to_primitive_method_sync(caller, method, val, hint);
                 if value::is_exception(result) {
                     return result;
@@ -1501,7 +1501,6 @@ pub(crate) fn to_primitive_with_hint(
                     "TypeError: Cannot convert object to primitive value",
                 );
             }
-        }
     }
 
     ordinary_to_primitive(caller, val, hint)
@@ -1629,7 +1628,7 @@ pub(crate) fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -
                     .unwrap_or_else(|e| e.into_inner());
                 let eq = closures
                     .get(closure_idx as usize)
-                    .map(|c| c.func_idx as u32 == func_idx)
+                    .map(|c| c.func_idx == func_idx)
                     .unwrap_or(false);
                 return value::encode_bool(eq);
             }
@@ -1919,10 +1918,9 @@ pub(crate) async fn func_apply_impl_async(
     this_val: i64,
     args_array: i64,
 ) -> i64 {
-    let args = match crate::host_imports::extract_array_like_elements(caller, args_array).await {
-        Ok(v) => v,
-        Err(_) => Vec::new(),
-    };
+    let args = crate::host_imports::extract_array_like_elements(caller, args_array)
+        .await
+        .unwrap_or_default();
     Box::pin(crate::host_imports::reflect_apply_impl_async(
         caller, func, this_val, &args,
     ))

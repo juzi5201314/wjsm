@@ -327,11 +327,10 @@ pub async fn execute_with_options(wasm_bytes: &[u8], options: RuntimeOptions) ->
             Ok(())
         }
         Err(error) => {
-            if let Some(diagnostics) = runtime_process::process_exit_diagnostics(&error) {
-                if !diagnostics.is_empty() {
+            if let Some(diagnostics) = runtime_process::process_exit_diagnostics(&error)
+                && !diagnostics.is_empty() {
                     let _ = io::stderr().write_all(diagnostics);
                 }
-            }
             Err(error)
         }
     }
@@ -1110,16 +1109,18 @@ impl Clone for RuntimeState {
                     .clone(),
             ),
             vm_deadline: Mutex::new(
-                self.vm_deadline
+                *self.vm_deadline
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone(),
+                    .unwrap_or_else(|e| e.into_inner()),
             ),
             // 不跨 store 共享 Instance
             live_eval_instances: Mutex::new(Vec::new()),
         }
     }
 }
+/// eval 编译缓存：code hash → (WASM bytes, source map id)
+type EvalCacheMap = HashMap<u64, (Vec<u8>, u32)>;
+
 struct RuntimeState {
     output: Arc<Mutex<Vec<u8>>>,
     performance_origin: Arc<std::time::Instant>,
@@ -1199,7 +1200,7 @@ struct RuntimeState {
     /// combinator context 侧表空闲槽位。
     combinator_context_free_slots: Arc<Mutex<Vec<usize>>>,
     /// eval 编译缓存：code string hash → eval 模式 WASM bytes。
-    eval_cache: Arc<Mutex<HashMap<u64, (Vec<u8>, u32)>>>,
+    eval_cache: Arc<Mutex<EvalCacheMap>>,
     /// BigInt 侧表：存储任意精度 BigInt 值
     bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>>,
     /// Symbol 侧表：存储 symbol 条目（description + global_key）
@@ -1611,7 +1612,6 @@ impl RuntimeState {
     }
 
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
-
     pub(crate) fn new() -> Self {
         RuntimeState {
             performance_origin: Arc::new(std::time::Instant::now()),
@@ -2449,13 +2449,7 @@ mod tests {
         .expect("send settle");
 
         // 手动 enqueue Materialize（闭包在 owner 执行，可分配）
-        let mat: Box<
-            dyn FnOnce(
-                    &mut wasmtime::Store<super::RuntimeState>,
-                    &super::WasmEnv,
-                ) -> PromiseSettlement
-                + Send,
-        > = Box::new(|_store, _env| {
+        let mat = Box::new(|_store: &mut wasmtime::Store<super::RuntimeState>, _env: &super::WasmEnv| {
             // 真实会 alloc runtime string/object，此处模拟
             PromiseSettlement::Fulfill(888)
         });

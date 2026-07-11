@@ -208,7 +208,7 @@ pub(crate) fn format_backtrace(
         // 压缩连续重复帧：相同行合并为 "entry (xN)"。
         if let Some(last) = lines.last_mut() {
             if let Some((prefix, count_str)) = last.rsplit_once(" (x") {
-                if prefix == &entry {
+                if prefix == entry {
                     let count: u32 = count_str.trim_end_matches(')').parse().unwrap_or(1);
                     *last = format!("{entry} (x{})", count + 1);
                     continue;

@@ -538,16 +538,14 @@ fn collect_host_table_values(
         }
         // process IPC message / disconnect 回调（否则 GC 会清掉 process.on('message')）
         if let Some(ipc) = st.process_ipc.as_ref() {
-            if let Ok(cb) = ipc.message_cb.lock() {
-                if let Some(v) = *cb {
+            if let Ok(cb) = ipc.message_cb.lock()
+                && let Some(v) = *cb {
                     out.push(v);
                 }
-            }
-            if let Ok(cb) = ipc.disconnect_cb.lock() {
-                if let Some(v) = *cb {
+            if let Ok(cb) = ipc.disconnect_cb.lock()
+                && let Some(v) = *cb {
                     out.push(v);
                 }
-            }
         }
         // child_process 本地 message/exit/disconnect 回调
         if let Ok(bindings) = st.child_bindings.lock() {

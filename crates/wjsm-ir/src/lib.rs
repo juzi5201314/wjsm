@@ -933,8 +933,8 @@ pub struct ReExportBinding {
 }
 
 // ── Shadow Stack Constants ──────────────────────────────────────────────
-/// 影子栈位于独立 WASM 线性内存 `env.__shadow_memory`（memory index 1）。
-/// 主内存不再预留影子区；冷启动只提交 INITIAL，按需 grow 到 soft max。
+// 影子栈位于独立 WASM 线性内存 `env.__shadow_memory`（memory index 1）。
+// 主内存不再预留影子区；冷启动只提交 INITIAL，按需 grow 到 soft max。
 
 /// 影子栈初始容量（1 页 = 64KiB = 8192 个 i64 槽位）。
 pub const SHADOW_STACK_INITIAL_SIZE: u32 = 64 * 1024;

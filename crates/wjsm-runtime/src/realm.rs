@@ -366,7 +366,7 @@ pub(crate) fn reclaim_dead_realms(
 
 /// 从主 realm 的 RuntimeState 字段装配 intrinsics（object/array proto 由调用方从 WASM global 填入）。
 /// Phase 1 克隆入口使用；当前阶段由单测覆盖。
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 pub(crate) fn main_realm_intrinsics_from_state(
     object_proto: i64,
     array_proto: i64,

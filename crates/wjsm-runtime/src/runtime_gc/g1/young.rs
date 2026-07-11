@@ -421,6 +421,7 @@ fn drain_young_graph(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_host_roots_fixed_point(
     ctx: &mut GcContext<'_>,
     roots_provider: &mut dyn RootProvider,
@@ -453,6 +454,7 @@ fn drain_host_roots_fixed_point(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_dirty_card_roots(
     ctx: &mut GcContext<'_>,
     regions: &RegionSpace,

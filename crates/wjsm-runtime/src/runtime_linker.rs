@@ -192,16 +192,15 @@ pub(super) fn register_common_bridges(
                 _ => {}
             }
             if prop_name == "call" || prop_name == "apply" || prop_name == "bind" {
-                if !value::is_object(caller.data().function_prototype) {
-                    if let Some(env) = WasmEnv::from_caller(&mut caller) {
+                if !value::is_object(caller.data().function_prototype)
+                    && let Some(env) = WasmEnv::from_caller(&mut caller) {
                         crate::runtime_heap::ensure_function_prototype_initialized(
                             &mut caller, &env,
                         );
                     }
-                }
                 let proto = caller.data().function_prototype;
-                if value::is_object(proto) {
-                    if let Some(env) = WasmEnv::from_caller(&mut caller)
+                if value::is_object(proto)
+                    && let Some(env) = WasmEnv::from_caller(&mut caller)
                         && let Some(ptr) = resolve_handle_idx_with_env(
                             &mut caller,
                             &env,
@@ -212,7 +211,6 @@ pub(super) fn register_common_bridges(
                     {
                         return val;
                     }
-                }
                 return value::encode_undefined();
             }
             if prop_name != "prototype" {
@@ -352,7 +350,7 @@ pub(super) fn register_common_bridges(
                         return value::encode_f64(func.params.len() as f64);
                     }
                     if prop_name == "name" {
-                        return store_runtime_string(&mut caller, String::new());
+                        return store_runtime_string(&caller, String::new());
                     }
                 }
                 return value::encode_undefined();
