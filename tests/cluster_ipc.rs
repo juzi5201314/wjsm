@@ -202,9 +202,14 @@ if (cluster.isPrimary) {
 /// 完成条件只认 `cluster` 的 `listening` 事件（IPC 事件驱动）：
 /// 收齐 2 次 listening 且 port 相同即成功。
 ///
+/// runtime 侧保证：
+/// - listen / queryServer / RR bind 失败会 error 回包并让 worker 退出（无 error 监听者时 process.exit(1)）
+/// - worker 未 listening 就 exit 时 primary 用 exit 事件收口，禁止永久挂起
+/// - process.exit 会 SIGKILL 仍存活的子进程
+///
 /// 注意（wjsm 现状）：
-/// - 不要在 listening 回调栈里同步 `worker.kill()` 再 `process.exit`（会死挂）。
-/// - 不要用 `finished` 守卫再 `process.exit(code)`（也会死挂）；直接 inline exit。
+/// - 不要在 listening 回调栈里同步 `worker.kill()` 再 `process.exit`。
+/// - 不要用 `finished` 守卫再 `process.exit(code)`；直接 inline exit。
 #[test]
 fn cluster_net_shared_port_rr() {
     let script = write_temp_script(
@@ -238,6 +243,12 @@ if (cluster.isPrimary) {
   cluster.on('listening', function (worker, addr) {
     worker.__gotListen = true;
     report(addr.port, worker.id, 'listening');
+  });
+
+  // bind/IPC 失败会抬到 cluster 'error'：直接失败退出，禁止挂死。
+  cluster.on('error', function (err) {
+    console.log('cluster-error', err && err.message);
+    process.exit(6);
   });
 
   // 子进程若未 listening 就退出：用 exit 事件收口，禁止 primary 永久挂起。
@@ -350,4 +361,84 @@ if (cluster.isPrimary) {
         "stdout={stdout} stderr={stderr}"
     );
 }
+
+/// listen 失败必须 emit error / worker 退出，禁止 UnhandledPromiseRejection 后挂死。
+#[test]
+fn net_listen_error_emits_and_exits() {
+    let script = write_temp_script(
+        "listen_error",
+        r#"
+const net = require('net');
+const s = net.createServer();
+s.on('error', function (err) {
+  console.log('listen-error', err && err.message);
+  process.exit(0);
+});
+// 非 root 绑 80 应失败
+s.listen(80, '127.0.0.1');
+"#,
+    );
+    let output = run_wjsm_script(&script, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={stdout} stderr={stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("listen-error"),
+        "expected listen-error in stdout={stdout} stderr={stderr}"
+    );
+}
+
+/// cluster worker listen 失败时 worker 必须退出，primary 用 exit 收口，禁止 60s 挂死。
+#[test]
+fn cluster_worker_listen_failure_primary_exits() {
+    let script = write_temp_script(
+        "cluster_listen_fail",
+        r#"
+const cluster = require('cluster');
+const net = require('net');
+
+if (cluster.isPrimary) {
+  cluster.schedulingPolicy = cluster.SCHED_RR;
+  var exits = 0;
+  cluster.on('exit', function (worker, code, signal) {
+    exits = exits + 1;
+    console.log('worker-exit', worker.id, code, signal);
+    if (exits >= 1) {
+      console.log('primary-done');
+      process.exit(0);
+    }
+  });
+  cluster.on('listening', function () {
+    console.log('unexpected-listening');
+    process.exit(3);
+  });
+  cluster.fork();
+} else {
+  // exclusive 强制走本地 bind，绕过 RR；绑 80 失败 → process.exit(1)
+  net.createServer().listen({ port: 80, host: '127.0.0.1', exclusive: true });
+}
+"#,
+    );
+    let output = run_wjsm_script(&script, &[("NODE_CLUSTER_SCHED_POLICY", "rr")]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={stdout} stderr={stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("primary-done"),
+        "expected primary-done in stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("unexpected-listening"),
+        "should not listen on privileged port: {stdout}"
+    );
+}
+
 

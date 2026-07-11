@@ -57,6 +57,7 @@ export function Worker(options) {
       });
       this.process.on('exit', function (code, signal) {
         self.state = 'dead';
+        removeWorkerFromEntries(self);
         self.emit('exit', code, signal);
         clusterEmit('exit', self, code, signal);
         delete workers[self.id];
@@ -206,12 +207,99 @@ function makeRrEntry(key, msg) {
     rrIndex: 0,
     listening: false,
     binding: false,
+    closed: false,
     reusePort: schedulingPolicy === SCHED_NONE,
     boundPort: 0,
     boundAddress: '',
     serverHandle: undefined,
     waitList: [],
   };
+}
+
+function errorMessage(err, fallback) {
+  if (err && typeof err === 'object' && err.message !== undefined) return String(err.message);
+  if (err !== undefined && err !== null && err !== '') return String(err);
+  return fallback || 'cluster error';
+}
+
+function sendClusterError(worker, seq, message) {
+  if (!worker || !worker.process || typeof worker.process.send !== 'function') return;
+  worker.process.send({
+    cmd: 'NODE_CLUSTER',
+    act: 'error',
+    seq: seq,
+    message: message,
+  });
+}
+
+/** bind 失败 / worker 中途退出：把 waitList 全部 error 回包，并清 binding。 */
+function failEntryWaiters(entry, message, primaryWorker, primarySeq) {
+  if (!entry) return;
+  entry.binding = false;
+  entry.listening = false;
+  const waiters = entry.waitList;
+  entry.waitList = [];
+  const seen = Object.create(null);
+  if (primaryWorker) {
+    sendClusterError(primaryWorker, primarySeq, message);
+    if (primarySeq !== undefined && primarySeq !== null) seen[String(primarySeq)] = true;
+  }
+  for (var i = 0; i < waiters.length; i = i + 1) {
+    const item = waiters[i];
+    if (!item) continue;
+    const key = String(item.seq);
+    if (seen[key]) continue;
+    seen[key] = true;
+    sendClusterError(item.worker, item.seq, message);
+  }
+  clusterEmit('error', new Error(message));
+}
+
+function closeRrEntry(entry, netHost) {
+  if (!entry || entry.closed) return;
+  entry.closed = true;
+  entry.listening = false;
+  entry.binding = false;
+  const handle = entry.serverHandle;
+  entry.serverHandle = undefined;
+  if (handle !== undefined && handle !== null && netHost && typeof netHost.serverClose === 'function') {
+    try {
+      netHost.serverClose(handle);
+    } catch (_e) {}
+  }
+}
+
+/** worker 退出时从所有 RR entry 摘掉；无人时关闭 primary 持有的 listener。 */
+function removeWorkerFromEntries(worker) {
+  if (!worker) return;
+  const netHost = globalThis.__wjsm_node_net;
+  for (var i = 0; i < rrHandleList.length; i = i + 1) {
+    const entry = rrHandleList[i];
+    if (!entry) continue;
+    const nextWorkers = [];
+    for (var j = 0; j < entry.workers.length; j = j + 1) {
+      const w = entry.workers[j];
+      if (w && w.id !== worker.id) nextWorkers.push(w);
+    }
+    entry.workers = nextWorkers;
+    if (entry.primaryWorker && entry.primaryWorker.id === worker.id) {
+      entry.primaryWorker = nextWorkers.length > 0 ? nextWorkers[0] : null;
+    }
+    const nextWait = [];
+    for (var k = 0; k < entry.waitList.length; k = k + 1) {
+      const item = entry.waitList[k];
+      if (!item || !item.worker) continue;
+      if (item.worker.id === worker.id) {
+        sendClusterError(item.worker, item.seq, 'worker exited during listen');
+        continue;
+      }
+      nextWait.push(item);
+    }
+    entry.waitList = nextWait;
+    if (nextWorkers.length === 0 && entry.serverHandle !== undefined) {
+      closeRrEntry(entry, netHost);
+    }
+  }
 }
 
 function handlePrimaryInternal(worker, msg, fd) {
@@ -267,6 +355,11 @@ function handleQueryServer(worker, msg) {
       const listenHost = normalizeListenHost(entry.address);
       const replySeq = msg.seq;
       const replyWorker = worker;
+      if (!netHost || typeof netHost.serverListen !== 'function') {
+        failEntryWaiters(entry, 'net host unavailable', replyWorker, replySeq);
+        return;
+      }
+      // 单参 .then + .catch：双参 then 在 lowerer 下会丢 rejection 路径
       netHost.serverListen(listenPort, listenHost, { reusePort: true }).then(function (handle) {
         entry.listening = true;
         entry.binding = false;
@@ -274,12 +367,18 @@ function handleQueryServer(worker, msg) {
         entry.boundAddress = netHost.serverAddress(handle);
         netHost.serverClose(handle);
         notifyShare(entry, replySeq, replyWorker);
-        // 刷 waitList
         const waiters = entry.waitList;
         entry.waitList = [];
         for (var si = 0; si < waiters.length; si = si + 1) {
           notifyShare(entry, waiters[si].seq, waiters[si].worker);
         }
+      }).catch(function (err) {
+        failEntryWaiters(
+          entry,
+          errorMessage(err, 'cluster share listen failed'),
+          replyWorker,
+          replySeq
+        );
       });
     } else if (entry.listening) {
       notifyShare(entry, msg.seq, worker);
@@ -290,6 +389,10 @@ function handleQueryServer(worker, msg) {
   }
 
   // SCHED_RR
+  if (entry.closed) {
+    sendClusterError(worker, msg.seq, 'cluster handle closed');
+    return;
+  }
   if (entry.listening) {
     sendRrReply(
       worker,
@@ -302,6 +405,7 @@ function handleQueryServer(worker, msg) {
   entry.waitList.push({ worker: worker, seq: msg.seq });
   if (entry.binding) return;
   startRoundRobin(entry, worker, msg.seq);
+
 }
 
 function normalizeListenPort(port) {
@@ -360,24 +464,25 @@ function startRoundRobin(entry, firstWorker, firstSeq) {
   // 捕获的 workers 数组尚未 materialize 时，首个 listener 仍可接收连接。
   entry.primaryWorker = firstWorker;
   const netHost = globalThis.__wjsm_node_net;
-  if (!netHost) {
-    if (firstWorker && firstWorker.process) {
-      firstWorker.process.send({
-        cmd: 'NODE_CLUSTER',
-        act: 'error',
-        seq: firstSeq,
-        message: 'net host unavailable',
-      });
-    }
+  if (!netHost || typeof netHost.serverListen !== 'function') {
+    failEntryWaiters(entry, 'net host unavailable', firstWorker, firstSeq);
     return;
   }
   const listenPort = normalizeListenPort(entry.port);
   const listenHost = normalizeListenHost(entry.address);
   entry.binding = true;
+  entry.closed = false;
   // 闭包捕获发起者，确保 then 回调内一定能回包（不依赖 entry 动态字段）
   const replyWorker = firstWorker;
   const replySeq = firstSeq;
+  // 单参 .then + .catch：双参 then 会把 rejection 路径弄丢，导致 binding 永久 true
   netHost.serverListen(listenPort, listenHost, { reusePort: false }).then(function (handle) {
+    if (entry.closed) {
+      try {
+        netHost.serverClose(handle);
+      } catch (_e) {}
+      return;
+    }
     const boundPort = netHost.serverPort(handle);
     const boundAddress = netHost.serverAddress(handle);
     entry.listening = true;
@@ -397,15 +502,25 @@ function startRoundRobin(entry, firstWorker, firstSeq) {
       sendRrReply(item.worker, item.seq, boundAddress, boundPort);
     }
     acceptLoop(entry, netHost);
+  }).catch(function (err) {
+    failEntryWaiters(
+      entry,
+      errorMessage(err, 'cluster round-robin listen failed'),
+      replyWorker,
+      replySeq
+    );
   });
 }
 
 function acceptLoop(entry, netHost) {
+  if (!entry || entry.closed) return;
   if (entry.serverHandle === undefined || entry.serverHandle === null) return;
   const acceptPromise = netHost.serverAcceptRawFd
     ? netHost.serverAcceptRawFd(entry.serverHandle)
     : netHost.serverAccept(entry.serverHandle);
+  // 单参 then + catch：避免双参 then 的 lowerer 控制流 bug
   acceptPromise.then(function (rawOrHandle) {
+    if (entry.closed) return;
     if (rawOrHandle === null || rawOrHandle === undefined) {
       scheduleAccept(entry, netHost);
       return;
@@ -421,12 +536,19 @@ function acceptLoop(entry, netHost) {
     entry.rrIndex = entry.rrIndex + 1;
     worker.process.send({ cmd: 'NODE_CLUSTER', act: 'newconn' }, rawOrHandle);
     scheduleAccept(entry, netHost);
-  }, function (error) {
-    clusterEmit('error', error);
+  }).catch(function (error) {
+    if (entry.closed) return;
+    clusterEmit(
+      'error',
+      error instanceof Error ? error : new Error(errorMessage(error, 'accept failed'))
+    );
+    // accept 瞬时失败不拆 listener，继续轮询；closeRrEntry 后停止
+    scheduleAccept(entry, netHost);
   });
 }
 
 function scheduleAccept(entry, netHost) {
+  if (!entry || entry.closed) return;
   setTimeout(function () {
     acceptLoop(entry, netHost);
   }, 0);

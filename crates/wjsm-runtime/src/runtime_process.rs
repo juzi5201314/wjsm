@@ -305,6 +305,8 @@ pub(crate) fn call_process_exit(caller: &mut Caller<'_, RuntimeState>, args: &[i
         .copied()
         .map(|value| process_exit_code_from_value(caller, value))
         .unwrap_or(0);
+    // 先杀子进程再设退出信号：cluster RR primary 的 worker 与 IPC 不再拖死宿主。
+    crate::runtime_node_child_process::kill_all_child_processes(caller);
     *caller
         .data()
         .process_exit_signal

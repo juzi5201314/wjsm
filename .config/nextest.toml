@@ -39,23 +39,17 @@ slow-timeout = { period = "500ms", terminate-after = 120 }
 cluster-ipc = { max-threads = 1 }
 runtime-cache-delete = { max-threads = 1 }
 
+# cluster IPC：同二进制内串行，降低 IPC reader 与 host 完成队列争用。
+# 失败路径已在 runtime 收口（bind/queryServer error → worker exit → primary 不再永久挂），
+# 不再需要独占全部测试槽。
 [[profile.default.overrides]]
 filter = 'binary(cluster_ipc)'
 test-group = 'cluster-ipc'
-
-# RR 会同时驱动主进程和多个 worker；独占测试槽避免宿主资源争用使 IPC 停滞。
-[[profile.default.overrides]]
-filter = 'test(cluster_net_shared_port_rr)'
-threads-required = 'num-test-threads'
 
 
 [[profile.ci.overrides]]
 filter = 'binary(cluster_ipc)'
 test-group = 'cluster-ipc'
-
-[[profile.ci.overrides]]
-filter = 'test(cluster_net_shared_port_rr)'
-threads-required = 'num-test-threads'
 
 
 [[profile.default.overrides]]

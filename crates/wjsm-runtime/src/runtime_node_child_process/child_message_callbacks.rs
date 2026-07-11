@@ -75,6 +75,9 @@ pub(super) fn child_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[i6
         binding.message_cb = Some(callback);
         binding.message_cb_ready = false;
     }
+    // 同一把锁内：pending 为空则 ready=true，否则取出 pending 并保持 ready=false。
+    // 禁止在锁外把 ready 置 true，否则 drain 会在 ready=false 窗口把 inbox 塞进 pending，
+    // 随后 ready=true 却永不 drain pending → IPC 消息永久丢失 → cluster queryServer 挂死。
     loop {
         let pending = {
             let mut map = caller
@@ -89,6 +92,8 @@ pub(super) fn child_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[i6
                 binding.message_cb_ready = true;
                 Vec::new()
             } else {
+                // 回放期间保持 ready=false，新消息继续进 pending，下一轮再取
+                binding.message_cb_ready = false;
                 std::mem::take(&mut binding.pending_messages)
             }
         };
@@ -130,13 +135,16 @@ pub(crate) fn drain_child_messages(
             return;
         };
         let Some(callback) = binding.message_cb else {
+            // 回调尚未注册：inbox 暂存 pending，等 child_on_message 回放
             binding.pending_messages.append(&mut messages);
             return;
         };
         if !binding.message_cb_ready {
+            // 回放窗口：绝不能直接投递，否则与 onMessage 回放乱序/重复
             binding.pending_messages.append(&mut messages);
             return;
         }
+        // ready：必须合并可能残留的 pending（防止历史窗口丢消息），再投递
         if binding.pending_messages.is_empty() {
             (messages, callback)
         } else {

@@ -8,7 +8,8 @@ mod spawn_async;
 mod spawn_sync;
 
 pub(crate) use spawn_async::{
-    ChildProcessEntry, LocalChildBinding, ProcessIpcState, try_init_process_ipc_from_env,
+    ChildProcessEntry, LocalChildBinding, ProcessIpcState, kill_all_child_processes,
+    try_init_process_ipc_from_env,
 };
 
 use wasmtime::Caller;

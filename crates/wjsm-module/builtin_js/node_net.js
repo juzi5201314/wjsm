@@ -41,10 +41,11 @@ function normalizeConnectArgs(a, b, c) {
 }
 
 function normalizeListenArgs(a, b, c) {
-  const out = { port: 0, host: '127.0.0.1', callback: undefined };
+  const out = { port: 0, host: '127.0.0.1', callback: undefined, exclusive: false };
   if (typeof a === 'object' && a !== null) {
     out.port = a.port || 0;
     out.host = a.host || a.hostname || '127.0.0.1';
+    out.exclusive = a.exclusive === true;
     if (typeof b === 'function') out.callback = b;
   } else {
     if (a !== undefined) out.port = a;
@@ -234,19 +235,38 @@ function netServerOnBound(server, handle) {
   server.__acceptLoop();
 }
 
+/** listen 失败统一收口：有 error 监听者则 emit；否则 worker/进程必须退出，避免 primary 挂死。 */
+function netServerOnListenError(server, err) {
+  const error = err instanceof Error ? err : new Error(String(err || 'listen failed'));
+  schedule(function () {
+    const listeners = server && server._events ? server._events.error : null;
+    if (listeners && listeners.length > 0) {
+      server.emit('error', error);
+      return;
+    }
+    // EventEmitter 无监听者时的 throw 路径在当前 runtime 不可靠；
+    // cluster worker 直接 exit，让 primary 的 exit 事件收口。
+    if (typeof process !== 'undefined' && typeof process.exit === 'function') {
+      process.exit(1);
+    }
+  });
+}
+
 function netServerBindLocal(server, port, hostName, reusePort) {
   const p = Number(port) || 0;
   const h = String(hostName || '127.0.0.1');
-  // 注意：仅单参数 .then(onFulfilled)。双参数 .then(ok, err) 在当前 lowerer
-  // 下会生成错误控制流（promise.then 落在不可达 bb，听不到 listening）。
+  // 注意：仅单参数 .then(onFulfilled) + .catch。双参数 .then(ok, err) 在当前 lowerer
+  // 下会生成错误控制流（promise.then 落在不可达 bb，听不到 listening / 丢 rejection）。
+  const onBound = function (handle) {
+    netServerOnBound(server, handle);
+  };
+  const onFail = function (err) {
+    netServerOnListenError(server, err);
+  };
   if (reusePort) {
-    host.serverListen(p, h, { reusePort: true }).then(function (handle) {
-      netServerOnBound(server, handle);
-    });
+    host.serverListen(p, h, { reusePort: true }).then(onBound).catch(onFail);
   } else {
-    host.serverListen(p, h).then(function (handle) {
-      netServerOnBound(server, handle);
-    });
+    host.serverListen(p, h).then(onBound).catch(onFail);
   }
 }
 
@@ -290,6 +310,8 @@ Server.prototype.listen = function (a, b, c) {
   if (cluster && cluster.isWorker && !exclusive && typeof cluster.queryServerListen === 'function') {
     cluster.queryServerListen(opts).then(function (plan) {
       netServerOnClusterPlan(server, opts, plan);
+    }).catch(function (err) {
+      netServerOnListenError(server, err);
     });
     return this;
   }
@@ -308,6 +330,9 @@ Server.prototype.__acceptLoop = function () {
     self.emit('connection', socket);
     socket._startReadLoop();
     schedule(function () { self.__acceptLoop(); });
+  }).catch(function (error) {
+    if (self.__closing) return;
+    netServerOnListenError(self, error);
   });
 };
 

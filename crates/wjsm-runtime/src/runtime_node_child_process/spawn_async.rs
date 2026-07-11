@@ -450,6 +450,46 @@ pub(super) fn child_kill(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) ->
     }
 }
 
+/// `process.exit` 时杀掉仍存活的子进程，避免 cluster RR primary 退出后
+/// worker / acceptLoop 相关宿主资源成为孤儿并拖死测试 harness。
+pub(crate) fn kill_all_child_processes(caller: &mut Caller<'_, RuntimeState>) {
+    let mut inner = caller
+        .data()
+        .child_process_table
+        .inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for entry in inner.entries.iter_mut().flatten() {
+        if entry.exited.load(Ordering::SeqCst) {
+            continue;
+        }
+        entry.killed.store(true, Ordering::SeqCst);
+        let pid = entry.pid;
+        let mut child_guard = entry.child.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(child) = child_guard.as_mut() {
+            #[cfg(unix)]
+            {
+                let _ = unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = child.kill();
+            }
+            continue;
+        }
+        drop(child_guard);
+        #[cfg(unix)]
+        {
+            let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pid;
+        }
+    }
+}
+
+
 #[cfg(unix)]
 fn signal_name_to_libc(name: &str) -> i32 {
     match name {
