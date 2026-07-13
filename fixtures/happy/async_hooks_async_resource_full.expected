@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+object true
+true true
+scope 5
+true true
+true
+6
+bound true
+5 1
+init:1,before,after,before,after,destroy
+--- stderr ---

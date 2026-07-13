@@ -15,8 +15,10 @@ use crate::scheduler::AsyncHostCompletion;
 
 /// 构造 owner 线程上的 wake 任务（IPC reader 线程通过 channel 投递）。
 pub(crate) type IpcWakeTaskFactory = Arc<
-    dyn Fn() -> Box<dyn FnOnce(&mut wasmtime::Store<crate::RuntimeState>, &crate::WasmEnv) + Send>
-        + Send
+    dyn Fn() -> (
+            Box<dyn FnOnce(&mut wasmtime::Store<crate::RuntimeState>, &crate::WasmEnv) + Send>,
+            Option<crate::CapturedScope>,
+        ) + Send
         + Sync,
 >;
 
@@ -200,13 +202,8 @@ impl ParentIpcHandle {
             .push((payload, send_fd));
         // 竞态：accept 可能在 push 之前完成并已 drain 过空 pending
         if let Some(ep) = self.try_endpoint() {
-            let leftover = std::mem::take(
-                &mut *self
-                    .inner
-                    .pending
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()),
-            );
+            let leftover =
+                std::mem::take(&mut *self.inner.pending.lock().unwrap_or_else(|e| e.into_inner()));
             for (p, fd) in leftover {
                 let _ = ep.send(&p, fd);
             }
@@ -274,13 +271,8 @@ impl ParentIpcHandle {
         }
         self.inner.ready.notify_all();
         loop {
-            let batch = std::mem::take(
-                &mut *self
-                    .inner
-                    .pending
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()),
-            );
+            let batch =
+                std::mem::take(&mut *self.inner.pending.lock().unwrap_or_else(|e| e.into_inner()));
             if batch.is_empty() {
                 break;
             }
@@ -291,11 +283,7 @@ impl ParentIpcHandle {
     }
 
     fn set_error(&self, err: String) {
-        *self
-            .inner
-            .error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(err);
+        *self.inner.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
         self.inner.ready.notify_all();
     }
 }
@@ -339,7 +327,10 @@ pub(crate) fn create_parent_ipc() -> io::Result<ParentIpcHandle> {
                         )
                         .map(Arc::new);
                     }
-                    Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => {
+                    Err(e)
+                        if e.kind() == ErrorKind::WouldBlock
+                            || e.kind() == ErrorKind::Interrupted =>
+                    {
                         let now = Instant::now();
                         if now >= deadline {
                             break Err(io::Error::new(ErrorKind::TimedOut, "ipc accept timeout"));
@@ -398,8 +389,8 @@ fn wake_with(endpoint: &IpcEndpoint, make_wake_task: &IpcWakeTaskFactory) {
         .unwrap_or_else(|e| e.into_inner())
         .clone()
     {
-        let run = make_wake_task();
-        let _ = tx.send(AsyncHostCompletion::HostTask { run });
+        let (run, scope) = make_wake_task();
+        let _ = tx.send(AsyncHostCompletion::HostTask { run, scope });
     }
 }
 

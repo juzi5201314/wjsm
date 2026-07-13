@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-12-node-async-hooks",
+  "lastCheckpointRef": "docs/aegis/work/2026-07-12-node-async-hooks/todo-checkpoint-draft.json",
+  "resumeInstruction": "Read design+plan+this checkpoint. Do not treat phases as shippable subsets. Compat baseline Node v24.15; no withScope. Start TDD at Task 0.1.",
+  "knownPartialWork": [
+    "Wrote design spec docs/aegis/specs/2026-07-12-node-async-hooks-design.md",
+    "Wrote plan docs/aegis/plans/2026-07-12-node-async-hooks.md",
+    "Created work lifecycle docs/aegis/work/2026-07-12-node-async-hooks/"
+  ],
+  "mustReadBeforeContinuing": [
+    "docs/aegis/work/2026-07-12-node-async-hooks/10-intent.md",
+    "docs/aegis/work/2026-07-12-node-async-hooks/20-checkpoint.md",
+    "docs/aegis/work/2026-07-12-node-async-hooks/todo-checkpoint-draft.json"
+  ],
+  "unsafeToAssume": [
+    "That createHook can ship without I/O provider wiring; that setImmediate can be deferred; that Node main/v27 withScope is required."
+  ]
+}

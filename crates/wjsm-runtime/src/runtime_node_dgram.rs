@@ -140,10 +140,7 @@ fn bind(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     promise
 }
 
-fn make_dgram_socket_entry(
-    socket: UdpSocket,
-    local_addr: SocketAddr,
-) -> DgramSocketEntry {
+fn make_dgram_socket_entry(socket: UdpSocket, local_addr: SocketAddr) -> DgramSocketEntry {
     DgramSocketEntry {
         socket: Arc::new(socket),
         local_addr,
@@ -188,7 +185,11 @@ fn send(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
 fn recv(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
     let Some(entry) = socket_entry(caller, args.first().copied()) else {
-        reject_promise_from_caller(caller, promise, "dgram.Socket handle is invalid".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "dgram.Socket handle is invalid".to_string(),
+        );
         return promise;
     };
     let socket = Arc::clone(&entry.socket);
@@ -278,7 +279,10 @@ struct SocketSnapshot {
     close_notify: Arc<Notify>,
 }
 
-fn socket_entry(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Option<SocketSnapshot> {
+fn socket_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Option<SocketSnapshot> {
     let handle = handle_arg(value_raw)?;
     let table = caller.data().dgram_socket_table.inner.lock().ok()?;
     let entry = table.get(handle as usize)?;
@@ -341,7 +345,10 @@ fn host_arg(
     }
 }
 
-fn data_arg(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Result<Vec<u8>, String> {
+fn data_arg(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Result<Vec<u8>, String> {
     let value_raw = value_raw.unwrap_or_else(value::encode_undefined);
     if value::is_undefined(value_raw) || value::is_null(value_raw) {
         return Ok(Vec::new());
@@ -365,25 +372,39 @@ fn enqueue_async_result<T, Fut, Materialize>(
         + 'static,
 {
     let Some(tx) = caller.data().host_completion_tx.clone() else {
-        reject_promise_from_caller(caller, promise, "async network runtime is not available".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "async network runtime is not available".to_string(),
+        );
         return;
     };
     let Some(counter) = caller.data().async_op_counter.clone() else {
-        reject_promise_from_caller(caller, promise, "async network runtime is not available".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "async network runtime is not available".to_string(),
+        );
         return;
     };
     let guard = counter.begin();
+    let scope = crate::scheduler::capture_completion_scope_from_caller(caller);
     tokio::spawn(async move {
         let result = future.await;
         let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
             promise,
             materialize: Box::new(move |store, env| materialize(store, env, result)),
+            scope,
         });
         drop(guard);
     });
 }
 
-fn reject_promise_from_caller(caller: &mut Caller<'_, RuntimeState>, promise: i64, message: String) {
+fn reject_promise_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    message: String,
+) {
     let msg_val = crate::runtime_render::store_runtime_string(caller, message.clone());
     let error = create_error_object(caller, "Error", msg_val, value::encode_undefined());
     settle_promise(caller.data(), promise, PromiseSettlement::Reject(error));
@@ -401,4 +422,3 @@ fn error_from_caller(caller: &mut Caller<'_, RuntimeState>, message: String) -> 
     let msg_val = crate::runtime_render::store_runtime_string(caller, message);
     create_error_object(caller, "Error", msg_val, value::encode_undefined())
 }
-

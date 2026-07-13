@@ -325,7 +325,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .map_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                
+
                 if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
                     let idx = *index as usize;
@@ -359,7 +359,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .headers_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                
+
                 if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
@@ -386,7 +386,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .headers_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                
+
                 if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
@@ -413,7 +413,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .headers_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                
+
                 if *headers_handle < table.len() as u32 {
                     let entry = &table[*headers_handle as usize];
                     let idx = *index as usize;
@@ -478,7 +478,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .set_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                
+
                 if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
                     let idx = *index as usize;
@@ -618,9 +618,10 @@ async fn ordinary_has_instance_async(
     // 普通对象从 obj_table 条目偏移 0 读取 [[Prototype]] handle。
     let mut current_proto: u32 = if value::is_regexp(value) {
         if !value::is_object(caller.data().regexp_prototype)
-            && let Some(env) = WasmEnv::from_caller(caller) {
-                crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
-            }
+            && let Some(env) = WasmEnv::from_caller(caller)
+        {
+            crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
+        }
         let regexp_proto = caller.data().regexp_prototype;
         if !value::is_object(regexp_proto) {
             return value::encode_bool(false);
@@ -1576,12 +1577,13 @@ pub(crate) fn define_core(
         }
         let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
         if barrier_event_buf_base != 0
-            && let Some(global) = env.barrier_buf_ptr {
-                let _ = global.set(
-                    &mut caller,
-                    wasmtime::Val::I32(barrier_event_buf_base as i32),
-                );
-            }
+            && let Some(global) = env.barrier_buf_ptr
+        {
+            let _ = global.set(
+                &mut caller,
+                wasmtime::Val::I32(barrier_event_buf_base as i32),
+            );
+        }
         if let Some(global) = env.gc_alloc_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(0));
         }
@@ -1639,12 +1641,13 @@ pub(crate) fn define_core(
         }
         let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
         if barrier_event_buf_base != 0
-            && let Some(global) = env.barrier_buf_ptr {
-                let _ = global.set(
-                    &mut caller,
-                    wasmtime::Val::I32(barrier_event_buf_base as i32),
-                );
-            }
+            && let Some(global) = env.barrier_buf_ptr
+        {
+            let _ = global.set(
+                &mut caller,
+                wasmtime::Val::I32(barrier_event_buf_base as i32),
+            );
+        }
     });
     linker.define(&mut store, "env", "gc_barrier_flush", f)?;
 

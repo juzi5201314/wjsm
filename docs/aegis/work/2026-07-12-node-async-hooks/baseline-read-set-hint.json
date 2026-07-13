@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "candidateDocs": [
+    "issue://313",
+    "docs/adr/0002-runtimestate-stays-flat.md",
+    "docs/adr/0003-startup-snapshot-boundary.md",
+    "docs/adr/0005-pluggable-gc-v2.md",
+    "docs/adr/0008-node-vm-multi-realm.md",
+    "https://nodejs.org/docs/v24.15.0/api/async_hooks.html",
+    "https://nodejs.org/docs/v24.15.0/api/async_context.html",
+    "crates/wjsm-runtime/src/scheduler.rs",
+    "crates/wjsm-runtime/src/runtime_microtask.rs",
+    "crates/wjsm-runtime/src/runtime_promises.rs"
+  ],
+  "whyRelevant": "Issue non-goal overridden by user; ADRs constrain state/GC/snapshot/vm; Node docs pin public API; runtime files are integration seams.",
+  "missingAuthority": []
+}

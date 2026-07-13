@@ -312,6 +312,33 @@ pub(crate) fn define_timers_arrays_async(
                     id
                 };
                 let deadline = Instant::now() + Duration::from_millis(delay_ms);
+                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                let resource = crate::runtime_node_async_hooks::create_timer_resource_object(
+                    &mut caller,
+                    &env,
+                    id,
+                    "Timeout",
+                );
+                let scope = {
+                    let mut hooks = caller
+                        .data()
+                        .async_hooks
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    hooks.capture_for_scheduled_callback(resource, true)
+                };
+                if let Some(scope) = scope {
+                    let type_value = store_runtime_string(&mut caller, "Timeout".to_string());
+                    let _ = crate::runtime_async_hooks::emit::emit_init_from_caller(
+                        &mut caller,
+                        scope.async_id,
+                        type_value,
+                        scope.trigger_async_id,
+                        scope.resource,
+                        false,
+                    )
+                    .await;
+                }
                 let mut timers = caller
                     .data()
                     .timers
@@ -323,8 +350,10 @@ pub(crate) fn define_timers_arrays_async(
                     callback,
                     repeating: false,
                     interval: Duration::from_millis(delay_ms),
+                    resource,
+                    scope,
                 });
-                value::encode_f64(id as f64)
+                resource
             })
         },
     )?;
@@ -332,10 +361,11 @@ pub(crate) fn define_timers_arrays_async(
     linker.func_wrap_async(
         "env",
         "clear_timeout",
-        |caller: Caller<'_, RuntimeState>, (timer_id,): (i64,)| {
+        |mut caller: Caller<'_, RuntimeState>, (timer_id,): (i64,)| {
             Box::new(async move {
-                if value::is_f64(timer_id) {
-                    let id = value::decode_f64(timer_id) as u32;
+                if let Some(id) =
+                    crate::runtime_node_async_hooks::timer_id_from_arg(&mut caller, Some(timer_id))
+                {
                     caller
                         .data()
                         .cancelled_timers
@@ -367,6 +397,33 @@ pub(crate) fn define_timers_arrays_async(
                     id
                 };
                 let deadline = Instant::now() + Duration::from_millis(delay_ms);
+                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                let resource = crate::runtime_node_async_hooks::create_timer_resource_object(
+                    &mut caller,
+                    &env,
+                    id,
+                    "Timeout",
+                );
+                let scope = {
+                    let mut hooks = caller
+                        .data()
+                        .async_hooks
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    hooks.capture_for_scheduled_callback(resource, true)
+                };
+                if let Some(scope) = scope {
+                    let type_value = store_runtime_string(&mut caller, "Timeout".to_string());
+                    let _ = crate::runtime_async_hooks::emit::emit_init_from_caller(
+                        &mut caller,
+                        scope.async_id,
+                        type_value,
+                        scope.trigger_async_id,
+                        scope.resource,
+                        false,
+                    )
+                    .await;
+                }
                 let mut timers = caller
                     .data()
                     .timers
@@ -378,8 +435,10 @@ pub(crate) fn define_timers_arrays_async(
                     callback,
                     repeating: true,
                     interval: Duration::from_millis(delay_ms),
+                    resource,
+                    scope,
                 });
-                value::encode_f64(id as f64)
+                resource
             })
         },
     )?;
@@ -387,10 +446,11 @@ pub(crate) fn define_timers_arrays_async(
     linker.func_wrap_async(
         "env",
         "clear_interval",
-        |caller: Caller<'_, RuntimeState>, (timer_id,): (i64,)| {
+        |mut caller: Caller<'_, RuntimeState>, (timer_id,): (i64,)| {
             Box::new(async move {
-                if value::is_f64(timer_id) {
-                    let id = value::decode_f64(timer_id) as u32;
+                if let Some(id) =
+                    crate::runtime_node_async_hooks::timer_id_from_arg(&mut caller, Some(timer_id))
+                {
                     caller
                         .data()
                         .cancelled_timers

@@ -21,8 +21,8 @@ use child_message_callbacks::child_on_message;
 #[cfg(not(unix))]
 use spawn_async::child_on_message;
 use spawn_async::{
-    child_disconnect, child_kill, child_on_exit, child_send, process_connected,
-    process_disconnect, process_on_message, process_send, spawn_async,
+    child_disconnect, child_kill, child_on_exit, child_send, process_connected, process_disconnect,
+    process_on_message, process_send, spawn_async,
 };
 use spawn_sync::{exec_sync, spawn_sync};
 
@@ -77,10 +77,20 @@ pub(crate) fn create_child_process_host_object(caller: &mut Caller<'_, RuntimeSt
     install(caller, obj, "spawn", ChildProcessMethodKind::Spawn);
     install(caller, obj, "kill", ChildProcessMethodKind::Kill);
     install(caller, obj, "send", ChildProcessMethodKind::Send);
-    install(caller, obj, "disconnect", ChildProcessMethodKind::Disconnect);
+    install(
+        caller,
+        obj,
+        "disconnect",
+        ChildProcessMethodKind::Disconnect,
+    );
     install(caller, obj, "onMessage", ChildProcessMethodKind::OnMessage);
     install(caller, obj, "onExit", ChildProcessMethodKind::OnExit);
-    install(caller, obj, "processSend", ChildProcessMethodKind::ProcessSend);
+    install(
+        caller,
+        obj,
+        "processSend",
+        ChildProcessMethodKind::ProcessSend,
+    );
     install(
         caller,
         obj,

@@ -70,8 +70,9 @@ impl GcScheduler {
                 StepOutcome::Progress { .. } | StepOutcome::CycleComplete
             )
         {
-            self.step_work_bytes =
-                current.saturating_mul(2).clamp(MIN_STEP_WORK_BYTES, MAX_STEP_WORK_BYTES);
+            self.step_work_bytes = current
+                .saturating_mul(2)
+                .clamp(MIN_STEP_WORK_BYTES, MAX_STEP_WORK_BYTES);
         }
     }
 

@@ -33,8 +33,7 @@ pub(crate) struct Lowerer {
     pub(crate) function_label_stack_stack: Vec<Vec<LabelContext>>,
     pub(crate) function_active_finalizers_stack: Vec<Vec<PendingFinalizer>>,
     pub(crate) function_pending_loop_label_stack: Vec<Option<String>>,
-    pub(crate) function_exception_fork_suppression_stack:
-        Vec<ExceptionForkSuppressionFrame>,
+    pub(crate) function_exception_fork_suppression_stack: Vec<ExceptionForkSuppressionFrame>,
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
     pub(crate) captured_names_stack: Vec<Vec<CapturedBinding>>,
@@ -68,8 +67,8 @@ pub(crate) struct Lowerer {
     /// 用于 `import { x as y }` 和 `import x from './dep'` 等场景。
     /// 按导入方模块 ID 隔离，避免不同模块的同名 local 互相覆盖（#44）。
     pub(crate) import_aliases: std::collections::HashMap<(wjsm_ir::ModuleId, String), String>,
-    /// 每个模块的顶层块作用域 ID（predeclare 阶段分配，lower 阶段重新进入）。
-    /// 使各模块顶层 let/const 处于独立作用域，避免跨模块同名冲突（#43）。
+    /// 每个模块的顶层作用域 ID（predeclare 阶段分配，lower 阶段重新进入）。
+    /// 同时隔离模块顶层词法声明、var 声明与函数声明。
     pub(crate) module_scopes: std::collections::HashMap<wjsm_ir::ModuleId, usize>,
     /// 每个模块的编译期路径元数据，供 CJS 路径绑定和 import.meta 使用。
     pub(crate) module_metadata: std::collections::HashMap<wjsm_ir::ModuleId, ModuleMetadata>,

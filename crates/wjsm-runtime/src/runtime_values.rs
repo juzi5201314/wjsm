@@ -351,6 +351,10 @@ pub(crate) fn grow_array(
     )?;
     let ptr = resolve_handle_idx_with_env(caller, &env, handle_idx)?;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
+    let required_end = (ptr + old_size).max(heap_ptr + new_size);
+    if !crate::runtime_heap::ensure_host_memory_capacity(caller, &env, 0, required_end) {
+        return None;
+    }
     let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
@@ -395,6 +399,10 @@ pub(crate) fn grow_object(
     )?;
     let ptr = resolve_handle_idx_with_env(caller, &env, handle_idx)?;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
+    let required_end = (ptr + old_size).max(heap_ptr + new_size);
+    if !crate::runtime_heap::ensure_host_memory_capacity(caller, &env, 0, required_end) {
+        return None;
+    }
     let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
@@ -1433,7 +1441,7 @@ pub(crate) fn number_less_than_bigint(
     // Fallback: f64 超出精确整数范围或非整数很大值
     // 用 BigInt 的 to_f64 近似比较
     let bi_f64_op = bi.to_f64();
-    
+
     match bi_f64_op {
         Some(bi_f64) => {
             if bigint_is_left {
@@ -1488,19 +1496,20 @@ pub(crate) fn to_primitive_with_hint(
         )
         .or_else(|| read_object_property_by_name(caller, ptr, "Symbol.toPrimitive"));
         if let Some(method) = exotic
-            && is_callable_in_runtime(caller, method) {
-                let result = invoke_to_primitive_method_sync(caller, method, val, hint);
-                if value::is_exception(result) {
-                    return result;
-                }
-                if !is_object_like(result) {
-                    return result;
-                }
-                return make_type_error_exception(
-                    caller,
-                    "TypeError: Cannot convert object to primitive value",
-                );
+            && is_callable_in_runtime(caller, method)
+        {
+            let result = invoke_to_primitive_method_sync(caller, method, val, hint);
+            if value::is_exception(result) {
+                return result;
             }
+            if !is_object_like(result) {
+                return result;
+            }
+            return make_type_error_exception(
+                caller,
+                "TypeError: Cannot convert object to primitive value",
+            );
+        }
     }
 
     ordinary_to_primitive(caller, val, hint)
@@ -1727,11 +1736,7 @@ pub(crate) async fn resolve_and_call_async(
         for i in 0..args_count {
             let mut buf = [0u8; 8];
             env.shadow_memory
-                .read(
-                    &mut *caller,
-                    (args_base + i * 8) as usize,
-                    &mut buf,
-                )
+                .read(&mut *caller, (args_base + i * 8) as usize, &mut buf)
                 .unwrap();
             env.shadow_memory
                 .write(
@@ -1871,8 +1876,7 @@ pub(crate) async fn resolve_callable_and_call_async(
         let mut collected_args = Vec::with_capacity(args_count as usize);
         for i in 0..args_count {
             let mut buf = [0u8; 8];
-            let _ =
-                shadow_memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
+            let _ = shadow_memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
             collected_args.push(i64::from_le_bytes(buf));
         }
         return call_native_callable_with_args_from_caller_async(

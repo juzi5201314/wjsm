@@ -23,6 +23,34 @@ pub(crate) fn clear_pending_unhandled_rejection(state: &RuntimeState, handle: us
 /// - 中文 header 引用 2026-05-31 plan、async Store contract（Correction 3：yield 后所有 Wasm entry 必须 async API）、原始 must-convert 列表
 ///
 /// 完成此项后，Phase 3 must-convert audit 列表（eval、resume、host reentrant、microtask+call_host）全部落地，'Phase 1-4 solid' 可被诚实评估。
+fn with_captured_scope_enter(
+    ctx: &mut impl crate::RuntimeStateAccess,
+    scope: Option<crate::CapturedScope>,
+) -> Option<(crate::CapturedScope, Option<crate::FrameId>)> {
+    let scope = scope?;
+    let mut hooks = ctx
+        .state_mut()
+        .async_hooks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prior = hooks.enter_captured_scope(scope);
+    Some((scope, prior))
+}
+
+fn with_captured_scope_exit(
+    ctx: &mut impl crate::RuntimeStateAccess,
+    entered: Option<(crate::CapturedScope, Option<crate::FrameId>)>,
+) {
+    if let Some((scope, prior)) = entered {
+        let mut hooks = ctx
+            .state_mut()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        hooks.exit_captured_scope(scope, prior);
+    }
+}
+
 pub(crate) async fn drain_microtasks_async<
     C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
 >(
@@ -30,6 +58,12 @@ pub(crate) async fn drain_microtasks_async<
     env: &WasmEnv,
 ) {
     loop {
+        if crate::runtime_async_hooks::emit::drain_pending_promise_events(ctx, env).await {
+            return;
+        }
+        if crate::runtime_async_hooks::emit::drain_destroy_queue(ctx, env).await {
+            return;
+        }
         loop {
             let next_tick = {
                 let mut queue = ctx
@@ -42,6 +76,23 @@ pub(crate) async fn drain_microtasks_async<
             let Some(next_tick) = next_tick else {
                 break;
             };
+            let prior = if let Some(scope) = next_tick.scope {
+                let mut hooks = ctx
+                    .state_mut()
+                    .async_hooks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                Some((scope, hooks.enter_captured_scope(scope)))
+            } else {
+                None
+            };
+            if let Some(scope) = next_tick.scope
+                && crate::runtime_async_hooks::emit::emit_before(ctx, env, scope.async_id, false)
+                    .await
+            {
+                return;
+            }
+
             if is_callable_with_env(ctx, env, next_tick.callback) {
                 let _ = call_host_function_with_args_async(
                     ctx,
@@ -52,9 +103,37 @@ pub(crate) async fn drain_microtasks_async<
                 )
                 .await;
             }
+            if let Some(scope) = next_tick.scope
+                && crate::runtime_async_hooks::emit::emit_after(ctx, env, scope.async_id, false)
+                    .await
+            {
+                return;
+            }
+
+            if let Some((scope, prior_frame)) = prior {
+                let mut hooks = ctx
+                    .state_mut()
+                    .async_hooks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                hooks.exit_captured_scope(scope, prior_frame);
+            }
+            if let Some(scope) = next_tick.scope
+                && crate::runtime_async_hooks::emit::emit_destroy(ctx, env, scope.async_id, false)
+                    .await
+            {
+                return;
+            }
+
             if crate::runtime_process::pending_process_exit_signal(ctx.state_mut()).is_some() {
                 return;
             }
+        }
+
+        // setImmediate：nextTick 之后、普通 microtask/timers 之前
+        crate::runtime_node_async_hooks::drain_immediates_async(ctx, env).await;
+        if crate::runtime_process::pending_process_exit_signal(ctx.state_mut()).is_some() {
+            return;
         }
 
         let task = {
@@ -71,64 +150,81 @@ pub(crate) async fn drain_microtasks_async<
                 reaction_type,
                 handler,
                 argument,
+                scope,
             }) => {
-                if handle_combinator_reaction(ctx, env, handler, argument) {
-                    continue;
+                let entered = with_captured_scope_enter(ctx, scope);
+                if let Some(scope) = scope
+                    && crate::runtime_async_hooks::emit::emit_before(ctx, env, scope.async_id, true)
+                        .await
+                {
+                    return;
                 }
-                if handle_finally_await_reaction(ctx, handler, argument, reaction_type) {
-                    continue;
-                }
-                if is_callable_with_env(ctx, env, handler) {
-                    let call_arg = match reaction_type {
-                        ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
-                            value::encode_undefined()
-                        }
-                        _ => argument,
-                    };
-                    match call_host_function_async(ctx, env, handler, call_arg).await {
-                        Some(result) => match reaction_type {
-                            ReactionType::Fulfill | ReactionType::Reject => {
-                                // onFulfilled/onRejected 抛异常时（§27.2.1.3.2 step），
-                                // result promise 应以抛出的值 reject，而非 fulfill 异常值。
-                                if value::is_exception(result) {
-                                    let reason =
-                                        exception_reason_from_state(ctx.state_mut(), result);
-                                    settle_promise(
-                                        ctx.state_mut(),
-                                        promise,
-                                        PromiseSettlement::Reject(reason),
-                                    );
-                                } else {
-                                    resolve_promise(ctx, env, promise, result);
-                                }
-                            }
+
+                let handled_internally = handle_combinator_reaction(ctx, env, handler, argument)
+                    || handle_finally_await_reaction(ctx, handler, argument, reaction_type);
+                if !handled_internally {
+                    if is_callable_with_env(ctx, env, handler) {
+                        let call_arg = match reaction_type {
                             ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
-                                settle_finally_reaction(
-                                    ctx,
-                                    env,
+                                value::encode_undefined()
+                            }
+                            _ => argument,
+                        };
+                        match call_host_function_async(ctx, env, handler, call_arg).await {
+                            Some(result) => match reaction_type {
+                                ReactionType::Fulfill | ReactionType::Reject => {
+                                    // onFulfilled/onRejected 抛异常时（§27.2.1.3.2 step），
+                                    // result promise 应以抛出的值 reject，而非 fulfill 异常值。
+                                    if value::is_exception(result) {
+                                        let reason =
+                                            exception_reason_from_state(ctx.state_mut(), result);
+                                        settle_promise(
+                                            ctx.state_mut(),
+                                            promise,
+                                            PromiseSettlement::Reject(reason),
+                                        );
+                                    } else {
+                                        resolve_promise(ctx, env, promise, result);
+                                    }
+                                }
+                                ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
+                                    settle_finally_reaction(
+                                        ctx,
+                                        env,
+                                        promise,
+                                        argument,
+                                        result,
+                                        reaction_type,
+                                    );
+                                }
+                            },
+                            None => {
+                                let err = runtime_error_value(
+                                    ctx.state_mut(),
+                                    "TypeError: promise reaction handler failed".to_string(),
+                                );
+                                settle_promise(
+                                    ctx.state_mut(),
                                     promise,
-                                    argument,
-                                    result,
-                                    reaction_type,
+                                    PromiseSettlement::Reject(err),
                                 );
                             }
-                        },
-                        None => {
-                            let err = runtime_error_value(
-                                ctx.state_mut(),
-                                "TypeError: promise reaction handler failed".to_string(),
-                            );
-                            settle_promise(
-                                ctx.state_mut(),
-                                promise,
-                                PromiseSettlement::Reject(err),
-                            );
                         }
+                    } else {
+                        let settlement = passive_reaction_settlement(reaction_type, argument);
+                        settle_promise(ctx.state_mut(), promise, settlement);
                     }
-                } else {
-                    let settlement = passive_reaction_settlement(reaction_type, argument);
-                    settle_promise(ctx.state_mut(), promise, settlement);
                 }
+                if crate::runtime_async_hooks::emit::drain_pending_promise_events(ctx, env).await {
+                    return;
+                }
+                if let Some(scope) = scope
+                    && crate::runtime_async_hooks::emit::emit_after(ctx, env, scope.async_id, true)
+                        .await
+                {
+                    return;
+                }
+                with_captured_scope_exit(ctx, entered);
             }
             Some(Microtask::PromiseResolveThenable {
                 promise,
@@ -160,7 +256,8 @@ pub(crate) async fn drain_microtasks_async<
                     }
                 }
             }
-            Some(Microtask::MicrotaskCallback { callback }) => {
+            Some(Microtask::MicrotaskCallback { callback, scope }) => {
+                let entered = with_captured_scope_enter(ctx, scope);
                 if is_callable_with_env(ctx, env, callback) {
                     let _ = call_host_function_with_args_async(
                         ctx,
@@ -171,6 +268,7 @@ pub(crate) async fn drain_microtasks_async<
                     )
                     .await;
                 }
+                with_captured_scope_exit(ctx, entered);
             }
             Some(Microtask::TransformStreamTransform {
                 callback,
@@ -304,7 +402,9 @@ pub(crate) async fn drain_microtasks_async<
                 state,
                 resume_val,
                 completion,
+                scope,
             }) => {
+                let entered = with_captured_scope_enter(ctx, scope);
                 resume_async_function_async(
                     ctx,
                     env,
@@ -315,6 +415,7 @@ pub(crate) async fn drain_microtasks_async<
                     completion,
                 )
                 .await;
+                with_captured_scope_exit(ctx, entered);
             }
             Some(Microtask::CleanupFinalizationRegistry {
                 callback,

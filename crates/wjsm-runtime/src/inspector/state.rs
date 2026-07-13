@@ -198,9 +198,10 @@ impl InspectorInner {
         };
         if let Some(entry) = self.breakpoints.get(&key) {
             if let Some(bp_col) = entry.column
-                && col.saturating_sub(1) != bp_col {
-                    return None;
-                }
+                && col.saturating_sub(1) != bp_col
+            {
+                return None;
+            }
             // 命中断点时清除步进状态。
             self.step_target = None;
             self.step_mode = StepMode::None;

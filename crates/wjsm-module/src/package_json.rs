@@ -18,14 +18,12 @@ pub(crate) struct PackageInfo {
     pub(crate) browser: Option<BrowserField>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum PackageType {
     #[default]
     CommonJs,
     Module,
 }
-
 
 impl PackageType {
     fn from_package_json(value: Option<&Value>) -> Self {

@@ -97,9 +97,7 @@ pub(crate) fn engine_config_key(
 
 /// 获取（或首次创建）与 key 匹配的 Engine。
 pub(crate) fn acquire_engine(key: EngineConfigKey) -> Result<PooledEngine> {
-    let mut pool = ENGINE_POOL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut pool = ENGINE_POOL.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(existing) = pool.get(&key) {
         return Ok(existing.clone());
     }
@@ -107,10 +105,7 @@ pub(crate) fn acquire_engine(key: EngineConfigKey) -> Result<PooledEngine> {
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
     let epoch = EpochController::new(engine.clone());
-    let pooled = PooledEngine {
-        engine,
-        epoch,
-    };
+    let pooled = PooledEngine { engine, epoch };
     pool.insert(key, pooled.clone());
     Ok(pooled)
 }
@@ -177,10 +172,7 @@ impl EpochController {
     /// Some → None 时调用：armed--；到 0 时 ticker 自行阻塞。
     pub fn disarm(&self) {
         let prev = self.armed.fetch_sub(1, Ordering::SeqCst);
-        debug_assert!(
-            prev > 0,
-            "EpochController::disarm with armed==0"
-        );
+        debug_assert!(prev > 0, "EpochController::disarm with armed==0");
     }
 
     fn ensure_ticker(self: &Arc<Self>) {
@@ -201,10 +193,7 @@ impl EpochController {
             {
                 let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 while self.armed.load(Ordering::SeqCst) == 0 {
-                    st = self
-                        .cv
-                        .wait(st)
-                        .unwrap_or_else(|e| e.into_inner());
+                    st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());
                 }
             }
             while self.armed.load(Ordering::SeqCst) > 0 {

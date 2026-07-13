@@ -521,7 +521,7 @@ fn emit_handle_bounds_check(func: &mut Function, handle_local: u32, sentinel: Op
     func.instruction(&WasmInstruction::LocalGet(handle_local));
 }
 
-/// 新 handle 分配前检查：candidate 槽位不得越过 handle 表（止于 barrier 基址）。
+/// 新 handle 分配前检查：candidate 槽位不得越过固定 handle 表。
 fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::LocalGet(candidate_local));
@@ -530,7 +530,11 @@ fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::I32Const(4));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_END));
+    func.instruction(&WasmInstruction::I32Const(
+        constants::GC_BARRIER_EVENT_BUFFER_SIZE as i32,
+    ));
+    func.instruction(&WasmInstruction::I32Sub);
     func.instruction(&WasmInstruction::I32GtU);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::Unreachable);

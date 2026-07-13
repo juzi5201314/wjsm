@@ -4,17 +4,17 @@
 //! runInContext 在 execution_realm 帧内 eval，scope_env = sandbox。
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use wasmtime::{AsContextMut, Caller};
 
+use crate::realm::MicrotaskMode;
 use crate::realm::RealmId;
 use crate::realm_clone::clone_pristine_realm;
 use crate::runtime_encoding::js_string_lossy;
 use crate::runtime_eval::perform_eval_from_caller_async;
-use crate::realm::MicrotaskMode;
 
 use crate::*;
 
@@ -82,7 +82,10 @@ pub(crate) fn create_vm_host_object(caller: &mut Caller<'_, RuntimeState>) -> i6
         ("compileFunction", VmMethodKind::CompileFunction),
         ("scriptRunInContext", VmMethodKind::ScriptRunInContext),
         ("scriptRunInNewContext", VmMethodKind::ScriptRunInNewContext),
-        ("scriptRunInThisContext", VmMethodKind::ScriptRunInThisContext),
+        (
+            "scriptRunInThisContext",
+            VmMethodKind::ScriptRunInThisContext,
+        ),
     ] {
         install_vm_method(caller, obj, name, kind);
     }
@@ -146,7 +149,10 @@ pub(crate) async fn call_vm_method_async(
 /// - `options.parsingContext`：contextified sandbox；未传时绑定当前全局对象
 /// - `options.contextExtensions`：对象环境链（后入者更靠近函数）
 fn compile_function(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
-    let code_val = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let code_val = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let params_val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let options_val = args.get(2).copied().unwrap_or_else(value::encode_undefined);
 
@@ -161,17 +167,13 @@ fn compile_function(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 
     let context_extensions = read_options_object_prop(caller, options_val, "contextExtensions");
 
     // parsingContext 必须是 contextified sandbox（若提供）
-    let (scope_env, _realm_id) = match resolve_compile_scope_env(
-        caller,
-        parsing_context,
-        context_extensions,
-    ) {
-        Ok(v) => v,
-        Err(msg) => return make_type_error_exception(caller, &msg),
-    };
+    let (scope_env, _realm_id) =
+        match resolve_compile_scope_env(caller, parsing_context, context_extensions) {
+            Ok(v) => v,
+            Err(msg) => return make_type_error_exception(caller, &msg),
+        };
 
     // Node: compileFunction 不受 codeGeneration.strings 限制（仅 eval/Function 构造器）
-
 
     let body_stmts = match parse_function_body_stmts(&code) {
         Ok(stmts) => stmts,
@@ -210,7 +212,9 @@ fn read_compile_function_params(
         }
         let name = js_string_lossy(caller, elem);
         if name.is_empty() || !is_simple_ident(&name) {
-            return Err(format!("Invalid parameter name '{name}' for compileFunction"));
+            return Err(format!(
+                "Invalid parameter name '{name}' for compileFunction"
+            ));
         }
         out.push(name);
     }
@@ -249,10 +253,7 @@ fn resolve_compile_scope_env(
     let (base_object_env, realm_id) = if value::is_undefined(parsing_context)
         || value::is_null(parsing_context)
     {
-        let global = caller
-            .data()
-            .js_global_object
-            .load(Ordering::Relaxed);
+        let global = caller.data().js_global_object.load(Ordering::Relaxed);
         let env = if value::is_object(global) || value::is_array(global) {
             global
         } else {
@@ -293,8 +294,7 @@ fn resolve_compile_scope_env(
         if let Some(ptr) = resolve_array_ptr(caller, context_extensions) {
             let len = read_array_length(caller, ptr).unwrap_or(0);
             for i in 0..len {
-                let elem =
-                    read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
+                let elem = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
                 if !value::is_object(elem) && !value::is_array(elem) {
                     return Err("contextExtensions must be an array of objects".to_string());
                 }
@@ -351,7 +351,8 @@ fn resolve_compile_scope_env(
         current_outer = Some(value::encode_scope_record_handle(handle));
     }
 
-    let scope_env = current_outer.ok_or_else(|| "Error: failed to build compile scope".to_string())?;
+    let scope_env =
+        current_outer.ok_or_else(|| "Error: failed to build compile scope".to_string())?;
     Ok((scope_env, realm_id))
 }
 
@@ -446,7 +447,6 @@ fn create_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             .insert(h, realm.id);
     }
     sandbox
-
 }
 
 fn apply_codegen_options(
@@ -476,13 +476,15 @@ fn apply_codegen_options(
         return;
     };
     if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "strings")
-        && value::is_bool(raw) {
-            realm.code_generation.strings = value::decode_bool(raw);
-        }
+        && value::is_bool(raw)
+    {
+        realm.code_generation.strings = value::decode_bool(raw);
+    }
     if let Some(raw) = read_object_property_by_name(caller, cg_ptr, "wasm")
-        && value::is_bool(raw) {
-            realm.code_generation.wasm = value::decode_bool(raw);
-        }
+        && value::is_bool(raw)
+    {
+        realm.code_generation.wasm = value::decode_bool(raw);
+    }
 }
 
 fn apply_microtask_mode_option(
@@ -511,7 +513,6 @@ fn apply_microtask_mode_option(
     }
 }
 
-
 fn is_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let Some(sandbox) = args.first().copied() else {
         return value::encode_bool(false);
@@ -533,10 +534,7 @@ async fn run_in_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> 
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
-    let sandbox = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let sandbox = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let options = args.get(2).copied();
 
     let Some(h) = object_handle_idx(sandbox) else {
@@ -619,51 +617,53 @@ fn install_realm_global_builtins(
 
     let main_global = caller.data().js_global_object.load(Ordering::Relaxed);
     if (value::is_object(main_global) || value::is_array(main_global))
-        && let Some(main_ptr) = resolve_handle(caller, main_global) {
-            // 从主 global 拷贝标准内建（共享函数值；不拷贝用户属性）
-            const NAMES: &[&str] = &[
-                "Array",
-                "Object",
-                "String",
-                "Boolean",
-                "Number",
-                "Symbol",
-                "BigInt",
-                "RegExp",
-                "Error",
-                "TypeError",
-                "RangeError",
-                "SyntaxError",
-                "ReferenceError",
-                "URIError",
-                "EvalError",
-                "AggregateError",
-                "Map",
-                "Set",
-                "WeakMap",
-                "WeakSet",
-                "Promise",
-                "Proxy",
-                "Date",
-                "ArrayBuffer",
-                "DataView",
-                "JSON",
-                "Math",
-                "Reflect",
-                "console",
-                "queueMicrotask",
-                "setTimeout",
-                "clearTimeout",
-                "setInterval",
-                "clearInterval",
-            ];
-            for name in NAMES {
-                if let Some(val) = read_object_property_by_name(caller, main_ptr, name)
-                    && !value::is_undefined(val) {
-                        let _ = define_host_data_property_from_caller(caller, sandbox, name, val);
-                    }
+        && let Some(main_ptr) = resolve_handle(caller, main_global)
+    {
+        // 从主 global 拷贝标准内建（共享函数值；不拷贝用户属性）
+        const NAMES: &[&str] = &[
+            "Array",
+            "Object",
+            "String",
+            "Boolean",
+            "Number",
+            "Symbol",
+            "BigInt",
+            "RegExp",
+            "Error",
+            "TypeError",
+            "RangeError",
+            "SyntaxError",
+            "ReferenceError",
+            "URIError",
+            "EvalError",
+            "AggregateError",
+            "Map",
+            "Set",
+            "WeakMap",
+            "WeakSet",
+            "Promise",
+            "Proxy",
+            "Date",
+            "ArrayBuffer",
+            "DataView",
+            "JSON",
+            "Math",
+            "Reflect",
+            "console",
+            "queueMicrotask",
+            "setTimeout",
+            "clearTimeout",
+            "setInterval",
+            "clearInterval",
+        ];
+        for name in NAMES {
+            if let Some(val) = read_object_property_by_name(caller, main_ptr, name)
+                && !value::is_undefined(val)
+            {
+                let _ = define_host_data_property_from_caller(caller, sandbox, name, val);
             }
         }
+    }
 
     // Function：用可门控的构造器覆盖（codeGeneration.strings）
     let function_val = {
@@ -693,17 +693,16 @@ fn install_realm_global_builtins(
 
     let _ = define_host_data_property_from_caller(caller, sandbox, "globalThis", sandbox);
 
-    // 补齐 node web globals（若主 global 尚未带上）
+    // 每个 realm 都需要自己的 Node host bridge 对象；标准 web global 的存在不能代表
+    // 这些运行时对象已被安装。
     if let Some(ptr) = resolve_handle(caller, sandbox)
-        && read_object_property_by_name(caller, ptr, "queueMicrotask").is_none() {
-            let _ =
-                crate::runtime_node_globals::install_node_web_globals_from_caller(caller, sandbox);
-        }
+        && read_object_property_by_name(caller, ptr, "__wjsm_node_async_hooks").is_none()
+    {
+        let _ = crate::runtime_node_globals::install_node_web_globals_from_caller(caller, sandbox);
+    }
 
     Ok(())
 }
-
-
 
 async fn run_in_this_context(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let code_val = args
@@ -762,11 +761,7 @@ async fn eval_in_realm(
         .data()
         .execution_realm
         .swap(realm_id.0, Ordering::Relaxed);
-    let prev_array = env
-        .array_proto_handle
-        .get(&mut *caller)
-        .i32()
-        .unwrap_or(-1);
+    let prev_array = env.array_proto_handle.get(&mut *caller).i32().unwrap_or(-1);
     let prev_object = env
         .object_proto_handle
         .get(&mut *caller)
@@ -816,20 +811,19 @@ async fn eval_in_realm(
                 || msg.contains("interrupt")
                 || msg.contains("timed out")
                 || msg.contains("timeout"))
-            {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = None;
-                return make_type_error_exception(caller, "Error: Script execution timed out.");
-            }
+        {
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = None;
+            return make_type_error_exception(caller, "Error: Script execution timed out.");
+        }
     }
     // 仅 microtaskMode === "afterEvaluate" 时在 run 边界 drain 到稳态
-    if drain_after
-        && let Some(env) = WasmEnv::from_caller(caller) {
-            let _ = drain_microtasks_after_eval(caller, &env).await;
-        }
+    if drain_after && let Some(env) = WasmEnv::from_caller(caller) {
+        let _ = drain_microtasks_after_eval(caller, &env).await;
+    }
 
     if value::is_exception(result) {
         // 解释器路径可能以 exception 抛出 timeout 文案
@@ -911,9 +905,7 @@ fn arm_vm_timeout(caller: &mut Caller<'_, RuntimeState>, timeout_ms: u64) -> VmT
         *slot = Some(deadline);
         was_none
     };
-    if did_arm
-        && let Some(ctrl) = caller.data().epoch_controller.as_ref()
-    {
+    if did_arm && let Some(ctrl) = caller.data().epoch_controller.as_ref() {
         ctrl.arm();
     }
     // 确保下一 epoch tick 立刻检查本 Store。
@@ -936,7 +928,8 @@ impl VmTimeoutGuard {
             *slot = None;
             was
         };
-        if was_some && self.did_arm
+        if was_some
+            && self.did_arm
             && let Some(ctrl) = caller.data().epoch_controller.as_ref()
         {
             ctrl.disarm();

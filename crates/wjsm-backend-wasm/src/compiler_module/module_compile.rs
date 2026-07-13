@@ -348,7 +348,7 @@ impl Compiler {
                 alloc_ptr: object_heap_start as i32,
                 alloc_end: object_heap_start as i32,
                 gc_alloc_bytes: 0,
-                gc_trigger_bytes: 256 * 1024,
+                gc_trigger_bytes: constants::GC_INITIAL_TRIGGER_BYTES as i32,
                 gc_phase: 0,
                 good_color: 0,
                 barrier_buf_ptr: barrier_event_buf_base as i32,

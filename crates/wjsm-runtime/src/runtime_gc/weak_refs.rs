@@ -12,6 +12,22 @@ pub fn process_weak_refs_after_sweep(ctx: &mut GcContext, freed_handles: &[Handl
     }
     let freed: HashSet<u32> = freed_handles.iter().copied().collect();
     ctx.with_state(|st| {
+        st.async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .queue_auto_destroy_for_freed(&freed);
+        {
+            let mut table = st.promise_table.lock().unwrap_or_else(|e| e.into_inner());
+            for &handle in &freed {
+                if let Some(entry) = table.get_mut(handle as usize) {
+                    *entry = crate::PromiseEntry::empty();
+                }
+            }
+        }
+        st.pending_unhandled_rejections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|handle| !freed.contains(&(*handle as u32)));
         {
             let mut table = st.weakref_table.lock().expect("weakref table mutex");
             for entry in table.iter_mut() {
@@ -111,79 +127,89 @@ pub fn cleanup_stream_tables_after_sweep(ctx: &mut GcContext, freed_handles: &[H
                     // readable_stream
                     if let Ok(inner) = st.readable_stream_table.inner.lock()
                         && let Some(entry) = inner.get(handle as usize)
-                            && let Some(ctrl_h) = entry.controller_handle
-                                && visited.insert(ctrl_h) {
-                                    worklist.push((2, ctrl_h));
-                                }
+                        && let Some(ctrl_h) = entry.controller_handle
+                        && visited.insert(ctrl_h)
+                    {
+                        worklist.push((2, ctrl_h));
+                    }
                 }
                 1 => {
                     // reader
                     if let Ok(inner) = st.reader_table.inner.lock()
-                        && let Some(entry) = inner.get(handle as usize) {
-                            let stream_h = entry.stream_handle;
-                            if visited.insert(stream_h) {
-                                worklist.push((0, stream_h));
-                            }
+                        && let Some(entry) = inner.get(handle as usize)
+                    {
+                        let stream_h = entry.stream_handle;
+                        if visited.insert(stream_h) {
+                            worklist.push((0, stream_h));
                         }
+                    }
                 }
                 2 => {
                     // controller
                     if let Ok(inner) = st.stream_controller_table.inner.lock()
-                        && let Some(entry) = inner.get(handle as usize) {
-                            let stream_h = entry.stream_handle;
-                            if visited.insert(stream_h) {
-                                worklist.push((0, stream_h));
-                            }
-                            if let Some(byob_h) = entry.active_byob_request
-                                && visited.insert(byob_h) {
-                                    worklist.push((3, byob_h));
-                                }
+                        && let Some(entry) = inner.get(handle as usize)
+                    {
+                        let stream_h = entry.stream_handle;
+                        if visited.insert(stream_h) {
+                            worklist.push((0, stream_h));
                         }
+                        if let Some(byob_h) = entry.active_byob_request
+                            && visited.insert(byob_h)
+                        {
+                            worklist.push((3, byob_h));
+                        }
+                    }
                 }
                 3 => {
                     // byob
                     if let Ok(inner) = st.byob_request_table.inner.lock()
-                        && let Some(entry) = inner.get(handle as usize) {
-                            if visited.insert(entry.controller_handle) {
-                                worklist.push((2, entry.controller_handle));
-                            }
-                            if visited.insert(entry.reader_handle) {
-                                worklist.push((1, entry.reader_handle));
-                            }
+                        && let Some(entry) = inner.get(handle as usize)
+                    {
+                        if visited.insert(entry.controller_handle) {
+                            worklist.push((2, entry.controller_handle));
                         }
+                        if visited.insert(entry.reader_handle) {
+                            worklist.push((1, entry.reader_handle));
+                        }
+                    }
                 }
                 4 => {
                     // writable_stream
                     if let Ok(inner) = st.writable_stream_table.inner.lock()
                         && let Some(entry) = inner.get(handle as usize)
-                            && let Some(ctrl_h) = entry.controller_handle
-                                && visited.insert(ctrl_h) {
-                                    worklist.push((2, ctrl_h));
-                                }
+                        && let Some(ctrl_h) = entry.controller_handle
+                        && visited.insert(ctrl_h)
+                    {
+                        worklist.push((2, ctrl_h));
+                    }
                 }
                 5 => {
                     // writer
                     if let Ok(inner) = st.writer_table.inner.lock()
-                        && let Some(entry) = inner.get(handle as usize) {
-                            let writable_h = entry.writable_stream_handle;
-                            if visited.insert(writable_h) {
-                                worklist.push((4, writable_h));
-                            }
+                        && let Some(entry) = inner.get(handle as usize)
+                    {
+                        let writable_h = entry.writable_stream_handle;
+                        if visited.insert(writable_h) {
+                            worklist.push((4, writable_h));
                         }
+                    }
                 }
                 6 => {
                     // transform_stream
                     if let Ok(inner) = st.transform_stream_table.inner.lock()
-                        && let Some(entry) = inner.get(handle as usize) {
-                            if let Some(readable_h) = entry.readable_stream_handle
-                                && visited.insert(readable_h) {
-                                    worklist.push((0, readable_h));
-                                }
-                            if let Some(writable_h) = entry.writable_stream_handle
-                                && visited.insert(writable_h) {
-                                    worklist.push((4, writable_h));
-                                }
+                        && let Some(entry) = inner.get(handle as usize)
+                    {
+                        if let Some(readable_h) = entry.readable_stream_handle
+                            && visited.insert(readable_h)
+                        {
+                            worklist.push((0, readable_h));
                         }
+                        if let Some(writable_h) = entry.writable_stream_handle
+                            && visited.insert(writable_h)
+                        {
+                            worklist.push((4, writable_h));
+                        }
+                    }
                 }
                 _ => {}
             }

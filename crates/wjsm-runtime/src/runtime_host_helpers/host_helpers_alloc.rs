@@ -38,19 +38,20 @@ pub(crate) fn array_species_constructor(
     let mut constructor = read_object_property_by_name(caller, exemplar_ptr, "constructor")
         .unwrap_or_else(value::encode_undefined);
     if value::is_object(constructor)
-        && let Some(ctor_ptr) = resolve_handle(caller, constructor) {
-            let species = read_object_property_by_name_id(
-                caller,
-                ctor_ptr,
-                encode_symbol_name_id(WELL_KNOWN_SYMBOL_SPECIES),
-            )
-            .unwrap_or_else(value::encode_undefined);
-            if value::is_null(species) {
-                constructor = value::encode_undefined();
-            } else if !value::is_undefined(species) {
-                constructor = species;
-            }
+        && let Some(ctor_ptr) = resolve_handle(caller, constructor)
+    {
+        let species = read_object_property_by_name_id(
+            caller,
+            ctor_ptr,
+            encode_symbol_name_id(WELL_KNOWN_SYMBOL_SPECIES),
+        )
+        .unwrap_or_else(value::encode_undefined);
+        if value::is_null(species) {
+            constructor = value::encode_undefined();
+        } else if !value::is_undefined(species) {
+            constructor = species;
         }
+    }
     if value::is_undefined(constructor) {
         default_ctor
     } else {

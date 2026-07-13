@@ -8,21 +8,14 @@ use super::ipc::IpcMessage;
 use super::make_type_error_exception;
 use super::spawn_async::handle_arg;
 
-pub(super) fn ipc_payload_to_js(
-    store: &mut Store<RuntimeState>,
-    env: &WasmEnv,
-    text: &str,
-) -> i64 {
+pub(super) fn ipc_payload_to_js(store: &mut Store<RuntimeState>, env: &WasmEnv, text: &str) -> i64 {
     match crate::runtime_json::parse_json_text(text) {
         Ok(jv) => crate::runtime_json::build_wasm_value_with_env(store, env, &jv),
         Err(_) => store_runtime_string_in_state(store.data(), text.to_string()),
     }
 }
 
-pub(super) fn ipc_payload_to_js_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    text: &str,
-) -> i64 {
+pub(super) fn ipc_payload_to_js_caller(caller: &mut Caller<'_, RuntimeState>, text: &str) -> i64 {
     match crate::runtime_json::parse_json_text(text) {
         Ok(jv) => {
             let env = WasmEnv::from_caller(caller).expect("WasmEnv");
@@ -36,6 +29,7 @@ fn queue_child_messages_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callback: i64,
     messages: Vec<IpcMessage>,
+    scope: Option<crate::CapturedScope>,
 ) {
     for msg in messages {
         let payload = ipc_payload_to_js_caller(caller, &msg.payload);
@@ -51,6 +45,7 @@ fn queue_child_messages_caller(
             .push_back(ProcessNextTickTask {
                 callback,
                 args: vec![payload, fd_val],
+                scope,
             });
     }
 }
@@ -59,11 +54,8 @@ pub(super) fn child_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[i6
     let Some(handle) = handle_arg(args.first().copied()) else {
         return make_type_error_exception(caller, "childOnMessage: invalid id");
     };
-    let callback = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
-    {
+    let callback = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+    let scope = {
         let mut map = caller
             .data()
             .child_bindings
@@ -74,7 +66,8 @@ pub(super) fn child_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[i6
         };
         binding.message_cb = Some(callback);
         binding.message_cb_ready = false;
-    }
+        binding.scope
+    };
     // 同一把锁内：pending 为空则 ready=true，否则取出 pending 并保持 ready=false。
     // 禁止在锁外把 ready 置 true，否则 drain 会在 ready=false 窗口把 inbox 塞进 pending，
     // 随后 ready=true 却永不 drain pending → IPC 消息永久丢失 → cluster queryServer 挂死。
@@ -100,17 +93,13 @@ pub(super) fn child_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[i6
         if pending.is_empty() {
             break;
         }
-        queue_child_messages_caller(caller, callback, pending);
+        queue_child_messages_caller(caller, callback, pending, scope);
     }
     value::encode_undefined()
 }
 
-pub(crate) fn drain_child_messages(
-    store: &mut Store<RuntimeState>,
-    env: &WasmEnv,
-    handle: u32,
-) {
-    let (messages, callback) = {
+pub(crate) fn drain_child_messages(store: &mut Store<RuntimeState>, env: &WasmEnv, handle: u32) {
+    let (messages, callback, scope) = {
         let endpoint = {
             let inner = store
                 .data()
@@ -146,11 +135,11 @@ pub(crate) fn drain_child_messages(
         }
         // ready：必须合并可能残留的 pending（防止历史窗口丢消息），再投递
         if binding.pending_messages.is_empty() {
-            (messages, callback)
+            (messages, callback, binding.scope)
         } else {
             let mut pending = std::mem::take(&mut binding.pending_messages);
             pending.append(&mut messages);
-            (pending, callback)
+            (pending, callback, binding.scope)
         }
     };
     for msg in messages {
@@ -167,6 +156,7 @@ pub(crate) fn drain_child_messages(
             .push_back(ProcessNextTickTask {
                 callback,
                 args: vec![payload, fd_val],
+                scope,
             });
     }
 }

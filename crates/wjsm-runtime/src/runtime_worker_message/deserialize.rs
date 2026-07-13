@@ -8,9 +8,7 @@ use wasmtime::{AsContext, AsContextMut};
 
 use crate::runtime_buffer::create_buffer_from_bytes_with_env;
 use crate::runtime_render::store_runtime_string_in_state;
-use crate::runtime_worker_message::{
-    MESSAGE_PORT_ID_PROP, SAB_HANDLE_PROP, SerializedValue,
-};
+use crate::runtime_worker_message::{MESSAGE_PORT_ID_PROP, SAB_HANDLE_PROP, SerializedValue};
 use crate::*;
 
 struct DeCtx {
@@ -101,8 +99,7 @@ fn deserialize_one<C: AsContextMut<Data = RuntimeState>>(
             cx.memo.insert(*id, obj);
             obj
         }
-        SerializedValue::Buffer { id, bytes }
-        | SerializedValue::TypedArray { id, bytes, .. } => {
+        SerializedValue::Buffer { id, bytes } | SerializedValue::TypedArray { id, bytes, .. } => {
             let obj = create_buffer_from_bytes_with_env(ctx, env, bytes.clone());
             cx.memo.insert(*id, obj);
             obj
@@ -255,8 +252,7 @@ fn create_date_with_env<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
     let get_time = create_date_method(ctx.as_context().data(), DateMethodKind::GetTime);
-    let _ =
-        define_host_data_property_with_env(ctx, env, obj, "__date_ms__", value::encode_f64(ms));
+    let _ = define_host_data_property_with_env(ctx, env, obj, "__date_ms__", value::encode_f64(ms));
     let _ = define_host_data_property_with_env(ctx, env, obj, "getTime", get_time);
     obj
 }
@@ -323,11 +319,7 @@ fn materialize_sab_with_env<C: AsContextMut<Data = RuntimeState>>(
         let Some(entry) = table.get(handle as usize) else {
             return value::encode_undefined();
         };
-        (
-            entry.byte_length,
-            entry.growable(),
-            entry.max_byte_length(),
-        )
+        (entry.byte_length, entry.growable(), entry.max_byte_length())
     };
     let obj = alloc_host_object(ctx, env, 4);
     let _ = define_host_data_property_with_env(

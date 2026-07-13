@@ -2057,10 +2057,10 @@ pub(crate) fn define_collections_buffers(
 
             caller.data().truncate_host_temp_roots(temp_root_len);
             // 永久 root：事件循环回调之间 main local 可能不在栈上。
-            caller.data().js_global_object.store(
-                obj,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            caller
+                .data()
+                .js_global_object
+                .store(obj, std::sync::atomic::Ordering::Relaxed);
             obj
         });
     linker.define(

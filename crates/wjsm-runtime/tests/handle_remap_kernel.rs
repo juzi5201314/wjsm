@@ -56,7 +56,9 @@ fn read_proto(heap: &[u8]) -> u32 {
 }
 
 fn slot_value_off(slot: usize) -> usize {
-    HEAP_OBJECT_HEADER_SIZE as usize + slot * PROP_SLOT_SIZE as usize + PROP_SLOT_VALUE_OFFSET as usize
+    HEAP_OBJECT_HEADER_SIZE as usize
+        + slot * PROP_SLOT_SIZE as usize
+        + PROP_SLOT_VALUE_OFFSET as usize
 }
 
 fn slot_getter_off(slot: usize) -> usize {
@@ -200,11 +202,7 @@ fn legacy_remap_api_delegates_to_walker() -> anyhow::Result<()> {
     let table_len = 2u32;
     let current_base = 200u32;
     let mut heap = alloc_object_heap(1, u32::MAX);
-    write_data_prop(
-        &mut heap,
-        0,
-        value::encode_function_idx(snapshot_base + 1),
-    );
+    write_data_prop(&mut heap, 0, value::encode_function_idx(snapshot_base + 1));
     remap_array_proto_function_indices(&mut heap, snapshot_base, table_len, current_base)?;
     assert_eq!(
         value::decode_function_idx(read_i64(&heap, slot_value_off(0))),

@@ -40,7 +40,6 @@ impl Compiler {
         self.function_table.push(wasm_idx);
     }
 
-
     pub(crate) fn new_with_layout(mode: CompileMode, data_base: u32, table_base: u32) -> Self {
         let types = crate::shared_types::build_shared_type_section();
         let mut imports = ImportSection::new();

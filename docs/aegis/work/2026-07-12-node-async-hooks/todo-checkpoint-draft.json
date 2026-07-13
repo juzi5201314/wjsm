@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-12-node-async-hooks",
+  "currentTodo": "Documentation slice complete; await implementation Phase 0",
+  "completedTodos": [
+    "Wrote design spec docs/aegis/specs/2026-07-12-node-async-hooks-design.md",
+    "Wrote plan docs/aegis/plans/2026-07-12-node-async-hooks.md",
+    "Created work lifecycle docs/aegis/work/2026-07-12-node-async-hooks/"
+  ],
+  "activeSlice": "documentation-complete",
+  "evidenceRefs": [
+    "docs/aegis/specs/2026-07-12-node-async-hooks-design.md",
+    "docs/aegis/plans/2026-07-12-node-async-hooks.md"
+  ],
+  "blockedOn": null,
+  "nextStep": "Implement Task 0.1 AsyncHooksState per plan (separate execution session)",
+  "updatedAt": "2026-07-12"
+}

@@ -17,6 +17,11 @@ impl RuntimeStateAccess for Store<RuntimeState> {
     }
 }
 
+fn capture_microtask_scope(state: &RuntimeState) -> Option<crate::CapturedScope> {
+    let mut hooks = state.async_hooks.lock().unwrap_or_else(|e| e.into_inner());
+    hooks.capture_for_scheduled_callback(0, false)
+}
+
 pub(crate) fn promise_entry_mut(
     table: &mut [PromiseEntry],
     handle: usize,
@@ -120,10 +125,41 @@ pub(crate) fn create_promise_resolving_functions(state: &RuntimeState, promise: 
 
 pub(crate) fn alloc_promise_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
-    entry: PromiseEntry,
+    mut entry: PromiseEntry,
 ) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let promise = alloc_host_object(caller, &env, 0);
+    let temp_root_len = caller.data().push_host_temp_roots([promise]);
+    if entry.capture_scope.is_none() {
+        let cached_type = caller
+            .data()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .promise_type_value();
+        let type_value = cached_type.unwrap_or_else(|| {
+            let value = store_runtime_string(caller, "PROMISE".to_string());
+            caller
+                .data()
+                .async_hooks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_promise_type_value(value);
+            value
+        });
+        let mut hooks = caller
+            .data()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        entry.capture_scope = hooks.capture_promise_scope(promise, None);
+        if let Some(scope) = entry.capture_scope {
+            hooks.queue_promise_event(crate::runtime_async_hooks::PendingPromiseHookEvent::Init {
+                scope,
+                type_value,
+            });
+        }
+    }
     if value::is_object(promise) {
         if !value::is_object(caller.data().promise_prototype) {
             crate::runtime_heap::ensure_promise_prototype_initialized(caller, &env);
@@ -140,6 +176,7 @@ pub(crate) fn alloc_promise_from_caller(
             .unwrap_or_else(|e| e.into_inner());
         insert_promise_entry(&mut table, handle, entry);
     }
+    caller.data().truncate_host_temp_roots(temp_root_len);
     promise
 }
 
@@ -280,12 +317,29 @@ pub(crate) fn queue_promise_reactions(
     reactions: Vec<PromiseReaction>,
     value: i64,
     is_rejected: bool,
+    promise_scope: Option<crate::CapturedScope>,
 ) {
+    let scoped_reactions = {
+        let table = state
+            .promise_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reactions
+            .into_iter()
+            .map(|reaction| {
+                let scope = promise_entry(&table, reaction.target_promise as usize)
+                    .and_then(|entry| entry.capture_scope)
+                    .or(promise_scope)
+                    .or_else(|| capture_microtask_scope(state));
+                (reaction, scope)
+            })
+            .collect::<Vec<_>>()
+    };
     let mut queue = state
         .microtask_queue
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    for reaction in reactions {
+    for (reaction, scope) in scoped_reactions {
         match reaction.kind {
             PromiseReactionKind::AsyncResume {
                 fn_table_idx,
@@ -297,6 +351,7 @@ pub(crate) fn queue_promise_reactions(
                     state: resume_state,
                     resume_val: value,
                     completion: if is_rejected { 1 } else { 0 },
+                    scope,
                 });
             }
             PromiseReactionKind::Normal { handler } => {
@@ -305,6 +360,7 @@ pub(crate) fn queue_promise_reactions(
                     reaction_type: reaction.reaction_type,
                     handler,
                     argument: value,
+                    scope,
                 });
             }
         }
@@ -313,7 +369,7 @@ pub(crate) fn queue_promise_reactions(
 
 pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: PromiseSettlement) {
     let handle = raw_promise_handle(promise);
-    let (reactions, value, is_rejected) = {
+    let (reactions, value, is_rejected, promise_scope) = {
         let mut table = state
             .promise_table
             .lock()
@@ -324,11 +380,12 @@ pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: Pro
         if !matches!(entry.state, PromiseState::Pending) {
             return;
         }
+        let promise_scope = entry.capture_scope;
         match settlement {
             PromiseSettlement::Fulfill(value) => {
                 let reactions = std::mem::take(&mut entry.fulfill_reactions);
                 entry.state = PromiseState::Fulfilled(value);
-                (reactions, value, false)
+                (reactions, value, false, promise_scope)
             }
             PromiseSettlement::Reject(reason) => {
                 if !entry.handled {
@@ -340,11 +397,22 @@ pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: Pro
                 }
                 let reactions = std::mem::take(&mut entry.reject_reactions);
                 entry.state = PromiseState::Rejected(reason);
-                (reactions, reason, true)
+                (reactions, reason, true, promise_scope)
             }
         }
     };
-    queue_promise_reactions(state, reactions, value, is_rejected);
+    if let Some(scope) = promise_scope {
+        state
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .queue_promise_event(
+                crate::runtime_async_hooks::PendingPromiseHookEvent::Resolve {
+                    async_id: scope.async_id,
+                },
+            );
+    }
+    queue_promise_reactions(state, reactions, value, is_rejected, promise_scope);
 }
 
 pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
@@ -392,6 +460,7 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
             reaction_type,
             handler: value::encode_undefined(),
             argument,
+            scope: capture_microtask_scope(state),
         });
     }
 }
@@ -481,9 +550,42 @@ pub(crate) fn is_thenable_value<C: AsContextMut<Data = RuntimeState> + RuntimeSt
 pub(crate) fn alloc_promise_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
     ctx: &mut C,
     env: &WasmEnv,
-    entry: PromiseEntry,
+    mut entry: PromiseEntry,
 ) -> i64 {
     let promise = alloc_object_with_env(ctx, env, 0);
+    let temp_root_len = ctx.state_mut().push_host_temp_roots([promise]);
+    if entry.capture_scope.is_none() {
+        let cached_type = ctx
+            .state_mut()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .promise_type_value();
+        let type_value = cached_type.unwrap_or_else(|| {
+            let value = crate::runtime_render::store_runtime_string_in_state(
+                ctx.state_mut(),
+                "PROMISE".to_string(),
+            );
+            ctx.state_mut()
+                .async_hooks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_promise_type_value(value);
+            value
+        });
+        let mut hooks = ctx
+            .state_mut()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        entry.capture_scope = hooks.capture_promise_scope(promise, None);
+        if let Some(scope) = entry.capture_scope {
+            hooks.queue_promise_event(crate::runtime_async_hooks::PendingPromiseHookEvent::Init {
+                scope,
+                type_value,
+            });
+        }
+    }
     if value::is_object(promise) {
         if !value::is_object(ctx.as_context().data().promise_prototype) {
             crate::runtime_heap::ensure_promise_prototype_initialized(ctx, env);
@@ -500,6 +602,7 @@ pub(crate) fn alloc_promise_with_env<C: AsContextMut<Data = RuntimeState> + Runt
             .unwrap_or_else(|e| e.into_inner());
         insert_promise_entry(&mut table, handle, entry);
     }
+    ctx.state_mut().truncate_host_temp_roots(temp_root_len);
     promise
 }
 

@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+bind udp-context
+message udp-context
+reply udp-context
+--- stderr ---

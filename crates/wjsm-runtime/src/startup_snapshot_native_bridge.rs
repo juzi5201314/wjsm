@@ -5,11 +5,11 @@ use anyhow::{Result, bail};
 use crate::runtime_node_child_process::ChildProcessMethodKind;
 use crate::runtime_node_dgram::DgramMethodKind;
 use crate::runtime_node_fs::FsMethodKind;
+use crate::runtime_node_net::NetMethodKind;
 use crate::runtime_node_tls::TlsMethodKind;
+use crate::runtime_node_vm::VmMethodKind;
 use crate::runtime_node_worker_threads::WorkerThreadsMethodKind;
 use crate::runtime_node_zlib::ZlibMethodKind;
-use crate::runtime_node_net::NetMethodKind;
-use crate::runtime_node_vm::VmMethodKind;
 use crate::types::{NativeCallable, OsInfoKind, TypedArrayConstructorKind};
 use wjsm_snapshot_format::SnapshotNativeCallable;
 
@@ -238,6 +238,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::ChildProcessMethod { kind: _ } => Self::ChildProcessMethod,
             NativeCallable::NetMethod { kind: _ } => Self::NetMethod,
             NativeCallable::VmMethod { kind: _ } => Self::VmMethod,
+            // AsyncHooksMethod 含动态 ALS 状态，禁止入 snapshot
             NativeCallable::DgramMethod { kind: _ } => Self::DgramMethod,
             NativeCallable::TlsMethod { kind: _ } => Self::TlsMethod,
             NativeCallable::WorkerThreadsMethod { kind: _ } => Self::WorkerThreadsMethod,
@@ -246,6 +247,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             | NativeCallable::CjsRequireResolvePaths { .. }
             | NativeCallable::ImportMetaResolve { .. }
             | NativeCallable::CjsRequireCacheTrap { .. }
+            | NativeCallable::AsyncHooksMethod { .. }
             | NativeCallable::CryptoMethod { .. }
             | NativeCallable::CryptoDigestMethod { .. }
             | NativeCallable::StringPrimitiveMethod { .. }

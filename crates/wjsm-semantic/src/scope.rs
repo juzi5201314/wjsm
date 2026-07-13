@@ -4,6 +4,7 @@
 pub(crate) enum ScopeKind {
     Block,
     Function,
+    Module,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,7 +116,7 @@ impl ScopeTree {
         initialised: bool,
     ) -> Result<usize, String> {
         let target_idx = match kind {
-            VarKind::Var => self.nearest_function_scope()?,
+            VarKind::Var => self.nearest_var_scope()?,
             VarKind::Let | VarKind::Const => self.current,
         };
 
@@ -264,6 +265,22 @@ impl ScopeTree {
                 Some(parent) => cursor = parent,
                 None => return Err(format!("undeclared identifier `{name}`")),
             }
+        }
+    }
+
+    /// 返回最近的 var 声明作用域。模块顶层与函数体都拥有独立 var 环境。
+    fn nearest_var_scope(&self) -> Result<usize, String> {
+        let mut cursor = self.current;
+        loop {
+            if matches!(
+                self.arenas[cursor].kind,
+                ScopeKind::Function | ScopeKind::Module
+            ) {
+                return Ok(cursor);
+            }
+            cursor = self.arenas[cursor]
+                .parent
+                .ok_or_else(|| "root must be a var scope".to_string())?;
         }
     }
 

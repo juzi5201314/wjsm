@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "baselineRefs": [
+    "docs/aegis/specs/2026-07-12-node-async-hooks-design.md",
+    "docs/aegis/plans/2026-07-12-node-async-hooks.md"
+  ],
+  "impactStatement": "docs/aegis/work/2026-07-12-node-async-hooks/impact-statement-draft.json",
+  "compatPlan": "Node v24.15 public API; no withScope; no fake providers; zero-overhead when hooks/ALS off; do not close #313.",
+  "retirementPlan": "no old async_hooks stub; issue non-goal remains historical text with override",
+  "evidenceBundle": [
+    "docs/aegis/work/2026-07-12-node-async-hooks/evidence-bundle-draft-design-spec.json",
+    "docs/aegis/work/2026-07-12-node-async-hooks/evidence-bundle-draft-implementation-plan.json"
+  ]
+}

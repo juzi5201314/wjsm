@@ -37,7 +37,6 @@ pub(crate) fn make_eval_error_exception(caller: &mut Caller<'_, RuntimeState>, m
     make_error_exception(caller, "EvalError", msg)
 }
 
-
 fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
     let error_obj = create_error_object(caller, error_name, msg_val, value::encode_undefined());

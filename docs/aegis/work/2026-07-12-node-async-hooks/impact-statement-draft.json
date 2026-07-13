@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "affectedLayers": [
+    "runtime",
+    "module-builtins"
+  ],
+  "owners": [
+    "runtime_async_hooks + node_async_hooks.js"
+  ],
+  "invariants": [
+    "Single AsyncHooksState per Store; all callback boundaries use scope helpers; Workers isolated; vm shares Store hooks."
+  ],
+  "compatBoundary": "Node v24.15 public API; no withScope; no fake providers; zero-overhead when hooks/ALS off; do not close #313.",
+  "nonGoals": [
+    "withScope; domain module; perf_hooks full; inventing providers for missing subsystems; production code in this docs slice."
+  ]
+}

@@ -42,6 +42,22 @@ pub(crate) fn install_node_web_globals_from_caller(
         "queueMicrotask",
         NativeCallable::QueueMicrotask,
     );
+    install_native(
+        caller,
+        global_obj,
+        "setImmediate",
+        NativeCallable::AsyncHooksMethod {
+            kind: crate::runtime_node_async_hooks::AsyncHooksMethodKind::SetImmediate,
+        },
+    );
+    install_native(
+        caller,
+        global_obj,
+        "clearImmediate",
+        NativeCallable::AsyncHooksMethod {
+            kind: crate::runtime_node_async_hooks::AsyncHooksMethodKind::ClearImmediate,
+        },
+    );
     install_native(caller, global_obj, "atob", NativeCallable::Atob);
     install_native(caller, global_obj, "btoa", NativeCallable::Btoa);
 
@@ -148,6 +164,10 @@ pub(crate) fn install_node_web_globals_from_caller(
     let vm = crate::runtime_node_vm::create_vm_host_object(caller);
     let _ = caller.data().push_host_temp_roots([vm]);
     define_global(caller, global_obj, "__wjsm_node_vm", vm);
+
+    let async_hooks = crate::runtime_node_async_hooks::create_async_hooks_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([async_hooks]);
+    define_global(caller, global_obj, "__wjsm_node_async_hooks", async_hooks);
 
     let dgram = crate::runtime_node_dgram::create_dgram_host_object(caller);
     let _ = caller.data().push_host_temp_roots([dgram]);
@@ -327,12 +347,20 @@ pub(crate) fn call_queue_microtask(caller: &mut Caller<'_, RuntimeState>, args: 
     if !is_callable_in_runtime(caller, callback) {
         return make_type_error_exception(caller, "queueMicrotask callback must be a function");
     }
+    let scope = {
+        let mut hooks = caller
+            .data()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        hooks.capture_for_scheduled_callback(0, true)
+    };
     let mut queue = caller
         .data()
         .microtask_queue
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    queue.push_back(Microtask::MicrotaskCallback { callback });
+    queue.push_back(Microtask::MicrotaskCallback { callback, scope });
     value::encode_undefined()
 }
 

@@ -619,7 +619,10 @@ fn record_and_attach_gc_heap(
     enforce_heap_limit(store, wasm_env)?;
     let (_, attached_dynamic_heap_start, _) = store.data().heap_layout_boundaries();
     if let Some(global) = wasm_env.gc_trigger_bytes {
-        global.set(&mut *store, Val::I32(256 * 1024))?;
+        global.set(
+            &mut *store,
+            Val::I32(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES as i32),
+        )?;
     }
 
     let gc_arc = store.data().gc_algorithm.clone();
@@ -642,19 +645,15 @@ pub(super) async fn setup_shared_env_and_support(
 
     // 独立影子栈 memory：冷启动 1 页，软上限来自 RuntimeOptions。
     let soft_max = store.data().shadow_stack_max();
-    let initial_pages =
-        (wjsm_ir::SHADOW_STACK_INITIAL_SIZE as u64).div_ceil(65536).max(1) as u32;
+    let initial_pages = (wjsm_ir::SHADOW_STACK_INITIAL_SIZE as u64)
+        .div_ceil(65536)
+        .max(1) as u32;
     let max_pages = ((soft_max as u64).div_ceil(65536).max(initial_pages as u64)) as u32;
     let shadow_memory = Memory::new(
         &mut *store,
         MemoryType::new(initial_pages, Some(max_pages.max(initial_pages))),
     )?;
-    linker.define(
-        &*store,
-        "env",
-        wjsm_ir::SHADOW_MEMORY_NAME,
-        shadow_memory,
-    )?;
+    linker.define(&*store, "env", wjsm_ir::SHADOW_MEMORY_NAME, shadow_memory)?;
 
     // 创建 shared funcref table。
     // 间接调用 / 闭包 / 方法表会写入 element section；cluster+net 等大型 builtin
@@ -694,7 +693,11 @@ pub(super) async fn setup_shared_env_and_support(
         ("__alloc_ptr", ValType::I32, Val::I32(0)),
         ("__alloc_end", ValType::I32, Val::I32(0)),
         ("__gc_alloc_bytes", ValType::I32, Val::I32(0)),
-        ("__gc_trigger_bytes", ValType::I32, Val::I32(256 * 1024)),
+        (
+            "__gc_trigger_bytes",
+            ValType::I32,
+            Val::I32(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES as i32),
+        ),
         ("__gc_phase", ValType::I32, Val::I32(0)),
         ("__good_color", ValType::I32, Val::I32(0)),
         ("__barrier_buf_ptr", ValType::I32, Val::I32(0)),
@@ -894,10 +897,7 @@ pub(super) async fn try_restore_snapshot(
         }
         return false;
     }
-    crate::runtime_heap::ensure_function_prototype_initialized(
-        &mut bundle.store,
-        &bundle.wasm_env,
-    );
+    crate::runtime_heap::ensure_function_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::install_function_props_prototypes(&mut bundle.store, &bundle.wasm_env);
     let immortal_objects_end = bundle
         .wasm_env

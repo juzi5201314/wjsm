@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+options ERR_INVALID_ARG_TYPE
+init ERR_ASYNC_CALLBACK
+before ERR_ASYNC_CALLBACK
+after ERR_ASYNC_CALLBACK
+destroy ERR_ASYNC_CALLBACK
+promiseResolve ERR_ASYNC_CALLBACK
+trackPromises ERR_INVALID_ARG_TYPE
+true true
+--- stderr ---

@@ -699,6 +699,9 @@ pub(crate) enum NativeCallable {
     VmMethod {
         kind: crate::runtime_node_vm::VmMethodKind,
     },
+    AsyncHooksMethod {
+        kind: crate::runtime_node_async_hooks::AsyncHooksMethodKind,
+    },
     DgramMethod {
         kind: crate::runtime_node_dgram::DgramMethodKind,
     },
@@ -1255,6 +1258,20 @@ pub(crate) struct TimerEntry {
     pub(crate) callback: i64, // NaN-boxed function handle
     pub(crate) repeating: bool,
     pub(crate) interval: Duration,
+    /// JS 可见 Timeout 对象（init.resource / setTimeout 返回值）
+    #[allow(dead_code)]
+    pub(crate) resource: i64,
+    /// 调度时捕获的 async scope（hooks/ALS 开启时有效）
+    pub(crate) scope: Option<crate::CapturedScope>,
+}
+
+/// setImmediate 队列条目。
+pub(crate) struct ImmediateEntry {
+    pub(crate) id: u32,
+    pub(crate) callback: i64,
+    #[allow(dead_code)]
+    pub(crate) resource: i64,
+    pub(crate) scope: Option<crate::CapturedScope>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -1373,6 +1390,8 @@ pub(crate) struct PromiseEntry {
     /// 构造器引用（用于 species-aware 操作；None 表示内建 Promise）
     pub(crate) constructor_handle: Option<i64>,
     pub(crate) is_promise: bool,
+    /// 创建时捕获的 ALS/hooks scope（then 反应继承，非 then 注册时 current）
+    pub(crate) capture_scope: Option<crate::CapturedScope>,
 }
 
 impl PromiseEntry {
@@ -1385,6 +1404,7 @@ impl PromiseEntry {
             constructor_resolver: None,
             constructor_handle: None,
             is_promise: true,
+            capture_scope: None,
         }
     }
 
@@ -1397,6 +1417,7 @@ impl PromiseEntry {
             constructor_resolver: None,
             constructor_handle: None,
             is_promise: true,
+            capture_scope: None,
         }
     }
 
@@ -1409,6 +1430,7 @@ impl PromiseEntry {
             constructor_resolver: None,
             constructor_handle: None,
             is_promise: false,
+            capture_scope: None,
         }
     }
 }
@@ -1467,6 +1489,7 @@ pub(crate) enum Microtask {
         reaction_type: ReactionType,
         handler: i64,
         argument: i64,
+        scope: Option<crate::CapturedScope>,
     },
     PromiseResolveThenable {
         promise: i64,
@@ -1475,6 +1498,7 @@ pub(crate) enum Microtask {
     },
     MicrotaskCallback {
         callback: i64,
+        scope: Option<crate::CapturedScope>,
     },
     TransformStreamTransform {
         callback: i64,
@@ -1501,6 +1525,7 @@ pub(crate) enum Microtask {
         state: u32,
         resume_val: i64,
         completion: u8,
+        scope: Option<crate::CapturedScope>,
     },
     #[allow(dead_code)]
     CleanupFinalizationRegistry {

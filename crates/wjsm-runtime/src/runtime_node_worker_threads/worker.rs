@@ -28,10 +28,7 @@ pub(super) fn create_worker(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
         .copied()
         .unwrap_or_else(value::encode_undefined);
     let filename = js_string_lossy(caller, filename_raw);
-    let options = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let options = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let is_eval = if value::is_object(options) {
         object_bool_property(caller, options, "eval").unwrap_or(false)
     } else {
@@ -87,17 +84,14 @@ pub(super) fn create_worker(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
         .insert(worker_id, Arc::clone(&control));
     cluster.active_workers.fetch_add(1, Ordering::SeqCst);
     ensure_local_port(caller, parent_port.id);
+    let worker_scope = crate::runtime_async_hooks::capture_from_caller(caller);
     {
         let mut map = caller
             .data()
             .worker_bindings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let lifetime_guard = caller
-            .data()
-            .async_op_counter
-            .as_ref()
-            .map(|c| c.begin());
+        let lifetime_guard = caller.data().async_op_counter.as_ref().map(|c| c.begin());
         map.insert(
             worker_id,
             LocalWorkerBinding {
@@ -107,11 +101,13 @@ pub(super) fn create_worker(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
                 error_cb: None,
                 exit_cb: None,
                 lifetime_guard,
+                scope: worker_scope,
             },
         );
     }
     let parent_options = clone_runtime_options_for_worker(caller);
-    let wasm_result = compile_worker_source(&filename, is_eval, caller.data().process.cwd.as_deref());
+    let wasm_result =
+        compile_worker_source(&filename, is_eval, caller.data().process.cwd.as_deref());
     let wasm_bytes = match wasm_result {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -304,10 +300,7 @@ fn notify_worker_online(control: &WorkerControl) {
 }
 
 fn notify_worker_exit(control: &WorkerControl, code: i32) {
-    if control
-        .exit_notified
-        .swap(true, Ordering::SeqCst)
-    {
+    if control.exit_notified.swap(true, Ordering::SeqCst) {
         return;
     }
     let worker_id = control.id;
@@ -320,13 +313,8 @@ fn notify_worker_exit(control: &WorkerControl, code: i32) {
 fn notify_worker_error_and_exit(control: &WorkerControl, message: String, code: i32) {
     let worker_id = control.id;
     send_parent_host_task(control, move |store, env| {
-        let err_val = crate::runtime_heap::alloc_error_object_with_env(
-            store,
-            env,
-            "Error",
-            message,
-            None,
-        );
+        let err_val =
+            crate::runtime_heap::alloc_error_object_with_env(store, env, "Error", message, None);
         invoke_lifecycle_cb_value(store, worker_id, LifecycleKind::Error, err_val);
     });
     notify_worker_exit(control, code);
@@ -350,7 +338,10 @@ where
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     if let Some(tx) = tx {
-        let _ = tx.send(AsyncHostCompletion::HostTask { run: Box::new(f) });
+        let _ = tx.send(AsyncHostCompletion::HostTask {
+            run: Box::new(f),
+            scope: None,
+        });
     }
 }
 
@@ -360,8 +351,7 @@ fn invoke_lifecycle_cb(
     kind: LifecycleKind,
     number_arg: Option<f64>,
 ) {
-    let cb = lifecycle_cb(store, worker_id, &kind);
-    let Some(cb) = cb else {
+    let Some((cb, scope)) = lifecycle_cb(store, worker_id, &kind) else {
         return;
     };
     let args = match number_arg {
@@ -376,6 +366,7 @@ fn invoke_lifecycle_cb(
         .push_back(ProcessNextTickTask {
             callback: cb,
             args,
+            scope,
         });
 }
 
@@ -385,8 +376,7 @@ fn invoke_lifecycle_cb_value(
     kind: LifecycleKind,
     arg: i64,
 ) {
-    let cb = lifecycle_cb(store, worker_id, &kind);
-    let Some(cb) = cb else {
+    let Some((cb, scope)) = lifecycle_cb(store, worker_id, &kind) else {
         return;
     };
     store
@@ -397,6 +387,7 @@ fn invoke_lifecycle_cb_value(
         .push_back(ProcessNextTickTask {
             callback: cb,
             args: vec![arg],
+            scope,
         });
 }
 
@@ -404,19 +395,20 @@ fn lifecycle_cb(
     store: &Store<RuntimeState>,
     worker_id: u32,
     kind: &LifecycleKind,
-) -> Option<i64> {
+) -> Option<(i64, Option<crate::CapturedScope>)> {
     let map = store
         .data()
         .worker_bindings
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let binding = map.get(&worker_id)?;
-    match kind {
+    let callback = match kind {
         LifecycleKind::Online => binding.online_cb,
         LifecycleKind::Message => binding.message_cb,
         LifecycleKind::Error => binding.error_cb,
         LifecycleKind::Exit => binding.exit_cb,
-    }
+    }?;
+    Some((callback, binding.scope))
 }
 
 fn clear_worker_lifetime(store: &mut Store<RuntimeState>, worker_id: u32) {
@@ -481,6 +473,7 @@ pub(super) fn worker_terminate(caller: &mut Caller<'_, RuntimeState>, args: &[i6
                     .unwrap_or_else(|e| e.into_inner()) =
                     Some(crate::runtime_process::ProcessExitSignal::new(1));
             }),
+            scope: None,
         });
     } else {
         // worker 可能已结束：直接 exit 通知
@@ -493,10 +486,7 @@ pub(super) fn worker_terminate(caller: &mut Caller<'_, RuntimeState>, args: &[i6
 fn close_port_endpoint(cluster: &WorkerClusterState, port_id: u32) {
     if let Some(port) = cluster.port(port_id) {
         port.closed.store(true, Ordering::SeqCst);
-        port.inbox
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        port.inbox.lock().unwrap_or_else(|e| e.into_inner()).clear();
         *port.wake_tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
@@ -551,10 +541,7 @@ pub(super) fn worker_on_lifecycle(caller: &mut Caller<'_, RuntimeState>, args: &
     let Some(worker_id) = port_id_arg(args, 0) else {
         return value::encode_undefined();
     };
-    let handlers = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let handlers = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let (online, message, error, exit) = read_lifecycle_handlers(caller, handlers);
     {
         let mut map = caller

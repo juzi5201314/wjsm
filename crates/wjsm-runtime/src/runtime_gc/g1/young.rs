@@ -366,7 +366,7 @@ fn snapshot_objects(
             let Some(size) = object_size_from_memory(data, ptr) else {
                 debug_assert!(
                     false,
-                    "G1 young: live obj_table entry has unreadable header"
+                    "G1 young: live obj_table entry {h} points to unreadable header at {ptr:#x}"
                 );
                 continue;
             };

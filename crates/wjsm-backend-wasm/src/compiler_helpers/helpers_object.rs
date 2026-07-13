@@ -11,7 +11,7 @@ impl Compiler {
         let function_props_done_global = self.function_props_done_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
-        let handle_table_limit_global = self.barrier_buf_ptr_global_idx;
+        let handle_table_limit_global = self.barrier_buf_end_global_idx;
         let num_ir_functions_global = self.num_ir_functions_global_idx;
         let function_props_base_global = self.function_props_base_global_idx;
 

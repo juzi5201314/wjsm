@@ -48,23 +48,13 @@ console.log('B:' + s);
     let handle_a = {
         let p = path_a.clone();
         thread::spawn(move || {
-            wjsm_cli::run_file_in_process_with_options(
-                &p,
-                &[],
-                &[("WJSM_COMPILER", "winch")],
-                None,
-            )
+            wjsm_cli::run_file_in_process_with_options(&p, &[], &[("WJSM_COMPILER", "winch")], None)
         })
     };
     let handle_b = {
         let p = path_b.clone();
         thread::spawn(move || {
-            wjsm_cli::run_file_in_process_with_options(
-                &p,
-                &[],
-                &[("WJSM_COMPILER", "winch")],
-                None,
-            )
+            wjsm_cli::run_file_in_process_with_options(&p, &[], &[("WJSM_COMPILER", "winch")], None)
         })
     };
 

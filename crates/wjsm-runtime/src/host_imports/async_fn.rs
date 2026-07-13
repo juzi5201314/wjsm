@@ -54,6 +54,7 @@ pub(crate) fn define_async_fn(
                 state: 0,
                 resume_val: value::encode_undefined(),
                 completion: 0,
+                scope: crate::runtime_async_hooks::capture_from_caller(&caller),
             });
 
             outer_promise
@@ -140,16 +141,17 @@ pub(crate) fn define_async_fn(
                             c_table.get(cont_handle).map(|e| e.outer_promise)
                         };
                         if let Some(outer_promise) = outer_promise
-                            && is_promise_settled(caller.data(), outer_promise) {
-                                let mut c_table = caller
-                                    .data()
-                                    .continuation_table
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner());
-                                if let Some(entry) = c_table.get_mut(cont_handle) {
-                                    entry.completed = true;
-                                }
+                            && is_promise_settled(caller.data(), outer_promise)
+                        {
+                            let mut c_table = caller
+                                .data()
+                                .continuation_table
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            if let Some(entry) = c_table.get_mut(cont_handle) {
+                                entry.completed = true;
                             }
+                        }
                         return;
                     }
                 }
@@ -164,6 +166,7 @@ pub(crate) fn define_async_fn(
                     state,
                     resume_val,
                     completion,
+                    scope: crate::runtime_async_hooks::capture_from_caller(&caller),
                 });
             })
         },
@@ -225,7 +228,7 @@ pub(crate) fn define_async_fn(
                             state as u32,
                         )];
                         drop(p_table);
-                        queue_promise_reactions(caller.data(), reactions, val, false);
+                        queue_promise_reactions(caller.data(), reactions, val, false, None);
                     }
                     PromiseState::Rejected(reason) => {
                         let reason = *reason;
@@ -236,7 +239,7 @@ pub(crate) fn define_async_fn(
                             state as u32,
                         )];
                         drop(p_table);
-                        queue_promise_reactions(caller.data(), reactions, reason, true);
+                        queue_promise_reactions(caller.data(), reactions, reason, true, None);
                     }
                 }
             } else {
@@ -255,6 +258,7 @@ pub(crate) fn define_async_fn(
                     state: state as u32,
                     resume_val: awaited_promise,
                     completion: 0,
+                    scope: crate::runtime_async_hooks::capture_from_caller(&caller),
                 });
             }
         },

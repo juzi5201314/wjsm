@@ -20,7 +20,7 @@ use tokio::{
     sync::mpsc::UnboundedReceiver,
     time::{Instant as TokioInstant, sleep_until},
 };
-use wasmtime::Store;
+use wasmtime::{Caller, Store};
 
 use crate::runtime_builtins::PromiseSettlement;
 use crate::runtime_microtask::{call_host_function_with_args_async, drain_microtasks_async};
@@ -30,22 +30,68 @@ use crate::{RuntimeState, TimerEntry, WasmEnv};
 /// - SettleValue: simple value settle (worker can Send data)
 /// - Materialize: closure runs only on scheduler owner (&mut Store + &WasmEnv)
 /// - HostTask: 非 Promise 副作用（MessagePort 投递、Worker lifecycle 事件）
+///
+/// `scope` 必须在 **调度/发起** 时捕获（hooks 或 ALS 开启时），fire 时恢复；禁止 fire-time current。
 pub(crate) enum AsyncHostCompletion {
     #[allow(dead_code)]
     SettleValue {
         promise: i64,
         settlement: PromiseSettlement,
+        scope: Option<crate::CapturedScope>,
     },
     #[allow(clippy::type_complexity)]
     Materialize {
         promise: i64,
         materialize:
             Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) -> PromiseSettlement + Send>,
+        scope: Option<crate::CapturedScope>,
     },
     #[allow(clippy::type_complexity)]
     HostTask {
         run: Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) + Send>,
+        scope: Option<crate::CapturedScope>,
     },
+}
+
+/// 在当前 Store 上于调度点捕获 scope（仅 hooks/ALS 开启时）。
+/// 从 Caller 在调度点捕获 scope（spawn 之前调用）。
+pub(crate) fn capture_completion_scope_from_caller(
+    caller: &Caller<'_, RuntimeState>,
+) -> Option<crate::CapturedScope> {
+    let mut hooks = caller
+        .data()
+        .async_hooks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    hooks.capture_for_scheduled_callback(0, true)
+}
+
+fn enter_completion_scope(
+    store: &mut Store<RuntimeState>,
+    scope: Option<crate::CapturedScope>,
+) -> Option<(crate::CapturedScope, Option<crate::FrameId>)> {
+    let scope = scope?;
+    let mut hooks = store
+        .data()
+        .async_hooks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prior = hooks.enter_captured_scope(scope);
+    Some((scope, prior))
+}
+
+fn exit_completion_scope(
+    store: &mut Store<RuntimeState>,
+    entered: Option<(crate::CapturedScope, Option<crate::FrameId>)>,
+) {
+    if let Some((scope, prior)) = entered {
+        let mut hooks = store
+            .data()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        hooks.exit_captured_scope(scope, prior);
+    }
 }
 
 #[derive(Clone)]
@@ -107,18 +153,24 @@ pub(crate) async fn run_post_main_scheduler_async(
             AsyncHostCompletion::SettleValue {
                 promise,
                 settlement,
+                scope,
             } => {
+                let _ = scope;
                 crate::runtime_promises::settle_promise(store.data(), promise, settlement);
             }
             AsyncHostCompletion::Materialize {
                 promise,
                 materialize,
+                scope,
             } => {
+                let _ = scope;
                 let settlement = materialize(store, env);
                 crate::runtime_promises::settle_promise(store.data(), promise, settlement);
             }
-            AsyncHostCompletion::HostTask { run } => {
+            AsyncHostCompletion::HostTask { run, scope } => {
+                let entered = enter_completion_scope(store, scope);
                 run(store, env);
+                exit_completion_scope(store, entered);
             }
         }
     }
@@ -298,6 +350,25 @@ pub(crate) async fn run_post_main_scheduler_async(
             let repeating = entry.repeating;
             let interval = entry.interval;
             let entry_id = entry.id;
+            let entry_resource = entry.resource;
+            let entry_scope = entry.scope;
+
+            // 若有 CapturedScope，在 fire 时恢复调度时 frame（P0-5）
+            let prior_frame = entry_scope.map(|scope| {
+                let mut hooks = store
+                    .data()
+                    .async_hooks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                hooks.enter_captured_scope(scope)
+            });
+
+            if let Some(scope) = entry_scope
+                && crate::runtime_async_hooks::emit::emit_before(store, env, scope.async_id, false)
+                    .await
+            {
+                return Ok(());
+            }
 
             // 定时器回调按宿主 API 语义以 this=undefined、零参数调用。
             let result = call_host_function_with_args_async(
@@ -308,6 +379,23 @@ pub(crate) async fn run_post_main_scheduler_async(
                 &[],
             )
             .await;
+
+            if let Some(scope) = entry_scope
+                && crate::runtime_async_hooks::emit::emit_after(store, env, scope.async_id, false)
+                    .await
+            {
+                return Ok(());
+            }
+
+            if let (Some(scope), Some(prior)) = (entry_scope, prior_frame) {
+                let mut hooks = store
+                    .data()
+                    .async_hooks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                hooks.exit_captured_scope(scope, prior);
+            }
+
             if process_exit_pending(store) {
                 return Ok(());
             }
@@ -315,32 +403,41 @@ pub(crate) async fn run_post_main_scheduler_async(
             // 未捕获异常：timer 回调抛出的异常打印到 stdout 但不中断事件循环。
             // 浏览器语义：setTimeout 回调中的 throw 不阻止后续 timer/microtask 执行。
             if let Some(val) = result
-                && value::is_exception(val) {
-                    let idx = value::decode_handle(val) as usize;
-                    let msg = store
+                && value::is_exception(val)
+            {
+                let idx = value::decode_handle(val) as usize;
+                let msg = store
+                    .data()
+                    .error_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(idx)
+                    .map(|e| {
+                        if e.name.is_empty() {
+                            format!("Uncaught exception: {}", e.message)
+                        } else {
+                            format!("Uncaught exception: {}: {}", e.name, e.message)
+                        }
+                    })
+                    .unwrap_or_else(|| "Uncaught exception: unknown error".to_string());
+                writeln!(
+                    store
                         .data()
-                        .error_table
+                        .output
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get(idx)
-                        .map(|e| {
-                            if e.name.is_empty() {
-                                format!("Uncaught exception: {}", e.message)
-                            } else {
-                                format!("Uncaught exception: {}: {}", e.name, e.message)
-                            }
-                        })
-                        .unwrap_or_else(|| "Uncaught exception: unknown error".to_string());
-                    writeln!(
-                        store
-                            .data()
-                            .output
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()),
-                        "{msg}"
-                    )
-                    .ok();
-                }
+                        .unwrap_or_else(|e| e.into_inner()),
+                    "{msg}"
+                )
+                .ok();
+            }
+            if !repeating
+                && let Some(scope) = entry_scope
+                && crate::runtime_async_hooks::emit::emit_destroy(store, env, scope.async_id, false)
+                    .await
+            {
+                return Ok(());
+            }
+
             // Drain microtasks after timer callback（严格 per-callback，不 batch）
             drain_microtasks_async(store, env).await;
             if process_exit_pending(store) {
@@ -360,6 +457,8 @@ pub(crate) async fn run_post_main_scheduler_async(
                         callback,
                         repeating: true,
                         interval,
+                        resource: entry_resource,
+                        scope: entry_scope,
                     });
             }
         }

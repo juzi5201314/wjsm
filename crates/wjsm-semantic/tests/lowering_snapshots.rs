@@ -828,6 +828,18 @@ fn lower_single_esm_source(source: &str) -> String {
     .dump_text()
 }
 
+#[test]
+fn module_scope_binding_survives_top_level_await() {
+    let text = lower_single_esm_source(
+        "const later = () => 42; await Promise.resolve(); console.log(later());\n",
+    );
+
+    assert!(
+        text.contains("continuation.save_var") && text.matches("store var $1.later").count() >= 2,
+        "module binding must be saved and restored around top-level await:\n{text}"
+    );
+}
+
 fn lower_single_esm_error(source: &str) -> LoweringError {
     lower_modules(
         vec![esm_input(0, "/project/main.js", source)],

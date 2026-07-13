@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+object
+Timeout
+number
+fired
+--- stderr ---

@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+function,function,function,function,object,function,function
+1
+0
+number
+--- stderr ---

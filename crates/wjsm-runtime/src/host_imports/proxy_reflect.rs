@@ -328,10 +328,11 @@ pub(crate) fn reflect_delete_property_impl(
     };
     // 数组元素删除：将对应 slot 置 hole
     if value::is_array(target)
-        && let Ok(index) = prop_name.parse::<u32>() {
-            crate::runtime_values::write_array_hole(caller, ptr, index);
-            return value::encode_bool(true);
-        }
+        && let Ok(index) = prop_name.parse::<u32>()
+    {
+        crate::runtime_values::write_array_hole(caller, ptr, index);
+        return value::encode_bool(true);
+    }
     delete_property_by_name_id(caller, target, name_id)
 }
 
@@ -608,9 +609,10 @@ pub(crate) async fn reflect_get_prototype_of_impl(
     // 不能走 resolve_handle（会得到 null）；与 ordinary_has_instance_async 同构。
     if value::is_regexp(target) {
         if !value::is_object(caller.data().regexp_prototype)
-            && let Some(env) = WasmEnv::from_caller(caller) {
-                crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
-            }
+            && let Some(env) = WasmEnv::from_caller(caller)
+        {
+            crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
+        }
         let proto = caller.data().regexp_prototype;
         return if value::is_object(proto) {
             proto

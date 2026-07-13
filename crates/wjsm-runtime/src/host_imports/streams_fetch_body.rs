@@ -141,6 +141,7 @@ fn spawn_chunk_pull(
     let guard = caller.data().async_op_counter.as_ref().map(|c| c.begin());
     let promise_clone = promise;
     let mut response_opt = Some(response);
+    let scope = crate::scheduler::capture_completion_scope_from_caller(&caller);
     tokio::spawn(async move {
         let _guard: Option<AsyncOpGuard> = guard;
         let mut response = response_opt.take().unwrap();
@@ -208,6 +209,7 @@ fn spawn_chunk_pull(
                     PromiseSettlement::Reject(err)
                 }
             }),
+            scope,
         });
     });
     Some(promise)
@@ -265,6 +267,7 @@ pub(crate) fn consume_fetch_body_to_bytes(
     };
     let guard = caller.data().async_op_counter.as_ref().map(|c| c.begin());
     let promise_clone = promise;
+    let scope = crate::scheduler::capture_completion_scope_from_caller(&caller);
     tokio::spawn(async move {
         let _guard: Option<AsyncOpGuard> = guard;
         let outcome = response.bytes().await;
@@ -363,6 +366,7 @@ pub(crate) fn consume_fetch_body_to_bytes(
                     }
                 }
             }),
+            scope,
         });
     });
     true

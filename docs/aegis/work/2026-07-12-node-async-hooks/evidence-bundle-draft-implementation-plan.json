@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "implementation-plan",
+  "type": "document",
+  "source": "docs/aegis/plans/2026-07-12-node-async-hooks.md",
+  "summary": "Phased TDD plan with full acceptance matrix; phase=order only",
+  "verifier": "file exists; tasks name exact files and commands"
+}

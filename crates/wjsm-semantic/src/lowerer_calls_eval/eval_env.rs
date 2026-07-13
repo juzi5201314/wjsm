@@ -14,13 +14,8 @@ impl Lowerer {
             EVAL_SCOPE_ENV_PARAM.to_string()
         };
         let env = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::LoadVar {
-                dest: env,
-                name,
-            },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::LoadVar { dest: env, name });
         env
     }
 

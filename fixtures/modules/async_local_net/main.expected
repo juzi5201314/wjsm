@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+listen net-context
+accept net-context
+connect net-context
+--- stderr ---

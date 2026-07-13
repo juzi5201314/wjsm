@@ -44,6 +44,7 @@ pub(crate) struct LocalChildBinding {
     pub exit_cb: Option<i64>,
     pub disconnect_cb: Option<i64>,
     pub ref_guard: Option<crate::scheduler::AsyncOpGuard>,
+    pub scope: Option<crate::CapturedScope>,
     #[cfg(unix)]
     pub pending_messages: Vec<super::ipc::IpcMessage>,
     #[cfg(unix)]
@@ -108,7 +109,10 @@ pub(super) fn spawn_async(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -
     #[cfg(not(unix))]
     {
         let _ = (command, spawn_args, options);
-        make_child_process_error(caller, "async child_process.spawn is only supported on Unix")
+        make_child_process_error(
+            caller,
+            "async child_process.spawn is only supported on Unix",
+        )
     }
 }
 
@@ -206,10 +210,7 @@ fn spawn_unix(
     // 环境：默认继承 process.env，再叠 envPairs
     cmd.env_clear();
     for (key, value) in caller.data().process.env.iter() {
-        if key == "NODE_CHANNEL_FD"
-            || key == "NODE_UNIQUE_ID"
-            || key == "WJSM_IPC_PATH"
-        {
+        if key == "NODE_CHANNEL_FD" || key == "NODE_UNIQUE_ID" || key == "WJSM_IPC_PATH" {
             continue;
         }
         cmd.env(key, value);
@@ -222,7 +223,6 @@ fn spawn_unix(
         cmd.env("WJSM_IPC_PATH", handle.path());
         cmd.env("NODE_CHANNEL_FD", "ipc");
     }
-
 
     cmd.stdin(Stdio::null());
     // 不用 inherit：nextest 捕获父 stdout 时 inherit 会让子进程写满管道后阻塞。
@@ -252,6 +252,8 @@ fn spawn_unix(
     };
     let handle = caller.data().child_process_table.alloc(entry);
 
+    let completion_scope = crate::runtime_async_hooks::capture_from_caller(caller);
+
     // 本地绑定 + 保持 async op 直到 exit（防止 scheduler 提前退出）
     {
         let mut map = caller
@@ -259,11 +261,7 @@ fn spawn_unix(
             .child_bindings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let ref_guard = caller
-            .data()
-            .async_op_counter
-            .as_ref()
-            .map(|c| c.begin());
+        let ref_guard = caller.data().async_op_counter.as_ref().map(|c| c.begin());
         map.insert(
             handle,
             LocalChildBinding {
@@ -271,6 +269,7 @@ fn spawn_unix(
                 exit_cb: None,
                 disconnect_cb: None,
                 ref_guard,
+                scope: completion_scope,
                 pending_messages: Vec::new(),
                 message_cb_ready: false,
             },
@@ -279,7 +278,7 @@ fn spawn_unix(
 
     // 尽早启动 parent IPC reader，不必等第一次 send
     if let Some(ref ipc) = parent_ipc {
-        start_parent_ipc_reader(caller, handle, ipc.clone());
+        start_parent_ipc_reader(caller, handle, ipc.clone(), completion_scope);
     }
 
     // wait 线程：绝不能在 child.wait() 期间持有 table.inner 锁，
@@ -320,6 +319,7 @@ fn spawn_unix(
                         run: Box::new(move |store, _env| {
                             deliver_exit(store, handle, code, signal);
                         }),
+                        scope: completion_scope,
                     });
                 }
             })
@@ -330,18 +330,10 @@ fn spawn_unix(
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = alloc_host_object(caller, &env, 2);
     let temp = caller.data().push_host_temp_roots([obj]);
-    let _ = define_host_data_property_from_caller(
-        caller,
-        obj,
-        "id",
-        value::encode_f64(handle as f64),
-    );
-    let _ = define_host_data_property_from_caller(
-        caller,
-        obj,
-        "pid",
-        value::encode_f64(pid as f64),
-    );
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "id", value::encode_f64(handle as f64));
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "pid", value::encode_f64(pid as f64));
     caller.data().truncate_host_temp_roots(temp);
     obj
 }
@@ -352,19 +344,18 @@ fn deliver_exit(
     code: Option<i32>,
     signal: Option<String>,
 ) {
-    let (exit_cb, disconnect_cb) = {
+    let (exit_cb, disconnect_cb, scope) = {
         let mut map = store
             .data()
             .child_bindings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         match map.get_mut(&handle) {
-            Some(b) => {
-                // 释放 ref_guard，允许 scheduler 在无其它 op 时退出
-                b.ref_guard = None;
-                (b.exit_cb, b.disconnect_cb)
+            Some(binding) => {
+                binding.ref_guard = None;
+                (binding.exit_cb, binding.disconnect_cb, binding.scope)
             }
-            None => (None, None),
+            None => (None, None, None),
         }
     };
     if let Some(cb) = disconnect_cb {
@@ -376,6 +367,7 @@ fn deliver_exit(
             .push_back(ProcessNextTickTask {
                 callback: cb,
                 args: vec![],
+                scope,
             });
     }
     if let Some(cb) = exit_cb {
@@ -394,6 +386,7 @@ fn deliver_exit(
             .push_back(ProcessNextTickTask {
                 callback: cb,
                 args: vec![code_val, signal_val],
+                scope,
             });
     }
 }
@@ -489,7 +482,6 @@ pub(crate) fn kill_all_child_processes(caller: &mut Caller<'_, RuntimeState>) {
     }
 }
 
-
 #[cfg(unix)]
 fn signal_name_to_libc(name: &str) -> i32 {
     match name {
@@ -505,10 +497,7 @@ pub(super) fn child_send(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) ->
     let Some(handle) = handle_arg(args.first().copied()) else {
         return make_type_error_exception(caller, "childSend: invalid id");
     };
-    let raw = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let raw = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let payload = match js_value_to_json_text(caller, raw) {
         Ok(s) => s,
         Err(err) => return make_child_process_error(caller, &err),
@@ -541,7 +530,12 @@ pub(super) fn child_send(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) ->
     if let Err(err) = handle_ipc.send_nonblocking(payload, send_fd) {
         return make_child_process_error(caller, &format!("childSend failed: {err}"));
     }
-    start_parent_ipc_reader(caller, handle, handle_ipc);
+    start_parent_ipc_reader(
+        caller,
+        handle,
+        handle_ipc,
+        crate::runtime_async_hooks::capture_from_caller(caller),
+    );
     value::encode_bool(true)
 }
 
@@ -551,6 +545,7 @@ fn start_parent_ipc_reader(
     caller: &Caller<'_, RuntimeState>,
     handle: u32,
     handle_ipc: super::ipc::ParentIpcHandle,
+    scope: Option<crate::CapturedScope>,
 ) {
     let Some(tx) = caller.data().host_completion_tx.clone() else {
         return;
@@ -560,10 +555,13 @@ fn start_parent_ipc_reader(
             endpoint.set_wake_tx(Some(tx));
             let make_wake = Arc::new(move || {
                 let id = handle;
-                Box::new(move |store: &mut Store<RuntimeState>, env: &WasmEnv| {
-                    drain_child_messages(store, env, id);
-                })
-                    as Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) + Send>
+                (
+                    Box::new(move |store: &mut Store<RuntimeState>, env: &WasmEnv| {
+                        drain_child_messages(store, env, id);
+                    })
+                        as Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) + Send>,
+                    scope,
+                )
             });
             endpoint.ensure_reader(make_wake);
         }
@@ -575,6 +573,7 @@ fn start_parent_ipc_reader(
     _caller: &Caller<'_, RuntimeState>,
     _handle: u32,
     _handle_ipc: (),
+    _scope: Option<crate::CapturedScope>,
 ) {
 }
 
@@ -597,9 +596,10 @@ pub(super) fn child_disconnect(caller: &mut Caller<'_, RuntimeState>, args: &[i6
     };
     // 不阻塞 host：仅关闭已就绪的 endpoint；未 accept 的由 drop 清理
     if let Some(ipc) = ipc
-        && let Some(ep) = ipc.try_endpoint() {
-            ep.close();
-        }
+        && let Some(ep) = ipc.try_endpoint()
+    {
+        ep.close();
+    }
     value::encode_undefined()
 }
 
@@ -608,10 +608,7 @@ pub(super) fn child_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[i6
     let Some(handle) = handle_arg(args.first().copied()) else {
         return make_type_error_exception(caller, "childOnMessage: invalid id");
     };
-    let callback = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let callback = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let mut bindings = caller
         .data()
         .child_bindings
@@ -627,20 +624,18 @@ pub(super) fn child_on_exit(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
     let Some(handle) = handle_arg(args.first().copied()) else {
         return make_type_error_exception(caller, "childOnExit: invalid id");
     };
-    let cb = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
-    {
+    let cb = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+    let scope = {
         let mut map = caller
             .data()
             .child_bindings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(b) = map.get_mut(&handle) {
-            b.exit_cb = Some(cb);
-        }
-    }
+        map.get_mut(&handle).and_then(|binding| {
+            binding.exit_cb = Some(cb);
+            binding.scope
+        })
+    };
     let already = {
         let inner = caller
             .data()
@@ -679,11 +674,11 @@ pub(super) fn child_on_exit(caller: &mut Caller<'_, RuntimeState>, args: &[i64])
             .push_back(ProcessNextTickTask {
                 callback: cb,
                 args: vec![code_val, signal_val],
+                scope,
             });
     }
     value::encode_undefined()
 }
-
 
 pub(super) fn handle_arg(raw: Option<i64>) -> Option<u32> {
     let raw = raw?;
@@ -780,9 +775,12 @@ fn ensure_process_ipc_reader(
     };
     endpoint.set_wake_tx(Some(tx));
     let make_wake = Arc::new(move || {
-        Box::new(move |store: &mut Store<RuntimeState>, env: &WasmEnv| {
-            drain_process_messages(store, env);
-        }) as Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) + Send>
+        (
+            Box::new(move |store: &mut Store<RuntimeState>, env: &WasmEnv| {
+                drain_process_messages(store, env);
+            }) as Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) + Send>,
+            None,
+        )
     });
     endpoint.ensure_reader(make_wake);
 }
@@ -861,7 +859,12 @@ fn js_to_serde_json(
 pub(super) fn process_disconnect(caller: &mut Caller<'_, RuntimeState>, _args: &[i64]) -> i64 {
     if let Some(ipc) = caller.data().process_ipc.as_ref() {
         ipc.connected.store(false, Ordering::SeqCst);
-        if let Some(ep) = ipc.endpoint.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(ep) = ipc
+            .endpoint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
             ep.close();
         }
         *ipc.ref_guard.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -884,9 +887,10 @@ pub(super) fn process_on_message(caller: &mut Caller<'_, RuntimeState>, args: &[
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .is_none()
-        && let Some(counter) = caller.data().async_op_counter.clone() {
-            *ipc.ref_guard.lock().unwrap_or_else(|e| e.into_inner()) = Some(counter.begin());
-        }
+        && let Some(counter) = caller.data().async_op_counter.clone()
+    {
+        *ipc.ref_guard.lock().unwrap_or_else(|e| e.into_inner()) = Some(counter.begin());
+    }
     let endpoint = match ipc.ensure_endpoint() {
         Ok(ep) => ep,
         Err(_) => return value::encode_undefined(),
@@ -944,6 +948,7 @@ fn drain_process_messages_from_caller(caller: &mut Caller<'_, RuntimeState>) {
             .push_back(ProcessNextTickTask {
                 callback: cb,
                 args: vec![payload, fd_val],
+                scope: None,
             });
     }
 }
@@ -973,6 +978,7 @@ pub(crate) fn drain_process_messages(store: &mut Store<RuntimeState>, env: &Wasm
                 .push_back(ProcessNextTickTask {
                     callback: dcb,
                     args: vec![],
+                    scope: None,
                 });
         }
     }
@@ -993,8 +999,7 @@ pub(crate) fn drain_process_messages(store: &mut Store<RuntimeState>, env: &Wasm
             .push_back(ProcessNextTickTask {
                 callback: cb,
                 args: vec![payload, fd_val],
+                scope: None,
             });
     }
 }
-
-

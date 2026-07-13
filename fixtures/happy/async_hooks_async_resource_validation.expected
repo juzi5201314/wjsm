@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+instanceof true
+direct TypeError
+empty-no-hook function
+empty-with-hook TypeError
+type ERR_INVALID_ARG_TYPE
+options ERR_INVALID_ARG_TYPE
+trigger-negative ERR_INVALID_ASYNC_ID
+trigger-float ERR_INVALID_ASYNC_ID
+run-fn ERR_INVALID_ARG_TYPE
+bind-fn ERR_INVALID_ARG_TYPE
+static-bind-fn ERR_INVALID_ARG_TYPE
+--- stderr ---

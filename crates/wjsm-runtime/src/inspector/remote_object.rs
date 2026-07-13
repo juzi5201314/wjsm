@@ -245,5 +245,10 @@ fn parse_js_string_literal(expr: &str) -> Option<String> {
     }
     let inner = &expr[1..expr.len() - 1];
     // 简化：不完整处理转义，足够调试字面量。
-    Some(inner.replace("\\n", "\n").replace("\\\"", "\"").replace("\\'", "'"))
+    Some(
+        inner
+            .replace("\\n", "\n")
+            .replace("\\\"", "\"")
+            .replace("\\'", "'"),
+    )
 }

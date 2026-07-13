@@ -131,6 +131,7 @@ pub(crate) fn enqueue_async_resume_from_caller(
             state,
             resume_val,
             completion,
+            scope: crate::runtime_async_hooks::capture_from_caller(&caller),
         });
 }
 
@@ -380,6 +381,7 @@ pub(crate) async fn resume_async_function_async<
         }
     }
 }
+
 /// Dedicated async-only helper (for the thin top-level async execution skeleton in lib.rs
 /// or future wiring after async instantiate + prototype setup).
 /// Contains a full byte-for-byte copy of the block from sync execute's post-instantiate

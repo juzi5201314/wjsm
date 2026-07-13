@@ -27,12 +27,20 @@ pub(crate) fn define_misc(
     let queue_microtask_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, callback: i64| {
+            let scope = {
+                let mut hooks = caller
+                    .data()
+                    .async_hooks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                hooks.capture_for_scheduled_callback(0, true)
+            };
             let mut queue = caller
                 .data()
                 .microtask_queue
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            queue.push_back(Microtask::MicrotaskCallback { callback });
+            queue.push_back(Microtask::MicrotaskCallback { callback, scope });
         },
     );
     linker.define(&mut store, "env", "queue_microtask", queue_microtask_fn)?;

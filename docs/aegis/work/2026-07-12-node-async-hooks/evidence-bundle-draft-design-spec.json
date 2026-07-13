@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "design-spec",
+  "type": "document",
+  "source": "docs/aegis/specs/2026-07-12-node-async-hooks-design.md",
+  "summary": "Host-core design B; Node v24.15 surface; seams; GC; acceptance matrix",
+  "verifier": "file exists; covers createHook/ALS/AsyncResource/providers/seams"
+}

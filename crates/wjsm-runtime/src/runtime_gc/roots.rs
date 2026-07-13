@@ -213,10 +213,7 @@ impl RootProvider for RuntimeRoots {
         // - realm ≥1：仅当 sandbox global handle 已被其它 root 标记 live 时，再 root 其 intrinsics
         //   （fixed-point 多轮 host root 会在 sandbox 本轮被 mark 后下一轮注入 intrinsic）
         let realm_entries: Vec<(u32, i64, Vec<i64>)> = ctx.with_state(|st| {
-            let realms = st
-                .active_realms
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let realms = st.active_realms.lock().unwrap_or_else(|e| e.into_inner());
             realms
                 .iter()
                 .filter(|r| r.id.0 != 0)
@@ -539,13 +536,15 @@ fn collect_host_table_values(
         // process IPC message / disconnect 回调（否则 GC 会清掉 process.on('message')）
         if let Some(ipc) = st.process_ipc.as_ref() {
             if let Ok(cb) = ipc.message_cb.lock()
-                && let Some(v) = *cb {
-                    out.push(v);
-                }
+                && let Some(v) = *cb
+            {
+                out.push(v);
+            }
             if let Ok(cb) = ipc.disconnect_cb.lock()
-                && let Some(v) = *cb {
-                    out.push(v);
-                }
+                && let Some(v) = *cb
+            {
+                out.push(v);
+            }
         }
         // child_process 本地 message/exit/disconnect 回调
         if let Ok(bindings) = st.child_bindings.lock() {
@@ -581,7 +580,7 @@ fn collect_host_table_values(
                     } => {
                         out.extend([*promise, *thenable, *then]);
                     }
-                    Microtask::MicrotaskCallback { callback } => out.push(*callback),
+                    Microtask::MicrotaskCallback { callback, .. } => out.push(*callback),
                     Microtask::TransformStreamTransform {
                         callback,
                         this_val,
@@ -665,6 +664,16 @@ fn collect_host_table_values(
                 out.push(task.callback);
                 out.extend(task.args.iter().copied());
             }
+        }
+        if let Ok(pending_rejections) = st.pending_unhandled_rejections.lock() {
+            out.extend(
+                pending_rejections
+                    .iter()
+                    .map(|&handle| value::encode_object_handle(handle as u32)),
+            );
+        }
+        if let Ok(async_hooks) = st.async_hooks.lock() {
+            out.extend(async_hooks.gc_roots());
         }
 
         // promise_table：只有已可达 Promise 对象的 state value + reactions 才是 child edge。
@@ -760,10 +769,23 @@ fn collect_host_table_values(
             }
         }
 
-        // timers：callback（TimerEntry 非 Clone，在 guard 内直接取字段）
+        // timers：callback + JS Timeout 资源对象
         if let Ok(timers) = st.timers.lock() {
             for t in timers.iter() {
                 out.push(t.callback);
+                if t.resource != 0 {
+                    out.push(t.resource);
+                }
+            }
+        }
+
+        // setImmediate 队列
+        if let Ok(immediates) = st.immediate_queue.lock() {
+            for e in immediates.iter() {
+                out.push(e.callback);
+                if e.resource != 0 {
+                    out.push(e.resource);
+                }
             }
         }
 

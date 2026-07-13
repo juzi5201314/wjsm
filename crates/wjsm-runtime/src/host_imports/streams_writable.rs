@@ -389,32 +389,33 @@ pub(crate) async fn construct_writable_stream(
 
     // 6.5 保存 underlyingSink 与 write/close/abort 回调
     if value::is_object(sink)
-        && let Some(ptr) = resolve_handle(caller, sink) {
-            let write_fn = read_object_property_by_name(caller, ptr, "write")
-                .unwrap_or_else(value::encode_undefined);
-            let close_fn = read_object_property_by_name(caller, ptr, "close")
-                .unwrap_or_else(value::encode_undefined);
-            let abort_fn = read_object_property_by_name(caller, ptr, "abort")
-                .unwrap_or_else(value::encode_undefined);
-            let mut table = caller
-                .data()
-                .stream_controller_table
-                .inner
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(ctrl) = table.get_mut(controller_handle as usize) {
-                ctrl.underlying_source = Some(sink);
-                if value::is_callable(write_fn) {
-                    ctrl.write_callback = Some(write_fn);
-                }
-                if value::is_callable(close_fn) {
-                    ctrl.sink_close_callback = Some(close_fn);
-                }
-                if value::is_callable(abort_fn) {
-                    ctrl.cancel_callback = Some(abort_fn);
-                }
+        && let Some(ptr) = resolve_handle(caller, sink)
+    {
+        let write_fn = read_object_property_by_name(caller, ptr, "write")
+            .unwrap_or_else(value::encode_undefined);
+        let close_fn = read_object_property_by_name(caller, ptr, "close")
+            .unwrap_or_else(value::encode_undefined);
+        let abort_fn = read_object_property_by_name(caller, ptr, "abort")
+            .unwrap_or_else(value::encode_undefined);
+        let mut table = caller
+            .data()
+            .stream_controller_table
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ctrl) = table.get_mut(controller_handle as usize) {
+            ctrl.underlying_source = Some(sink);
+            if value::is_callable(write_fn) {
+                ctrl.write_callback = Some(write_fn);
+            }
+            if value::is_callable(close_fn) {
+                ctrl.sink_close_callback = Some(close_fn);
+            }
+            if value::is_callable(abort_fn) {
+                ctrl.cancel_callback = Some(abort_fn);
             }
         }
+    }
 
     // 7. 标记 controller.started = true
     {

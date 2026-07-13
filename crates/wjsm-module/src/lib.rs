@@ -49,8 +49,8 @@ pub fn lower_bundle_with_debug(
     options: ResolutionOptions,
     emit_debug_checks: bool,
 ) -> Result<wjsm_ir::Program> {
-    let bundler =
-        ModuleBundler::with_resolution_options(root_path, options)?.with_emit_debug_checks(emit_debug_checks);
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?
+        .with_emit_debug_checks(emit_debug_checks);
     bundler.lower_bundle(entry)
 }
 
@@ -70,8 +70,8 @@ pub fn lower_runtime_entry_bundle_with_debug(
     options: ResolutionOptions,
     emit_debug_checks: bool,
 ) -> Result<RuntimeEntryBundle> {
-    let bundler =
-        ModuleBundler::with_resolution_options(root_path, options)?.with_emit_debug_checks(emit_debug_checks);
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?
+        .with_emit_debug_checks(emit_debug_checks);
     bundler.lower_runtime_entry_bundle(entry)
 }
 
@@ -91,8 +91,8 @@ pub fn lower_runtime_builtin_bundle_with_debug(
     options: ResolutionOptions,
     emit_debug_checks: bool,
 ) -> Result<RuntimeEntryBundle> {
-    let bundler =
-        ModuleBundler::with_resolution_options(root_path, options)?.with_emit_debug_checks(emit_debug_checks);
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?
+        .with_emit_debug_checks(emit_debug_checks);
     bundler.lower_runtime_builtin_bundle(specifier)
 }
 

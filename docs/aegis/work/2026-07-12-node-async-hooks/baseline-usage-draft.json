@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-12-node-async-hooks",
+  "requiredBaselineRefs": [
+    "issue://313",
+    "docs/adr/0002-runtimestate-stays-flat.md",
+    "docs/adr/0003-startup-snapshot-boundary.md",
+    "docs/adr/0005-pluggable-gc-v2.md",
+    "docs/adr/0008-node-vm-multi-realm.md",
+    "https://nodejs.org/docs/v24.15.0/api/async_hooks.html",
+    "https://nodejs.org/docs/v24.15.0/api/async_context.html",
+    "crates/wjsm-runtime/src/scheduler.rs",
+    "crates/wjsm-runtime/src/runtime_microtask.rs",
+    "crates/wjsm-runtime/src/runtime_promises.rs",
+    "docs/aegis/specs/2026-07-12-node-async-hooks-design.md"
+  ],
+  "deliveredContextRefs": [
+    "design investigation session 2026-07-12",
+    "opensrc nodejs/node main internal impl reference"
+  ],
+  "acknowledgedBeforePlanRefs": [
+    "issue://313 non-goal override by user",
+    "Node v24.15 public API; exclude withScope",
+    "ADR 0002 flat RuntimeState",
+    "Host-core scheme B",
+    "setImmediate required in full delivery"
+  ],
+  "citedInPlanRefs": [
+    "docs/aegis/specs/2026-07-12-node-async-hooks-design.md",
+    "docs/aegis/plans/2026-07-12-node-async-hooks.md",
+    "https://nodejs.org/docs/v24.15.0/api/async_hooks.html",
+    "https://nodejs.org/docs/v24.15.0/api/async_context.html",
+    "crates/wjsm-runtime/src/scheduler.rs",
+    "docs/adr/0002-runtimestate-stays-flat.md"
+  ],
+  "missingRefs": [],
+  "decision": "continue"
+}

@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+TickObject init,before,after,destroy
+Timeout init,before,after,destroy
+Immediate init,before,after,destroy
+--- stderr ---

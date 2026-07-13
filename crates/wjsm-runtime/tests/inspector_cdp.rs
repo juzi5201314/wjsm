@@ -203,8 +203,7 @@ async fn e2e_inspect_brk_debugger_pause_resume() {
     use std::sync::{Arc, Mutex};
     use tokio_tungstenite::tungstenite::Message;
     use wjsm_runtime::{
-        InspectConfig, RuntimeOptions, compile_source_with_debug,
-        execute_with_writer_with_options,
+        InspectConfig, RuntimeOptions, compile_source_with_debug, execute_with_writer_with_options,
     };
 
     let source = "let x = 42;\ndebugger;\nconsole.log(x);\n";
@@ -263,15 +262,15 @@ async fn e2e_inspect_brk_debugger_pause_resume() {
         .await
         .unwrap()
             && let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
-                && let Some(url) = v
-                    .as_array()
-                    .and_then(|a| a.first())
-                    .and_then(|o| o.get("webSocketDebuggerUrl"))
-                    .and_then(|u| u.as_str())
-                {
-                    ws_url = Some(url.to_string());
-                    break;
-                }
+            && let Some(url) = v
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|o| o.get("webSocketDebuggerUrl"))
+                .and_then(|u| u.as_str())
+        {
+            ws_url = Some(url.to_string());
+            break;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let ws_url = ws_url.expect("inspector discovery should publish webSocketDebuggerUrl");
@@ -340,7 +339,10 @@ async fn e2e_inspect_brk_debugger_pause_resume() {
                 let v: serde_json::Value = serde_json::from_str(&t).unwrap();
                 if v.get("method").and_then(|m| m.as_str()) == Some("Debugger.paused") {
                     paused_at_debugger = true;
-                    let frames = v["params"]["callFrames"].as_array().cloned().unwrap_or_default();
+                    let frames = v["params"]["callFrames"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
                     assert!(!frames.is_empty(), "paused should include callFrames");
                     let scope_id = frames[0]["scopeChain"][0]["object"]["objectId"]
                         .as_str()
@@ -406,22 +408,19 @@ fn ureq_get(url: &str) -> Result<String, String> {
     } else {
         (hostport, 80u16)
     };
-    let mut stream =
-        std::net::TcpStream::connect((host, port)).map_err(|e| e.to_string())?;
+    let mut stream = std::net::TcpStream::connect((host, port)).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(std::time::Duration::from_millis(200)))
         .ok();
     let req = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n");
     use std::io::{Read, Write};
-    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&buf);
-    let body = text
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
     Ok(body)
 }
 

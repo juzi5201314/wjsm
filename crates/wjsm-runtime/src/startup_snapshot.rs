@@ -437,6 +437,14 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
             bail!("capture: async_from_sync_iterators not empty");
         }
     }
+    if !data
+        .async_hooks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_empty_for_snapshot()
+    {
+        bail!("capture: async_hooks runtime state not empty");
+    }
     Ok(())
 }
 

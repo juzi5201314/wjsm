@@ -118,12 +118,37 @@ pub(crate) fn create_net_host_object(caller: &mut Caller<'_, RuntimeState>) -> i
     install_net_method(caller, obj, "serverClose", NetMethodKind::ServerClose);
     install_net_method(caller, obj, "serverPort", NetMethodKind::ServerPort);
     install_net_method(caller, obj, "serverAddress", NetMethodKind::ServerAddress);
-    install_net_method(caller, obj, "socketLocalPort", NetMethodKind::SocketLocalPort);
-    install_net_method(caller, obj, "socketLocalAddress", NetMethodKind::SocketLocalAddress);
-    install_net_method(caller, obj, "socketRemotePort", NetMethodKind::SocketRemotePort);
-    install_net_method(caller, obj, "socketRemoteAddress", NetMethodKind::SocketRemoteAddress);
+    install_net_method(
+        caller,
+        obj,
+        "socketLocalPort",
+        NetMethodKind::SocketLocalPort,
+    );
+    install_net_method(
+        caller,
+        obj,
+        "socketLocalAddress",
+        NetMethodKind::SocketLocalAddress,
+    );
+    install_net_method(
+        caller,
+        obj,
+        "socketRemotePort",
+        NetMethodKind::SocketRemotePort,
+    );
+    install_net_method(
+        caller,
+        obj,
+        "socketRemoteAddress",
+        NetMethodKind::SocketRemoteAddress,
+    );
     install_net_method(caller, obj, "socketFromFd", NetMethodKind::SocketFromFd);
-    install_net_method(caller, obj, "serverAcceptRawFd", NetMethodKind::ServerAcceptRawFd);
+    install_net_method(
+        caller,
+        obj,
+        "serverAcceptRawFd",
+        NetMethodKind::ServerAcceptRawFd,
+    );
     caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }
@@ -213,7 +238,8 @@ fn connect(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         },
         |store, _env, result| match result {
             Ok((stream, local_addr, peer_addr)) => {
-                let handle = alloc_socket_entry_from_stream(store.data(), stream, local_addr, peer_addr);
+                let handle =
+                    alloc_socket_entry_from_stream(store.data(), stream, local_addr, peer_addr);
                 PromiseSettlement::Fulfill(value::encode_f64(handle as f64))
             }
             Err(message) => PromiseSettlement::Reject(error_with_env(store, _env, message)),
@@ -254,7 +280,9 @@ fn read(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             }
         },
         |store, env, result| match result {
-            Ok(Some(bytes)) => PromiseSettlement::Fulfill(arraybuffer_with_bytes(store, env, &bytes)),
+            Ok(Some(bytes)) => {
+                PromiseSettlement::Fulfill(arraybuffer_with_bytes(store, env, &bytes))
+            }
             Ok(None) => PromiseSettlement::Fulfill(value::encode_null()),
             Err(message) => PromiseSettlement::Reject(error_with_env(store, env, message)),
         },
@@ -704,7 +732,9 @@ fn server_port(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
 
 fn server_address(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     server_entry(caller, args.first().copied())
-        .map(|entry| crate::runtime_render::store_runtime_string(caller, entry.local_addr.ip().to_string()))
+        .map(|entry| {
+            crate::runtime_render::store_runtime_string(caller, entry.local_addr.ip().to_string())
+        })
         .unwrap_or_else(value::encode_undefined)
 }
 
@@ -717,7 +747,11 @@ fn socket_addr_number(
     let Some(entry) = socket_entry(caller, args.first().copied()) else {
         return value::encode_undefined();
     };
-    let addr = if peer { entry.peer_addr } else { entry.local_addr };
+    let addr = if peer {
+        entry.peer_addr
+    } else {
+        entry.local_addr
+    };
     if port {
         value::encode_f64(f64::from(addr.port()))
     } else {
@@ -729,11 +763,18 @@ fn socket_addr_string(caller: &mut Caller<'_, RuntimeState>, args: &[i64], peer:
     let Some(entry) = socket_entry(caller, args.first().copied()) else {
         return value::encode_undefined();
     };
-    let addr = if peer { entry.peer_addr } else { entry.local_addr };
+    let addr = if peer {
+        entry.peer_addr
+    } else {
+        entry.local_addr
+    };
     crate::runtime_render::store_runtime_string(caller, addr.ip().to_string())
 }
 
-fn socket_entry(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Option<SocketSnapshot> {
+fn socket_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Option<SocketSnapshot> {
     let handle = handle_arg(value_raw)?;
     let table = caller.data().net_socket_table.inner.lock().ok()?;
     let entry = table.get(handle as usize)?;
@@ -746,7 +787,10 @@ fn socket_entry(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -
     })
 }
 
-fn server_entry(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Option<ServerSnapshot> {
+fn server_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Option<ServerSnapshot> {
     let handle = handle_arg(value_raw)?;
     let table = caller.data().net_server_table.inner.lock().ok()?;
     let entry = table.get(handle as usize)?;
@@ -824,7 +868,10 @@ fn host_arg(
     }
 }
 
-fn data_arg(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Result<Vec<u8>, String> {
+fn data_arg(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Result<Vec<u8>, String> {
     let value_raw = value_raw.unwrap_or_else(value::encode_undefined);
     if value::is_undefined(value_raw) || value::is_null(value_raw) {
         return Ok(Vec::new());
@@ -848,25 +895,40 @@ fn enqueue_async_result<T, Fut, Materialize>(
         + 'static,
 {
     let Some(tx) = caller.data().host_completion_tx.clone() else {
-        reject_promise_from_caller(caller, promise, "async network runtime is not available".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "async network runtime is not available".to_string(),
+        );
         return;
     };
     let Some(counter) = caller.data().async_op_counter.clone() else {
-        reject_promise_from_caller(caller, promise, "async network runtime is not available".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "async network runtime is not available".to_string(),
+        );
         return;
     };
     let guard = counter.begin();
+    // 调度点捕获：在 spawn 前取当前 ALS/hooks frame（P0-5）
+    let scope = crate::scheduler::capture_completion_scope_from_caller(caller);
     tokio::spawn(async move {
         let result = future.await;
         let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
             promise,
             materialize: Box::new(move |store, env| materialize(store, env, result)),
+            scope,
         });
         drop(guard);
     });
 }
 
-fn reject_promise_from_caller(caller: &mut Caller<'_, RuntimeState>, promise: i64, message: String) {
+fn reject_promise_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    message: String,
+) {
     let msg_val = crate::runtime_render::store_runtime_string(caller, message.clone());
     let error = create_error_object(caller, "Error", msg_val, value::encode_undefined());
     settle_promise(caller.data(), promise, PromiseSettlement::Reject(error));

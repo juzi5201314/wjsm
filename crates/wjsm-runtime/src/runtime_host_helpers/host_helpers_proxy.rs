@@ -398,9 +398,10 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
     // 确保原型就绪后直接返回。
     if value::is_regexp(target) {
         if !value::is_object(caller.data().regexp_prototype)
-            && let Some(env) = WasmEnv::from_caller(caller) {
-                crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
-            }
+            && let Some(env) = WasmEnv::from_caller(caller)
+        {
+            crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
+        }
         let proto = caller.data().regexp_prototype;
         return if value::is_object(proto) {
             proto
@@ -938,8 +939,18 @@ caller_env_wrapper! {
 }
 
 #[inline]
-pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: PromiseEntry) -> i64 {
+pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, mut entry: PromiseEntry) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    if entry.capture_scope.is_none() {
+        entry.capture_scope = {
+            let mut hooks = caller
+                .data()
+                .async_hooks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            hooks.capture_for_scheduled_callback(0, false)
+        };
+    }
     let promise = alloc_object_with_env(caller, &env, 0);
     if value::is_object(promise) {
         if !value::is_object(caller.data().promise_prototype) {

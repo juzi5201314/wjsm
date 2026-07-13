@@ -36,14 +36,16 @@ pub(crate) fn snapshot_call_frames(
     col: u32,
 ) -> Vec<serde_json::Value> {
     if let Some(frames) = try_guest_debug_frames(caller, debug_info, line, col)
-        && !frames.is_empty() {
-            return frames;
-        }
+        && !frames.is_empty()
+    {
+        return frames;
+    }
 
     if let Some(frames) = try_wasm_backtrace_frames(caller, debug_info, line, col)
-        && !frames.is_empty() {
-            return frames;
-        }
+        && !frames.is_empty()
+    {
+        return frames;
+    }
 
     vec![synthetic_top_frame(debug_info, line, col)]
 }
@@ -60,7 +62,10 @@ fn try_guest_debug_frames(
     }
     let mut frames = Vec::new();
     for (depth, handle) in handles.into_iter().enumerate() {
-        let func_idx_pc = handle.wasm_function_index_and_pc(&mut *caller).ok().flatten();
+        let func_idx_pc = handle
+            .wasm_function_index_and_pc(&mut *caller)
+            .ok()
+            .flatten();
         let (func_name, loc_line, loc_col) = match func_idx_pc {
             Some((idx, pc)) => {
                 // DefinedFuncIndex Debug 形如 `DefinedFuncIndex(N)`；N 与 backend wasm func 索引对齐时
@@ -218,13 +223,14 @@ fn display_local_name(name: &str) -> Option<String> {
         return Some("globalThis".to_string());
     }
     if let Some(rest) = name.strip_prefix('$')
-        && let Some(dot) = rest.find('.') {
-            let user = &rest[dot + 1..];
-            if user.is_empty() || user.starts_with('$') {
-                return None;
-            }
-            return Some(user.to_string());
+        && let Some(dot) = rest.find('.')
+    {
+        let user = &rest[dot + 1..];
+        if user.is_empty() || user.starts_with('$') {
+            return None;
         }
+        return Some(user.to_string());
+    }
     if name.starts_with('$') {
         return None;
     }

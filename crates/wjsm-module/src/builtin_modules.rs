@@ -104,6 +104,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         canonical: "vm",
         source: include_str!("../builtin_js/node_vm.js"),
     },
+    BuiltinModule {
+        canonical: "async_hooks",
+        source: include_str!("../builtin_js/node_async_hooks.js"),
+    },
 ];
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {

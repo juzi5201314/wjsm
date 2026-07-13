@@ -496,7 +496,7 @@ pub(crate) fn resolve_fetch_request_params(
             Ok(Some(init_redirect)) => {
                 let mode = parse_redirect_mode(caller, &init_redirect)?;
                 redirect = mode
-            },
+            }
             Ok(None) => {}
             Err(exception) => return Err(exception),
         }

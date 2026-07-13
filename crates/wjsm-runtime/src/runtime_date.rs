@@ -135,9 +135,10 @@ pub(crate) fn parse_date_string(s: &str) -> Option<f64> {
             return Some(ndt.and_utc().timestamp_millis() as f64);
         }
         if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, fmt)
-            && let Some(ndt) = nd.and_hms_opt(0, 0, 0) {
-                return Some(ndt.and_utc().timestamp_millis() as f64);
-            }
+            && let Some(ndt) = nd.and_hms_opt(0, 0, 0)
+        {
+            return Some(ndt.and_utc().timestamp_millis() as f64);
+        }
     }
 
     // `Date.prototype.toUTCString()`: "Wed, 22 Jun 2026 12:00:00 GMT"
@@ -875,20 +876,10 @@ pub(crate) fn call_date_method_from_caller(
             call_date_method_from_caller(caller, this_val, DateMethodKind::ToString, args)
         }
         DateMethodKind::ToLocaleDateString => {
-            call_date_method_from_caller(
-                caller,
-                this_val,
-                DateMethodKind::ToDateString,
-                args,
-            )
+            call_date_method_from_caller(caller, this_val, DateMethodKind::ToDateString, args)
         }
         DateMethodKind::ToLocaleTimeString => {
-            call_date_method_from_caller(
-                caller,
-                this_val,
-                DateMethodKind::ToTimeString,
-                args,
-            )
+            call_date_method_from_caller(caller, this_val, DateMethodKind::ToTimeString, args)
         }
         DateMethodKind::ToISOString => {
             if ms.is_nan() {

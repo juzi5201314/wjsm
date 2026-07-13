@@ -1,52 +1,109 @@
-# Aegis Index
+# Aegis Workspace Index
 
-## Specs
+This index tracks files created under this project's `docs/aegis/` workspace.
 
-| Date | Title | File |
-|------|-------|------|
-| 2026-05-28 | Host Import Registry Consolidation | [specs/2026-05-28-host-import-registry-design.md](specs/2026-05-28-host-import-registry-design.md) |
-| 2026-05-28 | Proxy 13-Trap + Reflect API Completion | [specs/2026-05-28-proxy-reflect-complete-design.md](specs/2026-05-28-proxy-reflect-complete-design.md) |
-| 2026-06-02 | Unified Async Execution Model | [specs/2026-06-02-unified-async-execution-model-design.md](specs/2026-06-02-unified-async-execution-model-design.md) |
-| 2026-06-03 | Fetch Standard Implementation | [specs/2026-06-03-fetch-standard-design.md](specs/2026-06-03-fetch-standard-design.md) |
-| 2026-06-03 | WHATWG Streams Standard Implementation | [specs/2026-06-03-streams-standard-design.md](specs/2026-06-03-streams-standard-design.md) |
-| 2026-06-05 | SharedArrayBuffer + Atomics ES Full Implementation | [specs/2026-06-05-sharedarraybuffer-atomics-design.md](specs/2026-06-05-sharedarraybuffer-atomics-design.md) |
-| 2026-06-07 | Runtime Side Table Lifecycle (Phase 4 GC) | [specs/2026-06-07-runtime-side-table-lifecycle-design.md](specs/2026-06-07-runtime-side-table-lifecycle-design.md) |
-| 2026-06-13 | Fetch/Streams Streaming Completion | [specs/2026-06-13-fetch-streams-completion-design.md](specs/2026-06-13-fetch-streams-completion-design.md) |
-| 2026-06-14 | Pluggable GC Framework (non-moving MarkSweep) | [specs/2026-06-14-pluggable-gc-framework-design.md](specs/2026-06-14-pluggable-gc-framework-design.md) |
-| 2026-07-03 | N-API Native Addon Compatibility Layer | [specs/2026-07-03-napi-native-addon-design.md](specs/2026-07-03-napi-native-addon-design.md) |
-| 2026-07-03 | Pluggable GC v2 (mark-sweep / G1 / ZGC) | [specs/2026-07-03-pluggable-gc-v2-design.md](specs/2026-07-03-pluggable-gc-v2-design.md) |
-| 2026-07-06 | Package Resolution Enhancement (issue #309) | [specs/2026-07-06-package-resolution-enhancement-design.md](specs/2026-07-06-package-resolution-enhancement-design.md) |
-| 2026-07-07 | Runtime Module Loading (issue #312) | [specs/2026-07-07-runtime-module-loading-design.md](specs/2026-07-07-runtime-module-loading-design.md) |
-| 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [specs/2026-07-07-package-management-design.md](specs/2026-07-07-package-management-design.md) |
-| 2026-07-08 | Node Advanced Builtins and CLI Tooling (issue #311) | [specs/2026-07-08-node-advanced-modules-issue311-design.md](specs/2026-07-08-node-advanced-modules-issue311-design.md) |
-| 2026-07-10 | node:vm Multi-Realm Sandbox | [specs/2026-07-10-node-vm-multi-realm-design.md](specs/2026-07-10-node-vm-multi-realm-design.md) |
-## Plans
-
-| Date | Title | File |
-|------|-------|------|
-| 2026-05-28 | Host Import Registry Consolidation | [plans/2026-05-28-host-import-registry-consolidation.md](plans/2026-05-28-host-import-registry-consolidation.md) |
-| 2026-05-27 | TypedArray Methods Completion + BigInt64Array/BigUint64Array | [plans/2026-05-27-typedarray-methods-completion.md](plans/2026-05-27-typedarray-methods-completion.md) |
-| 2026-06-03 | Fetch Standard Implementation | [plans/2026-06-03-fetch-standard.md](plans/2026-06-03-fetch-standard.md) |
-| 2026-06-05 | SharedArrayBuffer + Atomics ES Full Implementation | [plans/2026-06-05-sharedarraybuffer-atomics.md](plans/2026-06-05-sharedarraybuffer-atomics.md) |
-| 2026-06-07 | Runtime Side Table Lifecycle | [plans/2026-06-07-runtime-side-table-lifecycle.md](plans/2026-06-07-runtime-side-table-lifecycle.md) |
-| 2026-06-07 | Eval Arguments/TDZ/Super Gap Closure | [plans/2026-06-07-eval-arguments-tdz-super-gaps.md](plans/2026-06-07-eval-arguments-tdz-super-gaps.md) |
-| 2026-06-03 | WHATWG Streams Standard Implementation | [plans/2026-06-03-streams-standard.md](plans/2026-06-03-streams-standard.md) |
-| 2026-06-13 | Fetch/Streams Streaming Completion | [plans/2026-06-13-fetch-streams-completion.md](plans/2026-06-13-fetch-streams-completion.md) |
-| 2026-06-14 | Pluggable GC Framework | [plans/2026-06-14-pluggable-gc-framework.md](plans/2026-06-14-pluggable-gc-framework.md) |
-| 2026-06-17 | Startup Snapshot | [plans/2026-06-17-startup-snapshot.md](plans/2026-06-17-startup-snapshot.md) |
-| 2026-06-19 | Build-Time Embedded Runtime | [plans/2026-06-19-build-time-embedded-runtime.md](plans/2026-06-19-build-time-embedded-runtime.md) |
-| 2026-07-03 | N-API Native Addon Compatibility Layer | [plans/2026-07-03-napi-native-addon.md](plans/2026-07-03-napi-native-addon.md) |
-| 2026-07-03 | Pluggable GC v2 (mark-sweep / G1 / ZGC) | [plans/2026-07-03-pluggable-gc-v2.md](plans/2026-07-03-pluggable-gc-v2.md) |
-| 2026-07-06 | Package Resolution Enhancement (issue #309) | [plans/2026-07-06-package-resolution-enhancement.md](plans/2026-07-06-package-resolution-enhancement.md) |
-| 2026-07-07 | Runtime Module Loading (issue #312) | [plans/2026-07-07-runtime-module-loading.md](plans/2026-07-07-runtime-module-loading.md) |
-| 2026-07-07 | Package Management (wjsm-pm: CAS + PubGrub + task/x) | [plans/2026-07-07-package-management.md](plans/2026-07-07-package-management.md) |
-| 2026-07-08 | Node Advanced Builtins and CLI Tooling (issue #311) | [plans/2026-07-08-node-advanced-modules-issue311.md](plans/2026-07-08-node-advanced-modules-issue311.md) |
-| 2026-07-10 | node:vm Multi-Realm Sandbox | [plans/2026-07-10-node-vm-multi-realm.md](plans/2026-07-10-node-vm-multi-realm.md) |
-
-## Baselines
-
-| 2026-06-18 | Startup Snapshot Boundary (ADR 0003) | [../../docs/adr/0003-startup-snapshot-boundary.md](../../docs/adr/0003-startup-snapshot-boundary.md) |
-| 2026-06-19 | Build-Time Embedded Runtime (ADR 0004; partial supersede 0003) | [../../docs/adr/0004-build-time-embedded-runtime.md](../../docs/adr/0004-build-time-embedded-runtime.md) |
-| 2026-07-05 | Pluggable GC v2 Boundary (ADR 0005) | [../../docs/adr/0005-pluggable-gc-v2.md](../../docs/adr/0005-pluggable-gc-v2.md) |
-| 2026-07-07 | Runtime Module Loading Boundary (ADR 0006) | [../../docs/adr/0006-runtime-module-loading-boundary.md](../../docs/adr/0006-runtime-module-loading-boundary.md) |
-| 2026-07-11 | node:vm Multi-Realm Sandbox (ADR 0008) | [../../docs/adr/0008-node-vm-multi-realm.md](../../docs/adr/0008-node-vm-multi-realm.md) |
+| Date | Kind | Path | Title |
+|------|------|------|-------|
+| 2026-07-12 | governance | docs/aegis/BASELINE-GOVERNANCE.md | BASELINE-GOVERNANCE |
+| 2026-07-12 | doc | docs/aegis/README.md | README |
+| 2026-05-27 | plan | docs/aegis/plans/2026-05-27-typedarray-methods-completion.md | 2026-05-27-typedarray-methods-completion |
+| 2026-05-28 | plan | docs/aegis/plans/2026-05-28-host-import-registry-consolidation.md | 2026-05-28-host-import-registry-consolidation |
+| 2026-05-28 | plan | docs/aegis/plans/2026-05-28-proxy-reflect-complete.md | 2026-05-28-proxy-reflect-complete |
+| 2026-05-30 | plan | docs/aegis/plans/2026-05-30-json-implementation.md | 2026-05-30-json-implementation |
+| 2026-05-31 | plan | docs/aegis/plans/2026-05-31-json-implementation-corrected.md | 2026-05-31-json-implementation-corrected |
+| 2026-06-02 | plan | docs/aegis/plans/2026-06-02-unified-async-execution-model.md | 2026-06-02-unified-async-execution-model |
+| 2026-06-03 | plan | docs/aegis/plans/2026-06-03-fetch-standard.md | 2026-06-03-fetch-standard |
+| 2026-06-03 | plan | docs/aegis/plans/2026-06-03-streams-standard.md | 2026-06-03-streams-standard |
+| 2026-06-05 | plan | docs/aegis/plans/2026-06-05-sharedarraybuffer-atomics.md | 2026-06-05-sharedarraybuffer-atomics |
+| 2026-06-07 | plan | docs/aegis/plans/2026-06-07-eval-arguments-tdz-super-gaps.md | 2026-06-07-eval-arguments-tdz-super-gaps |
+| 2026-06-07 | plan | docs/aegis/plans/2026-06-07-runtime-side-table-lifecycle.md | 2026-06-07-runtime-side-table-lifecycle |
+| 2026-06-10 | plan | docs/aegis/plans/2026-06-10-fix-9-failing-fixtures.md | 2026-06-10-fix-9-failing-fixtures |
+| 2026-06-13 | plan | docs/aegis/plans/2026-06-13-fetch-streams-completion.md | 2026-06-13-fetch-streams-completion |
+| 2026-06-14 | plan | docs/aegis/plans/2026-06-14-pluggable-gc-framework.md | 2026-06-14-pluggable-gc-framework |
+| 2026-06-17 | plan | docs/aegis/plans/2026-06-17-startup-snapshot.md | 2026-06-17-startup-snapshot |
+| 2026-06-19 | plan | docs/aegis/plans/2026-06-19-build-time-embedded-runtime.md | 2026-06-19-build-time-embedded-runtime |
+| 2026-07-03 | plan | docs/aegis/plans/2026-07-03-napi-native-addon.md | 2026-07-03-napi-native-addon |
+| 2026-07-03 | plan | docs/aegis/plans/2026-07-03-pluggable-gc-v2.md | 2026-07-03-pluggable-gc-v2 |
+| 2026-07-06 | plan | docs/aegis/plans/2026-07-06-package-resolution-enhancement.md | 2026-07-06-package-resolution-enhancement |
+| 2026-07-07 | plan | docs/aegis/plans/2026-07-07-package-management.md | 2026-07-07-package-management |
+| 2026-07-07 | plan | docs/aegis/plans/2026-07-07-runtime-module-loading.md | 2026-07-07-runtime-module-loading |
+| 2026-07-08 | plan | docs/aegis/plans/2026-07-08-node-advanced-modules-issue311.md | 2026-07-08-node-advanced-modules-issue311 |
+| 2026-07-10 | plan | docs/aegis/plans/2026-07-10-node-vm-multi-realm.md | 2026-07-10-node-vm-multi-realm |
+| 2026-07-12 | plan | docs/aegis/plans/2026-07-12-node-async-hooks.md | 2026-07-12-node-async-hooks |
+| 2026-05-28 | spec | docs/aegis/specs/2026-05-28-host-import-registry-design.md | 2026-05-28-host-import-registry-design |
+| 2026-05-28 | spec | docs/aegis/specs/2026-05-28-proxy-reflect-complete-design.md | 2026-05-28-proxy-reflect-complete-design |
+| 2026-06-02 | spec | docs/aegis/specs/2026-06-02-unified-async-execution-model-design.md | 2026-06-02-unified-async-execution-model-design |
+| 2026-06-03 | spec | docs/aegis/specs/2026-06-03-fetch-standard-design.md | 2026-06-03-fetch-standard-design |
+| 2026-06-03 | spec | docs/aegis/specs/2026-06-03-streams-standard-design.md | 2026-06-03-streams-standard-design |
+| 2026-06-05 | spec | docs/aegis/specs/2026-06-05-sharedarraybuffer-atomics-design.md | 2026-06-05-sharedarraybuffer-atomics-design |
+| 2026-06-07 | spec | docs/aegis/specs/2026-06-07-runtime-side-table-lifecycle-design.md | 2026-06-07-runtime-side-table-lifecycle-design |
+| 2026-06-10 | spec | docs/aegis/specs/2026-06-10-fixture-failures-analysis.md | 2026-06-10-fixture-failures-analysis |
+| 2026-06-10 | spec | docs/aegis/specs/2026-06-10-fixture-failures-approaches.md | 2026-06-10-fixture-failures-approaches |
+| 2026-06-10 | spec | docs/aegis/specs/2026-06-10-fixture-failures-plan.md | 2026-06-10-fixture-failures-plan |
+| 2026-06-13 | spec | docs/aegis/specs/2026-06-13-fetch-streams-completion-design.md | 2026-06-13-fetch-streams-completion-design |
+| 2026-06-14 | spec | docs/aegis/specs/2026-06-14-pluggable-gc-framework-design.md | 2026-06-14-pluggable-gc-framework-design |
+| 2026-07-03 | spec | docs/aegis/specs/2026-07-03-napi-native-addon-design.md | 2026-07-03-napi-native-addon-design |
+| 2026-07-03 | spec | docs/aegis/specs/2026-07-03-pluggable-gc-v2-design.md | 2026-07-03-pluggable-gc-v2-design |
+| 2026-07-06 | spec | docs/aegis/specs/2026-07-06-package-resolution-enhancement-design.md | 2026-07-06-package-resolution-enhancement-design |
+| 2026-07-07 | spec | docs/aegis/specs/2026-07-07-package-management-design.md | 2026-07-07-package-management-design |
+| 2026-07-07 | spec | docs/aegis/specs/2026-07-07-runtime-module-loading-design.md | 2026-07-07-runtime-module-loading-design |
+| 2026-07-08 | spec | docs/aegis/specs/2026-07-08-node-advanced-modules-issue311-design.md | 2026-07-08-node-advanced-modules-issue311-design |
+| 2026-07-10 | spec | docs/aegis/specs/2026-07-10-node-vm-multi-realm-design.md | 2026-07-10-node-vm-multi-realm-design |
+| 2026-07-12 | spec | docs/aegis/specs/2026-07-12-node-async-hooks-design.md | 2026-07-12-node-async-hooks-design |
+| 2026-05-27 | work | docs/aegis/work/2026-05-27-typedarray-methods-completion/10-intent.md | 10-intent |
+| 2026-05-27 | work | docs/aegis/work/2026-05-27-typedarray-methods-completion/20-checkpoint.md | 20-checkpoint |
+| 2026-05-31 | work | docs/aegis/work/2026-05-31-async-scheduler-implementation/10-intent.md | 10-intent |
+| 2026-05-31 | work | docs/aegis/work/2026-05-31-async-scheduler-implementation/20-checkpoint.md | 20-checkpoint |
+| 2026-05-31 | work | docs/aegis/work/2026-05-31-json-es-compliance-simd/10-intent.md | 10-intent |
+| 2026-05-31 | work | docs/aegis/work/2026-05-31-json-es-compliance-simd/20-checkpoint.md | 20-checkpoint |
+| 2026-05-31 | work | docs/aegis/work/2026-05-31-json-es-compliance-simd/90-evidence.md | 90-evidence |
+| 2026-06-03 | work | docs/aegis/work/2026-06-03-streams-standard/10-intent.md | 10-intent |
+| 2026-06-03 | work | docs/aegis/work/2026-06-03-streams-standard/20-checkpoint.md | 20-checkpoint |
+| 2026-06-03 | work | docs/aegis/work/2026-06-03-streams-standard/90-evidence.md | 90-evidence |
+| 2026-06-03 | work | docs/aegis/work/2026-06-03-streams-standard/99-reflection.md | 99-reflection |
+| 2026-06-05 | work | docs/aegis/work/2026-06-05-sharedarraybuffer-atomics/10-intent.md | 10-intent |
+| 2026-06-05 | work | docs/aegis/work/2026-06-05-sharedarraybuffer-atomics/20-checkpoint.md | 20-checkpoint |
+| 2026-06-07 | work | docs/aegis/work/2026-06-07-eval-arguments-tdz-super-gaps/10-intent.md | 10-intent |
+| 2026-06-07 | work | docs/aegis/work/2026-06-07-eval-arguments-tdz-super-gaps/20-checkpoint.md | 20-checkpoint |
+| 2026-06-07 | work | docs/aegis/work/2026-06-07-eval-arguments-tdz-super-gaps/90-evidence.md | 90-evidence |
+| 2026-06-07 | work | docs/aegis/work/2026-06-07-runtime-side-table-lifecycle/10-intent.md | 10-intent |
+| 2026-06-07 | work | docs/aegis/work/2026-06-07-runtime-side-table-lifecycle/20-checkpoint.md | 20-checkpoint |
+| 2026-06-07 | work | docs/aegis/work/2026-06-07-runtime-side-table-lifecycle/90-evidence.md | 90-evidence |
+| 2026-06-10 | work | docs/aegis/work/2026-06-10-fix-9-failing-fixtures/10-intent.md | 10-intent |
+| 2026-06-10 | work | docs/aegis/work/2026-06-10-fix-9-failing-fixtures/20-checkpoint.md | 20-checkpoint |
+| 2026-06-10 | work | docs/aegis/work/2026-06-10-fix-9-failing-fixtures/90-evidence.md | 90-evidence |
+| 2026-06-14 | work | docs/aegis/work/2026-06-14-pluggable-gc-framework/10-intent.md | 10-intent |
+| 2026-06-14 | work | docs/aegis/work/2026-06-14-pluggable-gc-framework/20-checkpoint.md | 20-checkpoint |
+| 2026-06-14 | work | docs/aegis/work/2026-06-14-pluggable-gc-framework/90-evidence.md | 90-evidence |
+| 2026-06-17 | work | docs/aegis/work/2026-06-17-startup-snapshot/10-intent.md | 10-intent |
+| 2026-06-17 | work | docs/aegis/work/2026-06-17-startup-snapshot/20-checkpoint.md | 20-checkpoint |
+| 2026-06-17 | work | docs/aegis/work/2026-06-17-startup-snapshot/30-slice-p3.md | 30-slice-p3 |
+| 2026-06-17 | work | docs/aegis/work/2026-06-17-startup-snapshot/90-evidence.md | 90-evidence |
+| 2026-06-19 | work | docs/aegis/work/2026-06-19-build-time-embedded-runtime/10-intent.md | 10-intent |
+| 2026-06-19 | work | docs/aegis/work/2026-06-19-build-time-embedded-runtime/20-checkpoint.md | 20-checkpoint |
+| 2026-06-19 | work | docs/aegis/work/2026-06-19-build-time-embedded-runtime/90-evidence.md | 90-evidence |
+| 2026-06-19 | work | docs/aegis/work/2026-06-19-build-time-embedded-runtime/progress.md | progress |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-gc-v2/10-intent.md | 10-intent |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-gc-v2/20-checkpoint.md | 20-checkpoint |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-gc-v2/90-evidence.md | 90-evidence |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-gc-v2/EXECUTION-STATUS.md | EXECUTION-STATUS |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-gc-v2/bare-write-audit.md | bare-write-audit |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-gc-v2/regression-matrix-coverage.md | regression-matrix-coverage |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-issue310-process/10-intent.md | 10-intent |
+| 2026-07-03 | work | docs/aegis/work/2026-07-03-issue310-process/20-checkpoint.md | 20-checkpoint |
+| 2026-07-06 | work | docs/aegis/work/2026-07-06-issue309-package-resolution/10-intent.md | 10-intent |
+| 2026-07-06 | work | docs/aegis/work/2026-07-06-issue309-package-resolution/20-checkpoint.md | 20-checkpoint |
+| 2026-07-06 | work | docs/aegis/work/2026-07-06-issue309-package-resolution/90-evidence.md | 90-evidence |
+| 2026-07-07 | work | docs/aegis/work/2026-07-07-runtime-module-loading/10-intent.md | 10-intent |
+| 2026-07-07 | work | docs/aegis/work/2026-07-07-runtime-module-loading/20-checkpoint.md | 20-checkpoint |
+| 2026-07-07 | work | docs/aegis/work/2026-07-07-runtime-module-loading/90-evidence.md | 90-evidence |
+| 2026-07-07 | work | docs/aegis/work/2026-07-07-runtime-module-loading/99-reflection.md | 99-reflection |
+| 2026-07-10 | work | docs/aegis/work/2026-07-10-node-vm-multi-realm/10-intent.md | 10-intent |
+| 2026-07-10 | work | docs/aegis/work/2026-07-10-node-vm-multi-realm/20-checkpoint.md | 20-checkpoint |
+| 2026-07-10 | work | docs/aegis/work/2026-07-10-node-vm-multi-realm/90-evidence.md | 90-evidence |
+| 2026-07-10 | work | docs/aegis/work/2026-07-10-node-vm-multi-realm/99-reflection.md | 99-reflection |
+| 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/10-intent.md | 10-intent |
+| 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/20-checkpoint.md | 20-checkpoint |
+| 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/90-evidence.md | 90-evidence |
+| 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/99-reflection.md | 99-reflection |
+| 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/proof-bundle.md | proof-bundle |

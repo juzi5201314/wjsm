@@ -112,6 +112,7 @@ pub(crate) struct LocalPortBinding {
     pub(crate) deliver_cb: Option<i64>,
     pub(crate) started: bool,
     pub(crate) ref_guard: Option<AsyncOpGuard>,
+    pub(crate) scope: Option<crate::CapturedScope>,
 }
 
 /// Store 本地 Worker 绑定。
@@ -123,6 +124,7 @@ pub(crate) struct LocalWorkerBinding {
     pub(crate) error_cb: Option<i64>,
     pub(crate) exit_cb: Option<i64>,
     pub(crate) lifetime_guard: Option<AsyncOpGuard>,
+    pub(crate) scope: Option<crate::CapturedScope>,
 }
 
 pub(super) fn cluster_of(caller: &Caller<'_, RuntimeState>) -> Option<Arc<WorkerClusterState>> {

@@ -96,7 +96,9 @@ tests/fixture_runner.rs                      # E2E harness
 
 **Two-phase lowering**: (1) pre-declare — hoist `var` to function scope (init `undefined`), register `let`/`const` in block scope (TDZ, uninit); (2) lower — walk AST emitting IR. Ensures TDZ + hoisting semantics.
 
-**Scope tree**: `ScopeKind::Block`/`Function`, `VarKind::Var`/`Let`/`Const`. Names scope-qualified in IR as `${scope_id}.{name}` (e.g. `$0.x`); new scopes increment the prefix. Lookup walks scope chain upward.
+**`node:async_hooks`**: `RuntimeState.async_hooks` is the single Store-wide owner shared by all vm realms; never introduce a realm-local hook state or a second ALS stack. Scheduling, lifecycle, fatal, GC, and snapshot invariants are owned by [ADR 0009](docs/adr/0009-async-hooks-host-core.md).
+
+**Scope tree**: `ScopeKind::Block`/`Module`/`Function`, `VarKind::Var`/`Let`/`Const`. Module Records own independent lexical and `var` environments even though their bodies lower into `$module_main`. Names scope-qualified in IR as `${scope_id}.{name}` (e.g. `$0.x`); new scopes increment the prefix. Lookup walks scope chain upward.
 
 **WASM contract (Normal mode)**: imports the registry-owned `env` host functions, `env.{memory, __table, <27 globals>}`, and `wjsm_support.{obj_new, obj_get, obj_set, obj_delete, arr_new, elem_get, elem_set, string_eq, to_int32, get_proto_from_ctor}`; re-exports `memory`/`__table`/the 27 globals for `WasmEnv::from_caller`; exports `main()`. Eval mode still inlines helpers while importing the same env globals. String constants in DataSection at offset 0, nul-terminated. Primordial property names (Array.prototype methods, `length`, `name`, `Symbol.toStringTag`, etc.) occupy fixed offsets at 224–493; user strings start at offset 493 (`USER_STRING_START`). GC algorithm selection is `RuntimeOptions`/CLI `--gc`/`WJSM_GC` (`mark-sweep`, `g1`, `zgc`); `WJSM_TEST_GC` remains the test-matrix override.
 

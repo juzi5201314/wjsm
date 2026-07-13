@@ -21,6 +21,10 @@ mod array_named_props;
 mod handle_remap;
 mod host_side_table;
 pub mod realm;
+pub mod runtime_async_hooks;
+pub use runtime_async_hooks::{
+    AsyncHooksFlags, AsyncHooksState, CapturedScope, FrameId, HookRecord, ResourceMeta,
+};
 mod realm_clone;
 pub use handle_remap::{
     FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
@@ -52,20 +56,21 @@ mod runtime_linker;
 mod runtime_microtask;
 mod runtime_module_loader;
 mod runtime_module_registry;
+mod runtime_node_async_hooks;
 mod runtime_node_child_process;
 mod runtime_node_crypto;
 mod runtime_node_data;
+mod runtime_node_dgram;
 mod runtime_node_fs;
 mod runtime_node_globals;
 mod runtime_node_net;
-mod runtime_node_vm;
-mod runtime_node_dgram;
 mod runtime_node_tls;
+mod runtime_node_vm;
 mod runtime_node_worker_threads;
-mod runtime_worker_message;
 mod runtime_node_zlib;
 mod runtime_process;
 mod runtime_promises;
+mod runtime_worker_message;
 pub use runtime_module_loader::{
     RuntimeInstantiatedModule, RuntimeInstantiationEnv, RuntimeModuleFormat,
     RuntimeModuleImportLink, RuntimeModuleInstantiationContext, RuntimeModuleLoadError,
@@ -76,9 +81,9 @@ pub use runtime_module_registry::{
     RuntimeModuleKey, RuntimeModuleRegistry, RuntimeModuleRequireResult, RuntimeModuleState,
     RuntimeRequireCacheEntry,
 };
+mod runtime_engine_pool;
 mod runtime_regexp;
 mod runtime_source_map;
-mod runtime_engine_pool;
 
 mod runtime_startup;
 mod runtime_string;
@@ -133,8 +138,8 @@ mod runtime_render;
 mod runtime_values;
 mod wasm_env;
 use host_imports::*;
-use property_key::*;
 pub use inspector::InspectConfig;
+use property_key::*;
 pub(crate) use wasm_env::WasmEnv;
 
 use runtime_arguments::*;
@@ -228,9 +233,10 @@ impl std::fmt::Debug for RuntimeOptions {
             .field("compiler", &self.compiler)
             .field(
                 "current_entry",
-                &self.current_entry.as_ref().map(|e| {
-                    format!("source={} wasm={}", e.source.display(), e.wasm.display())
-                }),
+                &self
+                    .current_entry
+                    .as_ref()
+                    .map(|e| format!("source={} wasm={}", e.source.display(), e.wasm.display())),
             )
             .field("argv", &self.argv)
             .field("cwd", &self.cwd)
@@ -361,9 +367,10 @@ pub async fn execute_with_options(wasm_bytes: &[u8], options: RuntimeOptions) ->
         }
         Err(error) => {
             if let Some(diagnostics) = runtime_process::process_exit_diagnostics(&error)
-                && !diagnostics.is_empty() {
-                    let _ = io::stderr().write_all(diagnostics);
-                }
+                && !diagnostics.is_empty()
+            {
+                let _ = io::stderr().write_all(diagnostics);
+            }
             Err(error)
         }
     }
@@ -1147,17 +1154,15 @@ impl Clone for RuntimeState {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone(),
             ),
-            vm_deadline: Mutex::new(
-                *self
-                    .vm_deadline
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()),
-            ),
+            vm_deadline: Mutex::new(*self.vm_deadline.lock().unwrap_or_else(|e| e.into_inner())),
             epoch_controller: self.epoch_controller.clone(),
             compiler: self.compiler,
             current_entry: self.current_entry.clone(),
             // 不跨 store 共享 Instance
             live_eval_instances: Mutex::new(Vec::new()),
+            // async_hooks 状态不跨 clone 共享（每 Store 独立）
+            async_hooks: Mutex::new(AsyncHooksState::bootstrap()),
+            immediate_queue: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 }
@@ -1363,9 +1368,7 @@ struct RuntimeState {
     /// 异步 child_process 侧表。
     child_process_table: Arc<HostSideTable<runtime_node_child_process::ChildProcessEntry>>,
     /// 子进程本地回调绑定（message/exit）。
-    child_bindings: Arc<
-        Mutex<HashMap<u32, runtime_node_child_process::LocalChildBinding>>,
-    >,
+    child_bindings: Arc<Mutex<HashMap<u32, runtime_node_child_process::LocalChildBinding>>>,
     /// 本进程作为 IPC child 时的通道（NODE_CHANNEL_FD）。
     process_ipc: Option<runtime_node_child_process::ProcessIpcState>,
     /// ReadableStream 侧表：存储流状态
@@ -1407,13 +1410,9 @@ struct RuntimeState {
     /// CDP Inspector 句柄；`None` 表示未启用 inspect。
     inspector: Option<inspector::InspectorHandle>,
     /// MessagePort 本地绑定（deliver 回调仅本 Store 有效）。
-    message_port_bindings: Arc<
-        Mutex<HashMap<u32, runtime_node_worker_threads::LocalPortBinding>>,
-    >,
+    message_port_bindings: Arc<Mutex<HashMap<u32, runtime_node_worker_threads::LocalPortBinding>>>,
     /// Worker 本地绑定（lifecycle 回调 + lifetime AsyncOpGuard）。
-    worker_bindings: Arc<
-        Mutex<HashMap<u32, runtime_node_worker_threads::LocalWorkerBinding>>,
-    >,
+    worker_bindings: Arc<Mutex<HashMap<u32, runtime_node_worker_threads::LocalWorkerBinding>>>,
     /// 是否主线程 agent（worker_threads.isMainThread）。
     is_worker_thread: bool,
     /// worker_threads.threadId（主线程 0）。
@@ -1437,7 +1436,10 @@ struct RuntimeState {
     pub(crate) epoch_controller: Option<Arc<runtime_engine_pool::EpochController>>,
     /// 保活已安装到主 `__table` 的 compiled-eval Instance（嵌套函数 FunctionRef 依赖）。
     pub(crate) live_eval_instances: Mutex<Vec<wasmtime::Instance>>,
-
+    /// node:async_hooks / AsyncLocalStorage 每 Store 状态（扁平挂载，ADR 0002）。
+    pub(crate) async_hooks: Mutex<AsyncHooksState>,
+    /// setImmediate 队列（nextTick 之后、timers 之前 drain）。
+    pub(crate) immediate_queue: Arc<Mutex<VecDeque<ImmediateEntry>>>,
 }
 
 impl RuntimeState {
@@ -1576,7 +1578,9 @@ impl RuntimeState {
         let mut state = Self::new();
         state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
         state.max_heap_size = options.max_heap_size;
-        state.shadow_stack_max = options.shadow_stack_max.max(wjsm_ir::SHADOW_STACK_INITIAL_SIZE as usize);
+        state.shadow_stack_max = options
+            .shadow_stack_max
+            .max(wjsm_ir::SHADOW_STACK_INITIAL_SIZE as usize);
         state.inspect = options.inspect.clone();
         state.compiler = options.compiler;
         state.current_entry = options.current_entry.clone();
@@ -1620,6 +1624,20 @@ impl RuntimeState {
     /// 返回 handle_free_list 的可变引用，供 sweep 回收的 handle 入表。
     pub(crate) fn handle_free_list_for_gc(&self) -> Option<std::sync::MutexGuard<'_, Vec<u32>>> {
         self.handle_free_list.lock().ok()
+    }
+
+    pub(crate) fn take_freed_handle_for_host(&self) -> Option<u32> {
+        self.handle_free_list
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+    }
+
+    pub(crate) fn return_freed_handle_from_host(&self, handle: u32) {
+        self.handle_free_list
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(handle);
     }
 
     /// 注册 resize（grow_array/grow_object）抛弃的旧区域 (ptr, old_size)。
@@ -1672,7 +1690,9 @@ impl RuntimeState {
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
             runtime_strings: Arc::new(Mutex::new(Vec::new())),
-            runtime_property_keys: Arc::new(Mutex::new(crate::property_key::PropertyKeyTable::new())),
+            runtime_property_keys: Arc::new(Mutex::new(
+                crate::property_key::PropertyKeyTable::new(),
+            )),
             memory_string_cache: Arc::new(Mutex::new(HashMap::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
@@ -1862,6 +1882,8 @@ impl RuntimeState {
             vm_deadline: Mutex::new(None),
             epoch_controller: None,
             live_eval_instances: Mutex::new(Vec::new()),
+            async_hooks: Mutex::new(AsyncHooksState::bootstrap()),
+            immediate_queue: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -1934,7 +1956,11 @@ mod tests {
                 .active_realms
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            realms.push(Realm::new(RealmId(0), main_global, RealmIntrinsics::empty()));
+            realms.push(Realm::new(
+                RealmId(0),
+                main_global,
+                RealmIntrinsics::empty(),
+            ));
             realms.push(Realm::new(
                 RealmId(1),
                 live_sandbox,
@@ -1947,10 +1973,7 @@ mod tests {
             ));
         }
         {
-            let mut table = state
-                .contextified
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut table = state.contextified.lock().unwrap_or_else(|e| e.into_inner());
             table.insert(10, RealmId(1));
             table.insert(20, RealmId(2));
         }
@@ -1967,10 +1990,7 @@ mod tests {
         assert!(realms.iter().any(|r| r.id == RealmId(1)));
         assert!(!realms.iter().any(|r| r.id == RealmId(2)));
 
-        let table = state
-            .contextified
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let table = state.contextified.lock().unwrap_or_else(|e| e.into_inner());
         assert!(table.contains_key(&10));
         assert!(!table.contains_key(&20));
     }
@@ -2502,17 +2522,21 @@ mod tests {
         tx.send(AsyncHostCompletion::SettleValue {
             promise: 100,
             settlement: PromiseSettlement::Fulfill(999),
+            scope: None,
         })
         .expect("send settle");
 
         // 手动 enqueue Materialize（闭包在 owner 执行，可分配）
-        let mat = Box::new(|_store: &mut wasmtime::Store<super::RuntimeState>, _env: &super::WasmEnv| {
-            // 真实会 alloc runtime string/object，此处模拟
-            PromiseSettlement::Fulfill(888)
-        });
+        let mat = Box::new(
+            |_store: &mut wasmtime::Store<super::RuntimeState>, _env: &super::WasmEnv| {
+                // 真实会 alloc runtime string/object，此处模拟
+                PromiseSettlement::Fulfill(888)
+            },
+        );
         tx.send(AsyncHostCompletion::Materialize {
             promise: 101,
             materialize: mat,
+            scope: None,
         })
         .expect("send mat");
 
@@ -2522,6 +2546,7 @@ mod tests {
             AsyncHostCompletion::SettleValue {
                 promise,
                 settlement: PromiseSettlement::Fulfill(v),
+                scope: _,
             } => {
                 assert_eq!(promise, 100);
                 assert_eq!(v, 999);

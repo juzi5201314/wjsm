@@ -19,11 +19,11 @@ fn enter_cloned_realm_swaps_proto_globals_and_restores() {
         p.inside_object, p.main_object,
         "enter 后 __object_proto_handle 必须切到克隆 realm"
     );
-    assert!(
-        p.inside_execution_realm >= 1,
-        "execution_realm 应为克隆 id"
-    );
+    assert!(p.inside_execution_realm >= 1, "execution_realm 应为克隆 id");
     assert_eq!(p.after_array, p.main_array, "exit 恢复 array proto global");
-    assert_eq!(p.after_object, p.main_object, "exit 恢复 object proto global");
+    assert_eq!(
+        p.after_object, p.main_object,
+        "exit 恢复 object proto global"
+    );
     assert_eq!(p.after_execution_realm, 0, "exit 恢复 execution_realm=0");
 }

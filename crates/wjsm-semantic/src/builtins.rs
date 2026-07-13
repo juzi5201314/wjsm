@@ -80,6 +80,8 @@ pub(crate) const BUILTIN_GLOBALS: &[&str] = &[
     "Iterator",
     "AsyncIterator",
     "gc",
+    "setImmediate",
+    "clearImmediate",
     "$262",
 ];
 

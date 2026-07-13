@@ -1,7 +1,7 @@
 //! MessageChannel + MessagePort host 方法。
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use wasmtime::{Caller, Store};
 
@@ -48,6 +48,7 @@ pub(super) fn ensure_local_port(caller: &mut Caller<'_, RuntimeState>, global_id
         deliver_cb: None,
         started: false,
         ref_guard: None,
+        scope: None,
     });
 }
 
@@ -64,14 +65,8 @@ pub(super) fn port_post_message(caller: &mut Caller<'_, RuntimeState>, args: &[i
     let Some(port_id) = port_id_arg(args, 0) else {
         return make_type_error_exception(caller, "portPostMessage: invalid port id");
     };
-    let value_raw = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
-    let transfer = args
-        .get(2)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let value_raw = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+    let transfer = args.get(2).copied().unwrap_or_else(value::encode_undefined);
     let payload = match serialize_for_post_message(caller, value_raw, transfer) {
         Ok(v) => v,
         Err(msg) => return make_type_error_exception(caller, &msg),
@@ -108,23 +103,26 @@ fn wake_port_delivery(port: &PortEndpoint, port_id: u32) {
     let Some(tx) = tx else {
         return;
     };
+    // 同 Store MessageChannel：无 Caller 时无法读 async_hooks；scope 在目标 Store drain 时不恢复发起方 frame。
+    // 跨 Store Worker：目标独立 ALS。此处 scope 留空，由 next_tick 在目标侧再捕获。
     let _ = tx.send(AsyncHostCompletion::HostTask {
         run: Box::new(move |store, env| {
             drain_port_to_next_tick(store, env, port_id);
         }),
+        scope: None,
     });
 }
 
 fn drain_port_to_next_tick(store: &mut Store<RuntimeState>, env: &WasmEnv, port_id: u32) {
-    let (started, deliver_cb) = {
+    let (started, deliver_cb, scope) = {
         let map = store
             .data()
             .message_port_bindings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         match map.get(&port_id) {
-            Some(b) if b.started => (true, b.deliver_cb),
-            _ => (false, None),
+            Some(b) if b.started => (true, b.deliver_cb, b.scope),
+            _ => (false, None, None),
         }
     };
     if !started {
@@ -160,6 +158,7 @@ fn drain_port_to_next_tick(store: &mut Store<RuntimeState>, env: &WasmEnv, port_
             .push_back(ProcessNextTickTask {
                 callback: cb,
                 args: vec![js_val],
+                scope,
             });
     }
 }
@@ -168,11 +167,9 @@ pub(super) fn port_start(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) ->
     let Some(port_id) = port_id_arg(args, 0) else {
         return make_type_error_exception(caller, "portStart: invalid port id");
     };
-    let deliver = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let deliver = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     ensure_local_port(caller, port_id);
+    let callback_scope = crate::runtime_async_hooks::capture_from_caller(caller);
     {
         let mut map = caller
             .data()
@@ -182,10 +179,12 @@ pub(super) fn port_start(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) ->
         if let Some(binding) = map.get_mut(&port_id) {
             binding.deliver_cb = Some(deliver);
             binding.started = true;
+            binding.scope = callback_scope;
             if binding.ref_guard.is_none()
-                && let Some(counter) = caller.data().async_op_counter.clone() {
-                    binding.ref_guard = Some(counter.begin());
-                }
+                && let Some(counter) = caller.data().async_op_counter.clone()
+            {
+                binding.ref_guard = Some(counter.begin());
+            }
         }
     }
     if let Some(cluster) = cluster_of(caller)
@@ -223,6 +222,7 @@ fn drain_port_inbox_sync(caller: &mut Caller<'_, RuntimeState>, port_id: u32, de
             .push_back(ProcessNextTickTask {
                 callback: deliver,
                 args: vec![js_val],
+                scope: None,
             });
     }
 }
@@ -235,10 +235,7 @@ pub(super) fn port_close(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) ->
         && let Some(port) = cluster.port(port_id)
     {
         port.closed.store(true, Ordering::SeqCst);
-        port.inbox
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        port.inbox.lock().unwrap_or_else(|e| e.into_inner()).clear();
         *port.wake_tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
     if let Some(binding) = caller
@@ -328,6 +325,7 @@ pub(crate) fn auto_ref_port_on_store(store: &mut Store<RuntimeState>, port_id: u
             deliver_cb: None,
             started: false,
             ref_guard: None,
+            scope: None,
         });
     }
     let counter = store.data().async_op_counter.clone();

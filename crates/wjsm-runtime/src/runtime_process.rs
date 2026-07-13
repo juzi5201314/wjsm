@@ -66,6 +66,8 @@ impl ProcessState {
 pub(crate) struct ProcessNextTickTask {
     pub(crate) callback: i64,
     pub(crate) args: Vec<i64>,
+    /// 调度时捕获的 ALS/hooks scope（P0-5）
+    pub(crate) scope: Option<crate::CapturedScope>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,7 +209,12 @@ pub(crate) fn install_process_global_from_caller(
             NativeCallable::ProcessDisconnect,
         );
         define_native_method(caller, process_obj, "on", NativeCallable::ProcessOn);
-        define_native_method(caller, process_obj, "addListener", NativeCallable::ProcessOn);
+        define_native_method(
+            caller,
+            process_obj,
+            "addListener",
+            NativeCallable::ProcessOn,
+        );
     }
 
     define_native_method(caller, process_obj, "cwd", NativeCallable::ProcessCwd);
@@ -271,10 +278,7 @@ pub(crate) fn call_process_on(caller: &mut Caller<'_, RuntimeState>, args: &[i64
         .copied()
         .map(|v| crate::runtime_encoding::js_string_lossy(caller, v))
         .unwrap_or_default();
-    let listener = args
-        .get(1)
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let listener = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     if event == "message" {
         return crate::runtime_node_child_process::call_child_process_method(
             caller,
@@ -333,6 +337,20 @@ pub(crate) fn call_process_next_tick(caller: &mut Caller<'_, RuntimeState>, args
         );
     }
 
+    let resource = crate::runtime_node_async_hooks::create_timer_resource_object(
+        caller,
+        &env,
+        0,
+        "TickObject",
+    );
+    let scope = {
+        let mut hooks = caller
+            .data()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        hooks.capture_for_scheduled_callback(resource, true)
+    };
     caller
         .data()
         .next_tick_queue
@@ -341,8 +359,38 @@ pub(crate) fn call_process_next_tick(caller: &mut Caller<'_, RuntimeState>, args
         .push_back(ProcessNextTickTask {
             callback,
             args: args.iter().skip(1).copied().collect(),
+            scope,
         });
     value::encode_undefined()
+}
+pub(crate) async fn call_process_next_tick_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    args: &[i64],
+) -> i64 {
+    let result = call_process_next_tick(caller, args);
+    if value::is_exception(result) {
+        return result;
+    }
+    let scope = caller
+        .data()
+        .next_tick_queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .back()
+        .and_then(|task| task.scope);
+    if let Some(scope) = scope {
+        let type_value = store_runtime_string(caller, "TickObject".to_string());
+        let _ = crate::runtime_async_hooks::emit::emit_init_from_caller(
+            caller,
+            scope.async_id,
+            type_value,
+            scope.trigger_async_id,
+            scope.resource,
+            false,
+        )
+        .await;
+    }
+    result
 }
 
 pub(crate) fn call_process_stream_write(
@@ -585,6 +633,13 @@ pub(crate) fn take_process_exit_signal(state: &RuntimeState) -> Option<ProcessEx
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
+}
+
+pub(crate) fn request_process_exit(state: &RuntimeState, code: i32) {
+    *state
+        .process_exit_signal
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(ProcessExitSignal::new(code));
 }
 
 pub(crate) fn pending_process_exit_signal(state: &RuntimeState) -> Option<ProcessExitSignal> {

@@ -346,8 +346,7 @@ fn shared_execution_runtime() -> &'static tokio::runtime::Runtime {
 }
 
 fn block_on_wasm_execute(wasm: &[u8], options: runtime::RuntimeOptions) -> Result<()> {
-    shared_execution_runtime()
-        .block_on(runtime::execute_with_options(wasm, options))
+    shared_execution_runtime().block_on(runtime::execute_with_options(wasm, options))
 }
 
 fn process_exit_code_from_error(error: &anyhow::Error) -> Option<ExitCode> {
@@ -608,13 +607,16 @@ fn setup_colors(choice: Option<ColorChoice>, no_color: bool) {
 /// 自动颜色：尊重 NO_COLOR / CLICOLOR_FORCE，并检测 stdout、stderr 是否为 TTY。
 fn resolve_auto_colors() -> bool {
     if let Ok(v) = std::env::var("CLICOLOR_FORCE")
-        && !v.is_empty() && v != "0" {
-            return true;
-        }
+        && !v.is_empty()
+        && v != "0"
+    {
+        return true;
+    }
     if let Ok(v) = std::env::var("NO_COLOR")
-        && !v.is_empty() {
-            return false;
-        }
+        && !v.is_empty()
+    {
+        return false;
+    }
     io::stdout().is_terminal() || io::stderr().is_terminal()
 }
 
@@ -697,16 +699,14 @@ fn cmd_build(
             }
 
             let wasm = match resolve_input(input, eval)? {
-                InputSource::Inline(code) => {
-                    compile_source(
-                        &code,
-                        None,
-                        cli.target,
-                        script,
-                        cli.should_verify_ir(),
-                        cli.wants_debug_codegen(),
-                    )?
-                }
+                InputSource::Inline(code) => compile_source(
+                    &code,
+                    None,
+                    cli.target,
+                    script,
+                    cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
+                )?,
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
@@ -874,10 +874,7 @@ fn cmd_run_precompiled(
         }
     };
     // 快速 magic/version 头校验；完整校验由 Module 加载失败承接。
-    if wasm_bytes.len() < 8
-        || &wasm_bytes[0..4] != b"\0asm"
-        || wasm_bytes[4..8] != [1, 0, 0, 0]
-    {
+    if wasm_bytes.len() < 8 || &wasm_bytes[0..4] != b"\0asm" || wasm_bytes[4..8] != [1, 0, 0, 0] {
         eprintln!(
             "Error: precompiled wasm {} has invalid WASM header",
             wasm_path.display()
@@ -921,10 +918,7 @@ fn write_pipeline_wasm_cache(wasm: &[u8]) -> Option<PathBuf> {
         return Some(final_path);
     }
     // create_new temp + rename 原子落盘
-    let tmp_path = pipeline_dir.join(format!(
-        ".{hex}.{}.tmp",
-        std::process::id()
-    ));
+    let tmp_path = pipeline_dir.join(format!(".{hex}.{}.tmp", std::process::id()));
     {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
@@ -2471,9 +2465,7 @@ fn runtime_options_for_in_process(
         .find(|(k, _)| k == "WJSM_COMPILER")
         .map(|(_, v)| v.as_str())
     {
-        Some("winch") | Some("Winch") | Some("WINCH") => {
-            Some(runtime::RuntimeCompiler::Winch)
-        }
+        Some("winch") | Some("Winch") | Some("WINCH") => Some(runtime::RuntimeCompiler::Winch),
         Some("cranelift") | Some("Cranelift") | Some("CRANELIFT") => {
             Some(runtime::RuntimeCompiler::Cranelift)
         }

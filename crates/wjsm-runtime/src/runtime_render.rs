@@ -37,22 +37,22 @@ pub(crate) fn render_unhandled_rejection_reason_with_env<
         if let Some(op) = resolve_handle_with_env(ctx, env, val)
             && let Some(brand_val) =
                 read_object_property_by_name_with_env(ctx, env, op, "__error_brand__")
-                && value::is_bool(brand_val)
-                && value::decode_bool(brand_val)
-            {
-                let name = read_object_property_by_name_with_env(ctx, env, op, "name")
-                    .map(|name_val| render_unhandled_rejection_reason_with_env(ctx, env, name_val))
-                    .unwrap_or_default();
-                let message = read_object_property_by_name_with_env(ctx, env, op, "message")
-                    .map(|message_val| {
-                        render_unhandled_rejection_reason_with_env(ctx, env, message_val)
-                    })
-                    .unwrap_or_default();
-                if message.is_empty() {
-                    return name;
-                }
-                return format!("{name}: {message}");
+            && value::is_bool(brand_val)
+            && value::decode_bool(brand_val)
+        {
+            let name = read_object_property_by_name_with_env(ctx, env, op, "name")
+                .map(|name_val| render_unhandled_rejection_reason_with_env(ctx, env, name_val))
+                .unwrap_or_default();
+            let message = read_object_property_by_name_with_env(ctx, env, op, "message")
+                .map(|message_val| {
+                    render_unhandled_rejection_reason_with_env(ctx, env, message_val)
+                })
+                .unwrap_or_default();
+            if message.is_empty() {
+                return name;
             }
+            return format!("{name}: {message}");
+        }
         return "[object Object]".to_string();
     }
     if value::is_undefined(val) {

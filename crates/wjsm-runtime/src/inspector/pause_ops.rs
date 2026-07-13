@@ -4,9 +4,7 @@ use super::remote_object::RemoteObjectTable;
 use super::state::PauseCommand;
 use crate::runtime_eval::{ScopeRecord, perform_eval_from_caller_async};
 use crate::runtime_host_helpers::collect_own_property_names_from_value;
-use crate::runtime_render::{
-    read_runtime_string_utf8_lossy, render_value, store_runtime_string,
-};
+use crate::runtime_render::{read_runtime_string_utf8_lossy, render_value, store_runtime_string};
 use crate::runtime_values::{
     read_array_elem, read_array_length, read_object_property_by_name, resolve_array_ptr,
     resolve_handle,
@@ -32,7 +30,8 @@ pub(crate) async fn dispatch_pause_command(
             expression,
             reply,
         } => {
-            let result = evaluate_on_frame(caller, frame_locals, remote, &frame_id, &expression).await;
+            let result =
+                evaluate_on_frame(caller, frame_locals, remote, &frame_id, &expression).await;
             let _ = reply.send(result);
         }
         PauseCommand::EvaluateGlobal { expression, reply } => {
@@ -96,35 +95,36 @@ fn expand_value_properties(
     }
 
     if value::is_array(raw)
-        && let Some(ptr) = resolve_array_ptr(caller, raw) {
-            let len = read_array_length(caller, ptr).unwrap_or(0);
-            props.push(property_descriptor(
-                "length",
-                json!({
-                    "type": "number",
-                    "value": len as f64,
-                    "description": format!("{len}"),
-                }),
-            ));
-            for i in 0..len {
-                if let Some(elem) = read_array_elem(caller, ptr, i) {
-                    let desc = describe_with_store(caller, remote, elem);
-                    props.push(property_descriptor(&i.to_string(), desc));
-                }
+        && let Some(ptr) = resolve_array_ptr(caller, raw)
+    {
+        let len = read_array_length(caller, ptr).unwrap_or(0);
+        props.push(property_descriptor(
+            "length",
+            json!({
+                "type": "number",
+                "value": len as f64,
+                "description": format!("{len}"),
+            }),
+        ));
+        for i in 0..len {
+            if let Some(elem) = read_array_elem(caller, ptr, i) {
+                let desc = describe_with_store(caller, remote, elem);
+                props.push(property_descriptor(&i.to_string(), desc));
             }
-            // 数组命名属性（非索引）。
-            let names = collect_own_property_names_from_value(caller, raw, false);
-            for name in names {
-                if name == "length" || name.chars().all(|c| c.is_ascii_digit()) {
-                    continue;
-                }
-                if let Some(v) = read_object_property_by_name(caller, ptr, &name) {
-                    let desc = describe_with_store(caller, remote, v);
-                    props.push(property_descriptor(&name, desc));
-                }
-            }
-            return props;
         }
+        // 数组命名属性（非索引）。
+        let names = collect_own_property_names_from_value(caller, raw, false);
+        for name in names {
+            if name == "length" || name.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if let Some(v) = read_object_property_by_name(caller, ptr, &name) {
+                let desc = describe_with_store(caller, remote, v);
+                props.push(property_descriptor(&name, desc));
+            }
+        }
+        return props;
+    }
 
     if let Some(ptr) = resolve_handle(caller, raw) {
         let names = collect_own_property_names_from_value(caller, raw, false);
@@ -249,10 +249,7 @@ async fn evaluate_global(
     eval_result_ok(describe_with_store(caller, remote, result))
 }
 
-fn create_scope_from_locals(
-    caller: &mut Caller<'_, RuntimeState>,
-    pairs: &[(String, i64)],
-) -> i64 {
+fn create_scope_from_locals(caller: &mut Caller<'_, RuntimeState>, pairs: &[(String, i64)]) -> i64 {
     let data = caller.data_mut();
     let handle = data.scope_record_next_handle;
     data.scope_record_next_handle += 1;

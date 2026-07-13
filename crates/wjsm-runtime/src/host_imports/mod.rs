@@ -25,7 +25,7 @@ pub(crate) use promise::define_promise;
 pub(crate) use promise_combinators::define_promise_combinators;
 pub(crate) use proxy_reflect::define_proxy_reflect;
 pub(crate) use proxy_reflect::{
-    extract_array_like_elements, object_enumerable_own_keys_async, object_entries_async,
+    extract_array_like_elements, object_entries_async, object_enumerable_own_keys_async,
     object_get_own_property_names_async, object_values_async, reflect_apply_impl_async,
 };
 pub(crate) use proxy_reflect_async::define_proxy_reflect_async;

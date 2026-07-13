@@ -62,7 +62,12 @@ pub fn compile_runtime_module_at(
     data_base: u32,
     table_base: u32,
 ) -> Result<RuntimeCompiledModule> {
-    compile_runtime_module_at_with_options(program, data_base, table_base, CompileOptions::default())
+    compile_runtime_module_at_with_options(
+        program,
+        data_base,
+        table_base,
+        CompileOptions::default(),
+    )
 }
 
 pub fn compile_runtime_module_at_with_options(

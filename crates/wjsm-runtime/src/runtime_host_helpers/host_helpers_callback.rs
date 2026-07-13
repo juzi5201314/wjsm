@@ -390,7 +390,7 @@ pub(crate) async fn invoke_resolved_callback_async_option<
             if crate::runtime_process::process_exit_code(&err).is_none() {
                 set_runtime_error(
                     ctx.state_mut(),
-                    format!("host function callback error: {err}"),
+                    format!("host function callback error: {err:#}"),
                 );
             }
             None

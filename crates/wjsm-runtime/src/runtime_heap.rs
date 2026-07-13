@@ -3,13 +3,14 @@ use crate::wasm_env::WasmEnv;
 
 use wjsm_ir::constants;
 
-/// handle 表上界（止于 barrier 基址），与 WASM emit_handle_table_alloc_check 一致。
+/// handle 表上界（barrier event buffer 基址），与 WASM guard 一致。
 fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     ctx: &mut C,
 ) -> usize {
-    if let Some(g) = env.barrier_buf_ptr {
-        return g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
+    if let Some(g) = env.barrier_buf_end {
+        let end = g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
+        return end.saturating_sub(constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize);
     }
     if let Some(g) = env.object_heap_start {
         return g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
@@ -201,23 +202,32 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     capacity: u32,
     proto: u32,
 ) -> i64 {
+    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let reused_handle = ctx.as_context().data().take_freed_handle_for_host();
+    let handle = reused_handle.unwrap_or(obj_table_count);
+    if reused_handle.is_none() && !host_handle_slot_fits(env, ctx, handle) {
+        return value::encode_undefined();
+    }
     let size = constants::HEAP_OBJECT_HEADER_SIZE
         .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
     let Some(ptr) =
         alloc_heap_region_for_host(ctx, env, size as usize, wjsm_ir::HEAP_TYPE_OBJECT, capacity)
     else {
+        if let Some(handle) = reused_handle {
+            ctx.as_context()
+                .data()
+                .return_freed_handle_from_host(handle);
+        }
         return value::encode_undefined();
     };
     let heap_ptr = ptr as u32;
-    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    if !host_handle_slot_fits(env, ctx, obj_table_count) {
-        return value::encode_undefined();
-    }
-    let ptr = heap_ptr as usize;
-    let slot_addr = obj_table_ptr as usize
-        + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+    let slot_addr =
+        obj_table_ptr as usize + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
     if crate::runtime_gc::heap_access::init_proto_at_ptr(ctx, env, ptr, proto).is_none() {
+        ctx.as_context()
+            .data()
+            .return_freed_handle_from_host(handle);
         return value::encode_undefined();
     }
     {
@@ -235,10 +245,12 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
         data[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
             .copy_from_slice(&heap_ptr.to_le_bytes());
     }
-    let _ = env
-        .obj_table_count
-        .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
-    value::encode_object_handle(obj_table_count)
+    if reused_handle.is_none() {
+        let _ = env
+            .obj_table_count
+            .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
+    }
+    value::encode_object_handle(handle)
 }
 
 pub(crate) fn alloc_heap_region_without_gc<C: AsContextMut<Data = RuntimeState>>(
@@ -274,6 +286,24 @@ pub(crate) fn alloc_heap_region_without_gc<C: AsContextMut<Data = RuntimeState>>
     Some(heap_ptr)
 }
 
+pub(crate) fn ensure_host_memory_capacity<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    ptr: usize,
+    size: usize,
+) -> bool {
+    let Some(end) = ptr.checked_add(size) else {
+        return false;
+    };
+    let current = env.memory.data_size(&*ctx);
+    if end <= current {
+        return true;
+    }
+    let missing = end - current;
+    let pages = missing.div_ceil(64 * 1024) as u64;
+    env.memory.grow(&mut *ctx, pages).is_ok()
+}
+
 pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -295,7 +325,10 @@ pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
             capacity,
         };
         if let Some(ptr) = gc.alloc_slow(&mut gc_ctx, &mut roots as _, req) {
-            return Some(ptr);
+            if ensure_host_memory_capacity(ctx, env, ptr, size) {
+                return Some(ptr);
+            }
+            return None;
         }
     }
     let used = heap_used_bytes(ctx, env);
@@ -720,9 +753,10 @@ pub(crate) fn native_callable_function_prototype(
         return None;
     }
     if !value::is_object(caller.data().function_prototype)
-        && let Some(env) = WasmEnv::from_caller(caller) {
-            ensure_function_prototype_initialized(caller, &env);
-        }
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_function_prototype_initialized(caller, &env);
+    }
     let proto = caller.data().function_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -767,9 +801,10 @@ pub(crate) fn native_callable_promise_prototype(
         return None;
     }
     if !value::is_object(caller.data().promise_prototype)
-        && let Some(env) = WasmEnv::from_caller(caller) {
-            ensure_promise_prototype_initialized(caller, &env);
-        }
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_promise_prototype_initialized(caller, &env);
+    }
     let proto = caller.data().promise_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -786,9 +821,10 @@ pub(crate) fn native_callable_symbol_prototype(
         return None;
     }
     if !value::is_object(caller.data().symbol_prototype)
-        && let Some(env) = WasmEnv::from_caller(caller) {
-            ensure_symbol_prototype_initialized(caller, &env);
-        }
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_symbol_prototype_initialized(caller, &env);
+    }
     let proto = caller.data().symbol_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -841,9 +877,10 @@ pub(crate) fn native_callable_regexp_prototype(
         return None;
     }
     if !value::is_object(caller.data().regexp_prototype)
-        && let Some(env) = WasmEnv::from_caller(caller) {
-            ensure_regexp_prototype_initialized(caller, &env);
-        }
+        && let Some(env) = WasmEnv::from_caller(caller)
+    {
+        ensure_regexp_prototype_initialized(caller, &env);
+    }
     let proto = caller.data().regexp_prototype;
     if value::is_object(proto) {
         Some(proto)
@@ -905,9 +942,10 @@ pub(crate) fn native_callable_error_prototype(
 ) -> Option<i64> {
     let protos = {
         if !caller.data().error_prototypes.is_initialized()
-            && let Some(env) = WasmEnv::from_caller(caller) {
-                ensure_error_prototypes_initialized(caller, &env);
-            }
+            && let Some(env) = WasmEnv::from_caller(caller)
+        {
+            ensure_error_prototypes_initialized(caller, &env);
+        }
         caller.data().error_prototypes
     };
     if !protos.is_initialized() {
@@ -1882,12 +1920,7 @@ mod shadow_stack_capacity_tests {
         let (mut store, env) = test_env(16 * 1024 * 1024);
         let need = wjsm_ir::SHADOW_STACK_INITIAL_SIZE as i32 + 64;
         assert!(ensure_shadow_stack_capacity(&mut store, &env, 0, need));
-        let end = env
-            .shadow_stack_end
-            .unwrap()
-            .get(&mut store)
-            .i32()
-            .unwrap() as usize;
+        let end = env.shadow_stack_end.unwrap().get(&mut store).i32().unwrap() as usize;
         assert!(end >= need as usize);
         assert!(env.shadow_memory.data_size(&store) >= need as usize);
     }

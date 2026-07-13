@@ -6,9 +6,7 @@ use wasmtime::Caller;
 
 use crate::runtime_buffer::visible_bytes;
 use crate::runtime_render::read_runtime_string_utf8_lossy;
-use crate::runtime_worker_message::{
-    MESSAGE_PORT_ID_PROP, SAB_HANDLE_PROP, SerializedValue,
-};
+use crate::runtime_worker_message::{MESSAGE_PORT_ID_PROP, SAB_HANDLE_PROP, SerializedValue};
 use crate::shared_buffer::read_sab_handle_from_object;
 use crate::*;
 
@@ -442,10 +440,7 @@ fn copy_arraybuffer_bytes(caller: &mut Caller<'_, RuntimeState>, handle: u32, le
         .unwrap_or_default()
 }
 
-fn detach_arraybuffer(
-    caller: &mut Caller<'_, RuntimeState>,
-    ab_obj: i64,
-) -> Result<(), String> {
+fn detach_arraybuffer(caller: &mut Caller<'_, RuntimeState>, ab_obj: i64) -> Result<(), String> {
     let Some((handle, _)) = arraybuffer_obj_handle(caller, ab_obj) else {
         return Err("Value in transfer list is not transferable".to_string());
     };
@@ -483,12 +478,7 @@ fn detach_arraybuffer_views(caller: &mut Caller<'_, RuntimeState>, ab_obj: i64, 
     }
 }
 
-fn set_existing_or_define(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-    name: &str,
-    val: i64,
-) {
+fn set_existing_or_define(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str, val: i64) {
     let Some(obj_ptr) = resolve_handle(caller, obj) else {
         let _ = define_host_data_property_from_caller(caller, obj, name, val);
         return;
@@ -518,10 +508,7 @@ fn message_port_id(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u3
     Some(value::decode_f64(raw) as u32)
 }
 
-fn arraybuffer_obj_handle(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-) -> Option<(u32, u32)> {
+fn arraybuffer_obj_handle(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<(u32, u32)> {
     if !value::is_object(obj) {
         return None;
     }

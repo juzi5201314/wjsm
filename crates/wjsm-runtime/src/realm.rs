@@ -235,16 +235,8 @@ where
         .data()
         .execution_realm
         .swap(realm_id.0, Ordering::Relaxed);
-    let prev_array = env
-        .array_proto_handle
-        .get(&mut *ctx)
-        .i32()
-        .unwrap_or(-1);
-    let prev_object = env
-        .object_proto_handle
-        .get(&mut *ctx)
-        .i32()
-        .unwrap_or(-1);
+    let prev_array = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    let prev_object = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
 
     if let Some((target_array, target_object)) = resolve_proto_global_handles(ctx, realm_id) {
         let _ = env
@@ -257,9 +249,7 @@ where
 
     let result = f(ctx);
 
-    let _ = env
-        .array_proto_handle
-        .set(&mut *ctx, Val::I32(prev_array));
+    let _ = env.array_proto_handle.set(&mut *ctx, Val::I32(prev_array));
     let _ = env
         .object_proto_handle
         .set(&mut *ctx, Val::I32(prev_object));
@@ -350,10 +340,7 @@ pub(crate) fn reclaim_dead_realms(
         });
     }
     {
-        let mut table = state
-            .contextified
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut table = state.contextified.lock().unwrap_or_else(|e| e.into_inner());
         table.retain(|handle, realm_id| {
             if realm_id.0 == 0 {
                 return true;

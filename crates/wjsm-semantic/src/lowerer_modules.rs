@@ -176,12 +176,10 @@ fn predeclare_module_exports(
         let module_id = module.id;
         let module_ast = &module.ast;
         lowerer.current_module_id = Some(module_id);
-        // 为每个模块的顶层声明创建独立的块级作用域（#43）：
-        // 避免两个模块同名的顶层 let/const 落入同一根作用域导致 "cannot redeclare"。
-        // 使用 Block 而非 Function 作用域——模块体最终全部降级进同一个 $module_main 函数，
-        // 若用 Function 作用域会让 binding_owner_function_scope ≠ current_function_scope_id，
-        // 破坏捕获/共享 env 的路由判断（live binding 依赖该机制）。
-        lowerer.scopes.push_scope(ScopeKind::Block);
+        // 每个模块拥有独立的词法环境与 var 环境。模块体虽然共同降级进
+        // `$module_main`，顶层 var/函数声明仍必须按 ECMAScript Module Record 隔离；
+        // `ScopeKind::Module` 只改变 var hoist 边界，不改变闭包所属的 IR 函数。
+        lowerer.scopes.push_scope(ScopeKind::Module);
         let module_scope = lowerer.scopes.current_scope_id();
         lowerer.module_scopes.insert(module_id, module_scope);
         predeclare_cjs_host_bindings(lowerer, module_id)?;
@@ -765,7 +763,7 @@ fn lower_export_default_expr(
 ) -> Result<StmtFlow, LoweringError> {
     let outer_block = lowerer.ensure_open(flow)?;
     let value_val = lowerer.lower_expr(&default_expr.expr, outer_block)?;
-    let outer_block = lowerer.ensure_open(flow)?;
+    let outer_block = lowerer.resolve_store_block(outer_block);
     if let Some(current_mid) = lowerer.current_module_id {
         let default_var = format!("_default_export_mod{}", current_mid.0);
         if let Some(ir_name) = lowerer

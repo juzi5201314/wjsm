@@ -11,8 +11,8 @@ use wasmtime::{AsContextMut, Engine};
 use wjsm_ir::constants::{
     FLAG_IS_ACCESSOR, HANDLE_TABLE_ENTRY_SIZE, HEAP_ARRAY_CAPACITY_OFFSET, HEAP_ARRAY_ELEMENT_SIZE,
     HEAP_OBJECT_CAPACITY_OFFSET, HEAP_OBJECT_HEADER_SIZE, HEAP_OBJECT_PROPERTY_SLOT_SIZE,
-    HEAP_OBJECT_PROTO_OFFSET, HEAP_OBJECT_TYPE_OFFSET, PROP_SLOT_FLAGS_OFFSET, PROP_SLOT_GETTER_OFFSET,
-    PROP_SLOT_SETTER_OFFSET, PROP_SLOT_SIZE, PROP_SLOT_VALUE_OFFSET,
+    HEAP_OBJECT_PROTO_OFFSET, HEAP_OBJECT_TYPE_OFFSET, PROP_SLOT_FLAGS_OFFSET,
+    PROP_SLOT_GETTER_OFFSET, PROP_SLOT_SETTER_OFFSET, PROP_SLOT_SIZE, PROP_SLOT_VALUE_OFFSET,
 };
 use wjsm_ir::value;
 use wjsm_ir::{HEAP_TYPE_ARRAY, HEAP_TYPE_OBJECT};
@@ -27,7 +27,8 @@ use crate::runtime_heap::{
     alloc_heap_region_for_host, alloc_host_object, host_handle_slot_fits, set_object_proto_header,
 };
 use crate::runtime_startup::{
-    compile_or_load_cached, instantiate_execute_bundle, run_startup_cold_path, startup_engine_config,
+    compile_or_load_cached, instantiate_execute_bundle, run_startup_cold_path,
+    startup_engine_config,
 };
 use crate::wasm_env::WasmEnv;
 use crate::{RuntimeOptions, RuntimeState, compile_source};
@@ -510,8 +511,7 @@ pub async fn probe_execution_realm_frame() -> Result<ExecutionRealmFrameProbe> {
         Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
     let module = compile_or_load_cached(&engine, &wasm)?;
     let mut bundle =
-        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default())
-            .await?;
+        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default()).await?;
     run_startup_cold_path(&mut bundle).await?;
 
     let env = bundle.wasm_env;
@@ -575,8 +575,7 @@ pub async fn probe_eval_array_literal_in_realm() -> Result<EvalRealmArrayProbe> 
         Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
     let module = compile_or_load_cached(&engine, &wasm)?;
     let mut bundle =
-        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default())
-            .await?;
+        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default()).await?;
     run_startup_cold_path(&mut bundle).await?;
 
     let env = bundle.wasm_env;
@@ -595,8 +594,12 @@ pub async fn probe_eval_array_literal_in_realm() -> Result<EvalRealmArrayProbe> 
             let h = value::decode_array_handle(arr);
             let obj_table_ptr =
                 env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
-            let obj_table_count =
-                env.obj_table_count.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+            let obj_table_count = env
+                .obj_table_count
+                .get(&mut *store)
+                .i32()
+                .unwrap_or(0)
+                .max(0) as usize;
             let data = env.memory.data(&*store);
             if let Some(ptr) = resolve_handle(data, h, obj_table_ptr, obj_table_count) {
                 result_proto = u32::from_le_bytes(data[ptr..ptr + 4].try_into().unwrap());
@@ -619,8 +622,7 @@ pub async fn probe_clone_pristine_realm() -> Result<RealmCloneProbe> {
         Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
     let module = compile_or_load_cached(&engine, &wasm)?;
     let mut bundle =
-        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default())
-            .await?;
+        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default()).await?;
     run_startup_cold_path(&mut bundle).await?;
 
     let env = bundle.wasm_env;
@@ -638,7 +640,12 @@ pub async fn probe_clone_pristine_realm() -> Result<RealmCloneProbe> {
     let closure_set: HashSet<u32> = closure.iter().copied().collect();
 
     let obj_table_ptr = env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
-    let obj_table_count = env.obj_table_count.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+    let obj_table_count = env
+        .obj_table_count
+        .get(&mut *store)
+        .i32()
+        .unwrap_or(0)
+        .max(0) as usize;
 
     let roots_covered = roots.iter_roots().all(|raw| {
         if value::is_object(raw) || value::is_array(raw) {
@@ -670,8 +677,12 @@ pub async fn probe_clone_pristine_realm() -> Result<RealmCloneProbe> {
 
     let clone_array_proto_of = {
         let obj_table_ptr = env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
-        let obj_table_count =
-            env.obj_table_count.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+        let obj_table_count = env
+            .obj_table_count
+            .get(&mut *store)
+            .i32()
+            .unwrap_or(0)
+            .max(0) as usize;
         let data = env.memory.data(&*store);
         let ptr = resolve_handle(data, clone_array, obj_table_ptr, obj_table_count)
             .context("resolve clone array_proto")?;

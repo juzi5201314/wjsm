@@ -33,7 +33,6 @@ fn modules_respects_explicit_root_flag() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn modules__runtime_loading__rejects_runtime_ts_tsx_jsx() -> Result<()> {
     for extension in ["ts", "tsx", "jsx"] {

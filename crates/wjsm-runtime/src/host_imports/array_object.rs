@@ -1107,20 +1107,21 @@ async fn collect_array_from_values_async(
     }
     // 类数组：读取 length + 索引属性
     if (value::is_object(source) || value::is_function(source))
-        && let Some(ptr) = resolve_handle(caller, source) {
-            let len_val = read_object_property_by_name(caller, ptr, "length")
+        && let Some(ptr) = resolve_handle(caller, source)
+    {
+        let len_val = read_object_property_by_name(caller, ptr, "length")
+            .unwrap_or_else(value::encode_undefined);
+        let len = array_concat_to_length(caller, len_val).unwrap_or(0);
+        let mut out = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            let key = i.to_string();
+            let cur = resolve_handle(caller, source)
+                .and_then(|p| read_object_property_by_name(caller, p, &key))
                 .unwrap_or_else(value::encode_undefined);
-            let len = array_concat_to_length(caller, len_val).unwrap_or(0);
-            let mut out = Vec::with_capacity(len as usize);
-            for i in 0..len {
-                let key = i.to_string();
-                let cur = resolve_handle(caller, source)
-                    .and_then(|p| read_object_property_by_name(caller, p, &key))
-                    .unwrap_or_else(value::encode_undefined);
-                out.push(cur);
-            }
-            return Some(out);
+            out.push(cur);
         }
+        return Some(out);
+    }
     None
 }
 /// 抽干裸 TAG_ITERATOR 的非 reentrant 内部状态为值序列（供 Array.from 处理

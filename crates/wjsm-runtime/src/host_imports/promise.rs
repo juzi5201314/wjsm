@@ -11,7 +11,6 @@ pub(crate) fn define_promise(
     let promise_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
-            
             alloc_promise(&mut caller, PromiseEntry::pending())
         },
     );
@@ -137,6 +136,16 @@ pub(crate) fn define_promise(
             let result_promise = alloc_object(&mut caller, 0);
             set_promise_proto_from_constructor(&mut caller, result_promise, species_constructor);
             let result_handle = value::decode_object_handle(result_promise) as usize;
+            caller.data().push_host_temp_roots([result_promise]);
+            let parent_scope = caller
+                .data()
+                .promise_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(handle)
+                .and_then(|entry| entry.capture_scope);
+            let result_scope =
+                capture_child_promise_scope(&mut caller, result_promise, parent_scope);
             let mut queued = None;
             {
                 let mut table = caller
@@ -146,6 +155,7 @@ pub(crate) fn define_promise(
                     .unwrap_or_else(|e| e.into_inner());
                 let mut result_entry = PromiseEntry::pending();
                 result_entry.constructor_handle = species_constructor;
+                result_entry.capture_scope = result_scope;
                 insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     // §27.2.5.3.1 step 10 — .then() 总是标记为已处理
@@ -171,7 +181,7 @@ pub(crate) fn define_promise(
                             queued = Some((ReactionType::Reject, on_rejected, reason));
                         }
                     }
-                } 
+                }
             }
             if let Some((reaction_type, handler, argument)) = queued {
                 let mut queue = caller
@@ -184,6 +194,7 @@ pub(crate) fn define_promise(
                     reaction_type,
                     handler,
                     argument,
+                    scope: result_scope,
                 });
             }
             caller
@@ -202,11 +213,22 @@ pub(crate) fn define_promise(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_rejected: i64| -> i64 {
             let handle = raw_promise_handle(promise);
+            let temp_root_len = caller.data().push_host_temp_roots([promise, on_rejected]);
             let species_constructor =
                 promise_result_species_constructor_handle(&mut caller, promise);
             let result_promise = alloc_object(&mut caller, 0);
+            caller.data().push_host_temp_roots([result_promise]);
             set_promise_proto_from_constructor(&mut caller, result_promise, species_constructor);
             let result_handle = value::decode_object_handle(result_promise) as usize;
+            let parent_scope = caller
+                .data()
+                .promise_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(handle)
+                .and_then(|entry| entry.capture_scope);
+            let result_scope =
+                capture_child_promise_scope(&mut caller, result_promise, parent_scope);
             let mut queued = None;
             {
                 let mut table = caller
@@ -216,6 +238,7 @@ pub(crate) fn define_promise(
                     .unwrap_or_else(|e| e.into_inner());
                 let mut result_entry = PromiseEntry::pending();
                 result_entry.constructor_handle = species_constructor;
+                result_entry.capture_scope = result_scope;
                 insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     entry.handled = true;
@@ -243,18 +266,20 @@ pub(crate) fn define_promise(
                 }
             }
             if let Some((reaction_type, handler, argument)) = queued {
-                let mut queue = caller
+                caller
                     .data()
                     .microtask_queue
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                queue.push_back(Microtask::PromiseReaction {
-                    promise: result_handle as i64,
-                    reaction_type,
-                    handler,
-                    argument,
-                });
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push_back(Microtask::PromiseReaction {
+                        promise: result_handle as i64,
+                        reaction_type,
+                        handler,
+                        argument,
+                        scope: result_scope,
+                    });
             }
+            caller.data().truncate_host_temp_roots(temp_root_len);
             result_promise
         },
     );
@@ -265,11 +290,22 @@ pub(crate) fn define_promise(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_finally: i64| -> i64 {
             let handle = raw_promise_handle(promise);
+            let temp_root_len = caller.data().push_host_temp_roots([promise, on_finally]);
             let species_constructor =
                 promise_result_species_constructor_handle(&mut caller, promise);
             let result_promise = alloc_object(&mut caller, 0);
+            caller.data().push_host_temp_roots([result_promise]);
             set_promise_proto_from_constructor(&mut caller, result_promise, species_constructor);
             let result_handle = value::decode_object_handle(result_promise) as usize;
+            let parent_scope = caller
+                .data()
+                .promise_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(handle)
+                .and_then(|entry| entry.capture_scope);
+            let result_scope =
+                capture_child_promise_scope(&mut caller, result_promise, parent_scope);
             let mut queued = None;
             {
                 let mut table = caller
@@ -279,6 +315,7 @@ pub(crate) fn define_promise(
                     .unwrap_or_else(|e| e.into_inner());
                 let mut result_entry = PromiseEntry::pending();
                 result_entry.constructor_handle = species_constructor;
+                result_entry.capture_scope = result_scope;
                 insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     entry.handled = true;
@@ -306,18 +343,20 @@ pub(crate) fn define_promise(
                 }
             }
             if let Some((reaction_type, handler, argument)) = queued {
-                let mut queue = caller
+                caller
                     .data()
                     .microtask_queue
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                queue.push_back(Microtask::PromiseReaction {
-                    promise: result_handle as i64,
-                    reaction_type,
-                    handler,
-                    argument,
-                });
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push_back(Microtask::PromiseReaction {
+                        promise: result_handle as i64,
+                        reaction_type,
+                        handler,
+                        argument,
+                        scope: result_scope,
+                    });
             }
+            caller.data().truncate_host_temp_roots(temp_root_len);
             result_promise
         },
     );
@@ -431,4 +470,55 @@ pub(crate) fn define_promise(
     linker.define(&mut store, "env", "is_promise", is_promise_fn)?;
 
     Ok(())
+}
+
+fn capture_child_promise_scope(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    parent_scope: Option<crate::CapturedScope>,
+) -> Option<crate::CapturedScope> {
+    let (scope, emit_init) = {
+        let mut hooks = caller
+            .data()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut scope =
+            hooks.capture_promise_scope(promise, parent_scope.map(|scope| scope.async_id));
+        if let (Some(scope), Some(parent_scope)) = (&mut scope, parent_scope) {
+            scope.frame_id = parent_scope.frame_id;
+        }
+        let emit_init = scope.is_some() && hooks.init_hooks_exist();
+        (scope, emit_init)
+    };
+    if emit_init {
+        let cached_type = caller
+            .data()
+            .async_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .promise_type_value();
+        let type_value = cached_type.unwrap_or_else(|| {
+            let value = store_runtime_string(caller, "PROMISE".to_string());
+            caller
+                .data()
+                .async_hooks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_promise_type_value(value);
+            value
+        });
+        if let Some(scope) = scope {
+            caller
+                .data()
+                .async_hooks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .queue_promise_event(crate::runtime_async_hooks::PendingPromiseHookEvent::Init {
+                    scope,
+                    type_value,
+                });
+        }
+    }
+    scope
 }

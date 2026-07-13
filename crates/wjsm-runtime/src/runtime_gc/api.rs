@@ -203,8 +203,7 @@ impl<'a> GcContext<'a> {
 }
 
 // ── GC 统计 ──
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CycleKind {
     #[default]
     Full,
@@ -225,7 +224,6 @@ impl CycleKind {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Default)]
 pub struct GcStats {

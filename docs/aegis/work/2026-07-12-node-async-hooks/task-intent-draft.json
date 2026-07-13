@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "requestedOutcome": "Complete Node v24.15.0-compatible node:async_hooks (createHook, AsyncResource, AsyncLocalStorage, ids, providers) via host-core AsyncContext integrated at scheduler/microtask/promise/timer/I/O seams; documentation phase first.",
+  "goal": "Deliver full async_hooks + ALS semantics on wjsm without stubs; phase is execution order only.",
+  "successEvidence": [
+    "All plan acceptance fixtures green; workspace nextest green; WJSM_TEST_GC matrix for destroy/ALS fixtures; design+plan+work indexed; no production code in this documentation slice."
+  ],
+  "stopCondition": "done=docs+plan complete and helper check pass; blocked=missing Node v24.15 API fact; needs-verification=implementation slices later; scope-exceeded=withScope/v27-only or closing #313 entirely.",
+  "nonGoals": [
+    "withScope; domain module; perf_hooks full; inventing providers for missing subsystems; production code in this docs slice."
+  ],
+  "scope": "docs/aegis design+plan+work for async_hooks; future implementation in wjsm-runtime/module only as later slices. No production code this turn.",
+  "changeKinds": [
+    "architecture"
+  ],
+  "riskHints": [
+    "Host seam coverage gaps; GC destroy leaks; setImmediate currently missing; fatal hook errors vs process_exit_signal."
+  ]
+}

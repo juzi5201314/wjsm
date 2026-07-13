@@ -19,6 +19,16 @@ impl Lowerer {
             cursor = parent;
         }
         scope_chain.reverse();
+        // 多个 Module Record 共用 async `$module_main`，但其 Module scope 不是
+        // 当前词法链的永久成员。continuation 的 liveness 必须看见所有模块环境，
+        // 否则 await 后仍然 live 的 import/顶层绑定会以未初始化 WASM local 恢复。
+        if self.async_main_body_entry.is_some() {
+            for (scope_id, scope) in self.scopes.arenas.iter().enumerate() {
+                if scope.kind == ScopeKind::Module && !scope_chain.contains(&scope_id) {
+                    scope_chain.push(scope_id);
+                }
+            }
+        }
 
         let mut seen = std::collections::HashSet::new();
         let mut bindings = Vec::new();

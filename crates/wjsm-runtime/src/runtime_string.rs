@@ -58,9 +58,10 @@ impl RuntimeString {
         let unit = self.code_unit_at(index)?;
         if is_high_surrogate(unit)
             && let Some(next) = self.code_unit_at(index + 1)
-                && is_low_surrogate(next) {
-                    return Some(decode_surrogate_pair(unit, next));
-                }
+            && is_low_surrogate(next)
+        {
+            return Some(decode_surrogate_pair(unit, next));
+        }
         Some(unit as u32)
     }
 

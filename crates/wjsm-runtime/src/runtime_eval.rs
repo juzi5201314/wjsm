@@ -247,8 +247,7 @@ pub(crate) fn cached_eval_wasm(
         has_scope_bridge,
         var_writes_to_scope,
     )?;
-    let compiled =
-        wjsm_backend_wasm::compile_eval_at_data_base(&program, data_base, table_base)?;
+    let compiled = wjsm_backend_wasm::compile_eval_at_data_base(&program, data_base, table_base)?;
     let entry = (compiled.wasm, compiled.table_len);
     state
         .eval_cache
@@ -714,8 +713,7 @@ fn eval_exception_from_message(caller: &mut Caller<'_, RuntimeState>, msg: Strin
         ("Error", thrown.clone())
     };
     let msg_val = store_runtime_string(caller, message.clone());
-    let error_obj =
-        create_error_object(caller, error_name, msg_val, value::encode_undefined());
+    let error_obj = create_error_object(caller, error_name, msg_val, value::encode_undefined());
     let mut errors = caller
         .data()
         .error_table
@@ -2130,12 +2128,8 @@ pub(crate) fn eval_get_binding(
         if !init {
             let msg = format!("Cannot access '{}' before initialization", name_str);
             let msg_val = store_runtime_string(caller, msg.clone());
-            let error_obj = create_error_object(
-                caller,
-                "ReferenceError",
-                msg_val,
-                value::encode_undefined(),
-            );
+            let error_obj =
+                create_error_object(caller, "ReferenceError", msg_val, value::encode_undefined());
             {
                 let mut errors = caller
                     .data()
@@ -2154,14 +2148,15 @@ pub(crate) fn eval_get_binding(
         return v;
     }
     if let Some(obj_env) = object_env
-        && let Some(ptr) = resolve_handle(caller, obj_env) {
-            let mut visited = std::collections::HashSet::new();
-            if let Some(v) =
-                read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
-            {
-                return v;
-            }
+        && let Some(ptr) = resolve_handle(caller, obj_env)
+    {
+        let mut visited = std::collections::HashSet::new();
+        if let Some(v) =
+            read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
+        {
+            return v;
         }
+    }
     if let Some(outer) = outer {
         return eval_get_binding(caller, outer, name);
     }
@@ -2233,20 +2228,21 @@ pub(crate) fn eval_set_binding(
         return val;
     }
     if let Some(obj_env) = object_env
-        && (value::is_object(obj_env) || value::is_array(obj_env)) {
-            if let Some(ptr) = resolve_handle(caller, obj_env) {
-                let mut visited = std::collections::HashSet::new();
-                if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
-                    .is_some()
-                {
-                    let _ = set_host_data_property_from_caller(caller, obj_env, &name_str, val);
-                    return val;
-                }
-            } else {
+        && (value::is_object(obj_env) || value::is_array(obj_env))
+    {
+        if let Some(ptr) = resolve_handle(caller, obj_env) {
+            let mut visited = std::collections::HashSet::new();
+            if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
+                .is_some()
+            {
                 let _ = set_host_data_property_from_caller(caller, obj_env, &name_str, val);
                 return val;
             }
+        } else {
+            let _ = set_host_data_property_from_caller(caller, obj_env, &name_str, val);
+            return val;
         }
+    }
     if let Some(outer) = outer {
         return eval_set_binding(caller, outer, name, val);
     }
@@ -2311,14 +2307,13 @@ pub(crate) fn eval_has_binding(
         return value::encode_bool(true);
     }
     if let Some(obj_env) = object_env
-        && let Some(ptr) = resolve_handle(caller, obj_env) {
-            let mut visited = std::collections::HashSet::new();
-            if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited)
-                .is_some()
-            {
-                return value::encode_bool(true);
-            }
+        && let Some(ptr) = resolve_handle(caller, obj_env)
+    {
+        let mut visited = std::collections::HashSet::new();
+        if read_object_property_by_name_proto_walk(caller, ptr, &name_str, &mut visited).is_some() {
+            return value::encode_bool(true);
         }
+    }
     if let Some(outer) = outer {
         return eval_has_binding(caller, outer, name);
     }

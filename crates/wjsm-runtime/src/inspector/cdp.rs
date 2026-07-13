@@ -1,8 +1,8 @@
 //! CDP JSON-RPC 请求分发。
 
+use super::InspectorHandle;
 use super::remote_object::evaluate_simple_expression;
 use super::state::{MAIN_SCRIPT_ID, PauseCommand, ResumeAction};
-use super::InspectorHandle;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -179,19 +179,27 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
                 .unwrap_or("")
                 .to_string();
             if handle.paused.load(std::sync::atomic::Ordering::SeqCst)
-                && let Ok(result) = send_pause_command(handle, |reply| PauseCommand::EvaluateGlobal {
-                    expression: expression.clone(),
-                    reply,
-                })
-                .await { return vec![ok_response(id, result)] }
+                && let Ok(result) =
+                    send_pause_command(handle, |reply| PauseCommand::EvaluateGlobal {
+                        expression: expression.clone(),
+                        reply,
+                    })
+                    .await
+            {
+                return vec![ok_response(id, result)];
+            }
             let mut inner = handle.inner.lock().await;
             match evaluate_simple_expression(&expression, &mut inner.remote_objects) {
                 Ok(remote) => vec![ok_response(id, json!({ "result": remote }))],
                 Err(msg) => vec![ok_response(id, eval_error_payload(&msg))],
             }
         }
-        "Runtime.releaseObject" | "Runtime.releaseObjectGroup" | "Runtime.compileScript"
-        | "Runtime.discardConsoleEntries" | "Profiler.enable" | "HeapProfiler.enable" => {
+        "Runtime.releaseObject"
+        | "Runtime.releaseObjectGroup"
+        | "Runtime.compileScript"
+        | "Runtime.discardConsoleEntries"
+        | "Profiler.enable"
+        | "HeapProfiler.enable" => {
             vec![ok_response(id, json!({}))]
         }
         _ => vec![error_response(
@@ -203,10 +211,7 @@ pub(crate) async fn handle_message(handle: &InspectorHandle, text: &str) -> Vec<
 }
 
 /// 向暂停循环发送命令；若未暂停则返回缓存回退结果。
-async fn send_pause_command<F>(
-    handle: &InspectorHandle,
-    make: F,
-) -> Result<Value, Value>
+async fn send_pause_command<F>(handle: &InspectorHandle, make: F) -> Result<Value, Value>
 where
     F: FnOnce(oneshot::Sender<Value>) -> PauseCommand,
 {
@@ -243,10 +248,7 @@ where
     }
 }
 
-fn offline_scope_props(
-    inner: &mut super::state::InspectorInner,
-    object_id: &str,
-) -> Vec<Value> {
+fn offline_scope_props(inner: &mut super::state::InspectorInner, object_id: &str) -> Vec<Value> {
     let Some(frame_id) = object_id.strip_prefix("scope:") else {
         return Vec::new();
     };

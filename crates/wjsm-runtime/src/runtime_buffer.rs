@@ -245,13 +245,8 @@ pub(crate) fn create_buffer_from_bytes_with_env<C: AsContextMut<Data = RuntimeSt
         "__buffer_brand__",
         value::encode_bool(true),
     );
-    let _ = define_host_data_property_with_env(
-        ctx,
-        env,
-        obj,
-        "length",
-        value::encode_f64(len as f64),
-    );
+    let _ =
+        define_host_data_property_with_env(ctx, env, obj, "length", value::encode_f64(len as f64));
     let _ = define_host_data_property_with_env(
         ctx,
         env,
@@ -259,13 +254,7 @@ pub(crate) fn create_buffer_from_bytes_with_env<C: AsContextMut<Data = RuntimeSt
         "byteLength",
         value::encode_f64(len as f64),
     );
-    let _ = define_host_data_property_with_env(
-        ctx,
-        env,
-        obj,
-        "byteOffset",
-        value::encode_f64(0.0),
-    );
+    let _ = define_host_data_property_with_env(ctx, env, obj, "byteOffset", value::encode_f64(0.0));
     let _ = define_host_data_property_with_env(ctx, env, obj, "buffer", ab_obj);
     obj
 }
@@ -451,9 +440,10 @@ fn buffer_from(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         return create_buffer_view(caller, handle, Some(first), offset as u32, length as u32);
     }
     if typedarray_entry_from_value(caller, first).is_some()
-        && let Some(bytes) = visible_bytes(caller, first) {
-            return create_buffer_from_bytes(caller, bytes);
-        }
+        && let Some(bytes) = visible_bytes(caller, first)
+    {
+        return create_buffer_from_bytes(caller, bytes);
+    }
     if let Some(length) = array_like_length(caller, first) {
         let mut bytes = Vec::with_capacity(length as usize);
         for index in 0..length {

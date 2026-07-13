@@ -186,7 +186,10 @@ pub const HEAP_ARRAY_LENGTH_OFFSET: u32 = 8;
 pub const HEAP_ARRAY_CAPACITY_OFFSET: u32 = 12;
 pub const HEAP_ARRAY_ELEMENT_SIZE: u32 = 8;
 pub const HANDLE_TABLE_ENTRY_SIZE: u32 = 4;
-pub const HANDLE_TABLE_MIN_ENTRIES: u32 = 8192;
+pub const GC_INITIAL_TRIGGER_BYTES: u32 = 256 * 1024;
+pub const HANDLE_TABLE_GC_WINDOWS: u32 = 2;
+pub const HANDLE_TABLE_MIN_ENTRIES: u32 =
+    HANDLE_TABLE_GC_WINDOWS * GC_INITIAL_TRIGGER_BYTES / HEAP_OBJECT_HEADER_SIZE;
 pub const HANDLE_TABLE_FUNCTION_ENTRY_FACTOR: u32 = 4;
 pub const HEAP_ALLOCATION_ALIGNMENT: u32 = 8;
 pub const GC_REGION_SIZE: u32 = 64 * 1024;
@@ -217,6 +220,8 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         ("heap_array_element_size", HEAP_ARRAY_ELEMENT_SIZE),
         ("handle_table_entry_size", HANDLE_TABLE_ENTRY_SIZE),
         ("handle_table_min_entries", HANDLE_TABLE_MIN_ENTRIES),
+        ("gc_initial_trigger_bytes", GC_INITIAL_TRIGGER_BYTES),
+        ("handle_table_gc_windows", HANDLE_TABLE_GC_WINDOWS),
         (
             "handle_table_function_entry_factor",
             HANDLE_TABLE_FUNCTION_ENTRY_FACTOR,

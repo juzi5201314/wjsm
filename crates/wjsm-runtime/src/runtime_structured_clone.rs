@@ -4,7 +4,7 @@ use crate::runtime_buffer::{
     create_arraybuffer_from_bytes, create_buffer_from_bytes, visible_bytes,
 };
 use crate::runtime_worker_message::{
-    deserialize_value, serialize_value, transfer_arg_from_options, parse_transfer_list,
+    deserialize_value, parse_transfer_list, serialize_value, transfer_arg_from_options,
 };
 use crate::*;
 

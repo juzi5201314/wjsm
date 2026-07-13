@@ -9,7 +9,7 @@ use wasmtime::{Caller, Linker, Store};
 
 use crate::inspector::pause_ops::dispatch_pause_command;
 use crate::inspector::state::{PauseCommand, ResumeAction};
-use crate::inspector::{snapshot_call_frames, capture_frame_locals};
+use crate::inspector::{capture_frame_locals, snapshot_call_frames};
 use crate::*;
 
 pub(crate) fn define_inspector_host(
@@ -48,8 +48,7 @@ pub(crate) fn define_inspector_host(
                     let inner = inspector.inner.lock().await;
                     inner.debug_info.clone()
                 };
-                let call_frames =
-                    snapshot_call_frames(&mut caller, &debug_info, line_u, col_u);
+                let call_frames = snapshot_call_frames(&mut caller, &debug_info, line_u, col_u);
                 let frame_locals = capture_frame_locals(&mut caller, &debug_info);
                 let pause_depth = call_frames.len().saturating_sub(1) as u32;
 
@@ -70,16 +69,13 @@ pub(crate) fn define_inspector_host(
                     inner.resume_tx = Some(resume_tx);
                     inner.pause_cmd_tx = Some(cmd_tx);
                 }
-                inspector.paused.store(true, std::sync::atomic::Ordering::SeqCst);
-
-                let params = crate::inspector::pause::build_paused_params(
-                    reason,
-                    call_frames,
-                    hit_bps,
-                );
                 inspector
-                    .broadcast_event("Debugger.paused", params)
-                    .await;
+                    .paused
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+
+                let params =
+                    crate::inspector::pause::build_paused_params(reason, call_frames, hit_bps);
+                inspector.broadcast_event("Debugger.paused", params).await;
 
                 // 暂停循环：resume 或处理需要 Caller 的 CDP 命令。
                 let action = loop {

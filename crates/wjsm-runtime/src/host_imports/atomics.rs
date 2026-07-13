@@ -1163,6 +1163,7 @@ pub(crate) fn define_atomics(
                 let pclone = promise;
                 let bh = buf_handle as u32;
                 let ou = off as u32;
+                let scope = crate::scheduler::capture_completion_scope_from_caller(&caller);
                 tokio::spawn(async move {
                     ::tokio::time::sleep_until(d).await;
                     crate::shared_buffer::remove_waiter(&sh, bh, ou, &nh);
@@ -1175,6 +1176,7 @@ pub(crate) fn define_atomics(
                             );
                             PromiseSettlement::Fulfill(timed)
                         }),
+                        scope,
                     });
                 });
             }

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-12-node-async-hooks",
+  "taskIntentRef": "docs/aegis/work/2026-07-12-node-async-hooks/task-intent-draft.json",
+  "baselineRefs": [
+    "docs/aegis/specs/2026-07-12-node-async-hooks-design.md",
+    "docs/aegis/plans/2026-07-12-node-async-hooks.md"
+  ],
+  "scopeStatus": "docs-only slice; no production code; full implementation still required later",
+  "compatStatus": "pinned to Node v24.15 public API; withScope excluded; #313 not closed",
+  "retirementStatus": "no old async_hooks stub; issue non-goal remains historical text with override",
+  "newRiskSignals": [
+    "setImmediate currently missing in runtime — plan forces delivery"
+  ],
+  "decision": "continue"
+}

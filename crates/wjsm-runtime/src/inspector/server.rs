@@ -5,8 +5,8 @@
 //! - `GET /json/version`
 //! - WebSocket upgrade（任意路径，含 `/{session_id}`）
 
-use super::cdp;
 use super::InspectorHandle;
+use super::cdp;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::atomic::Ordering;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -12,8 +12,7 @@ fn realm_id_is_monotonic() {
 fn realm_intrinsics_empty_is_all_undefined() {
     let intr = RealmIntrinsics::empty();
     assert!(
-        intr.iter_roots()
-            .all(|h| h == RealmIntrinsics::UNDEFINED),
+        intr.iter_roots().all(|h| h == RealmIntrinsics::UNDEFINED),
         "empty() 每个 intrinsic 根必须是 undefined"
     );
 }
@@ -33,17 +32,21 @@ fn with_execution_realm_is_nested_safe() {
 
     // 模拟 RuntimeState.execution_realm 的保存/恢复语义
     let execution_realm = AtomicU32::new(0);
-    let outer = wjsm_runtime::realm::with_execution_realm_slot(&execution_realm, RealmId(1), || {
-        assert_eq!(execution_realm.load(Ordering::Relaxed), 1);
-        let inner =
-            wjsm_runtime::realm::with_execution_realm_slot(&execution_realm, RealmId(2), || {
-                assert_eq!(execution_realm.load(Ordering::Relaxed), 2);
-                42
-            });
-        assert_eq!(inner, 42);
-        assert_eq!(execution_realm.load(Ordering::Relaxed), 1);
-        7
-    });
+    let outer =
+        wjsm_runtime::realm::with_execution_realm_slot(&execution_realm, RealmId(1), || {
+            assert_eq!(execution_realm.load(Ordering::Relaxed), 1);
+            let inner = wjsm_runtime::realm::with_execution_realm_slot(
+                &execution_realm,
+                RealmId(2),
+                || {
+                    assert_eq!(execution_realm.load(Ordering::Relaxed), 2);
+                    42
+                },
+            );
+            assert_eq!(inner, 42);
+            assert_eq!(execution_realm.load(Ordering::Relaxed), 1);
+            7
+        });
     assert_eq!(outer, 7);
     assert_eq!(execution_realm.load(Ordering::Relaxed), 0);
 }

@@ -107,7 +107,12 @@ fn install_all_methods(caller: &mut Caller<'_, RuntimeState>, obj: i64) {
     install(caller, obj, "getParentPortId", K::GetParentPortId);
 }
 
-fn install(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str, kind: WorkerThreadsMethodKind) {
+fn install(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    kind: WorkerThreadsMethodKind,
+) {
     let callable =
         create_native_callable(caller.data(), NativeCallable::WorkerThreadsMethod { kind });
     let _ = define_host_data_property_from_caller(caller, obj, name, callable);

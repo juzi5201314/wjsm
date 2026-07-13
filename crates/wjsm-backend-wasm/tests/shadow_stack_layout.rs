@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 
 use wasmparser::{Operator, Parser, Payload};
-use wjsm_ir::constants::{GC_BARRIER_EVENT_BUFFER_SIZE, GC_REGION_SIZE};
 use wjsm_ir::SHADOW_STACK_INITIAL_SIZE;
+use wjsm_ir::constants::{GC_BARRIER_EVENT_BUFFER_SIZE, GC_REGION_SIZE};
 
 #[test]
 fn independent_shadow_memory_layout() {

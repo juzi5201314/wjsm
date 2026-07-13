@@ -1,7 +1,6 @@
 nextest-version = "0.9.122"
 
-# 正确性 suite：事件驱动完成即通过；墙钟只用于「真挂死」保护与 SLOW 标注。
-# 禁止把 1s 墙钟硬杀当成性能/正确性门禁——并行负载下天然抖动，必然 flaky。
+# 所有测试必须在 3s 内完成；超过即视为死锁、未关闭资源或性能回归。
 
 [profile.default]
 test-threads = "num-cpus"
@@ -10,9 +9,8 @@ success-output = "never"
 status-level = "pass"
 final-status-level = "all"
 fail-fast = false
-# 0.5s 起标 SLOW（可见性）；不 terminate。
-# 真挂死保护：60s 后杀进程（只挡死循环/死锁，不挡调度抖动）。
-slow-timeout = { period = "500ms", terminate-after = 120 }
+# 3s 全局硬超时。
+slow-timeout = { period = "3s", terminate-after = 1 }
 
 [profile.ci]
 test-threads = "num-cpus"
@@ -21,10 +19,9 @@ success-output = "never"
 status-level = "pass"
 final-status-level = "all"
 fail-fast = false
-slow-timeout = { period = "500ms", terminate-after = 120 }
+slow-timeout = { period = "3s", terminate-after = 1 }
 
-# 可选串行观测 profile：只标 SLOW、不硬杀，用于本地看谁慢。
-# 用法：cargo nextest run --profile perf --workspace --status-level slow
+# 串行观测 profile 仍执行同一 3s 正确性门禁。
 [profile.perf]
 test-threads = 1
 failure-output = "immediate-final"
@@ -32,24 +29,25 @@ success-output = "never"
 status-level = "slow"
 final-status-level = "slow"
 fail-fast = false
-slow-timeout = { period = "500ms", terminate-after = 120 }
+slow-timeout = { period = "3s", terminate-after = 1 }
 
 [test-groups]
 # 资源隔离（端口/共享 cache 路径），不是墙钟预算。
 cluster-ipc = { max-threads = 1 }
 runtime-cache-delete = { max-threads = 1 }
 
-# cluster IPC：同二进制内串行，降低 IPC reader 与 host 完成队列争用。
-# 失败路径已在 runtime 收口（bind/queryServer error → worker exit → primary 不再永久挂），
-# 不再需要独占全部测试槽。
+# cluster IPC：同二进制内串行，并独占测试执行槽；网络/子进程本身均低于 3s，
+# 但与全量 CPU 密集 fixture 并发时会越过同一硬门禁。
 [[profile.default.overrides]]
 filter = 'binary(cluster_ipc)'
 test-group = 'cluster-ipc'
+threads-required = "num-cpus"
 
 
 [[profile.ci.overrides]]
 filter = 'binary(cluster_ipc)'
 test-group = 'cluster-ipc'
+threads-required = "num-cpus"
 
 
 [[profile.default.overrides]]

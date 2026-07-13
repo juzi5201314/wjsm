@@ -902,23 +902,24 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ChildProcessMethod { kind } => {
             Some(crate::runtime_node_child_process::call_child_process_method(caller, kind, &args))
         }
-        NativeCallable::NetMethod { kind } => {
-            Some(crate::runtime_node_net::call_net_method(caller, kind, &args))
-        }
+        NativeCallable::NetMethod { kind } => Some(crate::runtime_node_net::call_net_method(
+            caller, kind, &args,
+        )),
         NativeCallable::VmMethod { kind } => {
             Some(crate::runtime_node_vm::call_vm_method(caller, kind, &args))
         }
-        NativeCallable::DgramMethod { kind } => {
-            Some(crate::runtime_node_dgram::call_dgram_method(caller, kind, &args))
-        }
-        NativeCallable::TlsMethod { kind } => {
-            Some(crate::runtime_node_tls::call_tls_method(caller, kind, &args))
-        }
-        NativeCallable::WorkerThreadsMethod { kind } => {
-            Some(crate::runtime_node_worker_threads::call_worker_threads_method(
-                caller, kind, &args,
-            ))
-        }
+        NativeCallable::AsyncHooksMethod { kind } => Some(
+            crate::runtime_node_async_hooks::call_async_hooks_method(caller, kind, this_val, &args),
+        ),
+        NativeCallable::DgramMethod { kind } => Some(crate::runtime_node_dgram::call_dgram_method(
+            caller, kind, &args,
+        )),
+        NativeCallable::TlsMethod { kind } => Some(crate::runtime_node_tls::call_tls_method(
+            caller, kind, &args,
+        )),
+        NativeCallable::WorkerThreadsMethod { kind } => Some(
+            crate::runtime_node_worker_threads::call_worker_threads_method(caller, kind, &args),
+        ),
         NativeCallable::CryptoDigestMethod { state, kind } => {
             Some(crate::runtime_node_crypto::call_crypto_digest_method(
                 caller, this_val, state, kind, &args,
@@ -1546,10 +1547,7 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
                 .first()
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
-            let arr_like = args
-                .get(1)
-                .copied()
-                .unwrap_or_else(value::encode_undefined);
+            let arr_like = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             let call_args =
                 match crate::host_imports::extract_array_like_elements(caller, arr_like).await {
                     Ok(v) => v,
@@ -1606,6 +1604,15 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         NativeCallable::VmMethod { kind } => {
             Some(crate::runtime_node_vm::call_vm_method_async(caller, kind, &args).await)
         }
+        NativeCallable::ProcessNextTick => {
+            Some(crate::runtime_process::call_process_next_tick_async(caller, &args).await)
+        }
+        NativeCallable::AsyncHooksMethod { kind } => Some(
+            crate::runtime_node_async_hooks::call_async_hooks_method_async(
+                caller, kind, this_val, &args,
+            )
+            .await,
+        ),
         NativeCallable::AgentStart
         | NativeCallable::AgentBroadcast
         | NativeCallable::AgentMonotonicNow => {
@@ -2270,7 +2277,10 @@ async fn call_object_static_async(
     args: &[i64],
 ) -> i64 {
     use crate::types::ObjectStaticKind;
-    let arg0 = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let arg0 = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     match kind {
         ObjectStaticKind::Keys
         | ObjectStaticKind::Values
@@ -2367,7 +2377,10 @@ async fn call_promise_static_async(
     args: &[i64],
 ) -> i64 {
     use crate::types::PromiseStaticKind;
-    let arg0 = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let arg0 = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     match kind {
         PromiseStaticKind::Resolve => {
             if crate::runtime_promises::is_promise_value(caller.data(), arg0) {

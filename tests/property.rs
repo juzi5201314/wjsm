@@ -1,13 +1,15 @@
 //! Property tests：每个测试只编译一次固定 runner，按 process.argv 传参执行。
 //! 保留原三个测试名、ProptestConfig.cases=8、生成策略与逐字 expected。
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{LazyLock, OnceLock};
 use anyhow::{Context, Result, ensure};
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, OnceLock};
 use tokio::runtime::Runtime;
-use wjsm_runtime::{RuntimeCompiler, RuntimeOptions, compile_source, execute_with_writer_with_options};
+use wjsm_runtime::{
+    RuntimeCompiler, RuntimeOptions, compile_source, execute_with_writer_with_options,
+};
 
 /// 共享 current-thread Tokio runtime（整个 property 二进制复用）。
 static PROP_RT: LazyLock<Runtime> = LazyLock::new(|| {

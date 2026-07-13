@@ -214,13 +214,14 @@ fn canonical_integer_index(s: &str) -> Option<u32> {
     }
     // parse 并验证不超过 u32::MAX
     if let Ok(idx) = s.parse::<u64>()
-        && idx <= u32::MAX as u64 {
-            // 确保往返转换一致（排除非规范形式如 "+0", "-0" 等，这里 digits-only 已排除）
-            let back = idx.to_string();
-            if back == s {
-                return Some(idx as u32);
-            }
+        && idx <= u32::MAX as u64
+    {
+        // 确保往返转换一致（排除非规范形式如 "+0", "-0" 等，这里 digits-only 已排除）
+        let back = idx.to_string();
+        if back == s {
+            return Some(idx as u32);
         }
+    }
     None
 }
 

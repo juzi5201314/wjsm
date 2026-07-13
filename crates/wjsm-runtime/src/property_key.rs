@@ -40,7 +40,6 @@ impl PropertyKeyTable {
 
 pub(crate) type SharedPropertyKeyTable = Arc<Mutex<PropertyKeyTable>>;
 
-
 /// 属性槽 `name_id` 的三种存储来源。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DecodedNameId {

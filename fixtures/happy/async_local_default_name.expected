@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+ctx
+3
+true
+TypeError
+--- stderr ---

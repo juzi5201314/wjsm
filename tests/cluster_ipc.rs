@@ -27,9 +27,7 @@ fn wjsm_bin() -> PathBuf {
     ensure_cluster_test_env();
     std::env::var("CARGO_BIN_EXE_wjsm")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/wjsm")
-        })
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/wjsm"))
 }
 
 fn write_temp_script(name: &str, source: &str) -> PathBuf {
@@ -64,6 +62,35 @@ fn run_wjsm_script(script: &std::path::Path, extra_env: &[(&str, &str)]) -> std:
         cmd.env(*k, *v);
     }
     cmd.output().expect("spawn wjsm")
+}
+
+#[test]
+fn child_process_exit_preserves_async_local_storage() {
+    let script = write_temp_script(
+        "async_hooks_child_exit",
+        r#"
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { spawn } = require('node:child_process');
+const als = new AsyncLocalStorage();
+
+als.enterWith('child-context');
+const child = spawn('/bin/sh', ['-c', 'exit 0']);
+als.enterWith('changed');
+child.on('exit', () => {
+  console.log(als.getStore());
+  process.exit(0);
+});
+"#,
+    );
+    let output = run_wjsm_script(&script, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={stdout} stderr={stderr}",
+        output.status
+    );
+    assert_eq!(stdout.trim(), "child-context", "stderr={stderr}");
 }
 
 #[test]
@@ -222,12 +249,17 @@ if (cluster.isPrimary) {
   cluster.schedulingPolicy = cluster.SCHED_RR;
   var ports = [];
   var reports = 0;
+  var shuttingDown = false;
+  var exited = 0;
 
   function maybeFinish() {
     if (reports < 2) return;
     if (ports[0] > 0 && ports[0] === ports[1]) {
       console.log('shared-port ' + ports[0]);
-      process.exit(0);
+      shuttingDown = true;
+      var ids = Object.keys(cluster.workers);
+      for (var i = 0; i < ids.length; i = i + 1) cluster.workers[ids[i]].kill();
+      return;
     }
     console.log('port-mismatch ' + ports[0] + ' ' + ports[1]);
     process.exit(5);
@@ -253,6 +285,11 @@ if (cluster.isPrimary) {
 
   // 子进程若未 listening 就退出：用 exit 事件收口，禁止 primary 永久挂起。
   cluster.on('exit', function (worker, code, signal) {
+    if (shuttingDown) {
+      exited = exited + 1;
+      if (exited === 2) process.exit(0);
+      return;
+    }
     if (worker.__gotListen) return;
     worker.__gotListen = true;
     report(-1, worker.id, 'exit-before-listen:' + code + ':' + signal);
@@ -440,5 +477,3 @@ if (cluster.isPrimary) {
         "should not listen on privileged port: {stdout}"
     );
 }
-
-

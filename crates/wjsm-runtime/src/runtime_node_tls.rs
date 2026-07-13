@@ -174,10 +174,30 @@ pub(crate) fn create_tls_host_object(caller: &mut Caller<'_, RuntimeState>) -> i
     install_tls_method(caller, obj, "serverClose", TlsMethodKind::ServerClose);
     install_tls_method(caller, obj, "serverPort", TlsMethodKind::ServerPort);
     install_tls_method(caller, obj, "serverAddress", TlsMethodKind::ServerAddress);
-    install_tls_method(caller, obj, "socketLocalPort", TlsMethodKind::SocketLocalPort);
-    install_tls_method(caller, obj, "socketLocalAddress", TlsMethodKind::SocketLocalAddress);
-    install_tls_method(caller, obj, "socketRemotePort", TlsMethodKind::SocketRemotePort);
-    install_tls_method(caller, obj, "socketRemoteAddress", TlsMethodKind::SocketRemoteAddress);
+    install_tls_method(
+        caller,
+        obj,
+        "socketLocalPort",
+        TlsMethodKind::SocketLocalPort,
+    );
+    install_tls_method(
+        caller,
+        obj,
+        "socketLocalAddress",
+        TlsMethodKind::SocketLocalAddress,
+    );
+    install_tls_method(
+        caller,
+        obj,
+        "socketRemotePort",
+        TlsMethodKind::SocketRemotePort,
+    );
+    install_tls_method(
+        caller,
+        obj,
+        "socketRemoteAddress",
+        TlsMethodKind::SocketRemoteAddress,
+    );
     caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }
@@ -263,9 +283,13 @@ fn connect(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
         .get(3)
         .copied()
         .map(|v| {
-            if value::is_bool(v) { value::decode_bool(v) }
-            else if value::is_f64(v) { value::decode_f64(v) != 0.0 }
-            else { true }
+            if value::is_bool(v) {
+                value::decode_bool(v)
+            } else if value::is_f64(v) {
+                value::decode_f64(v) != 0.0
+            } else {
+                true
+            }
         })
         .unwrap_or(true);
     // alpn_protocols：逗号分隔字符串（如 "h2,http/1.1"）
@@ -315,7 +339,12 @@ fn connect(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
                 .alpn_protocol()
                 .map(|p| String::from_utf8_lossy(p).to_string());
 
-            Ok((TlsStream::Client(tls_stream), local_addr, peer_addr, alpn_protocol))
+            Ok((
+                TlsStream::Client(tls_stream),
+                local_addr,
+                peer_addr,
+                alpn_protocol,
+            ))
         },
         |store, _env, result| match result {
             Ok((stream, local_addr, peer_addr, alpn_protocol)) => {
@@ -360,7 +389,11 @@ fn make_client_config(
 fn read(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
     let Some(entry) = socket_entry(caller, args.first().copied()) else {
-        reject_promise_from_caller(caller, promise, "tls.TLSSocket handle is invalid".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "tls.TLSSocket handle is invalid".to_string(),
+        );
         return promise;
     };
     let reader = Arc::clone(&entry.reader);
@@ -389,7 +422,9 @@ fn read(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             }
         },
         |store, env, result| match result {
-            Ok(Some(bytes)) => PromiseSettlement::Fulfill(arraybuffer_with_bytes(store, env, &bytes)),
+            Ok(Some(bytes)) => {
+                PromiseSettlement::Fulfill(arraybuffer_with_bytes(store, env, &bytes))
+            }
             Ok(None) => PromiseSettlement::Fulfill(value::encode_null()),
             Err(message) => PromiseSettlement::Reject(error_with_env(store, env, message)),
         },
@@ -676,7 +711,11 @@ fn socket_addr_number(
     let Some(entry) = socket_entry(caller, args.first().copied()) else {
         return value::encode_undefined();
     };
-    let addr = if peer { entry.peer_addr } else { entry.local_addr };
+    let addr = if peer {
+        entry.peer_addr
+    } else {
+        entry.local_addr
+    };
     if port {
         value::encode_f64(f64::from(addr.port()))
     } else {
@@ -688,7 +727,11 @@ fn socket_addr_string(caller: &mut Caller<'_, RuntimeState>, args: &[i64], peer:
     let Some(entry) = socket_entry(caller, args.first().copied()) else {
         return value::encode_undefined();
     };
-    let addr = if peer { entry.peer_addr } else { entry.local_addr };
+    let addr = if peer {
+        entry.peer_addr
+    } else {
+        entry.local_addr
+    };
     crate::runtime_render::store_runtime_string(caller, addr.ip().to_string())
 }
 
@@ -743,7 +786,10 @@ struct ServerSnapshot {
     close_notify: Arc<Notify>,
 }
 
-fn socket_entry(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Option<SocketSnapshot> {
+fn socket_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Option<SocketSnapshot> {
     let handle = handle_arg(value_raw)?;
     let table = caller.data().tls_socket_table.inner.lock().ok()?;
     let entry = table.get(handle as usize)?;
@@ -756,7 +802,10 @@ fn socket_entry(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -
     })
 }
 
-fn server_entry(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Option<ServerSnapshot> {
+fn server_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Option<ServerSnapshot> {
     let handle = handle_arg(value_raw)?;
     let table = caller.data().tls_server_table.inner.lock().ok()?;
     let entry = table.get(handle as usize)?;
@@ -826,7 +875,10 @@ fn string_arg(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> 
         .unwrap_or_default()
 }
 
-fn data_arg(caller: &mut Caller<'_, RuntimeState>, value_raw: Option<i64>) -> Result<Vec<u8>, String> {
+fn data_arg(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: Option<i64>,
+) -> Result<Vec<u8>, String> {
     let value_raw = value_raw.unwrap_or_else(value::encode_undefined);
     if value::is_undefined(value_raw) || value::is_null(value_raw) {
         return Ok(Vec::new());
@@ -850,25 +902,39 @@ fn enqueue_async_result<T, Fut, Materialize>(
         + 'static,
 {
     let Some(tx) = caller.data().host_completion_tx.clone() else {
-        reject_promise_from_caller(caller, promise, "async network runtime is not available".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "async network runtime is not available".to_string(),
+        );
         return;
     };
     let Some(counter) = caller.data().async_op_counter.clone() else {
-        reject_promise_from_caller(caller, promise, "async network runtime is not available".to_string());
+        reject_promise_from_caller(
+            caller,
+            promise,
+            "async network runtime is not available".to_string(),
+        );
         return;
     };
     let guard = counter.begin();
+    let scope = crate::scheduler::capture_completion_scope_from_caller(caller);
     tokio::spawn(async move {
         let result = future.await;
         let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
             promise,
             materialize: Box::new(move |store, env| materialize(store, env, result)),
+            scope,
         });
         drop(guard);
     });
 }
 
-fn reject_promise_from_caller(caller: &mut Caller<'_, RuntimeState>, promise: i64, message: String) {
+fn reject_promise_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    message: String,
+) {
     let msg_val = crate::runtime_render::store_runtime_string(caller, message.clone());
     let error = create_error_object(caller, "Error", msg_val, value::encode_undefined());
     settle_promise(caller.data(), promise, PromiseSettlement::Reject(error));

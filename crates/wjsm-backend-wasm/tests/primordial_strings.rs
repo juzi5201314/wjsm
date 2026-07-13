@@ -12,14 +12,12 @@ fn primordial_string_offsets_consistent_across_compilations() {
         let needle = s.as_bytes();
         let end = *offset as usize + s.len();
         assert!(
-            data1
-                .get(*offset as usize..end) == Some(needle),
+            data1.get(*offset as usize..end) == Some(needle),
             "primordial string \"{s}\" missing/wrong at offset {offset} in compilation 1 (data len={})",
             data1.len(),
         );
         assert!(
-            data2
-                .get(*offset as usize..end) == Some(needle),
+            data2.get(*offset as usize..end) == Some(needle),
             "primordial string \"{s}\" missing/wrong at offset {offset} in compilation 2 (data len={})",
             data2.len(),
         );
