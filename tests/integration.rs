@@ -1,4 +1,4 @@
-#[path = "fixture_runner.rs"]
+#[path = "integration/fixture_runner.rs"]
 mod fixture_runner;
 
 #[path = "integration/mod.rs"]

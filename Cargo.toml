@@ -74,9 +74,6 @@ proptest = { workspace = true }
 tokio = { workspace = true }
 wjsm-runtime = { path = "crates/wjsm-runtime" }
 
-[[test]]
-name = "gc_footprint_long_run"
-path = "crates/wjsm-runtime/tests/gc_footprint_long_run.rs"
 # 仅对 wasmtime/cranelift 这类编译密集型依赖启用优化，
 # 保持本仓库自身 crate 仍走快速 debug 编译。
 # 测试时每个 fixture 都会用 Cranelift 把 WASM 编译成本机码，
