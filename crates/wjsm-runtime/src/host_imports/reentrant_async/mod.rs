@@ -165,6 +165,11 @@ pub(crate) async fn native_call_from_caller_async(
         return result;
     }
 
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    if !is_callable_with_env(caller, &env, callable) {
+        return type_error_exception_from_caller(caller, "TypeError: value is not callable");
+    }
+
     resolve_callable_and_call_async(caller, callable, this_val, args_base, args_count).await
 }
 
@@ -328,7 +333,7 @@ pub(crate) fn define_timers_arrays_async(
                     hooks.capture_for_scheduled_callback(resource, true)
                 };
                 if let Some(scope) = scope {
-                    let type_value = store_runtime_string(&mut caller, "Timeout".to_string());
+                    let type_value = store_runtime_string(&caller, "Timeout".to_string());
                     let _ = crate::runtime_async_hooks::emit::emit_init_from_caller(
                         &mut caller,
                         scope.async_id,
@@ -413,7 +418,7 @@ pub(crate) fn define_timers_arrays_async(
                     hooks.capture_for_scheduled_callback(resource, true)
                 };
                 if let Some(scope) = scope {
-                    let type_value = store_runtime_string(&mut caller, "Timeout".to_string());
+                    let type_value = store_runtime_string(&caller, "Timeout".to_string());
                     let _ = crate::runtime_async_hooks::emit::emit_init_from_caller(
                         &mut caller,
                         scope.async_id,

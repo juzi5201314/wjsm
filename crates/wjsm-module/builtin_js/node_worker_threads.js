@@ -1,4 +1,20 @@
 import { EventEmitter } from 'events';
+// Histogram clone 必须在 workerData/message 反序列化前注册目标 Store prototype。
+import 'node:perf_hooks';
+
+var MessagePort;
+var MessageChannel;
+var Worker;
+var receiveMessageOnPort;
+var isMainThread;
+var threadId;
+var workerData;
+var parentPort;
+var resourceLimits;
+var SHARE_ENV;
+var workerThreads;
+
+function loadWorkerThreads() {
 
 function getHost() {
   const host = globalThis.__wjsm_node_worker_threads;
@@ -41,7 +57,7 @@ function normalizeWorkerOptions(options) {
   };
 }
 
-export function MessagePort(id) {
+function MessagePort(id) {
   EventEmitter.call(this);
   this.__id = id;
   this.__started = false;
@@ -108,13 +124,13 @@ MessagePort.prototype.prependOnceListener = function (name, listener) {
   return result;
 };
 
-export function MessageChannel() {
+function MessageChannel() {
   const ids = host.createMessageChannel();
   this.port1 = new MessagePort(ids.port1);
   this.port2 = new MessagePort(ids.port2);
 }
 
-export function Worker(filename, options) {
+function Worker(filename, options) {
   EventEmitter.call(this);
   options = options || {};
   const normalized = normalizeWorkerOptions(options);
@@ -161,7 +177,7 @@ Worker.prototype.unref = function () {
   return this;
 };
 
-export function receiveMessageOnPort(port) {
+function receiveMessageOnPort(port) {
   const id = port && port.__id !== undefined ? port.__id : port;
   const msg = host.receiveMessageOnPort(id);
   if (msg === undefined || msg === null) return undefined;
@@ -169,9 +185,9 @@ export function receiveMessageOnPort(port) {
   return { message: msg };
 }
 
-export const isMainThread = host.getIsMainThread();
-export const threadId = host.getThreadId();
-export const workerData = host.getWorkerData();
+const isMainThread = host.getIsMainThread();
+const threadId = host.getThreadId();
+const workerData = host.getWorkerData();
 
 function resolveParentPort() {
   if (isMainThread) return null;
@@ -179,10 +195,10 @@ function resolveParentPort() {
   if (id === undefined || id === null) return null;
   return new MessagePort(id);
 }
-export const parentPort = resolveParentPort();
+const parentPort = resolveParentPort();
 
-export const resourceLimits = {};
-export const SHARE_ENV = Symbol.for('nodejs.worker_threads.SHARE_ENV');
+const resourceLimits = {};
+const SHARE_ENV = Symbol.for('nodejs.worker_threads.SHARE_ENV');
 
 const workerThreads = {
   isMainThread: isMainThread,
@@ -195,5 +211,46 @@ const workerThreads = {
   receiveMessageOnPort: receiveMessageOnPort,
   resourceLimits: resourceLimits,
   SHARE_ENV: SHARE_ENV,
+};
+
+return {
+  MessagePort: MessagePort,
+  MessageChannel: MessageChannel,
+  Worker: Worker,
+  receiveMessageOnPort: receiveMessageOnPort,
+  isMainThread: isMainThread,
+  threadId: threadId,
+  workerData: workerData,
+  parentPort: parentPort,
+  resourceLimits: resourceLimits,
+  SHARE_ENV: SHARE_ENV,
+  workerThreads: workerThreads,
+};
+}
+
+const loadedWorkerThreads = loadWorkerThreads();
+MessagePort = loadedWorkerThreads.MessagePort;
+MessageChannel = loadedWorkerThreads.MessageChannel;
+Worker = loadedWorkerThreads.Worker;
+receiveMessageOnPort = loadedWorkerThreads.receiveMessageOnPort;
+isMainThread = loadedWorkerThreads.isMainThread;
+threadId = loadedWorkerThreads.threadId;
+workerData = loadedWorkerThreads.workerData;
+parentPort = loadedWorkerThreads.parentPort;
+resourceLimits = loadedWorkerThreads.resourceLimits;
+SHARE_ENV = loadedWorkerThreads.SHARE_ENV;
+workerThreads = loadedWorkerThreads.workerThreads;
+
+export {
+  MessagePort,
+  MessageChannel,
+  Worker,
+  receiveMessageOnPort,
+  isMainThread,
+  threadId,
+  workerData,
+  parentPort,
+  resourceLimits,
+  SHARE_ENV,
 };
 export default workerThreads;

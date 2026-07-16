@@ -52,7 +52,11 @@ pub(crate) fn define_property_impl(
     name_id: u32,
     desc_handle: i64,
 ) -> i64 {
-    if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
+    if !value::is_object(obj)
+        && !value::is_function(obj)
+        && !value::is_closure(obj)
+        && !value::is_array(obj)
+    {
         return make_type_error_exception(caller, "Object.defineProperty called on non-object");
     }
     if value::is_proxy(obj) {
@@ -1145,8 +1149,8 @@ pub(crate) fn define_core(
                 return get_own_prop_desc_proxy(&mut caller, obj, key);
             }
 
-            // 检查 obj 是否是对象或函数
-            if !value::is_object(obj) && !value::is_function(obj) {
+            // function / closure / object 均可拥有自有属性（模块内函数是 closure）。
+            if !value::is_object(obj) && !value::is_function(obj) && !value::is_closure(obj) {
                 *caller
                     .data()
                     .runtime_error

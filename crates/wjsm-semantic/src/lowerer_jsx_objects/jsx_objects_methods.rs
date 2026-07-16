@@ -64,9 +64,15 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        let fn_value =
-                            self.lower_method_to_fn(&getter.key, body, None, home_object, block)?;
-                        block = self.resolve_store_block(block);
+                        let function =
+                            self.lower_method_to_fn(&getter.key, body, None, home_object)?;
+                        let (continuation, fn_value) = self.materialize_method_function_value(
+                            block,
+                            &function,
+                            home_object,
+                            getter.span,
+                        )?;
+                        block = continuation;
                         let desc = self.build_descriptor("get", fn_value, true, true, block)?;
                         block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
@@ -90,14 +96,19 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        let fn_value = self.lower_method_to_fn(
+                        let function = self.lower_method_to_fn(
                             &setter.key,
                             body,
                             Some(std::slice::from_ref(&*setter.param)),
                             home_object,
-                            block,
                         )?;
-                        block = self.resolve_store_block(block);
+                        let (continuation, fn_value) = self.materialize_method_function_value(
+                            block,
+                            &function,
+                            home_object,
+                            setter.span,
+                        )?;
+                        block = continuation;
                         let desc = self.build_descriptor("set", fn_value, true, true, block)?;
                         block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
@@ -122,13 +133,18 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        let fn_value = self.lower_method_prop_to_fn(
+                        let function = self.lower_method_prop_to_fn(
                             &method.key,
                             &method.function,
                             home_object,
-                            block,
                         )?;
-                        block = self.resolve_store_block(block);
+                        let (continuation, fn_value) = self.materialize_method_function_value(
+                            block,
+                            &function,
+                            home_object,
+                            method.function.span,
+                        )?;
+                        block = continuation;
                         self.current_function.append_instruction(
                             block,
                             Instruction::SetProp {
@@ -240,88 +256,55 @@ impl Lowerer {
     fn create_method_env_with_home(
         &mut self,
         block: BasicBlockId,
-        captured: &[CapturedBinding],
+        parent_env: ValueId,
         home_object: ValueId,
     ) -> ValueId {
-        let env_val = self.alloc_value();
+        let env = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::NewObject {
-                dest: env_val,
-                capacity: captured.len() as u32 + 1,
+                dest: env,
+                capacity: 1,
             },
         );
-
-        for binding in captured {
-            let current_val = if self.binding_belongs_to_current_function(binding) {
-                let current_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::LoadVar {
-                        dest: current_val,
-                        name: binding.var_ir_name(),
-                    },
-                );
-                current_val
-            } else {
-                self.record_capture(binding.clone());
-                let parent_env = self.load_env_object(block);
-                let parent_key = self.append_env_key_const(block, binding);
-                let current_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::GetProp {
-                        dest: current_val,
-                        object: parent_env,
-                        key: parent_key,
-                    },
-                );
-                current_val
-            };
-
-            let key_val = self.append_env_key_const(block, binding);
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: env_val,
-                    key: key_val,
-                    value: current_val,
-                },
-            );
-        }
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProto {
+                object: env,
+                value: parent_env,
+            },
+        );
 
         let home_key = self
             .module
             .add_constant(Constant::String("home".to_string()));
-        let home_key_val = self.alloc_value();
+        let home_key_value = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::Const {
-                dest: home_key_val,
+                dest: home_key_value,
                 constant: home_key,
             },
         );
         self.current_function.append_instruction(
             block,
             Instruction::SetProp {
-                object: env_val,
-                key: home_key_val,
+                object: env,
+                key: home_key_value,
                 value: home_object,
             },
         );
-
-        env_val
+        env
     }
 
-    /// 将 getter/setter 方法体编译为内联函数，返回 FunctionRef 的 ValueId
+    /// 将 getter/setter 方法体编译为独立 IR 函数，物化由 caller 在外层 continuation 完成。
     pub(crate) fn lower_method_to_fn(
         &mut self,
         key: &swc_ast::PropName,
         body: &swc_ast::BlockStmt,
         accessor_params: Option<&[swc_ast::Pat]>,
         home_object: Option<ValueId>,
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
+    ) -> Result<LoweredMethodFunction, LoweringError> {
         let method_name = match key {
             swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
             swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
@@ -404,74 +387,38 @@ impl Lowerer {
 
         self.pop_function_context();
 
-        let m_ref_const = self
-            .module
-            .add_constant(Constant::FunctionRef(m_function_id));
-        let func_ref_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: func_ref_val,
-                constant: m_ref_const,
-            },
-        );
-
-        if let Some(home_object) = home_object {
-            let env_val = self.create_method_env_with_home(block, &m_captured, home_object);
-            let closure_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::CallBuiltin {
-                    dest: Some(closure_val),
-                    builtin: Builtin::CreateClosure,
-                    args: vec![func_ref_val, env_val],
-                },
-            );
-            Ok(closure_val)
-        } else if m_captured.is_empty() {
-            Ok(func_ref_val)
-        } else {
-            let mut closure_block = block;
-            let env_val = self.ensure_shared_env(closure_block, &m_captured, key.span())?;
-            closure_block = self.resolve_store_block(closure_block);
-            let closure_val = self.alloc_value();
-            self.current_function.append_instruction(
-                closure_block,
-                Instruction::CallBuiltin {
-                    dest: Some(closure_val),
-                    builtin: Builtin::CreateClosure,
-                    args: vec![func_ref_val, env_val],
-                },
-            );
-            Ok(closure_val)
-        }
+        Ok(LoweredMethodFunction {
+            function_id: m_function_id,
+            captured: m_captured,
+        })
     }
 
-    // TODO: lower_method_prop_to_fn 与 lower_fn_expr 的逻辑高度相似
-    // （创建函数上下文、声明 $env/$this、构建参数、降低函数体、创建闭包等），
-    // 未来应提取共享逻辑以减少代码重复。
     pub(crate) fn lower_method_prop_to_fn(
         &mut self,
         key: &swc_ast::PropName,
         function: &swc_ast::Function,
         home_object: Option<ValueId>,
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
+    ) -> Result<LoweredMethodFunction, LoweringError> {
         if function.is_generator {
             let method_name = match key {
                 swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
                 swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
                 _ => "anonymous".to_string(),
             };
-            let fn_expr = swc_ast::FnExpr {
-                ident: Some(swc_ast::Ident::new(
+            let declaration = swc_ast::FnDecl {
+                ident: swc_ast::Ident::new(
                     method_name.into(),
                     key.span(),
                     swc_core::common::SyntaxContext::empty(),
-                )),
+                ),
+                declare: false,
                 function: Box::new(function.clone()),
             };
-            return self.lower_fn_expr(&fn_expr, block);
+            let (function_id, captured) = self.lower_gen_function(&declaration)?;
+            return Ok(LoweredMethodFunction {
+                function_id,
+                captured,
+            });
         }
         let method_name = match key {
             swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
@@ -544,48 +491,68 @@ impl Lowerer {
 
         self.pop_function_context();
 
-        let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
-        let func_ref_val = self.alloc_value();
+        Ok(LoweredMethodFunction {
+            function_id,
+            captured,
+        })
+    }
+
+    pub(crate) fn materialize_method_function_value(
+        &mut self,
+        block: BasicBlockId,
+        function: &LoweredMethodFunction,
+        home_object: Option<ValueId>,
+        span: Span,
+    ) -> Result<(BasicBlockId, ValueId), LoweringError> {
+        let function_ref = self
+            .module
+            .add_constant(Constant::FunctionRef(function.function_id));
+        let function_value = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::Const {
-                dest: func_ref_val,
-                constant: func_ref_const,
+                dest: function_value,
+                constant: function_ref,
             },
         );
 
-        let callee_val = if let Some(home_object) = home_object {
-            let env_val = self.create_method_env_with_home(block, &captured, home_object);
-            let closure_val = self.alloc_value();
+        if let Some(home_object) = home_object {
+            let (continuation, parent_env) = if function.captured.is_empty() {
+                (block, self.load_env_object(block))
+            } else {
+                let env = self.ensure_shared_env(block, &function.captured, span)?;
+                (self.resolve_store_block(block), env)
+            };
+            let method_env =
+                self.create_method_env_with_home(continuation, parent_env, home_object);
+            let closure = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                continuation,
                 Instruction::CallBuiltin {
-                    dest: Some(closure_val),
+                    dest: Some(closure),
                     builtin: Builtin::CreateClosure,
-                    args: vec![func_ref_val, env_val],
+                    args: vec![function_value, method_env],
                 },
             );
-            closure_val
-        } else if captured.is_empty() {
-            func_ref_val
-        } else {
-            let mut closure_block = block;
-            let env_val = self.ensure_shared_env(closure_block, &captured, key.span())?;
-            closure_block = self.resolve_store_block(closure_block);
-            let closure_val = self.alloc_value();
-            self.current_function.append_instruction(
-                closure_block,
-                Instruction::CallBuiltin {
-                    dest: Some(closure_val),
-                    builtin: Builtin::CreateClosure,
-                    args: vec![func_ref_val, env_val],
-                },
-            );
-            self.expr_merge_block = Some(closure_block);
-            closure_val
-        };
+            return Ok((continuation, closure));
+        }
 
-        Ok(callee_val)
+        if function.captured.is_empty() {
+            return Ok((block, function_value));
+        }
+
+        let env = self.ensure_shared_env(block, &function.captured, span)?;
+        let continuation = self.resolve_store_block(block);
+        let closure = self.alloc_value();
+        self.current_function.append_instruction(
+            continuation,
+            Instruction::CallBuiltin {
+                dest: Some(closure),
+                builtin: Builtin::CreateClosure,
+                args: vec![function_value, env],
+            },
+        );
+        Ok((continuation, closure))
     }
 
     /// 构建 getter/setter descriptor 对象 { get/set: fn, enumerable, configurable }

@@ -84,6 +84,24 @@ impl<T> HostSideTable<T> {
         self.unpin(side_handle);
     }
 
+    /// 通过精确 wrapper object handle 查询 side-table handle；不沿原型链读取属性。
+    pub fn side_handle_for_obj(&self, obj_handle: u32) -> Option<u32> {
+        self.obj_to_side
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&obj_handle)
+            .copied()
+    }
+
+    pub fn object_bindings(&self) -> Vec<(u32, u32)> {
+        self.obj_to_side
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(&object, &side)| (object, side))
+            .collect()
+    }
+
     pub fn pin(&self, side_handle: u32) {
         self.pinned
             .lock()
@@ -113,6 +131,11 @@ impl<T> HostSideTable<T> {
 
     /// 按 side-entry reachability 回收不可达 slot。调用方负责先完成表间传播。
     pub fn reclaim_unreachable(&self, reachable: &HashSet<u32>) {
+        drop(self.reclaim_unreachable_entries(reachable));
+    }
+
+    /// 与 `reclaim_unreachable` 相同，但把被回收的 entry 交给 owner 做资源注销。
+    pub fn reclaim_unreachable_entries(&self, reachable: &HashSet<u32>) -> Vec<(u32, T)> {
         let pinned = self
             .pinned
             .lock()
@@ -122,25 +145,31 @@ impl<T> HostSideTable<T> {
         let mut reclaimed = Vec::new();
         for (idx, entry) in inner.entries.iter_mut().enumerate() {
             let handle = idx as u32;
-            if entry.is_some() && !reachable.contains(&handle) && !pinned.contains(&handle) {
-                *entry = None;
-                reclaimed.push(handle);
+            if !reachable.contains(&handle)
+                && !pinned.contains(&handle)
+                && let Some(entry) = entry.take()
+            {
+                reclaimed.push((handle, entry));
             }
         }
-        inner.free_list.extend(reclaimed.iter().copied());
+        inner
+            .free_list
+            .extend(reclaimed.iter().map(|(handle, _)| *handle));
         drop(inner);
 
         if !reclaimed.is_empty() {
-            let reclaimed: HashSet<u32> = reclaimed.into_iter().collect();
+            let reclaimed_handles: HashSet<u32> =
+                reclaimed.iter().map(|(handle, _)| *handle).collect();
             self.obj_to_side
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .retain(|_, side_handle| !reclaimed.contains(side_handle));
+                .retain(|_, side_handle| !reclaimed_handles.contains(side_handle));
             self.pinned
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .retain(|side_handle| !reclaimed.contains(side_handle));
+                .retain(|side_handle| !reclaimed_handles.contains(side_handle));
         }
+        reclaimed
     }
 
     /// 活跃条目数（不含 tombstone）。

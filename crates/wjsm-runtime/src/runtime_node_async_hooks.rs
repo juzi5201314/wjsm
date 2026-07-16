@@ -30,6 +30,7 @@ pub(crate) enum AsyncHooksMethodKind {
     AlsPopFrame = 19,
     HookEnable = 20,
     HookDisable = 21,
+    AsyncResourceInit = 22,
 }
 #[allow(dead_code)]
 impl AsyncHooksMethodKind {
@@ -62,6 +63,7 @@ impl AsyncHooksMethodKind {
             x if x == Self::AlsPopFrame as u8 => Some(Self::AlsPopFrame),
             x if x == Self::HookEnable as u8 => Some(Self::HookEnable),
             x if x == Self::HookDisable as u8 => Some(Self::HookDisable),
+            x if x == Self::AsyncResourceInit as u8 => Some(Self::AsyncResourceInit),
             _ => None,
         }
     }
@@ -71,7 +73,7 @@ static NEXT_IMMEDIATE_ID: AtomicU32 = AtomicU32::new(1);
 
 pub(crate) fn create_async_hooks_host_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 24);
+    let obj = alloc_host_object(caller, &env, 25);
     let temp = caller.data().push_host_temp_roots([obj]);
     for (name, kind) in [
         ("executionAsyncId", AsyncHooksMethodKind::ExecutionAsyncId),
@@ -85,6 +87,7 @@ pub(crate) fn create_async_hooks_host_object(caller: &mut Caller<'_, RuntimeStat
         ("alsGetStore", AsyncHooksMethodKind::AlsGetStore),
         ("alsDisable", AsyncHooksMethodKind::AlsDisable),
         ("asyncResourceNew", AsyncHooksMethodKind::AsyncResourceNew),
+        ("asyncResourceInit", AsyncHooksMethodKind::AsyncResourceInit),
         (
             "asyncResourceEnter",
             AsyncHooksMethodKind::AsyncResourceEnter,
@@ -161,6 +164,7 @@ pub(crate) fn call_async_hooks_method(
             als_disable(caller, store_obj)
         }
         AsyncHooksMethodKind::AsyncResourceNew => async_resource_new(caller, args),
+        AsyncHooksMethodKind::AsyncResourceInit => async_resource_init(caller, args),
         AsyncHooksMethodKind::AsyncResourceEnter => {
             let res = args.first().copied().unwrap_or(this_val);
             async_resource_enter(caller, res)
@@ -204,7 +208,7 @@ pub(crate) fn call_async_hooks_method(
                 .first()
                 .copied()
                 .filter(|v| value::is_f64(*v))
-                .map(|v| value::decode_f64(v));
+                .map(value::decode_f64);
             let mut hooks = caller
                 .data()
                 .async_hooks
@@ -228,7 +232,7 @@ pub(crate) fn call_async_hooks_method(
                 .first()
                 .copied()
                 .filter(|v| value::is_f64(*v))
-                .map(|v| value::decode_f64(v));
+                .map(value::decode_f64);
             let mut hooks = caller
                 .data()
                 .async_hooks
@@ -337,6 +341,23 @@ fn als_disable(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> i64 {
 
 fn async_resource_new(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 10);
+    initialize_async_resource(caller, obj, args)
+}
+
+fn async_resource_init(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    let Some(resource) = args.first().copied().filter(|raw| value::is_object(*raw)) else {
+        return make_type_error_exception(caller, "TypeError: async resource must be an object");
+    };
+    initialize_async_resource(caller, resource, &args[1..])
+}
+
+fn initialize_async_resource(
+    caller: &mut Caller<'_, RuntimeState>,
+    resource: i64,
+    args: &[i64],
+) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let type_value = args
         .first()
         .copied()
@@ -385,30 +406,28 @@ fn async_resource_new(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i6
             .unwrap_or_else(|e| e.into_inner());
         (hooks.new_async_id(), hooks.retain_current_frame())
     };
-    let obj = alloc_host_object(caller, &env, 10);
-    let temp_root_len = caller.data().push_host_temp_roots([obj]);
-    let _ = define_host_data_property_from_caller(
+    let temp_root_len = caller.data().push_host_temp_roots([resource, type_value]);
+    let _ = define_host_data_property_non_enumerable(
         caller,
-        obj,
+        resource,
         "__async_id__",
         value::encode_f64(async_id as f64),
     );
-    let _ = define_host_data_property_from_caller(
+    let _ = define_host_data_property_non_enumerable(
         caller,
-        obj,
+        resource,
         "__trigger_async_id__",
         value::encode_f64(trigger as f64),
     );
     if let Some(FrameId(fid)) = frame {
-        let _ = define_host_data_property_from_caller(
+        let _ = define_host_data_property_non_enumerable(
             caller,
-            obj,
+            resource,
             "__frame_id__",
             value::encode_f64(fid as f64),
         );
     }
-    caller.data().push_host_temp_roots([type_value]);
-    let _ = define_host_data_property_from_caller(caller, obj, "__type__", type_value);
+    let _ = define_host_data_property_non_enumerable(caller, resource, "__type__", type_value);
     caller
         .data()
         .async_hooks
@@ -417,13 +436,13 @@ fn async_resource_new(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i6
         .register_resource(
             async_id,
             crate::ResourceMeta {
-                resource: obj,
+                resource,
                 manual_destroy: manual,
                 destroyed: false,
             },
         );
     caller.data().truncate_host_temp_roots(temp_root_len);
-    obj
+    resource
 }
 
 fn async_resource_enter(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> i64 {
@@ -543,6 +562,8 @@ fn set_immediate(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             callback,
             resource,
             scope,
+            native_performance_converter: None,
+            native_performance_dispatcher: None,
         });
     resource
 }
@@ -575,15 +596,25 @@ async fn set_immediate_async(caller: &mut Caller<'_, RuntimeState>, args: &[i64]
 
 async fn async_resource_new_async(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
     let resource = async_resource_new(caller, args);
+    emit_async_resource_init(caller, resource, args.first().copied()).await
+}
+
+async fn async_resource_init_async(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
+    let resource = async_resource_init(caller, args);
+    emit_async_resource_init(caller, resource, args.get(1).copied()).await
+}
+
+async fn emit_async_resource_init(
+    caller: &mut Caller<'_, RuntimeState>,
+    resource: i64,
+    type_value: Option<i64>,
+) -> i64 {
     if value::is_exception(resource) {
         return resource;
     }
     let async_id = prop_f64(caller, resource, "__async_id__").unwrap_or(0.0) as u64;
     let trigger_async_id = prop_f64(caller, resource, "__trigger_async_id__").unwrap_or(0.0) as u64;
-    let type_value = args
-        .first()
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
+    let type_value = type_value.unwrap_or_else(value::encode_undefined);
     let _ = crate::runtime_async_hooks::emit::emit_init_from_caller(
         caller,
         async_id,
@@ -622,6 +653,7 @@ pub(crate) async fn call_async_hooks_method_async(
     match kind {
         AsyncHooksMethodKind::SetImmediate => set_immediate_async(caller, args).await,
         AsyncHooksMethodKind::AsyncResourceNew => async_resource_new_async(caller, args).await,
+        AsyncHooksMethodKind::AsyncResourceInit => async_resource_init_async(caller, args).await,
         AsyncHooksMethodKind::AsyncResourceEnter => {
             async_resource_enter_async(caller, args.first().copied().unwrap_or(this_val)).await
         }
@@ -686,10 +718,12 @@ pub(crate) fn timer_id_from_arg(
 
 fn providers_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 4);
+    let obj = alloc_host_object(caller, &env, 5);
     let temp_root_len = caller.data().push_host_temp_roots([obj]);
     let _ = define_host_data_property_from_caller(caller, obj, "NONE", value::encode_f64(0.0));
     let _ = define_host_data_property_from_caller(caller, obj, "PROMISE", value::encode_f64(27.0));
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "ELDHISTOGRAM", value::encode_f64(3.0));
     caller.data().truncate_host_temp_roots(temp_root_len);
     obj
 }
@@ -773,6 +807,7 @@ pub(crate) async fn drain_immediates_async<
         let Some(entry) = entry else {
             break;
         };
+        crate::runtime_node_perf_hooks::increment_event_count(ctx.state_mut());
         let prior = if let Some(scope) = entry.scope {
             let mut hooks = ctx
                 .state_mut()
@@ -789,15 +824,63 @@ pub(crate) async fn drain_immediates_async<
             return;
         }
 
-        if is_callable_with_env(ctx, env, entry.callback) {
-            let _ = call_host_function_with_args_async(
+        let mut result = if is_callable_with_env(ctx, env, entry.callback) {
+            call_host_function_with_args_async(
                 ctx,
                 env,
                 entry.callback,
                 value::encode_undefined(),
                 &[],
             )
+            .await
+        } else {
+            None
+        };
+        if let (Some(converter), Some(raw)) = (entry.native_performance_converter, result)
+            && !value::is_undefined(raw)
+            && !value::is_exception(raw)
+        {
+            result = call_host_function_with_args_async(
+                ctx,
+                env,
+                converter,
+                value::encode_undefined(),
+                &[raw],
+            )
             .await;
+        }
+        if let Some(dispatcher) = entry.native_performance_dispatcher
+            && result.is_some_and(|value| !value::is_exception(value))
+        {
+            result = call_host_function_with_args_async(
+                ctx,
+                env,
+                dispatcher,
+                value::encode_undefined(),
+                &[],
+            )
+            .await;
+        }
+        if let Some(val) = result
+            && value::is_exception(val)
+        {
+            let idx = value::decode_handle(val) as usize;
+            let msg = ctx
+                .state_mut()
+                .error_table
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(idx)
+                .map(|error| format!("{}: {}", error.name, error.message))
+                .unwrap_or_else(|| "unknown error".to_string());
+            writeln!(
+                ctx.state_mut()
+                    .output
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()),
+                "Uncaught exception: {msg}"
+            )
+            .ok();
         }
         if let Some(scope) = entry.scope
             && crate::runtime_async_hooks::emit::emit_after(ctx, env, scope.async_id, false).await

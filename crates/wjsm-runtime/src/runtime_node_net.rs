@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::Instant;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -102,6 +103,20 @@ struct AcceptedTcpStream {
     stream: TcpStream,
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
+}
+
+struct ConnectedTcpStream {
+    stream: TcpStream,
+    local_addr: SocketAddr,
+    peer_addr: SocketAddr,
+    timing: Option<NetConnectTiming>,
+}
+
+struct NetConnectTiming {
+    start_time: f64,
+    duration: f64,
+    host: String,
+    port: u16,
 }
 
 pub(crate) fn create_net_host_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
@@ -220,32 +235,91 @@ fn connect(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
             return promise;
         }
     };
-    let address = format!("{host}:{port}");
+    let observer_mask = Arc::clone(&caller.data().performance_observer_mask);
+    let performance_origin = Arc::clone(&caller.data().performance_origin);
     enqueue_async_result(
         caller,
         promise,
-        async move {
-            let stream = TcpStream::connect(address)
-                .await
-                .map_err(|err| format!("connect {host}:{port} failed: {err}"))?;
-            let local_addr = stream
-                .local_addr()
-                .map_err(|err| format!("connect local_addr failed: {err}"))?;
-            let peer_addr = stream
-                .peer_addr()
-                .map_err(|err| format!("connect peer_addr failed: {err}"))?;
-            Ok((stream, local_addr, peer_addr))
-        },
+        connect_tcp(host, port, observer_mask, performance_origin),
         |store, _env, result| match result {
-            Ok((stream, local_addr, peer_addr)) => {
-                let handle =
-                    alloc_socket_entry_from_stream(store.data(), stream, local_addr, peer_addr);
+            Ok(connected) => {
+                if let Some(timing) = connected.timing {
+                    crate::runtime_node_perf_hooks::queue_net_entry(
+                        store.data(),
+                        timing.start_time,
+                        timing.duration,
+                        timing.host,
+                        timing.port,
+                    );
+                }
+                let handle = alloc_socket_entry_from_stream(
+                    store.data(),
+                    connected.stream,
+                    connected.local_addr,
+                    connected.peer_addr,
+                );
                 PromiseSettlement::Fulfill(value::encode_f64(handle as f64))
             }
             Err(message) => PromiseSettlement::Reject(error_with_env(store, _env, message)),
         },
     );
     promise
+}
+
+async fn connect_tcp(
+    host: String,
+    port: u16,
+    observer_mask: Arc<AtomicU32>,
+    performance_origin: Arc<Instant>,
+) -> Result<ConnectedTcpStream, String> {
+    let addresses = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|error| format!("connect {host}:{port} lookup failed: {error}"))?;
+    let mut last_error = None;
+    for address in addresses {
+        let timing_start = if observer_mask.load(Ordering::Relaxed)
+            & crate::runtime_node_perf_hooks::OBSERVE_NET
+            != 0
+        {
+            let started_at = Instant::now();
+            Some((
+                started_at,
+                started_at
+                    .saturating_duration_since(*performance_origin)
+                    .as_secs_f64()
+                    * 1000.0,
+            ))
+        } else {
+            None
+        };
+        match TcpStream::connect(address).await {
+            Ok(stream) => {
+                let local_addr = stream
+                    .local_addr()
+                    .map_err(|error| format!("connect local_addr failed: {error}"))?;
+                let peer_addr = stream
+                    .peer_addr()
+                    .map_err(|error| format!("connect peer_addr failed: {error}"))?;
+                let timing = timing_start.map(|(started_at, start_time)| NetConnectTiming {
+                    start_time,
+                    duration: started_at.elapsed().as_secs_f64() * 1000.0,
+                    host: peer_addr.ip().to_string(),
+                    port: peer_addr.port(),
+                });
+                return Ok(ConnectedTcpStream {
+                    stream,
+                    local_addr,
+                    peer_addr,
+                    timing,
+                });
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let error = last_error
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| "host resolved to no addresses".to_string());
+    Err(format!("connect {host}:{port} failed: {error}"))
 }
 
 fn read(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
@@ -981,4 +1055,85 @@ fn arraybuffer_with_bytes<C: AsContextMut<Data = RuntimeState>>(
         value::encode_f64(bytes.len() as f64),
     );
     ab
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tokio::runtime::Builder;
+
+    #[test]
+    fn connect_timing_uses_resolved_peer_and_requires_active_observer() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build Tokio runtime")
+            .block_on(async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("bind local listener");
+                let port = listener.local_addr().expect("listener address").port();
+                let accept = tokio::spawn(async move {
+                    let _ = listener.accept().await.expect("accept timed connection");
+                });
+                let connected = connect_tcp(
+                    "localhost".to_string(),
+                    port,
+                    Arc::new(AtomicU32::new(crate::runtime_node_perf_hooks::OBSERVE_NET)),
+                    Arc::new(Instant::now()),
+                )
+                .await
+                .expect("connect through resolved localhost");
+                let timing = connected.timing.expect("active observer timing");
+                assert_eq!(timing.host, "127.0.0.1");
+                assert_eq!(timing.port, port);
+                assert!(timing.start_time >= 0.0);
+                assert!(timing.duration >= 0.0);
+                drop(connected.stream);
+                accept.await.expect("join accept task");
+
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("bind observer-off listener");
+                let port = listener.local_addr().expect("listener address").port();
+                let accept = tokio::spawn(async move {
+                    let _ = listener.accept().await.expect("accept untimed connection");
+                });
+                let connected = connect_tcp(
+                    "127.0.0.1".to_string(),
+                    port,
+                    Arc::new(AtomicU32::new(0)),
+                    Arc::new(Instant::now()),
+                )
+                .await
+                .expect("connect without observer");
+                assert!(connected.timing.is_none());
+                drop(connected.stream);
+                accept.await.expect("join accept task");
+            });
+    }
+
+    #[test]
+    fn failed_connect_produces_no_timing() {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build Tokio runtime")
+            .block_on(async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("reserve local port");
+                let port = listener.local_addr().expect("listener address").port();
+                drop(listener);
+                let result = connect_tcp(
+                    "127.0.0.1".to_string(),
+                    port,
+                    Arc::new(AtomicU32::new(crate::runtime_node_perf_hooks::OBSERVE_NET)),
+                    Arc::new(Instant::now()),
+                )
+                .await;
+                assert!(result.is_err());
+            });
+    }
 }

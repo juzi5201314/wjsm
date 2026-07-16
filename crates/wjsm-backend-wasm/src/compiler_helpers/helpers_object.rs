@@ -239,7 +239,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalSet(5));
             func.instruction(&WasmInstruction::Br(2));
             func.instruction(&WasmInstruction::End);
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            // arr_proto 等宿主函数：委托 host 解析 Function.prototype 与 length/name。
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::FunctionValueGetProperty],
+            ));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(3));

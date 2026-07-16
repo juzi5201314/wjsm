@@ -172,6 +172,38 @@ pub(crate) fn call_headers_method_from_caller(
     }
 }
 
+pub(crate) async fn call_headers_method_from_caller_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: HeadersMethodKind,
+    args: &[i64],
+) -> Option<i64> {
+    let HeadersMethodKind::ForEach = kind else {
+        return call_headers_method_from_caller(caller, this_val, kind, args);
+    };
+    let handle = get_headers_handle_from_object(caller, this_val)?;
+    let cb = args.first().copied()?;
+    let this_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+    let pairs = {
+        let table = caller.data().headers_table.lock().ok()?;
+        table.get(handle as usize)?.pairs.clone()
+    };
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    for (name, val) in pairs {
+        let name_js = store_runtime_string(caller, name);
+        let val_js = store_runtime_string(caller, val);
+        invoke_resolved_callback_async_option(
+            caller,
+            &env,
+            cb,
+            this_arg,
+            &[val_js, name_js, this_val],
+        )
+        .await?;
+    }
+    Some(value::encode_undefined())
+}
+
 pub(crate) fn call_response_method_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
@@ -191,6 +223,7 @@ pub(crate) fn call_response_method_from_caller(
         is_consuming,
         http_response_handle,
         stream_handle,
+        resource_timing,
     ) = {
         let mut table = caller
             .data()
@@ -218,6 +251,7 @@ pub(crate) fn call_response_method_from_caller(
             is_consuming,
             entry.http_response_handle,
             entry.stream_handle,
+            entry.resource_timing.clone(),
         )
     };
     if is_consuming && was_body_used {
@@ -244,6 +278,7 @@ pub(crate) fn call_response_method_from_caller(
             return Some(p);
         }
     }
+
     // HTTP Response — 异步 body 消费
     if is_consuming && let Some(http_handle) = http_response_handle {
         let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
@@ -262,6 +297,7 @@ pub(crate) fn call_response_method_from_caller(
             return Some(promise);
         }
     }
+    let body_len = body.len();
     let result = match kind {
         ResponseMethodKind::Text => {
             let body_str = String::from_utf8_lossy(&body).to_string();
@@ -315,10 +351,15 @@ pub(crate) fn call_response_method_from_caller(
                 redirected,
                 None,
             );
+            set_response_resource_timing(caller, new_resp, resource_timing.clone());
             Some(new_resp)
         }
     };
     if is_consuming {
+        if http_response_handle.is_none() {
+            record_fetch_body_bytes(&resource_timing, body_len, body_len);
+            complete_fetch_resource_timing(caller.data(), &resource_timing);
+        }
         let _ = set_host_data_property_from_caller(
             caller,
             this_val,

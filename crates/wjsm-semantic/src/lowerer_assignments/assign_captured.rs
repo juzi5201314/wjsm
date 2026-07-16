@@ -59,10 +59,13 @@ impl Lowerer {
             env_val
         } else {
             self.record_capture(binding.clone());
-            self.load_env_object(current_block)
+            let start_env = self.load_env_object(current_block);
+            let (owner_block, owner_env) =
+                self.resolve_env_binding_owner(current_block, start_env, binding);
+            current_block = owner_block;
+            owner_env
         };
         let key_val = self.append_env_key_const(current_block, binding);
-
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
@@ -75,6 +78,9 @@ impl Lowerer {
                         value: rhs,
                     },
                 );
+                // 把后续异常分叉/语句接续钉在 owner 解析后的 store_block，
+                // 避免 resolve_store_block 沿着入口 Jump 误入 header 并覆盖 terminator。
+                self.expr_merge_block = Some(store_block);
                 Ok(rhs)
             }
             op => {
@@ -128,6 +134,7 @@ impl Lowerer {
                         value: dest,
                     },
                 );
+                self.expr_merge_block = Some(current_block);
                 Ok(dest)
             }
         }

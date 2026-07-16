@@ -957,6 +957,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::PerformanceNow => {
             Some(crate::runtime_node_globals::call_performance_now(caller))
         }
+        NativeCallable::PerfHooksMethod { kind } => Some(
+            crate::runtime_node_perf_hooks::call_perf_hooks_method(caller, kind, &args),
+        ),
         NativeCallable::OsInfo { kind } => {
             Some(crate::runtime_node_globals::call_os_info(caller, kind))
         }
@@ -1193,6 +1196,10 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
                 (algorithm, gc.collect_full(&mut ctx, &mut roots as _))
             };
+            caller
+                .data()
+                .performance_forced_gc
+                .store(true, std::sync::atomic::Ordering::Release);
             caller.data().store_last_gc_stats(algorithm, stats);
             Some(value::encode_undefined())
         }
@@ -1595,6 +1602,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         NativeCallable::MapSetMethod {
             kind: MapSetMethodKind::ForEach,
         } => Some(map_set_for_each_impl_async(caller, this_val, &args).await),
+        NativeCallable::HeadersMethod { kind, .. } => {
+            call_headers_method_from_caller_async(caller, this_val, kind, &args).await
+        }
         NativeCallable::GeneratorMethod { generator, kind } => {
             Some(call_generator_method_from_caller_async(caller, generator, kind, argument).await)
         }

@@ -9,7 +9,10 @@ use crate::scheduler::{AsyncHostCompletion, AsyncOpGuard};
 use crate::*;
 use wasmtime::Caller;
 
-use super::fetch_core::alloc_type_error_from_caller;
+use super::fetch_core::{
+    alloc_type_error_from_caller, complete_http_response_resource_timing,
+    record_http_response_body_bytes,
+};
 use super::streams_readable::{
     build_reader_result, build_reader_result_with_env, create_uint8array_with_env,
     transfer_byob_view_with_env, write_u8_bytes_to_view,
@@ -63,13 +66,21 @@ pub(crate) fn call_fetch_body_reader_read(
     };
 
     match decision {
-        ReadDecision::Missing | ReadDecision::Eof | ReadDecision::SpawnEof => {
+        ReadDecision::Missing => {
+            let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let result = build_reader_result(caller, true, None);
+            settle_promise(caller.data_mut(), p, PromiseSettlement::Fulfill(result));
+            Some(p)
+        }
+        ReadDecision::Eof | ReadDecision::SpawnEof => {
+            complete_http_response_resource_timing(caller.data(), http_handle);
             let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
             let result = build_reader_result(caller, true, None);
             settle_promise(caller.data_mut(), p, PromiseSettlement::Fulfill(result));
             Some(p)
         }
         ReadDecision::Error(msg) => {
+            complete_http_response_resource_timing(caller.data(), http_handle);
             let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
             let err = alloc_type_error_from_caller(caller, &msg);
             settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(err));
@@ -133,6 +144,7 @@ fn spawn_chunk_pull(
     let tx = match caller.data().host_completion_tx.clone() {
         Some(t) => t,
         None => {
+            complete_http_response_resource_timing(caller.data(), http_handle);
             let err = alloc_type_error_from_caller(caller, "fetch runtime unavailable");
             settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
             return Some(promise);
@@ -141,7 +153,7 @@ fn spawn_chunk_pull(
     let guard = caller.data().async_op_counter.as_ref().map(|c| c.begin());
     let promise_clone = promise;
     let mut response_opt = Some(response);
-    let scope = crate::scheduler::capture_completion_scope_from_caller(&caller);
+    let scope = crate::scheduler::capture_completion_scope_from_caller(caller);
     tokio::spawn(async move {
         let _guard: Option<AsyncOpGuard> = guard;
         let mut response = response_opt.take().unwrap();
@@ -150,6 +162,12 @@ fn spawn_chunk_pull(
             promise: promise_clone,
             materialize: Box::new(move |store, env| match outcome {
                 Ok(Some(chunk)) => {
+                    record_http_response_body_bytes(
+                        store.data(),
+                        http_handle,
+                        chunk.len(),
+                        chunk.len(),
+                    );
                     let settlement = materialize_chunk_into_entry(
                         store,
                         env,
@@ -187,6 +205,7 @@ fn spawn_chunk_pull(
                         }
                     }
                     clear_reader_pending(store, reader_handle);
+                    complete_http_response_resource_timing(store.data(), http_handle);
                     let result = build_reader_result_with_env(store, env, true, None);
                     PromiseSettlement::Fulfill(result)
                 }
@@ -204,6 +223,7 @@ fn spawn_chunk_pull(
                         }
                     }
                     clear_reader_pending(store, reader_handle);
+                    complete_http_response_resource_timing(store.data(), http_handle);
                     let err =
                         crate::runtime_heap::alloc_type_error_with_env(store, env, e.to_string());
                     PromiseSettlement::Reject(err)
@@ -260,6 +280,7 @@ pub(crate) fn consume_fetch_body_to_bytes(
     let tx = match caller.data().host_completion_tx.clone() {
         Some(t) => t,
         None => {
+            complete_http_response_resource_timing(caller.data(), http_handle);
             let err = alloc_type_error_from_caller(caller, "fetch runtime unavailable");
             settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
             return true;
@@ -267,10 +288,10 @@ pub(crate) fn consume_fetch_body_to_bytes(
     };
     let guard = caller.data().async_op_counter.as_ref().map(|c| c.begin());
     let promise_clone = promise;
-    let scope = crate::scheduler::capture_completion_scope_from_caller(&caller);
+    let scope = crate::scheduler::capture_completion_scope_from_caller(caller);
     tokio::spawn(async move {
         let _guard: Option<AsyncOpGuard> = guard;
-        let outcome = response.bytes().await;
+        let outcome = read_response_body(response).await;
         let _ = tx.send(AsyncHostCompletion::Materialize {
             promise: promise_clone,
             materialize: Box::new(move |store, env| {
@@ -288,80 +309,97 @@ pub(crate) fn consume_fetch_body_to_bytes(
                     }
                 }
                 match outcome {
-                    Ok(bytes) => match kind {
-                        ResponseMethodKind::Text => {
-                            let text = String::from_utf8_lossy(&bytes).to_string();
-                            let handle = crate::runtime_render::store_runtime_string_in_state(
-                                store.data(),
-                                text,
-                            );
-                            PromiseSettlement::Fulfill(handle)
-                        }
-                        ResponseMethodKind::Json => {
-                            let text = String::from_utf8_lossy(&bytes).to_string();
-                            let mut parser = crate::runtime_json::JsonParser::new(text.as_bytes());
-                            match parser.parse_value() {
-                                Ok(json_value) => {
-                                    let wasm_value = crate::runtime_json::build_wasm_value_with_env(
-                                        store,
-                                        env,
-                                        &json_value,
-                                    );
-                                    PromiseSettlement::Fulfill(wasm_value)
-                                }
-                                Err(e) => {
-                                    let err = crate::runtime_heap::alloc_type_error_with_env(
-                                        store, env, e,
-                                    );
-                                    PromiseSettlement::Reject(err)
+                    Ok(bytes) => {
+                        record_http_response_body_bytes(
+                            store.data(),
+                            http_handle,
+                            bytes.len(),
+                            bytes.len(),
+                        );
+                        complete_http_response_resource_timing(store.data(), http_handle);
+                        match kind {
+                            ResponseMethodKind::Text => {
+                                let text = String::from_utf8_lossy(&bytes).to_string();
+                                let handle = crate::runtime_render::store_runtime_string_in_state(
+                                    store.data(),
+                                    text,
+                                );
+                                PromiseSettlement::Fulfill(handle)
+                            }
+                            ResponseMethodKind::Json => {
+                                let text = String::from_utf8_lossy(&bytes).to_string();
+                                let mut parser =
+                                    crate::runtime_json::JsonParser::new(text.as_bytes());
+                                match parser.parse_value() {
+                                    Ok(json_value) => {
+                                        let wasm_value =
+                                            crate::runtime_json::build_wasm_value_with_env(
+                                                store,
+                                                env,
+                                                &json_value,
+                                            );
+                                        PromiseSettlement::Fulfill(wasm_value)
+                                    }
+                                    Err(e) => {
+                                        let err = crate::runtime_heap::alloc_type_error_with_env(
+                                            store, env, e,
+                                        );
+                                        PromiseSettlement::Reject(err)
+                                    }
                                 }
                             }
+                            ResponseMethodKind::ArrayBuffer => {
+                                let ab_handle = {
+                                    let mut ab_table = store
+                                        .data()
+                                        .arraybuffer_table
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    let ab_handle = ab_table.len() as u32;
+                                    ab_table.push(ArrayBufferEntry {
+                                        data: bytes.to_vec(),
+                                    });
+                                    ab_handle
+                                };
+                                let ab_obj = crate::runtime_heap::alloc_host_object(store, env, 2);
+                                let _ =
+                                    crate::runtime_host_helpers::define_host_data_property_with_env(
+                                        store,
+                                        env,
+                                        ab_obj,
+                                        "__arraybuffer_handle__",
+                                        wjsm_ir::value::encode_f64(ab_handle as f64),
+                                    );
+                                let _ =
+                                    crate::runtime_host_helpers::define_host_data_property_with_env(
+                                        store,
+                                        env,
+                                        ab_obj,
+                                        "byteLength",
+                                        wjsm_ir::value::encode_f64(bytes.len() as f64),
+                                    );
+                                PromiseSettlement::Fulfill(ab_obj)
+                            }
+                            ResponseMethodKind::Clone => {
+                                let err = crate::runtime_heap::alloc_type_error_with_env(
+                                    store,
+                                    env,
+                                    "clone cannot consume body".to_string(),
+                                );
+                                PromiseSettlement::Reject(err)
+                            }
                         }
-                        ResponseMethodKind::ArrayBuffer => {
-                            let ab_handle = {
-                                let mut ab_table = store
-                                    .data()
-                                    .arraybuffer_table
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner());
-                                let ab_handle = ab_table.len() as u32;
-                                ab_table.push(ArrayBufferEntry {
-                                    data: bytes.to_vec(),
-                                });
-                                ab_handle
-                            };
-                            let ab_obj = crate::runtime_heap::alloc_host_object(store, env, 2);
-                            let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
-                                store,
-                                env,
-                                ab_obj,
-                                "__arraybuffer_handle__",
-                                wjsm_ir::value::encode_f64(ab_handle as f64),
-                            );
-                            let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
-                                store,
-                                env,
-                                ab_obj,
-                                "byteLength",
-                                wjsm_ir::value::encode_f64(bytes.len() as f64),
-                            );
-                            PromiseSettlement::Fulfill(ab_obj)
-                        }
-                        ResponseMethodKind::Clone => {
-                            let err = crate::runtime_heap::alloc_type_error_with_env(
-                                store,
-                                env,
-                                "clone cannot consume body".to_string(),
-                            );
-                            PromiseSettlement::Reject(err)
-                        }
-                    },
-                    Err(e) => {
-                        let err = crate::runtime_heap::alloc_type_error_with_env(
-                            store,
-                            env,
-                            e.to_string(),
+                    }
+                    Err((message, bytes_received)) => {
+                        record_http_response_body_bytes(
+                            store.data(),
+                            http_handle,
+                            bytes_received,
+                            bytes_received,
                         );
+                        complete_http_response_resource_timing(store.data(), http_handle);
+                        let err =
+                            crate::runtime_heap::alloc_type_error_with_env(store, env, message);
                         PromiseSettlement::Reject(err)
                     }
                 }
@@ -370,6 +408,19 @@ pub(crate) fn consume_fetch_body_to_bytes(
         });
     });
     true
+}
+
+async fn read_response_body(
+    mut response: reqwest::Response,
+) -> std::result::Result<Vec<u8>, (String, usize)> {
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            Ok(None) => return Ok(body),
+            Err(error) => return Err((error.to_string(), body.len())),
+        }
+    }
 }
 
 fn clear_reader_pending<C: wasmtime::AsContextMut<Data = RuntimeState>>(

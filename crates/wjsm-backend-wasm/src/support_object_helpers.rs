@@ -48,7 +48,11 @@ fn emit_obj_get(flavor: GcFlavor) -> Function {
     emit_resolve_handle_ptr(&mut func, flavor, 4, 5);
     func.instruction(&WasmInstruction::Br(2));
     func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+    // arr_proto 等 table 宿主函数：没有 function_props 对象，走 host 解析
+    // Function.prototype.call/apply/bind 与 length/name。
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_FUNCTION_VALUE_GET_PROPERTY));
     func.instruction(&WasmInstruction::Return);
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::LocalGet(3));

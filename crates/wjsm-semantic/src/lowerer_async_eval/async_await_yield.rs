@@ -456,6 +456,7 @@ impl Lowerer {
                 },
             );
 
+            self.expr_merge_block = Some(continue_block);
             Ok(result)
         } else if self.is_generator_fn {
             let next_state = self.async_state_counter;
@@ -619,6 +620,7 @@ impl Lowerer {
                 },
             );
 
+            self.expr_merge_block = Some(continue_block);
             Ok(yielded_result)
         } else {
             Err(self.error(span, "yield outside generator"))

@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+2,3
+2,3
+9,8,7
+1,2
+y,z
+2 slice
+1 call
+--- stderr ---

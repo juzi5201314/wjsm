@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::{Instant as StdInstant, SystemTime, UNIX_EPOCH};
 use tokio::time::Instant;
 use wasmtime::Caller;
 use wjsm_ir::{constants, value};
@@ -37,6 +38,13 @@ pub struct SharedRuntimeState {
     pub(crate) sab_table: Arc<Mutex<Vec<SharedArrayBufferEntry>>>,
     pub(crate) waiter_lists: Arc<Mutex<HashMap<(u32, u32), WaiterList>>>,
     pub(crate) agent_state: Arc<AgentState>,
+    /// 进程及其 Worker 共享同一个单调时钟起点。
+    pub(crate) performance_origin: Arc<StdInstant>,
+    /// 与 `performance_origin` 同次采样的 Unix epoch 毫秒值。
+    pub(crate) performance_time_origin_ms: f64,
+    /// 结构化克隆仅传递 handle，实际 HDR backing 由集群级注册表共享。
+    pub(crate) perf_histograms:
+        Arc<crate::runtime_node_perf_hooks_histogram::PerfHooksHistogramRegistry>,
     /// worker_threads 集群：MessagePort + Worker 全局注册表。
     pub(crate) worker_cluster: Arc<crate::runtime_node_worker_threads::WorkerClusterState>,
 }
@@ -87,6 +95,10 @@ pub(crate) enum BufferBacking {
 }
 
 pub(crate) fn new_shared_runtime_state() -> Arc<SharedRuntimeState> {
+    let wall_origin = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let performance_origin = Arc::new(StdInstant::now());
     Arc::new(SharedRuntimeState {
         sab_table: Arc::new(Mutex::new(Vec::new())),
         waiter_lists: Arc::new(Mutex::new(HashMap::new())),
@@ -98,6 +110,11 @@ pub(crate) fn new_shared_runtime_state() -> Arc<SharedRuntimeState> {
             broadcast_callback_done_cv: Condvar::new(),
             next_agent_id: AtomicU32::new(0),
         }),
+        performance_origin,
+        performance_time_origin_ms: wall_origin.as_secs_f64() * 1_000.0,
+        perf_histograms: Arc::new(
+            crate::runtime_node_perf_hooks_histogram::PerfHooksHistogramRegistry::new(),
+        ),
         worker_cluster: Arc::new(crate::runtime_node_worker_threads::WorkerClusterState::new()),
     })
 }

@@ -2,5 +2,4 @@ exit_code: 2
 --- stdout ---
 --- stderr ---
 Runtime error: Uncaught WASM trap: wasm trap: call stack exhausted
-    at <anonymous> (errors/stack_overflow_backtrace.js:0)
-    at recurse (errors/stack_overflow_backtrace.js:2:1) (x49)
+    at recurse (errors/stack_overflow_backtrace.js:2:1) (x50)

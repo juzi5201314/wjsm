@@ -111,21 +111,23 @@ module {
       %28 = const c28
       store var $0.$shared_env, %28
       %29 = new_object(capacity=1)
+      %30 = load var $env
+      set_proto %29, %30
       store var $0.$shared_env, %29
-      %30 = load var $0.thenable
-      %31 = const c29
-      set_prop %29, %31, %30
-      %32 = call builtin.create_closure(%27, %29)
-      %33 = const c30
-      %34 = call builtin.promise.then(%26, %32, %33)
-      %35 = const c31
-      %36 = const c32
-      %37 = call builtin.promise.then(%34, %35, %36)
-      %38 = is_exception %37
-      branch %38, bb2, bb1
+      %31 = load var $0.thenable
+      %32 = const c29
+      set_prop %29, %32, %31
+      %33 = call builtin.create_closure(%27, %29)
+      %34 = const c30
+      %35 = call builtin.promise.then(%26, %33, %34)
+      %36 = const c31
+      %37 = const c32
+      %38 = call builtin.promise.then(%35, %36, %37)
+      %39 = is_exception %38
+      branch %39, bb2, bb1
     bb1:
       return
     bb2:
-      %39 = call builtin.exception_value(%37)
-      throw %39
+      %40 = call builtin.exception_value(%38)
+      throw %40
 }

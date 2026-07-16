@@ -271,7 +271,7 @@ fn get_v_proxy_by_name_id(caller: &mut Caller<'_, RuntimeState>, proxy: i64, nam
 }
 
 /// 沿原型链查找 symbol name_id 属性（数据属性槽值，不调用 getter）
-fn read_object_property_by_name_id_proto_walk(
+pub(crate) fn read_object_property_by_name_id_proto_walk(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
     name_id: u32,

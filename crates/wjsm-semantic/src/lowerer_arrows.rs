@@ -60,23 +60,14 @@ impl Lowerer {
                 let body_entry =
                     self.emit_arrow_param_inits(&arrow.params, &param_ir_names, entry)?;
                 let val = self.lower_expr(expr, body_entry)?;
-                // 如果表达式 lowered 时产生了分支（如三元运算符），body_entry 已经被 set_terminator，
-                // 此时需要在 merge block 处加 Return，而不是覆盖 body_entry 的 Branch。
-                let has_branch = self
-                    .current_function
-                    .block(body_entry)
-                    .map(|b| !matches!(b.terminator(), Terminator::Unreachable))
-                    .unwrap_or(false);
-                if has_branch {
-                    // lower_cond 创建的 merge block 是最后一个 block，给它加 Return
-                    let last_block = self.current_function.last_block_id();
-                    self.current_function
-                        .set_terminator(last_block, Terminator::Return { value: Some(val) });
-                } else {
-                    self.current_function
-                        .set_terminator(body_entry, Terminator::Return { value: Some(val) });
-                }
+                // new / 三元 / 短路等会在 body_entry 上留下 Jump/Branch，并设置
+                // new_expr_continue_block / expr_merge_block。必须在真正的继续块上 Return，
+                // 不能盲目用 last_block_id（可能是 throw 块）或覆盖 body_entry terminator。
+                let return_block = self.resolve_store_block(body_entry);
+                self.current_function
+                    .set_terminator(return_block, Terminator::Return { value: Some(val) });
                 self.expr_merge_block = None;
+                self.new_expr_continue_block = None;
                 inner_flow = StmtFlow::Terminated;
             }
         }
@@ -147,6 +138,7 @@ impl Lowerer {
                     args: vec![func_ref_val, env_val],
                 },
             );
+            self.expr_merge_block = Some(closure_block);
             closure_val
         };
 
@@ -806,6 +798,7 @@ impl Lowerer {
                     args: vec![wrapper_ref_val, env_val],
                 },
             );
+            self.expr_merge_block = Some(closure_block);
             closure_val
         };
 

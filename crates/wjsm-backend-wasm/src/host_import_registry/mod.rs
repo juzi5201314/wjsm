@@ -49,6 +49,7 @@ pub enum SpecialHostImport {
     SymbolPropertyKey,
     StringToArrayIndex,
     NativeCallableGetProperty,
+    FunctionValueGetProperty,
     PrimitiveBigIntGetMethod,
     PrimitiveNumberGetMethod,
     PrimitiveStringGetProperty,

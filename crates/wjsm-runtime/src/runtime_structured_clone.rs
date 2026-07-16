@@ -63,6 +63,9 @@ fn clone_value(
     {
         return Ok(value_raw);
     }
+    if value::is_proxy(value_raw) {
+        return Err("value could not be cloned".to_string());
+    }
     if value::is_callable(value_raw) || value::is_native_callable(value_raw) {
         return Err("value could not be cloned".to_string());
     }
@@ -111,6 +114,15 @@ fn clone_object_like(
     obj: i64,
     cx: &mut CloneContext,
 ) -> Result<i64, String> {
+    if let Some((capability, kind)) =
+        crate::runtime_node_perf_hooks::histogram_identity_from_object(caller, obj)
+    {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        let clone =
+            crate::runtime_node_perf_hooks::materialize_histogram(caller, &env, capability, kind);
+        cx.visited.insert(obj, clone);
+        return Ok(clone);
+    }
     let Some(ptr) = resolve_handle(caller, obj) else {
         return Err("value could not be cloned".to_string());
     };
@@ -120,7 +132,10 @@ fn clone_object_like(
         cx.visited.insert(obj, clone);
         return Ok(clone);
     }
-    if typedarray_entry_from_value(caller, obj).is_some() {
+    if let Some(entry) = typedarray_entry_from_value(caller, obj) {
+        if entry.element_kind == 4 || entry.element_kind == 5 {
+            return Err("value could not be cloned".to_string());
+        }
         let bytes = visible_bytes(caller, obj).unwrap_or_default();
         let clone = create_buffer_from_bytes(caller, bytes);
         cx.visited.insert(obj, clone);

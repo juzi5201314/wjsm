@@ -68,12 +68,15 @@ impl Lowerer {
         block: &mut BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let value = self.lower_expr(expr, *block)?;
-        loop {
+        while self.eval_continue_block.is_some()
+            || self.new_expr_continue_block.is_some()
+            || self.await_continue_block.is_some()
+            || self.expr_merge_block.is_some()
+        {
             let next = self.resolve_store_block(*block);
-            if next == *block {
-                break;
+            if next != *block {
+                *block = next;
             }
-            *block = next;
         }
         if self.exception_fork_suppressed() && self.expr_can_throw(expr) {
             *block = self.defer_value_exception_branch(*block, value);
@@ -477,6 +480,12 @@ impl Lowerer {
 
     // ── Unary operators ─────────────────────────────────────────────────────
 
+    fn publish_expr_continuation(&mut self, entry_block: BasicBlockId, continuation: BasicBlockId) {
+        if continuation != entry_block {
+            self.expr_merge_block = Some(continuation);
+        }
+    }
+
     pub(crate) fn lower_unary(
         &mut self,
         unary: &swc_ast::UnaryExpr,
@@ -497,6 +506,7 @@ impl Lowerer {
                         value,
                     },
                 );
+                self.publish_expr_continuation(block, current_block);
                 Ok(dest)
             }
             Minus => {
@@ -511,6 +521,7 @@ impl Lowerer {
                         value,
                     },
                 );
+                self.publish_expr_continuation(block, current_block);
                 Ok(dest)
             }
             Plus => {
@@ -525,6 +536,7 @@ impl Lowerer {
                         value,
                     },
                 );
+                self.publish_expr_continuation(block, current_block);
                 Ok(dest)
             }
             Tilde => {
@@ -539,6 +551,7 @@ impl Lowerer {
                         value,
                     },
                 );
+                self.publish_expr_continuation(block, current_block);
                 Ok(dest)
             }
             Void => {
@@ -554,6 +567,7 @@ impl Lowerer {
                         constant: undef,
                     },
                 );
+                self.publish_expr_continuation(block, current_block);
                 Ok(dest)
             }
             TypeOf => {
@@ -597,11 +611,7 @@ impl Lowerer {
                         args: vec![arg],
                     },
                 );
-                // EvalGetBinding 等会把后续指令放到 continue block；
-                // lower_expr 只返回 ValueId，必须把 continue 写回给外层 resolve_store_block。
-                if current_block != block {
-                    self.eval_continue_block = Some(current_block);
-                }
+                self.publish_expr_continuation(block, current_block);
                 Ok(dest)
             }
             Delete => {
@@ -641,6 +651,7 @@ impl Lowerer {
                             current_block,
                             Instruction::DeleteProp { dest, object, key },
                         );
+                        self.publish_expr_continuation(block, current_block);
                         Ok(dest)
                     }
                     // delete x 对变量总是返回 true（不能删除变量）
@@ -710,9 +721,12 @@ impl Lowerer {
 
                 if !self.binding_belongs_to_current_function(&binding) {
                     self.record_capture(binding.clone());
-                    let env_val = self.load_env_object(block);
+                    let start_env = self.load_env_object(block);
+                    let (owner_block, owner_env) =
+                        self.resolve_env_binding_owner(block, start_env, &binding);
+                    block = owner_block;
                     let key_val = self.append_env_key_const(block, &binding);
-                    Target::Captured(env_val, key_val)
+                    Target::Captured(owner_env, key_val)
                 } else {
                     Target::Var {
                         ir_name: format!("${scope_id}.{name}"),
@@ -864,6 +878,8 @@ impl Lowerer {
                         value: new_val,
                     },
                 );
+                // owner 解析后的 block 必须作为后续语句入口，不能再被入口 Jump 覆盖。
+                self.expr_merge_block = Some(block);
             }
             Target::Member { obj, key } => {
                 self.current_function.append_instruction(

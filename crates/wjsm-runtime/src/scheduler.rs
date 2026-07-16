@@ -127,6 +127,30 @@ impl Drop for AsyncOpGuard {
         assert!(previous > 0, "async op counter underflow");
     }
 }
+
+enum SchedulerWake {
+    Deadline,
+    Completion(Option<AsyncHostCompletion>),
+}
+
+async fn wait_for_scheduler_wake(
+    completion_rx: &mut UnboundedReceiver<AsyncHostCompletion>,
+    deadline: Option<TokioInstant>,
+) -> SchedulerWake {
+    let Some(deadline) = deadline else {
+        return SchedulerWake::Completion(completion_rx.recv().await);
+    };
+    tokio::select! {
+        _ = sleep_until(deadline) => SchedulerWake::Deadline,
+        completion = completion_rx.recv() => SchedulerWake::Completion(completion),
+    }
+}
+
+fn event_loop_delay_deadline(state: &RuntimeState) -> Option<TokioInstant> {
+    crate::runtime_node_perf_hooks::next_event_loop_delay_deadline(state)
+        .map(TokioInstant::from_std)
+}
+
 /// 替换原来 run_main_completion_block_async 里 `if main_ok { timer loop }` 的阻塞实现。
 /// 严格遵循 plan 361-456 的 process_one_due_timer 形状 + 现有经审计逻辑 + Phase 6 channel 处理（Correction 7）。
 /// 所有中文错误消息、MAX=1000 守卫、取消清理、重复 reschedule 顺序 100% 保留。
@@ -136,6 +160,8 @@ pub(crate) async fn run_post_main_scheduler_async(
     env: &WasmEnv,
     completion_rx: &mut UnboundedReceiver<AsyncHostCompletion>,
 ) -> Result<()> {
+    crate::runtime_node_perf_hooks::mark_loop_start(store.data());
+    let _loop_exit_guard = crate::runtime_node_perf_hooks::loop_exit_guard(store.data());
     // ── Timer event loop (only if main succeeded, 调用方已保证) ─────────────────────────
     // Poll timers; fire expired callbacks via the WASM function table。
     // 使用 tokio sleep_until 替代 std::thread::sleep（关键：不阻塞 runtime 线程）。
@@ -149,6 +175,7 @@ pub(crate) async fn run_post_main_scheduler_async(
         env: &WasmEnv,
         completion: AsyncHostCompletion,
     ) {
+        crate::runtime_node_perf_hooks::increment_event_count(store.data());
         match completion {
             AsyncHostCompletion::SettleValue {
                 promise,
@@ -179,20 +206,8 @@ pub(crate) async fn run_post_main_scheduler_async(
         crate::runtime_process::pending_process_exit_signal(store.data()).is_some()
     }
 
-    loop {
-        timer_iterations += 1;
-        if timer_iterations > MAX_TIMER_ITERATIONS {
-            writeln!(
-                store
-                    .data()
-                    .output
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()),
-                "Internal error: timer event loop exceeded max iterations"
-            )
-            .ok();
-            break;
-        }
+    'scheduler: loop {
+        crate::runtime_node_perf_hooks::mark_loop_iteration(store.data());
 
         // Phase 6: 非阻塞 drain 已就绪的 completion（可能在 timer fire 期间到达）
         let mut processed_any = false;
@@ -268,14 +283,24 @@ pub(crate) async fn run_post_main_scheduler_async(
                     // 若没有 microtask 但 counter > 0，说明有在途 host async op，
                     // 等待下一个 completion 唤醒。
                     if !has_pending && count > 0 {
-                        if let Some(completion) = completion_rx.recv().await {
-                            process_one_completion(store, env, completion);
-                            if process_exit_pending(store) {
-                                return Ok(());
+                        let idle_started = std::time::Instant::now();
+                        let deadline = event_loop_delay_deadline(store.data());
+                        let wake = wait_for_scheduler_wake(completion_rx, deadline).await;
+                        crate::runtime_node_perf_hooks::finish_idle_wait(
+                            store.data(),
+                            idle_started,
+                            count,
+                        );
+                        match wake {
+                            SchedulerWake::Deadline => continue 'scheduler,
+                            SchedulerWake::Completion(Some(completion)) => {
+                                process_one_completion(store, env, completion);
+                                if process_exit_pending(store) {
+                                    return Ok(());
+                                }
+                                continue;
                             }
-                            continue;
-                        } else {
-                            break;
+                            SchedulerWake::Completion(None) => break,
                         }
                     }
                 }
@@ -283,14 +308,20 @@ pub(crate) async fn run_post_main_scheduler_async(
             }
             if timers_empty && count > 0 {
                 // in-flight async host op 等待：await channel（唤醒时处理，循环重检）
-                if let Some(completion) = completion_rx.recv().await {
-                    process_one_completion(store, env, completion);
-                    drain_microtasks_async(store, env).await;
-                    if process_exit_pending(store) {
-                        return Ok(());
+                let idle_started = std::time::Instant::now();
+                let deadline = event_loop_delay_deadline(store.data());
+                let wake = wait_for_scheduler_wake(completion_rx, deadline).await;
+                crate::runtime_node_perf_hooks::finish_idle_wait(store.data(), idle_started, count);
+                match wake {
+                    SchedulerWake::Deadline => {}
+                    SchedulerWake::Completion(Some(completion)) => {
+                        process_one_completion(store, env, completion);
+                        drain_microtasks_async(store, env).await;
+                        if process_exit_pending(store) {
+                            return Ok(());
+                        }
                     }
-                } else {
-                    break;
+                    SchedulerWake::Completion(None) => break,
                 }
                 continue;
             }
@@ -322,21 +353,34 @@ pub(crate) async fn run_post_main_scheduler_async(
                 // 同时等待 next timer 与 host completion：
                 // 旧逻辑只 sleep_until(timer)，会在 setTimeout 存活期间饿死 in-flight
                 // dgram/net/tls bind 等异步完成（嵌套 .then 里启动的第二次 bind 永不 settle）。
-                let deadline = next.deadline;
+                let deadline = event_loop_delay_deadline(store.data())
+                    .map_or(next.deadline, |eld_deadline| {
+                        eld_deadline.min(next.deadline)
+                    });
+                let events_waiting = timers.len()
+                    + store
+                        .data()
+                        .async_op_counter
+                        .as_ref()
+                        .map_or(0, |counter| counter.count());
                 drop(timers);
                 drop(cancelled);
-                tokio::select! {
-                    _ = sleep_until(deadline) => {}
-                    completion = completion_rx.recv() => {
-                        if let Some(completion) = completion {
-                            process_one_completion(store, env, completion);
-                            drain_microtasks_async(store, env).await;
-                            if process_exit_pending(store) {
-                                return Ok(());
-                            }
-                        } else {
+                let idle_started = std::time::Instant::now();
+                let wake = wait_for_scheduler_wake(completion_rx, Some(deadline)).await;
+                crate::runtime_node_perf_hooks::finish_idle_wait(
+                    store.data(),
+                    idle_started,
+                    events_waiting,
+                );
+                if let SchedulerWake::Completion(completion) = wake {
+                    if let Some(completion) = completion {
+                        process_one_completion(store, env, completion);
+                        drain_microtasks_async(store, env).await;
+                        if process_exit_pending(store) {
                             return Ok(());
                         }
+                    } else {
+                        return Ok(());
                     }
                 }
                 continue;
@@ -346,6 +390,20 @@ pub(crate) async fn run_post_main_scheduler_async(
         }
 
         if let Some(entry) = _entry_to_fire {
+            timer_iterations += 1;
+            if timer_iterations > MAX_TIMER_ITERATIONS {
+                writeln!(
+                    store
+                        .data()
+                        .output
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()),
+                    "Internal error: timer event loop exceeded max iterations"
+                )
+                .ok();
+                break;
+            }
+            crate::runtime_node_perf_hooks::increment_event_count(store.data());
             let callback = entry.callback;
             let repeating = entry.repeating;
             let interval = entry.interval;

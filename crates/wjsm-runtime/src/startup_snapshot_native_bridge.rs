@@ -6,6 +6,7 @@ use crate::runtime_node_child_process::ChildProcessMethodKind;
 use crate::runtime_node_dgram::DgramMethodKind;
 use crate::runtime_node_fs::FsMethodKind;
 use crate::runtime_node_net::NetMethodKind;
+use crate::runtime_node_perf_hooks::PerfHooksMethodKind;
 use crate::runtime_node_tls::TlsMethodKind;
 use crate::runtime_node_vm::VmMethodKind;
 use crate::runtime_node_worker_threads::WorkerThreadsMethodKind;
@@ -112,6 +113,10 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::Btoa => NativeCallable::Btoa,
             Self::QueueMicrotask => NativeCallable::QueueMicrotask,
             Self::PerformanceNow => NativeCallable::PerformanceNow,
+            Self::PerfHooksMethod => NativeCallable::PerfHooksMethod {
+                kind: PerfHooksMethodKind::from_method(method)
+                    .unwrap_or(PerfHooksMethodKind::TimeOrigin),
+            },
             Self::OsInfo => NativeCallable::OsInfo {
                 kind: OsInfoKind::from_method(method).unwrap_or(OsInfoKind::Tmpdir),
             },
@@ -232,6 +237,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::Btoa => Self::Btoa,
             NativeCallable::QueueMicrotask => Self::QueueMicrotask,
             NativeCallable::PerformanceNow => Self::PerformanceNow,
+            NativeCallable::PerfHooksMethod { kind: _ } => Self::PerfHooksMethod,
             NativeCallable::OsInfo { kind: _ } => Self::OsInfo,
             NativeCallable::FsMethod { kind: _ } => Self::FsMethod,
             NativeCallable::ZlibMethod { kind: _ } => Self::ZlibMethod,

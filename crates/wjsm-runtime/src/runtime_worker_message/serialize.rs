@@ -259,6 +259,16 @@ fn serialize_object_like(
     obj: i64,
     cx: &mut SerCtx,
 ) -> Result<SerializedValue, String> {
+    if let Some((capability, kind)) =
+        crate::runtime_node_perf_hooks::histogram_identity_from_object(caller, obj)
+    {
+        let id = alloc_id(cx, obj);
+        return Ok(SerializedValue::Histogram {
+            id,
+            capability,
+            kind: if kind == 2 { 0 } else { kind },
+        });
+    }
     // MessagePort：必须 transfer。
     if let Some(global_id) = message_port_id(caller, obj) {
         if !cx.transfer.contains(&obj) {

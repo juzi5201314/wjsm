@@ -206,7 +206,7 @@ impl Lowerer {
                         }
                     };
 
-                    let attr_value = if let Some(ref value) = attr.value {
+                    let attr_value = if let Some(value) = &attr.value {
                         match value {
                             swc_ast::JSXAttrValue::Str(s) => {
                                 let str_val = s.value.to_string_lossy().into_owned();

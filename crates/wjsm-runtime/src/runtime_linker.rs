@@ -1,5 +1,111 @@
 use super::*;
 
+/// TAG_FUNCTION 在无 function_props 对象时的属性解析。
+/// 覆盖 Array.prototype 宿主方法（arr_proto_* table entries）的
+/// `call`/`apply`/`bind`/`length`/`name`。
+fn function_value_get_property_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_val: i64,
+    name_id: i32,
+) -> i64 {
+    if !value::is_function(func_val) {
+        return value::encode_undefined();
+    }
+    let name_id = name_id as u32;
+    if is_symbol_name_id(name_id) {
+        return value::encode_undefined();
+    }
+    let prop_bytes = read_string_bytes(caller, name_id);
+    let prop_name = match std::str::from_utf8(&prop_bytes) {
+        Ok(s) => s,
+        Err(_) => return value::encode_undefined(),
+    };
+
+    // call / apply / bind → Function.prototype 上的方法
+    if prop_name == "call" || prop_name == "apply" || prop_name == "bind" {
+        if !value::is_object(caller.data().function_prototype)
+            && let Some(env) = WasmEnv::from_caller(caller)
+        {
+            crate::runtime_heap::ensure_function_prototype_initialized(caller, &env);
+        }
+        let proto = caller.data().function_prototype;
+        if value::is_object(proto)
+            && let Some(env) = WasmEnv::from_caller(caller)
+            && let Some(ptr) = resolve_handle_idx_with_env(
+                caller,
+                &env,
+                value::decode_object_handle(proto) as usize,
+            )
+            && let Some(val) = read_object_property_by_name_with_env(caller, &env, ptr, prop_name)
+        {
+            return val;
+        }
+        return value::encode_undefined();
+    }
+
+    // length / name：仅对 arr_proto 宿主方法给出规范数据属性。
+    if (prop_name == "length" || prop_name == "name")
+        && let Some((name, length)) = array_proto_method_metadata(caller, func_val)
+    {
+        if prop_name == "length" {
+            return value::encode_f64(length as f64);
+        }
+        return store_runtime_string(caller, name);
+    }
+
+    value::encode_undefined()
+}
+
+/// 若 `func_val` 落在 arr_proto table 区间，返回 (property_name, length)。
+fn array_proto_method_metadata(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_val: i64,
+) -> Option<(String, u32)> {
+    let env = WasmEnv::from_caller(caller)?;
+    let base = env
+        .arr_proto_table_base
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0)
+        .max(0) as u32;
+    let len = env
+        .arr_proto_table_len
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0)
+        .max(0) as u32;
+    if len == 0 {
+        return None;
+    }
+    let idx = value::decode_function_idx(func_val);
+    if idx < base || idx >= base.saturating_add(len) {
+        return None;
+    }
+    let offset = (idx - base) as usize;
+    let (_, spec) =
+        wjsm_backend_wasm::host_import_registry::array_proto_method_specs().nth(offset)?;
+    let name = wjsm_backend_wasm::host_import_registry::array_proto_property_name(spec.name)?;
+    let length = array_proto_method_length(&name);
+    Some((name, length))
+}
+
+fn array_proto_method_length(name: &str) -> u32 {
+    match name {
+        "concat" | "push" | "unshift" | "every" | "filter" | "find" | "findIndex" | "findLast"
+        | "flatMap" | "forEach" | "includes" | "indexOf" | "join" | "lastIndexOf" | "map"
+        | "reduce" | "reduceRight" | "some" | "sort" | "toSorted" | "at" | "fill" => 1,
+        "copyWithin" | "slice" | "splice" | "toSpliced" | "with" => 2,
+        // entries/keys/values/pop/reverse/shift/toString/toLocaleString/toReversed/flat 等
+        _ => 0,
+    }
+}
+fn function_proto_method_meta(nc: &NativeCallable) -> Option<(u32, &'static str)> {
+    match nc {
+        NativeCallable::FunctionProtoCall => Some((1, "call")),
+        NativeCallable::FunctionProtoApply => Some((2, "apply")),
+        NativeCallable::FunctionProtoBind => Some((1, "bind")),
+        _ => None,
+    }
+}
+
 // ── Linker 注册辅助函数 ─────────────────────────────────────────
 
 /// 注册 16 个简单桥接（无 WASM 回调，sync/async 共享）
@@ -232,6 +338,17 @@ pub(super) fn register_common_bridges(
                     table.push(NativeCallable::BufferStatic { kind });
                     return value::encode_native_callable_idx(idx);
                 }
+                // Function.prototype.call/apply/bind 的 length / name
+                if let Some(nc) = record.as_ref()
+                    && let Some((length, name)) = function_proto_method_meta(nc)
+                {
+                    if prop_name == "length" {
+                        return value::encode_f64(length as f64);
+                    }
+                    if prop_name == "name" {
+                        return store_runtime_string(&caller, name.to_string());
+                    }
+                }
                 // Object / Promise 静态方法：可获取函数值（typeof === "function"）
                 if matches!(
                     record,
@@ -362,6 +479,15 @@ pub(super) fn register_common_bridges(
         },
     );
     linker.define(&mut *store, "env", "native_callable_get_property", f)?;
+    // function_value_get_property — TAG_FUNCTION 无 function_props 时的属性解析
+    // （arr_proto_* table 宿主函数、以及任何只编码为 function idx 的可调用值）。
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, func_val: i64, name_id: i32| -> i64 {
+            function_value_get_property_impl(&mut caller, func_val, name_id)
+        },
+    );
+    linker.define(&mut *store, "env", "function_value_get_property", f)?;
     // array.from 已移至 register_complex_bridges（async，支持迭代协议 + mapFn reentry）
     // obj_get_by_index
     let f = Func::wrap(

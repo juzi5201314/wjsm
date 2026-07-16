@@ -53,6 +53,7 @@ url = "2"
 encoding_rs = "0.8"
 get_if_addrs = "0.5.3"
 sysinfo = "0.39.5"
+hdrhistogram = { version = "7.5.4", default-features = false }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"

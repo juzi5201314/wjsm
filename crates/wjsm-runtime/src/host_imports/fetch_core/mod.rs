@@ -48,6 +48,7 @@ pub(crate) fn create_response_object(
         body_used: false,
         http_response_handle: None,
         stream_handle: None,
+        resource_timing: None,
     });
     drop(table);
 
@@ -131,22 +132,6 @@ pub(crate) fn create_response_object(
     obj
 }
 
-pub(crate) fn init_headers_object(caller: &mut Caller<'_, RuntimeState>, obj: i64, handle: u32) {
-    let handle_val = value::encode_f64(handle as f64);
-    let _ = define_host_data_property_from_caller(caller, obj, "__headers_handle__", handle_val);
-    attach_headers_methods(caller, obj, handle);
-}
-
-pub(crate) fn create_headers_object_from_handle(
-    caller: &mut Caller<'_, RuntimeState>,
-    headers_handle: u32,
-) -> i64 {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 8);
-    init_headers_object(caller, obj, headers_handle);
-    obj
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_response_object_with_http_handle(
     caller: &mut Caller<'_, RuntimeState>,
@@ -176,6 +161,7 @@ pub(crate) fn create_response_object_with_http_handle(
         body_used: false,
         http_response_handle: Some(http_handle),
         stream_handle: None,
+        resource_timing: None,
     });
     drop(table);
 
@@ -203,7 +189,6 @@ pub(crate) fn create_response_object_with_http_handle(
     let redirected_val = value::encode_bool(redirected);
     let _ = define_host_data_property_from_caller(caller, obj, "redirected", redirected_val);
 
-    // body / bodyUsed
     let stream_handle = caller
         .data()
         .readable_stream_table
@@ -253,8 +238,42 @@ pub(crate) fn create_response_object_with_http_handle(
     let _ = define_host_data_property_from_caller(caller, obj, "headers", headers_obj);
 
     attach_response_methods(caller, obj, handle);
-
     obj
+}
+
+pub(crate) fn init_headers_object(caller: &mut Caller<'_, RuntimeState>, obj: i64, handle: u32) {
+    let handle_val = value::encode_f64(handle as f64);
+    let _ = define_host_data_property_from_caller(caller, obj, "__headers_handle__", handle_val);
+    attach_headers_methods(caller, obj, handle);
+}
+
+pub(crate) fn create_headers_object_from_handle(
+    caller: &mut Caller<'_, RuntimeState>,
+    headers_handle: u32,
+) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 8);
+    init_headers_object(caller, obj, headers_handle);
+    obj
+}
+
+pub(crate) fn set_response_resource_timing(
+    caller: &mut Caller<'_, RuntimeState>,
+    response: i64,
+    resource_timing: Option<SharedFetchResourceTiming>,
+) {
+    let Some(handle) = get_response_handle_from_object(caller, response) else {
+        return;
+    };
+    if let Some(entry) = caller
+        .data()
+        .fetch_response_table
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get_mut(handle as usize)
+    {
+        entry.resource_timing = resource_timing;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -396,3 +415,5 @@ fn attach_request_methods(caller: &mut Caller<'_, RuntimeState>, obj: i64, handl
 
 mod fetch_core_impl;
 pub(crate) use fetch_core_impl::*;
+mod resource_timing;
+pub(crate) use resource_timing::*;

@@ -110,7 +110,6 @@ impl Lowerer {
                     .scopes
                     .resolve_scope_id(&name)
                     .map_err(|msg| self.error(pat.span(), msg))?;
-                let ir_name = format!("${scope_id}.{name}");
 
                 if matches!(kind, VarKind::Var) {
                     self.scopes
@@ -122,14 +121,9 @@ impl Lowerer {
                         .map_err(|msg| self.error(pat.span(), msg))?;
                 }
 
-                let store_block = self.resolve_store_block(block);
-                self.current_function.append_instruction(
-                    store_block,
-                    Instruction::StoreVar {
-                        name: ir_name,
-                        value: src_val,
-                    },
-                );
+                let binding = CapturedBinding::new(name.clone(), scope_id);
+                let store_block =
+                    self.store_binding_value(block, &binding, src_val, pat.span(), true)?;
                 let store_block =
                     self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block)?;
                 Ok(store_block)
@@ -211,17 +205,17 @@ impl Lowerer {
                             .scopes
                             .resolve_scope_id(&name)
                             .map_err(|msg| self.error(assign.key.span(), msg))?;
-                        let ir_name = format!("${scope_id}.{name}");
                         self.scopes
                             .mark_initialised(&name)
                             .map_err(|msg| self.error(assign.key.span(), msg))?;
-                        self.current_function.append_instruction(
+                        let binding = CapturedBinding::new(name.clone(), scope_id);
+                        block = self.store_binding_value(
                             block,
-                            Instruction::StoreVar {
-                                name: ir_name,
-                                value: resolved,
-                            },
-                        );
+                            &binding,
+                            resolved,
+                            assign.key.span(),
+                            true,
+                        )?;
                         block =
                             self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
                     } else {

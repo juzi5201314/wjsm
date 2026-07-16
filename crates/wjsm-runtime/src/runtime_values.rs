@@ -1901,7 +1901,7 @@ pub(crate) async fn resolve_callable_and_call_async(
         return value::encode_undefined();
     };
     let mut results = [Val::I64(0)];
-    let _ = func
+    if let Err(error) = func
         .call_async(
             &mut *caller,
             &[
@@ -1912,7 +1912,14 @@ pub(crate) async fn resolve_callable_and_call_async(
             ],
             &mut results,
         )
-        .await;
+        .await
+    {
+        set_runtime_error(
+            caller.data(),
+            format!("JavaScript callback failed: {error}"),
+        );
+        return value::encode_undefined();
+    }
     results[0].unwrap_i64()
 }
 

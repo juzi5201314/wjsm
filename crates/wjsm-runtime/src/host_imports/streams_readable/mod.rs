@@ -1,7 +1,9 @@
 // ReadableStream 核心实现（WHATWG Streams Phase 1）
 // 包含：构造函数、DefaultController、DefaultReader、locked getter、cancel
 
-use super::fetch_core::{alloc_type_error_from_caller, push_native_callable};
+use super::fetch_core::{
+    alloc_type_error_from_caller, complete_http_response_resource_timing, push_native_callable,
+};
 use super::streams_transform::{
     call_flush_from_writable_close_with_env, call_transform_from_writable_with_env,
 };

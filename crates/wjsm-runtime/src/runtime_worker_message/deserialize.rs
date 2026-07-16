@@ -15,16 +15,36 @@ struct DeCtx {
     memo: HashMap<usize, i64>,
 }
 
+impl DeCtx {
+    fn remember<C: AsContextMut<Data = RuntimeState>>(
+        &mut self,
+        ctx: &mut C,
+        id: usize,
+        value: i64,
+    ) {
+        // `memo` 位于 Rust 堆上，GC 不会扫描；递归构造完成前必须另行保活 JS identity。
+        ctx.as_context().data().push_host_temp_roots([value]);
+        self.memo.insert(id, value);
+    }
+}
+
 /// 在目标 agent 的 Store/Caller 上重建 JS 值。
 pub(crate) fn deserialize_value<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     value: &SerializedValue,
 ) -> i64 {
+    // 整棵消息图共享一个临时 root frame，既覆盖循环引用，也避免子对象构造时回收父对象。
+    let root_len = ctx
+        .as_context()
+        .data()
+        .push_host_temp_roots(std::iter::empty::<i64>());
     let mut cx = DeCtx {
         memo: HashMap::new(),
     };
-    deserialize_one(ctx, env, value, &mut cx)
+    let result = deserialize_one(ctx, env, value, &mut cx);
+    ctx.as_context().data().truncate_host_temp_roots(root_len);
+    result
 }
 
 /// Caller 路径便捷封装：从当前 host 上下文取 `WasmEnv` 后反序列化。
@@ -62,7 +82,7 @@ fn deserialize_one<C: AsContextMut<Data = RuntimeState>>(
             .unwrap_or_else(value::encode_undefined),
         SerializedValue::Array { id, items } => {
             let arr = alloc_array_with_env(ctx, env, items.len() as u32);
-            cx.memo.insert(*id, arr);
+            cx.remember(ctx, *id, arr);
             let Some(ptr) = resolve_array_ptr_with_env(ctx, env, arr) else {
                 return arr;
             };
@@ -75,7 +95,7 @@ fn deserialize_one<C: AsContextMut<Data = RuntimeState>>(
         }
         SerializedValue::Object { id, entries } => {
             let obj = alloc_host_object(ctx, env, entries.len() as u32);
-            cx.memo.insert(*id, obj);
+            cx.remember(ctx, *id, obj);
             for (name, val) in entries {
                 let v = deserialize_one(ctx, env, val, cx);
                 let _ = define_host_data_property_with_env(ctx, env, obj, name, v);
@@ -84,35 +104,37 @@ fn deserialize_one<C: AsContextMut<Data = RuntimeState>>(
         }
         SerializedValue::Map { id, entries } => deserialize_map(ctx, env, *id, entries, cx),
         SerializedValue::Set { id, values } => deserialize_set(ctx, env, *id, values, cx),
-        SerializedValue::Date { id, ms } => {
-            let obj = create_date_with_env(ctx, env, *ms);
-            cx.memo.insert(*id, obj);
-            obj
-        }
+        SerializedValue::Date { id, ms } => create_date_with_env(ctx, env, *id, *ms, cx),
         SerializedValue::RegExp { id, source, flags } => {
-            let obj = create_regexp_plain_with_env(ctx, env, source, flags);
-            cx.memo.insert(*id, obj);
-            obj
+            create_regexp_plain_with_env(ctx, env, *id, source, flags, cx)
         }
         SerializedValue::ArrayBuffer { id, bytes } => {
-            let obj = create_arraybuffer_from_bytes_with_env(ctx, env, bytes.clone());
-            cx.memo.insert(*id, obj);
-            obj
+            create_arraybuffer_from_bytes_with_env(ctx, env, *id, bytes.clone(), cx)
         }
         SerializedValue::Buffer { id, bytes } | SerializedValue::TypedArray { id, bytes, .. } => {
             let obj = create_buffer_from_bytes_with_env(ctx, env, bytes.clone());
-            cx.memo.insert(*id, obj);
+            cx.remember(ctx, *id, obj);
             obj
         }
         SerializedValue::SharedArrayBuffer { id, handle } => {
-            let obj = materialize_sab_with_env(ctx, env, *handle);
-            cx.memo.insert(*id, obj);
+            materialize_sab_with_env(ctx, env, *id, *handle, cx)
+        }
+        SerializedValue::Histogram {
+            id,
+            capability,
+            kind,
+        } => {
+            let obj = crate::runtime_node_perf_hooks::materialize_histogram(
+                ctx,
+                env,
+                capability.clone(),
+                *kind,
+            );
+            cx.remember(ctx, *id, obj);
             obj
         }
         SerializedValue::MessagePort { id, global_id } => {
-            let obj = create_message_port_shell(ctx, env, *global_id);
-            cx.memo.insert(*id, obj);
-            obj
+            create_message_port_shell(ctx, env, *id, *global_id, cx)
         }
     }
 }
@@ -138,8 +160,7 @@ fn deserialize_map<C: AsContextMut<Data = RuntimeState>>(
     cx: &mut DeCtx,
 ) -> i64 {
     let new_handle = ctx.as_context().data().alloc_map_entry();
-    let obj = create_map_shell_with_env(ctx, env, new_handle);
-    cx.memo.insert(id, obj);
+    let obj = create_map_shell_with_env(ctx, env, id, new_handle, cx);
     let mut keys = Vec::with_capacity(entries.len());
     let mut values = Vec::with_capacity(entries.len());
     for (k, v) in entries {
@@ -169,8 +190,7 @@ fn deserialize_set<C: AsContextMut<Data = RuntimeState>>(
     cx: &mut DeCtx,
 ) -> i64 {
     let new_handle = ctx.as_context().data().alloc_set_entry();
-    let obj = create_set_shell_with_env(ctx, env, new_handle);
-    cx.memo.insert(id, obj);
+    let obj = create_set_shell_with_env(ctx, env, id, new_handle, cx);
     let mut values = Vec::with_capacity(values_src.len());
     for v in values_src {
         values.push(deserialize_one(ctx, env, v, cx));
@@ -192,9 +212,12 @@ fn deserialize_set<C: AsContextMut<Data = RuntimeState>>(
 fn create_map_shell_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
+    id: usize,
     handle: u32,
+    cx: &mut DeCtx,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
+    cx.remember(ctx, id, obj);
     ctx.as_context()
         .data()
         .bind_map_entry_owner(handle, value::decode_object_handle(obj));
@@ -220,9 +243,12 @@ fn create_map_shell_with_env<C: AsContextMut<Data = RuntimeState>>(
 fn create_set_shell_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
+    id: usize,
     handle: u32,
+    cx: &mut DeCtx,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
+    cx.remember(ctx, id, obj);
     ctx.as_context()
         .data()
         .bind_set_entry_owner(handle, value::decode_object_handle(obj));
@@ -248,9 +274,12 @@ fn create_set_shell_with_env<C: AsContextMut<Data = RuntimeState>>(
 fn create_date_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
+    id: usize,
     ms: f64,
+    cx: &mut DeCtx,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
+    cx.remember(ctx, id, obj);
     let get_time = create_date_method(ctx.as_context().data(), DateMethodKind::GetTime);
     let _ = define_host_data_property_with_env(ctx, env, obj, "__date_ms__", value::encode_f64(ms));
     let _ = define_host_data_property_with_env(ctx, env, obj, "getTime", get_time);
@@ -260,10 +289,13 @@ fn create_date_with_env<C: AsContextMut<Data = RuntimeState>>(
 fn create_regexp_plain_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
+    id: usize,
     source: &str,
     flags: &str,
+    cx: &mut DeCtx,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
+    cx.remember(ctx, id, obj);
     let source_v = store_runtime_string_in_state(ctx.as_context().data(), source.to_string());
     let flags_v = store_runtime_string_in_state(ctx.as_context().data(), flags.to_string());
     let _ = define_host_data_property_with_env(ctx, env, obj, "source", source_v);
@@ -274,7 +306,9 @@ fn create_regexp_plain_with_env<C: AsContextMut<Data = RuntimeState>>(
 fn create_arraybuffer_from_bytes_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
+    id: usize,
     bytes: Vec<u8>,
+    cx: &mut DeCtx,
 ) -> i64 {
     let len = bytes.len() as u32;
     let ab_handle = {
@@ -289,6 +323,7 @@ fn create_arraybuffer_from_bytes_with_env<C: AsContextMut<Data = RuntimeState>>(
         handle
     };
     let obj = alloc_host_object(ctx, env, 2);
+    cx.remember(ctx, id, obj);
     let _ = define_host_data_property_with_env(
         ctx,
         env,
@@ -309,19 +344,26 @@ fn create_arraybuffer_from_bytes_with_env<C: AsContextMut<Data = RuntimeState>>(
 fn materialize_sab_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
+    id: usize,
     handle: u32,
+    cx: &mut DeCtx,
 ) -> i64 {
     let Some(shared) = ctx.as_context().data().shared_state.clone() else {
-        return value::encode_undefined();
+        let undefined = value::encode_undefined();
+        cx.remember(ctx, id, undefined);
+        return undefined;
     };
     let (byte_length, growable, max_byte_length) = {
         let table = shared.sab_table.lock().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = table.get(handle as usize) else {
-            return value::encode_undefined();
+            let undefined = value::encode_undefined();
+            cx.remember(ctx, id, undefined);
+            return undefined;
         };
         (entry.byte_length, entry.growable(), entry.max_byte_length())
     };
     let obj = alloc_host_object(ctx, env, 4);
+    cx.remember(ctx, id, obj);
     let _ = define_host_data_property_with_env(
         ctx,
         env,
@@ -351,9 +393,12 @@ fn materialize_sab_with_env<C: AsContextMut<Data = RuntimeState>>(
 fn create_message_port_shell<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
+    id: usize,
     global_id: u32,
+    cx: &mut DeCtx,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 1);
+    cx.remember(ctx, id, obj);
     let _ = define_host_data_property_with_env(
         ctx,
         env,

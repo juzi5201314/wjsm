@@ -12,6 +12,44 @@ use crate::*;
 const MAX_ARRAY_LENGTH: u32 = u32::MAX;
 const ARRAY_LENGTH_RANGE_ERROR: &str = "Invalid array length";
 
+/// Array.prototype.slice 用的 array-like length 读取。
+fn array_like_length_for_slice(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> u32 {
+    if value::is_array(this_val) {
+        if let Some(ptr) = resolve_array_ptr(caller, this_val) {
+            return read_array_length(caller, ptr).unwrap_or(0);
+        }
+        return 0;
+    }
+    if value::is_object(this_val)
+        && let Some(ptr) = resolve_handle(caller, this_val)
+        && let Some(len_val) = read_object_property_by_name(caller, ptr, "length")
+    {
+        let n = value::decode_f64(to_number(caller, len_val));
+        if !n.is_finite() || n <= 0.0 {
+            return 0;
+        }
+        return n.trunc().min(u32::MAX as f64) as u32;
+    }
+    0
+}
+
+/// Array.prototype.slice 用的 array-like 元素读取。
+fn array_like_get_for_slice(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    index: u32,
+) -> Option<i64> {
+    if value::is_array(this_val) {
+        let ptr = resolve_array_ptr(caller, this_val)?;
+        return read_array_elem(caller, ptr, index);
+    }
+    if value::is_object(this_val) {
+        let ptr = resolve_handle(caller, this_val)?;
+        return read_object_property_by_name(caller, ptr, &index.to_string());
+    }
+    None
+}
+
 fn array_length_would_overflow(len: u32, add: u32) -> bool {
     // u32 上任意合法 length 都 ≤ MAX_ARRAY_LENGTH；仅加法溢出才是越界。
     len.checked_add(add).is_none()
@@ -395,7 +433,13 @@ pub(crate) fn object_create_apply_properties(
     }
     let symbols = collect_own_property_key_values(caller, props_ptr, true);
     for sym in symbols {
-        let desc_obj = read_object_property_by_string_key_simple(caller, properties, sym);
+        let Some(name_id) = symbol_value_to_name_id(sym) else {
+            set_runtime_error(caller.data(), "TypeError: Invalid property key".to_string());
+            return false;
+        };
+        let desc_obj =
+            crate::runtime_values::read_object_property_by_name_id(caller, props_ptr, name_id)
+                .unwrap_or_else(value::encode_undefined);
         if !object_define_property_or_throw(caller, obj, sym, desc_obj) {
             return false;
         }
@@ -1572,10 +1616,10 @@ pub(crate) fn define_array_object(
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            // ECMAScript Array.prototype.slice 的 this 是 array-like。
+            // 结果数组必须走 alloc_array 固定布局：ArraySpeciesCreate → Array(length)
+            // 构造路径会留下会被后续 NewObject 踩掉的不稳定元素区。
+            let len = array_like_length_for_slice(&mut caller, this_val) as i32;
             let start = if args_count > 0 {
                 let s_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
                 if s_f64.is_nan() {
@@ -1601,12 +1645,12 @@ pub(crate) fn define_array_object(
                 len
             };
             let count = (end - start).max(0) as u32;
-            let new_arr = array_species_create(&mut caller, this_val, count);
+            let new_arr = alloc_array(&mut caller, count);
             let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
                 return value::encode_undefined();
             };
             for i in 0..count {
-                let elem = read_array_elem(&mut caller, ptr, start as u32 + i)
+                let elem = array_like_get_for_slice(&mut caller, this_val, start as u32 + i)
                     .unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, new_ptr, i, elem);
             }

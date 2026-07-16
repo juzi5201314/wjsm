@@ -32,7 +32,9 @@ function headersToObject(headers) {
   const out = {};
   if (!headers) return out;
   if (typeof headers.forEach === 'function') {
-    headers.forEach(function (value, name) { out[String(name).toLowerCase()] = String(value); });
+    headers.forEach(function (value, key) {
+      out[String(key).toLowerCase()] = String(value);
+    });
     return out;
   }
   const keys = Object.keys(headers);
@@ -120,17 +122,41 @@ ClientRequest.prototype.end = function (chunk, encoding, callback) {
   if (callback) callback();
   const self = this;
   const bodyChunks = [];
+  const perfEmit = globalThis.__wjsm_perf_emitNative;
+  const perfStart = perfEmit && perfEmit.enabled('http') ? globalThis.performance.now() : undefined;
   for (var i = 0; i < self._chunks.length; i = i + 1) bodyChunks.push(Buffer.from(self._chunks[i]));
   const body = bodyChunks.length === 0 ? undefined : Buffer.concat(bodyChunks);
   fetch(self._requestOptions.url, {
     method: self._requestOptions.method,
     headers: self._requestOptions.headers,
-    body: body
+    body: body,
+    __wjsm_internal_no_resource_timing: true
   }).then(function (response) {
+    const responseHeaders = headersToObject(response.headers);
+    if (perfStart !== undefined) {
+      perfEmit(
+        'HttpClient',
+        'http',
+        perfStart,
+        globalThis.performance.now() - perfStart,
+        {
+          req: {
+            method: self._requestOptions.method,
+            url: self._requestOptions.url,
+            headers: headersToObject(self._requestOptions.headers),
+          },
+          res: {
+            statusCode: response.status,
+            statusMessage: response.statusText || statusText(response.status),
+            headers: responseHeaders,
+          },
+        }
+      );
+    }
     return response.arrayBuffer().then(function (buffer) {
       const msg = new IncomingMessage(
         response.status,
-        headersToObject(response.headers),
+        responseHeaders,
         Buffer.from(buffer),
         self._requestOptions.method,
         self._requestOptions.url
@@ -286,6 +312,22 @@ ServerResponse.prototype.end = function (chunk, encoding, callback) {
   this.writableEnded = true;
   const self = this;
   this.socket.end(payload, function () {
+    if (self.__wjsmPerfStart !== undefined) {
+      self.__wjsmPerfEmit(
+        'HttpRequest',
+        'http',
+        self.__wjsmPerfStart,
+        globalThis.performance.now() - self.__wjsmPerfStart,
+        {
+          req: self.__wjsmPerfRequest,
+          res: {
+            statusCode: self.statusCode,
+            statusMessage: self.statusMessage || statusText(self.statusCode),
+            headers: headersToObject(self._headers),
+          },
+        }
+      );
+    }
     self.emit('finish');
     self.emit('close');
     if (callback) callback();
@@ -308,6 +350,12 @@ function handleHttpConnection(server, socket) {
     const body = Buffer.from(raw.slice(headerEnd + 4));
     const req = new IncomingMessage(0, parseHeaders(lines), body, method, url);
     const res = new ServerResponse(socket);
+    const perfEmit = globalThis.__wjsm_perf_emitNative;
+    if (perfEmit && perfEmit.enabled('http')) {
+      res.__wjsmPerfEmit = perfEmit;
+      res.__wjsmPerfStart = globalThis.performance.now();
+      res.__wjsmPerfRequest = { method: method, url: url, headers: req.headers };
+    }
     server.emit('request', req, res);
   });
   socket.on('error', function (error) { server.emit('clientError', error, socket); });

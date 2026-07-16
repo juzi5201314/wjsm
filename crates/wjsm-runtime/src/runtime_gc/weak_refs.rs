@@ -16,6 +16,19 @@ pub fn process_weak_refs_after_sweep(ctx: &mut GcContext, freed_handles: &[Handl
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .queue_auto_destroy_for_freed(&freed);
+        let histogram_roots = st
+            .performance_histogram_wrappers
+            .direct_roots_after_pruning(&freed);
+        let reclaimed_histograms = st
+            .performance_histogram_wrappers
+            .reclaim_unreachable_entries(&histogram_roots);
+        if let Ok(mut monitors) = st.performance_event_loop_monitors.lock() {
+            for (side_handle, entry) in reclaimed_histograms {
+                if entry.kind == 2 {
+                    monitors.remove(&side_handle);
+                }
+            }
+        }
         {
             let mut table = st.promise_table.lock().unwrap_or_else(|e| e.into_inner());
             for &handle in &freed {

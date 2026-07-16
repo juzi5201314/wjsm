@@ -1,3 +1,4 @@
+use self::function_values::LoweredClassFunction;
 use super::*;
 use swc_core::common::Span;
 use swc_core::ecma::visit::{Visit, VisitWith};
@@ -217,12 +218,25 @@ pub(super) fn class_member_kind(member: &swc_ast::ClassMember) -> &'static str {
 }
 
 /// 类私有方法 / 访问器在 lowering 阶段的绑定描述。
-pub(crate) enum PrivateMemberKind {
-    Method(FunctionId),
+struct PrivateMemberMeta {
+    field_name: String,
+    is_static: bool,
+    kind: PrivateMemberKind,
+}
+
+enum PrivateMemberKind {
+    Method(PrivateFunctionMeta),
     Accessor {
-        getter: Option<FunctionId>,
-        setter: Option<FunctionId>,
+        getter: Option<PrivateFunctionMeta>,
+        setter: Option<PrivateFunctionMeta>,
     },
+}
+
+struct PrivateFunctionMeta {
+    lowered_function: LoweredClassFunction,
+    instance_binding: Option<CapturedBinding>,
+    value: Option<ValueId>,
+    span: Span,
 }
 
 impl Lowerer {
@@ -263,41 +277,6 @@ impl Lowerer {
                     format!("Private field '#{source_name}' is not declared"),
                 )
             })
-    }
-
-    /// 将类构造器 IR 函数物化为运行时可调用值：无捕获时为 FunctionRef，有捕获时为 CreateClosure + 共享 env。
-    fn materialize_constructor_value(
-        &mut self,
-        block: BasicBlockId,
-        function_id: FunctionId,
-        captured: &[CapturedBinding],
-        span: Span,
-    ) -> Result<ValueId, LoweringError> {
-        let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
-        let func_ref_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: func_ref_val,
-                constant: func_ref_const,
-            },
-        );
-        if captured.is_empty() {
-            return Ok(func_ref_val);
-        }
-        let mut closure_block = block;
-        let env_val = self.ensure_shared_env(closure_block, captured, span)?;
-        closure_block = self.resolve_store_block(closure_block);
-        let closure_val = self.alloc_value();
-        self.current_function.append_instruction(
-            closure_block,
-            Instruction::CallBuiltin {
-                dest: Some(closure_val),
-                builtin: Builtin::CreateClosure,
-                args: vec![func_ref_val, env_val],
-            },
-        );
-        Ok(closure_val)
     }
 
     fn emit_string_const(&mut self, block: BasicBlockId, value: &str) -> ValueId {
@@ -527,7 +506,7 @@ impl Lowerer {
         mut block: BasicBlockId,
         this_scope_id: usize,
         members: &[swc_ast::ClassMember],
-        private_members: &[(String, bool, PrivateMemberKind)],
+        private_members: &[PrivateMemberMeta],
     ) -> Result<BasicBlockId, LoweringError> {
         for member in members {
             match member {
@@ -568,28 +547,57 @@ impl Lowerer {
             }
         }
 
-        for (field_name, is_static, kind) in private_members {
-            if !is_static {
-                let this_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::LoadVar {
-                        dest: this_val,
-                        name: format!("${this_scope_id}.$this"),
-                    },
-                );
-                match kind {
-                    PrivateMemberKind::Method(func_id) => {
-                        self.emit_private_method_bind(block, this_val, field_name, *func_id);
-                    }
-                    PrivateMemberKind::Accessor { getter, setter } => {
-                        self.emit_private_accessor_bind(
-                            block, this_val, field_name, *getter, *setter,
-                        );
-                    }
-                }
-                block = self.resolve_store_block(block);
+        for member in private_members {
+            if member.is_static {
+                continue;
             }
+            let this_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: this_val,
+                    name: format!("${this_scope_id}.$this"),
+                },
+            );
+            match &member.kind {
+                PrivateMemberKind::Method(function) => {
+                    let (continuation, function_value) =
+                        self.load_private_instance_function_value(block, function)?;
+                    block = continuation;
+                    self.emit_private_method_bind(
+                        block,
+                        this_val,
+                        &member.field_name,
+                        function_value,
+                    );
+                }
+                PrivateMemberKind::Accessor { getter, setter } => {
+                    let getter_value = if let Some(function) = getter {
+                        let (continuation, value) =
+                            self.load_private_instance_function_value(block, function)?;
+                        block = continuation;
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    let setter_value = if let Some(function) = setter {
+                        let (continuation, value) =
+                            self.load_private_instance_function_value(block, function)?;
+                        block = continuation;
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    self.emit_private_accessor_bind(
+                        block,
+                        this_val,
+                        &member.field_name,
+                        getter_value,
+                        setter_value,
+                    );
+                }
+            }
+            block = self.resolve_store_block(block);
         }
 
         Ok(block)
@@ -600,13 +608,11 @@ impl Lowerer {
         &mut self,
         class_name: &str,
         body: &[swc_ast::ClassMember],
-    ) -> Result<Vec<(String, bool, PrivateMemberKind)>, LoweringError> {
+    ) -> Result<Vec<PrivateMemberMeta>, LoweringError> {
         use std::collections::HashMap;
-        let mut out: Vec<(String, bool, PrivateMemberKind)> = Vec::new();
-        let mut accessor_pending: HashMap<
-            (String, bool),
-            (Option<FunctionId>, Option<FunctionId>),
-        > = HashMap::new();
+        let mut out: Vec<PrivateMemberMeta> = Vec::new();
+        let mut accessor_pending: HashMap<(String, bool), usize> = HashMap::new();
+        let mut next_function_index = 0;
 
         for member in body {
             let swc_ast::ClassMember::PrivateMethod(pm) = member else {
@@ -711,67 +717,151 @@ impl Lowerer {
             }
             let m_function_id = self.module.push_function(m_ir_function);
             self.pop_function_context();
+            let instance_binding = if is_static {
+                None
+            } else {
+                let binding_name = format!(
+                    "$private_function#{}_{}",
+                    self.next_private_name_id, next_function_index
+                );
+                next_function_index += 1;
+                let scope_id = self
+                    .scopes
+                    .declare(&binding_name, VarKind::Let, true)
+                    .map_err(|message| self.error(pm.span, message))?;
+                Some(CapturedBinding::new(binding_name, scope_id))
+            };
+            let private_function = PrivateFunctionMeta {
+                lowered_function: LoweredClassFunction {
+                    function_id: m_function_id,
+                    captured: m_captured,
+                },
+                instance_binding,
+                value: None,
+                span: pm.span,
+            };
 
             if accessor {
                 let key = (field_name.clone(), is_static);
-                let entry = accessor_pending.entry(key.clone()).or_insert((None, None));
-                if matches!(pm.kind, swc_ast::MethodKind::Getter) {
-                    entry.0 = Some(m_function_id);
-                } else {
-                    entry.1 = Some(m_function_id);
-                }
-                if entry.0.is_some() || entry.1.is_some() {
-                    let (g, s) = *entry;
-                    if let Some(pos) = out.iter().position(|(n, st, k)| {
-                        n == &key.0
-                            && *st == key.1
-                            && matches!(k, PrivateMemberKind::Accessor { .. })
-                    }) {
-                        out[pos].2 = PrivateMemberKind::Accessor {
-                            getter: g,
-                            setter: s,
-                        };
+                if let Some(position) = accessor_pending.get(&key).copied() {
+                    let PrivateMemberKind::Accessor { getter, setter } = &mut out[position].kind
+                    else {
+                        unreachable!("private accessor metadata kind changed")
+                    };
+                    if matches!(pm.kind, swc_ast::MethodKind::Getter) {
+                        *getter = Some(private_function);
                     } else {
-                        out.push((
-                            key.0,
-                            key.1,
-                            PrivateMemberKind::Accessor {
-                                getter: g,
-                                setter: s,
-                            },
-                        ));
+                        *setter = Some(private_function);
                     }
+                } else {
+                    let (getter, setter) = if matches!(pm.kind, swc_ast::MethodKind::Getter) {
+                        (Some(private_function), None)
+                    } else {
+                        (None, Some(private_function))
+                    };
+                    let position = out.len();
+                    out.push(PrivateMemberMeta {
+                        field_name: field_name.clone(),
+                        is_static,
+                        kind: PrivateMemberKind::Accessor { getter, setter },
+                    });
+                    accessor_pending.insert(key, position);
                 }
             } else {
-                out.push((
+                out.push(PrivateMemberMeta {
                     field_name,
                     is_static,
-                    PrivateMemberKind::Method(m_function_id),
-                ));
+                    kind: PrivateMemberKind::Method(private_function),
+                });
             }
         }
         Ok(out)
     }
 
+    fn materialize_private_member_values(
+        &mut self,
+        mut block: BasicBlockId,
+        private_members: &mut [PrivateMemberMeta],
+    ) -> Result<BasicBlockId, LoweringError> {
+        for member in private_members {
+            match &mut member.kind {
+                PrivateMemberKind::Method(function) => {
+                    block = self.materialize_private_function_value(block, function)?;
+                }
+                PrivateMemberKind::Accessor { getter, setter } => {
+                    if let Some(function) = getter {
+                        block = self.materialize_private_function_value(block, function)?;
+                    }
+                    if let Some(function) = setter {
+                        block = self.materialize_private_function_value(block, function)?;
+                    }
+                }
+            }
+        }
+        Ok(block)
+    }
+
+    fn materialize_private_function_value(
+        &mut self,
+        block: BasicBlockId,
+        function: &mut PrivateFunctionMeta,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let (continuation, value) = self.materialize_class_function_value(
+            block,
+            &function.lowered_function,
+            function.span,
+        )?;
+        if let Some(binding) = &function.instance_binding {
+            self.current_function.append_instruction(
+                continuation,
+                Instruction::StoreVar {
+                    name: binding.var_ir_name(),
+                    value,
+                },
+            );
+        }
+        function.value = Some(value);
+        Ok(continuation)
+    }
+
+    fn load_private_instance_function_value(
+        &mut self,
+        block: BasicBlockId,
+        function: &PrivateFunctionMeta,
+    ) -> Result<(BasicBlockId, ValueId), LoweringError> {
+        let binding = function
+            .instance_binding
+            .as_ref()
+            .expect("instance private function must have a lexical binding");
+        let value = self.load_captured_binding(block, binding)?;
+        Ok((self.resolve_store_block(block), value))
+    }
+
     fn patch_private_member_home_objects(
         &mut self,
         ctor_function_id: FunctionId,
-        private_members: &[(String, bool, PrivateMemberKind)],
+        private_members: &[PrivateMemberMeta],
     ) {
-        for (_, is_static, kind) in private_members {
-            let func_ids: Vec<FunctionId> = match kind {
-                PrivateMemberKind::Method(id) => vec![*id],
-                PrivateMemberKind::Accessor { getter, setter } => {
-                    getter.iter().chain(setter).copied().collect()
+        for member in private_members {
+            let home_object = if member.is_static {
+                HomeObject::Constructor(ctor_function_id)
+            } else {
+                HomeObject::Prototype(ctor_function_id)
+            };
+            let mut patch = |function: &PrivateFunctionMeta| {
+                if let Some(ir_function) = self
+                    .module
+                    .function_mut(function.lowered_function.function_id)
+                {
+                    ir_function.home_object = Some(home_object);
                 }
             };
-            for func_id in func_ids {
-                if let Some(function) = self.module.function_mut(func_id) {
-                    function.home_object = Some(if *is_static {
-                        HomeObject::Constructor(ctor_function_id)
-                    } else {
-                        HomeObject::Prototype(ctor_function_id)
-                    });
+            match &member.kind {
+                PrivateMemberKind::Method(function) => patch(function),
+                PrivateMemberKind::Accessor { getter, setter } => {
+                    for function in getter.iter().chain(setter) {
+                        patch(function);
+                    }
                 }
             }
         }
@@ -781,18 +871,37 @@ impl Lowerer {
         &mut self,
         block: BasicBlockId,
         ctor_dest: ValueId,
-        private_members: &[(String, bool, PrivateMemberKind)],
+        private_members: &[PrivateMemberMeta],
     ) {
-        for (field_name, is_static, kind) in private_members {
-            if !*is_static {
+        for member in private_members {
+            if !member.is_static {
                 continue;
             }
-            match kind {
-                PrivateMemberKind::Method(func_id) => {
-                    self.emit_private_method_bind(block, ctor_dest, field_name, *func_id);
+            match &member.kind {
+                PrivateMemberKind::Method(function) => {
+                    let value = function
+                        .value
+                        .expect("static private method must be materialized");
+                    self.emit_private_method_bind(block, ctor_dest, &member.field_name, value);
                 }
                 PrivateMemberKind::Accessor { getter, setter } => {
-                    self.emit_private_accessor_bind(block, ctor_dest, field_name, *getter, *setter);
+                    let getter_value = getter.as_ref().map(|function| {
+                        function
+                            .value
+                            .expect("static private getter must be materialized")
+                    });
+                    let setter_value = setter.as_ref().map(|function| {
+                        function
+                            .value
+                            .expect("static private setter must be materialized")
+                    });
+                    self.emit_private_accessor_bind(
+                        block,
+                        ctor_dest,
+                        &member.field_name,
+                        getter_value,
+                        setter_value,
+                    );
                 }
             }
         }
@@ -802,3 +911,4 @@ impl Lowerer {
 mod class_body;
 mod decl;
 mod expr;
+mod function_values;

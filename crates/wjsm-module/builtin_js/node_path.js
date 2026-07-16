@@ -1,8 +1,8 @@
-String.prototype.endsWith = function (search) {
-  const text = String(this);
+function stringEndsWith(value, search) {
+  const text = String(value);
   search = String(search);
   return text.substring(text.length - search.length) === search;
-};
+}
 
 function assertPath(path) {
   if (typeof path !== 'string') throw new TypeError('Path must be a string');
@@ -83,7 +83,7 @@ function posixNormalizeJoined(path) {
     if (ch === '/') {
       if (part === '' || part === '.') {
       } else if (part === '..') {
-        if (output && output !== '/' && output !== '..' && !output.endsWith('/..')) {
+        if (output && output !== '/' && output !== '..' && !stringEndsWith(output, '/..')) {
           output = trimLastPosixSegment(output);
         } else if (!absolute) {
           output = appendNormalizedPosixPart(output, '..');

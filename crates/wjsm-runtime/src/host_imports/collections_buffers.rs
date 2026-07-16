@@ -2568,7 +2568,7 @@ pub(crate) fn define_collections_buffers(
     let private_get_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
-            if !value::is_object(obj) && !value::is_function(obj) {
+            if !value::is_js_object(obj) {
                 return make_type_error_exception(
                     &mut caller,
                     "TypeError: Cannot read private member from a non-object",
@@ -2612,7 +2612,7 @@ pub(crate) fn define_collections_buffers(
     let private_set_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32, val: i64| -> i64 {
-            if !value::is_object(obj) && !value::is_function(obj) {
+            if !value::is_js_object(obj) {
                 *caller
                     .data()
                     .runtime_error
@@ -2677,7 +2677,7 @@ pub(crate) fn define_collections_buffers(
          getter: i64,
          setter: i64|
          -> i64 {
-            if !value::is_object(obj) && !value::is_function(obj) {
+            if !value::is_js_object(obj) {
                 *caller
                     .data()
                     .runtime_error
@@ -2703,7 +2703,7 @@ pub(crate) fn define_collections_buffers(
     let private_has_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
-            if !value::is_object(obj) && !value::is_function(obj) {
+            if !value::is_js_object(obj) {
                 return value::encode_bool(false);
             }
             let Some(ptr) = resolve_handle(&mut caller, obj) else {

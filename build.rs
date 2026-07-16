@@ -54,6 +54,8 @@ fn main() {
              }}\n\n",
         ));
     }
+    out.truncate(out.trim_end().len());
+    out.push('\n');
 
     fs::write(&output_path, &out).unwrap_or_else(|e| {
         panic!(

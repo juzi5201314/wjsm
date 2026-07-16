@@ -869,7 +869,7 @@ impl Lowerer {
                 value: dest,
             },
         );
-        let continue_block = self.current_function.new_block();
+        let mut continue_block = self.current_function.new_block();
         let exc_block = self.current_function.new_block();
         self.current_function.set_terminator(
             eval_block,
@@ -945,14 +945,17 @@ impl Lowerer {
                     );
                 }
             } else {
-                // Captured binding from enclosing function: SetProp on env
+                // 外层 binding：写入声明 frame，禁止在当前 env shadow。
                 self.record_capture(binding.clone());
-                let env_val = self.load_env_object(continue_block);
+                let start_env = self.load_env_object(continue_block);
+                let (owner_block, owner_env) =
+                    self.resolve_env_binding_owner(continue_block, start_env, &binding);
+                continue_block = owner_block;
                 let key_val = self.append_env_key_const(continue_block, &binding);
                 self.current_function.append_instruction(
                     continue_block,
                     Instruction::SetProp {
-                        object: env_val,
+                        object: owner_env,
                         key: key_val,
                         value,
                     },

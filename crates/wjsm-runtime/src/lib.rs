@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
@@ -64,6 +64,8 @@ mod runtime_node_dgram;
 mod runtime_node_fs;
 mod runtime_node_globals;
 mod runtime_node_net;
+mod runtime_node_perf_hooks;
+mod runtime_node_perf_hooks_histogram;
 mod runtime_node_tls;
 mod runtime_node_vm;
 mod runtime_node_worker_threads;
@@ -1020,9 +1022,40 @@ fn format_gc_log_summary(algorithm: &str, stats: &crate::runtime_gc::api::GcStat
 
 impl Clone for RuntimeState {
     fn clone(&self) -> Self {
+        let environment_ms = self.performance_origin.elapsed().as_secs_f64() * 1000.0;
         Self {
             output: self.output.clone(),
+            // perf_hooks 跨 Store 只共享时钟；Histogram backing 通过 shared_state
+            // capability 显式传递。所有观测、调度和 JS wrapper 状态必须重新初始化。
             performance_origin: self.performance_origin.clone(),
+            performance_time_origin_ms: self.performance_time_origin_ms,
+            performance_v8_start_ms: environment_ms,
+            performance_environment_ms: environment_ms,
+            performance_bootstrap_complete_ms: Arc::new(AtomicU64::new((-1.0f64).to_bits())),
+            performance_loop_start_ms: Arc::new(AtomicU64::new((-1.0f64).to_bits())),
+            performance_loop_exit_ms: Arc::new(AtomicU64::new((-1.0f64).to_bits())),
+            performance_idle_ns: Arc::new(AtomicU64::new(0)),
+            performance_loop_count: Arc::new(AtomicU64::new(0)),
+            performance_events: Arc::new(AtomicU64::new(0)),
+            performance_events_waiting: Arc::new(AtomicU64::new(0)),
+            performance_event_loop_monitors: Arc::new(Mutex::new(HashMap::new())),
+            performance_observer_mask: Arc::new(AtomicU32::new(0)),
+            performance_native_sink: Arc::new(AtomicI64::new(value::encode_undefined())),
+            performance_native_converter: Arc::new(AtomicI64::new(value::encode_undefined())),
+            performance_native_dispatcher: Arc::new(AtomicI64::new(value::encode_undefined())),
+            performance_native_entries: Arc::new(Mutex::new(VecDeque::new())),
+            performance_native_delivery_scheduled: Arc::new(AtomicBool::new(false)),
+            performance_forced_gc: Arc::new(AtomicBool::new(false)),
+            performance_histogram_base_prototype: Arc::new(AtomicI64::new(
+                value::encode_undefined(),
+            )),
+            performance_histogram_recordable_prototype: Arc::new(AtomicI64::new(
+                value::encode_undefined(),
+            )),
+            performance_histogram_interval_prototype: Arc::new(AtomicI64::new(
+                value::encode_undefined(),
+            )),
+            performance_histogram_wrappers: Arc::new(HostSideTable::new()),
             iterators: self.iterators.clone(),
             enumerators: self.enumerators.clone(),
             runtime_strings: self.runtime_strings.clone(),
@@ -1081,6 +1114,7 @@ impl Clone for RuntimeState {
             array_named_props: self.array_named_props.clone(),
             promise_prototype: self.promise_prototype,
             function_prototype: self.function_prototype,
+            cached_wasm_env: None, // Store 专属，跨 Store clone 不继承
             regexp_prototype: self.regexp_prototype,
             date_prototype: self.date_prototype,
             buffer_prototype: self.buffer_prototype,
@@ -1172,6 +1206,36 @@ type EvalCacheMap = HashMap<u64, (Vec<u8>, u32)>;
 struct RuntimeState {
     output: Arc<Mutex<Vec<u8>>>,
     performance_origin: Arc<std::time::Instant>,
+    /// `timeOrigin` 对应的 Unix epoch 毫秒；与 monotonic origin 同次采样。
+    performance_time_origin_ms: f64,
+    /// NodeTiming 中的宿主引擎初始化与环境创建 milestone。
+    performance_v8_start_ms: f64,
+    performance_environment_ms: f64,
+    /// 以下事件循环指标均为 Store-local；Worker 只共享时钟与 Histogram backing。
+    performance_bootstrap_complete_ms: Arc<AtomicU64>,
+    performance_loop_start_ms: Arc<AtomicU64>,
+    performance_loop_exit_ms: Arc<AtomicU64>,
+    performance_idle_ns: Arc<AtomicU64>,
+    performance_loop_count: Arc<AtomicU64>,
+    performance_events: Arc<AtomicU64>,
+    performance_events_waiting: Arc<AtomicU64>,
+    performance_event_loop_monitors:
+        Arc<Mutex<HashMap<u32, runtime_node_perf_hooks::EventLoopDelayMonitor>>>,
+    /// 原生 entry 只保存纯 Rust DTO；JS callback handle 单独 root。
+    performance_observer_mask: Arc<AtomicU32>,
+    performance_native_sink: Arc<AtomicI64>,
+    performance_native_converter: Arc<AtomicI64>,
+    performance_native_dispatcher: Arc<AtomicI64>,
+    performance_native_entries:
+        Arc<Mutex<VecDeque<runtime_node_perf_hooks::NativePerformanceEntry>>>,
+    performance_native_delivery_scheduled: Arc<AtomicBool>,
+    performance_forced_gc: Arc<AtomicBool>,
+    /// Histogram structured clone 在目标 Store 恢复正确 prototype。
+    performance_histogram_base_prototype: Arc<AtomicI64>,
+    performance_histogram_recordable_prototype: Arc<AtomicI64>,
+    performance_histogram_interval_prototype: Arc<AtomicI64>,
+    performance_histogram_wrappers:
+        Arc<HostSideTable<runtime_node_perf_hooks_histogram::HistogramWrapperEntry>>,
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
     runtime_strings: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
@@ -1293,6 +1357,10 @@ struct RuntimeState {
     promise_prototype: i64,
     /// %FunctionPrototype% 对象（Function.prototype.call/apply/bind 与函数原型链）
     function_prototype: i64,
+    /// 当前 Store 已实例化模块的 WasmEnv 缓存。
+    /// host 函数经 `Func::call_async` 嵌套重入时 `Caller::get_export` 不可用，
+    /// `WasmEnv::from_caller` 回退到此缓存。
+    cached_wasm_env: Option<crate::wasm_env::WasmEnv>,
     /// %RegExpPrototype% 对象（供 RegExp 构造函数 .prototype + instanceof 原型链遍历）
     regexp_prototype: i64,
     /// %DatePrototype% 对象（供 Date 构造函数 .prototype + instanceof 原型链遍历）。
@@ -1450,6 +1518,8 @@ impl RuntimeState {
         mut stats: crate::runtime_gc::api::GcStats,
     ) {
         stats.ensure_pause_from_elapsed();
+        let forced = self.performance_forced_gc.swap(false, Ordering::AcqRel);
+        runtime_node_perf_hooks::queue_gc_entry(self, &stats, forced);
         let has_pause = stats.has_pause_observation();
         if has_pause {
             let mut hist = self.gc_pause_hist.lock().unwrap_or_else(|e| e.into_inner());
@@ -1576,7 +1646,13 @@ impl RuntimeState {
         options: RuntimeOptions,
     ) -> Result<Self> {
         let mut state = Self::new();
-        state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
+        let shared_state = shared_state.unwrap_or_else(new_shared_runtime_state);
+        state.performance_origin = shared_state.performance_origin.clone();
+        state.performance_time_origin_ms = shared_state.performance_time_origin_ms;
+        let environment_ms = state.performance_origin.elapsed().as_secs_f64() * 1000.0;
+        state.performance_v8_start_ms = environment_ms;
+        state.performance_environment_ms = environment_ms;
+        state.shared_state = Some(shared_state);
         state.max_heap_size = options.max_heap_size;
         state.shadow_stack_max = options
             .shadow_stack_max
@@ -1684,8 +1760,40 @@ impl RuntimeState {
 
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
     pub(crate) fn new() -> Self {
+        let shared_state = new_shared_runtime_state();
+        let performance_origin = shared_state.performance_origin.clone();
+        let performance_time_origin_ms = shared_state.performance_time_origin_ms;
+        let environment_ms = performance_origin.elapsed().as_secs_f64() * 1000.0;
         RuntimeState {
-            performance_origin: Arc::new(std::time::Instant::now()),
+            performance_origin,
+            performance_time_origin_ms,
+            performance_v8_start_ms: environment_ms,
+            performance_environment_ms: environment_ms,
+            performance_bootstrap_complete_ms: Arc::new(AtomicU64::new((-1.0f64).to_bits())),
+            performance_loop_start_ms: Arc::new(AtomicU64::new((-1.0f64).to_bits())),
+            performance_loop_exit_ms: Arc::new(AtomicU64::new((-1.0f64).to_bits())),
+            performance_idle_ns: Arc::new(AtomicU64::new(0)),
+            performance_loop_count: Arc::new(AtomicU64::new(0)),
+            performance_events: Arc::new(AtomicU64::new(0)),
+            performance_events_waiting: Arc::new(AtomicU64::new(0)),
+            performance_event_loop_monitors: Arc::new(Mutex::new(HashMap::new())),
+            performance_observer_mask: Arc::new(AtomicU32::new(0)),
+            performance_native_sink: Arc::new(AtomicI64::new(value::encode_undefined())),
+            performance_native_converter: Arc::new(AtomicI64::new(value::encode_undefined())),
+            performance_native_dispatcher: Arc::new(AtomicI64::new(value::encode_undefined())),
+            performance_native_entries: Arc::new(Mutex::new(VecDeque::new())),
+            performance_native_delivery_scheduled: Arc::new(AtomicBool::new(false)),
+            performance_forced_gc: Arc::new(AtomicBool::new(false)),
+            performance_histogram_base_prototype: Arc::new(AtomicI64::new(
+                value::encode_undefined(),
+            )),
+            performance_histogram_recordable_prototype: Arc::new(AtomicI64::new(
+                value::encode_undefined(),
+            )),
+            performance_histogram_interval_prototype: Arc::new(AtomicI64::new(
+                value::encode_undefined(),
+            )),
+            performance_histogram_wrappers: Arc::new(HostSideTable::new()),
             output: Arc::new(Mutex::new(Vec::new())),
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
@@ -1811,6 +1919,7 @@ impl RuntimeState {
             async_iterator_prototype: value::encode_undefined(),
             promise_prototype: value::encode_undefined(),
             function_prototype: value::encode_undefined(),
+            cached_wasm_env: None,
             regexp_prototype: value::encode_undefined(),
             date_prototype: value::encode_undefined(),
             async_gen_prototype: value::encode_undefined(),
@@ -1860,7 +1969,7 @@ impl RuntimeState {
             writable_stream_table: Arc::new(HostSideTable::new()),
             transform_stream_table: Arc::new(HostSideTable::new()),
             writer_table: Arc::new(HostSideTable::new()),
-            shared_state: Some(new_shared_runtime_state()),
+            shared_state: Some(shared_state),
             non_extensible_handles: Arc::new(Mutex::new(HashSet::new())),
             scope_records: HashMap::new(),
             scope_record_next_handle: 0,
@@ -1914,8 +2023,9 @@ mod tests {
     use crate::runtime_gc::api::{CycleKind, GcStats};
     use anyhow::Result;
     use std::ffi::OsStr;
+    use std::sync::Arc;
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tokio::runtime::Runtime;
 
     #[test]
@@ -1939,6 +2049,229 @@ mod tests {
                 .unwrap_or_else(|e| e.into_inner())
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn runtime_state_clone_keeps_perf_hooks_store_local() {
+        use crate::runtime_node_perf_hooks::EventLoopDelayMonitor;
+        use crate::runtime_node_perf_hooks_histogram::HistogramWrapperEntry;
+        use crate::value;
+
+        let state = super::RuntimeState::new();
+        let shared = state.shared_state.as_ref().expect("shared runtime state");
+        let capability = shared
+            .perf_histograms
+            .create(1, 1_000_000, 3)
+            .expect("create histogram capability");
+
+        state
+            .performance_bootstrap_complete_ms
+            .store(7.0f64.to_bits(), Ordering::Relaxed);
+        state
+            .performance_loop_start_ms
+            .store(8.0f64.to_bits(), Ordering::Relaxed);
+        state
+            .performance_loop_exit_ms
+            .store(9.0f64.to_bits(), Ordering::Relaxed);
+        state.performance_idle_ns.store(10, Ordering::Relaxed);
+        state.performance_loop_count.store(11, Ordering::Relaxed);
+        state.performance_events.store(12, Ordering::Relaxed);
+        state
+            .performance_events_waiting
+            .store(13, Ordering::Relaxed);
+        state
+            .performance_event_loop_monitors
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                1,
+                EventLoopDelayMonitor {
+                    capability: capability.clone(),
+                    resolution: Duration::from_millis(10),
+                    next_deadline: Some(Instant::now()),
+                    enabled: true,
+                },
+            );
+        state.performance_observer_mask.store(7, Ordering::Relaxed);
+        state
+            .performance_native_sink
+            .store(value::encode_object_handle(21), Ordering::Relaxed);
+        crate::runtime_node_perf_hooks::queue_gc_entry(
+            &state,
+            &GcStats {
+                cycle_kind: CycleKind::Full,
+                elapsed: Duration::from_millis(1),
+                ..GcStats::default()
+            },
+            true,
+        );
+        state
+            .performance_native_delivery_scheduled
+            .store(true, Ordering::Relaxed);
+        state.performance_forced_gc.store(true, Ordering::Relaxed);
+        for prototype in [
+            &state.performance_histogram_base_prototype,
+            &state.performance_histogram_recordable_prototype,
+            &state.performance_histogram_interval_prototype,
+        ] {
+            prototype.store(value::encode_object_handle(22), Ordering::Relaxed);
+        }
+        let wrapper_handle = state
+            .performance_histogram_wrappers
+            .alloc(HistogramWrapperEntry {
+                capability: capability.clone(),
+                kind: 1,
+            });
+        state
+            .performance_histogram_wrappers
+            .bind_obj_handle(23, wrapper_handle);
+
+        let cloned = state.clone();
+
+        assert!(Arc::ptr_eq(
+            &state.performance_origin,
+            &cloned.performance_origin
+        ));
+        assert_eq!(
+            state.performance_time_origin_ms,
+            cloned.performance_time_origin_ms
+        );
+        assert!(Arc::ptr_eq(
+            state.shared_state.as_ref().expect("parent shared state"),
+            cloned.shared_state.as_ref().expect("cloned shared state")
+        ));
+        assert_eq!(shared.perf_histograms.active_count(), 1);
+
+        assert!(!Arc::ptr_eq(
+            &state.performance_loop_start_ms,
+            &cloned.performance_loop_start_ms
+        ));
+        for (parent, child) in [
+            (
+                &state.performance_bootstrap_complete_ms,
+                &cloned.performance_bootstrap_complete_ms,
+            ),
+            (
+                &state.performance_loop_exit_ms,
+                &cloned.performance_loop_exit_ms,
+            ),
+            (&state.performance_idle_ns, &cloned.performance_idle_ns),
+            (
+                &state.performance_loop_count,
+                &cloned.performance_loop_count,
+            ),
+            (&state.performance_events, &cloned.performance_events),
+            (
+                &state.performance_events_waiting,
+                &cloned.performance_events_waiting,
+            ),
+        ] {
+            assert!(!Arc::ptr_eq(parent, child));
+        }
+        assert!(!Arc::ptr_eq(
+            &state.performance_event_loop_monitors,
+            &cloned.performance_event_loop_monitors
+        ));
+        assert!(!Arc::ptr_eq(
+            &state.performance_observer_mask,
+            &cloned.performance_observer_mask
+        ));
+        assert!(!Arc::ptr_eq(
+            &state.performance_native_sink,
+            &cloned.performance_native_sink
+        ));
+        assert!(!Arc::ptr_eq(
+            &state.performance_native_entries,
+            &cloned.performance_native_entries
+        ));
+        assert!(!Arc::ptr_eq(
+            &state.performance_native_delivery_scheduled,
+            &cloned.performance_native_delivery_scheduled
+        ));
+        assert!(!Arc::ptr_eq(
+            &state.performance_forced_gc,
+            &cloned.performance_forced_gc
+        ));
+        for (parent, child) in [
+            (
+                &state.performance_histogram_base_prototype,
+                &cloned.performance_histogram_base_prototype,
+            ),
+            (
+                &state.performance_histogram_recordable_prototype,
+                &cloned.performance_histogram_recordable_prototype,
+            ),
+            (
+                &state.performance_histogram_interval_prototype,
+                &cloned.performance_histogram_interval_prototype,
+            ),
+        ] {
+            assert!(!Arc::ptr_eq(parent, child));
+        }
+        assert!(!Arc::ptr_eq(
+            &state.performance_histogram_wrappers,
+            &cloned.performance_histogram_wrappers
+        ));
+        assert_eq!(
+            f64::from_bits(
+                cloned
+                    .performance_bootstrap_complete_ms
+                    .load(Ordering::Relaxed)
+            ),
+            -1.0
+        );
+        assert_eq!(
+            f64::from_bits(cloned.performance_loop_start_ms.load(Ordering::Relaxed)),
+            -1.0
+        );
+        assert_eq!(
+            f64::from_bits(cloned.performance_loop_exit_ms.load(Ordering::Relaxed)),
+            -1.0
+        );
+        assert_eq!(cloned.performance_idle_ns.load(Ordering::Relaxed), 0);
+        assert_eq!(cloned.performance_loop_count.load(Ordering::Relaxed), 0);
+        assert_eq!(cloned.performance_events.load(Ordering::Relaxed), 0);
+        assert_eq!(cloned.performance_events_waiting.load(Ordering::Relaxed), 0);
+        assert!(
+            cloned
+                .performance_event_loop_monitors
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty()
+        );
+        assert_eq!(cloned.performance_observer_mask.load(Ordering::Relaxed), 0);
+        assert!(value::is_undefined(
+            cloned.performance_native_sink.load(Ordering::Relaxed)
+        ));
+        assert!(
+            cloned
+                .performance_native_entries
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty()
+        );
+        assert!(
+            !cloned
+                .performance_native_delivery_scheduled
+                .load(Ordering::Relaxed)
+        );
+        assert!(!cloned.performance_forced_gc.load(Ordering::Relaxed));
+        assert!(value::is_undefined(
+            cloned
+                .performance_histogram_base_prototype
+                .load(Ordering::Relaxed)
+        ));
+        assert!(value::is_undefined(
+            cloned
+                .performance_histogram_recordable_prototype
+                .load(Ordering::Relaxed)
+        ));
+        assert!(value::is_undefined(
+            cloned
+                .performance_histogram_interval_prototype
+                .load(Ordering::Relaxed)
+        ));
+        assert!(cloned.performance_histogram_wrappers.is_empty());
     }
 
     #[test]

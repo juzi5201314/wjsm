@@ -29,10 +29,24 @@ pub(crate) fn define_fetch(
                     settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
                     return promise;
                 }
+                let suppress_resource_timing =
+                    fetch_init_suppresses_resource_timing(&mut caller, init);
+                let resource_timing = begin_fetch_resource_timing(
+                    caller.data(),
+                    url.clone(),
+                    suppress_resource_timing,
+                );
                 // data: URL — 同步路径（保持现有行为）
                 if url.starts_with("data:") {
+                    mark_fetch_request_start(caller.data(), &resource_timing);
                     match perform_data_url_fetch(&mut caller, &url) {
                         Ok(response_val) => {
+                            mark_fetch_response_start(caller.data(), &resource_timing, 200);
+                            set_response_resource_timing(
+                                &mut caller,
+                                response_val,
+                                resource_timing.clone(),
+                            );
                             settle_promise(
                                 caller.data_mut(),
                                 promise,
@@ -64,6 +78,7 @@ pub(crate) fn define_fetch(
                     body_opt,
                     redirect,
                     signal_handle,
+                    resource_timing,
                 )
                 .await;
                 match http_result {
@@ -260,4 +275,9 @@ pub(crate) fn define_fetch(
         byte_length_queuing_strategy_constructor,
     )?;
     Ok(())
+}
+
+fn fetch_init_suppresses_resource_timing(caller: &mut Caller<'_, RuntimeState>, init: i64) -> bool {
+    object_property(caller, init, "__wjsm_internal_no_resource_timing")
+        .is_some_and(|raw| value::is_bool(raw) && value::decode_bool(raw))
 }

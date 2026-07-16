@@ -2125,13 +2125,13 @@ fn run_compile_then_execute(
         .context("compile stage produced no WASM")?;
 
     // 同入口 fork AOT：把 raw WASM 写入 pipeline cache 并设置 current_entry。
-    if let Some(source) = options.argv.get(1).map(PathBuf::from) {
-        if let Some(wasm_path) = write_pipeline_wasm_cache(wasm) {
-            options.current_entry = Some(runtime::PrecompiledEntry {
-                source,
-                wasm: wasm_path,
-            });
-        }
+    if let Some(source) = options.argv.get(1).map(PathBuf::from)
+        && let Some(wasm_path) = write_pipeline_wasm_cache(wasm)
+    {
+        options.current_entry = Some(runtime::PrecompiledEntry {
+            source,
+            wasm: wasm_path,
+        });
     }
 
     if cli.stats {

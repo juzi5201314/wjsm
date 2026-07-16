@@ -147,7 +147,7 @@ impl Diagnostic {
 
 impl std::fmt::Display for Diagnostic {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(ref src) = self.source {
+        if let Some(src) = &self.source {
             write!(
                 formatter,
                 "{}",

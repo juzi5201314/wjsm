@@ -362,9 +362,13 @@ impl Lowerer {
                         "compound assignment with destructuring is not supported",
                     ));
                 }
-                let value = self.lower_expr(assign.right.as_ref(), block)?;
+                let mut current_block = block;
+                let value =
+                    self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
                 let ir_pat = swc_ast::Pat::from(pat.clone());
-                self.lower_destructure_pattern(&ir_pat, value, block, VarKind::Let)?;
+                let continuation =
+                    self.lower_destructure_pattern(&ir_pat, value, current_block, VarKind::Let)?;
+                self.expr_merge_block = Some(continuation);
                 return Ok(value);
             }
         };
@@ -456,19 +460,14 @@ impl Lowerer {
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-                let store_block = self.resolve_store_block(block);
-                self.current_function.append_instruction(
-                    store_block,
-                    Instruction::StoreVar {
-                        name: ir_name,
-                        value: rhs,
-                    },
-                );
+                // RHS 可能通过闭包捕获把本绑定标记为 shared；必须同步写 shared_env。
+                // 否则 `let o; o = new Foo(() => o)` 只 StoreVar，闭包读到的仍是 undefined。
+                let store_block =
+                    self.store_binding_value(block, &binding, rhs, assign.span, true)?;
                 let after_write_block =
                     self.append_eval_var_leak_if_needed(&name, kind, rhs, store_block)?;
-                if after_write_block != store_block {
-                    self.expr_merge_block = Some(after_write_block);
-                }
+                // 钉死后续语句入口，避免 new 的 continue 块与 Jump 把 store 落到死块。
+                self.expr_merge_block = Some(after_write_block);
                 // 更新 Array 绑定跟踪：arr = [...] / new Array(...) -> 标记；arr = 其他 -> 取消标记。
                 if is_array_constructor_expr(assign.right.as_ref()) {
                     self.array_bindings.insert((scope_id, name.clone()));
@@ -548,5 +547,38 @@ impl Lowerer {
                 Ok(dest)
             }
         }
+    }
+
+    pub(crate) fn store_binding_value(
+        &mut self,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+        value: ValueId,
+        span: Span,
+        _sync_existing_env: bool,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let mut store_block = self.resolve_store_block(block);
+        self.current_function.append_instruction(
+            store_block,
+            Instruction::StoreVar {
+                name: binding.var_ir_name(),
+                value,
+            },
+        );
+        if self.is_shared_binding(binding) {
+            let env_val =
+                self.ensure_shared_env(store_block, std::slice::from_ref(binding), span)?;
+            store_block = self.resolve_store_block(store_block);
+            let key_val = self.append_env_key_const(store_block, binding);
+            self.current_function.append_instruction(
+                store_block,
+                Instruction::SetProp {
+                    object: env_val,
+                    key: key_val,
+                    value,
+                },
+            );
+        }
+        Ok(store_block)
     }
 }

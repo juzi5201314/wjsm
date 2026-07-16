@@ -2,6 +2,12 @@ use super::*;
 
 /// 异常分叉抑制栈帧：深度 + 被延迟的 (continue_block, exception_value) 列表。
 pub(crate) type ExceptionForkSuppressionFrame = (u32, Vec<Vec<(BasicBlockId, ValueId)>>);
+pub(crate) type ExpressionContinuationFrame = (
+    Option<BasicBlockId>,
+    Option<BasicBlockId>,
+    Option<BasicBlockId>,
+    Option<BasicBlockId>,
+);
 
 pub(crate) struct Lowerer {
     pub(crate) module: Module,
@@ -37,6 +43,8 @@ pub(crate) struct Lowerer {
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
     pub(crate) captured_names_stack: Vec<Vec<CapturedBinding>>,
+    /// 当前函数中被任意后代函数捕获的本地 binding；不随 CFG shared-env 状态回退。
+    pub(crate) shared_binding_names_stack: Vec<std::collections::HashSet<CapturedBinding>>,
     /// 每层函数的 function scope id，用于判断变量是否逃逸。
     pub(crate) function_scope_id_stack: Vec<usize>,
     /// 追踪当前是否在箭头函数中（箭头函数的 this 需要词法捕获）
@@ -52,8 +60,7 @@ pub(crate) struct Lowerer {
     /// 词法上可继承的 [[HomeObject]]（类方法体内嵌套箭头函数使用）。
     pub(crate) lexical_home_object: Option<HomeObject>,
     pub(crate) function_lexical_home_object_stack: Vec<Option<HomeObject>>,
-    /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
-    /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
+    /// 每层函数的共享 env 对象（ValueId + 已注册捕获变量集合）。
     pub(crate) shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
     // ── 模块系统相关 ────────────────────────────────────────────────────────
     /// 当前正在编译的模块 ID（用于多模块编译）
@@ -139,6 +146,7 @@ pub(crate) struct Lowerer {
     /// 由 lower_logical / lower_cond 在创建控制流表达式后设置其 merge block，
     /// 由 resolve_store_block 消费，确保后续指令插入到正确的继续块中。
     pub(crate) expr_merge_block: Option<BasicBlockId>,
+    pub(crate) function_expr_continuation_stack: Vec<ExpressionContinuationFrame>,
     /// 表达式结果需要由当前拥有者处理 abrupt completion 时，临时禁止通用异常分叉。
     /// 动态 import(expr) 用它让 specifier 求值产生的 TAG_EXCEPTION 继续流向 runtime host，
     /// 再由 host 创建并 reject import promise，而不是在外层同步 throw。

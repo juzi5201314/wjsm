@@ -1653,6 +1653,18 @@ pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, ob
         store_runtime_string(caller, "[object Undefined]".to_string())
     } else if value::is_null(obj) {
         store_runtime_string(caller, "[object Null]".to_string())
+    } else if let Some(ptr) = resolve_handle(caller, obj)
+        && let Some(tag) = crate::host_imports::read_object_property_by_name_id_proto_walk(
+            caller,
+            ptr,
+            crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::TO_STRING_TAG),
+        )
+        && let Some(bytes) = read_value_string_bytes(caller, tag)
+    {
+        store_runtime_string(
+            caller,
+            format!("[object {}]", String::from_utf8_lossy(&bytes)),
+        )
     } else if value::is_array(obj) {
         store_runtime_string(caller, "[object Array]".to_string())
     } else if value::is_function(obj) || value::is_callable(obj) {

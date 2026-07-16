@@ -19,10 +19,13 @@ impl Lowerer {
         );
 
         // 遍历元素：普通元素 push；spread 元素按 iterator 协议展开。
+        // 每个元素 lower 后可能切换 basic block（shared env 父链解析等），
+        // push 必须落在 lower_expr 的继续块上，否则会写到已终结的 block，phi 未定义。
+        let mut current = block;
         for elem in &arr.elems {
             let Some(elem) = elem else {
                 self.current_function.append_instruction(
-                    block,
+                    current,
                     Instruction::CallBuiltin {
                         dest: None,
                         builtin: Builtin::ArrayPushHole,
@@ -32,14 +35,15 @@ impl Lowerer {
                 continue;
             };
 
-            let val = self.lower_expr(&elem.expr, block)?;
+            let val = self.lower_expr(&elem.expr, current)?;
+            current = self.resolve_store_block(current);
             let builtin = if elem.spread.is_some() {
                 Builtin::ArrayPushSpread
             } else {
                 Builtin::ArrayPush
             };
             self.current_function.append_instruction(
-                block,
+                current,
                 Instruction::CallBuiltin {
                     dest: None,
                     builtin,
@@ -48,6 +52,7 @@ impl Lowerer {
             );
         }
 
+        self.expr_merge_block = Some(current);
         Ok(arr_dest)
     }
 
@@ -261,7 +266,7 @@ impl Lowerer {
     /// 加载当前函数的闭包环境对象（$env 参数）
     pub(crate) fn load_env_object(&mut self, block: BasicBlockId) -> ValueId {
         let dest = self.alloc_value();
-        let name = if let Some(ref env_name) = self.async_closure_env_ir_name {
+        let name = if let Some(env_name) = &self.async_closure_env_ir_name {
             env_name.clone()
         } else {
             "$env".to_string()

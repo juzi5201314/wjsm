@@ -78,6 +78,13 @@ pub enum SerializedValue {
         id: usize,
         handle: u32,
     },
+    /// perf_hooks Histogram：跨 Store 直接传递不可猜测的 backing capability。
+    Histogram {
+        id: usize,
+        capability: crate::runtime_node_perf_hooks_histogram::HistogramCapability,
+        /// 0=只读 Histogram，1=Recordable；Interval clone 时序列化为 0。
+        kind: u8,
+    },
     MessagePort {
         id: usize,
         global_id: u32,

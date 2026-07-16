@@ -118,10 +118,10 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         | CollectRestArgs { .. } => vec![],
         GetElem { object, index, .. } => vec![*object, *index],
         SetElem {
-            object: _,
+            object,
             index,
             value,
-        } => vec![*index, *value],
+        } => vec![*object, *index, *value],
         OptionalGetProp { object, key, .. } | OptionalGetElem { object, key, .. } => {
             vec![*object, *key]
         }
@@ -363,6 +363,20 @@ pub fn compute_var_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), Hash
         });
     if needs_module_global {
         entry_preinitialized.insert("$0.$global".to_owned());
+    }
+    let needs_closure_env = f
+        .blocks()
+        .iter()
+        .flat_map(|b| b.instructions())
+        .any(|inst| {
+            matches!(
+                inst,
+                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                    if name == "$env"
+            )
+        });
+    if needs_closure_env {
+        entry_preinitialized.insert("$env".to_owned());
     }
 
     // 块级 occupied_out：块出口时哪些变量槽仍持有值（正向数据流不动点）。

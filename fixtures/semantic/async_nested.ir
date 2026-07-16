@@ -282,20 +282,22 @@ module {
       %23 = const c68
       store var $0.$shared_env, %23
       %24 = new_object(capacity=1)
+      %25 = load var $env
+      set_proto %24, %25
       store var $0.$shared_env, %24
-      %25 = load var $0.inner
-      %26 = const c69
-      set_prop %24, %26, %25
-      %27 = call builtin.create_closure(%22, %24)
-      store var $0.outer, %27
-      %28 = const c70
-      %29 = load var $0.outer
-      %30 = call %29, this=%28
-      %31 = is_exception %30
-      branch %31, bb2, bb1
+      %26 = load var $0.inner
+      %27 = const c69
+      set_prop %24, %27, %26
+      %28 = call builtin.create_closure(%22, %24)
+      store var $0.outer, %28
+      %29 = const c70
+      %30 = load var $0.outer
+      %31 = call %30, this=%29
+      %32 = is_exception %31
+      branch %32, bb2, bb1
     bb1:
       return
     bb2:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %33 = call builtin.exception_value(%31)
+      throw %33
 }

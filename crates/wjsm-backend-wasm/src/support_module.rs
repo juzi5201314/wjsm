@@ -84,6 +84,7 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("obj_delete_runtime_key", 8),        // (i64, i32) -> i64
     ("gc_barrier_flush", 1),              // () -> ()
     ("gc_load_barrier_slow", 14),         // (i32) -> i32
+    ("function_value_get_property", 8),   // (i64, i32) -> i64
 ];
 
 // Host import function indices（在 support module 的 function index space 中）
@@ -112,10 +113,10 @@ const HOST_PRIMITIVE_STRING_GET_PROPERTY: u32 = 21;
 const HOST_OBJ_GET_RUNTIME_KEY: u32 = 22;
 const HOST_OBJ_SET_RUNTIME_KEY: u32 = 23;
 const HOST_OBJ_DELETE_RUNTIME_KEY: u32 = 24;
-
 const HOST_GC_BARRIER_FLUSH: u32 = 25;
 const HOST_GC_LOAD_BARRIER_SLOW: u32 = 26;
-const NUM_HOST_IMPORTS: u32 = 27;
+const HOST_FUNCTION_VALUE_GET_PROPERTY: u32 = 27;
+const NUM_HOST_IMPORTS: u32 = 28;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -1381,6 +1382,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 27);
+        assert_eq!(HOST_IMPORTS.len(), 28);
     }
 }

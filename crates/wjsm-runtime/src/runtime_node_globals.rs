@@ -69,6 +69,10 @@ pub(crate) fn install_node_web_globals_from_caller(
     define_global(caller, performance, "now", now);
     define_global(caller, global_obj, "performance", performance);
 
+    let perf_hooks = crate::runtime_node_perf_hooks::create_perf_hooks_host_object(caller);
+    let _ = caller.data().push_host_temp_roots([perf_hooks]);
+    define_global(caller, global_obj, "__wjsm_node_perf_hooks", perf_hooks);
+
     let os = alloc_host_object(caller, &env, 10);
     let _ = caller.data().push_host_temp_roots([os]);
     install_native(

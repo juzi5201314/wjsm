@@ -184,7 +184,7 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
         .and_then(|e| e.into_global())
         .expect("object_proto");
 
-    wasm_env::WasmEnv {
+    let wasm_env = wasm_env::WasmEnv {
         memory,
         shadow_memory,
         func_table,
@@ -248,7 +248,10 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
         barrier_buf_end: instance
             .get_export(&mut *store, "__barrier_buf_end")
             .and_then(|e| e.into_global()),
-    }
+    };
+    // 缓存供嵌套 host→host 重入：Caller::get_export 在纯 host 调用链上不可用。
+    store.data_mut().cached_wasm_env = Some(wasm_env);
+    wasm_env
 }
 
 fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
@@ -815,6 +818,7 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
     crate::runtime_heap::install_function_props_prototypes(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_regexp_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
     ensure_no_startup_error(&bundle.store)?;
+    crate::runtime_node_perf_hooks::mark_bootstrap_complete(bundle.store.data());
     Ok(())
 }
 
@@ -914,5 +918,6 @@ pub(super) async fn try_restore_snapshot(
         }
         return false;
     }
+    crate::runtime_node_perf_hooks::mark_bootstrap_complete(bundle.store.data());
     true
 }

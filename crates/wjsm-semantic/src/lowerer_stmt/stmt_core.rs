@@ -89,13 +89,14 @@ impl Lowerer {
 
         let result_block = match expr_stmt.expr.as_ref() {
             swc_ast::Expr::Call(call) => self.lower_call(call, block)?,
-            expr if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) => {
-                let value = self.lower_expr(expr, block)?;
-                self.lower_value_exception_branch(block, value)?
-            }
             expr => {
-                let _value = self.lower_expr(expr, block)?;
-                self.resolve_store_block(block)
+                let mut continuation = block;
+                let value = self.lower_expr_then_continue(expr, &mut continuation)?;
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+                    self.lower_value_exception_branch(continuation, value)?
+                } else {
+                    continuation
+                }
             }
         };
         Ok(StmtFlow::Open(result_block))

@@ -38,6 +38,7 @@ memchr = "2"
 icu_normalizer = { version = "2.2", features = ["compiled_data"] }
 sysinfo = { workspace = true }
 get_if_addrs = { workspace = true }
+hdrhistogram = { workspace = true, default-features = false }
 digest = "0.10"
 hmac = "0.12"
 libc = "0.2"

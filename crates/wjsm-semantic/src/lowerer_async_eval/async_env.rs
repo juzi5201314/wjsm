@@ -165,40 +165,27 @@ impl Lowerer {
         block: BasicBlockId,
         captured: &[CapturedBinding],
     ) -> ValueId {
-        let has_current_binding = captured
+        let own_binding_count = captured
             .iter()
-            .any(|binding| self.binding_belongs_to_current_function(binding));
-
-        // 捕获了当前函数参数/局部时，必须新建 env 对象。
-        // 旧逻辑在存在外层绑定时复用父 env，并把当前调用的参数 set_prop 进父 env，
-        // 导致同一函数多次调用（如 makeArmRecv(0)/makeArmRecv(1)）互相覆盖 handle 等槽位。
-        if has_current_binding {
-            let env_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::NewObject {
-                    dest: env_val,
-                    capacity: captured.len() as u32,
-                },
-            );
-            env_val
-        } else if captured
-            .iter()
-            .any(|binding| !self.binding_belongs_to_current_function(binding))
-        {
-            // 仅外层绑定：复用父 env，保持可变 let 的 live binding
-            self.load_env_object(block)
-        } else {
-            let env_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::NewObject {
-                    dest: env_val,
-                    capacity: 0,
-                },
-            );
-            env_val
-        }
+            .filter(|binding| self.binding_belongs_to_current_function(binding))
+            .count();
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: env_val,
+                capacity: own_binding_count as u32,
+            },
+        );
+        let parent_env = self.load_env_object(block);
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProto {
+                object: env_val,
+                value: parent_env,
+            },
+        );
+        env_val
     }
 
     fn write_shared_env_bindings(
@@ -209,7 +196,9 @@ impl Lowerer {
         existing_names: &std::collections::HashSet<CapturedBinding>,
     ) {
         for binding in captured {
-            if existing_names.contains(binding) {
+            if existing_names.contains(binding)
+                || !self.binding_belongs_to_current_function(binding)
+            {
                 continue;
             }
             let current_val = self.load_value_for_shared_env_binding(block, binding);
@@ -291,6 +280,104 @@ impl Lowerer {
             );
             current_val
         }
+    }
+
+    pub(crate) fn resolve_env_binding_owner(
+        &mut self,
+        block: BasicBlockId,
+        start_env: ValueId,
+        binding: &CapturedBinding,
+    ) -> (BasicBlockId, ValueId) {
+        let key = self.append_env_key_const(block, binding);
+        let header = self.current_function.new_block();
+        let own_block = self.current_function.new_block();
+        let parent_block = self.current_function.new_block();
+        let done = self.current_function.new_block();
+        self.current_function
+            .set_terminator(block, Terminator::Jump { target: header });
+
+        let current_env = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::Phi {
+                dest: current_env,
+                sources: vec![PhiSource {
+                    predecessor: block,
+                    value: start_env,
+                }],
+            },
+        );
+        let owns_binding = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::CallBuiltin {
+                dest: Some(owns_binding),
+                builtin: Builtin::ObjectHasOwn,
+                args: vec![current_env, key],
+            },
+        );
+        self.current_function.set_terminator(
+            header,
+            Terminator::Branch {
+                condition: owns_binding,
+                true_block: own_block,
+                false_block: parent_block,
+            },
+        );
+
+        self.current_function
+            .set_terminator(own_block, Terminator::Jump { target: done });
+
+        let parent_env = self.alloc_value();
+        self.current_function.append_instruction(
+            parent_block,
+            Instruction::CallBuiltin {
+                dest: Some(parent_env),
+                builtin: Builtin::ObjectGetPrototypeOf,
+                args: vec![current_env],
+            },
+        );
+        let parent_missing = self.alloc_value();
+        self.current_function.append_instruction(
+            parent_block,
+            Instruction::Unary {
+                dest: parent_missing,
+                op: UnaryOp::IsNullish,
+                value: parent_env,
+            },
+        );
+        self.current_function.set_terminator(
+            parent_block,
+            Terminator::Branch {
+                condition: parent_missing,
+                true_block: own_block,
+                false_block: header,
+            },
+        );
+        let Some(Instruction::Phi { sources, .. }) = self
+            .current_function
+            .block_mut(header)
+            .and_then(|block| block.instructions_mut().first_mut())
+        else {
+            unreachable!("env owner loop header must start with phi")
+        };
+        sources.push(PhiSource {
+            predecessor: parent_block,
+            value: parent_env,
+        });
+
+        let owner = self.alloc_value();
+        self.current_function.append_instruction(
+            done,
+            Instruction::Phi {
+                dest: owner,
+                sources: vec![PhiSource {
+                    predecessor: own_block,
+                    value: current_env,
+                }],
+            },
+        );
+        (done, owner)
     }
 
     pub(crate) fn lower_super_prop(

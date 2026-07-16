@@ -43,7 +43,9 @@ pub(crate) use object_builtins_async::define_object_builtins_async;
 mod core_async;
 mod get_method;
 pub(crate) use core_async::define_core_async;
-pub(crate) use get_method::{get_by_name_id_sync, get_method_by_name_id};
+pub(crate) use get_method::{
+    get_by_name_id_sync, get_method_by_name_id, read_object_property_by_name_id_proto_walk,
+};
 
 // 原 include! 裸块文件 → 模块声明
 mod array_object;
@@ -83,6 +85,7 @@ pub(crate) use core::{
 pub(crate) use fetch::define_fetch;
 pub(crate) use fetch_core::abort_controller_abort;
 pub(crate) use fetch_core::call_headers_method_from_caller;
+pub(crate) use fetch_core::call_headers_method_from_caller_async;
 pub(crate) use fetch_core::call_request_method_from_caller;
 pub(crate) use fetch_core::call_response_method_from_caller;
 pub(crate) use fetch_core::construct_abort_controller;

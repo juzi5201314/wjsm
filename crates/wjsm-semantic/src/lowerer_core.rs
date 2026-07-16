@@ -78,7 +78,9 @@ impl Lowerer {
             function_active_finalizers_stack: Vec::new(),
             function_pending_loop_label_stack: Vec::new(),
             function_exception_fork_suppression_stack: Vec::new(),
+            function_expr_continuation_stack: Vec::new(),
             captured_names_stack: Vec::new(),
+            shared_binding_names_stack: vec![std::collections::HashSet::new()],
             function_scope_id_stack: Vec::new(),
             is_arrow_fn_stack: Vec::new(),
             super_allowed: false,
@@ -214,6 +216,12 @@ impl Lowerer {
 
     pub(crate) fn push_function_context(&mut self, name: impl Into<String>, entry: BasicBlockId) {
         self.async_context_stack.push(self.capture_async_context());
+        self.function_expr_continuation_stack.push((
+            self.new_expr_continue_block.take(),
+            self.await_continue_block.take(),
+            self.eval_continue_block.take(),
+            self.expr_merge_block.take(),
+        ));
         self.function_stack.push(std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new(name, entry),
@@ -224,6 +232,8 @@ impl Lowerer {
         let fn_scope_id = self.scopes.current_scope_id();
         self.function_scope_id_stack.push(fn_scope_id);
         self.captured_names_stack.push(Vec::new());
+        self.shared_binding_names_stack
+            .push(std::collections::HashSet::new());
         self.is_arrow_fn_stack.push(false); // 默认非箭头函数，箭头函数会单独设置
         self.function_lexical_home_object_stack
             .push(self.lexical_home_object);
@@ -269,7 +279,13 @@ impl Lowerer {
         // 弹出函数作用域，回到外层作用域
         self.scopes.pop_scope();
         self.function_scope_id_stack.pop();
-        self.captured_names_stack.pop();
+        let child_captures = self
+            .captured_names_stack
+            .pop()
+            .expect("captured names stack underflow");
+        self.shared_binding_names_stack
+            .pop()
+            .expect("shared binding names stack underflow");
         self.is_arrow_fn_stack.pop();
         self.super_allowed = self
             .function_super_allowed_stack
@@ -334,11 +350,29 @@ impl Lowerer {
             .expect("exception fork suppression stack underflow");
         self.exception_fork_suppression_depth = exception_fork_suppression_depth;
         self.deferred_exception_forks_stack = deferred_exception_forks_stack;
+        let (new_expr_continue, await_continue, eval_continue, expr_merge) = self
+            .function_expr_continuation_stack
+            .pop()
+            .expect("expression continuation stack underflow");
+        self.new_expr_continue_block = new_expr_continue;
+        self.await_continue_block = await_continue;
+        self.eval_continue_block = eval_continue;
+        self.expr_merge_block = expr_merge;
         let async_context = self
             .async_context_stack
             .pop()
             .expect("async context stack underflow");
         self.restore_async_context(async_context);
+        for binding in child_captures {
+            if self.binding_belongs_to_current_function(&binding) {
+                self.shared_binding_names_stack
+                    .last_mut()
+                    .expect("shared binding names stack underflow")
+                    .insert(binding);
+            } else {
+                self.record_capture(binding);
+            }
+        }
     }
 
     pub(crate) fn current_function_scope_id(&self) -> usize {
@@ -410,10 +444,14 @@ impl Lowerer {
     }
 
     pub(crate) fn is_shared_binding(&self, binding: &CapturedBinding) -> bool {
-        self.shared_env_stack
+        self.shared_binding_names_stack
             .last()
-            .and_then(|shared| shared.as_ref())
-            .is_some_and(|(_, names)| names.contains(binding))
+            .is_some_and(|names| names.contains(binding))
+            || self
+                .shared_env_stack
+                .last()
+                .and_then(|shared| shared.as_ref())
+                .is_some_and(|(_, names)| names.contains(binding))
     }
 
     pub(crate) fn shared_env_value(&self) -> Option<ValueId> {
@@ -482,11 +520,10 @@ impl Lowerer {
         block: BasicBlockId,
         binding: &CapturedBinding,
     ) -> Result<ValueId, LoweringError> {
-        let current_block = block;
         if self.binding_belongs_to_current_function(binding) {
             let shared_env = self.alloc_value();
             self.current_function.append_instruction(
-                current_block,
+                block,
                 Instruction::LoadVar {
                     dest: shared_env,
                     name: self.shared_env_ir_name(),
@@ -496,16 +533,15 @@ impl Lowerer {
             let undef_const = self.module.add_constant(Constant::Undefined);
             let undef_val = self.alloc_value();
             self.current_function.append_instruction(
-                current_block,
+                block,
                 Instruction::Const {
                     dest: undef_val,
                     constant: undef_const,
                 },
             );
-
             let env_missing = self.alloc_value();
             self.current_function.append_instruction(
-                current_block,
+                block,
                 Instruction::Compare {
                     dest: env_missing,
                     op: CompareOp::StrictEq,
@@ -514,13 +550,13 @@ impl Lowerer {
                 },
             );
 
-            let key_val = self.append_env_key_const(current_block, binding);
+            let key_val = self.append_env_key_const(block, binding);
             let local_block = self.current_function.new_block();
             let has_key_block = self.current_function.new_block();
             let env_block = self.current_function.new_block();
             let merge = self.current_function.new_block();
             self.current_function.set_terminator(
-                current_block,
+                block,
                 Terminator::Branch {
                     condition: env_missing,
                     true_block: local_block,
@@ -591,11 +627,11 @@ impl Lowerer {
         }
 
         self.record_capture(binding.clone());
-        let env_val = self.load_env_object(current_block);
-        let key_val = self.append_env_key_const(current_block, binding);
+        let env_val = self.load_env_object(block);
+        let key_val = self.append_env_key_const(block, binding);
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            current_block,
+            block,
             Instruction::GetProp {
                 dest,
                 object: env_val,

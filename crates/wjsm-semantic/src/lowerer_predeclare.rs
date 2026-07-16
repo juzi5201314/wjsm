@@ -390,22 +390,20 @@ impl Lowerer {
     /// If so, find the merge block where subsequent instructions should go.
     /// Also checks for eval_continue_block set by lower_direct_eval_call.
     pub(crate) fn resolve_store_block(&mut self, block: BasicBlockId) -> BasicBlockId {
-        // eval 异常检查分叉后，后续代码应插入到 continue block
-        // new_expr (WeakRef/FR constructor) 异常检查分叉后，后续代码应插入到 continue block
-        if let Some(cont) = self.new_expr_continue_block.take() {
-            return cont;
-        }
-
-        if let Some(cont) = self.await_continue_block.take() {
-            return cont;
-        }
-
-        if let Some(cont) = self.eval_continue_block.take() {
-            return cont;
-        }
-
-        if let Some(cont) = self.expr_merge_block.take() {
-            return cont;
+        let continuations = [
+            self.new_expr_continue_block.take(),
+            self.await_continue_block.take(),
+            self.eval_continue_block.take(),
+            self.expr_merge_block.take(),
+        ];
+        let block_is_terminated = self
+            .current_function
+            .block(block)
+            .is_some_and(|candidate| !matches!(candidate.terminator(), Terminator::Unreachable));
+        if block_is_terminated
+            && let Some(continuation) = continuations.into_iter().flatten().next()
+        {
+            return continuation;
         }
 
         let Some(b) = self.current_function.block(block) else {

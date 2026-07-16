@@ -146,7 +146,7 @@ proptest! {
 
     #[test]
     fn string_length_and_concat_match_utf16_semantics(s in "[ -~]{0,32}") {
-        let argv = base_argv(&[s.clone()]);
+        let argv = base_argv(std::slice::from_ref(&s));
         let expected = format!("{}\n{}!\n", s.encode_utf16().count(), s);
         prop_assert_eq!(prop_run_wasm(string_wasm(), argv)?, expected);
         STRING_CASES.tick();

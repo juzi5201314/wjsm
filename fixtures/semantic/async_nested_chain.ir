@@ -399,48 +399,52 @@ module {
       %23 = const c67
       store var $0.$shared_env, %23
       %24 = new_object(capacity=1)
+      %25 = load var $env
+      set_proto %24, %25
       store var $0.$shared_env, %24
-      %25 = load var $0.c
-      %26 = const c68
-      set_prop %24, %26, %25
-      %27 = call builtin.create_closure(%22, %24)
-      store var $0.b, %27
-      %28 = const c94
-      %29 = load var $0.$shared_env
-      %30 = const c95
-      %31 = stricteq %29, %30
-      branch %31, bb1, bb2
+      %26 = load var $0.c
+      %27 = const c68
+      set_prop %24, %27, %26
+      %28 = call builtin.create_closure(%22, %24)
+      store var $0.b, %28
+      %29 = const c94
+      %30 = load var $0.$shared_env
+      %31 = const c95
+      %32 = stricteq %30, %31
+      branch %32, bb1, bb2
     bb1:
-      %32 = new_object(capacity=2)
-      store var $0.$shared_env, %32
-      %33 = load var $0.c
-      %34 = const c96
-      set_prop %32, %34, %33
-      %35 = load var $0.b
-      %36 = const c97
-      set_prop %32, %36, %35
+      %33 = new_object(capacity=2)
+      %34 = load var $env
+      set_proto %33, %34
+      store var $0.$shared_env, %33
+      %35 = load var $0.c
+      %36 = const c96
+      set_prop %33, %36, %35
+      %37 = load var $0.b
+      %38 = const c97
+      set_prop %33, %38, %37
       jump bb3
     bb2:
-      %37 = load var $0.b
-      %38 = const c98
-      set_prop %29, %38, %37
+      %39 = load var $0.b
+      %40 = const c98
+      set_prop %30, %40, %39
       jump bb3
     bb3:
-      %39 = phi [(bb1, %32), (bb2, %29)]
-      store var $0.$shared_env, %39
-      %40 = call builtin.create_closure(%28, %39)
-      store var $0.a, %40
-      %41 = const c99
-      %42 = load var $0.a
-      %43 = call %42, this=%41
-      %44 = const c100
-      %45 = const c101
-      %46 = call builtin.promise.then(%43, %44, %45)
-      %47 = is_exception %46
-      branch %47, bb5, bb4
+      %41 = phi [(bb1, %33), (bb2, %30)]
+      store var $0.$shared_env, %41
+      %42 = call builtin.create_closure(%29, %41)
+      store var $0.a, %42
+      %43 = const c99
+      %44 = load var $0.a
+      %45 = call %44, this=%43
+      %46 = const c100
+      %47 = const c101
+      %48 = call builtin.promise.then(%45, %46, %47)
+      %49 = is_exception %48
+      branch %49, bb5, bb4
     bb4:
       return
     bb5:
-      %48 = call builtin.exception_value(%46)
-      throw %48
+      %50 = call builtin.exception_value(%48)
+      throw %50
 }

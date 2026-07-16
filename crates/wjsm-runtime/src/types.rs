@@ -209,6 +209,22 @@ pub(crate) struct FetchResponseEntry {
     pub(crate) http_response_handle: Option<u32>,
     /// body ReadableStream 在 readable_stream_table 中的 handle（用于 locked 检查）
     pub(crate) stream_handle: Option<u32>,
+    /// Fetch Resource Timing 的共享完成状态；Response.clone() 必须共享同一状态。
+    pub(crate) resource_timing: Option<SharedFetchResourceTiming>,
+}
+
+pub(crate) type SharedFetchResourceTiming = Arc<Mutex<FetchResourceTimingState>>;
+
+#[derive(Debug)]
+pub(crate) struct FetchResourceTimingState {
+    pub(crate) requested_url: String,
+    pub(crate) start_time: f64,
+    pub(crate) request_start_time: f64,
+    pub(crate) response_start_time: f64,
+    pub(crate) response_status: u16,
+    pub(crate) encoded_body_size: u64,
+    pub(crate) decoded_body_size: u64,
+    pub(crate) completed: bool,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct FetchRequestEntry {
@@ -257,6 +273,7 @@ pub(crate) struct HttpResponseEntry {
     pub pending_bytes: std::collections::VecDeque<Vec<u8>>,
     pub eof: bool,
     pub error: Option<String>,
+    pub resource_timing: Option<SharedFetchResourceTiming>,
 }
 
 #[derive(Clone, Debug)]
@@ -678,6 +695,9 @@ pub(crate) enum NativeCallable {
     Btoa,
     QueueMicrotask,
     PerformanceNow,
+    PerfHooksMethod {
+        kind: crate::runtime_node_perf_hooks::PerfHooksMethodKind,
+    },
     OsInfo {
         kind: OsInfoKind,
     },
@@ -1272,6 +1292,8 @@ pub(crate) struct ImmediateEntry {
     #[allow(dead_code)]
     pub(crate) resource: i64,
     pub(crate) scope: Option<crate::CapturedScope>,
+    pub(crate) native_performance_converter: Option<i64>,
+    pub(crate) native_performance_dispatcher: Option<i64>,
 }
 
 #[allow(clippy::large_enum_variant)]

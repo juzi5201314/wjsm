@@ -19,7 +19,7 @@ impl Lowerer {
         });
 
         self.push_class_private_name_scope(&class.body);
-        let private_members = self.collect_class_private_members(class_name, &class.body)?;
+        let mut private_members = self.collect_class_private_members(class_name, &class.body)?;
 
         // ── 构造器 IR 函数 ──
         let ctor_name = format!("{}.constructor", class_name);
@@ -209,12 +209,14 @@ impl Lowerer {
         self.pop_function_context();
 
         // ── 物化构造器 + 创建原型 ──
-        let ctor_dest = self.materialize_constructor_value(
-            block,
-            ctor_function_id,
-            &ctor_captured,
-            class_span,
-        )?;
+        let block = self.materialize_private_member_values(block, &mut private_members)?;
+
+        let constructor_function = LoweredClassFunction {
+            function_id: ctor_function_id,
+            captured: ctor_captured,
+        };
+        let (block, ctor_dest) =
+            self.materialize_class_function_value(block, &constructor_function, class_span)?;
 
         let proto_dest = self.alloc_value();
         let method_count = class
@@ -381,12 +383,15 @@ impl Lowerer {
         match method.kind {
             swc_ast::MethodKind::Method => {
                 if method.function.is_generator {
-                    let mut method_value = self.lower_method_prop_to_fn(
-                        &method.key,
-                        &method.function,
-                        Some(target),
+                    let function =
+                        self.lower_method_prop_to_fn(&method.key, &method.function, Some(target))?;
+                    let (continuation, mut method_value) = self.materialize_method_function_value(
                         block,
+                        &function,
+                        Some(target),
+                        method.function.span,
                     )?;
+                    block = continuation;
                     if !method.function.decorators.is_empty() {
                         (block, method_value) = self.emit_apply_value_decorators(
                             block,
@@ -412,15 +417,16 @@ impl Lowerer {
                 }
 
                 let fn_name = format!("{}.{}", class_name, method_name);
-                let m_function_id = self.lower_class_method_fn(
+                let function = self.lower_class_method_fn(
                     &fn_name,
                     &method.function,
                     method.span,
                     ctor_function_id,
                     is_static,
                 )?;
-
-                let mut m_dest = self.emit_function_ref(block, m_function_id);
+                let (continuation, mut m_dest) =
+                    self.materialize_class_function_value(block, &function, method.span)?;
+                block = continuation;
                 if !method.function.decorators.is_empty() {
                     (block, m_dest) = self.emit_apply_value_decorators(
                         block,
@@ -451,15 +457,16 @@ impl Lowerer {
                     "set"
                 };
                 let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
-                let m_function_id = self.lower_class_method_fn(
+                let function = self.lower_class_method_fn(
                     &fn_name,
                     &method.function,
                     method.span,
                     ctor_function_id,
                     is_static,
                 )?;
-
-                let mut fn_dest = self.emit_function_ref(block, m_function_id);
+                let (continuation, mut fn_dest) =
+                    self.materialize_class_function_value(block, &function, method.span)?;
+                block = continuation;
                 if !method.function.decorators.is_empty() {
                     let kind = if matches!(method.kind, swc_ast::MethodKind::Getter) {
                         "getter"
@@ -503,27 +510,27 @@ impl Lowerer {
         idx: u32,
     ) -> Result<BasicBlockId, LoweringError> {
         let fn_name = format!("{}.static_init_{}", class_name, idx);
-        let m_function_id = self.lower_class_static_block_fn(
+        let function = self.lower_class_static_block_fn(
             &fn_name,
             &static_block.body,
             static_block.span,
             ctor_function_id,
         )?;
-
-        let fn_dest = self.emit_function_ref(block, m_function_id);
+        let (continuation, function_value) =
+            self.materialize_class_function_value(block, &function, static_block.span)?;
         self.current_function.append_instruction(
-            block,
+            continuation,
             Instruction::Call {
                 dest: None,
-                callee: fn_dest,
+                callee: function_value,
                 this_val: ctor_dest,
                 args: vec![],
             },
         );
-        Ok(block)
+        Ok(continuation)
     }
 
-    /// 为类方法/访问器创建 IR 函数并注册到模块。返回 FunctionId。
+    /// 为类方法/访问器创建 IR 函数并返回其函数标识及捕获集合。
     fn lower_class_method_fn(
         &mut self,
         fn_name: &str,
@@ -531,7 +538,7 @@ impl Lowerer {
         method_span: Span,
         ctor_function_id: FunctionId,
         is_static: bool,
-    ) -> Result<FunctionId, LoweringError> {
+    ) -> Result<LoweredClassFunction, LoweringError> {
         self.push_function_context(fn_name, BasicBlockId(0));
         self.is_method = true;
         self.super_allowed = true;
@@ -593,20 +600,20 @@ impl Lowerer {
         } else {
             HomeObject::Prototype(ctor_function_id)
         };
-        let m_function_id =
+        let function =
             self.finalize_class_method_function(fn_name, method_span, param_ir_names, home_object);
         self.pop_function_context();
-        Ok(m_function_id)
+        Ok(function)
     }
 
-    /// 为类静态块创建 IR 函数并注册到模块。返回 FunctionId。
+    /// 为类静态块创建 IR 函数并返回其函数标识及捕获集合。
     fn lower_class_static_block_fn(
         &mut self,
         fn_name: &str,
         body: &swc_ast::BlockStmt,
         span: Span,
         ctor_function_id: FunctionId,
-    ) -> Result<FunctionId, LoweringError> {
+    ) -> Result<LoweredClassFunction, LoweringError> {
         self.push_function_context(fn_name, BasicBlockId(0));
         self.is_method = true;
         self.super_allowed = true;
@@ -646,57 +653,47 @@ impl Lowerer {
                 .set_terminator(b, Terminator::Return { value: None });
         }
 
-        let m_function_id = self.finalize_class_method_function(
+        let function = self.finalize_class_method_function(
             fn_name,
             span,
             param_ir_names,
             HomeObject::Constructor(ctor_function_id),
         );
         self.pop_function_context();
-        Ok(m_function_id)
+        Ok(function)
     }
 
-    /// 收尾方法 IR 函数：提取 blocks、设置元数据、注册到模块。返回 FunctionId。
+    /// 收尾方法 IR 函数：提取 blocks、设置元数据，并返回统一的 class function metadata。
     fn finalize_class_method_function(
         &mut self,
         fn_name: &str,
         span: Span,
         param_ir_names: Vec<String>,
         home_object: HomeObject,
-    ) -> FunctionId {
-        let m_old_fn = std::mem::replace(
+    ) -> LoweredClassFunction {
+        let old_function = std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
-        let m_has_eval = m_old_fn.has_eval();
-        let m_blocks = m_old_fn.into_blocks();
-        let mut m_ir_function = Function::new(fn_name, BasicBlockId(0));
-        m_ir_function.set_has_eval(m_has_eval);
-        if let Some(src) = self.span_to_source_span(span) {
-            m_ir_function.set_source_span(src);
+        let has_eval = old_function.has_eval();
+        let blocks = old_function.into_blocks();
+        let mut ir_function = Function::new(fn_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
+        if let Some(source_span) = self.span_to_source_span(span) {
+            ir_function.set_source_span(source_span);
         }
-        m_ir_function.set_params(param_ir_names);
-        let m_captured = self.captured_names_stack.last().unwrap().clone();
-        m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-        m_ir_function.home_object = Some(home_object);
-        for b in m_blocks {
-            m_ir_function.push_block(b);
+        ir_function.set_params(param_ir_names);
+        let captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        ir_function.home_object = Some(home_object);
+        for block in blocks {
+            ir_function.push_block(block);
         }
-        self.module.push_function(m_ir_function)
-    }
-
-    /// 物化 FunctionRef 常量为运行时值。
-    fn emit_function_ref(&mut self, block: BasicBlockId, function_id: FunctionId) -> ValueId {
-        let ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
-        let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest,
-                constant: ref_const,
-            },
-        );
-        dest
+        let function_id = self.module.push_function(ir_function);
+        LoweredClassFunction {
+            function_id,
+            captured,
+        }
     }
 
     /// 提取类成员键（方法/访问器）：返回 (名称字符串, 运行时 key value)。

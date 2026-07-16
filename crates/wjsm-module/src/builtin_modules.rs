@@ -108,6 +108,19 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         canonical: "async_hooks",
         source: include_str!("../builtin_js/node_async_hooks.js"),
     },
+    BuiltinModule {
+        canonical: "perf_hooks",
+        source: concat!(
+            include_str!("../builtin_js/node_perf_hooks/internal.js"),
+            include_str!("../builtin_js/node_perf_hooks/entries.js"),
+            include_str!("../builtin_js/node_perf_hooks/observer.js"),
+            include_str!("../builtin_js/node_perf_hooks/histogram.js"),
+            include_str!("../builtin_js/node_perf_hooks/resource.js"),
+            include_str!("../builtin_js/node_perf_hooks/fetch.js"),
+            include_str!("../builtin_js/node_perf_hooks/performance.js"),
+            include_str!("../builtin_js/node_perf_hooks/exports.js"),
+        ),
+    },
 ];
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {
@@ -199,6 +212,7 @@ mod tests {
             "worker_threads",
             "inspector",
             "cluster",
+            "perf_hooks",
         ] {
             assert!(
                 seen.insert(virtual_path(canonical)),

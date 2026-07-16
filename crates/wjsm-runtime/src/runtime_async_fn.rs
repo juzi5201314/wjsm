@@ -131,7 +131,7 @@ pub(crate) fn enqueue_async_resume_from_caller(
             state,
             resume_val,
             completion,
-            scope: crate::runtime_async_hooks::capture_from_caller(&caller),
+            scope: crate::runtime_async_hooks::capture_from_caller(caller),
         });
 }
 

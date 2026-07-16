@@ -51,6 +51,7 @@ fn context_frame_cow_set_and_get() {
 
     let f2 = st.enter_with_store(7, 200);
     assert_eq!(st.get_store(7), Some(200));
+    assert_eq!(st.current_frame(), Some(f2));
     // 父 frame 仍持有旧值（COW）
     assert_eq!(st.frame_get(f1, 7), Some(100));
 

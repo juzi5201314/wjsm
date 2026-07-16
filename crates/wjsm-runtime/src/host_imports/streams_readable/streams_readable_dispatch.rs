@@ -157,8 +157,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
             Some(obj)
         }
         ReadableStreamMethodKind::Cancel => {
-            // 设置 state = Closed
-            let controller_handle = {
+            let (controller_handle, http_response_handle, response_body) = {
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
@@ -167,8 +166,30 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     .unwrap_or_else(|e| e.into_inner());
                 let entry = stream_table.get_mut(handle as usize)?;
                 entry.state = StreamState::Closed;
-                entry.controller_handle
+                entry.disturbed = true;
+                (
+                    entry.controller_handle,
+                    entry.http_response_handle,
+                    (entry.response_body_handle, entry.response_body_object),
+                )
             };
+            mark_response_body_used_from_caller(caller, response_body.0, response_body.1);
+
+            if let Some(http_handle) = http_response_handle {
+                {
+                    let mut table = caller
+                        .data()
+                        .http_response_table
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    if let Some(entry) = table.get_mut(http_handle as usize) {
+                        entry.response = None;
+                        entry.pending_bytes.clear();
+                        entry.eof = true;
+                    }
+                }
+                complete_http_response_resource_timing(caller.data(), http_handle);
+            }
 
             // 清空 controller 队列
             if let Some(ctrl_handle) = controller_handle {
@@ -184,7 +205,13 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 }
             }
 
-            Some(value::encode_undefined())
+            let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            settle_promise(
+                caller.data_mut(),
+                promise,
+                PromiseSettlement::Fulfill(value::encode_undefined()),
+            );
+            Some(promise)
         }
         ReadableStreamMethodKind::Tee => {
             // WHATWG Streams Standard: ReadableStream.tee()

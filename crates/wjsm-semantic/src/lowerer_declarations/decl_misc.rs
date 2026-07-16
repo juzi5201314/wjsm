@@ -414,7 +414,7 @@ impl Lowerer {
         block: BasicBlockId,
         target_val: ValueId,
         field_name: &str,
-        func_id: FunctionId,
+        function_value: ValueId,
     ) {
         let key_const = self
             .module
@@ -427,21 +427,12 @@ impl Lowerer {
                 constant: key_const,
             },
         );
-        let fn_dest = self.alloc_value();
-        let fn_ref_const = self.module.add_constant(Constant::FunctionRef(func_id));
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: fn_dest,
-                constant: fn_ref_const,
-            },
-        );
         self.current_function.append_instruction(
             block,
             Instruction::CallBuiltin {
                 dest: None,
                 builtin: Builtin::PrivateSet,
-                args: vec![target_val, key_dest, fn_dest],
+                args: vec![target_val, key_dest, function_value],
             },
         );
     }
@@ -452,8 +443,8 @@ impl Lowerer {
         block: BasicBlockId,
         target_val: ValueId,
         field_name: &str,
-        getter_id: Option<FunctionId>,
-        setter_id: Option<FunctionId>,
+        getter: Option<ValueId>,
+        setter: Option<ValueId>,
     ) {
         let key_const = self
             .module
@@ -466,51 +457,39 @@ impl Lowerer {
                 constant: key_const,
             },
         );
-        let undef_const = self.module.add_constant(Constant::Undefined);
-        let getter_dest = self.alloc_value();
-        if let Some(gid) = getter_id {
-            let fn_ref = self.module.add_constant(Constant::FunctionRef(gid));
-            self.current_function.append_instruction(
-                block,
-                Instruction::Const {
-                    dest: getter_dest,
-                    constant: fn_ref,
-                },
-            );
+        let undefined = self.module.add_constant(Constant::Undefined);
+        let getter_value = if let Some(value) = getter {
+            value
         } else {
+            let value = self.alloc_value();
             self.current_function.append_instruction(
                 block,
                 Instruction::Const {
-                    dest: getter_dest,
-                    constant: undef_const,
+                    dest: value,
+                    constant: undefined,
                 },
             );
-        }
-        let setter_dest = self.alloc_value();
-        if let Some(sid) = setter_id {
-            let fn_ref = self.module.add_constant(Constant::FunctionRef(sid));
-            self.current_function.append_instruction(
-                block,
-                Instruction::Const {
-                    dest: setter_dest,
-                    constant: fn_ref,
-                },
-            );
+            value
+        };
+        let setter_value = if let Some(value) = setter {
+            value
         } else {
+            let value = self.alloc_value();
             self.current_function.append_instruction(
                 block,
                 Instruction::Const {
-                    dest: setter_dest,
-                    constant: undef_const,
+                    dest: value,
+                    constant: undefined,
                 },
             );
-        }
+            value
+        };
         self.current_function.append_instruction(
             block,
             Instruction::CallBuiltin {
                 dest: None,
                 builtin: Builtin::PrivateAccessorBind,
-                args: vec![target_val, key_dest, getter_dest, setter_dest],
+                args: vec![target_val, key_dest, getter_value, setter_value],
             },
         );
     }

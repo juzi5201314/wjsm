@@ -555,6 +555,7 @@ pub(crate) async fn define_property_internal_async(
 ) -> Result<bool, String> {
     if !value::is_object(target)
         && !value::is_function(target)
+        && !value::is_closure(target)
         && !value::is_array(target)
         && !value::is_proxy(target)
     {

@@ -1,6 +1,11 @@
 use super::*;
 use swc_core::ecma::visit::{Visit, VisitWith};
 
+pub(crate) struct LoweredMethodFunction {
+    pub(crate) function_id: FunctionId,
+    pub(crate) captured: Vec<CapturedBinding>,
+}
+
 #[derive(Default)]
 struct ObjectMethodHomeUse {
     needs_home: bool,

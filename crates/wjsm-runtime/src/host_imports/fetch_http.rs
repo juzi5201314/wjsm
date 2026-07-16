@@ -30,6 +30,145 @@ pub(crate) fn parse_fetch_input(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn perform_http_fetch(
+    caller: &mut Caller<'_, RuntimeState>,
+    method: String,
+    url: String,
+    headers_handle: u32,
+    body: Option<Vec<u8>>,
+    redirect: RedirectMode,
+    signal_handle: Option<u32>,
+    resource_timing: Option<SharedFetchResourceTiming>,
+) -> std::result::Result<i64, String> {
+    if let Some(handle) = signal_handle
+        && is_signal_aborted(caller, handle)
+    {
+        return Err("The operation was aborted".to_string());
+    }
+    let client = caller
+        .data()
+        .http_client_for_redirect(redirect)
+        .map_err(|e| e.to_string())?;
+    let mut req_builder = client.request(
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?,
+        &url,
+    );
+
+    let header_pairs = {
+        let table = caller
+            .data()
+            .headers_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        table
+            .get(headers_handle as usize)
+            .map(|h| h.pairs.clone())
+            .unwrap_or_default()
+    };
+    for (name, value) in header_pairs {
+        req_builder = req_builder.header(&name, &value);
+    }
+    if let Some(body_bytes) = body {
+        req_builder = req_builder.body(body_bytes);
+    }
+    mark_fetch_request_start(caller.data(), &resource_timing);
+
+    let response = req_builder
+        .send()
+        .await
+        .map_err(|error| format!("fetch failed: {error}"))?;
+    if let Some(handle) = signal_handle
+        && is_signal_aborted(caller, handle)
+    {
+        return Err("The operation was aborted".to_string());
+    }
+    let status = response.status().as_u16();
+    mark_fetch_response_start(caller.data(), &resource_timing, status);
+    let status_text = response
+        .status()
+        .canonical_reason()
+        .unwrap_or("")
+        .to_string();
+    let final_url = response.url().to_string();
+    let redirected = final_url != url;
+
+    let response_headers = create_empty_headers(caller);
+    {
+        let mut htable = caller
+            .data()
+            .headers_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = htable.get_mut(response_headers as usize) {
+            for (name, value) in response.headers().iter() {
+                if let Ok(v) = value.to_str() {
+                    entry
+                        .pairs
+                        .push((name.as_str().to_ascii_lowercase(), v.to_string()));
+                }
+            }
+        }
+    }
+    if method.eq_ignore_ascii_case("HEAD") || matches!(status, 204 | 205 | 304) {
+        let response = create_response_object(
+            caller,
+            status,
+            status_text,
+            response_headers,
+            final_url,
+            Vec::new(),
+            ResponseType::Basic,
+            redirected,
+            None,
+        );
+        set_response_resource_timing(caller, response, resource_timing.clone());
+        complete_fetch_resource_timing(caller.data(), &resource_timing);
+        return Ok(response);
+    }
+
+    let http_handle = {
+        let mut table = caller
+            .data()
+            .http_response_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let handle = table.len() as u32;
+        table.push(HttpResponseEntry {
+            response: Some(response),
+            pending_read_promise: None,
+            pending_bytes: std::collections::VecDeque::new(),
+            eof: false,
+            error: None,
+            resource_timing: resource_timing.clone(),
+        });
+        handle
+    };
+    let response = create_response_object_with_http_handle(
+        caller,
+        status,
+        status_text,
+        response_headers,
+        final_url,
+        ResponseType::Basic,
+        redirected,
+        http_handle,
+    );
+    set_response_resource_timing(caller, response, resource_timing);
+    Ok(response)
+}
+
+fn is_signal_aborted(caller: &Caller<'_, RuntimeState>, handle: u32) -> bool {
+    caller
+        .data()
+        .abort_signal_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(handle as usize)
+        .map(|s| s.aborted)
+        .unwrap_or(false)
+}
+
 // ── Core fetch execution + Response construction ────────────────────────────
 
 pub(crate) fn perform_data_url_fetch(
@@ -66,137 +205,6 @@ pub(crate) fn perform_data_url_fetch(
         false,
         None,
     ))
-}
-
-pub(crate) async fn perform_http_fetch(
-    caller: &mut Caller<'_, RuntimeState>,
-    method: String,
-    url: String,
-    headers_handle: u32,
-    body: Option<Vec<u8>>,
-    redirect: RedirectMode,
-    signal_handle: Option<u32>,
-) -> std::result::Result<i64, String> {
-    // 1. 检查 abort
-    if let Some(handle) = signal_handle
-        && is_signal_aborted(caller.data(), handle)
-    {
-        return Err("The operation was aborted".to_string());
-    }
-
-    // 2. 复用按 redirect 策略缓存的 reqwest 客户端
-    let client = caller
-        .data()
-        .http_client_for_redirect(redirect)
-        .map_err(|e| format!("fetch client error: {}", e))?;
-
-    let http_method: reqwest::Method = method
-        .parse()
-        .map_err(|e| format!("invalid method: {}", e))?;
-
-    let mut builder = client.request(http_method, &url);
-
-    // 3. 添加 headers（限制锁作用域）
-    {
-        let headers = caller
-            .data()
-            .headers_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = headers.get(headers_handle as usize) {
-            for (name, value) in &entry.pairs {
-                builder = builder.header(name.as_str(), value.as_str());
-            }
-        }
-    }
-
-    // 4. 添加 body
-    if let Some(body_bytes) = body {
-        builder = builder.body(body_bytes);
-    }
-
-    // 5. 发送请求（await — wasmtime 自动 yield）
-    let response = builder
-        .send()
-        .await
-        .map_err(|e| format!("fetch failed: {}", e))?;
-
-    // 6. 检查 abort（请求完成后）
-    if let Some(handle) = signal_handle
-        && is_signal_aborted(caller.data(), handle)
-    {
-        return Err("The operation was aborted".to_string());
-    }
-
-    // 7. 提取响应信息
-    let status = response.status().as_u16();
-    let status_text = response
-        .status()
-        .canonical_reason()
-        .unwrap_or("")
-        .to_string();
-    let resp_url = response.url().to_string();
-    let redirected = response.url().as_str() != url;
-
-    // 8. 提取响应 headers
-    let resp_headers = create_empty_headers(caller);
-    {
-        let mut htable = caller
-            .data()
-            .headers_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = htable.get_mut(resp_headers as usize) {
-            for (key, value) in response.headers() {
-                entry.pairs.push((
-                    key.as_str().to_ascii_lowercase(),
-                    value.to_str().unwrap_or("").to_string(),
-                ));
-            }
-        }
-    }
-
-    // 9. 存储 reqwest Response（用于后续流式读取）
-    let http_handle = {
-        let mut table = caller
-            .data()
-            .http_response_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let handle = table.len() as u32;
-        table.push(HttpResponseEntry {
-            response: Some(response),
-            pending_read_promise: None,
-            pending_bytes: std::collections::VecDeque::new(),
-            eof: false,
-            error: None,
-        });
-        handle
-    };
-
-    // 10. 构造 Response 对象（body 暂为 null，通过 ReadableStream 懒加载）
-    let resp_obj = create_response_object_with_http_handle(
-        caller,
-        status,
-        status_text,
-        resp_headers,
-        resp_url,
-        ResponseType::Basic,
-        redirected,
-        http_handle,
-    );
-
-    Ok(resp_obj)
-}
-
-pub(crate) fn is_signal_aborted(state: &RuntimeState, handle: u32) -> bool {
-    state
-        .abort_signal_table
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(handle as usize)
-        .map(|e| e.aborted)
-        .unwrap_or(false)
 }
 
 const DATA_URL_DEFAULT_MEDIATYPE: &str = "text/plain;charset=US-ASCII";

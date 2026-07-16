@@ -6,6 +6,20 @@ impl Lowerer {
         fn_decl: &swc_ast::FnDecl,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        let (wrapper_fn_id, captured) = self.lower_gen_function(fn_decl)?;
+        self.store_wrapper_in_outer_scope(
+            flow,
+            fn_decl.ident.sym.as_ref(),
+            wrapper_fn_id,
+            &captured,
+            fn_decl.span(),
+        )
+    }
+
+    pub(crate) fn lower_gen_function(
+        &mut self,
+        fn_decl: &swc_ast::FnDecl,
+    ) -> Result<(FunctionId, Vec<CapturedBinding>), LoweringError> {
         let name = fn_decl.ident.sym.to_string();
         let gen_body_name = format!("{name}$gen");
 
@@ -433,6 +447,6 @@ impl Lowerer {
         let wrapper_fn_id = self.module.push_function(wrapper_ir_function);
         self.pop_function_context();
 
-        self.store_wrapper_in_outer_scope(flow, &name, wrapper_fn_id, &captured, fn_decl.span())
+        Ok((wrapper_fn_id, captured))
     }
 }

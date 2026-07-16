@@ -675,6 +675,24 @@ fn collect_host_table_values(
         if let Ok(async_hooks) = st.async_hooks.lock() {
             out.extend(async_hooks.gc_roots());
         }
+        for raw in [
+            st.performance_native_sink
+                .load(std::sync::atomic::Ordering::Relaxed),
+            st.performance_native_converter
+                .load(std::sync::atomic::Ordering::Relaxed),
+            st.performance_native_dispatcher
+                .load(std::sync::atomic::Ordering::Relaxed),
+            st.performance_histogram_base_prototype
+                .load(std::sync::atomic::Ordering::Relaxed),
+            st.performance_histogram_recordable_prototype
+                .load(std::sync::atomic::Ordering::Relaxed),
+            st.performance_histogram_interval_prototype
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ] {
+            if !value::is_undefined(raw) {
+                out.push(raw);
+            }
+        }
 
         // promise_table：只有已可达 Promise 对象的 state value + reactions 才是 child edge。
         if let Ok(promises) = st.promise_table.lock() {
@@ -785,6 +803,12 @@ fn collect_host_table_values(
                 out.push(e.callback);
                 if e.resource != 0 {
                     out.push(e.resource);
+                }
+                if let Some(converter) = e.native_performance_converter {
+                    out.push(converter);
+                }
+                if let Some(dispatcher) = e.native_performance_dispatcher {
+                    out.push(dispatcher);
                 }
             }
         }
@@ -923,6 +947,7 @@ mod tests {
                     pending_bytes: VecDeque::new(),
                     eof: false,
                     error: None,
+                    resource_timing: None,
                 });
         }
         {
@@ -941,6 +966,7 @@ mod tests {
                     body_used: false,
                     http_response_handle: Some(0),
                     stream_handle: None,
+                    resource_timing: None,
                 });
         }
         {

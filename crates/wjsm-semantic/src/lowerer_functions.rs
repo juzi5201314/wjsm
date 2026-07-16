@@ -60,7 +60,7 @@ impl Lowerer {
             .map_err(|msg| self.error(fn_expr.span(), msg))?;
 
         // Register the function's own name (named function expression) so it is accessible within the body.
-        if let Some(ref ident) = fn_expr.ident {
+        if let Some(ident) = &fn_expr.ident {
             let _ = self
                 .scopes
                 .declare(ident.sym.as_ref(), VarKind::Let, true)
@@ -163,9 +163,9 @@ impl Lowerer {
                 undef
             }
         } else {
-            let e = self.ensure_shared_env(closure_block, &captured, fn_expr.span())?;
+            let env = self.ensure_shared_env(closure_block, &captured, fn_expr.span())?;
             closure_block = self.resolve_store_block(closure_block);
-            e
+            env
         };
         let closure_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -177,6 +177,7 @@ impl Lowerer {
             },
         );
         let callee_val = closure_val;
+        self.expr_merge_block = Some(closure_block);
 
         Ok(callee_val)
     }
@@ -207,7 +208,7 @@ impl Lowerer {
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_expr.span(), msg))?;
 
-        if let Some(ref ident) = fn_expr.ident {
+        if let Some(ident) = &fn_expr.ident {
             let _ = self
                 .scopes
                 .declare(ident.sym.as_ref(), VarKind::Let, true)
@@ -811,9 +812,8 @@ impl Lowerer {
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
-            let mut closure_block = block;
-            let env_val = self.ensure_shared_env(closure_block, &captured, fn_expr.span())?;
-            closure_block = self.resolve_store_block(closure_block);
+            let env_val = self.ensure_shared_env(block, &captured, fn_expr.span())?;
+            let closure_block = self.resolve_store_block(block);
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,

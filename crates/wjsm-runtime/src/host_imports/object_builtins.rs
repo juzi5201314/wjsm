@@ -262,68 +262,19 @@ pub(crate) fn define_object_builtins(
     let object_get_own_property_descriptor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
+            // 与 Reflect 共用实现：正确解析 function/closure 的 function_props，
+            // 并统一 name_id 查找（property_key_value_to_name_id 会漏掉部分槽位）。
             if !value::is_js_object(target) {
-                return value::encode_undefined();
-            }
-            let Some(ptr) = resolve_handle(&mut caller, target) else {
-                return value::encode_undefined();
-            };
-            let Some(name_id) = property_key_value_to_name_id(&mut caller, prop, false) else {
-                return value::encode_undefined();
-            };
-            let Some((slot_offset, flags, val)) =
-                find_property_slot_by_name_id(&mut caller, ptr, name_id)
-            else {
-                return value::encode_undefined();
-            };
-            let is_accessor = (flags & constants::FLAG_IS_ACCESSOR) != 0;
-            let enumerable = (flags & constants::FLAG_ENUMERABLE) != 0;
-            let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
-            let (getter_val, setter_val) = if is_accessor {
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return value::encode_undefined();
-                };
-                let data = memory.data(&caller);
-                if slot_offset + 32 > data.len() {
-                    return value::encode_undefined();
-                }
-                let g = i64::from_le_bytes(
-                    data[slot_offset + 16..slot_offset + 24].try_into().unwrap(),
-                );
-                let s = i64::from_le_bytes(
-                    data[slot_offset + 24..slot_offset + 32].try_into().unwrap(),
-                );
-                (g, s)
-            } else {
-                (value::encode_undefined(), value::encode_undefined())
-            };
-            let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-            let desc = alloc_host_object(&mut caller, &env, 4);
-            if is_accessor {
-                let _ = define_host_data_property_from_caller(&mut caller, desc, "get", getter_val);
-                let _ = define_host_data_property_from_caller(&mut caller, desc, "set", setter_val);
-            } else {
-                let _ = define_host_data_property_from_caller(&mut caller, desc, "value", val);
-                let _ = define_host_data_property_from_caller(
+                return make_type_error_exception(
                     &mut caller,
-                    desc,
-                    "writable",
-                    value::encode_bool((flags & constants::FLAG_WRITABLE) != 0),
+                    "Object.getOwnPropertyDescriptor called on non-object",
                 );
             }
-            let _ = define_host_data_property_from_caller(
+            crate::host_imports::proxy_reflect::reflect_get_own_property_descriptor_impl(
                 &mut caller,
-                desc,
-                "enumerable",
-                value::encode_bool(enumerable),
-            );
-            let _ = define_host_data_property_from_caller(
-                &mut caller,
-                desc,
-                "configurable",
-                value::encode_bool(configurable),
-            );
-            desc
+                target,
+                prop,
+            )
         },
     );
     linker.define(

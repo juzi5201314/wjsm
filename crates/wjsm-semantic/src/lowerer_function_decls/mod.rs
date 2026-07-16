@@ -90,9 +90,8 @@ impl Lowerer {
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
-            let mut closure_block = outer_block;
-            let env_val = self.ensure_shared_env(closure_block, captured, span)?;
-            closure_block = self.resolve_store_block(closure_block);
+            let env_val = self.ensure_shared_env(outer_block, captured, span)?;
+            let closure_block = self.resolve_store_block(outer_block);
             store_block = closure_block;
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(

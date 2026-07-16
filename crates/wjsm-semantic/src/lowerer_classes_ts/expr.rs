@@ -18,13 +18,13 @@ impl Lowerer {
 
         // 命名类表达式：仅在类体内绑定名称（块作用域）。
         let class_body_name_scope =
-            if let Some(ref name) = class_expr.ident.as_ref().map(|id| id.sym.to_string()) {
+            if let Some(name) = class_expr.ident.as_ref().map(|id| id.sym.to_string()) {
                 self.scopes.push_scope(ScopeKind::Block);
                 let scope_id = self
                     .scopes
-                    .declare(name, VarKind::Const, false)
+                    .declare(&name, VarKind::Const, false)
                     .map_err(|msg| self.error(class_expr.span(), msg))?;
-                Some((name.clone(), scope_id))
+                Some((name, scope_id))
             } else {
                 None
             };
@@ -40,7 +40,7 @@ impl Lowerer {
         )?;
 
         // 命名类表达式：初始化类体绑定并弹出作用域。
-        if let Some((ref name, scope_id)) = class_body_name_scope {
+        if let Some((name, scope_id)) = &class_body_name_scope {
             self.scopes
                 .mark_initialised(name)
                 .map_err(|msg| self.error(class_expr.span(), msg))?;

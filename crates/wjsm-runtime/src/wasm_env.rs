@@ -38,7 +38,16 @@ pub(crate) struct WasmEnv {
 
 impl WasmEnv {
     /// 从 Caller 上下文中一次性提取所有导出句柄。
+    /// 嵌套 host→host 重入时 `Caller::get_export` 会返回 None（未经过 WASM 帧），
+    /// 此时回退到 RuntimeState 上缓存的实例句柄。
     pub fn from_caller(caller: &mut Caller<'_, RuntimeState>) -> Option<Self> {
+        if let Some(env) = Self::from_caller_exports(caller) {
+            return Some(env);
+        }
+        caller.data().cached_wasm_env
+    }
+
+    fn from_caller_exports(caller: &mut Caller<'_, RuntimeState>) -> Option<Self> {
         Some(Self {
             memory: caller.get_export("memory")?.into_memory()?,
             shadow_memory: caller

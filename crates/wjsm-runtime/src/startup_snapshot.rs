@@ -145,6 +145,7 @@ pub(crate) fn capture_startup_snapshot(
                 NativeCallable::DgramMethod { kind } => kind.method(),
                 NativeCallable::TlsMethod { kind } => kind.method(),
                 NativeCallable::WorkerThreadsMethod { kind } => kind.method(),
+                NativeCallable::PerfHooksMethod { kind } => kind.method(),
                 _ => 0,
             });
         }
@@ -445,6 +446,62 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
     {
         bail!("capture: async_hooks runtime state not empty");
     }
+    let histogram_registry_empty = data
+        .shared_state
+        .as_ref()
+        .map(|shared| shared.perf_histograms.is_empty())
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("capture: perf_hooks histogram registry: {error}"))?
+        .unwrap_or(true);
+    if data
+        .performance_observer_mask
+        .load(std::sync::atomic::Ordering::Relaxed)
+        != 0
+        || !value::is_undefined(
+            data.performance_native_sink
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        || !value::is_undefined(
+            data.performance_native_converter
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        || !value::is_undefined(
+            data.performance_native_dispatcher
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        || !data
+            .performance_native_entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+        || !data
+            .performance_event_loop_monitors
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+        || data
+            .performance_native_delivery_scheduled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        || data
+            .performance_forced_gc
+            .load(std::sync::atomic::Ordering::Relaxed)
+        || !value::is_undefined(
+            data.performance_histogram_base_prototype
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        || !value::is_undefined(
+            data.performance_histogram_recordable_prototype
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        || !value::is_undefined(
+            data.performance_histogram_interval_prototype
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        || !data.performance_histogram_wrappers.is_empty()
+        || !histogram_registry_empty
+    {
+        bail!("capture: perf_hooks runtime state not empty");
+    }
     Ok(())
 }
 
@@ -627,4 +684,136 @@ pub(crate) fn restore_startup_snapshot(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn assert_perf_hooks_state_rejected<T>(mutate: impl FnOnce(&crate::RuntimeState) -> T) {
+        let engine = Engine::default();
+        let store = Store::new(&engine, crate::RuntimeState::new());
+        assert_excluded_tables_clean(&store).expect("fresh runtime state must be snapshot-clean");
+
+        let dirty_state = mutate(store.data());
+
+        let error = assert_excluded_tables_clean(&store)
+            .expect_err("perf_hooks runtime state must be excluded from startup snapshots");
+        assert!(
+            error
+                .to_string()
+                .contains("perf_hooks runtime state not empty"),
+            "unexpected error: {error:#}"
+        );
+        drop(dirty_state);
+    }
+
+    #[test]
+    fn snapshot_rejects_perf_hooks_prototypes_registry_and_pending_flags() {
+        assert_perf_hooks_state_rejected(|state| {
+            state
+                .performance_histogram_base_prototype
+                .store(value::encode_null(), Ordering::Relaxed);
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            state
+                .performance_histogram_recordable_prototype
+                .store(value::encode_null(), Ordering::Relaxed);
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            state
+                .performance_histogram_interval_prototype
+                .store(value::encode_null(), Ordering::Relaxed);
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            state
+                .shared_state
+                .as_ref()
+                .expect("shared runtime state")
+                .perf_histograms
+                .create(1, 1_000, 3)
+                .expect("create histogram")
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            state
+                .performance_native_delivery_scheduled
+                .store(true, Ordering::Relaxed);
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            state.performance_forced_gc.store(true, Ordering::Relaxed);
+        });
+    }
+
+    #[test]
+    fn snapshot_rejects_perf_hooks_observer_queue_and_monitor_state() {
+        assert_perf_hooks_state_rejected(|state| {
+            state.performance_observer_mask.store(1, Ordering::Relaxed);
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            state
+                .performance_native_sink
+                .store(value::encode_null(), Ordering::Relaxed);
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            state
+                .performance_observer_mask
+                .store(1 << 6, Ordering::Relaxed);
+            crate::runtime_node_perf_hooks::queue_resource_entry(
+                state,
+                crate::runtime_node_perf_hooks::NativeResourceTiming {
+                    name: "https://snapshot.invalid/".to_string(),
+                    start_time: 1.0,
+                    request_start_time: 2.0,
+                    response_start_time: 3.0,
+                    end_time: 4.0,
+                    response_status: 200,
+                    encoded_body_size: 5,
+                    decoded_body_size: 6,
+                },
+            );
+            state.performance_observer_mask.store(0, Ordering::Relaxed);
+        });
+        assert_perf_hooks_state_rejected(|state| {
+            let capability = state
+                .shared_state
+                .as_ref()
+                .expect("shared runtime state")
+                .perf_histograms
+                .create(1_000, 1_000_000, 3)
+                .expect("create event loop histogram");
+            state
+                .performance_event_loop_monitors
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(
+                    0,
+                    crate::runtime_node_perf_hooks::EventLoopDelayMonitor {
+                        capability,
+                        resolution: std::time::Duration::from_millis(10),
+                        next_deadline: None,
+                        enabled: false,
+                    },
+                );
+        });
+    }
+
+    #[test]
+    fn snapshot_rejects_perf_hooks_histogram_wrapper_side_table() {
+        assert_perf_hooks_state_rejected(|state| {
+            let capability = state
+                .shared_state
+                .as_ref()
+                .expect("shared runtime state")
+                .perf_histograms
+                .create(1, 1_000, 3)
+                .expect("create histogram");
+            state.performance_histogram_wrappers.alloc(
+                crate::runtime_node_perf_hooks_histogram::HistogramWrapperEntry {
+                    capability,
+                    kind: 1,
+                },
+            )
+        });
+    }
 }
