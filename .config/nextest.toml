@@ -12,29 +12,13 @@ fail-fast = false
 # 3s 全局硬超时。
 slow-timeout = { period = "3s", terminate-after = 1 }
 
-[profile.ci]
-test-threads = "num-cpus"
-failure-output = "immediate-final"
-success-output = "never"
-status-level = "pass"
-final-status-level = "all"
-fail-fast = false
-slow-timeout = { period = "3s", terminate-after = 1 }
-
-# 串行观测 profile 仍执行同一 3s 正确性门禁。
-[profile.perf]
-test-threads = 1
-failure-output = "immediate-final"
-success-output = "never"
-status-level = "slow"
-final-status-level = "slow"
-fail-fast = false
-slow-timeout = { period = "3s", terminate-after = 1 }
-
 [test-groups]
 # 资源隔离（端口/共享 cache 路径），不是墙钟预算。
 cluster-ipc = { max-threads = 1 }
 runtime-cache-delete = { max-threads = 1 }
+# Worker fixture 会额外启动 Wasmtime Engine 与 host worker；保持 3s 硬门禁，
+# 仅限制它们彼此及与 CPU 密集 fixture 的资源竞争。
+worker-runtime = { max-threads = 1 }
 
 # cluster IPC：同二进制内串行，并独占测试执行槽；网络/子进程本身均低于 3s，
 # 但与全量 CPU 密集 fixture 并发时会越过同一硬门禁。
@@ -43,18 +27,14 @@ filter = 'binary(cluster_ipc)'
 test-group = 'cluster-ipc'
 threads-required = "num-cpus"
 
-
-[[profile.ci.overrides]]
-filter = 'binary(cluster_ipc)'
-test-group = 'cluster-ipc'
-threads-required = "num-cpus"
-
-
 [[profile.default.overrides]]
 filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
 test-group = 'runtime-cache-delete'
 
-[[profile.ci.overrides]]
-filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
-test-group = 'runtime-cache-delete'
+# Worker/async fixture 自身无墙钟豁免，但会同时启动主 Runtime 与 host worker；
+# 占用五个调度槽，避免 CPU 争用越过同一 3s 门禁，同时保留其余测试并发。
+[[profile.default.overrides]]
+filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/)'
+test-group = 'worker-runtime'
+threads-required = 5
 
