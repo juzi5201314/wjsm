@@ -107,3 +107,9 @@ This index tracks files created under this project's `docs/aegis/` workspace.
 | 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/90-evidence.md | 90-evidence |
 | 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/99-reflection.md | 99-reflection |
 | 2026-07-12 | work | docs/aegis/work/2026-07-12-node-async-hooks/proof-bundle.md | proof-bundle |
+
+| 2026-07-16 | spec | docs/aegis/specs/2026-07-16-zgc-performance-design.md | 2026-07-16-zgc-performance-design |
+| 2026-07-16 | work | docs/aegis/work/2026-07-16-zgc-performance/10-intent.md | 10-intent |
+| 2026-07-16 | work | docs/aegis/work/2026-07-16-zgc-performance/20-checkpoint.md | 20-checkpoint |
+| 2026-07-16 | work | docs/aegis/work/2026-07-16-zgc-performance/90-evidence.md | 90-evidence |
+| 2026-07-16 | plan | docs/aegis/plans/2026-07-16-zgc-performance.md | 2026-07-16-zgc-performance |
