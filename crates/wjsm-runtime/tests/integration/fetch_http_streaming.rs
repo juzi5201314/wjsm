@@ -14,7 +14,7 @@ fn run_async(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
     let rt = Builder::new_current_thread().enable_all().build()?;
     let options = RuntimeOptions {
-        compiler: Some(RuntimeCompiler::Winch),
+        compiler: Some(RuntimeCompiler::Cranelift),
         ..RuntimeOptions::default()
     };
     let (out, _) =

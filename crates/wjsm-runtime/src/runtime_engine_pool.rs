@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::Duration;
-use wasmtime::{Config, Engine, OptLevel, Strategy, UpdateDeadline};
+use wasmtime::{Engine, UpdateDeadline};
+use wjsm_engine_config::{CompilerStrategy, CraneliftOptLevel, EngineConfig, RuntimeEngineOptions};
 
 /// Engine 池键：决定 wasmtime Config 的全部可区分维度。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -101,8 +102,8 @@ pub(crate) fn acquire_engine(key: EngineConfigKey) -> Result<PooledEngine> {
     if let Some(existing) = pool.get(&key) {
         return Ok(existing.clone());
     }
-    let config = build_engine_config(&key);
-    let engine = Engine::new(&config)
+    let engine = build_engine_config(&key)
+        .build()
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
     let epoch = EpochController::new(engine.clone());
     let pooled = PooledEngine { engine, epoch };
@@ -113,39 +114,26 @@ pub(crate) fn acquire_engine(key: EngineConfigKey) -> Result<PooledEngine> {
 /// 冷路径 / 启动快照构建：不经池，直接 `Engine::new`。
 #[allow(dead_code)]
 pub(crate) fn create_cold_engine(key: EngineConfigKey) -> Result<Engine> {
-    let config = build_engine_config(&key);
-    Engine::new(&config).map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))
+    build_engine_config(&key)
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))
 }
 
-pub(crate) fn build_engine_config(key: &EngineConfigKey) -> Config {
-    let mut config = Config::new();
-    if key.guest_debug {
-        config.guest_debug(true);
-    } else if key.compiler == RuntimeCompiler::Winch {
-        config.strategy(Strategy::Winch);
-    }
-    match key.opt_level {
-        OptLevelKey::None => {
-            config.cranelift_opt_level(OptLevel::None);
-        }
-        OptLevelKey::SpeedAndSize => {
-            config.cranelift_opt_level(OptLevel::SpeedAndSize);
-        }
-        OptLevelKey::Default => {}
-    }
-    if key.use_epoch_async_yield {
-        config.epoch_interruption(true);
-    }
-    if let Some(bytes) = key.memory_reservation {
-        config.memory_reservation(bytes);
-        config.memory_reservation_for_growth(bytes.clamp(1 << 20, 64 << 20));
-        config.memory_guard_size(64 << 10);
-        config.guard_before_linear_memory(false);
-    }
-    config.wasm_backtrace_max_frames(std::num::NonZero::new(50));
-    config.generate_address_map(true);
-    config.wasm_bulk_memory(true);
-    config
+pub(crate) fn build_engine_config(key: &EngineConfigKey) -> EngineConfig {
+    EngineConfig::runtime(RuntimeEngineOptions {
+        compiler: match key.compiler {
+            RuntimeCompiler::Cranelift => CompilerStrategy::Cranelift,
+            RuntimeCompiler::Winch => CompilerStrategy::Winch,
+        },
+        opt_level: match key.opt_level {
+            OptLevelKey::Default => CraneliftOptLevel::Default,
+            OptLevelKey::None => CraneliftOptLevel::None,
+            OptLevelKey::SpeedAndSize => CraneliftOptLevel::SpeedAndSize,
+        },
+        epoch_interruption: key.use_epoch_async_yield,
+        memory_reservation: key.memory_reservation,
+        guest_debug: key.guest_debug,
+    })
 }
 
 impl EpochController {
@@ -230,7 +218,7 @@ mod tests {
     #[test]
     fn engine_pool_same_key_shares_engine_identity() {
         let key = EngineConfigKey {
-            compiler: RuntimeCompiler::Winch,
+            compiler: RuntimeCompiler::Cranelift,
             opt_level: OptLevelKey::Default,
             use_epoch_async_yield: true,
             memory_reservation: None,
@@ -245,6 +233,7 @@ mod tests {
         assert!(Arc::ptr_eq(&a.epoch, &b.epoch));
     }
 
+    #[cfg(not(target_arch = "aarch64"))]
     #[test]
     fn engine_pool_compiler_key_isolation() {
         let winch = EngineConfigKey {

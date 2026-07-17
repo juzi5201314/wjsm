@@ -7,7 +7,6 @@
 use anyhow::{Result, bail};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
 
 use wjsm_ir::constants;
 use wjsm_ir::value;
@@ -650,7 +649,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
 
 // ── ABI hash ────────────────────────────────────────────────────────
 
-pub fn abi_hash() -> u64 {
+fn abi_hasher() -> DefaultHasher {
     let mut hasher = DefaultHasher::new();
     SNAPSHOT_FORMAT_VERSION.hash(&mut hasher);
 
@@ -722,23 +721,22 @@ pub fn abi_hash() -> u64 {
     wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE.hash(&mut hasher);
     wjsm_ir::SHADOW_MEMORY_INDEX.hash(&mut hasher);
     wjsm_ir::SHADOW_MEMORY_NAME.hash(&mut hasher);
-    // Embedded support module / builtin JS bundle hash（运行时通过
-    // `register_abi_hash_external_input` 注入；未注入时为 0，不参与 hash 改变）。
-    if let Some(extra) = ABI_HASH_EXTERNAL_INPUT.get() {
-        extra.hash(&mut hasher);
-    }
 
-    hasher.finish()
+    hasher
 }
 
-/// 进程级注入：embedded support module / builtin JS bundle 的额外 ABI 输入。
-/// 由 `wjsm-runtime` 在启动时 set 一次（运行时输入，初始化时刻 + 来源都不在
-/// 本 crate 静态期可知，所以只能用 `OnceLock`，不可换 `LazyLock`）。
-/// 重复 set 静默忽略；这是为了让 build.rs 与运行时共享同一注入点。
-static ABI_HASH_EXTERNAL_INPUT: OnceLock<u64> = OnceLock::new();
+/// 返回仅由静态 snapshot layout 与 runtime value ABI 决定的哈希。
+pub fn abi_hash() -> u64 {
+    abi_hasher().finish()
+}
 
-pub fn register_abi_hash_external_input(value: u64) {
-    let _ = ABI_HASH_EXTERNAL_INPUT.set(value);
+/// 把调用方拥有的 support/builtin/engine fingerprint 显式纳入 ABI 哈希。
+///
+/// 该函数不持有进程全局状态，同一进程内的不同 engine profile 可独立校验。
+pub fn abi_hash_with_external_input(external_input: u64) -> u64 {
+    let mut hasher = abi_hasher();
+    external_input.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn align_up(n: u32, align: u32) -> u32 {
@@ -883,6 +881,16 @@ mod tests {
     #[test]
     fn abi_hash_includes_heap_layout_inputs() {
         assert_eq!(abi_hash(), expected_static_abi_hash());
+    }
+
+    #[test]
+    fn external_abi_input_is_explicit_and_order_independent() {
+        let first = abi_hash_with_external_input(0x1234_5678_9abc_def0);
+        let second = abi_hash_with_external_input(0xfedc_ba98_7654_3210);
+
+        assert_ne!(first, abi_hash());
+        assert_ne!(first, second);
+        assert_eq!(first, abi_hash_with_external_input(0x1234_5678_9abc_def0));
     }
 
     #[test]

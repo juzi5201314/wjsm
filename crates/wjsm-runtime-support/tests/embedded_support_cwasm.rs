@@ -6,6 +6,7 @@
 
 #![cfg(feature = "embedded")]
 
+use wjsm_engine_config::EngineConfig;
 use wjsm_runtime_support::{SupportGcFlavor, abi, embedded_support_cwasm};
 
 #[test]
@@ -38,12 +39,8 @@ fn embedded_available_support_flavors_match_abi() {
 
 #[test]
 fn embedded_available_support_cwasm_deserializes() {
-    let mut cfg = wasmtime::Config::new();
-    // 构建期 precompile 现已启用 epoch_interruption（匹配运行时 async yield 路径），
-    // deserialize 时 engine config 必须一致。
-    cfg.epoch_interruption(true);
-    cfg.wasm_bulk_memory(true);
-    let engine = wasmtime::Engine::new(&cfg).expect("engine");
+    // build.rs 与本测试共用 canonical artifact engine。
+    let engine = EngineConfig::artifact().build().expect("engine");
 
     for flavor in [
         SupportGcFlavor::MarkSweep,

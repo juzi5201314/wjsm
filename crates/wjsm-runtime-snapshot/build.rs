@@ -14,16 +14,8 @@ fn main() -> anyhow::Result<()> {
     if snapshot_bytes.is_empty() {
         anyhow::bail!("embedded startup snapshot is empty");
     }
-
-    let view = wjsm_snapshot_format::decode_snapshot(&snapshot_bytes)?;
-    let current_abi = wjsm_snapshot_format::abi_hash();
-    if view.header.abi_hash != current_abi {
-        anyhow::bail!(
-            "embedded snapshot ABI hash mismatch: file={:#018x} runtime={:#018x}",
-            view.header.abi_hash,
-            current_abi
-        );
-    }
+    wjsm_snapshot_format::decode_snapshot(&snapshot_bytes)
+        .map_err(|e| anyhow::anyhow!("embedded startup snapshot self-validation failed: {e:#}"))?;
 
     fs::write(&snapshot_path, &snapshot_bytes)?;
 

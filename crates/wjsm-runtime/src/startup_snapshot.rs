@@ -53,6 +53,7 @@ fn read_required_u64_global(
 pub(crate) fn capture_startup_snapshot(
     store: &mut Store<crate::RuntimeState>,
     env: &WasmEnv,
+    snapshot_abi_hash: u64,
 ) -> Result<StartupSnapshotOwned> {
     let heap_start = read_i32_global(store, env.object_heap_start) as usize;
     let heap_ptr = env.heap_ptr.get(&mut *store).i32().unwrap_or(0) as usize;
@@ -167,7 +168,7 @@ pub(crate) fn capture_startup_snapshot(
     let header = StartupSnapshotHeader {
         magic: SNAPSHOT_MAGIC,
         format_version: SNAPSHOT_FORMAT_VERSION,
-        abi_hash: abi_hash(),
+        abi_hash: snapshot_abi_hash,
         heap_used,
         immortal_objects_end_rel: heap_used,
         obj_table_count: obj_table_count as u32,
@@ -511,14 +512,14 @@ pub(crate) fn restore_startup_snapshot(
     store: &mut Store<crate::RuntimeState>,
     env: &WasmEnv,
     snapshot: StartupSnapshotView<'_>,
+    expected_abi_hash: u64,
 ) -> Result<()> {
     // ABI hash 验证
-    let current_abi = abi_hash();
-    if snapshot.header.abi_hash != current_abi {
+    if snapshot.header.abi_hash != expected_abi_hash {
         bail!(
             "restore: ABI hash mismatch: snapshot={:#018x} current={:#018x}",
             snapshot.header.abi_hash,
-            current_abi
+            expected_abi_hash
         );
     }
 

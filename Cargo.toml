@@ -16,6 +16,7 @@ members = [
     "crates/wjsm-module",
     "crates/wjsm-runtime-snapshot",
     "crates/wjsm-runtime-support",
+    "crates/wjsm-engine-config",
     "crates/wjsm-snapshot-format",
 ]
 
@@ -30,7 +31,7 @@ clap_complete = "4.6.0"
 swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common", "ecma_visit", "ecma_ast_serde", "ecma_codegen"] }
 thiserror = "2.0.18"
 wasm-encoder = "0.246.2"
-wasmtime = { version = "43.0.0", features = ["async", "winch", "debug"] }
+wasmtime = { version = "=43.0.2", features = ["async", "winch", "debug"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "io-util", "process"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake", "connect"] }
 futures-util = "0.3"

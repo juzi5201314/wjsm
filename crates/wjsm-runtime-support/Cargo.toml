@@ -12,8 +12,10 @@ embedded = []
 [build-dependencies]
 anyhow = { workspace = true }
 wasmtime = { workspace = true }
+wjsm-engine-config = { path = "../wjsm-engine-config" }
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 
 [dev-dependencies]
 wasmtime = { workspace = true }
+wjsm-engine-config = { path = "../wjsm-engine-config" }
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }

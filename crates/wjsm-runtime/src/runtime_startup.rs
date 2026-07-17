@@ -2,26 +2,28 @@ use super::*;
 use crate::runtime_linker::{register_common_bridges, register_complex_bridges, register_linker};
 
 pub(super) fn startup_snapshot_enabled() -> bool {
-    // 首次进入 startup 路径时，注入 ABI hash external input：
-    // 把 support module layout hash + builtin JS bundle hash 合并为单个 u64，
-    // 任一变更都使 embedded snapshot abi_hash 失配 → cold rebuild。
-    // OnceLock 重复 set 静默；build.rs 与运行时都安全调用此处。
-    wjsm_snapshot_format::register_abi_hash_external_input(combined_abi_external_input());
-    // 默认开启；显式设 WJSM_STARTUP_SNAPSHOT=0/off/false 可关闭。
+    // 默认开启；显式关闭时不构造 engine 或散列任何 snapshot ABI 状态。
     !matches!(
         std::env::var("WJSM_STARTUP_SNAPSHOT").as_deref(),
         Ok("0") | Ok("false") | Ok("off")
     )
 }
 
-/// 把 support module layout hash 与 builtin JS bundle hash 合并为单个稳定 u64。
-/// 任一项变化都会使 combined hash 变化 → embedded snapshot ABI mismatch。
-pub(super) fn combined_abi_external_input() -> u64 {
+/// 计算当前 engine profile 对应的完整 snapshot ABI 哈希。
+pub(super) fn startup_snapshot_abi_hash(engine: &Engine) -> u64 {
+    wjsm_snapshot_format::abi_hash_with_external_input(combined_abi_external_input(engine))
+}
+/// 把 support layout hash、builtin JS bundle hash 与 active engine fingerprint
+/// 合并为单个稳定 u64。任一项变化都会使 embedded snapshot ABI 失配。
+pub(super) fn combined_abi_external_input(engine: &Engine) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
     wjsm_runtime_support::support_abi_union_hash().hash(&mut h);
     builtin_js_bundle_hash().hash(&mut h);
+    // fingerprint 由唯一 engine-config owner 计算，不把 Wasmtime 泄漏进
+    // snapshot-format。
+    wjsm_engine_config::compatibility_fingerprint(engine).hash(&mut h);
     h.finish()
 }
 
@@ -94,8 +96,8 @@ pub(crate) fn startup_engine_config(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
     guest_debug: bool,
-) -> Config {
-    // 冷路径兼容：从环境解析 compiler，构造 Config（不经池）。
+) -> wjsm_engine_config::EngineConfig {
+    // 冷路径兼容：从环境解析 compiler，构造 EngineConfig（不经池）。
     let key = crate::runtime_engine_pool::engine_config_key(
         None,
         use_epoch_async_yield,
@@ -112,7 +114,7 @@ pub(crate) fn startup_engine_config_with_compiler(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
     guest_debug: bool,
-) -> Config {
+) -> wjsm_engine_config::EngineConfig {
     let key = crate::runtime_engine_pool::engine_config_key(
         compiler,
         use_epoch_async_yield,
@@ -881,9 +883,13 @@ pub(super) async fn try_restore_snapshot(
             return false;
         }
     };
-    if let Err(e) =
-        startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)
-    {
+    let expected_abi_hash = startup_snapshot_abi_hash(bundle.store.engine());
+    if let Err(e) = startup_snapshot::restore_startup_snapshot(
+        &mut bundle.store,
+        &bundle.wasm_env,
+        view,
+        expected_abi_hash,
+    ) {
         if startup_snapshot_debug_enabled() {
             eprintln!("startup snapshot restore failed: {e:#}");
         }

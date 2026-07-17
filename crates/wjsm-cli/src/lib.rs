@@ -2426,6 +2426,17 @@ pub fn run_file_in_process_with_options(
     }
 }
 
+fn default_in_process_compiler() -> runtime::RuntimeCompiler {
+    #[cfg(target_arch = "aarch64")]
+    {
+        runtime::RuntimeCompiler::Cranelift
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        runtime::RuntimeCompiler::Winch
+    }
+}
+
 fn runtime_options_for_in_process(
     input: &Path,
     script_args: &[&str],
@@ -2458,7 +2469,7 @@ fn runtime_options_for_in_process(
         false,
     )?;
 
-    // 测试 in-process 默认 Winch；显式 WJSM_COMPILER 优先。
+    // in-process 测试在支持 threads 的平台保留 Winch；AArch64 使用 Cranelift。
     let compiler = match env
         .iter()
         .rev()
@@ -2470,7 +2481,7 @@ fn runtime_options_for_in_process(
             Some(runtime::RuntimeCompiler::Cranelift)
         }
         Some(_) => None,
-        None => Some(runtime::RuntimeCompiler::Winch),
+        None => Some(default_in_process_compiler()),
     };
 
     Ok(runtime::RuntimeOptions {

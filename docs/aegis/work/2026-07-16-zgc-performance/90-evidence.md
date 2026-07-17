@@ -100,3 +100,42 @@ perf report --stdio --no-children --percent-limit 0.5 -i /tmp/wjsm-zgc.data
 - 规格§18.5与计划Task 1/23/24/25已增加fail-closed资源准入：`required_total=4*heap`、`required_available=3*heap+headroom`、RLIMIT/Job虚拟地址检查、exit 78、无自动缩heap、顺序/独占执行、large profile硬cgroup/Job隔离、90% watchdog、swap/PSI/OOM事件熔断。
 - fake `HostResourceProvider`合同固定：4 GiB available时1/4/16 GiB均在spawn前拒绝且child计数为零；256 MiB可运行。
 - 按新公式，当前主机允许1 GiB PR上限，但4 GiB与16 GiB大堆均会在spawn前拒绝。
+
+## Task 0 implementation evidence
+
+- 新增 `crates/wjsm-engine-config`：`EngineConfig::artifact()` / `EngineConfig::runtime(RuntimeEngineOptions)` 为唯一 `Config` 构造 owner；固定 threads、shared_memory、memory64、multi-memory、bulk-memory、backtrace(50)、address-map。
+- Canonical artifact 固定 Cranelift + epoch interruption；runtime 保留 compiler / opt / epoch / memory reservation / guest-debug 语义（guest_debug 强制 Cranelift）。
+- `compatibility_fingerprint` 基于 `Engine::precompile_compatibility_hash()` + 固定种子 FNV-1a；snapshot-format 以纯函数显式接收每个 engine 的 external input，不使用 first-writer-wins 全局状态；默认路径复用 active Engine，显式关闭 snapshot 时不计算 fingerprint。
+- AArch64 明确拒绝无法提供 threads capability 的 Winch profile，不静默关闭 threads 或切换 compiler；具名 AArch64 runner 由 Task 23 关闭条件测试证据。
+- 迁移：`runtime_engine_pool`、`runtime_startup`、snapshot/realm/bench 冷路径、`wjsm-runtime-support/build.rs` 与 support deserialize 测试全部复用 owner；除 engine-config 外无 `wasmtime::Config::new()`。
+- workspace `wasmtime = "=43.0.2"`，`Cargo.lock` 记录 `wasmtime 43.0.2`。
+- feasibility：user main memory32 + imported shared memory64；user/support 双 module 共享；object address `> 32 GiB`；Wasm SeqCst atomic 与 host `AtomicU64` 各 +10000，最终值 20000；support cwasm 由 canonical build engine precompile、由相同 fingerprint 的默认 runtime engine deserialize/instantiate。
+- feasibility 的两个 unsafe 边界分别记录可信 cwasm 来源/兼容 fingerprint，以及 shared mapping 的范围、对齐、生命周期、UnsafeCell 和全原子访问不变量。
+- 动态 runtime profile 的既有 support cwasm 编译 fallback 本任务不扩张也不提前删除；最终退役门由计划 Task 15/26 承担。
+
+### GREEN commands
+
+```text
+cargo nextest run -p wjsm-engine-config
+# Summary: 2 tests run: 2 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --test shared_memory64_feasibility
+# Summary: 1 test run: 1 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime -E 'test(startup_snapshot)'
+# Summary: 9 tests run: 9 passed, 296 skipped
+
+cargo nextest run -p wjsm-runtime-support
+# Summary: 9 tests run: 9 passed, 0 skipped
+
+cargo nextest run -p wjsm-snapshot-format
+# Summary: 6 tests run: 6 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime -E 'test(engine_pool)'
+# Summary: 6 tests run: 6 passed, 299 skipped
+
+cargo check -p wjsm-runtime-snapshot
+# Finished dev profile; 0 warnings
+```
+
+状态：Task 0 GREEN 完成；规格 review 已通过，质量 findings 已修复并由新增命令验证；按用户要求在 Phase A 结束统一 review。

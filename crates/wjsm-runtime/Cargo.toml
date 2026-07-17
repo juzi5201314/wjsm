@@ -10,6 +10,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 [dependencies]
 anyhow = { workspace = true }
 wasmtime = { workspace = true }
+wjsm-engine-config = { path = "../wjsm-engine-config" }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
@@ -53,6 +54,7 @@ rcgen = { workspace = true }
 webpki-roots = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+wjsm-engine-config = { path = "../wjsm-engine-config" }
 
 [[bench]]
 name = "gc_stress"

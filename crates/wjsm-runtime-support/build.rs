@@ -1,7 +1,7 @@
 //! Build-time support module precompile.
 //!
 //! 1. 调用 `wjsm_backend_wasm::emit_support_module(flavor)` 产三种 support.wasm；
-//! 2. 用 `wasmtime::Engine::precompile_module` 预编译为 cwasm；
+//! 2. 用 canonical artifact engine `precompile_module` 预编译为 cwasm；
 //! 3. 写入 OUT_DIR/wjsm_support_{mark_sweep,g1,zgc}.cwasm，供 `src/lib.rs`
 //!    通过 `include_bytes!` 嵌入二进制。
 //!
@@ -15,13 +15,8 @@ fn main() -> anyhow::Result<()> {
 
     let out_dir =
         std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR not set by cargo"));
-    let mut cfg = wasmtime::Config::new();
-    // 运行时 engine 默认启用 epoch interruption（async yield 路径），
-    // precompile 必须匹配，否则 Module::deserialize 会拒绝：
-    // "Module was compiled without epoch interruption but it is enabled for the host"
-    cfg.epoch_interruption(true);
-    cfg.wasm_bulk_memory(true);
-    let engine = wasmtime::Engine::new(&cfg)?;
+    // 唯一 owner：与 runtime deserialize 使用同一 canonical artifact profile。
+    let engine = wjsm_engine_config::EngineConfig::artifact().build()?;
 
     for flavor in [
         wjsm_backend_wasm::GcFlavor::MarkSweep,
@@ -41,6 +36,7 @@ fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../wjsm-backend-wasm/src/support_module.rs");
     println!("cargo:rerun-if-changed=src/abi.rs");
+    println!("cargo:rerun-if-changed=../wjsm-engine-config/src/lib.rs");
 
     Ok(())
 }

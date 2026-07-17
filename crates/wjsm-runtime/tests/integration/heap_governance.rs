@@ -22,7 +22,7 @@ fn run_js(source: &str) -> Result<String> {
     run_js_with_options(
         source,
         RuntimeOptions {
-            compiler: Some(RuntimeCompiler::Winch),
+            compiler: Some(RuntimeCompiler::Cranelift),
             ..RuntimeOptions::default()
         },
     )
@@ -32,7 +32,7 @@ fn run_js_with_options(source: &str, options: RuntimeOptions) -> Result<String> 
     let wasm = compile_source(source)?;
     let mut opts = options;
     if opts.compiler.is_none() {
-        opts.compiler = Some(RuntimeCompiler::Winch);
+        opts.compiler = Some(RuntimeCompiler::Cranelift);
     }
     let (out, _) =
         RT.block_on(async { execute_with_writer_with_options(&wasm, Vec::new(), opts).await })?;

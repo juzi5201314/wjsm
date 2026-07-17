@@ -24,7 +24,7 @@ fn install_embedded_startup_snapshot_exposes_valid_bytes() -> Result<()> {
     install_embedded_startup_snapshot(&bytes);
     let embedded = embedded_startup_snapshot().expect("embedded snapshot 已安装");
     let view = wjsm_snapshot_format::decode_snapshot(embedded)?;
-    assert_eq!(view.header.abi_hash, wjsm_snapshot_format::abi_hash());
+    assert_ne!(view.header.abi_hash, wjsm_snapshot_format::abi_hash());
     Ok(())
 }
 

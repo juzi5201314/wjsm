@@ -482,28 +482,30 @@ fn cache_entry_stats(path: &std::path::Path) -> Result<(usize, u64)> {
 
 /// 构建时生成嵌入式 startup snapshot 字节（空 seed JS → cold bootstrap → capture）。
 pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
-    // build.rs 路径不会进入运行时 `startup_snapshot_enabled()`，必须在此显式注册
-    // ABI external input，确保 snapshot header.abi_hash 与运行时 abi_hash() 一致。
-    wjsm_snapshot_format::register_abi_hash_external_input(combined_abi_external_input());
+    let engine = wjsm_engine_config::EngineConfig::artifact().build()?;
     let seed = concat_builtin_js_sources();
     let wasm = compile_source(&seed)?;
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create tokio runtime for snapshot build: {e}"))?;
-    rt.block_on(build_embedded_startup_snapshot_bytes_async(&wasm))
+    rt.block_on(build_embedded_startup_snapshot_bytes_async(&engine, &wasm))
 }
 
-async fn build_embedded_startup_snapshot_bytes_async(wasm: &[u8]) -> Result<Vec<u8>> {
-    let config = startup_engine_config(true, None, false);
-    let engine = Engine::new(&config)
-        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
-    let module = Module::new(&engine, wasm)
+async fn build_embedded_startup_snapshot_bytes_async(
+    engine: &Engine,
+    wasm: &[u8],
+) -> Result<Vec<u8>> {
+    let module = Module::new(engine, wasm)
         .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e))?;
     let mut bundle =
-        instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default()).await?;
+        instantiate_execute_bundle(engine, &module, None, true, RuntimeOptions::default()).await?;
     run_bootstrap_only(&mut bundle).await?;
-    let snap = startup_snapshot::capture_startup_snapshot(&mut bundle.store, &bundle.wasm_env)?;
+    let current_abi = startup_snapshot_abi_hash(engine);
+    let snap = startup_snapshot::capture_startup_snapshot(
+        &mut bundle.store,
+        &bundle.wasm_env,
+        current_abi,
+    )?;
     let bytes = startup_snapshot_format::encode_snapshot(&snap);
-    let current_abi = startup_snapshot_format::abi_hash();
     if snap.header.abi_hash != current_abi {
         anyhow::bail!(
             "embedded snapshot ABI hash mismatch: captured={:#018x} current={:#018x}",
@@ -523,17 +525,17 @@ pub fn install_embedded_startup_snapshot(snapshot_bytes: impl AsRef<[u8]>) {
 
 /// 返回已通过 decode + ABI 校验的嵌入式 snapshot 字节；未安装或校验失败时为 `None`。
 pub fn embedded_startup_snapshot() -> Option<&'static [u8]> {
-    embedded_startup_snapshot_view()
+    EMBEDDED_STARTUP_SNAPSHOT.get()?;
+    let engine = wjsm_engine_config::EngineConfig::artifact().build().ok()?;
+    embedded_startup_snapshot_view(&engine)
 }
 
-pub(crate) fn embedded_startup_snapshot_view() -> Option<&'static [u8]> {
+pub(crate) fn embedded_startup_snapshot_view(engine: &Engine) -> Option<&'static [u8]> {
     let arc = EMBEDDED_STARTUP_SNAPSHOT.get()?;
     let bytes = arc.as_ref();
     let view = startup_snapshot_format::decode_snapshot(bytes).ok()?;
-    // 惰性注册 external input（OnceLock 幂等）：确保 abi_hash() 包含 support module
-    // layout hash + builtin JS bundle hash，与 capture 时的 ABI 输入一致。
-    startup_snapshot_format::register_abi_hash_external_input(combined_abi_external_input());
-    if view.header.abi_hash != startup_snapshot_format::abi_hash() {
+    let current_abi = startup_snapshot_abi_hash(engine);
+    if view.header.abi_hash != current_abi {
         if startup_snapshot_debug_enabled() {
             eprintln!("embedded snapshot abi hash mismatch; falling back to cold startup");
         }
@@ -630,9 +632,9 @@ struct StartupBenchTimings {
 async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTimings> {
     let mut timings = StartupBenchTimings::default();
 
-    let config = startup_engine_config(true, None, false);
     let start = std::time::Instant::now();
-    let engine = Engine::new(&config)
+    let engine = startup_engine_config(true, None, false)
+        .build()
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
     timings.engine_only = start.elapsed();
 
@@ -704,7 +706,12 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
 
     // snapshot build = capture + encode；解码与恢复在新 instance 上重测一次。
     let start = std::time::Instant::now();
-    let snap = startup_snapshot::capture_startup_snapshot(&mut store, &wasm_env)?;
+    let snapshot_abi_hash = startup_snapshot_abi_hash(&engine);
+    let snap = startup_snapshot::capture_startup_snapshot(
+        &mut store,
+        &wasm_env,
+        snapshot_abi_hash,
+    )?;
     let bytes = startup_snapshot_format::encode_snapshot(&snap);
     timings.snapshot_build = start.elapsed();
 
@@ -734,7 +741,12 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     }
     initialize_host_post_bootstrap(&mut store2, &env2)?;
     let start = std::time::Instant::now();
-    startup_snapshot::restore_startup_snapshot(&mut store2, &env2, view)?;
+    startup_snapshot::restore_startup_snapshot(
+        &mut store2,
+        &env2,
+        view,
+        snapshot_abi_hash,
+    )?;
     timings.snapshot_restore = start.elapsed();
     Ok(timings)
 }
@@ -746,10 +758,9 @@ async fn execute_for_startup_bench(
 ) -> Result<StartupBenchTimings> {
     let mut timings = StartupBenchTimings::default();
     let total_start = std::time::Instant::now();
-    let config = startup_engine_config(true, None, false);
-
     let start = std::time::Instant::now();
-    let engine = Engine::new(&config)
+    let engine = startup_engine_config(true, None, false)
+        .build()
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
     timings.engine_only = start.elapsed();
 
@@ -759,7 +770,7 @@ async fn execute_for_startup_bench(
     timings.module_only = start.elapsed();
 
     let snapshot_bytes = if snapshot_enabled {
-        embedded_startup_snapshot_view()
+        embedded_startup_snapshot_view(&engine)
     } else {
         None
     };
@@ -777,7 +788,12 @@ async fn execute_for_startup_bench(
         let start = std::time::Instant::now();
         // Snapshot restore 前先运行 init_globals 使 __arr_proto_table_len 等 globals 就绪。
         let _ = run_init_globals_only(&mut bundle).await;
-        startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)?;
+        startup_snapshot::restore_startup_snapshot(
+            &mut bundle.store,
+            &bundle.wasm_env,
+            view,
+            startup_snapshot_abi_hash(&engine),
+        )?;
         timings.snapshot_restore = start.elapsed();
         snapshot_restored = true;
     }
@@ -847,7 +863,7 @@ async fn execute_with_writer_shared_inner_with_stats<W: Write>(
     // 解析 debug info（wjsm_debug 优先，回退 sourcemap），供 inspector 使用。
     let debug_info = inspector::DebugInfo::parse_from_wasm(wasm_bytes);
     let snapshot_bytes = if startup_snapshot_enabled() {
-        embedded_startup_snapshot_view()
+        embedded_startup_snapshot_view(engine)
     } else {
         None
     };
@@ -2725,8 +2741,9 @@ mod tests {
             std::env::set_var("WJSM_CACHE_DIR", &cache_dir);
         }
 
-        let config = startup_engine_config(true, None, false);
-        let engine = Engine::new(&config).map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
+        let engine = startup_engine_config(true, None, false)
+            .build()
+            .map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
 
         // ── 1. WASM 缓存 warm 命中 ──────────────────────────────────
         let _cold = compile_or_load_cached(&engine, &wasm)?;
@@ -2794,8 +2811,9 @@ mod tests {
                 let mut total = Duration::ZERO;
                 for _ in 0..iters {
                     rt.block_on(async {
-                        let config = startup_engine_config(true, None, false);
-                        let engine = Engine::new(&config).expect("engine");
+                        let engine = startup_engine_config(true, None, false)
+                            .build()
+                            .expect("engine");
                         let module = Module::new(&engine, &wasm).expect("module");
                         let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));
                         store.set_epoch_deadline(1);
@@ -2825,6 +2843,7 @@ mod tests {
                             &mut store,
                             &env,
                             snap_view.clone(),
+                            startup_snapshot_abi_hash(&engine),
                         )
                         .expect("restore");
                         total += start.elapsed();

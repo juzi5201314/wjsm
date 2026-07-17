@@ -7,7 +7,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, bail};
-use wasmtime::{AsContextMut, Engine};
+use wasmtime::AsContextMut;
 use wjsm_ir::constants::{
     FLAG_IS_ACCESSOR, HANDLE_TABLE_ENTRY_SIZE, HEAP_ARRAY_CAPACITY_OFFSET, HEAP_ARRAY_ELEMENT_SIZE,
     HEAP_OBJECT_CAPACITY_OFFSET, HEAP_OBJECT_HEADER_SIZE, HEAP_OBJECT_PROPERTY_SLOT_SIZE,
@@ -506,9 +506,9 @@ pub async fn probe_execution_realm_frame() -> Result<ExecutionRealmFrameProbe> {
     use crate::realm::{RealmId, with_execution_realm_frame};
 
     let wasm = compile_source("/* execution realm frame probe */")?;
-    let config = startup_engine_config(true, None, false);
-    let engine =
-        Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
+    let engine = startup_engine_config(true, None, false)
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
     let module = compile_or_load_cached(&engine, &wasm)?;
     let mut bundle =
         instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default()).await?;
@@ -570,9 +570,9 @@ pub async fn probe_eval_array_literal_in_realm() -> Result<EvalRealmArrayProbe> 
     use crate::realm::with_execution_realm_frame;
 
     let wasm = compile_source("/* eval realm array probe */")?;
-    let config = startup_engine_config(true, None, false);
-    let engine =
-        Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
+    let engine = startup_engine_config(true, None, false)
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
     let module = compile_or_load_cached(&engine, &wasm)?;
     let mut bundle =
         instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default()).await?;
@@ -617,9 +617,9 @@ pub async fn probe_eval_array_literal_in_realm() -> Result<EvalRealmArrayProbe> 
 /// Bootstrap 空模块、克隆 pristine realm，返回 handle 对照（集成测试入口）。
 pub async fn probe_clone_pristine_realm() -> Result<RealmCloneProbe> {
     let wasm = compile_source("/* realm clone probe */")?;
-    let config = startup_engine_config(true, None, false);
-    let engine =
-        Engine::new(&config).map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
+    let engine = startup_engine_config(true, None, false)
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to create engine: {e:?}"))?;
     let module = compile_or_load_cached(&engine, &wasm)?;
     let mut bundle =
         instantiate_execute_bundle(&engine, &module, None, true, RuntimeOptions::default()).await?;
