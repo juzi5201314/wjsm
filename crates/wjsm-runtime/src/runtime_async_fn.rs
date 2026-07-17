@@ -401,6 +401,7 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     completion_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
 ) -> anyhow::Result<(W, Vec<u8>, GcExecutionStats)> {
     let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
+    let steady_state_start = Instant::now();
     let main_result = main.call_async(&mut store, ()).await;
     let main_ok = match &main_result {
         Ok(return_val) => {
@@ -516,7 +517,9 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     if process_exit_signal.is_none() {
         process_exit_signal = crate::runtime_process::take_process_exit_signal(store.data());
     }
-    let gc_stats = store.data().gc_execution_stats_snapshot();
+    let mut gc_stats = store.data().gc_execution_stats_snapshot();
+    gc_stats.steady_state_ns = u64::try_from(steady_state_start.elapsed().as_nanos())
+        .expect("steady-state duration fits u64 nanoseconds");
     drop(store);
 
     let mut writer = writer;

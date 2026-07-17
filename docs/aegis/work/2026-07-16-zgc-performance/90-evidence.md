@@ -139,3 +139,54 @@ cargo check -p wjsm-runtime-snapshot
 ```
 
 状态：Task 0 GREEN 完成；规格 review 已通过，质量 findings 已修复并由新增命令验证；按用户要求在 Phase A 结束统一 review。
+
+## Task 1 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-gc-bench
+# 缺少 crate / schema / resource owner，失败。
+
+cargo nextest run -p wjsm-runtime -E 'test(gc_telemetry)'
+# 缺少 GcTelemetry API，失败。
+```
+
+### 实现事实
+
+- 新增 `wjsm-gc-bench` 专用 CLI：`capabilities`、`preflight`、`prepare-jdk`、`baseline`、`run`、`micro`、`compare`、`replay`、`gate`。
+- `HostResourceProvider` 以 `min(physical, finite cgroup/job limit)` 和 `min(MemAvailable, finite remaining)` 计算有效资源；准备/compare 在 `javac`/`java` spawn 前 fail-closed，资源不足返回 exit 78。
+- report 包含版本、硬件、counter source、resource snapshot、全部预算公式、admission 与 99% deterministic bootstrap CI；compile/Wasmtime compile/instantiate/startup 不计入 `steady_state_ns`。
+- `GcTelemetry` 使用 HDR histogram 保存 pause 分位数和精确 min/max；当前无法从 memory32 collector 获得的 physical allocation、GC CPU、barrier split、JDK numerator 明确编码为 null。
+- JDK 25 probe/patch 与 Java driver 已加入；错误/非 JDK 25 环境输出 `needs-verification` JSON，不作为普通测试失败。
+- `wjsm-gc-bench` 的 11 个 Rust tests 均标记 ignore，避免 workspace 全量 nextest 运行 benchmark contract；实际 benchmark 只经专用 CLI 入口执行。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime -E 'test(gc_telemetry)'
+# Summary: 1 test run: 1 passed, 303 skipped
+
+cargo check -p wjsm-gc-bench
+# Finished dev profile; 0 warnings
+
+cargo fmt --all -- --check
+# 通过
+
+cargo run --release -p wjsm-gc-bench -- preflight --heap 1g --profile pr --output /tmp/wjsm-gc-preflight.json
+# exit 0；JSON admission=admitted，含 required_total/available/virtual 公式。
+
+cargo run --release -p wjsm-gc-bench -- baseline --engine wjsm --gc zgc --heap 32m --scenario churn --samples 30 --output /tmp/wjsm-zgc-baseline.json
+# exit 0；30 个样本，steady-state mean=3_557_174_843 ns，99% CI=[3_477_254_643.7333336, 3_649_131_578.5333333]。
+
+cargo run --release -p wjsm-gc-bench -- prepare-jdk --jdk-home /definitely-not-jdk25 --jdk-probe-home /tmp/wjsm-jdk-probe --output /tmp/wjsm-jdk-probe-wrong.json
+# exit 0；JSON status=needs-verification。
+
+cargo nextest run -p wjsm-gc-bench
+# 0 run / 11 skipped；nextest 对无可运行选择返回 code 4，符合 benchmark tests 全部 ignore 的隔离设计。
+
+git apply --check --ignore-space-change crates/wjsm-gc-bench/jdk-probe/0001-zgc-benchmark-counters.patch
+# 以 OpenJDK master 相邻 ZGC source 验证补丁上下文；[INFERENCE] 仍需具名 JDK 25 GA runner 在 Task 24/25 提供最终 apply/build 证据。
+```
+
+状态：Task 1 GREEN 完成；JDK 25 instrumentation 与 physical/cpu/barrier raw numerator 的当前状态为 `needs-verification`，这是 gate 合同而非通过声明。

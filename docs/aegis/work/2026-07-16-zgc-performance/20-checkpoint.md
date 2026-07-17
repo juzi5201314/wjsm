@@ -21,10 +21,11 @@ Task 0 实现与三条 GREEN 已完成，等待主代理复审后标记最终完
 - 实现 `wjsm-engine-config` 唯一 Wasmtime config owner，并迁移 runtime/support/snapshot 调用链。
 - Wasmtime family 精确锁定 `=43.0.2`。
 - Task 0 GREEN：engine-config 2、shared_memory64 1、runtime-support 9、snapshot-format 6、startup snapshot 9、engine pool 6；runtime-snapshot 构建零 warning。
+- Task 1 GREEN：专用 `wjsm-gc-bench` CLI preflight 与 30 样本 ZGC baseline 在 180 秒上限内完成；runtime telemetry 1 项通过，benchmark crate tests 11 项全部 ignore，不参与 workspace 常规 gate。
 
 ## Active slice
 
-Task 1：固定 telemetry、benchmark CLI 与 JDK 25 diagnostic probe；准备 strict RED 测试边界。
+Task 2：添加非激活 NaN-box GC color helpers；不改变 active entry、backend store、snapshot ABI 或 runtime heap。
 
 ## Evidence refs
 
@@ -38,16 +39,16 @@ Task 1：固定 telemetry、benchmark CLI 与 JDK 25 diagnostic probe；准备 s
 
 ## Next step
 
-- 读取现有 GC telemetry、CLI/benchmark owners 与跨平台资源 provider 基线。
-- 写 Task 1 CLI/schema/resource/gate RED 测试并运行计划前两条 RED 命令。
+- 读取 `wjsm-ir/src/value.rs` 的 NaN-box layout 与现有 value unit/property tests。
+- 为所有 handle-backed tags/runtime string 与非引用值写 RED 边界测试。
 
 ## ResumeStateHint
 
-恢复时先读本文件、`90-evidence.md` Task 0 段、父规格与实施计划；Task 0 提交包含 engine-config 中心化与显式 per-engine snapshot ABI，active heap ABI 未改；当前从 Task 1 RED 开始。
+恢复时先读本文件、`90-evidence.md` 的 Task 0/1 段、父规格与实施计划；Task 1 提交包含专用 benchmark CLI、fail-closed resource admission、JDK 25 probe 与 runtime telemetry；当前从 Task 2 RED 开始。
 
 ## DriftCheckDraft
 
-- Scope：Task 0 仅 engine config / fingerprint / shared memory64 可行性门。
-- Compatibility：32 位 handle identity、ECMAScript、CLI 与 snapshot 开关保持；active heap ABI 未变化。
-- Retirement：删除 runtime/support 内重复 `Config::new` owner；现有动态 runtime profile 的 support cwasm 编译 fallback 保持 active 行为，按 Task 15/26 退役。
-- Decision：Task 0 GREEN 并关闭；按用户要求将 reviewer gate 延后到 Phase A（Task 0–2）结束，继续 Task 1。
+- Scope：Task 1 限定 measurement/telemetry/benchmark 驱动；不改变 active collector 算法或性能阈值。
+- Compatibility：全量 nextest 跳过 `wjsm-gc-bench` 的 11 个 ignore tests；benchmark 只通过专用 CLI 执行；错误 JDK 版本输出 `needs-verification` JSON，不把环境缺失变成通用测试失败。
+- Retirement：旧 `gc_stress`/`zgc_autoresearch`/`zgc_barrier_pressure` 暂不删除，Task 26 统一迁移和退役。
+- Decision：Task 1 GREEN 并关闭；本机无 JDK 25 patched probe 的指标保持 `needs-verification`，不伪造 counter，继续 Task 2。

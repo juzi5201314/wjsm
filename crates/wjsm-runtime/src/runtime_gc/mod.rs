@@ -83,6 +83,7 @@ pub mod registry;
 pub mod roots;
 pub mod scheduler;
 pub mod side_table_refs;
+pub mod telemetry;
 pub mod weak_refs;
 pub mod zgc;
 

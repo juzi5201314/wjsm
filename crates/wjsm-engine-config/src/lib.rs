@@ -9,6 +9,9 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use wasmtime::{Config, Engine, OptLevel, Strategy};
 
+/// 唯一 engine owner 所绑定的 Wasmtime 精确版本，用于 benchmark evidence。
+pub const WASMTIME_VERSION: &str = "43.0.2";
+
 /// 编译器后端，与 runtime 的 `RuntimeCompiler` 语义对齐。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CompilerStrategy {
@@ -124,7 +127,6 @@ pub fn compatibility_fingerprint(engine: &Engine) -> u64 {
     engine.precompile_compatibility_hash().hash(&mut hasher);
     hasher.finish()
 }
-
 
 fn apply_fixed_features(config: &mut Config) {
     config.wasm_threads(true);

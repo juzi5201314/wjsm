@@ -4983,6 +4983,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "wjsm-gc-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hdrhistogram",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysinfo",
+ "tokio",
+ "windows-sys 0.61.2",
+ "wjsm-engine-config",
+ "wjsm-runtime",
+]
+
+[[package]]
 name = "wjsm-ir"
 version = "0.1.0"
 

@@ -36,6 +36,7 @@ pub use realm_clone::{
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
+mod runtime_bench;
 mod runtime_buffer;
 mod runtime_builtins;
 mod runtime_collection_gc;
@@ -45,8 +46,12 @@ mod runtime_date;
 mod runtime_encoding;
 mod runtime_eval;
 mod runtime_gc;
+pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};
 pub use runtime_gc::registry::GcAlgorithmKind;
+pub use runtime_gc::telemetry::{
+    GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,
+};
 mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;
@@ -339,6 +344,8 @@ pub struct GcExecutionStats {
     pub pause_hist: Vec<u64>,
     /// 最近 GC 周期的 committed/reusable footprint 序列。
     pub memory_footprint_hist: Vec<MemoryFootprintSample>,
+    /// 已排除 parse/lower/codegen、Wasmtime compile、instantiate 与 startup 的执行耗时。
+    pub steady_state_ns: u64,
 }
 
 pub fn gc_algorithm_from_env(
@@ -707,11 +714,8 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     // snapshot build = capture + encode；解码与恢复在新 instance 上重测一次。
     let start = std::time::Instant::now();
     let snapshot_abi_hash = startup_snapshot_abi_hash(&engine);
-    let snap = startup_snapshot::capture_startup_snapshot(
-        &mut store,
-        &wasm_env,
-        snapshot_abi_hash,
-    )?;
+    let snap =
+        startup_snapshot::capture_startup_snapshot(&mut store, &wasm_env, snapshot_abi_hash)?;
     let bytes = startup_snapshot_format::encode_snapshot(&snap);
     timings.snapshot_build = start.elapsed();
 
@@ -741,12 +745,7 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     }
     initialize_host_post_bootstrap(&mut store2, &env2)?;
     let start = std::time::Instant::now();
-    startup_snapshot::restore_startup_snapshot(
-        &mut store2,
-        &env2,
-        view,
-        snapshot_abi_hash,
-    )?;
+    startup_snapshot::restore_startup_snapshot(&mut store2, &env2, view, snapshot_abi_hash)?;
     timings.snapshot_restore = start.elapsed();
     Ok(timings)
 }
@@ -1571,6 +1570,7 @@ impl RuntimeState {
             last,
             pause_hist,
             memory_footprint_hist,
+            steady_state_ns: 0,
         }
     }
 

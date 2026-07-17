@@ -17,6 +17,7 @@ members = [
     "crates/wjsm-runtime-snapshot",
     "crates/wjsm-runtime-support",
     "crates/wjsm-engine-config",
+    "crates/wjsm-gc-bench",
     "crates/wjsm-snapshot-format",
 ]
 
