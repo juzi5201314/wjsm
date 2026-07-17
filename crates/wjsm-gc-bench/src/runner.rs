@@ -1,6 +1,9 @@
 use anyhow::Result;
 use clap::ValueEnum;
 use serde::Serialize;
+use std::time::Instant;
+
+use wjsm_runtime::{ManagedAllocator, ManagedHeapLayout, Nlab};
 
 use crate::cli::{Cli, Command, CommonArgs, JdkArgs, MicroArgs, ReplayArgs, RunArgs};
 use crate::comparison::{compare, gate};
@@ -96,20 +99,65 @@ fn micro(args: MicroArgs) -> Result<i32> {
             profile: args.common.profile,
         },
     );
+    let (status, measurements, reason) = match admission.status {
+        AdmissionStatus::NeedsResourceRunner => (
+            GateStatus::NeedsResourceRunner,
+            Vec::new(),
+            Some("host resource admission rejected allocator micro run".into()),
+        ),
+        AdmissionStatus::Admitted => match args.component.as_str() {
+            "allocator" => (
+                GateStatus::Passed,
+                run_allocator_micro(args.common.heap, args.samples)?,
+                None,
+            ),
+            component => anyhow::bail!("unknown micro component `{component}`"),
+        },
+    };
     let report = MicroReport {
         schema_version: BENCHMARK_SCHEMA_VERSION,
-        status: match admission.status {
-            AdmissionStatus::Admitted => GateStatus::NeedsVerification,
-            AdmissionStatus::NeedsResourceRunner => GateStatus::NeedsResourceRunner,
-        },
+        status,
         component: args.component,
         samples: args.samples,
         resources,
         admission: admission.clone(),
-        reason: "micro component counters are unavailable until the managed allocator owner lands in Task 6".into(),
+        measurements,
+        reason,
     };
     write_json(&args.common.output, &report)?;
     Ok(exit_for_admission(&admission))
+}
+
+fn run_allocator_micro(heap: u64, samples: usize) -> Result<Vec<AllocatorMicroSample>> {
+    const CONTROL_RESERVED: u64 = 64 * 1024;
+    const PAGE_BYTES: u64 = 64 * 1024;
+    let operations = (heap / PAGE_BYTES).clamp(4096, 65_536);
+    let mut measurements = Vec::with_capacity(samples);
+
+    for sample in 0..samples {
+        let layout = ManagedHeapLayout::new(heap, CONTROL_RESERVED)?;
+        let allocator = ManagedAllocator::new(layout)?;
+        let mut nlab = Nlab::new();
+        let start = Instant::now();
+        let mut expected_bytes = 0;
+        for index in 0..operations {
+            let bytes = 8 + ((index + sample as u64) % 31) * 8;
+            allocator.allocate(&mut nlab, bytes)?;
+            expected_bytes += bytes;
+        }
+        let allocated_bytes = allocator.allocated_bytes();
+        anyhow::ensure!(
+            allocated_bytes == expected_bytes,
+            "allocator byte counter diverged: expected {expected_bytes}, got {allocated_bytes}"
+        );
+        measurements.push(AllocatorMicroSample {
+            elapsed_ns: start.elapsed().as_nanos().try_into().unwrap_or(u64::MAX),
+            allocated_objects: operations,
+            allocated_bytes,
+            committed_bytes: allocator.committed_bytes(),
+        });
+    }
+    Ok(measurements)
 }
 
 fn replay(args: ReplayArgs) -> Result<i32> {
@@ -186,5 +234,14 @@ struct MicroReport {
     samples: usize,
     resources: HostResourceSnapshot,
     admission: AdmissionDecision,
-    reason: String,
+    measurements: Vec<AllocatorMicroSample>,
+    reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AllocatorMicroSample {
+    elapsed_ns: u64,
+    allocated_objects: u64,
+    allocated_bytes: u64,
+    committed_bytes: u64,
 }

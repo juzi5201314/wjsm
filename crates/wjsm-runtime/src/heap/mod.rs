@@ -1,10 +1,15 @@
+mod allocator;
+mod bitmap;
 mod epoch;
 mod handle;
 mod handle_entry;
 mod memory;
 mod native_memory;
+mod object_map;
+mod page;
 mod word;
 
+pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, RelocationReserve};
 pub use epoch::EpochParticipant;
 pub use handle::{HandleTableV2, ManagedHeapLayout};
 pub use handle_entry::{
@@ -13,6 +18,8 @@ pub use handle_entry::{
 };
 pub use memory::SharedHeapMemory;
 pub use native_memory::NativeHeapMemory;
+pub use object_map::PageObjectIter;
+pub use page::{AllocationClass, ObjectRef, PAGE_GRANULE_BYTES, PageId, PageRange};
 pub use word::{HeapAddress, HeapMemoryError};
 
 use memory::HeapMemory;
@@ -22,16 +29,32 @@ use memory::HeapMemory;
 #[allow(dead_code)]
 pub(crate) struct ManagedHeap<M> {
     memory: M,
+    allocator: ManagedAllocator,
 }
 
 #[allow(dead_code)]
 impl<M> ManagedHeap<M> {
-    pub(crate) fn new(memory: M) -> Self {
-        Self { memory }
+    pub(crate) fn new(memory: M, layout: ManagedHeapLayout) -> Result<Self, AllocatorError> {
+        Ok(Self {
+            memory,
+            allocator: ManagedAllocator::new(layout)?,
+        })
     }
 
     pub(crate) fn memory(&self) -> &M {
         &self.memory
+    }
+
+    pub(crate) fn allocate(
+        &self,
+        nlab: &mut Nlab,
+        bytes: u64,
+    ) -> Result<Allocation, AllocatorError> {
+        self.allocator.allocate(nlab, bytes)
+    }
+
+    pub(crate) fn allocator(&self) -> &ManagedAllocator {
+        &self.allocator
     }
 }
 
@@ -73,3 +96,20 @@ impl<M: HeapMemory> ManagedHeap<M> {
 /// active runtime 切换前的生产类型别名；Task 4 只定义，不接入 Linker。
 #[allow(dead_code)]
 pub(crate) type RuntimeManagedHeap = ManagedHeap<SharedHeapMemory>;
+
+#[cfg(test)]
+mod tests {
+    use super::{ManagedHeap, ManagedHeapLayout, NativeHeapMemory, Nlab};
+
+    #[test]
+    fn managed_heap_delegates_nlab_allocation() {
+        let layout = ManagedHeapLayout::new(64 * 1024, 64 * 1024).unwrap();
+        let heap = ManagedHeap::new(NativeHeapMemory::with_base(0, 64), layout).unwrap();
+        let mut nlab = Nlab::new();
+
+        let allocation = heap.allocate(&mut nlab, 8).unwrap();
+
+        assert_eq!(allocation.object().offset(), 0);
+        assert_eq!(nlab.refills(), 1);
+    }
+}

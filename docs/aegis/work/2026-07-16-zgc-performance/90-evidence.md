@@ -363,3 +363,48 @@ cargo rustc -p wjsm-runtime --test handle_table --release --features managed-hea
 ```
 
 状态：Task 5 GREEN 完成；Task 4 Miri protocol 仍为 `needs-verification`，因为此前 180 秒内只完成 Wasmtime/SWC 依赖编译，未执行测试体。
+
+## Task 6 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test page_allocator
+# unresolved imports: AllocationClass / ManagedAllocator / Nlab / ObjectRef / PageId；失败。
+```
+
+### 实现事实
+
+- `ManagedHeap::allocate` 委派给 `ManagedAllocator`；`ObjectRef` 仅保存 heap-relative offset，分配路径不产生 host pointer。
+- `PageConfig` 在 heap 创建时选择 64 KiB–2 MiB page；NLAB 命中仅更新 mutator-local top、预分配 object map/bitmap 原子 metadata 和 byte counter，不获取 allocator mutex 或进行 heap allocation。
+- medium、large、humongous 从 coalescing free range 获取连续 page；relocation reserve 从同一 free range 隔离出去，不能被 mutator 分配。
+- page metadata 使用 object-start bitmap + `AtomicU64` size table 和 current/previous 双 mark bitmap；`PageObjectIter` 按 bitmap streaming，不构造对象列表。
+- `wjsm-gc-bench micro --component allocator` 已移除“counters unavailable”占位报告，受既有 admission gate 后执行真实 allocator loop 并输出每样本 elapsed/object/allocated/committed counters。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test page_allocator
+# Summary: 4 tests run: 4 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --lib -E 'test(managed_heap_delegates_nlab_allocation)'
+# Summary: 1 test run: 1 passed, 209 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished dev profile; 0 warnings
+
+cargo check -p wjsm-gc-bench
+# Finished dev profile; 0 warnings
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test managed_heap_memory --test handle_table --test gc_concurrency_model --test gc_loom_model --test page_allocator
+# Summary: 13 tests run: 13 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --no-default-features -E 'test(runtime_options_default)'
+# Summary: 1 test run: 1 passed, 308 skipped
+
+cargo run --release -p wjsm-gc-bench -- micro --component allocator --heap 256m --samples 30 --output /tmp/wjsm-allocator-micro-final.json
+# exit 0; report status=passed, admission=admitted, 30 samples。
+# 每样本真实测量：4096 allocated objects；首样本 allocated_bytes=523856、committed_bytes=524288、elapsed_ns=388045。
+```
+
+状态：Task 6 GREEN 完成；无 active allocator、collector 或 Linker ABI 切换。

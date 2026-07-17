@@ -51,9 +51,11 @@ mod runtime_gc;
 #[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
 pub use heap::{
-    ColoredHandleEntry, EpochParticipant, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES,
-    HandleGeneration, HandleId, HandleState, HandleTableError, HandleTableV2, HeapAddress,
-    HeapMemoryError, ManagedHeapLayout, NativeHeapMemory, SharedHeapMemory,
+    Allocation, AllocationClass, AllocatorError, ColoredHandleEntry, EpochParticipant,
+    HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleState,
+    HandleTableError, HandleTableV2, HeapAddress, HeapMemoryError, ManagedAllocator,
+    ManagedHeapLayout, NativeHeapMemory, Nlab, ObjectRef, PAGE_GRANULE_BYTES, PageId,
+    PageObjectIter, PageRange, RelocationReserve, SharedHeapMemory,
 };
 pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};

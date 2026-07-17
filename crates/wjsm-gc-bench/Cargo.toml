@@ -13,7 +13,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true }
-wjsm-runtime = { path = "../wjsm-runtime" }
+wjsm-runtime = { path = "../wjsm-runtime", features = ["managed-heap-v2"] }
 wjsm-engine-config = { path = "../wjsm-engine-config" }
 
 [target.'cfg(windows)'.dependencies]
