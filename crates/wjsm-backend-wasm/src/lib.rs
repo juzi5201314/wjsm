@@ -395,6 +395,35 @@ fn import_eval_global(
     );
 }
 
+#[cfg(feature = "managed-heap-v2")]
+fn import_v2_heap_globals(imports: &mut ImportSection) {
+    for name in [
+        wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME,
+        wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME,
+        wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME,
+        wjsm_ir::HEAP_LIMIT_GLOBAL_NAME,
+    ] {
+        import_eval_global(imports, name, ValType::I64, true);
+    }
+}
+
+fn import_support_helpers(imports: &mut ImportSection) {
+    imports.import("wjsm_support", "obj_new", EntityType::Function(7));
+    imports.import("wjsm_support", "obj_get", EntityType::Function(8));
+    imports.import("wjsm_support", "obj_set", EntityType::Function(9));
+    imports.import("wjsm_support", "obj_delete", EntityType::Function(8));
+    imports.import("wjsm_support", "arr_new", EntityType::Function(7));
+    imports.import("wjsm_support", "elem_get", EntityType::Function(8));
+    imports.import("wjsm_support", "elem_set", EntityType::Function(9));
+    imports.import("wjsm_support", "string_eq", EntityType::Function(26));
+    imports.import("wjsm_support", "to_int32", EntityType::Function(10));
+    imports.import(
+        "wjsm_support",
+        "get_proto_from_ctor",
+        EntityType::Function(3),
+    );
+}
+
 pub mod analysis_liveness;
 pub mod analysis_value_ty;
 pub use analysis_value_ty::{ValueTy, builtin_returns_scalar};

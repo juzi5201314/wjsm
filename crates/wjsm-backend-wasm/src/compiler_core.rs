@@ -70,6 +70,18 @@ impl Compiler {
                     page_size_log2: None,
                 }),
             );
+            #[cfg(feature = "managed-heap-v2")]
+            imports.import(
+                "env",
+                wjsm_ir::HEAP_MEMORY_NAME,
+                EntityType::Memory(MemoryType {
+                    minimum: wjsm_ir::HEAP_MEMORY_PAGES,
+                    maximum: Some(wjsm_ir::HEAP_MEMORY_PAGES),
+                    memory64: true,
+                    shared: true,
+                    page_size_log2: None,
+                }),
+            );
             // P2.2 后父模块把 memory/table/globals 全部作为 mutable env import
             // 再 re-export；compiled eval 手动实例化时导入同一批 global，mutability
             // 必须与父模块 export 完全一致，否则 wasmtime 会拒绝实例化并退回解释器路径。
@@ -100,6 +112,10 @@ impl Compiler {
             import_eval_global(&mut imports, "__good_color", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_end", ValType::I32, true);
+            #[cfg(feature = "managed-heap-v2")]
+            import_v2_heap_globals(&mut imports);
+            #[cfg(feature = "managed-heap-v2")]
+            import_support_helpers(&mut imports);
             // 与 runtime module 一样导入父模块 __table，使 FunctionRef 使用主表下标。
             imports.import(
                 "env",
@@ -136,6 +152,18 @@ impl Compiler {
                     maximum: None,
                     memory64: false,
                     shared: false,
+                    page_size_log2: None,
+                }),
+            );
+            #[cfg(feature = "managed-heap-v2")]
+            imports.import(
+                "env",
+                wjsm_ir::HEAP_MEMORY_NAME,
+                EntityType::Memory(MemoryType {
+                    minimum: wjsm_ir::HEAP_MEMORY_PAGES,
+                    maximum: Some(wjsm_ir::HEAP_MEMORY_PAGES),
+                    memory64: true,
+                    shared: true,
                     page_size_log2: None,
                 }),
             );
@@ -179,23 +207,11 @@ impl Compiler {
             import_eval_global(&mut imports, "__good_color", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_end", ValType::I32, true);
+            #[cfg(feature = "managed-heap-v2")]
+            import_v2_heap_globals(&mut imports);
 
-            // P2.5+: import obj_*/arr_*/elem_*/string_eq/to_int32/get_proto_from_ctor from wjsm_support。
-            // 10 个 helper imports 替代原来的 inline 函数定义。
-            imports.import("wjsm_support", "obj_new", EntityType::Function(7));
-            imports.import("wjsm_support", "obj_get", EntityType::Function(8));
-            imports.import("wjsm_support", "obj_set", EntityType::Function(9));
-            imports.import("wjsm_support", "obj_delete", EntityType::Function(8));
-            imports.import("wjsm_support", "arr_new", EntityType::Function(7));
-            imports.import("wjsm_support", "elem_get", EntityType::Function(8));
-            imports.import("wjsm_support", "elem_set", EntityType::Function(9));
-            imports.import("wjsm_support", "string_eq", EntityType::Function(26));
-            imports.import("wjsm_support", "to_int32", EntityType::Function(10));
-            imports.import(
-                "wjsm_support",
-                "get_proto_from_ctor",
-                EntityType::Function(3),
-            );
+            // Normal mode 与 Eval V2 共用同一 support helper ABI。
+            import_support_helpers(&mut imports);
         }
         let mut builtin_func_indices = HashMap::new();
         let mut special_host_import_indices = HashMap::new();
@@ -219,6 +235,12 @@ impl Compiler {
             // 重新 export 父模块传入的 memory 和本模块 table。
             exports.export("memory", ExportKind::Memory, 0);
             exports.export(crate::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
+            #[cfg(feature = "managed-heap-v2")]
+            exports.export(
+                wjsm_ir::HEAP_MEMORY_NAME,
+                ExportKind::Memory,
+                wjsm_ir::HEAP_MEMORY_INDEX,
+            );
             exports.export("__table", ExportKind::Table, 0);
             for (index, spec) in host_import_specs().iter().enumerate() {
                 exports.export(spec.name, ExportKind::Func, index as u32);
@@ -228,9 +250,27 @@ impl Compiler {
             // + table (idx 0) + 27 globals (idx 0..26)。
             exports.export("memory", ExportKind::Memory, 0);
             exports.export(crate::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
+            #[cfg(feature = "managed-heap-v2")]
+            exports.export(
+                wjsm_ir::HEAP_MEMORY_NAME,
+                ExportKind::Memory,
+                wjsm_ir::HEAP_MEMORY_INDEX,
+            );
             exports.export("__table", ExportKind::Table, 0);
             for (g, name) in ENV_GLOBAL_EXPORT_NAMES.iter().enumerate() {
                 exports.export(name, ExportKind::Global, g as u32);
+            }
+            #[cfg(feature = "managed-heap-v2")]
+            for (offset, name) in [
+                wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME,
+                wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME,
+                wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME,
+                wjsm_ir::HEAP_LIMIT_GLOBAL_NAME,
+            ]
+            .iter()
+            .enumerate()
+            {
+                exports.export(name, ExportKind::Global, 27 + offset as u32);
             }
             for (index, spec) in host_import_specs().iter().enumerate() {
                 exports.export(spec.name, ExportKind::Func, index as u32);
@@ -240,12 +280,14 @@ impl Compiler {
         // Normal mode 不再定义自己的 memory（已 import）；Eval mode 也不定义。
         let memory = MemorySection::new();
 
-        // Function import count: host funcs (+ Normal mode 的 10 support helper imports)
-        let actual_import_count = if mode == CompileMode::Normal {
-            host_import_specs().len() as u32 + 10
-        } else {
-            host_import_specs().len() as u32
-        };
+        // Normal mode 与 V2 Eval 均导入 10 个 support helper。
+        let helper_import_count =
+            if mode == CompileMode::Normal || cfg!(feature = "managed-heap-v2") {
+                10
+            } else {
+                0
+            };
+        let actual_import_count = host_import_specs().len() as u32 + helper_import_count;
         Self {
             module: Module::new(),
             types,

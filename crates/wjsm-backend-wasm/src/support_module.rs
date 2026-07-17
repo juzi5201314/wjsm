@@ -12,6 +12,9 @@
 //! support module 的 global 索引与 user wasm 完全对齐（0..26），
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
 
+// V2 选择独立 dynamic helper ABI；默认 static helper 仍为 default backend 唯一实现。
+#![cfg_attr(feature = "managed-heap-v2", allow(dead_code))]
+
 use crate::shared_types::build_shared_type_section;
 use anyhow::Result;
 use wasm_encoder::{
@@ -87,6 +90,21 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("function_value_get_property", 8),   // (i64, i32) -> i64
 ];
 
+#[cfg(feature = "managed-heap-v2")]
+const HOST_GC_ALLOC_SLOW_V2: u32 = 28;
+#[cfg(feature = "managed-heap-v2")]
+const HOST_GC_OBJ_GET_V2: u32 = 29;
+#[cfg(feature = "managed-heap-v2")]
+const HOST_GC_OBJ_SET_V2: u32 = 30;
+#[cfg(feature = "managed-heap-v2")]
+const HOST_GC_OBJ_DELETE_V2: u32 = 31;
+#[cfg(feature = "managed-heap-v2")]
+const HOST_GC_ARR_NEW_V2: u32 = 32;
+#[cfg(feature = "managed-heap-v2")]
+const HOST_GC_ELEM_GET_V2: u32 = 33;
+#[cfg(feature = "managed-heap-v2")]
+const HOST_GC_ELEM_SET_V2: u32 = 34;
+
 // Host import function indices（在 support module 的 function index space 中）
 const HOST_GC_SAFEPOINT_POLL: u32 = 0;
 const HOST_GC_ALLOC_SLOW: u32 = 1;
@@ -116,7 +134,10 @@ const HOST_OBJ_DELETE_RUNTIME_KEY: u32 = 24;
 const HOST_GC_BARRIER_FLUSH: u32 = 25;
 const HOST_GC_LOAD_BARRIER_SLOW: u32 = 26;
 const HOST_FUNCTION_VALUE_GET_PROPERTY: u32 = 27;
+#[cfg(not(feature = "managed-heap-v2"))]
 const NUM_HOST_IMPORTS: u32 = 28;
+#[cfg(feature = "managed-heap-v2")]
+const NUM_HOST_IMPORTS: u32 = 35;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
@@ -185,6 +206,11 @@ const G_GC_PHASE: u32 = 23;
 const G_GOOD_COLOR: u32 = 24;
 #[allow(dead_code)]
 const G_BARRIER_BUF_PTR: u32 = 25;
+
+#[cfg(feature = "managed-heap-v2")]
+const G_V2_HEAP_ALLOC_PTR: u32 = 27;
+#[cfg(feature = "managed-heap-v2")]
+const G_V2_HEAP_ALLOC_END: u32 = 28;
 #[allow(dead_code)]
 const G_BARRIER_BUF_END: u32 = 26;
 
@@ -351,6 +377,14 @@ const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     ("__barrier_buf_end", ValType::I32, true),
 ];
 
+#[cfg(feature = "managed-heap-v2")]
+const V2_HEAP_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
+    (wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, ValType::I64, true),
+    (wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, ValType::I64, true),
+    (wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME, ValType::I64, true),
+    (wjsm_ir::HEAP_LIMIT_GLOBAL_NAME, ValType::I64, true),
+];
+
 /// 必须与 `wjsm-runtime-support::abi::SUPPORT_TABLE_RESERVED_LEN` 一致。
 pub const SUPPORT_TABLE_RESERVED_LEN: u32 = 64;
 
@@ -419,6 +453,18 @@ pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
             page_size_log2: None,
         }),
     );
+    #[cfg(feature = "managed-heap-v2")]
+    imports.import(
+        "env",
+        wjsm_ir::HEAP_MEMORY_NAME,
+        EntityType::Memory(MemoryType {
+            minimum: wjsm_ir::HEAP_MEMORY_PAGES,
+            maximum: Some(wjsm_ir::HEAP_MEMORY_PAGES),
+            memory64: true,
+            shared: true,
+            page_size_log2: None,
+        }),
+    );
     imports.import(
         "env",
         "__table",
@@ -442,9 +488,34 @@ pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
             }),
         );
     }
+    #[cfg(feature = "managed-heap-v2")]
+    for (name, ty, mutable) in V2_HEAP_GLOBAL_IMPORTS {
+        imports.import(
+            "env",
+            name,
+            EntityType::Global(GlobalType {
+                val_type: *ty,
+                mutable: *mutable,
+                shared: false,
+            }),
+        );
+    }
     // 26 host function imports
     for (name, type_idx) in HOST_IMPORTS {
         imports.import("env", name, EntityType::Function(*type_idx));
+    }
+    #[cfg(feature = "managed-heap-v2")]
+    imports.import("env", "gc_alloc_slow_v2", EntityType::Function(38));
+    #[cfg(feature = "managed-heap-v2")]
+    for (name, type_index) in [
+        ("gc_obj_get_v2", 8),
+        ("gc_obj_set_v2", 9),
+        ("gc_obj_delete_v2", 8),
+        ("gc_arr_new_v2", 7),
+        ("gc_elem_get_v2", 8),
+        ("gc_elem_set_v2", 9),
+    ] {
+        imports.import("env", name, EntityType::Function(type_index));
     }
     module.section(&imports);
 
@@ -462,9 +533,23 @@ pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
     // callback 看到同一份 memory/table/global contract。
     exports.export("memory", ExportKind::Memory, 0);
     exports.export(wjsm_ir::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
+    #[cfg(feature = "managed-heap-v2")]
+    exports.export(
+        wjsm_ir::HEAP_MEMORY_NAME,
+        ExportKind::Memory,
+        wjsm_ir::HEAP_MEMORY_INDEX,
+    );
     exports.export("__table", ExportKind::Table, 0);
     for (idx, (name, _, _)) in ENV_GLOBAL_IMPORTS.iter().enumerate() {
         exports.export(name, ExportKind::Global, idx as u32);
+    }
+    #[cfg(feature = "managed-heap-v2")]
+    for (offset, (name, _, _)) in V2_HEAP_GLOBAL_IMPORTS.iter().enumerate() {
+        exports.export(
+            name,
+            ExportKind::Global,
+            ENV_GLOBAL_IMPORTS.len() as u32 + offset as u32,
+        );
     }
     for (i, &name) in HELPER_EXPORT_NAMES.iter().enumerate() {
         exports.export(name, ExportKind::Func, NUM_HOST_IMPORTS + i as u32);
@@ -476,14 +561,42 @@ pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
     // 这些 getter/setter 是 user wasm 的 JS 函数，在 table[64+] 中由 user wasm 的 element section 填充。
 
     // ── Code section ──
+    #[cfg(feature = "managed-heap-v2")]
+    let obj_new = emit_obj_new_v2(flavor);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let obj_new = emit_obj_new(flavor);
+    #[cfg(feature = "managed-heap-v2")]
+    let obj_get = emit_obj_get_v2();
+    #[cfg(feature = "managed-heap-v2")]
+    let obj_set = emit_obj_set_v2();
+    #[cfg(feature = "managed-heap-v2")]
+    let obj_delete = emit_obj_delete_v2();
+    #[cfg(feature = "managed-heap-v2")]
+    let arr_new = emit_arr_new_v2();
+    #[cfg(feature = "managed-heap-v2")]
+    let elem_get = emit_elem_get_v2();
+    #[cfg(feature = "managed-heap-v2")]
+    let elem_set = emit_elem_set_v2();
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let obj_get = emit_obj_get(flavor);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let obj_set = emit_obj_set(flavor);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let obj_delete = emit_obj_delete(flavor);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let arr_new = emit_arr_new(flavor);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let elem_get = emit_elem_get(flavor);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let elem_set = emit_elem_set(flavor);
     let helper_bodies = vec![
-        emit_obj_new(flavor),
-        emit_obj_get(flavor),
-        emit_obj_set(flavor),
-        emit_obj_delete(flavor),
-        emit_arr_new(flavor),
-        emit_elem_get(flavor),
-        emit_elem_set(flavor),
+        obj_new,
+        obj_get,
+        obj_set,
+        obj_delete,
+        arr_new,
+        elem_get,
+        elem_set,
         emit_string_eq(flavor),
         emit_to_int32(flavor),
         emit_get_proto_from_ctor(flavor),
@@ -688,6 +801,218 @@ fn emit_gc_safepoint_poll_if_due_support(func: &mut Function) {
 
 // ── obj_new (param $capacity i32) (result i32) — Type 0 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_new 段。
+#[cfg(feature = "managed-heap-v2")]
+fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
+    // local 0 = capacity:i32, 1 = size:i64, 2 = ptr:i64, 3 = handle:i32, 4 = end:i64。
+    let mut func = Function::new(vec![
+        (2, ValType::I64),
+        (1, ValType::I32),
+        (1, ValType::I64),
+    ]);
+    emit_gc_safepoint_poll_if_due_support(&mut func);
+
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    func.instruction(&WasmInstruction::I64Const(32));
+    func.instruction(&WasmInstruction::I64Mul);
+    func.instruction(&WasmInstruction::I64Const(16));
+    func.instruction(&WasmInstruction::I64Add);
+    func.instruction(&WasmInstruction::LocalSet(1));
+
+    func.instruction(&WasmInstruction::Call(HOST_GC_TAKE_FREED_HANDLE));
+    func.instruction(&WasmInstruction::LocalTee(3));
+    func.instruction(&WasmInstruction::I32Const(-1));
+    func.instruction(&WasmInstruction::I32Ne);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::Else);
+    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_COUNT));
+    func.instruction(&WasmInstruction::LocalTee(3));
+    emit_handle_table_alloc_check(&mut func, 3);
+    func.instruction(&WasmInstruction::I32Const(1));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_OBJ_TABLE_COUNT));
+    func.instruction(&WasmInstruction::End);
+
+    func.instruction(&WasmInstruction::GlobalGet(G_V2_HEAP_ALLOC_PTR));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I64Add);
+    func.instruction(&WasmInstruction::GlobalGet(G_V2_HEAP_ALLOC_END));
+    func.instruction(&WasmInstruction::I64LeU);
+    func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
+    func.instruction(&WasmInstruction::GlobalGet(G_V2_HEAP_ALLOC_PTR));
+    func.instruction(&WasmInstruction::LocalTee(2));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I64Add);
+    func.instruction(&WasmInstruction::LocalTee(4));
+    func.instruction(&WasmInstruction::GlobalSet(G_V2_HEAP_ALLOC_PTR));
+    func.instruction(&WasmInstruction::GlobalGet(G_GC_ALLOC_BYTES));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_GC_ALLOC_BYTES));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Else);
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::Call(HOST_GC_ALLOC_SLOW_V2));
+    func.instruction(&WasmInstruction::LocalTee(2));
+    func.instruction(&WasmInstruction::I64Const(-1));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::Unreachable);
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::LocalSet(2));
+
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::GlobalGet(G_OBJECT_PROTO_HANDLE));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+    }));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
+    func.instruction(&WasmInstruction::I32Store8(MemArg {
+        offset: 4,
+        align: 0,
+        memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+    }));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 8,
+        align: 2,
+        memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+    }));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Store(MemArg {
+        offset: 12,
+        align: 2,
+        memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+    }));
+
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    func.instruction(&WasmInstruction::I64Const(3));
+    func.instruction(&WasmInstruction::I64Shl);
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::I64Const(16));
+    func.instruction(&WasmInstruction::I64Shl);
+    func.instruction(&WasmInstruction::I64Const(1));
+    func.instruction(&WasmInstruction::I64Or);
+    func.instruction(&WasmInstruction::I64AtomicStore(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+    }));
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn emit_v2_resolve_handle_ptr(func: &mut Function, handle_local: u32, ptr_local: u32) {
+    func.instruction(&WasmInstruction::LocalGet(handle_local));
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    func.instruction(&WasmInstruction::I64Const(3));
+    func.instruction(&WasmInstruction::I64Shl);
+    func.instruction(&WasmInstruction::I64AtomicLoad(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+    }));
+    func.instruction(&WasmInstruction::I64Const(16));
+    func.instruction(&WasmInstruction::I64ShrU);
+    func.instruction(&WasmInstruction::LocalSet(ptr_local));
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn emit_obj_get_v2() -> Function {
+    let mut func = Function::new(vec![(1, ValType::I32), (1, ValType::I64)]);
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::LocalSet(2));
+    emit_v2_resolve_handle_ptr(&mut func, 2, 3);
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_GET_V2));
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn emit_obj_set_v2() -> Function {
+    let mut func = Function::new(vec![(1, ValType::I32), (1, ValType::I64)]);
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::LocalSet(3));
+    emit_v2_resolve_handle_ptr(&mut func, 3, 4);
+    func.instruction(&WasmInstruction::LocalGet(4));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_SET_V2));
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn emit_obj_delete_v2() -> Function {
+    let mut func = Function::new(vec![(1, ValType::I32), (1, ValType::I64)]);
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::LocalSet(2));
+    emit_v2_resolve_handle_ptr(&mut func, 2, 3);
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_DELETE_V2));
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn emit_arr_new_v2() -> Function {
+    let mut func = Function::new(Vec::new());
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::Call(HOST_GC_ARR_NEW_V2));
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn emit_elem_get_v2() -> Function {
+    let mut func = Function::new(vec![(1, ValType::I32), (1, ValType::I64)]);
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::LocalSet(2));
+    emit_v2_resolve_handle_ptr(&mut func, 2, 3);
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_GC_ELEM_GET_V2));
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn emit_elem_set_v2() -> Function {
+    let mut func = Function::new(vec![(1, ValType::I32), (1, ValType::I64)]);
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::LocalSet(3));
+    emit_v2_resolve_handle_ptr(&mut func, 3, 4);
+    func.instruction(&WasmInstruction::LocalGet(4));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Call(HOST_GC_ELEM_SET_V2));
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+// ── obj_new (param $capacity i32) (result i32) — Type 0 ──
+// ── obj_new (param $capacity i32) (result i32) — Type 0 ──
 fn emit_obj_new(flavor: GcFlavor) -> Function {
     // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx, local 4 = new_end
     let mut func = Function::new(vec![(4, ValType::I32)]);

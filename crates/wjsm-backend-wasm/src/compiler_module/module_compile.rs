@@ -61,20 +61,25 @@ impl Compiler {
         }
 
         // Reserve indices for object helper functions (so they're known during user function compilation).
-        if self.mode == CompileMode::Normal {
+        if self.mode == CompileMode::Normal || cfg!(feature = "managed-heap-v2") {
             let support_import_base = host_import_specs().len() as u32;
-            self.obj_new_func_idx = support_import_base;
-            self.obj_get_func_idx = support_import_base + 1;
-            self.obj_set_func_idx = support_import_base + 2;
-            self.obj_delete_func_idx = support_import_base + 3;
-            self.arr_new_func_idx = support_import_base + 4;
-            self.elem_get_func_idx = support_import_base + 5;
-            self.elem_set_func_idx = support_import_base + 6;
-            self.string_eq_func_idx = support_import_base + 7;
-            self.to_int32_func_idx = support_import_base + 8;
-            self.get_proto_from_ctor_func_idx = support_import_base + 9;
-            for i in 0..10u32 {
-                self.push_func_table(support_import_base + i);
+            #[cfg(feature = "managed-heap-v2")]
+            self.bind_v2_support_helpers(support_import_base);
+            #[cfg(not(feature = "managed-heap-v2"))]
+            {
+                self.obj_new_func_idx = support_import_base;
+                self.obj_get_func_idx = support_import_base + 1;
+                self.obj_set_func_idx = support_import_base + 2;
+                self.obj_delete_func_idx = support_import_base + 3;
+                self.arr_new_func_idx = support_import_base + 4;
+                self.elem_get_func_idx = support_import_base + 5;
+                self.elem_set_func_idx = support_import_base + 6;
+                self.string_eq_func_idx = support_import_base + 7;
+                self.to_int32_func_idx = support_import_base + 8;
+                self.get_proto_from_ctor_func_idx = support_import_base + 9;
+                for offset in 0..10 {
+                    self.push_func_table(support_import_base + offset);
+                }
             }
         } else {
             self.obj_new_func_idx = self._next_import_func;
@@ -357,13 +362,9 @@ impl Compiler {
         }
 
         // Pass 3: Compile helper functions.
-        if self.mode == CompileMode::Eval {
+        if self.mode == CompileMode::Eval && !cfg!(feature = "managed-heap-v2") {
             self.compile_object_helpers();
-        }
-        if self.mode == CompileMode::Eval {
             self.compile_array_helpers();
-        }
-        if self.mode == CompileMode::Eval {
             self.compile_get_proto_from_ctor();
         }
         if self.mode == CompileMode::Normal {

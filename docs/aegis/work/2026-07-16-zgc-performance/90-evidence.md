@@ -465,3 +465,44 @@ cargo +nightly miri test -p wjsm-runtime --features managed-heap-v2 --test gc_pr
 ```
 
 状态：Task 7 core GREEN；TSan 与 Miri 不得标记为通过，保留 `needs-verification`，等待允许超过 180 秒或预热的专用 sanitizer/Miri runner。
+
+## Task 8 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-backend-wasm --features managed-heap-v2 -E 'test(heap_memory64)'
+# user module missing env.__heap_memory import；失败。
+```
+
+### 实现事实
+
+- `wjsm-ir` 是 V2 memory ABI 的唯一常量 owner：固定 32 GiB / 524288 wasm pages、`__heap_memory` index 2，以及 i64 `__heap_alloc_ptr`/`__heap_alloc_end`/`__heap_object_start`/`__heap_limit_v2` globals。
+- user 与 support module 在 feature 下共同导入/导出 shared memory64；runtime feature 显式传播 backend/support feature，使 embedded support artifact 使用同一 ABI。
+- V2 `obj_new` 使用 i64 NLAB cursor，直接初始化 memory64 object header，并以 `handle * 8` 对 shared heap 写 `I64AtomicStore`（high48 address + low16 state）。V2 get/set/delete/array/element 先以 `I64AtomicLoad` resolve handle，再调用明确的 Task 9 dynamic host ABI。
+- compiler 的 V2 support helper binding 已拆为 `helpers_object/{alloc,resolve,property,array}.rs`；Eval V2 和 Normal V2 均走同一 `wjsm_support` ABI，不会 inline static memory32 helper。
+- default feature 保持静态 helper；legacy WAT tests 只约束 default ABI，V2 有 `heap_memory64` 独立 ABI test，未以 skip 掩盖 V2 合同。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-backend-wasm
+# Summary: 64 tests run: 64 passed, 0 skipped
+
+cargo nextest run -p wjsm-backend-wasm --features managed-heap-v2
+# Summary: 59 tests run: 59 passed, 0 skipped
+
+cargo check -p wjsm-backend-wasm
+# Finished dev profile; 0 warnings
+
+cargo check -p wjsm-backend-wasm --features managed-heap-v2
+# Finished dev profile; 0 warnings
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished dev profile; 0 warnings; V2 runtime-support artifact precompile chain passed.
+
+cargo nextest run -p wjsm-runtime --no-default-features -E 'test(runtime_options_default)'
+# Summary: 1 test run: 1 passed, 308 skipped
+```
+
+状态：Task 8 GREEN 完成；V2 dynamic host import 的 concrete owner 由下一任务 `HeapAccessV2` 实现。

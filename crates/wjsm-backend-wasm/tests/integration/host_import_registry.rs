@@ -223,6 +223,7 @@ fn emitted_builtin_imports_have_registry_keys() {
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 #[test]
 fn compiler_registry_matches_expected_import_count() {
     let module = wjsm_parser::parse_module(r#"console.log('hello');"#).expect("parse");

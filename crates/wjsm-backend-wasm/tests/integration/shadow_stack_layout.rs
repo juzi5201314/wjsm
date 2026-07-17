@@ -13,10 +13,15 @@ fn independent_shadow_memory_layout() {
     let globals = extract_init_globals_i32_sets(&wasm);
     let memories = extract_memory_imports(&wasm);
 
+    let expected_memory_imports = if cfg!(feature = "managed-heap-v2") {
+        3
+    } else {
+        2
+    };
     assert_eq!(
         memories.len(),
-        2,
-        "user module must import main memory + __shadow_memory, got {memories:?}"
+        expected_memory_imports,
+        "user module memory import count differs from selected ABI: {memories:?}"
     );
     assert!(
         memories.iter().any(|(m, n)| m == "env" && n == "memory"),
@@ -27,6 +32,13 @@ fn independent_shadow_memory_layout() {
             .iter()
             .any(|(m, n)| m == "env" && n == wjsm_ir::SHADOW_MEMORY_NAME),
         "missing env.__shadow_memory import"
+    );
+    #[cfg(feature = "managed-heap-v2")]
+    assert!(
+        memories
+            .iter()
+            .any(|(m, n)| m == "env" && n == wjsm_ir::HEAP_MEMORY_NAME),
+        "missing env.__heap_memory import"
     );
 
     let shadow_sp = *globals.get(&4).expect("__shadow_sp (global 4)");

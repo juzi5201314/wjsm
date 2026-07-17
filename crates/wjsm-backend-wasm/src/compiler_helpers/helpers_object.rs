@@ -1,5 +1,18 @@
 use super::*;
 
+#[cfg(feature = "managed-heap-v2")]
+#[path = "helpers_object/alloc.rs"]
+mod alloc;
+#[cfg(feature = "managed-heap-v2")]
+#[path = "helpers_object/array.rs"]
+mod array;
+#[cfg(feature = "managed-heap-v2")]
+#[path = "helpers_object/property.rs"]
+mod property;
+#[cfg(feature = "managed-heap-v2")]
+#[path = "helpers_object/resolve.rs"]
+mod resolve;
+
 impl Compiler {
     pub(crate) fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
@@ -1712,6 +1725,23 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
+        }
+    }
+}
+
+#[cfg(feature = "managed-heap-v2")]
+impl Compiler {
+    /// V2 的 object/array calls 均绑定到 memory64 support ABI，避免 inline static helper。
+    pub(crate) fn bind_v2_support_helpers(&mut self, support_import_base: u32) {
+        alloc::bind(self, support_import_base);
+        resolve::bind(self, support_import_base);
+        property::bind(self, support_import_base);
+        array::bind(self, support_import_base);
+        self.string_eq_func_idx = support_import_base + 7;
+        self.to_int32_func_idx = support_import_base + 8;
+        self.get_proto_from_ctor_func_idx = support_import_base + 9;
+        for offset in 0..10 {
+            self.push_func_table(support_import_base + offset);
         }
     }
 }

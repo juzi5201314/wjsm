@@ -143,10 +143,12 @@ fn imported_func_index(info: &SupportModuleInfo, name: &str) -> u32 {
         .unwrap_or_else(|| panic!("missing imported function `{name}`")) as u32
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn contains_subsequence(body: &[OwnedOperator], needle: &[OwnedOperator]) -> bool {
     body.windows(needle.len()).any(|window| window == needle)
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 #[test]
 fn support_alloc_helpers_use_alloc_window_and_safepoint_poll() {
     const G_HEAP_PTR: u32 = 1;
@@ -190,6 +192,7 @@ fn support_alloc_helpers_use_alloc_window_and_safepoint_poll() {
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 #[test]
 fn support_obj_set_re_resolves_old_ptr_before_resize_copy() {
     const G_OBJ_TABLE_PTR: u32 = 2;
@@ -220,6 +223,7 @@ fn support_obj_set_re_resolves_old_ptr_before_resize_copy() {
     );
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 #[test]
 fn g1_support_write_helpers_emit_barrier_events() {
     const G_BARRIER_BUF_PTR: u32 = 25;
@@ -247,6 +251,7 @@ fn g1_support_write_helpers_emit_barrier_events() {
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 #[test]
 fn zgc_support_read_helpers_emit_load_barriers() {
     const G_GOOD_COLOR: u32 = 24;
@@ -285,6 +290,7 @@ fn zgc_support_read_helpers_emit_load_barriers() {
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 #[test]
 fn zgc_support_write_helpers_emit_satb_events_without_satb_ptr() {
     const G_GC_PHASE: u32 = 23;
@@ -322,6 +328,7 @@ fn zgc_support_write_helpers_emit_satb_events_without_satb_ptr() {
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 #[test]
 fn zgc_alloc_helpers_store_current_good_color_in_obj_table_entries() {
     const G_OBJ_TABLE_PTR: u32 = 2;

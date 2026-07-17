@@ -947,6 +947,23 @@ pub const SHADOW_MEMORY_INDEX: u32 = 1;
 /// 影子内存 import/export 名。
 pub const SHADOW_MEMORY_NAME: &str = "__shadow_memory";
 
+/// V2 shared dynamic heap 在 multi-memory 模块中的 index。
+pub const HEAP_MEMORY_INDEX: u32 = 2;
+/// V2 shared dynamic heap import/export 名。
+pub const HEAP_MEMORY_NAME: &str = "__heap_memory";
+/// V2 dynamic heap 的固定虚拟 reserve 大小（32 GiB）。
+pub const HEAP_MEMORY_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+/// WebAssembly 64 KiB page 计数。
+pub const HEAP_MEMORY_PAGES: u64 = HEAP_MEMORY_BYTES / (64 * 1024);
+/// V2 NLAB fast-path 当前分配 cursor（i64 byte address）。
+pub const HEAP_ALLOC_PTR_GLOBAL_NAME: &str = "__heap_alloc_ptr";
+/// V2 NLAB fast-path 当前 buffer 末端（i64 byte address）。
+pub const HEAP_ALLOC_END_GLOBAL_NAME: &str = "__heap_alloc_end";
+/// V2 动态对象区起点（i64 byte address）。
+pub const HEAP_OBJECT_START_GLOBAL_NAME: &str = "__heap_object_start";
+/// V2 动态对象区上限（i64 byte address）。
+pub const HEAP_LIMIT_GLOBAL_NAME: &str = "__heap_limit_v2";
+
 // ── Well-Known Symbol 索引 ─────────────────────────────────────────────
 /// Well-known symbol 索引常量，semantic 和 runtime 共享。
 pub mod wk_symbol {
