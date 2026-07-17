@@ -322,3 +322,44 @@ cargo +nightly miri test -p wjsm-runtime --features managed-heap-v2 --test gc_pr
 ```
 
 状态：Task 4 implementation 完成；Miri protocol evidence 为 `needs-verification`，遵循用户 180 秒运行上限，未重试长跑。
+
+## Task 5 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test handle_table
+# unresolved imports: HandleGeneration / HandleId / HandleState / HandleTableV2 / ManagedHeapLayout；失败。
+```
+
+### 实现事实
+
+- `HandleTableV2` 以 Wasmtime shared memory64 min=max 32 GiB 取得完整连续虚拟 mapping；engine 通过唯一 `wjsm-engine-config` owner 配置，reserve 失败明确返回 `HandleTableError::VirtualReservation`，没有 native 或 map fallback。
+- entry 是 `AtomicU64`：high 48 bit byte address、low 16 bit state（Free、StableYoung、StableOld、RelocatingYoung、RelocatingOld、PinnedOld、Retired）。active 4-byte `obj_table` 未被读取或修改。
+- 64 KiB commit bitset 仅记录首次发布 block；内存由 OS demand paging 支持，`resolve` 不查询 block 或锁，直接计算 `region_base + handle * 8` 并执行一个 SeqCst entry load。
+- epoch participant 在读地址前进入、reclaim 只在全部旧 epoch participant 退出后将 Retired slot 置 Free 并放入 reusable stack；旧 sparse `BTreeMap` staging owner 已删除。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test handle_table
+# Summary: 3 tests run: 3 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test gc_concurrency_model
+# Summary: 1 test run: 1 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test gc_loom_model
+# Summary: 1 test run: 1 passed, 0 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished dev profile; 0 warnings
+
+cargo nextest run -p wjsm-runtime --no-default-features -E 'test(runtime_options_default)'
+# Summary: 1 test run: 1 passed, 308 skipped
+
+cargo rustc -p wjsm-runtime --test handle_table --release --features managed-heap-v2 -- --emit=asm
+# 通过；high-u32 test assembly 中 rcx = 34359738360 (`u32::MAX * 8`)，随后 `movq (%rax,%rcx), %r14`。
+# 该指令是 base + handle*8 的单个 8-byte direct load；没有 map lookup、lock 或额外 entry load。
+```
+
+状态：Task 5 GREEN 完成；Task 4 Miri protocol 仍为 `needs-verification`，因为此前 180 秒内只完成 Wasmtime/SWC 依赖编译，未执行测试体。

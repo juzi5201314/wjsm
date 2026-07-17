@@ -50,7 +50,11 @@ mod runtime_eval;
 mod runtime_gc;
 #[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
-pub use heap::{HeapAddress, HeapMemoryError, NativeHeapMemory, SharedHeapMemory};
+pub use heap::{
+    ColoredHandleEntry, EpochParticipant, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES,
+    HandleGeneration, HandleId, HandleState, HandleTableError, HandleTableV2, HeapAddress,
+    HeapMemoryError, ManagedHeapLayout, NativeHeapMemory, SharedHeapMemory,
+};
 pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};
 pub use runtime_gc::registry::GcAlgorithmKind;

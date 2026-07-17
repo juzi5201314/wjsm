@@ -1,7 +1,16 @@
+mod epoch;
+mod handle;
+mod handle_entry;
 mod memory;
 mod native_memory;
 mod word;
 
+pub use epoch::EpochParticipant;
+pub use handle::{HandleTableV2, ManagedHeapLayout};
+pub use handle_entry::{
+    ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId,
+    HandleState, HandleTableError,
+};
 pub use memory::SharedHeapMemory;
 pub use native_memory::NativeHeapMemory;
 pub use word::{HeapAddress, HeapMemoryError};
