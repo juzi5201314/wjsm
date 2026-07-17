@@ -257,3 +257,34 @@ cargo nextest run -p wjsm-ir
 ```
 
 状态：Phase A review fixes 已实现；用户已取消 Phase A 复审并要求整个 28 项计划完成后才统一 reviewer。最终 canonical workload 30-sample distribution 因用户禁止耗时运行仍为 `needs-verification`。
+
+## Task 3 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test gc_control_plane
+# package 不包含 managed-heap-v2 feature，失败。
+```
+
+### 实现事实
+
+- runtime/backend/support 都声明默认关闭的私有 `managed-heap-v2` feature；runtime feature 只传播给 backend/support，未改变默认 ABI。
+- `GcRuntimeV2` 只持有 epoch、participant id 与 active count atomics；`MutatorContext` 仅发布 `Arc<[u32]>` handle roots；`CollectorContext` 只观察不可变 `RootSnapshot`。
+- 新 control-plane 文件不导入 Store/Caller/WasmEnv，也没有包围 collector algorithm 的 mutex。
+- `gc_control_plane.rs` 自身 cfg-gate，避免 `--no-default-features` 仍编译 feature-only imports。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test gc_control_plane
+# Summary: 3 tests run: 3 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --no-default-features -E 'test(runtime_options_default)'
+# Summary: 1 test run: 1 passed, 308 skipped
+
+cargo fmt --all -- --check
+# 通过
+```
+
+状态：Task 3 GREEN 完成；feature 默认关闭，不切换 active runtime。

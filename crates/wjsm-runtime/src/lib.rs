@@ -52,6 +52,9 @@ pub use runtime_gc::registry::GcAlgorithmKind;
 pub use runtime_gc::telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,
 };
+#[cfg(feature = "managed-heap-v2")]
+#[doc(hidden)]
+pub use runtime_gc::{CollectorContext, GcRuntimeV2, MutatorContext, RootSnapshot};
 mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;

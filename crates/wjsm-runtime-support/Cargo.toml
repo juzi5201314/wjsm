@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = ["embedded"]
 embedded = []
+managed-heap-v2 = ["wjsm-backend-wasm/managed-heap-v2"]
 
 [dependencies]
 

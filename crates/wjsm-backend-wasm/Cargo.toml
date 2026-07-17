@@ -3,6 +3,9 @@ name = "wjsm-backend-wasm"
 version.workspace = true
 edition.workspace = true
 
+[features]
+managed-heap-v2 = []
+
 [dependencies]
 anyhow = { workspace = true }
 swc_core = { workspace = true }
