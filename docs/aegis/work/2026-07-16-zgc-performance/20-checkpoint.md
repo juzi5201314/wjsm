@@ -28,7 +28,7 @@ Task 0 实现与三条 GREEN 已完成，等待主代理复审后标记最终完
 - Task 5 GREEN：feature-gated 32 GiB Wasmtime shared memory64 V2 handle region、8-byte high48/low16 atomic entry、64 KiB logical commit、epoch quarantine/reuse 完成；handle table 3、concurrency 1、Loom 1、default isolation 1 均通过。
 - Task 6 GREEN：feature-gated 64 KiB page/NLAB allocator、heap-relative `ObjectRef`、atomic object map、双 mark bitmap、contiguous large/humongous 与 relocation reserve 完成；13 个 staged heap tests、default isolation 通过，`micro allocator --heap 256m --samples 30` admitted 且 passed。
 - Task 7 implementation：feature-gated Store-free fixed `GcWorkerPool`、fixed-capacity packet slab、crossbeam local/injector/peer-steal、inflight drain/park/ordered join 完成；228 staged tests、deterministic queue steal、Loom termination、concurrent producer 均通过。TSan 与 Miri 仍为 `needs-verification`：TSan 已越过 host/target ABI 配置错误但 180 秒内未执行测试体；Miri 延续 Task 4 的依赖编译上限。
-- Task 8 GREEN：`managed-heap-v2` user/support modules共同导入固定 32 GiB shared memory64、i64 NLAB cursor globals；V2 support `obj_new` 以 8-byte atomic entry 写入，resolve/property/array dispatch 到显式 dynamic host ABI。默认 backend 64/64 与 V2 backend 59/59 通过；runtime feature support precompile 和 default isolation 通过。
+- Task 8 GREEN：`managed-heap-v2` user/support modules共同导入 min 32 GiB handle reserve、max 256 TiB high48 address ABI 的 shared memory64，给 control/object heap 留出独立 grow 区；i64 NLAB cursor globals、8-byte atomic entry 与 dynamic host ABI 已建立。默认 backend 64/64 与 V2 backend 59/59 通过；runtime feature support precompile 和 default isolation 通过。
 
 ## Active slice
 

@@ -75,8 +75,8 @@ impl Compiler {
                 "env",
                 wjsm_ir::HEAP_MEMORY_NAME,
                 EntityType::Memory(MemoryType {
-                    minimum: wjsm_ir::HEAP_MEMORY_PAGES,
-                    maximum: Some(wjsm_ir::HEAP_MEMORY_PAGES),
+                    minimum: wjsm_ir::HEAP_MEMORY_MIN_PAGES,
+                    maximum: Some(wjsm_ir::HEAP_MEMORY_MAX_PAGES),
                     memory64: true,
                     shared: true,
                     page_size_log2: None,
@@ -160,8 +160,8 @@ impl Compiler {
                 "env",
                 wjsm_ir::HEAP_MEMORY_NAME,
                 EntityType::Memory(MemoryType {
-                    minimum: wjsm_ir::HEAP_MEMORY_PAGES,
-                    maximum: Some(wjsm_ir::HEAP_MEMORY_PAGES),
+                    minimum: wjsm_ir::HEAP_MEMORY_MIN_PAGES,
+                    maximum: Some(wjsm_ir::HEAP_MEMORY_MAX_PAGES),
                     memory64: true,
                     shared: true,
                     page_size_log2: None,

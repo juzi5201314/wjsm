@@ -2,7 +2,7 @@ use wasmparser::{Parser, Payload, TypeRef, ValType};
 use wjsm_backend_wasm::{GcFlavor, compile, emit_support_module};
 
 const HEAP_MEMORY_NAME: &str = "__heap_memory";
-const HEAP_MEMORY_PAGES: u64 = 32 * 1024 * 1024 * 1024 / (64 * 1024);
+const HEAP_MEMORY_MIN_PAGES: u64 = 32 * 1024 * 1024 * 1024 / (64 * 1024);
 
 #[test]
 fn heap_memory64_user_and_support_modules_share_dynamic_heap_import() {
@@ -14,8 +14,8 @@ fn heap_memory64_user_and_support_modules_share_dynamic_heap_import() {
             .unwrap_or_else(|| panic!("{name} module must import env.{HEAP_MEMORY_NAME}"));
         assert!(heap_memory.memory64, "{name} heap memory must be memory64");
         assert!(heap_memory.shared, "{name} heap memory must be shared");
-        assert_eq!(heap_memory.initial, HEAP_MEMORY_PAGES);
-        assert_eq!(heap_memory.maximum, Some(HEAP_MEMORY_PAGES));
+        assert_eq!(heap_memory.initial, HEAP_MEMORY_MIN_PAGES);
+        assert_eq!(heap_memory.maximum, Some(1_u64 << 32));
         for global_name in [
             "__heap_alloc_ptr",
             "__heap_alloc_end",

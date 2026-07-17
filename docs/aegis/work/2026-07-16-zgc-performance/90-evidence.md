@@ -477,7 +477,7 @@ cargo nextest run -p wjsm-backend-wasm --features managed-heap-v2 -E 'test(heap_
 
 ### 实现事实
 
-- `wjsm-ir` 是 V2 memory ABI 的唯一常量 owner：固定 32 GiB / 524288 wasm pages、`__heap_memory` index 2，以及 i64 `__heap_alloc_ptr`/`__heap_alloc_end`/`__heap_object_start`/`__heap_limit_v2` globals。
+- `wjsm-ir` 是 V2 memory ABI 的唯一常量 owner：minimum 32 GiB / 524288 wasm pages 仅保留 handle table；maximum 为 high48 address ABI 的 256 TiB / 2^32 pages，确保 control/object heap 可位于 32 GiB 之后独立 grow。`__heap_memory` index 2，i64 cursor globals 为 `__heap_alloc_ptr`/`__heap_alloc_end`/`__heap_object_start`/`__heap_limit_v2`。
 - user 与 support module 在 feature 下共同导入/导出 shared memory64；runtime feature 显式传播 backend/support feature，使 embedded support artifact 使用同一 ABI。
 - V2 `obj_new` 使用 i64 NLAB cursor，直接初始化 memory64 object header，并以 `handle * 8` 对 shared heap 写 `I64AtomicStore`（high48 address + low16 state）。V2 get/set/delete/array/element 先以 `I64AtomicLoad` resolve handle，再调用明确的 Task 9 dynamic host ABI。
 - compiler 的 V2 support helper binding 已拆为 `helpers_object/{alloc,resolve,property,array}.rs`；Eval V2 和 Normal V2 均走同一 `wjsm_support` ABI，不会 inline static memory32 helper。

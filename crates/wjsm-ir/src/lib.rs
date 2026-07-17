@@ -951,10 +951,14 @@ pub const SHADOW_MEMORY_NAME: &str = "__shadow_memory";
 pub const HEAP_MEMORY_INDEX: u32 = 2;
 /// V2 shared dynamic heap import/export 名。
 pub const HEAP_MEMORY_NAME: &str = "__heap_memory";
-/// V2 dynamic heap 的固定虚拟 reserve 大小（32 GiB）。
-pub const HEAP_MEMORY_BYTES: u64 = 32 * 1024 * 1024 * 1024;
-/// WebAssembly 64 KiB page 计数。
-pub const HEAP_MEMORY_PAGES: u64 = HEAP_MEMORY_BYTES / (64 * 1024);
+/// V2 handle table 所需的最小 shared memory64 reserve（32 GiB）。
+pub const HEAP_MEMORY_MIN_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+/// V2 high48 address ABI 的最大可寻址 shared memory64 范围（256 TiB）。
+pub const HEAP_MEMORY_MAX_BYTES: u64 = 1_u64 << 48;
+/// V2 shared memory64 最小 WebAssembly 64 KiB page 计数。
+pub const HEAP_MEMORY_MIN_PAGES: u64 = HEAP_MEMORY_MIN_BYTES / (64 * 1024);
+/// V2 shared memory64 最大 WebAssembly 64 KiB page 计数。
+pub const HEAP_MEMORY_MAX_PAGES: u64 = HEAP_MEMORY_MAX_BYTES / (64 * 1024);
 /// V2 NLAB fast-path 当前分配 cursor（i64 byte address）。
 pub const HEAP_ALLOC_PTR_GLOBAL_NAME: &str = "__heap_alloc_ptr";
 /// V2 NLAB fast-path 当前 buffer 末端（i64 byte address）。
