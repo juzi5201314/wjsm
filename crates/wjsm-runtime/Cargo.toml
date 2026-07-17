@@ -7,10 +7,7 @@ edition.workspace = true
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
 [features]
-managed-heap-v2 = [
-    "wjsm-backend-wasm/managed-heap-v2",
-    "wjsm-runtime-support/managed-heap-v2",
-]
+managed-heap-v2 = []
 
 [dependencies]
 anyhow = { workspace = true }

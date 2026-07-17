@@ -288,3 +288,37 @@ cargo fmt --all -- --check
 ```
 
 状态：Task 3 GREEN 完成；feature 默认关闭，不切换 active runtime。
+
+## Task 4 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test managed_heap_memory
+# HeapAddress / HeapMemoryError / ManagedHeap / NativeHeapMemory / SharedHeapMemory unresolved imports，失败。
+```
+
+### 实现事实
+
+- `HeapMemory` 为 sealed crate-private trait，生产 owner `ManagedHeap<M>` 静态单态化，不使用 `dyn HeapMemory`。
+- `SharedHeapMemory` 通过 Wasmtime `SharedMemory::data()` 的稳定 base pointer 执行 checked `AtomicU64` SeqCst word load/store；raw byte copy 使用 AtomicU8，文档限制为未发布对象区。
+- `NativeHeapMemory` 使用 `Arc<[AtomicU64]>` 和 CAS byte update，可模拟高于 u32 的 base address，覆盖 alignment/bounds/SeqCst/copy 语义。
+- runtime feature 不再把 Task 4 memory-only test 无谓传播到 backend/support；backend/support 保留各自默认关闭的 private feature。
+
+### GREEN / needs-verification
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test managed_heap_memory
+# Summary: 4 tests run: 4 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --no-default-features -E 'test(runtime_options_default)'
+# Summary: 1 test run: 1 passed, 308 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished dev profile; 0 warnings
+
+cargo +nightly miri test -p wjsm-runtime --features managed-heap-v2 --test gc_protocol_miri
+# 180 秒硬超时；Miri 仍在编译 Wasmtime/SWC dependency graph，测试体未执行。
+```
+
+状态：Task 4 implementation 完成；Miri protocol evidence 为 `needs-verification`，遵循用户 180 秒运行上限，未重试长跑。

@@ -33,6 +33,8 @@ pub use realm_clone::{
     EvalRealmArrayProbe, ExecutionRealmFrameProbe, RealmCloneProbe, probe_clone_pristine_realm,
     probe_eval_array_literal_in_realm, probe_execution_realm_frame,
 };
+#[cfg(feature = "managed-heap-v2")]
+mod heap;
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
@@ -46,6 +48,9 @@ mod runtime_date;
 mod runtime_encoding;
 mod runtime_eval;
 mod runtime_gc;
+#[cfg(feature = "managed-heap-v2")]
+#[doc(hidden)]
+pub use heap::{HeapAddress, HeapMemoryError, NativeHeapMemory, SharedHeapMemory};
 pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};
 pub use runtime_gc::registry::GcAlgorithmKind;
