@@ -132,6 +132,16 @@ pub fn decode_array_handle(val: i64) -> u32 {
 pub const TAG_MASK: u64 = 0x1F;
 
 pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x20;
+
+/// 非激活 GC reference color 占用 payload 的 bit 38–43；只允许附着于 heap-backed handle。
+pub const GC_COLOR_SHIFT: u32 = 38;
+pub const GC_COLOR_BITS: u32 = 6;
+pub const GC_COLOR_MASK: u64 = ((1_u64 << GC_COLOR_BITS) - 1) << GC_COLOR_SHIFT;
+
+/// 清除 value 中的 GC color，不改变 NaN-box tag 或低 32 位 handle identity。
+pub fn strip_gc_color(value: i64) -> i64 {
+    (value as u64 & !GC_COLOR_MASK) as i64
+}
 pub const BOX_BASE: u64 = MASK_SIGN | MASK_EXPONENT | MASK_QUIET_NAN;
 
 pub fn encode_f64(val: f64) -> i64 {
@@ -398,6 +408,14 @@ pub fn tag_needs_root(val: i64) -> bool {
         || is_iterator(val)
         || is_enumerator(val)
         || is_exception(val)
+}
+
+/// 返回 value 是否持有可安全附着 GC color 的运行时 heap handle。
+///
+/// 静态字符串、number、bool、null、undefined 与 array hole 都不是 heap-backed
+/// reference；运行时字符串句柄与所有 `tag_needs_root` handle 才是。
+pub fn is_handle_backed_reference(value: i64) -> bool {
+    tag_needs_root(strip_gc_color(value))
 }
 
 // ── Bound function ────────────────────────────────────────────────────

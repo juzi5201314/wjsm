@@ -22,10 +22,11 @@ Task 0 实现与三条 GREEN 已完成，等待主代理复审后标记最终完
 - Wasmtime family 精确锁定 `=43.0.2`。
 - Task 0 GREEN：engine-config 2、shared_memory64 1、runtime-support 9、snapshot-format 6、startup snapshot 9、engine pool 6；runtime-snapshot 构建零 warning。
 - Task 1 GREEN：专用 `wjsm-gc-bench` CLI preflight 与 30 样本 ZGC baseline 在 180 秒上限内完成；runtime telemetry 1 项通过，benchmark crate tests 11 项全部 ignore，不参与 workspace 常规 gate。
+- Task 2 GREEN：GC color bit 38–43 纯 helper 已加入；wjsm-ir 22 项与 snapshot-format 6 项通过，JS identity smoke 输出 `true`。
 
 ## Active slice
 
-Task 2：添加非激活 NaN-box GC color helpers；不改变 active entry、backend store、snapshot ABI 或 runtime heap。
+Phase A 统一审查：复核 Tasks 0–2 的平台可行性、measurement contract、NaN-box boundary 与 retire track；批准后才进入 Task 3。
 
 ## Evidence refs
 
@@ -39,16 +40,16 @@ Task 2：添加非激活 NaN-box GC color helpers；不改变 active entry、bac
 
 ## Next step
 
-- 读取 `wjsm-ir/src/value.rs` 的 NaN-box layout 与现有 value unit/property tests。
-- 为所有 handle-backed tags/runtime string 与非引用值写 RED 边界测试。
+- 请求 Phase A 的规格符合性审查与代码质量审查（用户指定每个大阶段一次）。
+- 无 Critical/Important finding 后开始 Task 3 的私有 `managed-heap-v2` control plane。
 
 ## ResumeStateHint
 
-恢复时先读本文件、`90-evidence.md` 的 Task 0/1 段、父规格与实施计划；Task 1 提交包含专用 benchmark CLI、fail-closed resource admission、JDK 25 probe 与 runtime telemetry；当前从 Task 2 RED 开始。
+恢复时先读本文件、`90-evidence.md` 的 Task 0–2 段、父规格与实施计划；Phase A 的三个任务均已提交，当前等待统一 review，未启动 Task 3。
 
 ## DriftCheckDraft
 
-- Scope：Task 1 限定 measurement/telemetry/benchmark 驱动；不改变 active collector 算法或性能阈值。
-- Compatibility：全量 nextest 跳过 `wjsm-gc-bench` 的 11 个 ignore tests；benchmark 只通过专用 CLI 执行；错误 JDK 版本输出 `needs-verification` JSON，不把环境缺失变成通用测试失败。
-- Retirement：旧 `gc_stress`/`zgc_autoresearch`/`zgc_barrier_pressure` 暂不删除，Task 26 统一迁移和退役。
-- Decision：Task 1 GREEN 并关闭；本机无 JDK 25 patched probe 的指标保持 `needs-verification`，不伪造 counter，继续 Task 2。
+- Scope：Task 2 仅在 `wjsm-ir::value` 定义 inactive color constants/helpers 与合同测试；不接入任何 active runtime owner。
+- Compatibility：color 只占 payload bit 38–43；`strip_gc_color` 保留低 32 位 handle identity 与 tag；snapshot-format ABI hash owner不依赖 `wjsm-ir`。
+- Retirement：无旧 owner 或 fallback 新增；ZGC 当前 entry color 仍是既有 runtime 私有实现，Task 16 才统一接入。
+- Decision：Task 2 GREEN 并关闭；按用户指令先完成 Phase A 统一 reviewer gate，再继续 Task 3。

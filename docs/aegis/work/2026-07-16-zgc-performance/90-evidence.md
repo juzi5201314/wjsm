@@ -190,3 +190,36 @@ git apply --check --ignore-space-change crates/wjsm-gc-bench/jdk-probe/0001-zgc-
 ```
 
 状态：Task 1 GREEN 完成；JDK 25 instrumentation 与 physical/cpu/barrier raw numerator 的当前状态为 `needs-verification`，这是 gate 合同而非通过声明。
+
+## Task 2 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-ir
+# `GC_COLOR_MASK`、`strip_gc_color`、`is_handle_backed_reference` unresolved imports，失败。
+```
+
+### 实现事实
+
+- `GC_COLOR_SHIFT=38`、`GC_COLOR_BITS=6`、`GC_COLOR_MASK=0x0000_0FC0_0000_0000` 只定义在 `wjsm-ir::value`。
+- `is_handle_backed_reference` 复用既有 `tag_needs_root` 语义，因此 object/array/function/closure/bound/native/bigint/symbol/regexp/proxy/scope-record/exception/iterator/enumerator/runtime string 可着色；number/static string/bool/null/undefined/array hole 不可着色。
+- `strip_gc_color` 只清除 bit 38–43，不改变 tag 或低 32 位 handle identity；没有 backend store、entry size、snapshot format 或 runtime heap 调用方改动。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-ir
+# Summary: 22 tests run: 22 passed, 0 skipped
+
+cargo nextest run -p wjsm-snapshot-format
+# Summary: 6 tests run: 6 passed, 0 skipped
+
+cargo run -- run -e 'const x={}; const y=x; console.log(x===y)'
+# stdout: true（176.46 秒；后续 runtime 命令遵循 180 秒绝对上限）
+
+cargo fmt --all -- --check
+# 通过
+```
+
+状态：Task 2 GREEN 完成；snapshot-format 的静态 ABI hash test 通过且该 crate 不依赖 `wjsm-ir`，因此 inactive IR-only color constants 不进入 active snapshot ABI。
