@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+
+use parking_lot::Mutex;
 
 use super::ManagedHeapLayout;
 use super::object_map::{PageMetadata, PageObjectIter};
@@ -160,14 +162,14 @@ impl ManagedAllocator {
     }
 
     pub fn reserve_relocation(&self, pages: u32) -> Result<RelocationReserve, AllocatorError> {
-        let mut state = self.state.lock().expect("allocator state lock poisoned");
+        let mut state = self.state.lock();
         let range = state.take_free(pages)?;
         state.reserves.insert(range.start().get(), range.len());
         Ok(RelocationReserve { pages: range })
     }
 
     pub fn release_relocation(&self, reserve: RelocationReserve) -> Result<(), AllocatorError> {
-        let mut state = self.state.lock().expect("allocator state lock poisoned");
+        let mut state = self.state.lock();
         let length = state
             .reserves
             .remove(&reserve.pages.start().get())
@@ -183,7 +185,7 @@ impl ManagedAllocator {
         if !allocation.dedicated {
             return Err(AllocatorError::SharedNlabAllocation);
         }
-        let mut state = self.state.lock().expect("allocator state lock poisoned");
+        let mut state = self.state.lock();
         let metadata = state
             .pages
             .get(&allocation.page)
@@ -221,27 +223,20 @@ impl ManagedAllocator {
     }
 
     pub fn objects_in_page(&self, page: PageId) -> PageObjectIter {
-        let page = self
-            .state
-            .lock()
-            .expect("allocator state lock poisoned")
-            .pages
-            .get(&page)
-            .cloned();
+        let page = self.state.lock().pages.get(&page).cloned();
         PageObjectIter::new(page)
     }
 
     pub fn object_count(&self, page: PageId) -> usize {
         self.state
             .lock()
-            .expect("allocator state lock poisoned")
             .pages
             .get(&page)
             .map_or(0, |metadata| metadata.object_count())
     }
 
     pub fn pages_are_contiguous(&self, range: PageRange) -> bool {
-        let state = self.state.lock().expect("allocator state lock poisoned");
+        let state = self.state.lock();
         (0..range.len()).all(|offset| {
             state
                 .pages
@@ -251,11 +246,7 @@ impl ManagedAllocator {
     }
 
     pub fn free_pages(&self) -> u32 {
-        self.state
-            .lock()
-            .expect("allocator state lock poisoned")
-            .free
-            .page_count()
+        self.state.lock().free.page_count()
     }
 
     pub const fn total_pages(&self) -> u32 {
@@ -293,7 +284,7 @@ impl ManagedAllocator {
     }
 
     fn acquire_pages(&self, count: u32) -> Result<Arc<PageMetadata>, AllocatorError> {
-        let mut state = self.state.lock().expect("allocator state lock poisoned");
+        let mut state = self.state.lock();
         let range = state.take_free(count)?;
         let page = Arc::new(PageMetadata::new(range, self.config.bytes));
         let newly_committed = state.commit(range);
@@ -312,7 +303,6 @@ impl ManagedAllocator {
             .map_err(|_| AllocatorError::UnknownObject { object })?;
         self.state
             .lock()
-            .expect("allocator state lock poisoned")
             .pages
             .get(&page)
             .cloned()

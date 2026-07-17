@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+
+use parking_lot::Mutex;
 
 use super::handle_entry::HandleId;
 
@@ -29,10 +31,7 @@ impl EpochQuarantine {
     pub(crate) fn register(self: &Arc<Self>) -> EpochParticipant {
         let id = self.next_participant.fetch_add(1, Ordering::SeqCst);
         let epoch = Arc::new(AtomicU64::new(INACTIVE_EPOCH));
-        self.participants
-            .lock()
-            .expect("epoch participant lock poisoned")
-            .insert(id, Arc::clone(&epoch));
+        self.participants.lock().insert(id, Arc::clone(&epoch));
         EpochParticipant {
             owner: Arc::clone(self),
             id,
@@ -46,15 +45,12 @@ impl EpochQuarantine {
 
     pub(crate) fn retire(&self, handle: HandleId) {
         let epoch = self.current.load(Ordering::SeqCst);
-        self.retired
-            .lock()
-            .expect("epoch quarantine lock poisoned")
-            .push(RetiredHandle { handle, epoch });
+        self.retired.lock().push(RetiredHandle { handle, epoch });
     }
 
     pub(crate) fn take_reclaimable(&self) -> Vec<HandleId> {
         let safe_epoch = self.safe_epoch();
-        let mut retired = self.retired.lock().expect("epoch quarantine lock poisoned");
+        let mut retired = self.retired.lock();
         let mut pending = Vec::with_capacity(retired.len());
         let mut reclaimed = Vec::new();
 
@@ -70,24 +66,17 @@ impl EpochQuarantine {
     }
 
     pub(crate) fn make_reusable(&self, handle: HandleId) {
-        self.reusable
-            .lock()
-            .expect("epoch reusable lock poisoned")
-            .push(handle);
+        self.reusable.lock().push(handle);
     }
 
     pub(crate) fn take_reusable(&self) -> Option<HandleId> {
-        self.reusable
-            .lock()
-            .expect("epoch reusable lock poisoned")
-            .pop()
+        self.reusable.lock().pop()
     }
 
     fn safe_epoch(&self) -> u64 {
         let current = self.current.load(Ordering::SeqCst);
         self.participants
             .lock()
-            .expect("epoch participant lock poisoned")
             .values()
             .map(|epoch| epoch.load(Ordering::SeqCst))
             .filter(|epoch| *epoch != INACTIVE_EPOCH)
@@ -122,10 +111,6 @@ impl EpochParticipant {
 impl Drop for EpochParticipant {
     fn drop(&mut self) {
         self.exit();
-        self.owner
-            .participants
-            .lock()
-            .expect("epoch participant lock poisoned")
-            .remove(&self.id);
+        self.owner.participants.lock().remove(&self.id);
     }
 }

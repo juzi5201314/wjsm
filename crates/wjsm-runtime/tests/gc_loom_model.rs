@@ -64,3 +64,47 @@ fn handle_aba_model_keeps_retired_slot_quarantined_while_reader_is_active() {
         );
     });
 }
+
+#[test]
+fn inflight_termination_model_drains_admitted_packet_before_worker_exit() {
+    loom::model(|| {
+        let accepting = Arc::new(AtomicBool::new(true));
+        let inflight = Arc::new(AtomicU64::new(0));
+        let processed = Arc::new(AtomicU64::new(0));
+        let (packet_tx, packet_rx) = mpsc::channel();
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let (start_tx, start_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let producer_accepting = Arc::clone(&accepting);
+        let producer_inflight = Arc::clone(&inflight);
+        let producer = thread::spawn(move || {
+            assert!(producer_accepting.load(Ordering::SeqCst));
+            producer_inflight.fetch_add(1, Ordering::SeqCst);
+            packet_tx.send(()).unwrap();
+            admitted_tx.send(()).unwrap();
+        });
+
+        let worker_accepting = Arc::clone(&accepting);
+        let worker_inflight = Arc::clone(&inflight);
+        let worker_processed = Arc::clone(&processed);
+        let worker = thread::spawn(move || {
+            packet_rx.recv().unwrap();
+            start_rx.recv().unwrap();
+            assert!(!worker_accepting.load(Ordering::SeqCst));
+            assert_eq!(worker_inflight.load(Ordering::SeqCst), 1);
+            worker_processed.fetch_add(1, Ordering::SeqCst);
+            worker_inflight.fetch_sub(1, Ordering::SeqCst);
+            done_tx.send(()).unwrap();
+        });
+
+        admitted_rx.recv().unwrap();
+        accepting.store(false, Ordering::SeqCst);
+        start_tx.send(()).unwrap();
+        done_rx.recv().unwrap();
+        assert_eq!(inflight.load(Ordering::SeqCst), 0);
+        assert_eq!(processed.load(Ordering::SeqCst), 1);
+        producer.join().unwrap();
+        worker.join().unwrap();
+    });
+}

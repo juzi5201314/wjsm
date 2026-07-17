@@ -408,3 +408,60 @@ cargo run --release -p wjsm-gc-bench -- micro --component allocator --heap 256m 
 ```
 
 状态：Task 6 GREEN 完成；无 active allocator、collector 或 Linker ABI 切换。
+
+## Task 7 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test gc_worker
+# unresolved imports: GcPacketKind / GcWorkPacket / GcWorkerPool / WorkerPoolError；失败。
+```
+
+### 实现事实
+
+- `runtime_gc/worker` 是 feature-private 的唯一 V2 worker owner；`GcWorkPacket` 为 Copy 的 page/bitmap/root/relocation range value，不含 Store、Caller、WasmEnv 或用户 callback context。
+- `PacketSlab` 在创建时预分配固定 slots；submit 从 free list 取得 `PacketId`，worker 完成后归还，容量耗尽显式报错而不增长或分配 fallback。
+- 每 worker 持有 crossbeam FIFO deque，提交进 injector，消费顺序为 local → injector batch → peer steal；deterministic unit test 直接将 packet 放入 owner local deque 并由 peer 成功 steal。
+- `inflight` 是 drain/termination 真相：shutdown 先停止 admission、worker 在 `inflight == 0` 前继续消费，最后 join。Condvar 仅协调 park/wake/idle，不承担工作正确性。
+- 新 V2 mutex 全部使用 `parking_lot`；active scheduler 未更改。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --lib -E 'test(worker_steals_packet_from_peer_local_deque)|test(managed_heap_delegates_nlab_allocation)'
+# Summary: 2 tests run: 2 passed, 209 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test page_allocator --test gc_worker --test gc_concurrency_model --test gc_loom_model --test gc_protocol_miri
+# Summary: 12 tests run: 12 passed, 0 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished dev profile; 0 warnings
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --lib --test managed_heap_memory --test handle_table --test page_allocator --test gc_worker --test gc_concurrency_model --test gc_loom_model --test gc_protocol_miri
+# Summary: 228 tests run: 228 passed, 2 skipped
+
+cargo nextest run -p wjsm-runtime --no-default-features -E 'test(runtime_options_default)'
+# Summary: 1 test run: 1 passed, 308 skipped
+
+cargo run --release -p wjsm-gc-bench -- micro --component allocator --heap 256m --samples 30 --output /tmp/wjsm-allocator-micro-task7.json
+# exit 0; report status=passed, admission=admitted, 30 samples。
+```
+
+### needs-verification：TSan / Miri
+
+```text
+# 初始全局 RUSTFLAGS TSan：rustc 拒绝未插桩 std 的 sanitizer ABI。
+# host/target 隔离配置：
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/wjsm-tsan-host-isolated \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-Z sanitizer=thread -C unsafe-allow-abi-mismatch=sanitizer' \
+cargo +nightly -Z target-applies-to-host -Z host-config \
+  --config 'target-applies-to-host = false' test --target x86_64-unknown-linux-gnu \
+  -p wjsm-runtime --features managed-heap-v2 --test gc_concurrency_model
+# host/proc-macro ABI 错误已消失；两次均在 180 秒内编译 Wasmtime/SWC/runtime graph，未到测试体。
+
+cargo +nightly miri test -p wjsm-runtime --features managed-heap-v2 --test gc_protocol_miri
+# 未重跑：Task 4 已在同一 180 秒上限内仅完成依赖编译、未执行测试体。新增 test 只构造 Copy packet，绝不执行 worker deque。
+```
+
+状态：Task 7 core GREEN；TSan 与 Miri 不得标记为通过，保留 `needs-verification`，等待允许超过 180 秒或预热的专用 sanitizer/Miri runner。

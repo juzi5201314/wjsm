@@ -91,6 +91,8 @@ pub mod scheduler;
 pub mod side_table_refs;
 pub mod telemetry;
 pub mod weak_refs;
+#[cfg(feature = "managed-heap-v2")]
+mod worker;
 pub mod zgc;
 
 pub use api::{GcAlgorithm, GcContext};
@@ -102,3 +104,5 @@ pub use collector_context::CollectorContext;
 pub use control::{GcRuntimeV2, RootSnapshot};
 #[cfg(feature = "managed-heap-v2")]
 pub use mutator::MutatorContext;
+#[cfg(feature = "managed-heap-v2")]
+pub use worker::{GcPacketKind, GcWorkPacket, GcWorkerPool, WorkerPoolError, WorkerPoolStats};

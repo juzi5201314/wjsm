@@ -11,6 +11,8 @@ managed-heap-v2 = []
 
 [dependencies]
 anyhow = { workspace = true }
+crossbeam-deque = "0.8.6"
+parking_lot = "0.12"
 wasmtime = { workspace = true }
 wjsm-engine-config = { path = "../wjsm-engine-config" }
 tokio = { workspace = true }

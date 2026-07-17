@@ -65,7 +65,10 @@ pub use runtime_gc::telemetry::{
 };
 #[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
-pub use runtime_gc::{CollectorContext, GcRuntimeV2, MutatorContext, RootSnapshot};
+pub use runtime_gc::{
+    CollectorContext, GcPacketKind, GcRuntimeV2, GcWorkPacket, GcWorkerPool, MutatorContext,
+    RootSnapshot, WorkerPoolError, WorkerPoolStats,
+};
 mod runtime_generator;
 mod runtime_heap;
 mod runtime_host_helpers;
