@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 const MIB: u64 = 1024 * 1024;
 const BYTES_PER_LOGICAL_OBJECT: u64 = MIB / 8;
 const MAX_LOGICAL_OBJECTS: u64 = 32_768;
+pub const WORKLOAD_CONTRACT_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -59,23 +60,24 @@ impl ScenarioSpec {
     pub fn build(&self) -> Scenario {
         let allocations = allocation_count(self.heap_cap_bytes);
         let retained = allocations.saturating_mul(u64::from(self.live_set_percent)) / 100;
-        let source = source_for(self.kind, self.seed, allocations, retained);
-        let logical_graph_hash = hash_source(&source);
+        let logical_graph_hash = hash_contract(self.kind, self.seed, allocations, retained);
         Scenario {
             manifest: ScenarioManifest {
                 name: self.kind.as_str().into(),
                 seed: self.seed,
                 heap_cap_bytes: self.heap_cap_bytes,
                 live_set_percent: self.live_set_percent,
+                retained_objects: retained,
+                workload_contract_version: WORKLOAD_CONTRACT_VERSION,
                 logical_graph_hash,
             },
             denominators: Denominators {
                 logical_objects: allocations,
-                reference_edges: reference_edges(self.kind, allocations, retained),
+                reference_edges: reference_edges(self.kind, allocations),
                 planned_allocation_bytes: allocations.saturating_mul(32),
                 physical_allocated_bytes: None,
             },
-            source,
+            source: source_for(self.kind, self.seed, allocations, retained),
         }
     }
 }
@@ -86,6 +88,8 @@ pub struct ScenarioManifest {
     pub seed: u64,
     pub heap_cap_bytes: u64,
     pub live_set_percent: u8,
+    pub retained_objects: u64,
+    pub workload_contract_version: u32,
     pub logical_graph_hash: String,
 }
 
@@ -106,6 +110,19 @@ pub struct Scenario {
     pub source: String,
 }
 
+impl Scenario {
+    /// Java driver 接收与 WJSM source 相同的 canonical workload contract 参数。
+    pub fn java_args(&self) -> [String; 5] {
+        [
+            self.manifest.name.clone(),
+            self.denominators.logical_objects.to_string(),
+            self.manifest.retained_objects.to_string(),
+            self.manifest.seed.to_string(),
+            self.manifest.logical_graph_hash.clone(),
+        ]
+    }
+}
+
 fn allocation_count(heap_cap_bytes: u64) -> u64 {
     // 32 MiB ZGC 的实测边界：4,096 个根对象会让单样本超过 100 秒，1,024 个
     // 仍约 14 秒，而 256 个对象执行真实 full GC 约 5 秒。每个逻辑对象按 128 KiB
@@ -114,55 +131,60 @@ fn allocation_count(heap_cap_bytes: u64) -> u64 {
     (heap_cap_bytes / BYTES_PER_LOGICAL_OBJECT).clamp(256, MAX_LOGICAL_OBJECTS)
 }
 
-fn reference_edges(kind: ScenarioKind, allocations: u64, retained: u64) -> u64 {
+fn reference_edges(kind: ScenarioKind, allocations: u64) -> u64 {
     match kind {
-        ScenarioKind::Chain | ScenarioKind::Cycle => allocations,
-        ScenarioKind::Wide => allocations.saturating_mul(4),
-        ScenarioKind::Mutation => allocations.saturating_mul(2),
-        ScenarioKind::Request | ScenarioKind::Saturation => retained.saturating_mul(2),
-        ScenarioKind::Humongous => allocations / 16,
-        ScenarioKind::Churn | ScenarioKind::IdleUncommit => retained,
+        ScenarioKind::Churn | ScenarioKind::Chain | ScenarioKind::IdleUncommit => allocations,
+        ScenarioKind::Request => allocations.saturating_mul(3),
+        ScenarioKind::Cycle => allocations.saturating_add(1),
+        ScenarioKind::Wide => allocations.saturating_mul(5),
+        ScenarioKind::Mutation | ScenarioKind::Humongous => allocations,
+        ScenarioKind::Saturation => allocations.saturating_mul(2),
     }
 }
 
 fn source_for(kind: ScenarioKind, seed: u64, allocations: u64, retained: u64) -> String {
     let common = format!(
-        "const total={allocations}; const retained={retained}; const seed={seed}; let roots=[];"
+        "const total={allocations};const retained={retained};const seed={seed};const slots=retained===0?1:retained;let roots=[];"
     );
     let body = match kind {
         ScenarioKind::Churn => {
-            "for(let i=0;i<total;i++){let o={i,seed,next:roots[i&255]};if(i<retained)roots[i%retained]=o;}gc();"
+            "for(let i=0;i<total;i++){let node={id:i,next:roots[i%slots],payload:null};if(i<retained)roots[i%slots]=node;}gc();"
         }
         ScenarioKind::Request => {
-            "for(let i=0;i<total;i++){let request={i,headers:{seed},body:[i,seed]};if(i<retained)roots[i%retained]=request;}"
+            "for(let i=0;i<total;i++){let header={id:i,next:null,payload:null};let body=[i,seed];let node={id:i,next:roots[i%slots],payload:[header,body]};if(i<retained)roots[i%slots]=node;}"
         }
         ScenarioKind::Chain => {
-            "let tail=null;for(let i=0;i<total;i++){tail={i,next:tail};if(i<retained)roots[i%retained]=tail;}"
+            "let tail=null;for(let i=0;i<total;i++){tail={id:i,next:tail,payload:null};if(i<retained)roots[i%slots]=tail;}"
         }
         ScenarioKind::Cycle => {
-            "let first={i:0};let tail=first;for(let i=1;i<total;i++){let o={i,next:first};tail.next=o;tail=o;if(i<retained)roots[i%retained]=o;}"
+            "let first={id:0,next:null,payload:null};let tail=first;for(let i=1;i<total;i++){let node={id:i,next:null,payload:null};tail.next=node;tail=node;if(i<retained)roots[i%slots]=node;}tail.next=first;"
         }
         ScenarioKind::Wide => {
-            "for(let i=0;i<total;i++){let o={i,a:{i},b:{i},c:{i},d:{i}};if(i<retained)roots[i%retained]=o;}"
+            "for(let i=0;i<total;i++){let payload=[{id:i,next:null,payload:null},{id:i+1,next:null,payload:null},{id:i+2,next:null,payload:null},{id:i+3,next:null,payload:null}];let node={id:i,next:null,payload:payload};if(i<retained)roots[i%slots]=node;}"
         }
         ScenarioKind::Mutation => {
-            "for(let i=0;i<total;i++){let o={i,next:roots[i&255]};o.next={i:i+1};if(i<retained)roots[i%retained]=o;}"
+            "for(let i=0;i<total;i++){let node={id:i,next:roots[i%slots],payload:null};node.next={id:i+1,next:null,payload:null};if(i<retained)roots[i%slots]=node;}"
         }
         ScenarioKind::Humongous => {
-            "for(let i=0;i<total;i++){let o={i,data:new Array(64)};if(i<retained)roots[i%retained]=o;}"
+            "for(let i=0;i<total;i++){let node={id:i,next:null,payload:new Array(64)};if(i<retained)roots[i%slots]=node;}"
         }
         ScenarioKind::IdleUncommit => {
-            "for(let i=0;i<total;i++){let o={i,data:[i,seed]};if(i<retained)roots[i%retained]=o;}gc();"
+            "for(let i=0;i<total;i++){let node={id:i,next:roots[i%slots],payload:null};if(i<retained)roots[i%slots]=node;}gc();"
         }
         ScenarioKind::Saturation => {
-            "for(let i=0;i<total;i++){let o={i,left:{i},right:{i}};if(i<retained)roots[i%retained]=o;}"
+            "for(let i=0;i<total;i++){let left={id:i,next:null,payload:null};let right={id:i+1,next:null,payload:null};let node={id:i,next:left,payload:right};if(i<retained)roots[i%slots]=node;}"
         }
     };
-    format!("{common}{body} console.log(roots.length);")
+    format!("{common}{body}console.log(roots.length);")
 }
 
-fn hash_source(source: &str) -> String {
-    let digest = Sha256::digest(source.as_bytes());
+fn hash_contract(kind: ScenarioKind, seed: u64, allocations: u64, retained: u64) -> String {
+    let contract = format!(
+        "wjsm-gc-workload-v{}|{}|{seed}|{allocations}|{retained}",
+        WORKLOAD_CONTRACT_VERSION,
+        kind.as_str()
+    );
+    let digest = Sha256::digest(contract.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -185,13 +207,13 @@ mod tests {
 
     #[test]
     #[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
-    fn churn_scenario_forces_a_cycle_within_32m_capacity_model() {
+    fn java_and_wjsm_share_canonical_workload_identity() {
         let scenario = ScenarioSpec::new(ScenarioKind::Churn, 7, 32 * MIB, 50).build();
-        assert_eq!(scenario.denominators.logical_objects, 256);
-        assert!(
-            scenario
-                .source
-                .ends_with("gc(); console.log(roots.length);")
-        );
+        let args = scenario.java_args();
+        assert_eq!(args[0], "churn");
+        assert_eq!(args[1], "256");
+        assert_eq!(args[2], "128");
+        assert_eq!(args[4], scenario.manifest.logical_graph_hash);
+        assert!(scenario.source.ends_with("gc();console.log(roots.length);"));
     }
 }

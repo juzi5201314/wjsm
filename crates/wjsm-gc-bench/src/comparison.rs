@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::EXIT_NEEDS_RESOURCE_RUNNER;
 use crate::cli::{CommonArgs, CompareArgs, EngineKind, GateArgs, GcKind, RunArgs};
-use crate::gate::{GateReport, NormalizedMetric, evaluate_gate};
+use crate::gate::{GateReport, NormalizedMetric, PauseGateResult, evaluate_gate, evaluate_pause};
 use crate::jdk_probe::prepare_jdk;
 use crate::report::{read_json, write_json};
 use crate::resource::{
@@ -140,11 +140,13 @@ pub(crate) fn gate_manifest(manifest: &BenchmarkManifest) -> GateReport {
         return GateReport {
             status: GateStatus::NeedsResourceRunner,
             metrics: Vec::new(),
+            pauses: Vec::new(),
             leading_metrics: 0,
             reasons: manifest.notes.clone(),
         };
     }
     let mut metrics = Vec::new();
+    let mut pauses = Vec::new();
     for wjsm in manifest
         .reports
         .iter()
@@ -156,54 +158,101 @@ pub(crate) fn gate_manifest(manifest: &BenchmarkManifest) -> GateReport {
         }) else {
             for name in metric_names() {
                 metrics.push(NormalizedMetric {
-                    name: name.into(),
+                    name: format!("{}:{name}", wjsm.scenario.logical_graph_hash),
                     wjsm_numerator: None,
+                    wjsm_denominator: None,
                     jdk_numerator: None,
-                    denominator: None,
+                    jdk_denominator: None,
                 });
             }
+            pauses.push(evaluate_pause(
+                wjsm.scenario.logical_graph_hash.clone(),
+                None,
+                None,
+                None,
+            ));
             continue;
         };
         for name in metric_names() {
             metrics.push(paired_metric(name, wjsm, jdk));
         }
+        pauses.push(paired_pause(wjsm, jdk));
     }
     if metrics.is_empty() {
         return GateReport {
             status: GateStatus::NeedsVerification,
             metrics: Vec::new(),
+            pauses,
             leading_metrics: 0,
-            reasons: vec!["manifest contains no WJSM/JDK comparison pairs".into()],
+            reasons: vec!["manifest 未包含 WJSM/JDK 对比对".into()],
         };
     }
-    evaluate_gate(&metrics)
+    evaluate_gate(&metrics, &pauses)
 }
 
 fn paired_metric(name: &str, wjsm: &RunReport, jdk: &RunReport) -> NormalizedMetric {
-    let wjsm_value = mean_metric_value(wjsm, name);
-    let jdk_value = mean_metric_value(jdk, name);
+    let (wjsm_numerator, wjsm_denominator) =
+        aggregate_metric_parts(wjsm, name).unwrap_or((None, None));
+    let (jdk_numerator, jdk_denominator) =
+        aggregate_metric_parts(jdk, name).unwrap_or((None, None));
     NormalizedMetric {
         name: format!("{}:{name}", wjsm.scenario.logical_graph_hash),
-        // 输入已经是归一化值，使用共同 denominator=1 保留 ratio 语义。
-        wjsm_numerator: wjsm_value,
-        jdk_numerator: jdk_value,
-        denominator: Some(1.0),
+        wjsm_numerator,
+        wjsm_denominator,
+        jdk_numerator,
+        jdk_denominator,
     }
 }
 
-fn mean_metric_value(report: &RunReport, name: &str) -> Option<f64> {
-    let values: Vec<_> = report
+fn aggregate_metric_parts(report: &RunReport, name: &str) -> Option<(Option<f64>, Option<f64>)> {
+    if report.samples.is_empty() {
+        return None;
+    }
+    let mut numerator = 0.0;
+    let mut denominator = 0.0;
+    for sample in &report.samples {
+        let metric = sample.metrics.iter().find(|metric| metric.name == name)?;
+        let (Some(top), Some(bottom)) = (metric.numerator, metric.denominator) else {
+            return None;
+        };
+        if bottom <= 0.0 {
+            return None;
+        }
+        numerator += top;
+        denominator += bottom;
+    }
+    Some((Some(numerator), Some(denominator)))
+}
+
+fn paired_pause(wjsm: &RunReport, jdk: &RunReport) -> PauseGateResult {
+    let wjsm_p999 = aggregate_pause(wjsm, |pause| pause.p999_ns);
+    let jdk_p999 = aggregate_pause(jdk, |pause| pause.p999_ns);
+    let wjsm_max = aggregate_pause(wjsm, |pause| pause.max_ns);
+    evaluate_pause(
+        wjsm.scenario.logical_graph_hash.clone(),
+        wjsm_p999,
+        jdk_p999,
+        wjsm_max,
+    )
+}
+
+fn aggregate_pause(
+    report: &RunReport,
+    select: impl Fn(&wjsm_runtime::HistogramSnapshot) -> u64,
+) -> Option<u64> {
+    if report.samples.is_empty()
+        || report
+            .samples
+            .iter()
+            .any(|sample| sample.gc_telemetry.pause.count == 0)
+    {
+        return None;
+    }
+    report
         .samples
         .iter()
-        .filter_map(|sample| {
-            sample
-                .metrics
-                .iter()
-                .find(|metric| metric.name == name)
-                .and_then(|metric| metric.value)
-        })
-        .collect();
-    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+        .map(|sample| select(&sample.gc_telemetry.pause))
+        .max()
 }
 
 fn parse_csv<T>(

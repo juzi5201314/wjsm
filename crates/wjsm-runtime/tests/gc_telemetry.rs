@@ -1,4 +1,4 @@
-use wjsm_runtime::{GcStats, GcTelemetry};
+use wjsm_runtime::{GcExecutionStats, GcStats, GcTelemetry};
 
 #[test]
 fn gc_telemetry_snapshot_is_versioned_and_uses_hdr_histograms() {
@@ -23,4 +23,28 @@ fn gc_telemetry_snapshot_is_versioned_and_uses_hdr_histograms() {
     let json = telemetry.to_json().expect("telemetry JSON");
     assert!(json.contains("\"schema_version\":1"));
     assert!(json.contains("\"collector\":\"zgc\""));
+}
+
+#[test]
+fn execution_telemetry_uses_cumulative_gc_counters() {
+    let mut last = GcStats::default();
+    last.freed_bytes = 3;
+    last.relocated_bytes = 5;
+    let mut cumulative = GcStats::default();
+    cumulative.freed_bytes = 13;
+    cumulative.relocated_bytes = 17;
+    let telemetry = GcTelemetry::from_execution_stats(
+        "zgc",
+        &GcExecutionStats {
+            last,
+            cumulative,
+            pause_hist: vec![11, 13],
+            ..Default::default()
+        },
+    );
+
+    let snapshot = telemetry.snapshot();
+    assert_eq!(snapshot.cycles, 2);
+    assert_eq!(snapshot.reclaimed_bytes, 13);
+    assert_eq!(snapshot.relocated_bytes, 17);
 }

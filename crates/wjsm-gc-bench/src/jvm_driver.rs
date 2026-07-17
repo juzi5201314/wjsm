@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::cli::GcKind;
 use crate::jdk_probe::JdkProbeMetadata;
 use crate::scenario::Scenario;
 
@@ -30,29 +31,21 @@ impl JdkDriver {
         Self { metadata }
     }
 
-    pub fn run_sample(&self, scenario: &Scenario) -> Result<JdkSample> {
+    pub fn run_sample(&self, scenario: &Scenario, gc: GcKind) -> Result<JdkSample> {
         let java = self.metadata.jdk_home.join("bin/java");
         let mut command = Command::new(&java);
-        command
-            .arg("-XX:+UseZGC")
-            .arg(format!("-Xmx{}", scenario.manifest.heap_cap_bytes));
+        command.arg(jdk_gc_flag(gc)?);
+        command.arg(format!("-Xmx{}", scenario.manifest.heap_cap_bytes));
         if self.metadata.diagnostic_counters_available {
             command.arg("-XX:+UnlockDiagnosticVMOptions");
             command.arg("-XX:+WjsmGcBenchmarkCounters");
         }
+        let args = scenario.java_args();
         command
             .arg("-cp")
             .arg(&self.metadata.classes_dir)
             .arg("WjsmGcBench")
-            .arg(&scenario.manifest.name)
-            .arg(scenario.denominators.logical_objects.to_string())
-            .arg(
-                (scenario.denominators.logical_objects
-                    * u64::from(scenario.manifest.live_set_percent)
-                    / 100)
-                    .to_string(),
-            )
-            .arg(scenario.manifest.seed.to_string());
+            .args(args);
         let output = command
             .output()
             .with_context(|| format!("spawn {}", java.display()))?;
@@ -64,7 +57,8 @@ impl JdkDriver {
             );
         }
         let stdout = String::from_utf8(output.stdout).context("decode JDK benchmark output")?;
-        let steady_state_ns = parse_steady_state_ns(&stdout)?;
+        let steady_state_ns =
+            parse_steady_state_ns(&stdout, &scenario.manifest.logical_graph_hash)?;
         Ok(JdkSample {
             steady_state_ns,
             // 收集器 patch 的 counters 文件协议在准备阶段不存在时不伪造；driver 将
@@ -78,13 +72,32 @@ impl JdkDriver {
     }
 }
 
-fn parse_steady_state_ns(stdout: &str) -> Result<u64> {
+fn jdk_gc_flag(gc: GcKind) -> Result<&'static str> {
+    match gc {
+        GcKind::Zgc => Ok("-XX:+UseZGC"),
+        GcKind::G1 => Ok("-XX:+UseG1GC"),
+        GcKind::MarkSweep => anyhow::bail!(
+            "JDK 没有与 WJSM mark-sweep 对应的 collector；此比较需要 JDK reference runner"
+        ),
+    }
+}
+
+fn parse_steady_state_ns(stdout: &str, expected_workload_hash: &str) -> Result<u64> {
     let line = stdout
         .lines()
         .find(|line| line.starts_with('{'))
         .context("JDK benchmark did not emit JSON")?;
     let value: serde_json::Value =
         serde_json::from_str(line).context("decode JDK benchmark JSON")?;
+    let workload_hash = value
+        .get("workload_hash")
+        .and_then(serde_json::Value::as_str)
+        .context("JDK benchmark JSON lacks workload_hash")?;
+    if workload_hash != expected_workload_hash {
+        anyhow::bail!(
+            "JDK workload hash mismatch: expected={expected_workload_hash} actual={workload_hash}"
+        );
+    }
     value
         .get("steady_state_ns")
         .and_then(serde_json::Value::as_u64)

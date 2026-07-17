@@ -74,6 +74,21 @@ pub(crate) fn build_run_report_with_jdk(
         ));
     }
 
+    let unsupported_controls = unsupported_control_reasons(args);
+    if !unsupported_controls.is_empty() {
+        return Ok(empty_run_report(
+            args,
+            scenario,
+            resources,
+            admission,
+            configuration,
+            GateStatus::NeedsVerification,
+            None,
+            None,
+            unsupported_controls,
+        ));
+    }
+
     match args.engine {
         EngineKind::Wjsm => build_wjsm_report(args, scenario, resources, admission, configuration),
         EngineKind::Jdk => {
@@ -160,15 +175,38 @@ fn build_jdk_report(
     metadata: JdkProbeMetadata,
 ) -> Result<RunReport> {
     if !metadata.classes_dir.is_dir() {
-        anyhow::bail!(
-            "JDK probe classes are absent at {}; run prepare-jdk first",
-            metadata.classes_dir.display()
-        );
+        return Ok(empty_run_report(
+            args,
+            scenario,
+            resources,
+            admission,
+            configuration,
+            GateStatus::NeedsVerification,
+            Some(metadata.patch_sha256),
+            Some("jdk-25-diagnostic-probe"),
+            vec![format!(
+                "JDK probe classes 不存在于 {}；先运行 prepare-jdk",
+                metadata.classes_dir.display()
+            )],
+        ));
+    }
+    if args.gc == GcKind::MarkSweep {
+        return Ok(empty_run_report(
+            args,
+            scenario,
+            resources,
+            admission,
+            configuration,
+            GateStatus::NeedsVerification,
+            Some(metadata.patch_sha256),
+            Some("jdk-25-stock"),
+            vec!["JDK 没有与 WJSM mark-sweep 对应的 collector；需要 JDK reference runner".into()],
+        ));
     }
     let driver = JdkDriver::new(metadata.clone());
     let mut samples = Vec::with_capacity(args.samples);
     for index in 0..args.samples {
-        let sample = driver.run_sample(&scenario)?;
+        let sample = driver.run_sample(&scenario, args.gc)?;
         samples.push(SampleReport {
             index,
             steady_state_ns: sample.steady_state_ns,
@@ -176,7 +214,7 @@ fn build_jdk_report(
             metrics: jdk_metrics(sample.counters),
         });
     }
-    Ok(build_report(
+    let mut report = build_report(
         args,
         scenario,
         resources,
@@ -190,7 +228,14 @@ fn build_jdk_report(
                 .then_some("jdk-25-diagnostic-probe")
                 .unwrap_or("jdk-25-stock"),
         ),
-    ))
+    );
+    if !metadata.diagnostic_counters_available {
+        report.status = GateStatus::NeedsVerification;
+        report
+            .notes
+            .push("stock JDK 未提供所需内部 numerator；不能通过 normalized gate".into());
+    }
+    Ok(report)
 }
 
 fn build_report(
@@ -271,6 +316,7 @@ fn load_prepared_jdk(args: &RunArgs) -> Result<JdkProbeMetadata> {
 
 fn configuration(args: &RunArgs) -> RunConfiguration {
     RunConfiguration {
+        profile: args.common.profile,
         samples: args.samples,
         duration_seconds: args.duration,
         workers: args.workers,
@@ -280,6 +326,23 @@ fn configuration(args: &RunArgs) -> RunConfiguration {
         jdk_home: args.jdk_home.clone(),
         jdk_probe_home: args.jdk_probe_home.clone(),
     }
+}
+
+fn unsupported_control_reasons(args: &RunArgs) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if args.workers != 1 {
+        reasons.push("--workers 尚未接入当前单线程 collector runtime".into());
+    }
+    if args.relocate_every_page {
+        reasons.push("--relocate-every-page 在 Task 20 前不可用".into());
+    }
+    if args.barrier_buffer_capacity != 4096 {
+        reasons.push("--barrier-buffer-capacity 在 Task 16 前不可用".into());
+    }
+    if args.safepoint_every_allocation {
+        reasons.push("--safepoint-every-allocation 在 Task 16 前不可用".into());
+    }
+    reasons
 }
 
 fn runtime_metadata(

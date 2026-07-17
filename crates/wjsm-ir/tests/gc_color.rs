@@ -56,22 +56,19 @@ fn scalar_values_never_encode_gc_color_bits() {
 }
 
 #[test]
-fn stripping_color_is_idempotent_for_every_nan_box_class() {
-    let values = [
-        encode_object_handle(u32::MAX),
-        encode_runtime_string_handle(u32::MAX),
-        encode_string_ptr(u32::MAX),
-        encode_f64(-0.0),
-        encode_bool(true),
-        encode_null(),
-        encode_undefined(),
-    ];
+fn stripping_color_preserves_raw_f64_payload_bits() {
+    let raw_f64 = encode_f64(f64::from_bits(0x3FF0_0FC0_0000_0000));
+    assert_ne!(raw_f64 as u64 & GC_COLOR_MASK, 0);
+    assert!(!is_handle_backed_reference(raw_f64));
+    assert_eq!(strip_gc_color(raw_f64), raw_f64);
 
-    for value in values {
-        let colored = (value as u64 | GC_COLOR_MASK) as i64;
-        assert_eq!(
-            strip_gc_color(strip_gc_color(colored)),
-            strip_gc_color(colored)
-        );
-    }
+    let colored_handle = (encode_object_handle(u32::MAX) as u64 | GC_COLOR_MASK) as i64;
+    assert_eq!(
+        strip_gc_color(colored_handle),
+        encode_object_handle(u32::MAX)
+    );
+    assert_eq!(
+        strip_gc_color(strip_gc_color(colored_handle)),
+        strip_gc_color(colored_handle)
+    );
 }

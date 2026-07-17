@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::cell::Cell;
 use wjsm_gc_bench::cli::Cli;
-use wjsm_gc_bench::gate::{NormalizedMetric, evaluate_metric};
+use wjsm_gc_bench::gate::{NormalizedMetric, evaluate_gate, evaluate_metric, evaluate_pause};
 use wjsm_gc_bench::resource::{
     AdmissionRequest, AdmissionStatus, HostResourceProvider, HostResourceSnapshot, admit_then_run,
 };
@@ -88,14 +88,71 @@ fn resource_admission_rejects_before_spawn() {
 
 #[test]
 #[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
+fn resource_probe_errors_reject_before_spawn() {
+    let mut resources = HostResourceSnapshot::synthetic(128 * GIB, 128 * GIB);
+    resources.probe_errors.push("RLIMIT_AS unavailable".into());
+    let provider = FakeResources(resources);
+    let spawned = Cell::new(false);
+    let decision = admit_then_run(&provider, AdmissionRequest::pr(256 * MIB), || {
+        spawned.set(true);
+        Ok(())
+    })
+    .expect("structured admission decision");
+    assert_eq!(decision.status, AdmissionStatus::NeedsResourceRunner);
+    assert!(!spawned.get());
+}
+
+#[test]
+#[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
 fn missing_jdk_numerator_never_passes_gate() {
     let result = evaluate_metric(&NormalizedMetric {
         name: "gc_cpu_per_allocated_byte".into(),
         wjsm_numerator: Some(100.0),
+        wjsm_denominator: Some(1_000.0),
         jdk_numerator: None,
-        denominator: Some(1_000.0),
+        jdk_denominator: None,
     });
     assert_eq!(result.status, GateStatus::NeedsVerification);
+}
+
+#[test]
+#[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
+fn gate_uses_each_engine_physical_denominator() {
+    let result = evaluate_metric(&NormalizedMetric {
+        name: "gc_cpu_per_allocated_byte".into(),
+        wjsm_numerator: Some(200.0),
+        wjsm_denominator: Some(100.0),
+        jdk_numerator: Some(100.0),
+        jdk_denominator: Some(100.0),
+    });
+    assert_eq!(result.ratio, Some(2.0));
+    assert_eq!(result.status, GateStatus::Failed);
+}
+
+#[test]
+#[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
+fn gate_requires_pause_distribution_evidence() {
+    let metrics = [
+        NormalizedMetric {
+            name: "one".into(),
+            wjsm_numerator: Some(80.0),
+            wjsm_denominator: Some(100.0),
+            jdk_numerator: Some(100.0),
+            jdk_denominator: Some(100.0),
+        },
+        NormalizedMetric {
+            name: "two".into(),
+            wjsm_numerator: Some(80.0),
+            wjsm_denominator: Some(100.0),
+            jdk_numerator: Some(100.0),
+            jdk_denominator: Some(100.0),
+        },
+    ];
+    let pauses = [evaluate_pause("scenario".into(), None, Some(1), Some(1))];
+    assert_eq!(
+        evaluate_gate(&metrics, &pauses).status,
+        GateStatus::NeedsVerification
+    );
 }
 
 struct FakeResources(HostResourceSnapshot);

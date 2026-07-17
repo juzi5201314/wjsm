@@ -21,12 +21,12 @@ Task 0 实现与三条 GREEN 已完成，等待主代理复审后标记最终完
 - 实现 `wjsm-engine-config` 唯一 Wasmtime config owner，并迁移 runtime/support/snapshot 调用链。
 - Wasmtime family 精确锁定 `=43.0.2`。
 - Task 0 GREEN：engine-config 2、shared_memory64 1、runtime-support 9、snapshot-format 6、startup snapshot 9、engine pool 6；runtime-snapshot 构建零 warning。
-- Task 1 GREEN：专用 `wjsm-gc-bench` CLI preflight 与 30 样本 ZGC baseline 在 180 秒上限内完成；runtime telemetry 1 项通过，benchmark crate tests 11 项全部 ignore，不参与 workspace 常规 gate。
-- Task 2 GREEN：GC color bit 38–43 纯 helper 已加入；wjsm-ir 22 项与 snapshot-format 6 项通过，JS identity smoke 输出 `true`。
+- Task 1：专用 `wjsm-gc-bench` CLI、preflight 与历史 30 样本 baseline 已验证；Phase A 审查后 canonical workload 改为跨 WJSM/JDK contract，当前只完成 1 样本 smoke，30 样本新合同需在用户允许的专用 runner 窗口重跑。
+- Task 2 GREEN：GC color bit 38–43 纯 helper 已加入；wjsm-ir 22 项与 snapshot-format 6 项通过，JS identity smoke 输出 `true`；Phase A 审查后 raw f64 保留 payload bit 的边界测试已通过。
 
 ## Active slice
 
-Phase A 统一审查：复核 Tasks 0–2 的平台可行性、measurement contract、NaN-box boundary 与 retire track；批准后才进入 Task 3。
+Task 3：建立私有 `managed-heap-v2` gate 与并发 control plane；用户要求所有 reviewer gate 延后至整个 28 项计划完成后统一执行。
 
 ## Evidence refs
 
@@ -36,20 +36,20 @@ Phase A 统一审查：复核 Tasks 0–2 的平台可行性、measurement contr
 
 ## Blocked on
 
-无。
+canonical workload 的 30 样本 baseline 重跑：用户要求不运行耗时程序且所有命令硬超时 180 秒；已有 1 样本 smoke，最终 distribution evidence 延后到计划终局专用 runner。
 
 ## Next step
 
-- 请求 Phase A 的规格符合性审查与代码质量审查（用户指定每个大阶段一次）。
-- 无 Critical/Important finding 后开始 Task 3 的私有 `managed-heap-v2` control plane。
+- 提交已验证的 Phase A review 修复。
+- 开始 Task 3 私有 `managed-heap-v2` control plane；不再调用 reviewer，直至全计划结束。
 
 ## ResumeStateHint
 
-恢复时先读本文件、`90-evidence.md` 的 Task 0–2 段、父规格与实施计划；Phase A 的三个任务均已提交，当前等待统一 review，未启动 Task 3。
+恢复时先读本文件、`90-evidence.md` 的 Task 0–2 与 Phase A review 修复段、父规格与实施计划；Phase A 修复待提交，Task 3 可直接开始；最终 reviewer 仅在整个计划结束后执行。
 
 ## DriftCheckDraft
 
-- Scope：Task 2 仅在 `wjsm-ir::value` 定义 inactive color constants/helpers 与合同测试；不接入任何 active runtime owner。
-- Compatibility：color 只占 payload bit 38–43；`strip_gc_color` 保留低 32 位 handle identity 与 tag；snapshot-format ABI hash owner不依赖 `wjsm-ir`。
-- Retirement：无旧 owner 或 fallback 新增；ZGC 当前 entry color 仍是既有 runtime 私有实现，Task 16 才统一接入。
-- Decision：Task 2 GREEN 并关闭；按用户指令先完成 Phase A 统一 reviewer gate，再继续 Task 3。
+- Scope：Phase A 修复只关闭 reviewer 指出的 measurement/config/value boundary 缺口；不接入 active managed heap 或改变 collector policy。
+- Compatibility：benchmark crate 的 14 个 Rust tests 全部 ignore；专用 CLI 是唯一 benchmark lane；错误 JDK 返回 `needs-verification`。color 只清除 heap-backed reference，不触碰 raw f64 payload。
+- Retirement：无新 fallback；未接入 adversarial controls 直接报告 `needs-verification`，旧 benchmark 仍由 Task 26 退役。
+- Decision：用户取消阶段性 reviewer；继续 Task 3。canonical 30-sample distribution 仍为 `needs-verification`，最终统一审查不得将其误报为通过。

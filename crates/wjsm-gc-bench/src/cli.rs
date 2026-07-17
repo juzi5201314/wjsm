@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::scenario::ScenarioKind;
@@ -58,7 +59,8 @@ impl GcKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub enum Profile {
     #[default]
     Pr,

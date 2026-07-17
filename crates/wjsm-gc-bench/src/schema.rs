@@ -58,6 +58,7 @@ pub struct SampleReport {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RunConfiguration {
+    pub profile: crate::cli::Profile,
     pub samples: usize,
     pub duration_seconds: u64,
     pub workers: usize,

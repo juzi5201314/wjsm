@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::ValueEnum;
 use serde::Serialize;
 
-use crate::cli::{Cli, Command, CommonArgs, JdkArgs, MicroArgs, Profile, ReplayArgs, RunArgs};
+use crate::cli::{Cli, Command, CommonArgs, JdkArgs, MicroArgs, ReplayArgs, RunArgs};
 use crate::comparison::{compare, gate};
 use crate::jdk_probe::prepare_jdk;
 use crate::report::{read_json, write_json};
@@ -133,7 +133,7 @@ fn replay(args: ReplayArgs) -> Result<i32> {
             common: CommonArgs {
                 heap: report.scenario.heap_cap_bytes,
                 output: args.output.clone(),
-                profile: Profile::Pr,
+                profile: report.configuration.profile,
             },
             engine,
             gc,

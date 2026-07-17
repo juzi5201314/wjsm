@@ -138,9 +138,13 @@ pub const GC_COLOR_SHIFT: u32 = 38;
 pub const GC_COLOR_BITS: u32 = 6;
 pub const GC_COLOR_MASK: u64 = ((1_u64 << GC_COLOR_BITS) - 1) << GC_COLOR_SHIFT;
 
-/// 清除 value 中的 GC color，不改变 NaN-box tag 或低 32 位 handle identity。
+/// 只清除 heap-backed reference 的 GC color；raw f64 的 payload bits 永远原样返回。
 pub fn strip_gc_color(value: i64) -> i64 {
-    (value as u64 & !GC_COLOR_MASK) as i64
+    if is_handle_backed_reference(value) {
+        (value as u64 & !GC_COLOR_MASK) as i64
+    } else {
+        value
+    }
 }
 pub const BOX_BASE: u64 = MASK_SIGN | MASK_EXPONENT | MASK_QUIET_NAN;
 
@@ -413,9 +417,10 @@ pub fn tag_needs_root(val: i64) -> bool {
 /// 返回 value 是否持有可安全附着 GC color 的运行时 heap handle。
 ///
 /// 静态字符串、number、bool、null、undefined 与 array hole 都不是 heap-backed
-/// reference；运行时字符串句柄与所有 `tag_needs_root` handle 才是。
+/// reference；运行时字符串句柄与所有 `tag_needs_root` handle 才是。color bit 不参与
+/// tag 解码，所以该判断不需要先 strip。
 pub fn is_handle_backed_reference(value: i64) -> bool {
-    tag_needs_root(strip_gc_color(value))
+    tag_needs_root(value)
 }
 
 // ── Bound function ────────────────────────────────────────────────────

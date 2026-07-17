@@ -223,3 +223,37 @@ cargo fmt --all -- --check
 ```
 
 状态：Task 2 GREEN 完成；snapshot-format 的静态 ABI hash test 通过且该 crate 不依赖 `wjsm-ir`，因此 inactive IR-only color constants 不进入 active snapshot ABI。
+
+## Phase A review repair evidence
+
+- 第一轮规格审查发现 11 项 Important：cgroup path/delegation、host probe 错误语义、profile replay、stock JDK/JDK collector、跨 engine scenario、未接入 controls、telemetry 只读 last、共同 denominator、缺失样本/pause hard gate、raw f64 color stripping。
+- `resource_platform.rs` 现在从 `/proc/self/cgroup` 与 `/proc/self/mountinfo` 推导实际 cgroup v2 mount；只有 finite `memory.max`、`memory.swap.max=0`、parent memory subtree delegation、可写 limit 和 `memory.events` 同时存在时声明 hard isolation。探测错误写入 `probe_errors`，admission 转为 `needs-resource-runner`。
+- `RunConfiguration` 保存 profile；replay 使用该 profile。非 JDK 25/JDK probe/classes 缺失、stock JDK、没有 JDK mark-sweep counterpart 均输出 `needs-verification`；不再把请求的 JDK collector 静默替换为 ZGC。
+- WJSM 与 Java driver 使用同一 v1 workload contract/hash；JDK 输出必须回传该 hash 才接受样本。非默认的 workers/relocation/barrier/safepoint controls 在其 owner 到位前明确返回 `needs-verification`，不假装生效。
+- `GcExecutionStats.cumulative` 在 `RuntimeState::store_last_gc_stats` 汇总所有 cycle；telemetry 读取 cumulative freed/relocated bytes。gate 以各 engine 独立 numerator/denominator 求值，任何 sample/counter/pause distribution 缺失均为 `needs-verification`，同时检查 p99.9 与 WJSM max <1ms。
+- `strip_gc_color` 只作用于 `tag_needs_root` heap-backed reference；raw f64 payload 即使碰巧占用 bit 38–43 也原样保留。
+
+```text
+cargo check -p wjsm-gc-bench
+cargo check -p wjsm-runtime
+cargo check -p wjsm-ir
+cargo fmt --all -- --check
+# 均通过，零 warning。
+
+cargo run --release -p wjsm-gc-bench -- preflight --heap 1g --profile pr --output /tmp/wjsm-gc-preflight-review.json
+# exit 0；实际 cgroup_path=/sys/fs/cgroup/init.scope，memory_controller=true，delegated=false，probe_errors=[]。
+
+cargo run --release -p wjsm-gc-bench -- run --engine jdk --gc zgc --heap 32m --scenario churn --samples 1 --jdk-home /definitely-not-jdk25 --jdk-probe-home /tmp/wjsm-jdk-probe --output /tmp/wjsm-jdk-run-review.json
+# exit 0；JSON status=needs-verification，未 spawn benchmark child。
+
+cargo run --release -p wjsm-gc-bench -- baseline --engine wjsm --gc zgc --heap 32m --scenario churn --samples 1 --output /tmp/wjsm-zgc-review-smoke.json
+# exit 0；canonical workload v1/hash 生效，steady_state_ns=4_045_969_265，cumulative reclaimed_bytes=18_288。
+
+cargo nextest run -p wjsm-runtime -E 'test(gc_telemetry) | test(gc_execution_stats_accumulate_all_cycles)'
+# Summary: 2 tests run: 2 passed, 306 skipped
+
+cargo nextest run -p wjsm-ir
+# Summary: 22 tests run: 22 passed, 0 skipped
+```
+
+状态：Phase A review fixes 已实现；用户已取消 Phase A 复审并要求整个 28 项计划完成后才统一 reviewer。最终 canonical workload 30-sample distribution 因用户禁止耗时运行仍为 `needs-verification`。

@@ -340,6 +340,8 @@ pub struct MemoryFootprintSample {
 pub struct GcExecutionStats {
     /// 最近一次完成 GC 周期的完整 v2 统计。
     pub last: GcStats,
+    /// 本次运行所有完成 GC 周期的累计统计；计数型 telemetry 必须读取此字段，不能只读 `last`。
+    pub cumulative: GcStats,
     /// 本次运行中观测到的 GC pause 最大值序列（纳秒）。
     pub pause_hist: Vec<u64>,
     /// 最近 GC 周期的 committed/reusable footprint 序列。
@@ -1103,6 +1105,7 @@ impl Clone for RuntimeState {
             gc_algorithm: self.gc_algorithm.clone(),
             gc_scheduler: self.gc_scheduler.clone(),
             last_gc_stats: self.last_gc_stats.clone(),
+            cumulative_gc_stats: self.cumulative_gc_stats.clone(),
             gc_pause_hist: self.gc_pause_hist.clone(),
             memory_footprint_hist: self.memory_footprint_hist.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
@@ -1324,6 +1327,8 @@ struct RuntimeState {
     /// 最近一次 GC 统计（含碎片治理指标，issue #332）。
     /// 每次完整 collection 后由 host 更新，供可观测性 API 查询。
     last_gc_stats: Arc<Mutex<crate::runtime_gc::api::GcStats>>,
+    /// 当前 Store 本次运行全部 GC 周期的累计统计，供 benchmark telemetry 消费。
+    cumulative_gc_stats: Arc<Mutex<crate::runtime_gc::api::GcStats>>,
     /// 最近 256 次 GC pause 观测，按纳秒记录；写入 last_gc_stats 时同步推进。
     gc_pause_hist: Arc<Mutex<GcPauseHist>>,
     /// 最近 256 次 GC footprint 观测；写入 last_gc_stats 时同步推进。
@@ -1553,6 +1558,13 @@ impl RuntimeState {
         if has_pause && gc_log_enabled() {
             eprintln!("{}", format_gc_log_summary(algorithm, &stats));
         }
+        {
+            let mut cumulative = self
+                .cumulative_gc_stats
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            cumulative.merge_from(&stats);
+        }
         let mut slot = self.last_gc_stats.lock().unwrap_or_else(|e| e.into_inner());
         *slot = stats;
     }
@@ -1564,10 +1576,16 @@ impl RuntimeState {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let cumulative = self
+            .cumulative_gc_stats
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let pause_hist = self.gc_pause_hist_snapshot();
         let memory_footprint_hist = self.memory_footprint_hist_snapshot();
         GcExecutionStats {
             last,
+            cumulative,
             pause_hist,
             memory_footprint_hist,
             steady_state_ns: 0,
@@ -1852,6 +1870,7 @@ impl RuntimeState {
                 crate::runtime_gc::scheduler::GcScheduler::default(),
             )),
             last_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
+            cumulative_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
             gc_pause_hist: Arc::new(Mutex::new(GcPauseHist::default())),
             memory_footprint_hist: Arc::new(Mutex::new(MemoryFootprintHist::default())),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
@@ -2362,6 +2381,26 @@ mod tests {
         assert_eq!(hist.len(), 256);
         assert_eq!(hist[0], 5);
         assert_eq!(hist[255], 260);
+    }
+
+    #[test]
+    fn gc_execution_stats_accumulate_all_cycles() {
+        let state = super::RuntimeState::new();
+        for freed_bytes in [3, 7] {
+            state.store_last_gc_stats(
+                "mark-sweep",
+                GcStats {
+                    freed_bytes,
+                    relocated_bytes: freed_bytes + 1,
+                    ..GcStats::default()
+                },
+            );
+        }
+
+        let stats = state.gc_execution_stats_snapshot();
+        assert_eq!(stats.last.freed_bytes, 7);
+        assert_eq!(stats.cumulative.freed_bytes, 10);
+        assert_eq!(stats.cumulative.relocated_bytes, 12);
     }
 
     #[test]

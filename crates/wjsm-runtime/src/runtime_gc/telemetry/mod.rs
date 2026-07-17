@@ -95,10 +95,10 @@ impl GcTelemetry {
         }
         inner.reclaimed_bytes = inner
             .reclaimed_bytes
-            .saturating_add(u64::try_from(stats.last.freed_bytes).expect("usize fits u64"));
-        inner.relocated_bytes = inner
-            .relocated_bytes
-            .saturating_add(u64::try_from(stats.last.relocated_bytes).expect("usize fits u64"));
+            .saturating_add(u64::try_from(stats.cumulative.freed_bytes).expect("usize fits u64"));
+        inner.relocated_bytes = inner.relocated_bytes.saturating_add(
+            u64::try_from(stats.cumulative.relocated_bytes).expect("usize fits u64"),
+        );
     }
 
     pub fn from_execution_stats(collector: &str, stats: &GcExecutionStats) -> Self {
