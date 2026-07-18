@@ -692,3 +692,30 @@ cargo check -p wjsm-runtime --features managed-heap-v2
 ```
 
 状态：Task 13 GREEN；managed V2 snapshot/support ABI 保持 private feature-gated，active V1 snapshot format 与 restore 未切换；进入 Task 14。
+
+## Task 14 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test realm_side_tables_v2
+# error[E0432]: unresolved imports `wjsm_runtime::V2ConditionalRoots`,
+# `wjsm_runtime::remap_realm_handles_v2`
+```
+
+旧 realm clone 只能通过 WasmEnv/main-memory clone/remap；没有能够验证 shared V2 handle table、条件 root 或 side-table dangling-handle 过滤的 owner。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(vm_gc_realm_roots_v2) | test(realm_clone_v2) | test(side_table_gc_v2)'
+# Summary: 3 tests run: 3 passed, 367 skipped
+
+cargo nextest run -p wjsm-runtime --test integration
+# Summary: 87 tests run: 87 passed, 0 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.63s
+```
+
+状态：Task 14 GREEN；V2 realm/root/side-table adapter 保持 private feature-gated，default realm path 未切换；进入 Task 15 cutover audit。

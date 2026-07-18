@@ -399,11 +399,11 @@ cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(startup_sn
 cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(vm_gc_realm_roots_v2) | test(realm_clone_v2) | test(side_table_gc_v2)'
 ```
 
-- [ ] **Write test**：realm共享单ManagedHeap；clone/remap只操作handles；conditional roots/side tables在V2 GC后无悬垂handle。
-- [ ] **Verify RED**：旧WasmEnv/main-memory假设失败。
-- [ ] **Implement**：feature-gated V2 realm/root/side-table adapters，不复制collector/worker/epoch。
-- [ ] **Verify GREEN**：feature tests与默认realm tests同时通过。
-- [ ] **Commit**：`refactor: stage realm and side-table heap migration`。
+- [x] **Write test**：realm共享单ManagedHeap；clone/remap只操作handles；conditional roots/side tables在V2 GC后无悬垂handle。
+- [x] **Verify RED**：旧WasmEnv/main-memory假设失败。
+- [x] **Implement**：feature-gated V2 realm/root/side-table adapters，不复制collector/worker/epoch。
+- [x] **Verify GREEN**：feature tests与默认realm tests同时通过。
+- [x] **Commit**：`refactor: stage realm and side-table heap migration`。
 
 ## Task 15：协调切换active ABI并删除私有门和旧dynamic heap
 

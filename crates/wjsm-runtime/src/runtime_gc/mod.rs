@@ -89,6 +89,8 @@ pub mod native_callable_refs;
 pub mod object_walker;
 pub mod registry;
 pub mod roots;
+#[cfg(feature = "managed-heap-v2")]
+mod roots_v2;
 pub mod scheduler;
 pub mod side_table_refs;
 pub mod telemetry;
@@ -108,5 +110,7 @@ pub use control::{GcRuntimeV2, RootSnapshot};
 pub use heap_access_v2::{HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property};
 #[cfg(feature = "managed-heap-v2")]
 pub use mutator::MutatorContext;
+#[cfg(feature = "managed-heap-v2")]
+pub use roots_v2::V2ConditionalRoots;
 #[cfg(feature = "managed-heap-v2")]
 pub use worker::{GcPacketKind, GcWorkPacket, GcWorkerPool, WorkerPoolError, WorkerPoolStats};

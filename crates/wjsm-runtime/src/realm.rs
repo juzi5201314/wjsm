@@ -112,6 +112,41 @@ impl RealmIntrinsics {
         .into_iter()
         .chain(self.typedarray_prototypes.iter().copied())
     }
+
+    pub fn try_map_values<E>(&self, mut map: impl FnMut(i64) -> Result<i64, E>) -> Result<Self, E> {
+        let mut typedarray_prototypes = [Self::UNDEFINED; TYPEDARRAY_PROTO_COUNT];
+        for (target, value) in typedarray_prototypes
+            .iter_mut()
+            .zip(self.typedarray_prototypes)
+        {
+            *target = map(value)?;
+        }
+        Ok(Self {
+            object_proto: map(self.object_proto)?,
+            array_proto: map(self.array_proto)?,
+            function_proto: map(self.function_proto)?,
+            iterator_prototype: map(self.iterator_prototype)?,
+            generator_prototype: map(self.generator_prototype)?,
+            async_iterator_prototype: map(self.async_iterator_prototype)?,
+            async_gen_prototype: map(self.async_gen_prototype)?,
+            symbol_prototype: map(self.symbol_prototype)?,
+            promise_prototype: map(self.promise_prototype)?,
+            regexp_prototype: map(self.regexp_prototype)?,
+            date_prototype: map(self.date_prototype)?,
+            error_proto: map(self.error_proto)?,
+            type_error_proto: map(self.type_error_proto)?,
+            range_error_proto: map(self.range_error_proto)?,
+            reference_error_proto: map(self.reference_error_proto)?,
+            syntax_error_proto: map(self.syntax_error_proto)?,
+            eval_error_proto: map(self.eval_error_proto)?,
+            uri_error_proto: map(self.uri_error_proto)?,
+            aggregate_error_proto: map(self.aggregate_error_proto)?,
+            buffer_prototype: map(self.buffer_prototype)?,
+            text_encoder_prototype: map(self.text_encoder_prototype)?,
+            text_decoder_prototype: map(self.text_decoder_prototype)?,
+            typedarray_prototypes,
+        })
+    }
 }
 
 #[cfg(test)]

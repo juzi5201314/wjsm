@@ -26,6 +26,8 @@ pub use runtime_async_hooks::{
     AsyncHooksFlags, AsyncHooksState, CapturedScope, FrameId, HookRecord, ResourceMeta,
 };
 mod realm_clone;
+#[cfg(feature = "managed-heap-v2")]
+mod realm_clone_v2;
 pub use handle_remap::{
     FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
 };
@@ -33,6 +35,9 @@ pub use realm_clone::{
     EvalRealmArrayProbe, ExecutionRealmFrameProbe, RealmCloneProbe, probe_clone_pristine_realm,
     probe_eval_array_literal_in_realm, probe_execution_realm_frame,
 };
+#[cfg(feature = "managed-heap-v2")]
+#[doc(hidden)]
+pub use realm_clone_v2::remap_realm_handles_v2;
 #[cfg(feature = "managed-heap-v2")]
 mod heap;
 mod property_key;
@@ -75,7 +80,8 @@ pub use runtime_gc::zgc::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepO
 #[doc(hidden)]
 pub use runtime_gc::{
     CollectorContext, GcPacketKind, GcRuntimeV2, GcWorkPacket, GcWorkerPool, HeapAccessV2,
-    HeapAccessV2Error, MutatorContext, RootSnapshot, WorkerPoolError, WorkerPoolStats,
+    HeapAccessV2Error, MutatorContext, RootSnapshot, V2ConditionalRoots, WorkerPoolError,
+    WorkerPoolStats,
 };
 mod runtime_generator;
 mod runtime_heap;

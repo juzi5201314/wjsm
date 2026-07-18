@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "managed-heap-v2")]
+use crate::heap::HandleId;
 use anyhow::Result;
 use wjsm_ir::constants::{
     FLAG_IS_ACCESSOR, HEAP_ARRAY_CAPACITY_OFFSET, HEAP_ARRAY_ELEMENT_SIZE,
@@ -54,6 +56,11 @@ impl HandleMap {
     /// 迭代 new handle。
     pub fn values(&self) -> impl Iterator<Item = u32> + '_ {
         self.map.values().copied()
+    }
+
+    #[cfg(feature = "managed-heap-v2")]
+    pub fn remap_handle_v2(&self, handle: HandleId) -> HandleId {
+        HandleId::new(self.get(handle.get()).unwrap_or(handle.get()))
     }
 }
 
