@@ -549,6 +549,8 @@ pub(super) fn register_linker(
     store: &mut Store<RuntimeState>,
 ) -> Result<()> {
     define_core(linker, store)?;
+    #[cfg(feature = "managed-heap-v2")]
+    crate::host_imports::define_v2(linker)?;
     crate::array_named_props::define_array_named_props(linker, store)?;
     define_timers_arrays(linker, store)?;
     define_fetch(linker, store)?;

@@ -5042,6 +5042,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wjsm-backend-wasm-v2"
+version = "0.1.0"
+dependencies = [
+ "wjsm-backend-wasm",
+]
+
+[[package]]
 name = "wjsm-cli"
 version = "0.1.0"
 dependencies = [
@@ -5169,9 +5176,11 @@ dependencies = [
  "tokio-tungstenite",
  "uuid",
  "wait-timeout",
+ "wasmparser 0.246.2",
  "wasmtime",
  "webpki-roots 0.26.11",
  "wjsm-backend-wasm",
+ "wjsm-backend-wasm-v2",
  "wjsm-engine-config",
  "wjsm-ir",
  "wjsm-module",
@@ -5195,6 +5204,7 @@ name = "wjsm-runtime-support"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "wasmparser 0.246.2",
  "wasmtime",
  "wjsm-backend-wasm",
  "wjsm-engine-config",

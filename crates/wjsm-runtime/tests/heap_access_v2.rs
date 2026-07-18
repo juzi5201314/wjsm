@@ -1,0 +1,381 @@
+#![cfg(feature = "managed-heap-v2")]
+
+use wasmparser::{Parser, Payload};
+use wasmtime::{MemoryType, SharedMemory};
+use wjsm_engine_config::EngineConfig;
+use wjsm_runtime::{HeapAccessV2, SharedHeapMemory};
+
+const HANDLE_REGION_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+const PAGE_BYTES: u64 = 64 * 1024;
+
+fn heap_access() -> HeapAccessV2 {
+    let engine = EngineConfig::artifact().build().unwrap();
+    let pages = HANDLE_REGION_BYTES / PAGE_BYTES + 2;
+    let memory = SharedMemory::new(
+        &engine,
+        MemoryType::builder()
+            .memory64(true)
+            .shared(true)
+            .min(pages)
+            .max(Some(pages))
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    HeapAccessV2::new(SharedHeapMemory::new(memory))
+}
+
+#[test]
+fn v2_compiler_imports_memory64_array_host_abi() {
+    let wasm =
+        wjsm_runtime::compile_source("const array = ['value']; console.log(array);").unwrap();
+    let imports = Parser::new(0)
+        .parse_all(&wasm)
+        .filter_map(Result::ok)
+        .filter_map(|payload| match payload {
+            Payload::ImportSection(section) => Some(section),
+            _ => None,
+        })
+        .flat_map(|section| section.into_imports().filter_map(Result::ok))
+        .map(|import| import.name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(imports.iter().any(|name| name == "__heap_memory"));
+}
+
+#[test]
+fn host_heap_access_v2() {
+    let wasm = wjsm_runtime::compile_source(
+        "const key = ['answer'].join(''); const object = {}; object[key] = 42; const array = [7, 8]; const map = new Map(); map.set(key, object); const proxy = new Proxy(object, { get(target, property) { return target[property]; } }); console.log(map.has(key), map.get(key) === object, array[1], proxy[key]);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "true true 8 42\n");
+}
+
+#[test]
+fn heap_access_v2_resolves_8byte_handle_and_updates_heap_relative_property_slot() {
+    let access = heap_access();
+    let handle = 41;
+    let object = HANDLE_REGION_BYTES + PAGE_BYTES;
+
+    access.publish_object(handle, object, u32::MAX, 2).unwrap();
+    access.set_property(handle, 17, 123).unwrap();
+
+    assert_eq!(access.resolve_handle(handle).unwrap(), object);
+    assert_eq!(access.get_property(handle, 17).unwrap(), Some(123));
+    assert_eq!(access.get_property(handle, 99).unwrap(), None);
+}
+
+#[test]
+fn heap_access_v2_publishes_and_updates_array_elements() {
+    let access = heap_access();
+    let handle = 42;
+    let object = HANDLE_REGION_BYTES + PAGE_BYTES;
+
+    access.publish_array(handle, object, u32::MAX, 3).unwrap();
+    access.set_element(handle, 0, 7).unwrap();
+    access.set_element(handle, 1, 8).unwrap();
+
+    assert_eq!(access.push_element(handle, 9).unwrap(), 3);
+    assert_eq!(access.get_element(handle, 0).unwrap(), Some(7));
+    assert_eq!(access.get_element(handle, 1).unwrap(), Some(8));
+    assert_eq!(access.get_element(handle, 2).unwrap(), Some(9));
+}
+
+#[test]
+fn v2_runtime_executes_runtime_string_computed_property_access() {
+    let wasm = wjsm_runtime::compile_source(
+        "const key = 'answer'; const object = {}; object[key] = 42; console.log(object[key]);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "42\n");
+}
+#[test]
+fn v2_runtime_executes_dynamic_string_computed_property_access() {
+    let wasm = wjsm_runtime::compile_source(
+        "const key = ['answer'].join(''); const object = {}; object[key] = 42; console.log(object[key]);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "42\n");
+}
+
+#[test]
+fn v2_runtime_executes_map_methods_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const map = new Map(); console.log(map.set('value', 42) === map, map.has('value'), map.get('value'));"
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "true true 42\n");
+}
+
+#[test]
+fn v2_runtime_executes_set_methods_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const set = new Set(); set.add(42); console.log(set.has(42), set.delete(42), set.has(42));",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "true true false\n");
+}
+
+#[test]
+fn v2_runtime_executes_collection_size_accessors_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const map = new Map(); map.set('value', 42); const set = new Set(); set.add(42); console.log(map.size, set.size);"
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 1\n");
+}
+
+#[test]
+fn v2_runtime_executes_collection_for_each_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const map = new Map([['first', 2], ['second', 3]]); const set = new Set([5, 7]); let total = 0; map.forEach(value => { total += value; }); set.forEach(value => { total += value; }); console.log(total);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "17\n");
+}
+
+#[test]
+fn v2_runtime_preserves_closure_lexical_mutation() {
+    let wasm = wjsm_runtime::compile_source(
+        "let total = 0; (() => { total += 2; })(); console.log(total);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "2\n");
+}
+
+#[test]
+fn v2_runtime_constructs_collections_from_iterables_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const map = new Map([['value', 42]]); const set = new Set([42]); console.log(map.get('value'), set.has(42));",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "42 true\n");
+}
+
+#[test]
+fn v2_runtime_executes_array_iterator_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const iterator = ['value', 42].values(); const first = iterator.next(); const second = iterator.next(); console.log(first.value, first.done, second.value, second.done);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "value false 42 false\n");
+}
+
+#[test]
+fn v2_runtime_publishes_array_symbol_iterator_without_memory32_reverse_lookup() {
+    let wasm =
+        wjsm_runtime::compile_source("console.log(typeof ['value'][Symbol.iterator]);").unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "function\n");
+}
+
+#[test]
+fn v2_runtime_publishes_array_values_method_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source("console.log(typeof ['value'].values);").unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "function\n");
+}
+
+#[test]
+fn v2_runtime_executes_proxy_property_access_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const target = { answer: 42 }; const proxy = new Proxy(target, {}); console.log(proxy.answer);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "42\n");
+}
+#[test]
+fn v2_runtime_executes_proxy_get_trap_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const target = { answer: 42 }; const proxy = new Proxy(target, { get(target, key) { return key === 'answer' ? target.answer + 1 : undefined; } }); console.log(proxy.answer);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "43\n");
+}
+
+#[test]
+fn v2_runtime_executes_proxy_set_trap_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const target = { answer: 0 }; const proxy = new Proxy(target, { set(target, key, value) { target[key] = value + 1; return true; } }); proxy.answer = 42; console.log(target.answer);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "43\n");
+}
+
+#[test]
+fn v2_runtime_executes_collection_values_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const map = new Map(); const value = { answer: 42 }; map.set('value', value); console.log(map.get('value').answer);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "42\n");
+}
+#[test]
+fn v2_runtime_executes_object_and_array_access_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const object = { answer: 42 }; const array = [7, 8]; console.log(object.answer, array[1]);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "42 8\n");
+}

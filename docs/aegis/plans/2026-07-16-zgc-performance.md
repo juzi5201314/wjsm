@@ -311,14 +311,14 @@ cargo run --features managed-heap-v2 -- dump-wat -e 'const x={a:[1,2,3]}; consol
 **GREEN**
 
 ```bash
-cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(host_heap_access_v2)'
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test heap_access_v2 -E 'test(host_heap_access_v2)'
 ```
 
-- [ ] **Write test**：对象/数组/property/runtime-string/proxy/collection在V2 heap resolve/write；target API携带handle，不依赖raw ptr反查。
-- [ ] **Verify RED**：旧main memory/ptr API不满足。
-- [ ] **Implement**：feature-gated concrete HeapAccessV2；缓存静态main-memory handles；消除V2 `WasmEnv::from_caller`热路与`handle_for_ptr`。
-- [ ] **Verify GREEN**：测试通过；结构搜索确认V2 host动态对象不调用`env.memory.data_mut`。
-- [ ] **Commit**：`refactor: stage centralized host heap access`。
+- [x] **Write test**：对象/数组/property/runtime-string/proxy/collection在V2 heap resolve/write；target API携带handle，不依赖raw ptr反查。
+- [x] **Verify RED**：旧main memory/ptr API不满足。
+- [x] **Implement**：feature-gated concrete HeapAccessV2；static/runtime/symbol property key canonicalization；V2 object/array/proxy/collection owner 不经 raw ptr 反查。回调保留独立 shadow-stack ABI 的 `WasmEnv` 使用，不作为 dynamic heap owner。
+- [x] **Verify GREEN**：实际 V2 compiler memory64 ABI、embedded V2 support artifact、object/array/runtime-string/proxy/collection/closure 端到端回归通过。
+- [x] **Commit**：`refactor: stage centralized host heap access`。
 
 ## Task 10：迁移mark-sweep policy到V2底座
 

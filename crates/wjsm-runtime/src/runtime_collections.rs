@@ -12,6 +12,31 @@ pub(crate) fn is_object_key(key: i64) -> bool {
         || value::is_symbol(key)
 }
 
+fn collection_handles(
+    caller: &mut Caller<'_, RuntimeState>,
+    receiver: i64,
+) -> (Option<i64>, Option<i64>) {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return (
+            read_host_data_property_v2(caller, receiver, "__map_handle__"),
+            read_host_data_property_v2(caller, receiver, "__set_handle__"),
+        );
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let Some(object) =
+            resolve_handle_idx(caller, value::decode_object_handle(receiver) as usize)
+        else {
+            return (None, None);
+        };
+        (
+            read_object_property_by_name(caller, object, "__map_handle__"),
+            read_object_property_by_name(caller, object, "__set_handle__"),
+        )
+    }
+}
+
 pub(crate) async fn fill_map_from_constructor_arg_async(
     caller: &mut Caller<'_, RuntimeState>,
     handle: u32,
@@ -105,13 +130,66 @@ async fn collect_iterator_object_values_async(
     caller: &mut Caller<'_, RuntimeState>,
     iterator: i64,
 ) -> Option<Vec<i64>> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return collect_iterator_object_values_v2_async(caller, iterator).await;
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let iterator = if value::is_iterator(iterator) {
+            create_raw_iterator_object(caller, iterator)
+        } else {
+            iterator
+        };
+        let iter_ptr = resolve_handle(caller, iterator)?;
+        let next = read_object_property_by_name(caller, iter_ptr, "next")?;
+        if !value::is_callable(next) {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: iterator next is not callable".to_string(),
+            );
+            return None;
+        }
+        let mut out = Vec::new();
+        loop {
+            let result =
+                call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
+            if value::is_exception(result) {
+                return Some(vec![result]);
+            }
+            let Some(result_ptr) = resolve_handle(caller, result) else {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: iterator next must return an object".to_string(),
+                );
+                return None;
+            };
+            let done = read_object_property_by_name(caller, result_ptr, "done")
+                .map(nanbox_to_bool)
+                .unwrap_or(false);
+            if done {
+                break;
+            }
+            out.push(
+                read_object_property_by_name(caller, result_ptr, "value")
+                    .unwrap_or_else(value::encode_undefined),
+            );
+        }
+        Some(out)
+    }
+}
+
+#[cfg(feature = "managed-heap-v2")]
+async fn collect_iterator_object_values_v2_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    iterator: i64,
+) -> Option<Vec<i64>> {
     let iterator = if value::is_iterator(iterator) {
         create_raw_iterator_object(caller, iterator)
     } else {
         iterator
     };
-    let iter_ptr = resolve_handle(caller, iterator)?;
-    let next = read_object_property_by_name(caller, iter_ptr, "next")?;
+    let next = read_host_data_property_v2(caller, iterator, "next")?;
     if !value::is_callable(next) {
         set_runtime_error(
             caller.data(),
@@ -126,21 +204,21 @@ async fn collect_iterator_object_values_async(
         if value::is_exception(result) {
             return Some(vec![result]);
         }
-        let Some(result_ptr) = resolve_handle(caller, result) else {
+        if !value::is_object(result) {
             set_runtime_error(
                 caller.data(),
                 "TypeError: iterator next must return an object".to_string(),
             );
             return None;
-        };
-        let done = read_object_property_by_name(caller, result_ptr, "done")
+        }
+        let done = read_host_data_property_v2(caller, result, "done")
             .map(nanbox_to_bool)
             .unwrap_or(false);
         if done {
             break;
         }
         out.push(
-            read_object_property_by_name(caller, result_ptr, "value")
+            read_host_data_property_v2(caller, result, "value")
                 .unwrap_or_else(value::encode_undefined),
         );
     }
@@ -151,25 +229,53 @@ fn map_entry_pair_from_value(
     caller: &mut Caller<'_, RuntimeState>,
     entry_val: i64,
 ) -> Option<(i64, i64)> {
-    if !value::is_js_object(entry_val) {
+    if !value::is_js_object(entry_val) && !value::is_array(entry_val) {
         set_runtime_error(
             caller.data(),
             "TypeError: Iterator value is not an entry object".to_string(),
         );
         return None;
     }
-    if value::is_array(entry_val) {
-        let entry_ptr = resolve_handle(caller, entry_val)?;
-        let key = read_array_elem(caller, entry_ptr, 0).unwrap_or_else(value::encode_undefined);
-        let val = read_array_elem(caller, entry_ptr, 1).unwrap_or_else(value::encode_undefined);
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        if value::is_array(entry_val) {
+            let handle = value::decode_handle(entry_val);
+            let access = caller.data().heap_access_v2();
+            let key = access
+                .get_element(handle, 0)
+                .ok()
+                .flatten()
+                .map(|entry| entry as i64)
+                .unwrap_or_else(value::encode_undefined);
+            let val = access
+                .get_element(handle, 1)
+                .ok()
+                .flatten()
+                .map(|entry| entry as i64)
+                .unwrap_or_else(value::encode_undefined);
+            return Some((key, val));
+        }
+        let key = read_host_data_property_v2(caller, entry_val, "0")
+            .unwrap_or_else(value::encode_undefined);
+        let val = read_host_data_property_v2(caller, entry_val, "1")
+            .unwrap_or_else(value::encode_undefined);
         return Some((key, val));
     }
-    let entry_ptr = resolve_handle(caller, entry_val)?;
-    let key = read_object_property_by_name(caller, entry_ptr, "0")
-        .unwrap_or_else(value::encode_undefined);
-    let val = read_object_property_by_name(caller, entry_ptr, "1")
-        .unwrap_or_else(value::encode_undefined);
-    Some((key, val))
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        if value::is_array(entry_val) {
+            let entry_ptr = resolve_handle(caller, entry_val)?;
+            let key = read_array_elem(caller, entry_ptr, 0).unwrap_or_else(value::encode_undefined);
+            let val = read_array_elem(caller, entry_ptr, 1).unwrap_or_else(value::encode_undefined);
+            return Some((key, val));
+        }
+        let entry_ptr = resolve_handle(caller, entry_val)?;
+        let key = read_object_property_by_name(caller, entry_ptr, "0")
+            .unwrap_or_else(value::encode_undefined);
+        let val = read_object_property_by_name(caller, entry_ptr, "1")
+            .unwrap_or_else(value::encode_undefined);
+        Some((key, val))
+    }
 }
 
 /// 为 Map/Set 创建 keys / values / entries 迭代器（与 NativeCallable 路径共用）。
@@ -186,17 +292,15 @@ pub(crate) fn map_set_create_iterator(
         );
         return value::encode_undefined();
     }
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
-    let Some(op) = obj_ptr else {
+    let (map_handle, set_handle) = collection_handles(caller, this_val);
+    if map_handle.is_none() && set_handle.is_none() {
         set_runtime_error(
             caller.data(),
             "TypeError: Method Map/Set.prototype method called on incompatible receiver"
                 .to_string(),
         );
         return value::encode_undefined();
-    };
-    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
-    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+    }
     match kind {
         MapSetMethodKind::Keys => {
             if let Some(mh) = map_handle {
@@ -361,6 +465,36 @@ pub(crate) fn map_set_create_iterator(
     }
 }
 
+async fn invoke_collection_callback_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    callback: i64,
+    this_arg: i64,
+    args: &[i64],
+) -> Option<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return match crate::runtime_host_helpers::call_wasm_callback_async(
+            caller, callback, this_arg, args,
+        )
+        .await
+        {
+            Ok(result) => Some(result),
+            Err(error) => {
+                set_runtime_error(
+                    caller.data(),
+                    format!("host function callback error: {error:#}"),
+                );
+                None
+            }
+        };
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let env = WasmEnv::from_caller(caller)?;
+        invoke_resolved_callback_async_option(caller, &env, callback, this_arg, args).await
+    }
+}
+
 /// Map/Set.prototype.forEach：遍历并调用 callback（同步宿主 import 路径）。
 pub(crate) fn map_set_for_each_impl(
     caller: &mut Caller<'_, RuntimeState>,
@@ -382,18 +516,15 @@ pub(crate) fn map_set_for_each_impl(
         );
         return value::encode_undefined();
     }
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
-    let Some(op) = obj_ptr else {
+    let (map_handle, set_handle) = collection_handles(caller, this_val);
+    if map_handle.is_none() && set_handle.is_none() {
         set_runtime_error(
             caller.data(),
             "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver"
                 .to_string(),
         );
         return value::encode_undefined();
-    };
-    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
-    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    }
     let rt = tokio::runtime::Handle::current();
     if let Some(mh) = map_handle {
         let handle = value::decode_f64(mh) as usize;
@@ -416,9 +547,8 @@ pub(crate) fn map_set_for_each_impl(
         };
         for (key, val) in pairs {
             if rt
-                .block_on(invoke_resolved_callback_async_option(
+                .block_on(invoke_collection_callback_async(
                     caller,
-                    &env,
                     cb,
                     this_arg,
                     &[val, key, this_val],
@@ -445,9 +575,8 @@ pub(crate) fn map_set_for_each_impl(
         };
         for val in values {
             if rt
-                .block_on(invoke_resolved_callback_async_option(
+                .block_on(invoke_collection_callback_async(
                     caller,
-                    &env,
                     cb,
                     this_arg,
                     &[val, val, this_val],
@@ -487,18 +616,15 @@ pub(crate) async fn map_set_for_each_impl_async(
         );
         return value::encode_undefined();
     }
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
-    let Some(op) = obj_ptr else {
+    let (map_handle, set_handle) = collection_handles(caller, this_val);
+    if map_handle.is_none() && set_handle.is_none() {
         set_runtime_error(
             caller.data(),
             "TypeError: Method Map/Set.prototype.forEach called on incompatible receiver"
                 .to_string(),
         );
         return value::encode_undefined();
-    };
-    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
-    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    }
     if let Some(mh) = map_handle {
         let handle = value::decode_f64(mh) as usize;
         let pairs: Vec<(i64, i64)> = {
@@ -519,15 +645,9 @@ pub(crate) async fn map_set_for_each_impl_async(
                 .collect()
         };
         for (key, val) in pairs {
-            if invoke_resolved_callback_async_option(
-                caller,
-                &env,
-                cb,
-                this_arg,
-                &[val, key, this_val],
-            )
-            .await
-            .is_none()
+            if invoke_collection_callback_async(caller, cb, this_arg, &[val, key, this_val])
+                .await
+                .is_none()
             {
                 return value::encode_undefined();
             }
@@ -548,15 +668,9 @@ pub(crate) async fn map_set_for_each_impl_async(
             table[handle].values.clone()
         };
         for val in values {
-            if invoke_resolved_callback_async_option(
-                caller,
-                &env,
-                cb,
-                this_arg,
-                &[val, val, this_val],
-            )
-            .await
-            .is_none()
+            if invoke_collection_callback_async(caller, cb, this_arg, &[val, val, this_val])
+                .await
+                .is_none()
             {
                 return value::encode_undefined();
             }
@@ -757,12 +871,7 @@ pub(crate) fn call_map_set_method_from_caller(
     if !value::is_object(this_val) {
         return value::encode_undefined();
     }
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
-    let Some(op) = obj_ptr else {
-        return value::encode_undefined();
-    };
-    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
-    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+    let (map_handle, set_handle) = collection_handles(caller, this_val);
 
     match kind {
         MapSetMethodKind::MapSet => {

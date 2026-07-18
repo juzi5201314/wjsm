@@ -66,8 +66,8 @@ pub use runtime_gc::telemetry::{
 #[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
 pub use runtime_gc::{
-    CollectorContext, GcPacketKind, GcRuntimeV2, GcWorkPacket, GcWorkerPool, MutatorContext,
-    RootSnapshot, WorkerPoolError, WorkerPoolStats,
+    CollectorContext, GcPacketKind, GcRuntimeV2, GcWorkPacket, GcWorkerPool, HeapAccessV2,
+    HeapAccessV2Error, MutatorContext, RootSnapshot, WorkerPoolError, WorkerPoolStats,
 };
 mod runtime_generator;
 mod runtime_heap;
@@ -430,6 +430,11 @@ pub async fn execute_with_writer_with_options_and_stats<W: Write>(
 pub fn compile_source(source: &str) -> Result<Vec<u8>> {
     let module = wjsm_parser::parse_module(source)?;
     let program = wjsm_semantic::lower_module(module, false)?;
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return wjsm_backend_wasm_v2::backend::compile(&program);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
     wjsm_backend_wasm::compile(&program)
 }
 
@@ -444,6 +449,14 @@ pub fn compile_source_with_debug(source: &str, filename: &str) -> Result<Vec<u8>
         filename,
         true,
     )?;
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return wjsm_backend_wasm_v2::backend::compile_with_options(
+            &program,
+            wjsm_backend_wasm_v2::backend::CompileOptions { debug: true },
+        );
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
     wjsm_backend_wasm::compile_with_options(
         &program,
         wjsm_backend_wasm::CompileOptions { debug: true },
@@ -580,9 +593,11 @@ static INSTALLED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
 static DEFAULT_MARK_SWEEP_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
     wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::MarkSweep)
 });
+#[cfg(not(feature = "managed-heap-v2"))]
 static DEFAULT_G1_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
     wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::G1)
 });
+#[cfg(not(feature = "managed-heap-v2"))]
 static DEFAULT_ZGC_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
     wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::Zgc)
 });
@@ -604,6 +619,16 @@ pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
 }
 
 pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let flavor = match kind {
+            GcAlgorithmKind::MarkSweep => wjsm_runtime_support::SupportGcFlavor::MarkSweep,
+            GcAlgorithmKind::G1 => wjsm_runtime_support::SupportGcFlavor::G1,
+            GcAlgorithmKind::Zgc => wjsm_runtime_support::SupportGcFlavor::Zgc,
+        };
+        return wjsm_runtime_support::embedded_support_cwasm_v2(flavor);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
     match kind {
         GcAlgorithmKind::MarkSweep => embedded_support_cwasm(),
         GcAlgorithmKind::G1 => *DEFAULT_G1_SUPPORT_CWASM,
@@ -1098,6 +1123,10 @@ impl Clone for RuntimeState {
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
+            #[cfg(feature = "managed-heap-v2")]
+            heap_access_v2: self.heap_access_v2.clone(),
+            #[cfg(feature = "managed-heap-v2")]
+            static_main_memory_v2: None,
             shadow_stack_max: self.shadow_stack_max,
             inspect: self.inspect.clone(),
             host_temp_roots: self.host_temp_roots.clone(),
@@ -1291,6 +1320,12 @@ struct RuntimeState {
     max_heap_size: Option<usize>,
     /// 影子栈软上限（字节）。
     shadow_stack_max: usize,
+    /// V2 dynamic heap canonical access owner；跨 host calls 复用 shared-memory handle。
+    #[cfg(feature = "managed-heap-v2")]
+    heap_access_v2: Option<Arc<crate::runtime_gc::HeapAccessV2>>,
+    /// V2 property-key 解码复用的 static main-memory handle，避免热路 export lookup。
+    #[cfg(feature = "managed-heap-v2")]
+    static_main_memory_v2: Option<Memory>,
     /// CDP inspector 监听配置（来自 CLI `--inspect` / `--inspect-brk`）。
     inspect: Option<InspectConfig>,
     /// 显式编译器选择（worker 继承用）。
@@ -1548,6 +1583,28 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
+    #[cfg(feature = "managed-heap-v2")]
+    fn install_heap_access_v2(
+        &mut self,
+        access: Arc<crate::runtime_gc::HeapAccessV2>,
+        memory: Memory,
+    ) {
+        self.heap_access_v2 = Some(access);
+        self.static_main_memory_v2 = Some(memory);
+    }
+
+    #[cfg(feature = "managed-heap-v2")]
+    fn heap_access_v2(&self) -> &Arc<crate::runtime_gc::HeapAccessV2> {
+        self.heap_access_v2
+            .as_ref()
+            .expect("V2 heap access must be installed before host calls")
+    }
+
+    #[cfg(feature = "managed-heap-v2")]
+    fn static_main_memory_v2(&self) -> Memory {
+        self.static_main_memory_v2
+            .expect("V2 main memory must be installed before host calls")
+    }
     /// 记录最近一次 GC 统计，并同步推进 v2 环形观测序列。
     pub(crate) fn store_last_gc_stats(
         &self,
@@ -1859,6 +1916,10 @@ impl RuntimeState {
             js_global_object: AtomicI64::new(value::encode_undefined()),
             max_heap_size: None,
             shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
+            #[cfg(feature = "managed-heap-v2")]
+            heap_access_v2: None,
+            #[cfg(feature = "managed-heap-v2")]
+            static_main_memory_v2: None,
             inspect: None,
             compiler: None,
             current_entry: None,

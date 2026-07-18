@@ -298,6 +298,25 @@ pub(crate) fn define_object_builtins(
             } else {
                 to_object(&mut caller, obj)
             };
+            #[cfg(feature = "managed-heap-v2")]
+            if value::is_js_object(boxed) || value::is_array(boxed) {
+                let Some(name_id) = object_property_name_id_from_key(&mut caller, prop) else {
+                    return value::encode_bool(false);
+                };
+                let Some(key) = crate::property_key::canonicalize_v2_name_id(&mut caller, name_id)
+                else {
+                    return value::encode_bool(false);
+                };
+                return value::encode_bool(
+                    caller
+                        .data()
+                        .heap_access_v2()
+                        .get_property(value::decode_handle(boxed), key)
+                        .ok()
+                        .flatten()
+                        .is_some(),
+                );
+            }
             let Some(ptr) = resolve_handle(&mut caller, boxed) else {
                 return value::encode_bool(false);
             };

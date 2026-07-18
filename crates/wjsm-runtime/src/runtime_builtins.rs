@@ -418,6 +418,14 @@ fn invoke_number_primitive_method(
 }
 
 fn array_like_length(caller: &mut Caller<'_, RuntimeState>, target: i64) -> u32 {
+    #[cfg(feature = "managed-heap-v2")]
+    if value::is_array(target) {
+        return caller
+            .data()
+            .heap_access_v2()
+            .array_length(value::decode_handle(target))
+            .unwrap_or(0);
+    }
     if value::is_array(target)
         && let Some(ptr) = resolve_handle(caller, target)
     {
@@ -448,6 +456,9 @@ fn create_array_like_iterator(
             kind,
         },
     );
+    #[cfg(feature = "managed-heap-v2")]
+    let obj = alloc_host_object_v2(caller, 2);
+    #[cfg(not(feature = "managed-heap-v2"))]
     let obj = {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
         alloc_host_object(caller, &env, 2)
@@ -469,6 +480,9 @@ pub(crate) fn create_raw_iterator_object(
 ) -> i64 {
     let next = create_native_callable(caller.data(), NativeCallable::RawIteratorNext { iterator });
     let self_fn = create_native_callable(caller.data(), NativeCallable::RegExpStringIteratorSelf);
+    #[cfg(feature = "managed-heap-v2")]
+    let obj = alloc_host_object_v2(caller, 2);
+    #[cfg(not(feature = "managed-heap-v2"))]
     let obj = {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
         alloc_host_object(caller, &env, 2)
@@ -614,7 +628,7 @@ fn advance_array_like_iterator(
     kind: ArrayIterKind,
 ) -> i64 {
     let idx = {
-        let mut index = index.lock().unwrap_or_else(|e| e.into_inner());
+        let mut index = index.lock().unwrap_or_else(|error| error.into_inner());
         if *index >= length {
             return alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
         }
@@ -622,17 +636,28 @@ fn advance_array_like_iterator(
         *index += 1;
         idx
     };
-    if kind == ArrayIterKind::Keys {
-        return alloc_iterator_result_from_caller(caller, value::encode_f64(idx as f64), false);
-    }
     let element = if value::is_array(target) {
-        resolve_handle(caller, target)
-            .and_then(|ptr| read_array_elem(caller, ptr, idx))
-            .unwrap_or_else(value::encode_undefined)
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            caller
+                .data()
+                .heap_access_v2()
+                .get_element(value::decode_handle(target), idx)
+                .ok()
+                .flatten()
+                .map(|element| element as i64)
+                .unwrap_or_else(value::encode_undefined)
+        }
+        #[cfg(not(feature = "managed-heap-v2"))]
+        {
+            resolve_handle(caller, target)
+                .and_then(|pointer| read_array_elem(caller, pointer, idx))
+                .unwrap_or_else(value::encode_undefined)
+        }
     } else {
         let key = idx.to_string();
         resolve_handle(caller, target)
-            .and_then(|ptr| read_object_property_by_name(caller, ptr, &key))
+            .and_then(|pointer| read_object_property_by_name(caller, pointer, &key))
             .unwrap_or_else(value::encode_undefined)
     };
     let produced = if kind == ArrayIterKind::Entries {

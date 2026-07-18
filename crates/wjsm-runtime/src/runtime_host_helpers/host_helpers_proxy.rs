@@ -1,5 +1,17 @@
 use super::*;
 
+fn proxy_handler_trap(caller: &mut Caller<'_, RuntimeState>, handler: i64, name: &str) -> i64 {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return read_host_data_property_v2(caller, handler, name)
+            .unwrap_or_else(value::encode_undefined);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    resolve_handle(caller, handler)
+        .and_then(|handler_ptr| read_object_property_by_name(caller, handler_ptr, name))
+        .unwrap_or_else(value::encode_undefined)
+}
+
 pub(crate) fn define_property_on_normal_object(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -339,17 +351,11 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
                     "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
                 );
             }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let result = match call_wasm_callback_async(
-                        caller,
-                        trap,
-                        entry.handler,
-                        &[entry.target],
-                    )
-                    .await
+            let trap = proxy_handler_trap(caller, entry.handler, "getPrototypeOf");
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                let result =
+                    match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target])
+                        .await
                     {
                         Ok(result) => result,
                         Err(error) => {
@@ -360,30 +366,28 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
                             return value::encode_null();
                         }
                     };
-                    if !value::is_null(result) && !value::is_js_object(result) {
+                if !value::is_null(result) && !value::is_js_object(result) {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: Proxy getPrototypeOf must return an object or null".to_string(),
+                    );
+                    return value::encode_null();
+                }
+                if !is_extensible_impl(caller, entry.target) {
+                    let target_proto = Box::pin(proxy_or_target_get_prototype_of_impl_async(
+                        caller,
+                        entry.target,
+                    ))
+                    .await;
+                    if result != target_proto {
                         set_runtime_error(
-                            caller.data(),
-                            "TypeError: Proxy getPrototypeOf must return an object or null"
-                                .to_string(),
-                        );
-                        return value::encode_null();
-                    }
-                    if !is_extensible_impl(caller, entry.target) {
-                        let target_proto = Box::pin(proxy_or_target_get_prototype_of_impl_async(
-                            caller,
-                            entry.target,
-                        ))
-                        .await;
-                        if result != target_proto {
-                            set_runtime_error(
                                 caller.data(),
                                 "TypeError: Proxy getPrototypeOf invariant violated: target is not extensible and trap returned different prototype".to_string(),
                             );
-                            return value::encode_null();
-                        }
+                        return value::encode_null();
                     }
-                    return result;
                 }
+                return result;
             }
             return Box::pin(proxy_or_target_get_prototype_of_impl_async(
                 caller,
@@ -450,17 +454,11 @@ pub(crate) async fn proxy_or_target_is_extensible_impl_async(
                 );
                 return false;
             }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "isExtensible")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let trap_res = match call_wasm_callback_async(
-                        caller,
-                        trap,
-                        entry.handler,
-                        &[entry.target],
-                    )
-                    .await
+            let trap = proxy_handler_trap(caller, entry.handler, "isExtensible");
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                let trap_res =
+                    match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target])
+                        .await
                     {
                         Ok(result) => !value::is_falsy(result),
                         Err(error) => {
@@ -471,16 +469,15 @@ pub(crate) async fn proxy_or_target_is_extensible_impl_async(
                             return false;
                         }
                     };
-                    let real_res = is_extensible_impl(caller, entry.target);
-                    if trap_res != real_res {
-                        set_runtime_error(
+                let real_res = is_extensible_impl(caller, entry.target);
+                if trap_res != real_res {
+                    set_runtime_error(
                             caller.data(),
                             "TypeError: Proxy isExtensible trap returned result that does not match target's extensibility".to_string(),
                         );
-                        return false;
-                    }
-                    return trap_res;
+                    return false;
                 }
+                return trap_res;
             }
             return is_extensible_impl(caller, entry.target);
         }
@@ -510,17 +507,11 @@ pub(crate) async fn proxy_or_target_prevent_extensions_impl_async(
                 );
                 return false;
             }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "preventExtensions")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let trap_res = match call_wasm_callback_async(
-                        caller,
-                        trap,
-                        entry.handler,
-                        &[entry.target],
-                    )
-                    .await
+            let trap = proxy_handler_trap(caller, entry.handler, "preventExtensions");
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                let trap_res =
+                    match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target])
+                        .await
                     {
                         Ok(result) => !value::is_falsy(result),
                         Err(error) => {
@@ -531,15 +522,14 @@ pub(crate) async fn proxy_or_target_prevent_extensions_impl_async(
                             return false;
                         }
                     };
-                    if trap_res && is_extensible_impl(caller, entry.target) {
-                        set_runtime_error(
+                if trap_res && is_extensible_impl(caller, entry.target) {
+                    set_runtime_error(
                             caller.data(),
                             "TypeError: Proxy preventExtensions trap returned true, but target remains extensible".to_string(),
                         );
-                        return false;
-                    }
-                    return trap_res;
+                    return false;
                 }
+                return trap_res;
             }
             return prevent_extensions_impl(caller, entry.target);
         }
@@ -599,97 +589,94 @@ async fn define_property_on_target_async(
             );
         }
 
-        if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-            let trap = read_object_property_by_name(caller, handler_ptr, "defineProperty")
-                .unwrap_or_else(value::encode_undefined);
-            if !value::is_undefined(trap) && !value::is_null(trap) {
-                let result = match call_wasm_callback_async(
-                    caller,
-                    trap,
-                    entry.handler,
-                    &[entry.target, prop_val, descriptor],
-                )
-                .await
-                {
-                    Ok(res) => res,
-                    Err(e) => return Err(format!("TypeError: defineProperty trap failed: {}", e)),
-                };
-                let trap_result = !value::is_falsy(result);
-                if !trap_result {
-                    return Ok(false);
-                }
-
-                let target_desc = get_target_descriptor(caller, entry.target, name_id);
-                let extensible = is_extensible_impl(caller, entry.target);
-                let setting_config_false = desc.configurable == Some(false);
-
-                if let Some(td) = target_desc {
-                    let target_configurable = td.configurable.unwrap_or(true);
-
-                    if !target_configurable {
-                        if desc.configurable == Some(true) {
-                            return Err("TypeError: proxy defineProperty invariant violation: cannot redefine non-configurable property as configurable".to_string());
-                        }
-                        if let Some(new_enum) = desc.enumerable
-                            && Some(new_enum) != td.enumerable
-                        {
-                            return Err("TypeError: proxy defineProperty invariant violation: cannot change enumerableness of non-configurable property".to_string());
-                        }
-
-                        let is_new_accessor = desc.get.is_some() || desc.set.is_some();
-                        let target_accessor = td.get.is_some() || td.set.is_some();
-                        if is_new_accessor != target_accessor {
-                            return Err("TypeError: proxy defineProperty invariant violation: cannot change property type on non-configurable property".to_string());
-                        }
-
-                        if !target_accessor {
-                            let target_writable = td.writable.unwrap_or(true);
-                            if !target_writable {
-                                if desc.writable == Some(true) {
-                                    return Err("TypeError: proxy defineProperty invariant violation: cannot make non-writable property writable".to_string());
-                                }
-                                if let Some(new_val) = desc.value {
-                                    let old_val = td.value.unwrap_or(value::encode_undefined());
-                                    let same = strict_eq(caller, old_val, new_val);
-                                    if value::is_falsy(same) {
-                                        return Err("TypeError: proxy defineProperty invariant violation: cannot change value of non-writable non-configurable property".to_string());
-                                    }
-                                }
-                            }
-                        } else {
-                            if let Some(new_getter) = desc.get {
-                                let old_getter = td.get.unwrap_or(value::encode_undefined());
-                                if new_getter != old_getter {
-                                    return Err("TypeError: proxy defineProperty invariant violation: cannot change getter of non-configurable property".to_string());
-                                }
-                            }
-                            if let Some(new_setter) = desc.set {
-                                let old_setter = td.set.unwrap_or(value::encode_undefined());
-                                if new_setter != old_setter {
-                                    return Err("TypeError: proxy defineProperty invariant violation: cannot change setter of non-configurable property".to_string());
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    if !extensible {
-                        return Err("TypeError: proxy defineProperty invariant violation: target is non-extensible and property does not exist".to_string());
-                    }
-                    if setting_config_false {
-                        return Err("TypeError: proxy defineProperty invariant violation: cannot define non-configurable property if it does not exist on target".to_string());
-                    }
-                }
-
-                return Box::pin(define_property_on_target_async(
-                    caller,
-                    entry.target,
-                    name_id,
-                    prop_val,
-                    descriptor,
-                    desc,
-                ))
-                .await;
+        let trap = proxy_handler_trap(caller, entry.handler, "defineProperty");
+        if !value::is_undefined(trap) && !value::is_null(trap) {
+            let result = match call_wasm_callback_async(
+                caller,
+                trap,
+                entry.handler,
+                &[entry.target, prop_val, descriptor],
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => return Err(format!("TypeError: defineProperty trap failed: {}", e)),
+            };
+            let trap_result = !value::is_falsy(result);
+            if !trap_result {
+                return Ok(false);
             }
+
+            let target_desc = get_target_descriptor(caller, entry.target, name_id);
+            let extensible = is_extensible_impl(caller, entry.target);
+            let setting_config_false = desc.configurable == Some(false);
+
+            if let Some(td) = target_desc {
+                let target_configurable = td.configurable.unwrap_or(true);
+
+                if !target_configurable {
+                    if desc.configurable == Some(true) {
+                        return Err("TypeError: proxy defineProperty invariant violation: cannot redefine non-configurable property as configurable".to_string());
+                    }
+                    if let Some(new_enum) = desc.enumerable
+                        && Some(new_enum) != td.enumerable
+                    {
+                        return Err("TypeError: proxy defineProperty invariant violation: cannot change enumerableness of non-configurable property".to_string());
+                    }
+
+                    let is_new_accessor = desc.get.is_some() || desc.set.is_some();
+                    let target_accessor = td.get.is_some() || td.set.is_some();
+                    if is_new_accessor != target_accessor {
+                        return Err("TypeError: proxy defineProperty invariant violation: cannot change property type on non-configurable property".to_string());
+                    }
+
+                    if !target_accessor {
+                        let target_writable = td.writable.unwrap_or(true);
+                        if !target_writable {
+                            if desc.writable == Some(true) {
+                                return Err("TypeError: proxy defineProperty invariant violation: cannot make non-writable property writable".to_string());
+                            }
+                            if let Some(new_val) = desc.value {
+                                let old_val = td.value.unwrap_or(value::encode_undefined());
+                                let same = strict_eq(caller, old_val, new_val);
+                                if value::is_falsy(same) {
+                                    return Err("TypeError: proxy defineProperty invariant violation: cannot change value of non-writable non-configurable property".to_string());
+                                }
+                            }
+                        }
+                    } else {
+                        if let Some(new_getter) = desc.get {
+                            let old_getter = td.get.unwrap_or(value::encode_undefined());
+                            if new_getter != old_getter {
+                                return Err("TypeError: proxy defineProperty invariant violation: cannot change getter of non-configurable property".to_string());
+                            }
+                        }
+                        if let Some(new_setter) = desc.set {
+                            let old_setter = td.set.unwrap_or(value::encode_undefined());
+                            if new_setter != old_setter {
+                                return Err("TypeError: proxy defineProperty invariant violation: cannot change setter of non-configurable property".to_string());
+                            }
+                        }
+                    }
+                }
+            } else {
+                if !extensible {
+                    return Err("TypeError: proxy defineProperty invariant violation: target is non-extensible and property does not exist".to_string());
+                }
+                if setting_config_false {
+                    return Err("TypeError: proxy defineProperty invariant violation: cannot define non-configurable property if it does not exist on target".to_string());
+                }
+            }
+
+            return Box::pin(define_property_on_target_async(
+                caller,
+                entry.target,
+                name_id,
+                prop_val,
+                descriptor,
+                desc,
+            ))
+            .await;
         }
 
         return Box::pin(define_property_on_target_async(
@@ -729,19 +716,16 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
                     "TypeError: Cannot perform 'get' on a proxy that has been revoked",
                 );
             }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "get")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    return call_wasm_callback_async(
-                        caller,
-                        trap,
-                        entry.handler,
-                        &[entry.target, prop, receiver],
-                    )
-                    .await
-                    .unwrap_or_else(|_| value::encode_undefined());
-                }
+            let trap = proxy_handler_trap(caller, entry.handler, "get");
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                return call_wasm_callback_async(
+                    caller,
+                    trap,
+                    entry.handler,
+                    &[entry.target, prop, receiver],
+                )
+                .await
+                .unwrap_or_else(|_| value::encode_undefined());
             }
             return Box::pin(reflect_get_impl_with_receiver_async(
                 caller,
@@ -806,7 +790,34 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
             .unwrap_or_else(value::encode_undefined);
     }
 
+    #[cfg(feature = "managed-heap-v2")]
+    let name_id = if value::is_runtime_string_handle(prop) {
+        Some(crate::property_key::encode_runtime_string_name_id(
+            value::decode_runtime_string_handle(prop),
+        ))
+    } else {
+        property_key_value_to_name_id(caller, prop, false)
+    };
+    #[cfg(not(feature = "managed-heap-v2"))]
     let name_id = property_key_value_to_name_id(caller, prop, false);
+    #[cfg(feature = "managed-heap-v2")]
+    if value::is_object(target) {
+        let Some(raw_name_id) = name_id else {
+            return value::encode_undefined();
+        };
+        let Some(name_id) = crate::property_key::canonicalize_v2_name_id(caller, raw_name_id)
+        else {
+            return value::encode_undefined();
+        };
+        return caller
+            .data()
+            .heap_access_v2()
+            .get_property(value::decode_handle(target), name_id)
+            .ok()
+            .flatten()
+            .map(|property_value| property_value as i64)
+            .unwrap_or_else(value::encode_undefined);
+    }
 
     let obj_ptr = match resolve_handle(caller, target) {
         Some(ptr) => ptr,
@@ -1026,79 +1037,95 @@ pub(crate) fn define_host_data_property_by_name_id_with_flags(
     val: i64,
     flags: i32,
 ) -> Option<()> {
-    // 数组实例：命名属性（含 .index/.input/.groups 等）存入宿主侧表，
-    // 与编译期 obj_set 的数组分支一致；直接写对象堆会把数组元素存储当属性槽而损坏。
-    if value::is_array(obj) {
-        crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
-        return Some(());
-    }
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj_ptr =
-        resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
-    let (capacity, num_props) = {
-        let data = env.memory.data(&*caller);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        let capacity = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]);
-        (capacity, num_props)
-    };
-    let actual_ptr = if num_props >= capacity {
-        let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
-        grow_object(caller, obj_ptr, obj, new_cap)?
-    } else {
-        obj_ptr
-    };
-    let slot_idx = num_props as usize;
-    let slot_offset = actual_ptr + 16 + slot_idx * 32;
+    #[cfg(feature = "managed-heap-v2")]
     {
-        let data = env.memory.data_mut(&mut *caller);
-        if slot_offset + 32 > data.len() {
-            return None;
+        if value::is_array(obj) {
+            crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
+            return Some(());
         }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+        return caller
+            .data()
+            .heap_access_v2()
+            .define_data_property(value::decode_handle(obj), key, val as u64, flags as u32)
+            .ok();
     }
-    let undef = value::encode_undefined();
-    let handle = value::decode_object_handle(obj);
-    crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Value,
-        val,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Getter,
-        undef,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Setter,
-        undef,
-    )?;
-    let data = env.memory.data_mut(&mut *caller);
-    data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
-    Some(())
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        // 数组实例：命名属性（含 .index/.input/.groups 等）存入宿主侧表，
+        // 与编译期 obj_set 的数组分支一致；直接写对象堆会把数组元素存储当属性槽而损坏。
+        if value::is_array(obj) {
+            crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
+            return Some(());
+        }
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        let obj_ptr =
+            resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
+        let (capacity, num_props) = {
+            let data = env.memory.data(&*caller);
+            if obj_ptr + 16 > data.len() {
+                return None;
+            }
+            let capacity = u32::from_le_bytes([
+                data[obj_ptr + 8],
+                data[obj_ptr + 9],
+                data[obj_ptr + 10],
+                data[obj_ptr + 11],
+            ]);
+            let num_props = u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]);
+            (capacity, num_props)
+        };
+        let actual_ptr = if num_props >= capacity {
+            let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
+            grow_object(caller, obj_ptr, obj, new_cap)?
+        } else {
+            obj_ptr
+        };
+        let slot_idx = num_props as usize;
+        let slot_offset = actual_ptr + 16 + slot_idx * 32;
+        {
+            let data = env.memory.data_mut(&mut *caller);
+            if slot_offset + 32 > data.len() {
+                return None;
+            }
+            data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        }
+        let undef = value::encode_undefined();
+        let handle = value::decode_object_handle(obj);
+        crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle,
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Value,
+            val,
+        )?;
+        crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle,
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Getter,
+            undef,
+        )?;
+        crate::runtime_gc::heap_access::write_property_slot(
+            caller,
+            &env,
+            handle,
+            slot_idx,
+            crate::runtime_gc::heap_access::SlotPart::Setter,
+            undef,
+        )?;
+        let data = env.memory.data_mut(&mut *caller);
+        data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+        Some(())
+    }
 }
 
 /// 定义一个访问器（getter/setter）属性到宿主创建的对象上（Caller 版本，支持 grow_object）。

@@ -931,6 +931,7 @@ pub(crate) fn push_array_value(
     Ok(())
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 /// 数组字面量 elision：length+1 并在新下标写入 hole。
 pub(crate) fn push_array_hole(caller: &mut Caller<'_, RuntimeState>, arr: i64) -> Result<(), i64> {
     let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;

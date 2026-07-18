@@ -345,6 +345,141 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
     alloc_host_object_impl(ctx, env, capacity, proto)
 }
 
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn alloc_host_object_v2(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+    let Some(handle) = take_v2_host_handle(caller) else {
+        return value::encode_undefined();
+    };
+    let Some(prototype) = v2_i32_global(caller, "__object_proto_handle") else {
+        set_runtime_error(
+            caller.data(),
+            "V2 host allocation requires __object_proto_handle".to_string(),
+        );
+        return value::encode_undefined();
+    };
+    let Some(bytes) = u64::from(capacity)
+        .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
+        .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
+    else {
+        set_runtime_error(
+            caller.data(),
+            "RangeError: V2 host object size overflow".to_string(),
+        );
+        return value::encode_undefined();
+    };
+    let access = caller.data().heap_access_v2().clone();
+    let (object, end) = match access.reserve_nlab(bytes) {
+        Ok(window) => window,
+        Err(error) => {
+            set_runtime_error(caller.data(), format!("V2 host object allocation: {error}"));
+            return value::encode_undefined();
+        }
+    };
+    if let Err(error) = access.publish_object(handle, object, prototype as u32, capacity) {
+        set_runtime_error(
+            caller.data(),
+            format!("V2 host object publication: {error}"),
+        );
+        return value::encode_undefined();
+    }
+    if !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, object + bytes)
+        || !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, end)
+    {
+        set_runtime_error(
+            caller.data(),
+            "V2 host allocation globals are unavailable".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    value::encode_object_handle(handle)
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn take_v2_host_handle(caller: &mut Caller<'_, RuntimeState>) -> Option<u32> {
+    let global = caller
+        .get_export("__obj_table_count")
+        .and_then(Extern::into_global)?;
+    let current = global.get(&mut *caller).i32()?;
+    let next = current.checked_add(1)?;
+    global.set(&mut *caller, Val::I32(next)).ok()?;
+    u32::try_from(current).ok()
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn v2_i32_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<i32> {
+    caller
+        .get_export(name)
+        .and_then(Extern::into_global)
+        .and_then(|global| global.get(&mut *caller).i32())
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn set_v2_i64_global(caller: &mut Caller<'_, RuntimeState>, name: &str, value: u64) -> bool {
+    caller
+        .get_export(name)
+        .and_then(Extern::into_global)
+        .is_some_and(|global| global.set(&mut *caller, Val::I64(value as i64)).is_ok())
+}
+
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn define_host_data_property_v2(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+    name: &str,
+    property_value: i64,
+) -> Option<()> {
+    let handle = value::decode_handle(object);
+    let key = v2_host_property_key(caller, name)?;
+    caller
+        .data()
+        .heap_access_v2()
+        .set_property(handle, key, property_value as u64)
+        .ok()
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn define_host_accessor_property_v2(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+    name: &str,
+    getter: i64,
+    setter: i64,
+) -> Option<()> {
+    let handle = value::decode_handle(object);
+    let key = v2_host_property_key(caller, name)?;
+    caller
+        .data()
+        .heap_access_v2()
+        .define_accessor_property(handle, key, getter as u64, setter as u64)
+        .ok()
+}
+
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn read_host_data_property_v2(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+    name: &str,
+) -> Option<i64> {
+    let handle = value::decode_handle(object);
+    let key = v2_host_property_key(caller, name)?;
+    caller
+        .data()
+        .heap_access_v2()
+        .get_property(handle, key)
+        .ok()
+        .flatten()
+        .map(|property_value| property_value as i64)
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn v2_host_property_key(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+    let index = crate::property_key::intern_runtime_property_key(
+        caller.data(),
+        crate::runtime_string::RuntimeString::from_utf8_str(name),
+    );
+    Some(crate::property_key::encode_runtime_string_name_id(index))
+}
+
 pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -1738,6 +1873,11 @@ pub(crate) fn define_host_data_property_from_caller(
     name: &str,
     val: i64,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return define_host_data_property_v2(caller, obj, name, val);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
     define_host_data_property(caller, obj, name, val)
 }
 
@@ -1749,6 +1889,11 @@ pub(crate) fn define_host_accessor_property_from_caller(
     getter: i64,
     setter: i64,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return define_host_accessor_property_v2(caller, obj, name, getter, setter);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
     define_host_accessor_property(caller, obj, name, getter, setter)
 }
 

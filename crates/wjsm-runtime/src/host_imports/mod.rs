@@ -55,6 +55,8 @@ mod core;
 mod fetch;
 mod fetch_core;
 mod fetch_http;
+#[cfg(feature = "managed-heap-v2")]
+mod gc;
 mod get_builtin_global_entry;
 mod math_number_error;
 mod primitive_core;
@@ -81,6 +83,8 @@ pub(crate) use core::{
     define_core, iterator_from_impl_async, iterator_value_impl, string_iter_advance_unit_pos,
     string_iter_current_value,
 };
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) use gc::define_v2;
 
 pub(crate) use fetch::define_fetch;
 pub(crate) use fetch_core::abort_controller_abort;

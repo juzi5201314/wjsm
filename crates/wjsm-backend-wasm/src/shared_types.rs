@@ -171,7 +171,6 @@ pub fn build_shared_type_section() -> TypeSection {
         vec![ValType::I64],
     );
 
-    #[cfg(feature = "managed-heap-v2")]
     // Type 38: (i64, i32, i32) -> (i64) — gc_alloc_slow_v2。
     types.ty().function(
         vec![ValType::I64, ValType::I32, ValType::I32],

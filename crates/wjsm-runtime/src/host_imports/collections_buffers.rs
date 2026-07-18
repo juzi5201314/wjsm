@@ -5,6 +5,22 @@ use wasmtime::{Caller, Func, Linker};
 use crate::property_key::encode_symbol_name_id;
 use crate::*;
 
+fn collection_handle_for_receiver(
+    caller: &mut Caller<'_, RuntimeState>,
+    receiver: i64,
+    name: &str,
+) -> Option<usize> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return read_host_data_property_v2(caller, receiver, name)
+            .map(|value| value::decode_f64(value) as usize);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    resolve_handle_idx(caller, value::decode_object_handle(receiver) as usize)
+        .and_then(|object| read_object_property_by_name(caller, object, name))
+        .map(|value| value::decode_f64(value) as usize)
+}
+
 pub(crate) fn define_collections_buffers(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -45,6 +61,9 @@ pub(crate) fn define_collections_buffers(
                         create_map_set_method(state, MapSetMethodKind::Entries),
                     )
                 };
+                #[cfg(feature = "managed-heap-v2")]
+                let obj = alloc_host_object_v2(&mut caller, 12);
+                #[cfg(not(feature = "managed-heap-v2"))]
                 let obj = {
                     let wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                     alloc_host_object(&mut caller, &wjsm_env, 12)
@@ -101,12 +120,10 @@ pub(crate) fn define_collections_buffers(
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle_val =
+                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__");
             let handle = match handle_val {
-                Some(v) => value::decode_f64(v) as usize,
+                Some(handle) => handle,
                 None => {
                     set_runtime_error(
                         caller.data(),
@@ -144,12 +161,10 @@ pub(crate) fn define_collections_buffers(
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle_val =
+                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__");
             let handle = match handle_val {
-                Some(v) => value::decode_f64(v) as usize,
+                Some(handle) => handle,
                 None => {
                     set_runtime_error(
                         caller.data(),
@@ -213,6 +228,9 @@ pub(crate) fn define_collections_buffers(
                         create_map_set_method(state, MapSetMethodKind::Entries),
                     )
                 };
+                #[cfg(feature = "managed-heap-v2")]
+                let obj = alloc_host_object_v2(&mut caller, 12);
+                #[cfg(not(feature = "managed-heap-v2"))]
                 let obj = {
                     let wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                     alloc_host_object(&mut caller, &wjsm_env, 12)
@@ -268,12 +286,10 @@ pub(crate) fn define_collections_buffers(
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__set_handle__"));
+            let handle_val =
+                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__");
             let handle = match handle_val {
-                Some(v) => value::decode_f64(v) as usize,
+                Some(handle) => handle,
                 None => {
                     set_runtime_error(
                         caller.data(),
@@ -315,45 +331,41 @@ pub(crate) fn define_collections_buffers(
                 );
                 return value::encode_bool(false);
             }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            if let Some(op) = obj_ptr {
-                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
-                if let Some(mh) = map_handle {
-                    let handle = value::decode_f64(mh) as usize;
-                    let table = caller
-                        .data()
-                        .map_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        let entry = &table[handle];
-                        for i in 0..entry.keys.len() {
-                            if same_value_zero(&caller, entry.keys[i], key) {
-                                return value::encode_bool(true);
-                            }
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
+            {
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(&caller, entry.keys[i], key) {
+                            return value::encode_bool(true);
                         }
                     }
-                    return value::encode_bool(false);
                 }
-                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
-                if let Some(sh) = set_handle {
-                    let handle = value::decode_f64(sh) as usize;
-                    let table = caller
-                        .data()
-                        .set_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        let entry = &table[handle];
-                        for i in 0..entry.values.len() {
-                            if same_value_zero(&caller, entry.values[i], key) {
-                                return value::encode_bool(true);
-                            }
+                return value::encode_bool(false);
+            }
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
+            {
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(&caller, entry.values[i], key) {
+                            return value::encode_bool(true);
                         }
                     }
-                    return value::encode_bool(false);
                 }
+                return value::encode_bool(false);
             }
             set_runtime_error(
                 caller.data(),
@@ -376,48 +388,44 @@ pub(crate) fn define_collections_buffers(
                 );
                 return value::encode_bool(false);
             }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            if let Some(op) = obj_ptr {
-                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
-                if let Some(mh) = map_handle {
-                    let handle = value::decode_f64(mh) as usize;
-                    let mut table = caller
-                        .data()
-                        .map_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        let entry = &mut table[handle];
-                        for i in 0..entry.keys.len() {
-                            if same_value_zero(&caller, entry.keys[i], key) {
-                                entry.keys.remove(i);
-                                entry.values.remove(i);
-                                return value::encode_bool(true);
-                            }
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
+            {
+                let mut table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(&caller, entry.keys[i], key) {
+                            entry.keys.remove(i);
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
                         }
                     }
-                    return value::encode_bool(false);
                 }
-                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
-                if let Some(sh) = set_handle {
-                    let handle = value::decode_f64(sh) as usize;
-                    let mut table = caller
-                        .data()
-                        .set_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        let entry = &mut table[handle];
-                        for i in 0..entry.values.len() {
-                            if same_value_zero(&caller, entry.values[i], key) {
-                                entry.values.remove(i);
-                                return value::encode_bool(true);
-                            }
+                return value::encode_bool(false);
+            }
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
+            {
+                let mut table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(&caller, entry.values[i], key) {
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
                         }
                     }
-                    return value::encode_bool(false);
                 }
+                return value::encode_bool(false);
             }
             set_runtime_error(
                 caller.data(),
@@ -440,36 +448,32 @@ pub(crate) fn define_collections_buffers(
                 );
                 return value::encode_undefined();
             }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            if let Some(op) = obj_ptr {
-                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
-                if let Some(mh) = map_handle {
-                    let handle = value::decode_f64(mh) as usize;
-                    let mut table = caller
-                        .data()
-                        .map_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        table[handle].keys.clear();
-                        table[handle].values.clear();
-                    }
-                    return value::encode_undefined();
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
+            {
+                let mut table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    table[handle].keys.clear();
+                    table[handle].values.clear();
                 }
-                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
-                if let Some(sh) = set_handle {
-                    let handle = value::decode_f64(sh) as usize;
-                    let mut table = caller
-                        .data()
-                        .set_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        table[handle].values.clear();
-                    }
-                    return value::encode_undefined();
+                return value::encode_undefined();
+            }
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
+            {
+                let mut table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    table[handle].values.clear();
                 }
+                return value::encode_undefined();
             }
             set_runtime_error(
                 caller.data(),
@@ -492,35 +496,31 @@ pub(crate) fn define_collections_buffers(
                 );
                 return value::encode_f64(0.0);
             }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            if let Some(op) = obj_ptr {
-                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
-                if let Some(mh) = map_handle {
-                    let handle = value::decode_f64(mh) as usize;
-                    let table = caller
-                        .data()
-                        .map_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        return value::encode_f64(table[handle].keys.len() as f64);
-                    }
-                    return value::encode_f64(0.0);
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
+            {
+                let table = caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].keys.len() as f64);
                 }
-                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
-                if let Some(sh) = set_handle {
-                    let handle = value::decode_f64(sh) as usize;
-                    let table = caller
-                        .data()
-                        .set_table
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if handle < table.len() {
-                        return value::encode_f64(table[handle].values.len() as f64);
-                    }
-                    return value::encode_f64(0.0);
+                return value::encode_f64(0.0);
+            }
+            if let Some(handle) =
+                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
+            {
+                let table = caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].values.len() as f64);
                 }
+                return value::encode_f64(0.0);
             }
             set_runtime_error(
                 caller.data(),

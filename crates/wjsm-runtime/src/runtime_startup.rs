@@ -648,6 +648,37 @@ pub(super) async fn setup_shared_env_and_support(
     let memory = Memory::new(&mut *store, MemoryType::new(8, None))?;
     linker.define(&*store, "env", "memory", memory)?;
 
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        const CONTROL_BYTES: u64 = 64 * 1024;
+        const DEFAULT_V2_HEAP_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+        let object_start = wjsm_ir::HEAP_MEMORY_MIN_BYTES + CONTROL_BYTES;
+        let heap_bytes = store
+            .data()
+            .max_heap_size
+            .map(|bytes| bytes as u64)
+            .unwrap_or(DEFAULT_V2_HEAP_BYTES);
+        let initial_pages = (object_start + 64 * 1024).div_ceil(64 * 1024);
+        let maximum_pages = (object_start + heap_bytes).div_ceil(64 * 1024);
+        let heap_memory_ty = MemoryType::builder()
+            .memory64(true)
+            .shared(true)
+            .min(initial_pages)
+            .max(Some(maximum_pages))
+            .build()?;
+        let heap_memory = SharedMemory::new(engine, heap_memory_ty)?;
+        linker.define(
+            &*store,
+            "env",
+            wjsm_ir::HEAP_MEMORY_NAME,
+            heap_memory.clone(),
+        )?;
+        let access = Arc::new(crate::runtime_gc::HeapAccessV2::new(
+            crate::heap::SharedHeapMemory::new(heap_memory),
+        ));
+        store.data_mut().install_heap_access_v2(access, memory);
+    }
+
     // 独立影子栈 memory：冷启动 1 页，软上限来自 RuntimeOptions。
     let soft_max = store.data().shadow_stack_max();
     let initial_pages = (wjsm_ir::SHADOW_STACK_INITIAL_SIZE as u64)
@@ -711,6 +742,34 @@ pub(super) async fn setup_shared_env_and_support(
         define_env_global(linker, store, name, ty, true, init);
     }
 
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        const CONTROL_BYTES: u64 = 64 * 1024;
+        const DEFAULT_V2_HEAP_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+        let object_start = wjsm_ir::HEAP_MEMORY_MIN_BYTES + CONTROL_BYTES;
+        let heap_limit = object_start
+            + store
+                .data()
+                .max_heap_size
+                .map(|bytes| bytes as u64)
+                .unwrap_or(DEFAULT_V2_HEAP_BYTES);
+        for (name, value) in [
+            (wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, object_start),
+            (wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, object_start),
+            (wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME, object_start),
+            (wjsm_ir::HEAP_LIMIT_GLOBAL_NAME, heap_limit),
+        ] {
+            define_env_global(
+                linker,
+                store,
+                name,
+                ValType::I64,
+                true,
+                Val::I64(value as i64),
+            );
+        }
+    }
+
     let gc_kind = {
         let gc = store
             .data()
@@ -737,14 +796,14 @@ pub(super) async fn setup_shared_env_and_support(
             Ok(m) => m,
             Err(_) => {
                 // cwasm 配置不匹配（如 epoch interruption），fallback 到从 wasm bytes 编译
-                let support_wasm = wjsm_backend_wasm::emit_support_module(support_flavor)?;
+                let support_wasm = emit_support_wasm_for_heap_mode(support_flavor)?;
                 Module::new(engine, &support_wasm)
                     .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
             }
         }
     } else {
         // build-time snapshot 生成路径：没有 embedded cwasm，直接从 emit_support_module 编译。
-        let support_wasm = wjsm_backend_wasm::emit_support_module(support_flavor)?;
+        let support_wasm = emit_support_wasm_for_heap_mode(support_flavor)?;
         Module::new(engine, &support_wasm)
             .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
     };
@@ -770,6 +829,15 @@ pub(super) async fn setup_shared_env_and_support(
         .unwrap_or_else(|e| e.into_inner()) = support_exports;
 
     Ok(())
+}
+
+fn emit_support_wasm_for_heap_mode(flavor: wjsm_backend_wasm::GcFlavor) -> anyhow::Result<Vec<u8>> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return wjsm_backend_wasm::emit_support_module_managed_heap_v2(flavor);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    wjsm_backend_wasm::emit_support_module(flavor)
 }
 
 pub(super) fn define_env_global(

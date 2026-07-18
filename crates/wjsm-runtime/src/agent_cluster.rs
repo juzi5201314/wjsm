@@ -52,6 +52,10 @@ fn run_agent_script(script: &str, shared: Arc<SharedRuntimeState>) -> Result<()>
     rt.block_on(async {
         let module = wjsm_parser::parse_script_as_module(script).context("agent parse")?;
         let program = wjsm_semantic::lower_module(module, true).context("agent lower")?;
+        #[cfg(feature = "managed-heap-v2")]
+        let wasm_bytes =
+            wjsm_backend_wasm_v2::backend::compile(&program).context("agent compile")?;
+        #[cfg(not(feature = "managed-heap-v2"))]
         let wasm_bytes = wjsm_backend_wasm::compile(&program).context("agent compile")?;
         let mut out = Vec::new();
         crate::execute_with_writer_shared_agent(&wasm_bytes, &mut out, shared)

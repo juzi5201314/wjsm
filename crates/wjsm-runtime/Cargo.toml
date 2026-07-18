@@ -8,7 +8,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
 [features]
 managed-heap-v2 = [
-    "wjsm-backend-wasm/managed-heap-v2",
+    "dep:wjsm-backend-wasm-v2",
     "wjsm-runtime-support/managed-heap-v2",
 ]
 
@@ -36,6 +36,7 @@ brotli = { workspace = true }
 wait-timeout = { workspace = true }
 swc_core = { workspace = true }
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
+wjsm-backend-wasm-v2 = { path = "../wjsm-backend-wasm-v2", optional = true }
 wjsm-module = { path = "../wjsm-module" }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
@@ -63,6 +64,7 @@ webpki-roots = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 loom = "0.7"
 wjsm-engine-config = { path = "../wjsm-engine-config" }
+wasmparser = { workspace = true }
 
 [[bench]]
 name = "gc_stress"

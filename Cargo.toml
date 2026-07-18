@@ -9,6 +9,7 @@ members = [
     "crates/wjsm-semantic",
     "crates/wjsm-ir",
     "crates/wjsm-backend-wasm",
+    "crates/wjsm-backend-wasm-v2",
     "crates/wjsm-backend-jit",
     "crates/wjsm-runtime",
     "crates/wjsm-cli",

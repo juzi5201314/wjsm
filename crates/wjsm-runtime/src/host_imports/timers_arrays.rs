@@ -70,32 +70,73 @@ pub(crate) fn define_timers_arrays(
     // ── Array method host functions (imports 37-48) ────────────────────
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
-            match super::array_object::push_array_value(&mut caller, arr, val) {
-                Ok(()) => {
-                    let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                        return value::encode_undefined();
-                    };
-                    let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-                    value::encode_f64(len as f64)
+        |caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let handle = value::decode_handle(arr);
+                return match caller
+                    .data()
+                    .heap_access_v2()
+                    .push_element(handle, val as u64)
+                {
+                    Ok(length) => value::encode_f64(length as f64),
+                    Err(error) => {
+                        set_runtime_error(
+                            caller.data(),
+                            format!("V2 Array.prototype.push: {error}"),
+                        );
+                        value::encode_undefined()
+                    }
+                };
+            }
+            #[cfg(not(feature = "managed-heap-v2"))]
+            {
+                let mut caller = caller;
+                match super::array_object::push_array_value(&mut caller, arr, val) {
+                    Ok(()) => {
+                        let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                            return value::encode_undefined();
+                        };
+                        let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                        value::encode_f64(len as f64)
+                    }
+                    Err(exc) => exc,
                 }
-                Err(exc) => exc,
             }
         },
     );
     linker.define(&mut store, "env", "arr_push", f)?;
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            match super::array_object::push_array_hole(&mut caller, arr) {
-                Ok(()) => {
-                    let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                        return value::encode_undefined();
-                    };
-                    let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-                    value::encode_f64(len as f64)
+        |caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let handle = value::decode_handle(arr);
+                return match caller
+                    .data()
+                    .heap_access_v2()
+                    .push_element(handle, value::encode_array_hole() as u64)
+                {
+                    Ok(length) => value::encode_f64(length as f64),
+                    Err(error) => {
+                        set_runtime_error(caller.data(), format!("V2 Array hole push: {error}"));
+                        value::encode_undefined()
+                    }
+                };
+            }
+            #[cfg(not(feature = "managed-heap-v2"))]
+            {
+                let mut caller = caller;
+                match super::array_object::push_array_hole(&mut caller, arr) {
+                    Ok(()) => {
+                        let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                            return value::encode_undefined();
+                        };
+                        let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                        value::encode_f64(len as f64)
+                    }
+                    Err(exc) => exc,
                 }
-                Err(exc) => exc,
             }
         },
     );

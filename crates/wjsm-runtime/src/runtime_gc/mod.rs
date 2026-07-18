@@ -78,6 +78,8 @@ pub mod context;
 mod control;
 pub mod g1;
 pub mod heap_access;
+#[cfg(feature = "managed-heap-v2")]
+mod heap_access_v2;
 pub mod heap_governance;
 pub mod mark_bitmap;
 pub mod mark_sweep;
@@ -102,6 +104,8 @@ pub use registry::GcAlgorithmKind;
 pub use collector_context::CollectorContext;
 #[cfg(feature = "managed-heap-v2")]
 pub use control::{GcRuntimeV2, RootSnapshot};
+#[cfg(feature = "managed-heap-v2")]
+pub use heap_access_v2::{HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property};
 #[cfg(feature = "managed-heap-v2")]
 pub use mutator::MutatorContext;
 #[cfg(feature = "managed-heap-v2")]

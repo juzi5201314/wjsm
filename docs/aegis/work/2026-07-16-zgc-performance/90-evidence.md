@@ -478,7 +478,7 @@ cargo nextest run -p wjsm-backend-wasm --features managed-heap-v2 -E 'test(heap_
 ### 实现事实
 
 - `wjsm-ir` 是 V2 memory ABI 的唯一常量 owner：minimum 32 GiB / 524288 wasm pages 仅保留 handle table；maximum 为 high48 address ABI 的 256 TiB / 2^32 pages，确保 control/object heap 可位于 32 GiB 之后独立 grow。`__heap_memory` index 2，i64 cursor globals 为 `__heap_alloc_ptr`/`__heap_alloc_end`/`__heap_object_start`/`__heap_limit_v2`。
-- user 与 support module 在 feature 下共同导入/导出 shared memory64；runtime feature 显式传播 backend/support feature，使 embedded support artifact 使用同一 ABI。
+- user 与 support module 共同维护 legacy/V2 两套 ABI artifact：runtime-support build-time 始终生成两组 cwasm，V2 runtime 只选择 V2 artifact；runtime source/eval/agent compile 通过 V2 backend feature bridge 实际编译 memory64 user module。
 - V2 `obj_new` 使用 i64 NLAB cursor，直接初始化 memory64 object header，并以 `handle * 8` 对 shared heap 写 `I64AtomicStore`（high48 address + low16 state）。V2 get/set/delete/array/element 先以 `I64AtomicLoad` resolve handle，再调用明确的 Task 9 dynamic host ABI。
 - compiler 的 V2 support helper binding 已拆为 `helpers_object/{alloc,resolve,property,array}.rs`；Eval V2 和 Normal V2 均走同一 `wjsm_support` ABI，不会 inline static memory32 helper。
 - default feature 保持静态 helper；legacy WAT tests 只约束 default ABI，V2 有 `heap_memory64` 独立 ABI test，未以 skip 掩盖 V2 合同。
@@ -506,3 +506,43 @@ cargo nextest run -p wjsm-runtime --no-default-features -E 'test(runtime_options
 ```
 
 状态：Task 8 GREEN 完成；V2 dynamic host import 的 concrete owner 由下一任务 `HeapAccessV2` 实现。
+
+## Task 9 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test heap_access_v2 \
+  -E 'test(v2_runtime_executes_collection_values_without_memory32_reverse_lookup)'
+# Runtime error: unresolved V2 handle 46。
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test heap_access_v2 \
+  -E 'test(v2_runtime_executes_proxy_property_access_without_memory32_reverse_lookup)'
+# Runtime error: unresolved V2 handle 1。
+```
+
+### 实现事实
+
+- `runtime_gc/heap_access_v2.rs` 是 V2 host memory64 地址、8-byte atomic handle entry、object/array/property slot 和 prototype-chain lookup 的唯一 owner；legacy `heap_access.rs` 不再混入 V2 owner。
+- V2 property key 将 static main-memory string、runtime string 和 symbol canonicalize 为统一 name ID；host data/accessor property、Map/Set side-table handle、Proxy handler/trap 与 iterator result 均使用该 ID，不反查 memory32 raw pointer。
+- V2 Array.prototype 懒初始化为当前 module 的完整 table method set，加上 values/keys/entries 与 `Symbol.iterator`；动态 string、iterator 和 collection constructor 都保留 ECMAScript property semantics。
+- backend 默认构建可显式 emit V2 support module；runtime-support build-time 验证并预编译 legacy/V2 cwasm。V2 feature bridge 绑定 runtime source、debug、eval 与 agent compiler 到实际启用 V2 的 backend crate。
+- callback invocation 仍通过 `WasmEnv` 维护独立 shadow-stack frame；该 ABI 不读取或写入 V2 dynamic object heap。对象/数组/property 的 V2 owner 不再进行 raw pointer reverse lookup。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test heap_access_v2
+# Summary: 20 tests run: 20 passed, 0 skipped
+
+cargo check -p wjsm-runtime --no-default-features --features managed-heap-v2
+# Finished dev profile; 0 warnings
+
+cargo nextest run -p wjsm-runtime --no-default-features --features managed-heap-v2 --test heap_access_v2
+# Summary: 20 tests run: 20 passed, 0 skipped
+
+cargo check -p wjsm-runtime
+# Finished dev profile; 0 warnings
+```
+
+状态：Task 9 GREEN；已独立提交；进入 Task 10。

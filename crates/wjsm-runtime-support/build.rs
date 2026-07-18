@@ -17,18 +17,29 @@ fn main() -> anyhow::Result<()> {
         std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR not set by cargo"));
     // 唯一 owner：与 runtime deserialize 使用同一 canonical artifact profile。
     let engine = wjsm_engine_config::EngineConfig::artifact().build()?;
-
     for flavor in [
         wjsm_backend_wasm::GcFlavor::MarkSweep,
         wjsm_backend_wasm::GcFlavor::G1,
         wjsm_backend_wasm::GcFlavor::Zgc,
     ] {
         let suffix = flavor.artifact_suffix();
-        let wasm = wjsm_backend_wasm::emit_support_module(flavor)?;
-        let cwasm_bytes = engine.precompile_module(&wasm)?;
+        let legacy_wasm = wjsm_backend_wasm::emit_support_module(flavor)?;
+        wasmparser::Validator::new()
+            .validate_all(&legacy_wasm)
+            .map_err(|error| anyhow::anyhow!("legacy support wasm validation failed: {error:?}"))?;
+        let legacy_cwasm = engine.precompile_module(&legacy_wasm)?;
         std::fs::write(
             out_dir.join(format!("wjsm_support_{suffix}.cwasm")),
-            &cwasm_bytes,
+            &legacy_cwasm,
+        )?;
+        let v2_wasm = wjsm_backend_wasm::emit_support_module_managed_heap_v2(flavor)?;
+        wasmparser::Validator::new()
+            .validate_all(&v2_wasm)
+            .map_err(|error| anyhow::anyhow!("V2 support wasm validation failed: {error:?}"))?;
+        let v2_cwasm = engine.precompile_module(&v2_wasm)?;
+        std::fs::write(
+            out_dir.join(format!("wjsm_support_{suffix}_v2.cwasm")),
+            &v2_cwasm,
         )?;
     }
 

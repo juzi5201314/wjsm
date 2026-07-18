@@ -33,6 +33,28 @@ impl SharedHeapMemory {
         <Self as HeapMemory>::byte_len(self)
     }
 
+    pub fn maximum_byte_len(&self) -> u64 {
+        self.memory
+            .ty()
+            .maximum()
+            .expect("V2 shared heap requires a finite maximum")
+            * 64
+            * 1024
+    }
+
+    pub fn grow_to(&self, byte_len: u64) -> Result<(), String> {
+        let current = self.byte_len();
+        if byte_len <= current {
+            return Ok(());
+        }
+        let target_pages = byte_len.div_ceil(64 * 1024);
+        let current_pages = current / (64 * 1024);
+        self.memory
+            .grow(target_pages - current_pages)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
     pub fn load_word(&self, address: HeapAddress) -> Result<u64, HeapMemoryError> {
         <Self as HeapMemory>::load_word(self, address)
     }
