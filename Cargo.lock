@@ -5195,7 +5195,9 @@ name = "wjsm-runtime-snapshot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "wjsm-engine-config",
  "wjsm-runtime",
+ "wjsm-runtime-support",
  "wjsm-snapshot-format",
 ]
 
@@ -5208,6 +5210,7 @@ dependencies = [
  "wasmtime",
  "wjsm-backend-wasm",
  "wjsm-engine-config",
+ "wjsm-ir",
 ]
 
 [[package]]

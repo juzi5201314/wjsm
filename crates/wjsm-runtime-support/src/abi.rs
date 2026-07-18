@@ -16,6 +16,10 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use wjsm_ir::{
+    HEAP_ALLOC_END_GLOBAL_NAME, HEAP_ALLOC_PTR_GLOBAL_NAME, HEAP_LIMIT_GLOBAL_NAME,
+    HEAP_MEMORY_MAX_PAGES, HEAP_MEMORY_MIN_PAGES, HEAP_MEMORY_NAME, HEAP_OBJECT_START_GLOBAL_NAME,
+};
 pub const SUPPORT_MODULE_NAME: &str = "wjsm_support";
 pub const ENV_MODULE_NAME: &str = "env";
 pub const TABLE_IMPORT_NAME: &str = "__table";
@@ -42,6 +46,19 @@ pub const AVAILABLE_SUPPORT_GC_FLAVORS: &[SupportGcFlavor] = &[
     SupportGcFlavor::MarkSweep,
     SupportGcFlavor::G1,
     SupportGcFlavor::Zgc,
+];
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum SupportHeapAbi {
+    LegacyMemory32,
+    ManagedHeapV2Memory64,
+}
+
+pub const MANAGED_HEAP_V2_GLOBAL_IMPORTS: &[&str] = &[
+    HEAP_ALLOC_PTR_GLOBAL_NAME,
+    HEAP_ALLOC_END_GLOBAL_NAME,
+    HEAP_OBJECT_START_GLOBAL_NAME,
+    HEAP_LIMIT_GLOBAL_NAME,
 ];
 
 /// Imported env global 的值类型。
@@ -239,6 +256,23 @@ pub fn support_abi_union_hash() -> u64 {
     h.finish()
 }
 
+/// 计算 managed-heap V2 support artifact 的独立 ABI hash。
+///
+/// 它刻意不改变 active V1 `support_abi_union_hash()`，因此 V2 artifact 的 ABI
+/// 演进不会伪装成 V1 snapshot format 变更。
+pub fn managed_heap_v2_support_abi_hash() -> u64 {
+    let mut h = DefaultHasher::new();
+    support_abi_union_hash().hash(&mut h);
+    SupportHeapAbi::ManagedHeapV2Memory64.hash(&mut h);
+    HEAP_MEMORY_NAME.hash(&mut h);
+    HEAP_MEMORY_MIN_PAGES.hash(&mut h);
+    HEAP_MEMORY_MAX_PAGES.hash(&mut h);
+    for global in MANAGED_HEAP_V2_GLOBAL_IMPORTS {
+        global.hash(&mut h);
+    }
+    h.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +283,13 @@ mod tests {
         let a = support_abi_union_hash();
         let b = support_abi_union_hash();
         assert_eq!(a, b, "support_abi_union_hash 必须是确定性的");
+    }
+
+    #[test]
+    fn managed_heap_v2_support_abi_hash_is_deterministic_and_distinct() {
+        let hash = managed_heap_v2_support_abi_hash();
+        assert_eq!(hash, managed_heap_v2_support_abi_hash());
+        assert_ne!(hash, support_abi_union_hash());
     }
 
     /// 12 helper exports 数量锁死；增删 export 必须显式更新此处。

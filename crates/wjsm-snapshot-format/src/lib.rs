@@ -10,6 +10,14 @@ use std::hash::{Hash, Hasher};
 
 use wjsm_ir::constants;
 use wjsm_ir::value;
+mod managed_heap_v2;
+
+pub use managed_heap_v2::{
+    ManagedHeapV2ArtifactAbi, ManagedHeapV2Generation, ManagedHeapV2Handle, ManagedHeapV2Layout,
+    ManagedHeapV2Page, ManagedHeapV2Snapshot, decode_managed_heap_v2_artifact_abi,
+    decode_managed_heap_v2_snapshot, encode_managed_heap_v2_artifact_abi,
+    encode_managed_heap_v2_snapshot, managed_heap_v2_snapshot_abi_hash,
+};
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
 /// 格式版本:v9 函数属性对象新增 prototype + constructor 属性。

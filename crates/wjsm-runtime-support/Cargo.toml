@@ -9,6 +9,7 @@ embedded = []
 managed-heap-v2 = ["wjsm-backend-wasm/managed-heap-v2"]
 
 [dependencies]
+wjsm-ir = { path = "../wjsm-ir" }
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -21,3 +22,4 @@ wasmparser = { workspace = true }
 wasmtime = { workspace = true }
 wjsm-engine-config = { path = "../wjsm-engine-config" }
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
+wasmparser = { workspace = true }

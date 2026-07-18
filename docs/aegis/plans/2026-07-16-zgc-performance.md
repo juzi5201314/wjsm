@@ -383,11 +383,11 @@ cargo nextest run -p wjsm-runtime-support --features managed-heap-v2
 cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(startup_snapshot_v2)'
 ```
 
-- [ ] **Write test**：V2 page metadata/8-byte entries/generation、engine fingerprint、old format拒绝、support cwasm V2 deserialize。
-- [ ] **Verify RED**：V2格式与artifact缺失。
-- [ ] **Implement**：新增未激活V2 format与artifact，不提升active FORMAT_VERSION。
-- [ ] **Verify GREEN**：V2和active V1 tests均通过。
-- [ ] **Commit**：`feat: stage managed heap snapshot ABI`。
+- [x] **Write test**：V2 page metadata/8-byte entries/generation、engine fingerprint、old format拒绝、support cwasm V2 deserialize。
+- [x] **Verify RED**：V2格式与artifact缺失。
+- [x] **Implement**：新增未激活V2 format与artifact，不提升active FORMAT_VERSION。
+- [x] **Verify GREEN**：V2和active V1 tests均通过。
+- [x] **Commit**：`feat: stage managed heap snapshot ABI`。
 
 ## Task 14：准备feature-gated realm、handle-remap与side-table迁移
 

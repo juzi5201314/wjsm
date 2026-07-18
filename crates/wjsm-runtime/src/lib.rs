@@ -126,6 +126,8 @@ mod runtime_value_adapter;
 mod shared_buffer;
 mod startup_snapshot;
 pub mod startup_snapshot_remap;
+#[cfg(feature = "managed-heap-v2")]
+mod startup_snapshot_v2;
 
 /// Builtin JS 扩展：snapshot 期顺序拼接为 seed module。空 manifest 时该 mod 是
 /// no-op；任一 .js 文件变化都会经 ABI hash external input 触发 embedded snapshot 失效。
@@ -535,6 +537,12 @@ pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create tokio runtime for snapshot build: {e}"))?;
     rt.block_on(build_embedded_startup_snapshot_bytes_async(&engine, &wasm))
+}
+
+#[cfg(feature = "managed-heap-v2")]
+#[doc(hidden)]
+pub fn build_embedded_managed_heap_v2_artifact_abi_bytes() -> Result<Vec<u8>> {
+    startup_snapshot_v2::build_artifact_abi_bytes()
 }
 
 async fn build_embedded_startup_snapshot_bytes_async(

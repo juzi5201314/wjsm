@@ -654,3 +654,41 @@ cargo check -p wjsm-runtime --features managed-heap-v2
 ```
 
 状态：Task 12 GREEN；`ZgcV2` 保持 feature-gated，默认 active ZGC 未切换；进入 Task 13。
+
+## Task 13 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-snapshot-format --test managed_heap_v2
+# error[E0432]: unresolved imports `wjsm_snapshot_format::ManagedHeapV2Generation`,
+# `ManagedHeapV2Handle`, `ManagedHeapV2Layout`, `ManagedHeapV2Page`,
+# `ManagedHeapV2Snapshot`, `decode_managed_heap_v2_snapshot`,
+# `encode_managed_heap_v2_snapshot`
+```
+
+V2 snapshot/artifact ABI 在实现前不存在；active V1 format 不能携带 managed page metadata、8-byte atomic handle entry/generation 或 artifact engine/support fingerprints。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-snapshot-format
+# Summary: 9 tests run: 9 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime-support --features managed-heap-v2
+# Summary: 12 tests run: 12 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(startup_snapshot_v2)'
+# Summary: 1 test run: 1 passed, 366 skipped
+
+cargo nextest run -p wjsm-runtime -E 'test(startup_snapshot)'
+# Summary: 9 tests run: 9 passed, 300 skipped
+
+cargo nextest run -p wjsm-runtime-snapshot --features managed-heap-v2 --test managed_heap_v2_artifact
+# Summary: 1 test run: 1 passed, 0 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.97s
+```
+
+状态：Task 13 GREEN；managed V2 snapshot/support ABI 保持 private feature-gated，active V1 snapshot format 与 restore 未切换；进入 Task 14。

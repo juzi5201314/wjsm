@@ -19,6 +19,15 @@ fn main() -> anyhow::Result<()> {
 
     fs::write(&snapshot_path, &snapshot_bytes)?;
 
+    if std::env::var_os("CARGO_FEATURE_MANAGED_HEAP_V2").is_some() {
+        let artifact_path = out_dir.join("wjsm_managed_heap_v2_artifact_abi.bin");
+        let artifact_bytes = wjsm_runtime::build_embedded_managed_heap_v2_artifact_abi_bytes()?;
+        if artifact_bytes.is_empty() {
+            anyhow::bail!("managed heap V2 artifact ABI is empty");
+        }
+        fs::write(artifact_path, artifact_bytes)?;
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../wjsm-runtime/src");
     println!("cargo:rerun-if-changed=../wjsm-runtime/src/runtime_node_globals.rs");
