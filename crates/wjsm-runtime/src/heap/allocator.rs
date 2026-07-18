@@ -212,6 +212,25 @@ impl ManagedAllocator {
         Ok(())
     }
 
+    pub fn forget_object(&self, object: ObjectRef, bytes: u64) -> Result<(), AllocatorError> {
+        self.metadata_for_object(object)?.forget(object);
+        self.allocated_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn release_empty_page(&self, page: PageId) -> Result<bool, AllocatorError> {
+        let mut state = self.state.lock();
+        let Some(metadata) = state.pages.get(&page).cloned() else {
+            return Err(AllocatorError::UnknownPage { page });
+        };
+        if metadata.range.len() != 1 || metadata.object_count() != 0 {
+            return Ok(false);
+        }
+        state.remove_range(metadata.range);
+        state.free.insert(metadata.range);
+        Ok(true)
+    }
+
     pub fn clear_current_marks(&self) {
         let state = self.state.lock();
         for (page_id, metadata) in &state.pages {

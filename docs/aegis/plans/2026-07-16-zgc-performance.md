@@ -346,11 +346,11 @@ cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(mark_sweep
 cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(g1_v2)'
 ```
 
-- [ ] **Write test**：eden/survivor/old、precise remset、young/mixed evacuation、humongous、promotion failure。
-- [ ] **Verify RED**：私有RegionSpace与V2不兼容。
-- [ ] **Implement**：G1V2复用pages/bitmaps/workers/telemetry；active默认G1不切换。
-- [ ] **Verify GREEN**：V2/default G1 tests通过，无V2第二handle table。
-- [ ] **Commit**：`refactor: stage G1 managed heap policy`。
+- [x] **Write test**：eden/survivor/old、precise remset、young/mixed evacuation、humongous、promotion failure。
+- [x] **Verify RED**：私有RegionSpace与V2不兼容。
+- [x] **Implement**：G1V2复用pages/bitmaps/workers/telemetry；active默认G1不切换。
+- [x] **Verify GREEN**：V2/default G1 tests通过，无V2第二handle table。
+- [x] **Commit**：`refactor: stage G1 managed heap policy`。
 
 ## Task 12：迁移现有增量ZGC policy到V2底座
 

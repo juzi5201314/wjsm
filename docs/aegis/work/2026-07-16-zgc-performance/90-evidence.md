@@ -589,3 +589,38 @@ cargo check -p wjsm-runtime
 ```
 
 状态：Task 10 GREEN；已独立提交；进入 Task 11。
+
+## Task 11 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test g1_v2
+# g1_v2_retains_old_to_survivor_edges_across_young_collections: FAILED
+# assertion `left == right` failed: left: 1, right: 0
+# g1_v2_redirties_promoted_objects_with_surviving_young_children: FAILED
+# assertion failed: next.remembered_cards_scanned > 0
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test g1_v2 -E 'test(g1_v2_records_collection_telemetry)'
+# error[E0599]: no method named `telemetry_snapshot` found for struct `G1V2`
+```
+
+两条 remembered-set 回归证明旧实现会在 young collection 后丢失仍指向 survivor 的 old 卡，且 promotion 后的新 old destination 未重新入卡；telemetry 合同在实现前也不存在。
+
+### GREEN
+
+```text
+cargo fmt --all && cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test g1_v2
+# Summary: 7 tests run: 7 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(g1_v2)'
+# Summary: 7 tests run: 7 passed, 357 skipped
+
+cargo nextest run -p wjsm-runtime -E 'test(g1_)'
+# Summary: 18 tests run: 18 passed, 291 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.87s
+```
+
+状态：Task 11 GREEN；`G1V2` 保持 feature-gated，默认 active G1 未切换；进入 Task 12。

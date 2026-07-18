@@ -32,6 +32,13 @@ impl ObjectMap {
         self.starts.mark(slot);
     }
 
+    pub(crate) fn remove(&self, offset: u64) {
+        let slot = offset as usize / OBJECT_ALIGNMENT;
+        debug_assert!(slot < self.sizes.len());
+        self.sizes[slot].store(0, Ordering::Release);
+        self.starts.clear_bit(slot);
+    }
+
     pub(crate) fn object_count(&self) -> usize {
         self.starts.count()
     }
@@ -68,6 +75,13 @@ impl PageMetadata {
     pub(crate) fn record(&self, object: ObjectRef, bytes: u64) {
         self.object_map
             .record(object.offset() - self.base_offset, bytes);
+    }
+
+    pub(crate) fn forget(&self, object: ObjectRef) {
+        let slot = ((object.offset() - self.base_offset) / OBJECT_ALIGNMENT as u64) as usize;
+        self.object_map.remove(object.offset() - self.base_offset);
+        self.current_mark.clear_bit(slot);
+        self.previous_mark.clear_bit(slot);
     }
 
     pub(crate) fn object_count(&self) -> usize {

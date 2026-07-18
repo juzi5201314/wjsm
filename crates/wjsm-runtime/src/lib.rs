@@ -60,6 +60,8 @@ pub use heap::{
 pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};
 #[cfg(feature = "managed-heap-v2")]
+pub use runtime_gc::g1::{G1V2, G1V2CollectionKind, G1V2Error, G1V2Generation, G1V2Report};
+#[cfg(feature = "managed-heap-v2")]
 pub use runtime_gc::mark_sweep::{
     MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report,
 };
