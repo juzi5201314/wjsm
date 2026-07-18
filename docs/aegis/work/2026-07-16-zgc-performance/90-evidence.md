@@ -624,3 +624,33 @@ cargo check -p wjsm-runtime --features managed-heap-v2
 ```
 
 状态：Task 11 GREEN；`G1V2` 保持 feature-gated，默认 active G1 未切换；进入 Task 12。
+
+## Task 12 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test zgc_v2
+# error[E0432]: unresolved imports `wjsm_runtime::ZgcV2`,
+# `wjsm_runtime::ZgcV2Phase`, `wjsm_runtime::ZgcV2StepOutcome`
+```
+
+V2 contract 在实现前不存在；legacy ZGC 的 bump/page-entry 路径没有可与 `ManagedHeap`、8-byte `HandleTableV2` 和 immutable `RootSnapshot` 组合的 policy owner。
+
+### GREEN
+
+```text
+cargo fmt --all && cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test zgc_v2
+# Summary: 2 tests run: 2 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(zgc_v2_incremental)'
+# Summary: 1 test run: 1 passed, 365 skipped
+
+cargo nextest run -p wjsm-runtime -E 'test(zgc_)'
+# Summary: 15 tests run: 15 passed, 294 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+# Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.83s
+```
+
+状态：Task 12 GREEN；`ZgcV2` 保持 feature-gated，默认 active ZGC 未切换；进入 Task 13。

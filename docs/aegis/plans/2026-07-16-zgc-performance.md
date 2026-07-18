@@ -362,11 +362,11 @@ cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(g1_v2)'
 cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(zgc_v2_incremental)'
 ```
 
-- [ ] **Write test**：现有mark/relocate语义在V2 page/handle/object map上保持，尚不启用concurrent worker或colored store。
-- [ ] **Verify RED**：旧bump/4-byte entry依赖失败。
-- [ ] **Implement**：ZgcV2 policy复用ManagedHeap但保持增量safepoint行为，作为切换前功能等价基线。
-- [ ] **Verify GREEN**：V2与默认ZGC tests通过。
-- [ ] **Commit**：`refactor: stage ZGC managed heap policy`。
+- [x] **Write test**：现有mark/relocate语义在V2 page/handle/object map上保持，尚不启用concurrent worker或colored store。
+- [x] **Verify RED**：旧bump/4-byte entry依赖失败。
+- [x] **Implement**：ZgcV2 policy复用ManagedHeap但保持增量safepoint行为，作为切换前功能等价基线。
+- [x] **Verify GREEN**：V2与默认ZGC tests通过。
+- [x] **Commit**：`refactor: stage ZGC managed heap policy`。
 
 ## Task 13：准备feature-gated snapshot/support artifact ABI
 

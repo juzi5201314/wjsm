@@ -2,6 +2,10 @@ pub mod color;
 mod mark;
 pub mod page;
 mod relocate;
+#[cfg(feature = "managed-heap-v2")]
+mod v2;
+#[cfg(feature = "managed-heap-v2")]
+pub use v2::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome};
 
 use super::api::{
     AllocRequest, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget, StepOutcome,

@@ -70,6 +70,8 @@ pub use runtime_gc::telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,
 };
 #[cfg(feature = "managed-heap-v2")]
+pub use runtime_gc::zgc::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome};
+#[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
 pub use runtime_gc::{
     CollectorContext, GcPacketKind, GcRuntimeV2, GcWorkPacket, GcWorkerPool, HeapAccessV2,
