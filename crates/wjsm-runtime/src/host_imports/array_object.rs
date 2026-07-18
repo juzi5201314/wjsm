@@ -1446,32 +1446,64 @@ pub(crate) fn define_array_object(
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let count = args_count as u32;
-            if array_length_would_overflow(len, count) {
-                return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
-            }
-            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
-            let mut ptr = ptr;
-            if len + count > cap {
-                let Some(needed) = array_grow_capacity_u32(cap, len + count) else {
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let handle = value::decode_handle(this_val);
+                let len = caller
+                    .data()
+                    .heap_access_v2()
+                    .array_length(handle)
+                    .unwrap_or(0);
+                let count = args_count as u32;
+                if array_length_would_overflow(len, count) {
                     return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
-                };
-                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
-                    ptr = new_ptr;
-                } else {
-                    return value::encode_undefined();
                 }
+                for index in 0..count {
+                    let argument = read_shadow_arg(&mut caller, args_base, index);
+                    if let Err(error) = crate::set_v2_array_element(
+                        &mut caller,
+                        handle,
+                        len + index,
+                        argument as u64,
+                    ) {
+                        set_runtime_error(
+                            caller.data(),
+                            format!("V2 Array.prototype.push: {error}"),
+                        );
+                        return value::encode_undefined();
+                    }
+                }
+                return value::encode_f64((len + count) as f64);
             }
-            for i in 0..count {
-                let val = read_shadow_arg(&mut caller, args_base, i);
-                write_array_elem(&mut caller, ptr, len + i, val);
+            #[cfg(not(feature = "managed-heap-v2"))]
+            {
+                let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                    return value::encode_undefined();
+                };
+                let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                let count = args_count as u32;
+                if array_length_would_overflow(len, count) {
+                    return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+                }
+                let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
+                let mut ptr = ptr;
+                if len + count > cap {
+                    let Some(needed) = array_grow_capacity_u32(cap, len + count) else {
+                        return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+                    };
+                    if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
+                        ptr = new_ptr;
+                    } else {
+                        return value::encode_undefined();
+                    }
+                }
+                for i in 0..count {
+                    let val = read_shadow_arg(&mut caller, args_base, i);
+                    write_array_elem(&mut caller, ptr, len + i, val);
+                }
+                write_array_length(&mut caller, ptr, len + count);
+                value::encode_f64((len + count) as f64)
             }
-            write_array_length(&mut caller, ptr, len + count);
-            value::encode_f64((len + count) as f64)
         },
     );
     linker.define(&mut store, "env", "arr_proto_push", arr_proto_push_fn)?;
@@ -1568,6 +1600,40 @@ pub(crate) fn define_array_object(
          args_base: i32,
          args_count: i32|
          -> i64 {
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let handle = value::decode_handle(this_val);
+                let access = caller.data().heap_access_v2().clone();
+                if access.resolve_handle(handle).is_ok() {
+                    let len = access.array_length(handle).unwrap_or(0);
+                    let sep_val = if args_count > 0 {
+                        read_shadow_arg(&mut caller, args_base, 0)
+                    } else {
+                        value::encode_undefined()
+                    };
+                    let sep_str = if value::is_undefined(sep_val) || value::is_null(sep_val) {
+                        ",".to_string()
+                    } else {
+                        get_string_utf8_lossy(&mut caller, sep_val)
+                    };
+                    let mut parts = Vec::with_capacity(len as usize);
+                    for index in 0..len {
+                        let element = access
+                            .get_element(handle, index)
+                            .ok()
+                            .flatten()
+                            .map(|element| element as i64);
+                        if let Some(element) =
+                            element.filter(|element| !value::is_array_hole(*element))
+                        {
+                            parts.push(array_join_element_string(&mut caller, element));
+                        } else {
+                            parts.push(String::new());
+                        }
+                    }
+                    return store_runtime_string(&caller, parts.join(&sep_str));
+                }
+            }
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };

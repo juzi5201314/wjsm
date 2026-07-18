@@ -36,24 +36,47 @@ pub(crate) fn define_core_async(
                         "TypeError: Cannot perform 'has' on a proxy that has been revoked",
                     );
                 }
-                if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                    let trap = read_object_property_by_name(caller, handler_ptr, "has")
-                        .unwrap_or_else(value::encode_undefined);
-                    if !value::is_undefined(trap) && !value::is_null(trap) {
-                        let result = call_wasm_callback_async(
-                            caller,
-                            trap,
-                            entry.handler,
-                            &[entry.target, prop],
-                        )
-                        .await
-                        .unwrap_or_else(|_| value::encode_bool(false));
-                        return value::encode_bool(nanbox_to_bool(result));
-                    }
+                #[cfg(feature = "managed-heap-v2")]
+                let trap = read_host_data_property_v2(caller, entry.handler, "has")
+                    .unwrap_or_else(value::encode_undefined);
+                #[cfg(not(feature = "managed-heap-v2"))]
+                let trap = resolve_handle(caller, entry.handler)
+                    .and_then(|handler_ptr| {
+                        read_object_property_by_name(caller, handler_ptr, "has")
+                    })
+                    .unwrap_or_else(value::encode_undefined);
+                if !value::is_undefined(trap) && !value::is_null(trap) {
+                    let result = call_wasm_callback_async(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target, prop],
+                    )
+                    .await
+                    .unwrap_or_else(|_| value::encode_bool(false));
+                    return value::encode_bool(nanbox_to_bool(result));
                 }
                 return Box::pin(op_in_async(caller, entry.target, prop)).await;
             }
             return value::encode_bool(false);
+        }
+        #[cfg(feature = "managed-heap-v2")]
+        if value::is_js_object(object) || value::is_array(object) {
+            let Some(name_id) = property_key_value_to_name_id(caller, prop, false) else {
+                return value::encode_bool(false);
+            };
+            let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+                return value::encode_bool(false);
+            };
+            return value::encode_bool(
+                caller
+                    .data()
+                    .heap_access_v2()
+                    .get_property_slot_on_proto_chain(value::decode_handle(object), key)
+                    .ok()
+                    .flatten()
+                    .is_some(),
+            );
         }
         op_in_impl(caller, object, prop)
     }

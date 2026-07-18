@@ -429,6 +429,26 @@ pub(crate) async fn extract_array_like_elements(
 ) -> Result<Vec<i64>, String> {
     let mut elements = Vec::new();
     if value::is_array(arr_like) {
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            let handle = value::decode_array_handle(arr_like);
+            let access = caller.data().heap_access_v2();
+            if access.resolve_handle(handle).is_ok() {
+                let len = access
+                    .array_length(handle)
+                    .map_err(|error| error.to_string())?;
+                for index in 0..len {
+                    elements.push(
+                        access
+                            .get_element(handle, index)
+                            .map_err(|error| error.to_string())?
+                            .map(|element| element as i64)
+                            .unwrap_or_else(value::encode_undefined),
+                    );
+                }
+                return Ok(elements);
+            }
+        }
         let handle = value::decode_array_handle(arr_like) as usize;
         let Some(ptr) = resolve_handle_idx(caller, handle) else {
             return Ok(elements);
@@ -905,10 +925,12 @@ pub(crate) async fn proxy_own_keys_trap_async(
     if let Some(exc) = check_proxy_revoked(caller, &entry, "ownKeys") {
         return exc;
     }
-    let Some(handler_ptr) = resolve_handle(caller, entry.handler) else {
-        return reflect_own_keys_impl(caller, entry.target);
-    };
-    let trap = read_object_property_by_name(caller, handler_ptr, "ownKeys")
+    #[cfg(feature = "managed-heap-v2")]
+    let trap = read_host_data_property_v2(caller, entry.handler, "ownKeys")
+        .unwrap_or_else(value::encode_undefined);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let trap = resolve_handle(caller, entry.handler)
+        .and_then(|handler_ptr| read_object_property_by_name(caller, handler_ptr, "ownKeys"))
         .unwrap_or_else(value::encode_undefined);
     if value::is_undefined(trap) || value::is_null(trap) {
         return reflect_own_keys_impl(caller, entry.target);
@@ -927,6 +949,83 @@ pub(crate) async fn proxy_own_keys_trap_async(
         }
     };
     let ext = is_extensible_impl(caller, entry.target);
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(entry.target))
+        .is_ok()
+    {
+        let mut trap_keys_str = Vec::new();
+        let mut trap_keys_sym = Vec::new();
+        for key in &keys {
+            if value::is_symbol(*key) {
+                trap_keys_sym.push(*key);
+            } else if let Ok(key) = render_value(caller, *key) {
+                trap_keys_str.push(key);
+            }
+        }
+        let target_slots = caller
+            .data()
+            .heap_access_v2()
+            .own_property_slots(value::decode_handle(entry.target))
+            .unwrap_or_default();
+        let mut target_strings = Vec::new();
+        let mut target_symbols = Vec::new();
+        for (name_id, flags) in target_slots {
+            let configurable = flags & constants::FLAG_CONFIGURABLE as u32 != 0;
+            match crate::property_key::decode_name_id(name_id) {
+                crate::property_key::DecodedNameId::RuntimeString(index) => {
+                    if let Some(key) =
+                        crate::property_key::runtime_property_key_units(caller.data(), index)
+                    {
+                        target_strings.push((key.to_utf8_lossy(), configurable));
+                    }
+                }
+                crate::property_key::DecodedNameId::Symbol(index) => {
+                    target_symbols.push((value::encode_symbol_handle(index), configurable));
+                }
+                crate::property_key::DecodedNameId::MemoryString(index) => {
+                    if let Ok(key) = render_value(caller, value::encode_string_ptr(index)) {
+                        target_strings.push((key, configurable));
+                    }
+                }
+            }
+        }
+        let violates_invariant = if !ext {
+            target_strings.len() != trap_keys_str.len()
+                || target_symbols.len() != trap_keys_sym.len()
+                || target_strings
+                    .iter()
+                    .any(|(key, _)| !trap_keys_str.contains(key))
+                || target_symbols.iter().any(|(key, _)| {
+                    !trap_keys_sym
+                        .iter()
+                        .any(|trap_key| same_value_zero(caller, *trap_key, *key))
+                })
+        } else {
+            target_strings
+                .iter()
+                .any(|(key, configurable)| !*configurable && !trap_keys_str.contains(key))
+                || target_symbols.iter().any(|(key, configurable)| {
+                    !*configurable
+                        && !trap_keys_sym
+                            .iter()
+                            .any(|trap_key| same_value_zero(caller, *trap_key, *key))
+                })
+        };
+        if violates_invariant {
+            return make_type_error_exception(
+                caller,
+                "Proxy ownKeys invariant violated for V2 target",
+            );
+        }
+        let arr = alloc_array(caller, keys.len() as u32);
+        for (index, key) in keys.into_iter().enumerate() {
+            set_array_elem(caller, arr, index as i32, key);
+        }
+        return arr;
+    }
     let Some(t_ptr) = resolve_handle(caller, entry.target) else {
         return value::encode_undefined();
     };
@@ -1016,6 +1115,22 @@ pub(crate) async fn proxy_own_keys_trap_async(
     arr
 }
 
+fn descriptor_enumerable(caller: &mut Caller<'_, RuntimeState>, descriptor: i64) -> Option<bool> {
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(descriptor))
+        .is_ok()
+    {
+        return read_host_data_property_v2(caller, descriptor, "enumerable")
+            .map(|value| !value::is_falsy(value));
+    }
+    let descriptor = resolve_handle(caller, descriptor)?;
+    read_object_property_by_name(caller, descriptor, "enumerable")
+        .map(|value| !value::is_falsy(value))
+}
+
 /// 通过 Reflect.getOwnPropertyDescriptor（含 proxy 陷阱）判断 enumerable。
 async fn descriptor_enumerable_on_proxy_async(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1024,10 +1139,9 @@ async fn descriptor_enumerable_on_proxy_async(
 ) -> bool {
     let desc = reflect_get_own_property_descriptor_on_object_async(caller, obj, key).await;
     if !value::is_undefined(desc)
-        && let Some(desc_ptr) = resolve_handle(caller, desc)
+        && let Some(enumerable) = descriptor_enumerable(caller, desc)
     {
-        let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
-        return prop_enum.is_some_and(|v| !value::is_falsy(v));
+        return enumerable;
     }
     // 陷阱描述符解析失败时，回退到 target 上的 enumerable（与常见 ownKeys+getOwnPropertyDescriptor 转发 handler 一致）
     if value::is_proxy(obj) {
@@ -1042,10 +1156,9 @@ async fn descriptor_enumerable_on_proxy_async(
         if let Some(entry) = entry {
             let target_desc = reflect_get_own_property_descriptor_impl(caller, entry.target, key);
             if !value::is_undefined(target_desc)
-                && let Some(desc_ptr) = resolve_handle(caller, target_desc)
+                && let Some(enumerable) = descriptor_enumerable(caller, target_desc)
             {
-                let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
-                return prop_enum.is_some_and(|v| !value::is_falsy(v));
+                return enumerable;
             }
         }
     }
@@ -1071,43 +1184,48 @@ async fn reflect_get_own_property_descriptor_on_object_async(
             if let Some(exc) = check_proxy_revoked(caller, &entry, "getOwnPropertyDescriptor") {
                 return exc;
             }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap =
-                    read_object_property_by_name(caller, handler_ptr, "getOwnPropertyDescriptor")
-                        .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let descriptor = match call_wasm_callback_async(
-                        caller,
-                        trap,
-                        entry.handler,
-                        &[entry.target, prop],
-                    )
-                    .await
-                    {
-                        Ok(desc) => desc,
-                        Err(e) => {
-                            set_runtime_error(
-                                caller.data(),
-                                format!("TypeError: getOwnPropertyDescriptor trap failed: {}", e),
-                            );
-                            return value::encode_undefined();
-                        }
-                    };
-                    let prop_name = render_value(caller, prop).ok();
-                    let name_id = prop_name
-                        .as_deref()
-                        .and_then(|name| find_memory_c_string(caller, name));
-                    if let Err(error) = validate_proxy_get_own_property_descriptor_result(
-                        caller,
-                        entry.target,
-                        name_id,
-                        descriptor,
-                    ) {
-                        set_runtime_error(caller.data(), error);
+            #[cfg(feature = "managed-heap-v2")]
+            let trap =
+                read_host_data_property_v2(caller, entry.handler, "getOwnPropertyDescriptor")
+                    .unwrap_or_else(value::encode_undefined);
+            #[cfg(not(feature = "managed-heap-v2"))]
+            let trap = resolve_handle(caller, entry.handler)
+                .and_then(|handler| {
+                    read_object_property_by_name(caller, handler, "getOwnPropertyDescriptor")
+                })
+                .unwrap_or_else(value::encode_undefined);
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                let descriptor = match call_wasm_callback_async(
+                    caller,
+                    trap,
+                    entry.handler,
+                    &[entry.target, prop],
+                )
+                .await
+                {
+                    Ok(descriptor) => descriptor,
+                    Err(error) => {
+                        set_runtime_error(
+                            caller.data(),
+                            format!("TypeError: getOwnPropertyDescriptor trap failed: {error}"),
+                        );
                         return value::encode_undefined();
                     }
-                    return descriptor;
+                };
+                let prop_name = render_value(caller, prop).ok();
+                let name_id = prop_name
+                    .as_deref()
+                    .and_then(|name| find_memory_c_string(caller, name));
+                if let Err(error) = validate_proxy_get_own_property_descriptor_result(
+                    caller,
+                    entry.target,
+                    name_id,
+                    descriptor,
+                ) {
+                    set_runtime_error(caller.data(), error);
+                    return value::encode_undefined();
                 }
+                return descriptor;
             }
             return reflect_get_own_property_descriptor_impl(caller, entry.target, prop);
         }

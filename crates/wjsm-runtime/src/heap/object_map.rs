@@ -54,11 +54,11 @@ pub(crate) struct PageMetadata {
 }
 
 impl PageMetadata {
-    pub(crate) fn new(range: PageRange, page_bytes: u64) -> Self {
+    pub(crate) fn new(range: PageRange, page_bytes: u64, object_heap_base: u64) -> Self {
         let bits = page_bytes as usize / OBJECT_ALIGNMENT;
         Self {
             range,
-            base_offset: range.start().get() as u64 * page_bytes,
+            base_offset: object_heap_base + range.start().get() as u64 * page_bytes,
             object_map: ObjectMap::new(page_bytes),
             current_mark: AtomicBitmap::new(bits),
             previous_mark: AtomicBitmap::new(bits),
@@ -72,6 +72,10 @@ impl PageMetadata {
 
     pub(crate) fn object_count(&self) -> usize {
         self.object_map.object_count()
+    }
+
+    pub(crate) fn clear_current_marks(&self) {
+        self.current_mark.clear();
     }
 
     pub(crate) fn mark_current(&self, object: ObjectRef) {

@@ -259,6 +259,52 @@ fn v2_runtime_executes_array_iterator_without_memory32_reverse_lookup() {
 }
 
 #[test]
+fn v2_runtime_grows_array_through_push_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "const array = []; console.log(array.push(1), array.length, array[0]);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 1 1\n");
+}
+
+#[test]
+fn v2_runtime_executes_process_env_proxy_traps_without_memory32_reverse_lookup() {
+    let wasm = wjsm_runtime::compile_source(
+        "process.env.B = '3'; console.log('B' in process.env, process.env.B); const keys = Object.keys(process.env); const sorted = keys.sort(); console.log(sorted === keys, typeof sorted.join, sorted.join(','));",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut options = wjsm_runtime::RuntimeOptions::default();
+    options.env = vec![("B".to_string(), "2".to_string())];
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer_with_options(
+            &wasm,
+            Vec::new(),
+            options,
+        ))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "true 2\ntrue function B\n"
+    );
+}
+
+#[test]
 fn v2_runtime_publishes_array_symbol_iterator_without_memory32_reverse_lookup() {
     let wasm =
         wjsm_runtime::compile_source("console.log(typeof ['value'][Symbol.iterator]);").unwrap();

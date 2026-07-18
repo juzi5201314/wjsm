@@ -6,6 +6,10 @@
 pub mod allocator;
 pub mod marker;
 pub mod sweeper;
+#[cfg(feature = "managed-heap-v2")]
+mod v2;
+#[cfg(feature = "managed-heap-v2")]
+pub use v2::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 
 use crate::runtime_gc::api::{
     AllocRequest, CycleKind, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget,

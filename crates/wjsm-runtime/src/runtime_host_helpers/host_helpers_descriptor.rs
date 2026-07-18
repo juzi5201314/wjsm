@@ -217,6 +217,37 @@ pub(crate) struct PropertyDescriptor {
     pub set: Option<i64>,
 }
 
+fn descriptor_properties(
+    caller: &mut Caller<'_, RuntimeState>,
+    descriptor: i64,
+) -> Option<[Option<i64>; 6]> {
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(descriptor))
+        .is_ok()
+    {
+        return Some([
+            read_host_data_property_v2(caller, descriptor, "value"),
+            read_host_data_property_v2(caller, descriptor, "writable"),
+            read_host_data_property_v2(caller, descriptor, "enumerable"),
+            read_host_data_property_v2(caller, descriptor, "configurable"),
+            read_host_data_property_v2(caller, descriptor, "get"),
+            read_host_data_property_v2(caller, descriptor, "set"),
+        ]);
+    }
+    let descriptor_ptr = resolve_handle(caller, descriptor)?;
+    Some([
+        read_object_property_by_name(caller, descriptor_ptr, "value"),
+        read_object_property_by_name(caller, descriptor_ptr, "writable"),
+        read_object_property_by_name(caller, descriptor_ptr, "enumerable"),
+        read_object_property_by_name(caller, descriptor_ptr, "configurable"),
+        read_object_property_by_name(caller, descriptor_ptr, "get"),
+        read_object_property_by_name(caller, descriptor_ptr, "set"),
+    ])
+}
+
 /// 解析 JS 对象形式的描述符（desc）为 Rust 的 PropertyDescriptor 结构体
 pub(crate) fn parse_descriptor(
     caller: &mut Caller<'_, RuntimeState>,
@@ -229,17 +260,19 @@ pub(crate) fn parse_descriptor(
     {
         return Err("Invalid property descriptor".to_string());
     }
-    let desc_ptr = match resolve_handle(caller, desc_handle) {
-        Some(p) => p,
-        None => return Err("Invalid property descriptor".to_string()),
+    let Some(
+        [
+            prop_value,
+            prop_writable,
+            prop_enumerable,
+            prop_configurable,
+            prop_get,
+            prop_set,
+        ],
+    ) = descriptor_properties(caller, desc_handle)
+    else {
+        return Err("Invalid property descriptor".to_string());
     };
-
-    let prop_value = read_object_property_by_name(caller, desc_ptr, "value");
-    let prop_writable = read_object_property_by_name(caller, desc_ptr, "writable");
-    let prop_enumerable = read_object_property_by_name(caller, desc_ptr, "enumerable");
-    let prop_configurable = read_object_property_by_name(caller, desc_ptr, "configurable");
-    let prop_get = read_object_property_by_name(caller, desc_ptr, "get");
-    let prop_set = read_object_property_by_name(caller, desc_ptr, "set");
 
     if let Some(getter) = prop_get
         && !value::is_undefined(getter)
@@ -287,6 +320,30 @@ pub(crate) fn get_target_descriptor(
     target: i64,
     name_id: u32,
 ) -> Option<PropertyDescriptor> {
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(target))
+        .is_ok()
+    {
+        let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+        let property = caller
+            .data()
+            .heap_access_v2()
+            .get_property_slot(value::decode_handle(target), key)
+            .ok()??;
+        let is_accessor = property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0;
+        return Some(PropertyDescriptor {
+            value: (!is_accessor).then_some(property.value as i64),
+            writable: (!is_accessor)
+                .then_some(property.flags & constants::FLAG_WRITABLE as u32 != 0),
+            enumerable: Some(property.flags & constants::FLAG_ENUMERABLE as u32 != 0),
+            configurable: Some(property.flags & constants::FLAG_CONFIGURABLE as u32 != 0),
+            get: is_accessor.then_some(property.getter as i64),
+            set: is_accessor.then_some(property.setter as i64),
+        });
+    }
     let obj_ptr = resolve_handle(caller, target)?;
     let (slot_offset, flags, val) = find_property_slot_by_name_id(caller, obj_ptr, name_id)?;
 

@@ -1,14 +1,11 @@
 use crate::array_named_props::array_named_get_sync;
-#[cfg(not(feature = "managed-heap-v2"))]
 use crate::constants;
 use crate::property_key::name_id_to_property_key_value;
 use crate::runtime_host_helpers::is_callable_in_runtime;
-#[cfg(not(feature = "managed-heap-v2"))]
 use crate::runtime_values::find_property_slot_by_name_id;
 use crate::runtime_values::resolve_handle;
 use crate::{WasmEnv, value};
 use wasmtime::Caller;
-#[cfg(not(feature = "managed-heap-v2"))]
 use wasmtime::Extern;
 
 use crate::RuntimeState;
@@ -136,6 +133,11 @@ pub(crate) fn get_by_name_id_sync(
         return value::encode_undefined();
     }
     #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(obj))
+        .is_ok()
     {
         let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
             return value::encode_undefined();
@@ -154,15 +156,12 @@ pub(crate) fn get_by_name_id_sync(
             None => value::encode_undefined(),
         };
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let Some(ptr) = resolve_handle(caller, obj) else {
-            return value::encode_undefined();
-        };
-        let mut visited = std::collections::HashSet::new();
-        get_by_name_id_on_proto_chain(caller, obj, ptr, name_id, &mut visited)
-            .unwrap_or_else(value::encode_undefined)
-    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return value::encode_undefined();
+    };
+    let mut visited = std::collections::HashSet::new();
+    get_by_name_id_on_proto_chain(caller, obj, ptr, name_id, &mut visited)
+        .unwrap_or_else(value::encode_undefined)
 }
 
 fn name_id_matches_utf8(
@@ -177,7 +176,6 @@ fn name_id_matches_utf8(
     crate::property_key::name_id_matches_runtime_string(caller, &env, name_id, &expected)
 }
 
-#[cfg(not(feature = "managed-heap-v2"))]
 fn read_getter_from_slot(caller: &mut Caller<'_, RuntimeState>, slot_offset: usize) -> i64 {
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         return value::encode_undefined();
@@ -212,7 +210,6 @@ fn invoke_getter_sync(caller: &mut Caller<'_, RuntimeState>, getter: i64, receiv
     .unwrap_or_else(|_| value::encode_undefined())
 }
 
-#[cfg(not(feature = "managed-heap-v2"))]
 fn get_by_name_id_on_proto_chain(
     caller: &mut Caller<'_, RuntimeState>,
     receiver: i64,
@@ -277,7 +274,13 @@ fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_
     }
 
     #[cfg(feature = "managed-heap-v2")]
-    if value::is_js_object(value_val) || value::is_array(value_val) {
+    if (value::is_js_object(value_val) || value::is_array(value_val))
+        && caller
+            .data()
+            .heap_access_v2()
+            .resolve_handle(value::decode_handle(value_val))
+            .is_ok()
+    {
         let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
             return value::encode_undefined();
         };

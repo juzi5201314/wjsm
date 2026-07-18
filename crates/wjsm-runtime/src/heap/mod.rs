@@ -109,7 +109,10 @@ mod tests {
 
         let allocation = heap.allocate(&mut nlab, 8).unwrap();
 
-        assert_eq!(allocation.object().offset(), 0);
+        assert_eq!(
+            allocation.object().offset(),
+            heap.allocator().layout().object_heap_base()
+        );
         assert_eq!(nlab.refills(), 1);
     }
 }

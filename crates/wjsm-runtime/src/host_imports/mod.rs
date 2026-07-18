@@ -84,7 +84,7 @@ pub(crate) use core::{
     string_iter_current_value,
 };
 #[cfg(feature = "managed-heap-v2")]
-pub(crate) use gc::define_v2;
+pub(crate) use gc::{allocate_v2_array_handle, define_v2};
 
 pub(crate) use fetch::define_fetch;
 pub(crate) use fetch_core::abort_controller_abort;

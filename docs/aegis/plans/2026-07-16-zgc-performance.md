@@ -330,11 +330,11 @@ cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test heap_access_
 cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(mark_sweep_v2)'
 ```
 
-- [ ] **Write test**：V2 root snapshot/object map mark、page sweep、handle quarantine、OOM/full collection与side-table cleanup。
-- [ ] **Verify RED**：旧GcContext/memory32依赖失败。
-- [ ] **Implement**：feature-gatedMarkSweepV2使用ManagedHeap；active默认collector不切换。
-- [ ] **Verify GREEN**：V2与默认mark-sweep tests同时通过。
-- [ ] **Commit**：`refactor: stage mark-sweep managed heap policy`。
+- [x] **Write test**：V2 root snapshot/object map mark、page sweep、handle quarantine、OOM/full collection与side-table cleanup。
+- [x] **Verify RED**：旧GcContext/memory32依赖失败。
+- [x] **Implement**：feature-gatedMarkSweepV2使用ManagedHeap；active默认collector不切换。
+- [x] **Verify GREEN**：V2与默认mark-sweep tests同时通过。
+- [x] **Commit**：`refactor: stage mark-sweep managed heap policy`。
 
 ## Task 11：迁移G1 policy到V2底座
 

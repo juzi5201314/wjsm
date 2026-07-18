@@ -22,6 +22,12 @@ impl AtomicBitmap {
         self.words[word].fetch_or(mask, Ordering::Release);
     }
 
+    pub(crate) fn clear(&self) {
+        for word in &self.words {
+            word.store(0, Ordering::Release);
+        }
+    }
+
     pub(crate) fn is_marked(&self, bit: usize) -> bool {
         debug_assert!(bit < self.bits);
         let word = bit / u64::BITS as usize;

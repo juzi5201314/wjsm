@@ -5,6 +5,25 @@ use wjsm_ir::value;
 use crate::RuntimeState;
 
 #[cfg(feature = "managed-heap-v2")]
+pub(crate) fn allocate_v2_array_handle(
+    caller: &mut Caller<'_, RuntimeState>,
+    capacity: u32,
+) -> wasmtime::Result<u32> {
+    let prototype = ensure_v2_array_prototype(caller)?;
+    let handle = take_next_handle(caller)?;
+    let bytes = u64::from(capacity)
+        .checked_mul(8)
+        .and_then(|elements| {
+            elements.checked_add(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE as u64)
+        })
+        .ok_or_else(|| wasmtime::Error::msg("V2 array size overflow"))?;
+    let access = caller.data().heap_access_v2().clone();
+    let (object, _) = crate::allocate_v2_object_bytes(caller, bytes)?;
+    access.publish_array(handle, object, prototype, capacity)?;
+    Ok(handle)
+}
+
+#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     linker.func_wrap(
         "env",
@@ -15,14 +34,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
          _capacity: i32|
          -> wasmtime::Result<i64> {
             let bytes = u64::try_from(bytes).map_err(host_error)?;
-            let access = caller.data().heap_access_v2().clone();
-            let (start, end) = access.reserve_nlab(bytes)?;
-            set_i64_global(
-                &mut caller,
-                wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME,
-                start + bytes,
-            )?;
-            set_i64_global(&mut caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, end)?;
+            let (start, _) = crate::allocate_v2_object_bytes(&mut caller, bytes)?;
             Ok(start as i64)
         },
     )?;
@@ -39,7 +51,32 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                     raw_key,
                 ));
             }
+            if caller
+                .data()
+                .heap_access_v2()
+                .resolve_handle(handle)
+                .is_err()
+            {
+                // Task 15 前 startup primordial 仍由 legacy memory32 heap 持有。
+                return Ok(crate::host_imports::get_method::get_by_name_id_sync(
+                    &mut caller,
+                    object,
+                    raw_key,
+                ));
+            }
             let key = property_key(&mut caller, key)?;
+            if value::is_array(object) {
+                let length_key = crate::property_key::encode_runtime_string_name_id(
+                    crate::property_key::intern_runtime_property_key(
+                        caller.data(),
+                        crate::runtime_string::RuntimeString::from_utf8_str("length"),
+                    ),
+                );
+                if key == length_key {
+                    let length = caller.data().heap_access_v2().array_length(handle)?;
+                    return Ok(value::encode_f64(length as f64));
+                }
+            }
             let access = caller.data().heap_access_v2().clone();
             let property = access.get_property_slot_on_proto_chain(handle, key)?;
             read_v2_property(&mut caller, object, property)
@@ -84,24 +121,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_arr_new_v2",
         |mut caller: Caller<'_, RuntimeState>, capacity: i32| -> wasmtime::Result<i32> {
             let capacity = u32::try_from(capacity).map_err(host_error)?;
-            let prototype = ensure_v2_array_prototype(&mut caller)?;
-            let handle = take_next_handle(&mut caller)?;
-            let bytes = u64::from(capacity)
-                .checked_mul(8)
-                .and_then(|elements| {
-                    elements.checked_add(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE as u64)
-                })
-                .ok_or_else(|| wasmtime::Error::msg("V2 array size overflow"))?;
-            let access = caller.data().heap_access_v2().clone();
-            let (object, end) = access.reserve_nlab(bytes)?;
-            access.publish_array(handle, object, prototype, capacity)?;
-            set_i64_global(
-                &mut caller,
-                wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME,
-                object + bytes,
-            )?;
-            set_i64_global(&mut caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, end)?;
-            Ok(handle as i32)
+            Ok(allocate_v2_array_handle(&mut caller, capacity)? as i32)
         },
     )?;
     linker.func_wrap(
@@ -120,17 +140,14 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     linker.func_wrap(
         "env",
         "gc_elem_set_v2",
-        |caller: Caller<'_, RuntimeState>,
+        |mut caller: Caller<'_, RuntimeState>,
          array: i64,
          index: i32,
          new_value: i64|
          -> wasmtime::Result<()> {
             let handle = value::decode_handle(array);
             let index = u32::try_from(index).map_err(host_error)?;
-            caller
-                .data()
-                .heap_access_v2()
-                .set_element(handle, index, new_value as u64)?;
+            crate::set_v2_array_element(&mut caller, handle, index, new_value as u64)?;
             Ok(())
         },
     )?;
@@ -293,7 +310,7 @@ fn set_proxy_property_v2(
     let prop = crate::property_key::name_id_to_property_key_value(raw_key)
         .ok_or_else(|| wasmtime::Error::msg("invalid V2 proxy property key"))?;
     let runtime = tokio::runtime::Handle::current();
-    let result = tokio::task::block_in_place(|| {
+    tokio::task::block_in_place(|| {
         runtime.block_on(crate::runtime_host_helpers::call_wasm_callback_async(
             caller,
             trap,
@@ -302,11 +319,6 @@ fn set_proxy_property_v2(
         ))
     })
     .map_err(host_error)?;
-    if value::is_falsy(result) {
-        return Err(wasmtime::Error::msg(
-            "TypeError: 'set' on proxy: trap returned falsish",
-        ));
-    }
     Ok(())
 }
 
@@ -359,20 +371,6 @@ fn get_i32_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> wasmtime
         return Err(wasmtime::Error::msg(format!("{name} is not i32")));
     };
     Ok(value)
-}
-
-#[cfg(feature = "managed-heap-v2")]
-fn set_i64_global(
-    caller: &mut Caller<'_, RuntimeState>,
-    name: &str,
-    value: u64,
-) -> wasmtime::Result<()> {
-    let global = caller
-        .get_export(name)
-        .and_then(Extern::into_global)
-        .ok_or_else(|| wasmtime::Error::msg(format!("missing {name} global")))?;
-    global.set(caller, Val::I64(value as i64))?;
-    Ok(())
 }
 
 #[cfg(feature = "managed-heap-v2")]

@@ -39,6 +39,14 @@ impl Allocation {
     pub const fn class(&self) -> AllocationClass {
         self.class
     }
+
+    pub const fn is_dedicated(&self) -> bool {
+        self.dedicated
+    }
+
+    pub const fn bytes(&self) -> u64 {
+        self.bytes
+    }
 }
 
 /// 由 mutator 独占的 local allocation buffer；命中路径不获取 allocator lock。
@@ -204,6 +212,15 @@ impl ManagedAllocator {
         Ok(())
     }
 
+    pub fn clear_current_marks(&self) {
+        let state = self.state.lock();
+        for (page_id, metadata) in &state.pages {
+            if *page_id == metadata.range.start() {
+                metadata.clear_current_marks();
+            }
+        }
+    }
+
     pub fn mark_current(&self, object: ObjectRef) -> Result<(), AllocatorError> {
         self.metadata_for_object(object)?.mark_current(object);
         Ok(())
@@ -286,7 +303,11 @@ impl ManagedAllocator {
     fn acquire_pages(&self, count: u32) -> Result<Arc<PageMetadata>, AllocatorError> {
         let mut state = self.state.lock();
         let range = state.take_free(count)?;
-        let page = Arc::new(PageMetadata::new(range, self.config.bytes));
+        let page = Arc::new(PageMetadata::new(
+            range,
+            self.config.bytes,
+            self.layout.object_heap_base(),
+        ));
         let newly_committed = state.commit(range);
         state.insert_page(Arc::clone(&page));
         self.committed_bytes.fetch_add(
@@ -297,7 +318,11 @@ impl ManagedAllocator {
     }
 
     fn metadata_for_object(&self, object: ObjectRef) -> Result<Arc<PageMetadata>, AllocatorError> {
-        let raw_page = object.offset() / self.config.bytes;
+        let relative = object
+            .offset()
+            .checked_sub(self.layout.object_heap_base())
+            .ok_or(AllocatorError::UnknownObject { object })?;
+        let raw_page = relative / self.config.bytes;
         let page = u32::try_from(raw_page)
             .map(PageId::new)
             .map_err(|_| AllocatorError::UnknownObject { object })?;

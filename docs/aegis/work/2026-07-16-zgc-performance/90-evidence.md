@@ -546,3 +546,46 @@ cargo check -p wjsm-runtime
 ```
 
 状态：Task 9 GREEN；已独立提交；进入 Task 10。
+
+## Task 10 implementation evidence
+
+### RED
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test mark_sweep_v2
+# unresolved import `wjsm_runtime::MarkSweepV2`
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --lib
+# max_heap_size_* 与 process_env_proxy_reads_keys_and_rejects_writes 暴露
+# V2 NLAB、hybrid primordial 与 host array/proxy descriptor owner 缺口。
+```
+
+### 实现事实
+
+- `MarkSweepV2` 以 `ManagedHeap<SharedHeapMemory>` 分配 object pages、以 `HandleTableV2` publish/retire/reclaim handles，并只消费 immutable handle-only `RootSnapshot`。
+- mark 周期先 clear current bitmap，再遍历 handle graph 写入 allocator object map；sweep 顺序固定为 retire handle → side-table cleanup → whole dedicated-page release → epoch advance/quarantine reclaim。
+- `allocate_or_collect` 仅捕获 allocator `OutOfPages`，运行 full collection 后重试；其他 allocation/handle/memory 错误保持原始失败。
+- allocator object address 统一为 `object_heap_base + page * page_bytes`，避免 control/handle region 与 object page offset 混淆。
+- 扩展 V2 gate 还修复了统一 NLAB globals、dynamic Array growth、Array length/push/join、host result arrays、Proxy ownKeys/descriptor、`process.env` 与 legacy startup primordial hybrid owner；Task 15 前 owner 由 atomic handle publication 判定。
+
+### GREEN
+
+```text
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test mark_sweep_v2
+# Summary: 2 tests run: 2 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --test heap_access_v2
+# Summary: 22 tests run: 22 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --features managed-heap-v2 --lib
+# Summary: 209 tests run: 209 passed, 2 skipped
+
+cargo nextest run -p wjsm-runtime --lib
+# Summary: 207 tests run: 207 passed, 2 skipped
+
+cargo check -p wjsm-runtime --features managed-heap-v2
+cargo check -p wjsm-runtime
+# Both finished with 0 warnings
+```
+
+状态：Task 10 GREEN；已独立提交；进入 Task 11。

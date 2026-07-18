@@ -368,7 +368,7 @@ pub(crate) fn alloc_host_object_v2(caller: &mut Caller<'_, RuntimeState>, capaci
         return value::encode_undefined();
     };
     let access = caller.data().heap_access_v2().clone();
-    let (object, end) = match access.reserve_nlab(bytes) {
+    let (object, _) = match allocate_v2_object_bytes(caller, bytes) {
         Ok(window) => window,
         Err(error) => {
             set_runtime_error(caller.data(), format!("V2 host object allocation: {error}"));
@@ -379,15 +379,6 @@ pub(crate) fn alloc_host_object_v2(caller: &mut Caller<'_, RuntimeState>, capaci
         set_runtime_error(
             caller.data(),
             format!("V2 host object publication: {error}"),
-        );
-        return value::encode_undefined();
-    }
-    if !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, object + bytes)
-        || !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, end)
-    {
-        set_runtime_error(
-            caller.data(),
-            "V2 host allocation globals are unavailable".to_string(),
         );
         return value::encode_undefined();
     }
@@ -414,11 +405,111 @@ fn v2_i32_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<i3
 }
 
 #[cfg(feature = "managed-heap-v2")]
+fn v2_i64_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<i64> {
+    caller
+        .get_export(name)
+        .and_then(Extern::into_global)
+        .and_then(|global| global.get(&mut *caller).i64())
+}
+
+#[cfg(feature = "managed-heap-v2")]
 fn set_v2_i64_global(caller: &mut Caller<'_, RuntimeState>, name: &str, value: u64) -> bool {
     caller
         .get_export(name)
         .and_then(Extern::into_global)
         .is_some_and(|global| global.set(&mut *caller, Val::I64(value as i64)).is_ok())
+}
+
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn allocate_v2_object_bytes(
+    caller: &mut Caller<'_, RuntimeState>,
+    bytes: u64,
+) -> wasmtime::Result<(u64, u64)> {
+    let bytes = bytes
+        .checked_add(7)
+        .map(|size| size & !7)
+        .ok_or_else(|| wasmtime::Error::msg("V2 object size overflow"))?;
+    let object_base = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
+    let cursor = v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME)
+        .map(|value| value as u64)
+        .unwrap_or(0);
+    let end = v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME)
+        .map(|value| value as u64)
+        .unwrap_or(0);
+    if cursor >= object_base
+        && let Some(next) = cursor.checked_add(bytes)
+        && next <= end
+    {
+        if !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, next) {
+            return Err(wasmtime::Error::msg(
+                "V2 allocation cannot update heap cursor",
+            ));
+        }
+        return Ok((cursor, end));
+    }
+
+    let access = caller.data().heap_access_v2().clone();
+    let (start, end) = match access.reserve_nlab(bytes) {
+        Ok(window) => window,
+        Err(error) => {
+            if matches!(
+                error,
+                crate::runtime_gc::HeapAccessV2Error::HeapExhausted { .. }
+            ) {
+                caller
+                    .data()
+                    .set_heap_oom_error(access.used_bytes() as usize, bytes as usize);
+            }
+            return Err(wasmtime::Error::msg(error.to_string()));
+        }
+    };
+    if !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, start + bytes)
+        || !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, end)
+    {
+        return Err(wasmtime::Error::msg(
+            "V2 allocation globals are unavailable",
+        ));
+    }
+    Ok((start, end))
+}
+
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn set_v2_array_element(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    index: u32,
+    value: u64,
+) -> wasmtime::Result<()> {
+    let access = caller.data().heap_access_v2().clone();
+    let (_, capacity) = access.array_shape(handle)?;
+    if index >= capacity {
+        let required = index
+            .checked_add(1)
+            .ok_or_else(|| wasmtime::Error::msg("V2 array index overflow"))?;
+        let new_capacity = required
+            .max(4)
+            .checked_next_power_of_two()
+            .ok_or_else(|| wasmtime::Error::msg("V2 array capacity overflow"))?;
+        let bytes = u64::from(new_capacity)
+            .checked_mul(8)
+            .and_then(|elements| elements.checked_add(constants::HEAP_OBJECT_HEADER_SIZE as u64))
+            .ok_or_else(|| wasmtime::Error::msg("V2 array size overflow"))?;
+        let (new_object, _) = allocate_v2_object_bytes(caller, bytes)?;
+        access.relocate_array(handle, new_object, new_capacity)?;
+    }
+    access.set_element(handle, index, value)?;
+    Ok(())
+}
+
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn push_v2_array_element(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    value: u64,
+) -> wasmtime::Result<u32> {
+    let length = caller.data().heap_access_v2().array_length(handle)?;
+    set_v2_array_element(caller, handle, length, value)?;
+    Ok(length + 1)
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -430,11 +521,17 @@ pub(crate) fn define_host_data_property_v2(
 ) -> Option<()> {
     let handle = value::decode_handle(object);
     let key = v2_host_property_key(caller, name)?;
-    caller
+    match caller
         .data()
         .heap_access_v2()
         .set_property(handle, key, property_value as u64)
-        .ok()
+    {
+        Ok(()) => Some(()),
+        Err(error) => {
+            set_runtime_error(caller.data(), format!("V2 host property {name}: {error}"));
+            None
+        }
+    }
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -447,11 +544,18 @@ fn define_host_accessor_property_v2(
 ) -> Option<()> {
     let handle = value::decode_handle(object);
     let key = v2_host_property_key(caller, name)?;
-    caller
-        .data()
-        .heap_access_v2()
-        .define_accessor_property(handle, key, getter as u64, setter as u64)
-        .ok()
+    match caller.data().heap_access_v2().define_accessor_property(
+        handle,
+        key,
+        getter as u64,
+        setter as u64,
+    ) {
+        Ok(()) => Some(()),
+        Err(error) => {
+            set_runtime_error(caller.data(), format!("V2 host accessor {name}: {error}"));
+            None
+        }
+    }
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -462,13 +566,13 @@ pub(crate) fn read_host_data_property_v2(
 ) -> Option<i64> {
     let handle = value::decode_handle(object);
     let key = v2_host_property_key(caller, name)?;
-    caller
-        .data()
-        .heap_access_v2()
-        .get_property(handle, key)
-        .ok()
-        .flatten()
-        .map(|property_value| property_value as i64)
+    match caller.data().heap_access_v2().get_property(handle, key) {
+        Ok(property) => property.map(|property_value| property_value as i64),
+        Err(error) => {
+            set_runtime_error(caller.data(), format!("V2 host property {name}: {error}"));
+            None
+        }
+    }
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -1874,10 +1978,14 @@ pub(crate) fn define_host_data_property_from_caller(
     val: i64,
 ) -> Option<()> {
     #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(obj))
+        .is_ok()
     {
         return define_host_data_property_v2(caller, obj, name, val);
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
     define_host_data_property(caller, obj, name, val)
 }
 
@@ -1890,10 +1998,14 @@ pub(crate) fn define_host_accessor_property_from_caller(
     setter: i64,
 ) -> Option<()> {
     #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(obj))
+        .is_ok()
     {
         return define_host_accessor_property_v2(caller, obj, name, getter, setter);
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
     define_host_accessor_property(caller, obj, name, getter, setter)
 }
 

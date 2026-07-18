@@ -919,14 +919,36 @@ macro_rules! caller_env_wrapper {
     };
 }
 
-caller_env_wrapper! {
-    #[inline]
-    pub(crate) fn alloc_array(capacity: u32) -> i64 = alloc_array_with_env
+#[inline]
+pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return match crate::host_imports::allocate_v2_array_handle(caller, capacity) {
+            Ok(handle) => value::encode_handle(value::TAG_ARRAY, handle),
+            Err(error) => {
+                set_runtime_error(caller.data(), format!("V2 host array allocation: {error}"));
+                value::encode_undefined()
+            }
+        };
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_array_with_env(caller, &env, capacity)
+    }
 }
 
-caller_env_wrapper! {
-    #[inline]
-    pub(crate) fn alloc_object(capacity: u32) -> i64 = alloc_object_with_env
+#[inline]
+pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return crate::alloc_host_object_v2(caller, capacity);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_object_with_env(caller, &env, capacity)
+    }
 }
 
 #[inline]
@@ -936,8 +958,22 @@ pub(crate) fn set_array_elem(
     index: i32,
     val: i64,
 ) {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    set_array_elem_with_env(caller, &env, arr_val, index, val);
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let Ok(index) = u32::try_from(index) else {
+            return;
+        };
+        if let Err(error) =
+            crate::set_v2_array_element(caller, value::decode_handle(arr_val), index, val as u64)
+        {
+            set_runtime_error(caller.data(), format!("V2 host array element: {error}"));
+        }
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        set_array_elem_with_env(caller, &env, arr_val, index, val);
+    }
 }
 
 caller_env_wrapper! {
@@ -1038,6 +1074,11 @@ pub(crate) fn define_host_data_property_by_name_id_with_flags(
     flags: i32,
 ) -> Option<()> {
     #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(obj))
+        .is_ok()
     {
         if value::is_array(obj) {
             crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
@@ -1050,7 +1091,6 @@ pub(crate) fn define_host_data_property_by_name_id_with_flags(
             .define_data_property(value::decode_handle(obj), key, val as u64, flags as u32)
             .ok();
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
     {
         // 数组实例：命名属性（含 .index/.input/.groups 等）存入宿主侧表，
         // 与编译期 obj_set 的数组分支一致；直接写对象堆会把数组元素存储当属性槽而损坏。

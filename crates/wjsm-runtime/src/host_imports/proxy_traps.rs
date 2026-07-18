@@ -70,8 +70,12 @@ pub(crate) fn proxy_trap_handler_trap(
     handler: i64,
     trap_name: &str,
 ) -> Option<i64> {
-    let ptr = resolve_handle(caller, handler)?;
-    let trap = read_object_property_by_name(caller, ptr, trap_name)
+    #[cfg(feature = "managed-heap-v2")]
+    let trap = read_host_data_property_v2(caller, handler, trap_name)
+        .unwrap_or_else(value::encode_undefined);
+    #[cfg(not(feature = "managed-heap-v2"))]
+    let trap = resolve_handle(caller, handler)
+        .and_then(|ptr| read_object_property_by_name(caller, ptr, trap_name))
         .unwrap_or_else(value::encode_undefined);
     if value::is_undefined(trap) || value::is_null(trap) {
         None
