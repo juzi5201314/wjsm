@@ -719,3 +719,14 @@ cargo check -p wjsm-runtime --features managed-heap-v2
 ```
 
 状态：Task 14 GREEN；V2 realm/root/side-table adapter 保持 private feature-gated，default realm path 未切换；进入 Task 15 cutover audit。
+
+## Task 15 activation audit and gate revision
+
+```text
+cargo nextest run --workspace --all-features
+# Summary: 1766 tests run: 1274 passed, 491 failed, 1 timed out, 16 skipped
+```
+
+失败不是单一import问题：backend/host在`managed-heap-v2`下已消费8-byte atomic handles、shared memory64与V2 globals，但primordial snapshot、function table、realm clone、eval/runtime module及部分host dynamic object仍生产V1 addresses/handles。代表性症状为`unresolved V2 handle`、`indirect call type mismatch`、`invalid legacy source handle`和object property capacity不足。
+
+原计划要求该命令在active cutover前GREEN，与feature的编译期activation语义矛盾。用户已批准修订为：先保持该命令RED以枚举完整迁移缺口，完成单一V2 runtime activation，再将同一命令作为cutover GREEN硬门。禁止通过重新隔离feature、V1 fallback或runtime双轨规避失败。

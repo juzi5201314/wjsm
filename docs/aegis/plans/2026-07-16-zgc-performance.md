@@ -413,18 +413,21 @@ cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(vm_gc_real
 
 Task 15保持单一active切换任务是架构约束：按collector拆分会让公开`--gc`模式同时依赖两套dynamic heap，或让尚未切换的collector不可用。风险通过切换前release-candidate gate降低，而不是引入runtime双轨。
 
-**Pre-cutover GREEN（仍在私有门下）**
+**Activation RED（先暴露完整迁移缺口）**
 
 ```bash
 cargo nextest run --workspace --all-features
-WJSM_TEST_GC=mark-sweep cargo nextest run --all-features -E 'test(happy__)'
-WJSM_TEST_GC=g1 cargo nextest run --all-features -E 'test(happy__)'
-WJSM_TEST_GC=zgc cargo nextest run --all-features -E 'test(happy__)'
 ```
 
-**GREEN**
+`managed-heap-v2` 会在编译期同时激活 backend 与 host V2 ABI；因此该命令在
+V1 primordial、function table、realm、eval/runtime module 或 side table 仍参与
+active execution 时必须保持 RED。不得通过重新隔离 feature、V1 fallback 或双轨
+runtime 让此门虚假变绿。
+
+**GREEN（完整activation与原子cutover后）**
 
 ```bash
+cargo nextest run --workspace --all-features
 cargo nextest run --workspace
 WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__)'
 WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'
@@ -434,9 +437,10 @@ cargo run -- run --gc g1 -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
 cargo run -- run --gc zgc -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
 ```
 
-- [ ] **Write cutover audit**：先确认Tasks 0–14均已形成提交且当前HEAD通过全部Pre-cutover GREEN，再生成逐caller cutover manifest，枚举active 4-byte entry、memory32 dynamic heap、old GcContext、private feature与V1 snapshot/support references；切换前audit必须RED。
-- [ ] **Verify RED**：audit报告全部旧active owners；任一Pre-cutover GREEN失败则不得开始active切换。
-- [ ] **Implement**：以单一原子提交切换8-byte entry/shared memory64/GcRuntimeV2/三policy/V2 snapshot/support/realm，并删除private feature定义、cfg和旧dynamic heap主路径；不按collector拆分active ABI。
+- [ ] **Write activation audit**：确认Tasks 0–14均已有提交；运行`--workspace --all-features`并按owner归类V1 primordial/snapshot、function table、realm clone、eval/runtime module、host ABI、4-byte entry与memory32 dynamic heap残留；audit必须RED。
+- [x] **Verify RED**：`cargo nextest run --workspace --all-features`为1274 passed、491 failed、1 timed out；主要证据为unresolved V2 handle、indirect-call type mismatch、legacy realm clone invalid handle及V2 property capacity。该结果推翻“先让pre-cutover all-features GREEN再切换”的原顺序。
+- [ ] **Implement activation**：先在单一V2 ABI内迁移primordial bootstrap/snapshot、function table、realm、eval/runtime module、全部host dynamic heap consumer；不得引入V1 fallback或第二runtime activation owner。
+- [ ] **Implement cutover**：所有active caller均已在V2上通过后，删除private feature定义/cfg、旧4-byte/memory32 dynamic heap main path与legacy collector context；三种公开`--gc`同时切换，不按collector拆分。
 - [ ] **Verify GREEN**：全部命令通过；active tree不含private gate、runtime fallback或两套dynamic heap owner。
 - [ ] **Commit**：`refactor: cut over all collectors to managed heap`。
 
