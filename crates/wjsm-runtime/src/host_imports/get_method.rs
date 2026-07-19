@@ -62,6 +62,39 @@ pub(crate) fn get_by_name_id_sync(
     obj: i64,
     name_id: u32,
 ) -> i64 {
+    #[cfg(feature = "managed-heap-v2")]
+    if value::is_array(obj)
+        && caller
+            .data()
+            .heap_access_v2()
+            .resolve_handle(value::decode_handle(obj))
+            .is_ok()
+    {
+        if name_id_matches_utf8(caller, name_id, "length") {
+            return caller
+                .data()
+                .heap_access_v2()
+                .array_shape(value::decode_handle(obj))
+                .map(|(length, _)| value::encode_f64(length as f64))
+                .unwrap_or_else(|_| value::encode_undefined());
+        }
+        let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+            return value::encode_undefined();
+        };
+        let property = caller
+            .data()
+            .heap_access_v2()
+            .get_property_slot_on_proto_chain(value::decode_handle(obj), key)
+            .ok()
+            .flatten();
+        return match property {
+            Some(property) if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 => {
+                invoke_getter_sync(caller, property.getter as i64, obj)
+            }
+            Some(property) => property.value as i64,
+            None => value::encode_undefined(),
+        };
+    }
     if value::is_array(obj) {
         if name_id_matches_utf8(caller, name_id, "length")
             && let Some(ptr) = crate::runtime_values::resolve_array_ptr(caller, obj)

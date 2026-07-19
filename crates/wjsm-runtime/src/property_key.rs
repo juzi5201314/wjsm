@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "managed-heap-v2")]
-use wasmtime::AsContextMut;
 
 use wasmtime::{AsContext, Caller};
 use wjsm_ir::{constants, value};
@@ -136,6 +134,23 @@ pub(crate) fn name_id_matches_runtime_string<C: AsContext<Data = RuntimeState>>(
     }
 }
 
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn canonicalize_v2_name_id_with_env<C: AsContext<Data = RuntimeState>>(
+    ctx: &C,
+    env: &WasmEnv,
+    name_id: u32,
+) -> Option<u32> {
+    match decode_name_id(name_id) {
+        DecodedNameId::MemoryString(index) => {
+            let bytes = crate::runtime_render::read_string_bytes_mem(ctx, &env.memory, index);
+            let key = RuntimeString::from_utf8_lossy(&bytes);
+            let index = intern_runtime_property_key(ctx.as_context().data(), key);
+            Some(encode_runtime_string_name_id(index))
+        }
+        DecodedNameId::RuntimeString(_) | DecodedNameId::Symbol(_) => Some(name_id),
+    }
+}
+
 pub(crate) fn property_key_value_to_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     prop: i64,
@@ -188,38 +203,10 @@ pub(crate) fn symbol_value_to_name_id(symbol_val: i64) -> Option<u32> {
 }
 
 #[cfg(feature = "managed-heap-v2")]
-pub(crate) fn canonicalize_v2_name_id<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
+pub(crate) fn canonicalize_v2_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
     name_id: u32,
 ) -> Option<u32> {
-    match decode_name_id(name_id) {
-        DecodedNameId::MemoryString(_) => {
-            let memory = ctx.as_context().data().static_main_memory_v2();
-            let data = memory.data(&*ctx);
-            let start = usize::try_from(name_id).ok()?;
-            let bytes = data.get(start..)?;
-            let end = bytes
-                .iter()
-                .position(|&byte| byte == 0)
-                .unwrap_or(bytes.len());
-            let index = intern_runtime_property_key(
-                ctx.as_context().data(),
-                RuntimeString::from_utf8_lossy(&bytes[..end]),
-            );
-            Some(encode_runtime_string_name_id(index))
-        }
-        DecodedNameId::RuntimeString(handle) => {
-            let property_name = ctx
-                .as_context()
-                .data()
-                .runtime_strings
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .get(handle as usize)
-                .cloned()?;
-            let index = intern_runtime_property_key(ctx.as_context().data(), property_name);
-            Some(encode_runtime_string_name_id(index))
-        }
-        DecodedNameId::Symbol(_) => Some(name_id),
-    }
+    let env = WasmEnv::from_caller(caller)?;
+    canonicalize_v2_name_id_with_env(caller, &env, name_id)
 }

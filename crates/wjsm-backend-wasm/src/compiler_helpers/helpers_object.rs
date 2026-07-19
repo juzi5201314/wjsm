@@ -228,38 +228,50 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(value::TAG_FUNCTION as i32));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I32WrapI64);
-            func.instruction(&WasmInstruction::GlobalGet(num_ir_functions_global));
-            func.instruction(&WasmInstruction::I32LtU);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I32WrapI64);
-            func.instruction(&WasmInstruction::GlobalGet(function_props_base_global));
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::I32Const(4));
-            func.instruction(&WasmInstruction::I32Mul);
-            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::I32Load(MemArg {
-                offset: 0,
-                align: 2,
-                memory_index: 0,
-            }));
-            // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
-            func.instruction(&WasmInstruction::I32Const(!0x3));
-            func.instruction(&WasmInstruction::I32And);
-            func.instruction(&WasmInstruction::LocalSet(5));
-            func.instruction(&WasmInstruction::Br(2));
-            func.instruction(&WasmInstruction::End);
-            // arr_proto 等宿主函数：委托 host 解析 Function.prototype 与 length/name。
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(
-                self.special_host_import_indices[&SpecialHostImport::FunctionValueGetProperty],
-            ));
-            func.instruction(&WasmInstruction::Return);
-            func.instruction(&WasmInstruction::End);
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                func.instruction(&WasmInstruction::LocalGet(0));
+                func.instruction(&WasmInstruction::LocalGet(1));
+                func.instruction(&WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::FunctionValueGetProperty],
+                ));
+                func.instruction(&WasmInstruction::Return);
+            }
+            #[cfg(not(feature = "managed-heap-v2"))]
+            {
+                func.instruction(&WasmInstruction::LocalGet(0));
+                func.instruction(&WasmInstruction::I32WrapI64);
+                func.instruction(&WasmInstruction::GlobalGet(num_ir_functions_global));
+                func.instruction(&WasmInstruction::I32LtU);
+                func.instruction(&WasmInstruction::If(BlockType::Empty));
+                func.instruction(&WasmInstruction::LocalGet(0));
+                func.instruction(&WasmInstruction::I32WrapI64);
+                func.instruction(&WasmInstruction::GlobalGet(function_props_base_global));
+                func.instruction(&WasmInstruction::I32Add);
+                func.instruction(&WasmInstruction::I32Const(4));
+                func.instruction(&WasmInstruction::I32Mul);
+                func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+                func.instruction(&WasmInstruction::I32Add);
+                func.instruction(&WasmInstruction::I32Load(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
+                func.instruction(&WasmInstruction::I32Const(!0x3));
+                func.instruction(&WasmInstruction::I32And);
+                func.instruction(&WasmInstruction::LocalSet(5));
+                func.instruction(&WasmInstruction::Br(2));
+                func.instruction(&WasmInstruction::End);
+                // arr_proto 等宿主函数：委托 host 解析 Function.prototype 与 length/name。
+                func.instruction(&WasmInstruction::LocalGet(0));
+                func.instruction(&WasmInstruction::LocalGet(1));
+                func.instruction(&WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::FunctionValueGetProperty],
+                ));
+                func.instruction(&WasmInstruction::Return);
+                func.instruction(&WasmInstruction::End);
+            }
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(value::TAG_CLOSURE as i32));
             func.instruction(&WasmInstruction::I32Eq);

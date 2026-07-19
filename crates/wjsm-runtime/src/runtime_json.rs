@@ -737,6 +737,10 @@ async fn apply_reviver_async(
     key: &str,
     val: i64,
 ) -> i64 {
+    #[cfg(feature = "managed-heap-v2")]
+    if value::is_object(val) {
+        return apply_reviver_v2_object(caller, reviver, val, key).await;
+    }
     if value::is_array(val) {
         if let Some(ptr) = resolve_array_ptr(caller, val) {
             let len = match read_array_length(caller, ptr) {
@@ -884,6 +888,67 @@ pub async fn json_parse_to_wasm_async(
             }
         }
         Err(error) => make_exception(caller, "SyntaxError", error),
+    }
+}
+#[cfg(feature = "managed-heap-v2")]
+async fn apply_reviver_v2_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    reviver: i64,
+    object: i64,
+    key: &str,
+) -> i64 {
+    let handle = value::decode_handle(object);
+    let access = caller.data().heap_access_v2().clone();
+    let slots = match access.own_property_slots(handle) {
+        Ok(slots) => slots,
+        Err(_) => return value::encode_undefined(),
+    };
+    for (property_key, _) in slots {
+        let Some(property) = access
+            .get_property_slot(handle, property_key)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let name = match crate::property_key::decode_name_id(property_key) {
+            crate::property_key::DecodedNameId::RuntimeString(index) => {
+                match crate::property_key::runtime_property_key_units(caller.data(), index) {
+                    Some(name) => name.to_utf8_lossy(),
+                    None => continue,
+                }
+            }
+            crate::property_key::DecodedNameId::MemoryString(index) => {
+                let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                String::from_utf8_lossy(&read_string_bytes_mem(caller, &env.memory, index))
+                    .into_owned()
+            }
+            crate::property_key::DecodedNameId::Symbol(_) => continue,
+        };
+        let new_value = Box::pin(apply_reviver_async(
+            caller,
+            reviver,
+            object,
+            &name,
+            property.value as i64,
+        ))
+        .await;
+        if value::is_exception(new_value) {
+            return new_value;
+        }
+        if value::is_undefined(new_value) {
+            let _ = access.delete_property(handle, property_key);
+        } else if let Err(error) =
+            access.define_data_property(handle, property_key, new_value as u64, property.flags)
+        {
+            set_runtime_error(caller.data(), format!("V2 JSON reviver write: {error}"));
+            return value::encode_undefined();
+        }
+    }
+    let key_str = store_runtime_string(caller, key.to_string());
+    match call_wasm_callback_async(caller, reviver, object, &[key_str, object]).await {
+        Ok(result) => result,
+        Err(_) => value::encode_undefined(),
     }
 }
 

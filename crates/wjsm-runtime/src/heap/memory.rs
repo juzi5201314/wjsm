@@ -73,6 +73,26 @@ impl SharedHeapMemory {
         <Self as HeapMemory>::copy_to(self, address, length)
     }
 
+    /// 从 shared memory64 读取 nul-terminated UTF-8 byte 序列的 owned snapshot。
+    pub fn read_c_string(&self, address: HeapAddress) -> Result<Vec<u8>, HeapMemoryError> {
+        const CHUNK_BYTES: u64 = 64 * 1024;
+
+        let mut current = address.get();
+        let end = self.byte_len();
+        let mut bytes = Vec::new();
+        while current < end {
+            let length = (end - current).min(CHUNK_BYTES);
+            let chunk = self.copy_to(HeapAddress::new(current), length)?;
+            if let Some(nul) = chunk.iter().position(|byte| *byte == 0) {
+                bytes.extend_from_slice(&chunk[..nul]);
+                return Ok(bytes);
+            }
+            bytes.extend_from_slice(&chunk);
+            current += length;
+        }
+        Ok(bytes)
+    }
+
     fn checked_index(&self, address: HeapAddress, length: u64) -> Result<usize, HeapMemoryError> {
         let memory_len = u64::try_from(self.memory.data().len()).expect("usize always fits u64");
         let end = address

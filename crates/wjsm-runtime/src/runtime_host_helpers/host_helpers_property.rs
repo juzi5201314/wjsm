@@ -8,6 +8,35 @@ pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeS
     name: &str,
     val: i64,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(obj);
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    ctx.as_context().data(),
+                    RuntimeString::from_utf8_str(name),
+                ),
+            );
+            return access
+                .define_data_property(
+                    handle,
+                    key,
+                    val as u64,
+                    (constants::FLAG_CONFIGURABLE
+                        | constants::FLAG_ENUMERABLE
+                        | constants::FLAG_WRITABLE) as u32,
+                )
+                .map_err(|error| {
+                    set_runtime_error(
+                        ctx.as_context().data(),
+                        format!("V2 host property {name}: {error}"),
+                    );
+                })
+                .ok();
+        }
+    }
     let name_id = find_memory_c_string_with_env(ctx, env, name)
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
     define_host_data_property_by_name_id_with_env(
@@ -30,6 +59,23 @@ pub(crate) fn define_host_data_property_by_name_id_with_env<
     val: i64,
     flags: i32,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(obj);
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::canonicalize_v2_name_id_with_env(ctx, env, name_id)?;
+            return access
+                .define_data_property(handle, key, val as u64, flags as u32)
+                .map_err(|error| {
+                    set_runtime_error(
+                        ctx.as_context().data(),
+                        format!("V2 host property key {name_id}: {error}"),
+                    );
+                })
+                .ok();
+        }
+    }
     let obj_ptr = resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
     let (capacity, num_props) = {
         let data = env.memory.data(&*ctx);
@@ -118,6 +164,28 @@ pub(crate) fn define_host_accessor_property_with_env<C: AsContextMut<Data = Runt
     getter: i64,
     setter: i64,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(obj);
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    ctx.as_context().data(),
+                    RuntimeString::from_utf8_str(name),
+                ),
+            );
+            return access
+                .define_accessor_property(handle, key, getter as u64, setter as u64)
+                .map_err(|error| {
+                    set_runtime_error(
+                        ctx.as_context().data(),
+                        format!("V2 host accessor {name}: {error}"),
+                    );
+                })
+                .ok();
+        }
+    }
     let name_id = find_memory_c_string_with_env(ctx, env, name)
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
     let obj_ptr = resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;

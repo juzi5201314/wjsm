@@ -10,14 +10,15 @@ const PAGE_BYTES: u64 = 64 * 1024;
 
 fn heap_access() -> HeapAccessV2 {
     let engine = EngineConfig::artifact().build().unwrap();
-    let pages = HANDLE_REGION_BYTES / PAGE_BYTES + 2;
+    let min_pages = HANDLE_REGION_BYTES / PAGE_BYTES + 2;
+    let max_pages = min_pages + 4;
     let memory = SharedMemory::new(
         &engine,
         MemoryType::builder()
             .memory64(true)
             .shared(true)
-            .min(pages)
-            .max(Some(pages))
+            .min(min_pages)
+            .max(Some(max_pages))
             .build()
             .unwrap(),
     )
@@ -74,6 +75,22 @@ fn heap_access_v2_resolves_8byte_handle_and_updates_heap_relative_property_slot(
     assert_eq!(access.resolve_handle(handle).unwrap(), object);
     assert_eq!(access.get_property(handle, 17).unwrap(), Some(123));
     assert_eq!(access.get_property(handle, 99).unwrap(), None);
+}
+
+#[test]
+fn heap_access_v2_grows_object_property_capacity_without_losing_slots() {
+    let access = heap_access();
+    access.reserve_nlab(PAGE_BYTES).unwrap();
+    let handle = 43;
+    let object = HANDLE_REGION_BYTES + PAGE_BYTES;
+    access.publish_object(handle, object, u32::MAX, 1).unwrap();
+
+    access.set_property(handle, 17, 123).unwrap();
+    access.set_property(handle, 18, 456).unwrap();
+
+    assert_ne!(access.resolve_handle(handle).unwrap(), object);
+    assert_eq!(access.get_property(handle, 17).unwrap(), Some(123));
+    assert_eq!(access.get_property(handle, 18).unwrap(), Some(456));
 }
 
 #[test]

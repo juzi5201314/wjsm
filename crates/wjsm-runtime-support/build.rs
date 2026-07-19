@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
         wjsm_backend_wasm::GcFlavor::Zgc,
     ] {
         let suffix = flavor.artifact_suffix();
-        let legacy_wasm = wjsm_backend_wasm::emit_support_module(flavor)?;
+        let legacy_wasm = wjsm_backend_wasm::emit_support_module_with_heap_mode(flavor, false)?;
         wasmparser::Validator::new()
             .validate_all(&legacy_wasm)
             .map_err(|error| anyhow::anyhow!("legacy support wasm validation failed: {error:?}"))?;
@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
             out_dir.join(format!("wjsm_support_{suffix}.cwasm")),
             &legacy_cwasm,
         )?;
-        let v2_wasm = wjsm_backend_wasm::emit_support_module_managed_heap_v2(flavor)?;
+        let v2_wasm = wjsm_backend_wasm::emit_support_module_with_heap_mode(flavor, true)?;
         wasmparser::Validator::new()
             .validate_all(&v2_wasm)
             .map_err(|error| anyhow::anyhow!("V2 support wasm validation failed: {error:?}"))?;

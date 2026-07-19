@@ -967,6 +967,13 @@ pub const HEAP_ALLOC_END_GLOBAL_NAME: &str = "__heap_alloc_end";
 pub const HEAP_OBJECT_START_GLOBAL_NAME: &str = "__heap_object_start";
 /// V2 动态对象区上限（i64 byte address）。
 pub const HEAP_LIMIT_GLOBAL_NAME: &str = "__heap_limit_v2";
+/// V2 dynamic heap shared mutable global import 顺序。
+pub const V2_HEAP_GLOBAL_IMPORTS: [&str; 4] = [
+    HEAP_ALLOC_PTR_GLOBAL_NAME,
+    HEAP_ALLOC_END_GLOBAL_NAME,
+    HEAP_OBJECT_START_GLOBAL_NAME,
+    HEAP_LIMIT_GLOBAL_NAME,
+];
 
 // ── Well-Known Symbol 索引 ─────────────────────────────────────────────
 /// Well-known symbol 索引常量，semantic 和 runtime 共享。

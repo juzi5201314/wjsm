@@ -92,6 +92,7 @@ pub(crate) fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Resu
     Ok(module)
 }
 
+#[cfg_attr(feature = "managed-heap-v2", allow(dead_code))]
 pub(crate) fn startup_engine_config(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
@@ -270,6 +271,35 @@ fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &Wa
     let values = create_native_callable(store.data(), NativeCallable::ArrayProtoValues);
     let keys = create_native_callable(store.data(), NativeCallable::ArrayProtoKeys);
     let entries = create_native_callable(store.data(), NativeCallable::ArrayProtoEntries);
+
+    #[cfg(feature = "managed-heap-v2")]
+    if store
+        .data()
+        .heap_access_v2()
+        .resolve_handle(array_proto_handle as u32)
+        .is_ok()
+    {
+        let access = store.data().heap_access_v2().clone();
+        for (name, callable) in [("values", values), ("keys", keys), ("entries", entries)] {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    store.data(),
+                    crate::runtime_string::RuntimeString::from_utf8_str(name),
+                ),
+            );
+            access
+                .set_property(array_proto_handle as u32, key, callable as u64)
+                .expect("install V2 Array.prototype iterator method");
+        }
+        access
+            .set_property(
+                array_proto_handle as u32,
+                crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
+                values as u64,
+            )
+            .expect("install V2 Array.prototype iterator symbol");
+        return;
+    }
     let method_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;
     for (name, callable) in [("values", values), ("keys", keys), ("entries", entries)] {
         if let Some(name_id) = find_memory_c_string_with_env(store, wasm_env, name)
@@ -358,13 +388,22 @@ pub(super) fn initialize_host_post_bootstrap(
     ensure_startup_object(store, generator_proto, "GeneratorPrototype")?;
     let generator_handle = value::decode_object_handle(generator_proto);
     let iterator_handle = value::decode_object_handle(iterator_proto);
-    let Some(generator_ptr) =
-        resolve_handle_idx_with_env(store, wasm_env, generator_handle as usize)
-    else {
-        anyhow::bail!("startup allocation failed for GeneratorPrototype");
-    };
-    let data = wasm_env.memory.data_mut(&mut *store);
-    data[generator_ptr..generator_ptr + 4].copy_from_slice(&iterator_handle.to_le_bytes());
+    #[cfg(feature = "managed-heap-v2")]
+    store
+        .data()
+        .heap_access_v2()
+        .set_prototype(generator_handle, iterator_handle)
+        .map_err(|error| anyhow::anyhow!("V2 GeneratorPrototype prototype: {error}"))?;
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let Some(generator_ptr) =
+            resolve_handle_idx_with_env(store, wasm_env, generator_handle as usize)
+        else {
+            anyhow::bail!("startup allocation failed for GeneratorPrototype");
+        };
+        let data = wasm_env.memory.data_mut(&mut *store);
+        data[generator_ptr..generator_ptr + 4].copy_from_slice(&iterator_handle.to_le_bytes());
+    }
     let generator_tag = store_runtime_string_in_state(store.data(), "Generator".to_string());
     let _ = define_host_data_property_with_env(
         store,
@@ -404,13 +443,23 @@ pub(super) fn initialize_host_post_bootstrap(
     ensure_startup_object(store, async_gen_proto, "AsyncGeneratorPrototype")?;
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let Some(async_gen_ptr) =
-        resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize)
-    else {
-        anyhow::bail!("startup allocation failed for AsyncGeneratorPrototype");
-    };
-    let data = wasm_env.memory.data_mut(&mut *store);
-    data[async_gen_ptr..async_gen_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
+    #[cfg(feature = "managed-heap-v2")]
+    store
+        .data()
+        .heap_access_v2()
+        .set_prototype(async_gen_handle, async_iterator_handle)
+        .map_err(|error| anyhow::anyhow!("V2 AsyncGeneratorPrototype prototype: {error}"))?;
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let Some(async_gen_ptr) =
+            resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize)
+        else {
+            anyhow::bail!("startup allocation failed for AsyncGeneratorPrototype");
+        };
+        let data = wasm_env.memory.data_mut(&mut *store);
+        data[async_gen_ptr..async_gen_ptr + 4]
+            .copy_from_slice(&async_iterator_handle.to_le_bytes());
+    }
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
     let _ = define_host_data_property_with_env(
         store,
@@ -674,9 +723,9 @@ pub(super) async fn setup_shared_env_and_support(
             heap_memory.clone(),
         )?;
         let access = Arc::new(crate::runtime_gc::HeapAccessV2::new(
-            crate::heap::SharedHeapMemory::new(heap_memory),
+            crate::heap::SharedHeapMemory::new(heap_memory.clone()),
         ));
-        store.data_mut().install_heap_access_v2(access, memory);
+        store.data_mut().install_heap_access_v2(access, heap_memory);
     }
 
     // 独立影子栈 memory：冷启动 1 页，软上限来自 RuntimeOptions。
@@ -753,21 +802,32 @@ pub(super) async fn setup_shared_env_and_support(
                 .max_heap_size
                 .map(|bytes| bytes as u64)
                 .unwrap_or(DEFAULT_V2_HEAP_BYTES);
+        let mut globals = Vec::with_capacity(wjsm_ir::V2_HEAP_GLOBAL_IMPORTS.len());
         for (name, value) in [
             (wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, object_start),
             (wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, object_start),
             (wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME, object_start),
             (wjsm_ir::HEAP_LIMIT_GLOBAL_NAME, heap_limit),
         ] {
-            define_env_global(
+            globals.push(define_env_global(
                 linker,
                 store,
                 name,
                 ValType::I64,
                 true,
                 Val::I64(value as i64),
-            );
+            ));
         }
+        let [alloc_ptr, alloc_end, object_start, heap_limit] =
+            globals.try_into().expect("V2 heap global count is fixed");
+        store
+            .data_mut()
+            .install_heap_globals_v2(crate::StaticHeapGlobalsV2 {
+                alloc_ptr,
+                alloc_end,
+                object_start,
+                heap_limit,
+            });
     }
 
     let gc_kind = {
@@ -847,7 +907,7 @@ pub(super) fn define_env_global(
     val_type: ValType,
     mutable: bool,
     init: Val,
-) {
+) -> Global {
     let gty = GlobalType::new(
         val_type,
         if mutable {
@@ -856,10 +916,11 @@ pub(super) fn define_env_global(
             Mutability::Const
         },
     );
-    let g = Global::new(&mut *store, gty, init).expect("create env global");
+    let global = Global::new(&mut *store, gty, init).expect("create env global");
     linker
-        .define(&*store, "env", name, g)
+        .define(&*store, "env", name, global.clone())
         .expect("define env global");
+    global
 }
 
 /// 仅执行 bootstrap 逻辑（host post-bootstrap + __wjsm_bootstrap_once），不触发 snapshot capture。

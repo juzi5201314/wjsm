@@ -3,11 +3,16 @@
 //! 禁止整段 immortal memcpy / 二次 snapshot restore；只对可达闭包中的对象逐个
 //! 分配 dynamic 槽并复制后做 ObjectHandleMapPolicy 重映射。
 
+#[cfg(not(feature = "managed-heap-v2"))]
 use std::collections::{HashSet, VecDeque};
+#[cfg(not(feature = "managed-heap-v2"))]
 use std::sync::atomic::Ordering;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
+#[cfg(not(feature = "managed-heap-v2"))]
+use anyhow::{Context, bail};
 use wasmtime::AsContextMut;
+#[cfg(not(feature = "managed-heap-v2"))]
 use wjsm_ir::constants::{
     FLAG_IS_ACCESSOR, HANDLE_TABLE_ENTRY_SIZE, HEAP_ARRAY_CAPACITY_OFFSET, HEAP_ARRAY_ELEMENT_SIZE,
     HEAP_OBJECT_CAPACITY_OFFSET, HEAP_OBJECT_HEADER_SIZE, HEAP_OBJECT_PROPERTY_SLOT_SIZE,
@@ -15,23 +20,31 @@ use wjsm_ir::constants::{
     PROP_SLOT_GETTER_OFFSET, PROP_SLOT_SETTER_OFFSET, PROP_SLOT_SIZE, PROP_SLOT_VALUE_OFFSET,
 };
 use wjsm_ir::value;
+#[cfg(not(feature = "managed-heap-v2"))]
 use wjsm_ir::{HEAP_TYPE_ARRAY, HEAP_TYPE_OBJECT};
 
+#[cfg(not(feature = "managed-heap-v2"))]
+use crate::RuntimeOptions;
+use crate::RuntimeState;
+#[cfg(not(feature = "managed-heap-v2"))]
+use crate::compile_source;
+#[cfg(not(feature = "managed-heap-v2"))]
 use crate::handle_remap::{HandleMap, ObjectHandleMapPolicy, RemapPolicy, remap_object_at};
-use crate::realm::{
-    Realm, RealmId, RealmIntrinsics, TYPEDARRAY_PROTO_COUNT, main_realm_intrinsics_from_state,
-    max_realms_limit,
-};
+use crate::realm::{Realm, RealmIntrinsics, main_realm_intrinsics_from_state};
+#[cfg(not(feature = "managed-heap-v2"))]
+use crate::realm::{RealmId, TYPEDARRAY_PROTO_COUNT, max_realms_limit};
+#[cfg(not(feature = "managed-heap-v2"))]
 use crate::runtime_gc::object_walker::resolve_handle;
+#[cfg(not(feature = "managed-heap-v2"))]
 use crate::runtime_heap::{
     alloc_heap_region_for_host, alloc_host_object, host_handle_slot_fits, set_object_proto_header,
 };
+#[cfg(not(feature = "managed-heap-v2"))]
 use crate::runtime_startup::{
     compile_or_load_cached, instantiate_execute_bundle, run_startup_cold_path,
     startup_engine_config,
 };
 use crate::wasm_env::WasmEnv;
-use crate::{RuntimeOptions, RuntimeState, compile_source};
 
 /// 从主 realm 的 WASM global + RuntimeState 字段装配 intrinsics。
 pub(crate) fn main_realm_intrinsics_from_env<C: AsContextMut<Data = RuntimeState>>(
@@ -76,6 +89,7 @@ pub(crate) fn main_realm_intrinsics_from_env<C: AsContextMut<Data = RuntimeState
 }
 
 /// 惰性登记主 realm 为 `active_realms[0]`。
+#[cfg(not(feature = "managed-heap-v2"))]
 pub(crate) fn main_realm_lazy_register<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -106,6 +120,7 @@ pub(crate) fn main_realm_lazy_register<C: AsContextMut<Data = RuntimeState>>(
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 /// 从 intrinsic 根 BFS 收集 obj_table handle 闭包（仅 object/array 堆对象）。
 pub(crate) fn primordial_reachable_closure<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
@@ -137,6 +152,7 @@ pub(crate) fn primordial_reachable_closure<C: AsContextMut<Data = RuntimeState>>
     Ok(seen.into_iter().collect())
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn push_obj_handle(
     raw: i64,
     obj_table_count: usize,
@@ -155,6 +171,7 @@ fn push_obj_handle(
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn collect_object_child_handles(
     data: &[u8],
     h: u32,
@@ -232,6 +249,7 @@ fn collect_object_child_handles(
     out
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn read_i64(data: &[u8], off: usize) -> i64 {
     if off + 8 > data.len() {
         return value::encode_undefined();
@@ -239,6 +257,7 @@ fn read_i64(data: &[u8], off: usize) -> i64 {
     i64::from_le_bytes(data[off..off + 8].try_into().unwrap_or([0; 8]))
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn push_raw_handle(raw: i64, obj_table_count: usize, out: &mut Vec<u32>) {
     if value::is_object(raw) || value::is_array(raw) {
         let h = value::decode_object_handle(raw);
@@ -248,6 +267,16 @@ fn push_raw_handle(raw: i64, obj_table_count: usize, out: &mut Vec<u32>) {
     }
 }
 
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn clone_pristine_realm<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    sandbox_global: i64,
+) -> Result<Realm> {
+    crate::realm_clone_v2::clone_pristine_realm_v2(ctx, env, sandbox_global)
+}
+
+#[cfg(not(feature = "managed-heap-v2"))]
 /// 克隆 pristine 图到新 handle，返回已登记的 Realm。
 pub(crate) fn clone_pristine_realm<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
@@ -315,6 +344,7 @@ pub(crate) fn clone_pristine_realm<C: AsContextMut<Data = RuntimeState>>(
     Ok(realm)
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn remap_intrinsics(roots: &RealmIntrinsics, map: &HandleMap) -> RealmIntrinsics {
     let map_val = |raw: i64| -> i64 {
         if value::is_object(raw) {
@@ -362,6 +392,7 @@ fn remap_intrinsics(roots: &RealmIntrinsics, map: &HandleMap) -> RealmIntrinsics
     }
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn duplicate_heap_object<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -417,6 +448,7 @@ fn duplicate_heap_object<C: AsContextMut<Data = RuntimeState>>(
     Ok(new_count)
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 fn remap_cloned_objects<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -501,6 +533,7 @@ pub struct ExecutionRealmFrameProbe {
     pub after_execution_realm: u32,
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 /// Bootstrap + clone 后验证 `with_execution_realm_frame` 的 global swap。
 pub async fn probe_execution_realm_frame() -> Result<ExecutionRealmFrameProbe> {
     use crate::realm::{RealmId, with_execution_realm_frame};
@@ -565,6 +598,7 @@ pub struct EvalRealmArrayProbe {
     pub main_array_proto: u32,
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 /// Task 2.1/2.2：执行帧内数组分配 [[Prototype]] === realm.array_proto。
 pub async fn probe_eval_array_literal_in_realm() -> Result<EvalRealmArrayProbe> {
     use crate::realm::with_execution_realm_frame;
@@ -615,6 +649,7 @@ pub async fn probe_eval_array_literal_in_realm() -> Result<EvalRealmArrayProbe> 
 }
 
 /// Bootstrap 空模块、克隆 pristine realm，返回 handle 对照（集成测试入口）。
+#[cfg(not(feature = "managed-heap-v2"))]
 pub async fn probe_clone_pristine_realm() -> Result<RealmCloneProbe> {
     let wasm = compile_source("/* realm clone probe */")?;
     let engine = startup_engine_config(true, None, false)

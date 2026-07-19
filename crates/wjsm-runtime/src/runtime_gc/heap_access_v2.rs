@@ -95,6 +95,20 @@ impl HeapAccessV2 {
             .map_err(HeapAccessV2Error::Memory)
     }
 
+    pub fn set_prototype(&self, handle: u32, prototype: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let header = self
+            .memory
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.memory
+            .store_word(
+                HeapAddress::new(object),
+                (header & !u64::from(u32::MAX)) | u64::from(prototype),
+            )
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
     pub fn publish_array(
         &self,
         handle: u32,
@@ -182,6 +196,29 @@ impl HeapAccessV2 {
                 object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
             ))
             .map(|shape| shape as u32)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    pub fn set_array_length(&self, handle: u32, length: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let shape_address = object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64;
+        let shape = self
+            .memory
+            .load_word(HeapAddress::new(shape_address))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let capacity = (shape >> 32) as u32;
+        if length > capacity {
+            return Err(HeapAccessV2Error::ElementCapacityExceeded {
+                handle,
+                index: length.saturating_sub(1),
+                capacity,
+            });
+        }
+        self.memory
+            .store_word(
+                HeapAddress::new(shape_address),
+                u64::from(length) | (u64::from(capacity) << 32),
+            )
             .map_err(HeapAccessV2Error::Memory)
     }
 
@@ -298,6 +335,23 @@ impl HeapAccessV2 {
             return Err(HeapAccessV2Error::UnresolvedHandle { handle });
         }
         Ok(entry >> 16)
+    }
+
+    pub fn object_type(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        Ok((self
+            .memory
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?
+            >> 32) as u32)
+    }
+
+    pub fn prototype(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        Ok(self
+            .memory
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)? as u32)
     }
 
     pub fn get_property(&self, handle: u32, key: u32) -> Result<Option<u64>, HeapAccessV2Error> {
@@ -462,7 +516,8 @@ impl HeapAccessV2 {
             }
         }
         if count == capacity {
-            return Err(HeapAccessV2Error::PropertyCapacityExceeded { handle, capacity });
+            self.grow_object_property_capacity(handle, object, capacity, count)?;
+            return self.define_property_slot(handle, key, flags, property_value, getter, setter);
         }
         let slot = property_slot_address(object, count)?;
         self.write_property_slot(slot, key, flags, property_value, getter, setter)?;
@@ -482,6 +537,49 @@ impl HeapAccessV2 {
             ))
             .map_err(HeapAccessV2Error::Memory)?;
         Ok((shape as u32, (shape >> 32) as u32))
+    }
+
+    fn grow_object_property_capacity(
+        &self,
+        handle: u32,
+        object: u64,
+        capacity: u32,
+        count: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let minimum = count
+            .checked_add(1)
+            .ok_or(HeapAccessV2Error::AddressOverflow)?;
+        let new_capacity = capacity.saturating_mul(2).max(4).max(minimum);
+        if new_capacity == capacity {
+            return Err(HeapAccessV2Error::AddressOverflow);
+        }
+        let old_bytes = object_property_bytes(capacity)?;
+        let new_bytes = object_property_bytes(new_capacity)?;
+        let (destination, _) = self.reserve_nlab(new_bytes)?;
+        let contents = self
+            .memory
+            .copy_to(HeapAddress::new(object), old_bytes)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.memory
+            .copy_from(HeapAddress::new(destination), &contents)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.memory
+            .store_word(
+                HeapAddress::new(destination + constants::HEAP_OBJECT_CAPACITY_OFFSET as u64),
+                u64::from(new_capacity) | (u64::from(count) << 32),
+            )
+            .map_err(HeapAccessV2Error::Memory)?;
+        let entry_address = u64::from(handle) * 8;
+        let entry = self
+            .memory
+            .load_word(HeapAddress::new(entry_address))
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.memory
+            .store_word(
+                HeapAddress::new(entry_address),
+                (destination << 16) | (entry & 0xFFFF),
+            )
+            .map_err(HeapAccessV2Error::Memory)
     }
 
     fn read_property_slot(&self, slot: u64) -> Result<HeapAccessV2Property, HeapAccessV2Error> {
@@ -556,6 +654,13 @@ fn property_slot_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Err
     object
         .checked_add(constants::HEAP_OBJECT_HEADER_SIZE as u64)
         .and_then(|base| base.checked_add(u64::from(index) * constants::PROP_SLOT_SIZE as u64))
+        .ok_or(HeapAccessV2Error::AddressOverflow)
+}
+
+fn object_property_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
+    u64::from(capacity)
+        .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
+        .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
         .ok_or(HeapAccessV2Error::AddressOverflow)
 }
 

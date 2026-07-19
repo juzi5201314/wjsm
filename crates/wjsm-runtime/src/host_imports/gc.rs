@@ -38,48 +38,57 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             Ok(start as i64)
         },
     )?;
-    linker.func_wrap(
+    linker.func_wrap_async(
         "env",
         "gc_obj_get_v2",
-        |mut caller: Caller<'_, RuntimeState>, object: i64, key: i32| -> wasmtime::Result<i64> {
-            let handle = value::decode_handle(object);
-            let raw_key = key as u32;
-            if value::is_proxy(object) {
-                return Ok(crate::host_imports::get_method::get_by_name_id_sync(
-                    &mut caller,
-                    object,
-                    raw_key,
-                ));
-            }
-            if caller
-                .data()
-                .heap_access_v2()
-                .resolve_handle(handle)
-                .is_err()
-            {
-                // Task 15 前 startup primordial 仍由 legacy memory32 heap 持有。
-                return Ok(crate::host_imports::get_method::get_by_name_id_sync(
-                    &mut caller,
-                    object,
-                    raw_key,
-                ));
-            }
-            let key = property_key(&mut caller, key)?;
-            if value::is_array(object) {
-                let length_key = crate::property_key::encode_runtime_string_name_id(
-                    crate::property_key::intern_runtime_property_key(
-                        caller.data(),
-                        crate::runtime_string::RuntimeString::from_utf8_str("length"),
-                    ),
-                );
-                if key == length_key {
-                    let length = caller.data().heap_access_v2().array_length(handle)?;
-                    return Ok(value::encode_f64(length as f64));
+        |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
+            Box::new(async move {
+                let handle = value::decode_handle(object);
+                if value::is_function(object)
+                    || value::is_closure(object)
+                    || value::is_bound(object)
+                {
+                    return Ok(crate::runtime_linker::function_value_get_property_impl(
+                        &mut caller,
+                        object,
+                        key,
+                    ));
                 }
-            }
-            let access = caller.data().heap_access_v2().clone();
-            let property = access.get_property_slot_on_proto_chain(handle, key)?;
-            read_v2_property(&mut caller, object, property)
+                if value::is_proxy(object) {
+                    return Ok(
+                        crate::host_imports::reentrant_async::proxy_trap_internal_get_async(
+                            &mut caller,
+                            object,
+                            key,
+                        )
+                        .await,
+                    );
+                }
+                if caller
+                    .data()
+                    .heap_access_v2()
+                    .resolve_handle(handle)
+                    .is_err()
+                {
+                    return Ok(value::encode_undefined());
+                }
+                let key = property_key(&mut caller, key)?;
+                if value::is_array(object) {
+                    let length_key = crate::property_key::encode_runtime_string_name_id(
+                        crate::property_key::intern_runtime_property_key(
+                            caller.data(),
+                            crate::runtime_string::RuntimeString::from_utf8_str("length"),
+                        ),
+                    );
+                    if key == length_key {
+                        let length = caller.data().heap_access_v2().array_length(handle)?;
+                        return Ok(value::encode_f64(length as f64));
+                    }
+                }
+                let access = caller.data().heap_access_v2().clone();
+                let property = access.get_property_slot_on_proto_chain(handle, key)?;
+                read_v2_property_async(&mut caller, object, property).await
+            })
         },
     )?;
     linker.func_wrap(
@@ -164,7 +173,7 @@ fn property_key(caller: &mut Caller<'_, RuntimeState>, key: i32) -> wasmtime::Re
 }
 
 #[cfg(feature = "managed-heap-v2")]
-fn read_v2_property(
+async fn read_v2_property_async(
     caller: &mut Caller<'_, RuntimeState>,
     receiver: i64,
     property: Option<crate::runtime_gc::HeapAccessV2Property>,
@@ -178,15 +187,13 @@ fn read_v2_property(
     if value::is_undefined(property.getter as i64) {
         return Ok(value::encode_undefined());
     }
-    let runtime = tokio::runtime::Handle::current();
-    tokio::task::block_in_place(|| {
-        runtime.block_on(crate::runtime_host_helpers::call_wasm_callback_async(
-            caller,
-            property.getter as i64,
-            receiver,
-            &[],
-        ))
-    })
+    crate::runtime_host_helpers::call_wasm_callback_async(
+        caller,
+        property.getter as i64,
+        receiver,
+        &[],
+    )
+    .await
     .map_err(host_error)
 }
 

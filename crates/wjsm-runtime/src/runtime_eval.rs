@@ -123,13 +123,39 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
                 imports.push(func.into());
             }
             ExternType::Memory(_) => {
-                let memory = caller
-                    .get_export(import.name())
-                    .and_then(Extern::into_memory)
-                    .ok_or_else(|| anyhow::anyhow!("eval parent missing memory import"))?;
-                imports.push(memory.into());
+                #[cfg(feature = "managed-heap-v2")]
+                if import.name() == wjsm_ir::HEAP_MEMORY_NAME {
+                    imports.push(caller.data().static_main_memory_v2().into());
+                } else {
+                    let memory = caller
+                        .get_export(import.name())
+                        .and_then(Extern::into_memory)
+                        .ok_or_else(|| anyhow::anyhow!("eval parent missing memory import"))?;
+                    imports.push(memory.into());
+                }
+                #[cfg(not(feature = "managed-heap-v2"))]
+                {
+                    let memory = caller
+                        .get_export(import.name())
+                        .and_then(Extern::into_memory)
+                        .ok_or_else(|| anyhow::anyhow!("eval parent missing memory import"))?;
+                    imports.push(memory.into());
+                }
             }
             ExternType::Global(_) => {
+                #[cfg(feature = "managed-heap-v2")]
+                let global = caller
+                    .data()
+                    .static_heap_global_v2(import.name())
+                    .or_else(|| {
+                        caller
+                            .get_export(import.name())
+                            .and_then(Extern::into_global)
+                    })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("eval parent missing global import `{}`", import.name())
+                    })?;
+                #[cfg(not(feature = "managed-heap-v2"))]
                 let global = caller
                     .get_export(import.name())
                     .and_then(Extern::into_global)

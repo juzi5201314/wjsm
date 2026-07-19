@@ -341,8 +341,59 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
-    alloc_host_object_impl(ctx, env, capacity, proto)
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(-1);
+        if handle < 0
+            || env
+                .obj_table_count
+                .set(&mut *ctx, Val::I32(handle.saturating_add(1)))
+                .is_err()
+        {
+            set_runtime_error(
+                ctx.as_context().data(),
+                "V2 host allocation exhausted handles".to_string(),
+            );
+            return value::encode_undefined();
+        }
+        let prototype = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+        let Some(bytes) = u64::from(capacity)
+            .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
+            .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
+        else {
+            set_runtime_error(
+                ctx.as_context().data(),
+                "RangeError: V2 host object size overflow".to_string(),
+            );
+            return value::encode_undefined();
+        };
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        let (object, _) = match allocate_v2_object_bytes_with_context(ctx, bytes) {
+            Ok(window) => window,
+            Err(error) => {
+                set_runtime_error(
+                    ctx.as_context().data(),
+                    format!("V2 host object allocation: {error}"),
+                );
+                return value::encode_undefined();
+            }
+        };
+        if let Err(error) = access.publish_object(handle as u32, object, prototype as u32, capacity)
+        {
+            set_runtime_error(
+                ctx.as_context().data(),
+                format!("V2 host object publication: {error}"),
+            );
+            return value::encode_undefined();
+        }
+        return value::encode_object_handle(handle as u32);
+    }
+
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
+        alloc_host_object_impl(ctx, env, capacity, proto)
+    }
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -405,24 +456,26 @@ fn v2_i32_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<i3
 }
 
 #[cfg(feature = "managed-heap-v2")]
-fn v2_i64_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<i64> {
-    caller
-        .get_export(name)
-        .and_then(Extern::into_global)
-        .and_then(|global| global.get(&mut *caller).i64())
+fn v2_i64_global<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, name: &str) -> Option<i64> {
+    let global = ctx.as_context().data().static_heap_global_v2(name)?;
+    global.get(&mut *ctx).i64()
 }
 
 #[cfg(feature = "managed-heap-v2")]
-fn set_v2_i64_global(caller: &mut Caller<'_, RuntimeState>, name: &str, value: u64) -> bool {
-    caller
-        .get_export(name)
-        .and_then(Extern::into_global)
-        .is_some_and(|global| global.set(&mut *caller, Val::I64(value as i64)).is_ok())
+fn set_v2_i64_global<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    name: &str,
+    value: u64,
+) -> bool {
+    let Some(global) = ctx.as_context().data().static_heap_global_v2(name) else {
+        return false;
+    };
+    global.set(&mut *ctx, Val::I64(value as i64)).is_ok()
 }
 
 #[cfg(feature = "managed-heap-v2")]
-pub(crate) fn allocate_v2_object_bytes(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn allocate_v2_object_bytes_with_context<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
     bytes: u64,
 ) -> wasmtime::Result<(u64, u64)> {
     let bytes = bytes
@@ -430,17 +483,17 @@ pub(crate) fn allocate_v2_object_bytes(
         .map(|size| size & !7)
         .ok_or_else(|| wasmtime::Error::msg("V2 object size overflow"))?;
     let object_base = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
-    let cursor = v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME)
+    let cursor = v2_i64_global(ctx, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME)
         .map(|value| value as u64)
         .unwrap_or(0);
-    let end = v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME)
+    let end = v2_i64_global(ctx, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME)
         .map(|value| value as u64)
         .unwrap_or(0);
     if cursor >= object_base
         && let Some(next) = cursor.checked_add(bytes)
         && next <= end
     {
-        if !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, next) {
+        if !set_v2_i64_global(ctx, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, next) {
             return Err(wasmtime::Error::msg(
                 "V2 allocation cannot update heap cursor",
             ));
@@ -448,7 +501,7 @@ pub(crate) fn allocate_v2_object_bytes(
         return Ok((cursor, end));
     }
 
-    let access = caller.data().heap_access_v2().clone();
+    let access = ctx.as_context().data().heap_access_v2().clone();
     let (start, end) = match access.reserve_nlab(bytes) {
         Ok(window) => window,
         Err(error) => {
@@ -456,21 +509,29 @@ pub(crate) fn allocate_v2_object_bytes(
                 error,
                 crate::runtime_gc::HeapAccessV2Error::HeapExhausted { .. }
             ) {
-                caller
+                ctx.as_context()
                     .data()
                     .set_heap_oom_error(access.used_bytes() as usize, bytes as usize);
             }
             return Err(wasmtime::Error::msg(error.to_string()));
         }
     };
-    if !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, start + bytes)
-        || !set_v2_i64_global(caller, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, end)
+    if !set_v2_i64_global(ctx, wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME, start + bytes)
+        || !set_v2_i64_global(ctx, wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME, end)
     {
         return Err(wasmtime::Error::msg(
             "V2 allocation globals are unavailable",
         ));
     }
     Ok((start, end))
+}
+
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn allocate_v2_object_bytes(
+    caller: &mut Caller<'_, RuntimeState>,
+    bytes: u64,
+) -> wasmtime::Result<(u64, u64)> {
+    allocate_v2_object_bytes_with_context(caller, bytes)
 }
 
 #[cfg(feature = "managed-heap-v2")]

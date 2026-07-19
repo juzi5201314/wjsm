@@ -6,12 +6,14 @@ edition.workspace = true
 [features]
 default = ["embedded"]
 embedded = []
-managed-heap-v2 = ["wjsm-runtime/managed-heap-v2"]
+managed-heap-v2 = []
 
 [dependencies]
 
 [build-dependencies]
 wjsm-runtime = { path = "../wjsm-runtime" }
+wjsm-engine-config = { path = "../wjsm-engine-config" }
+wjsm-runtime-support = { path = "../wjsm-runtime-support" }
 wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }
 anyhow = { workspace = true }
 

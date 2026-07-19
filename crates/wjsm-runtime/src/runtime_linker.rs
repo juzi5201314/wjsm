@@ -3,7 +3,7 @@ use super::*;
 /// TAG_FUNCTION 在无 function_props 对象时的属性解析。
 /// 覆盖 Array.prototype 宿主方法（arr_proto_* table entries）的
 /// `call`/`apply`/`bind`/`length`/`name`。
-fn function_value_get_property_impl(
+pub(crate) fn function_value_get_property_impl(
     caller: &mut Caller<'_, RuntimeState>,
     func_val: i64,
     name_id: i32,

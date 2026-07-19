@@ -1,11 +1,11 @@
 //! Build-time embedded startup snapshot bytes.
-#[cfg(feature = "embedded")]
+#[cfg(all(feature = "embedded", not(feature = "managed-heap-v2")))]
 pub static EMBEDDED_STARTUP_SNAPSHOT: Option<&[u8]> = Some(include_bytes!(concat!(
     env!("OUT_DIR"),
     "/wjsm_startup_snapshot.bin"
 )));
 
-#[cfg(not(feature = "embedded"))]
+#[cfg(any(not(feature = "embedded"), feature = "managed-heap-v2"))]
 pub static EMBEDDED_STARTUP_SNAPSHOT: Option<&[u8]> = None;
 
 #[cfg(all(feature = "embedded", feature = "managed-heap-v2"))]

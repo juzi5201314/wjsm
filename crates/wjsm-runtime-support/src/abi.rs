@@ -16,10 +16,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use wjsm_ir::{
-    HEAP_ALLOC_END_GLOBAL_NAME, HEAP_ALLOC_PTR_GLOBAL_NAME, HEAP_LIMIT_GLOBAL_NAME,
-    HEAP_MEMORY_MAX_PAGES, HEAP_MEMORY_MIN_PAGES, HEAP_MEMORY_NAME, HEAP_OBJECT_START_GLOBAL_NAME,
-};
+use wjsm_ir::{HEAP_MEMORY_MAX_PAGES, HEAP_MEMORY_MIN_PAGES, HEAP_MEMORY_NAME};
 pub const SUPPORT_MODULE_NAME: &str = "wjsm_support";
 pub const ENV_MODULE_NAME: &str = "env";
 pub const TABLE_IMPORT_NAME: &str = "__table";
@@ -54,12 +51,7 @@ pub enum SupportHeapAbi {
     ManagedHeapV2Memory64,
 }
 
-pub const MANAGED_HEAP_V2_GLOBAL_IMPORTS: &[&str] = &[
-    HEAP_ALLOC_PTR_GLOBAL_NAME,
-    HEAP_ALLOC_END_GLOBAL_NAME,
-    HEAP_OBJECT_START_GLOBAL_NAME,
-    HEAP_LIMIT_GLOBAL_NAME,
-];
+pub const MANAGED_HEAP_V2_GLOBAL_IMPORTS: &[&str] = &wjsm_ir::V2_HEAP_GLOBAL_IMPORTS;
 
 /// Imported env global 的值类型。
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]

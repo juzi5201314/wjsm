@@ -190,28 +190,57 @@ pub(crate) fn resolve_handle_idx_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     handle_idx: usize,
 ) -> Option<usize> {
+    #[cfg(feature = "managed-heap-v2")]
+    if ctx
+        .as_context()
+        .data()
+        .heap_access_v2()
+        .resolve_handle(u32::try_from(handle_idx).ok()?)
+        .is_ok()
+    {
+        return Some(handle_idx);
+    }
     let handle = u32::try_from(handle_idx).ok()?;
     Some(crate::runtime_gc::heap_access::resolve(ctx, env, handle)?.ptr)
 }
 
 // ── Array helpers ──────────────────────────────────────────────────────
 
-/// 解析 TAG_ARRAY 值 → 数组对象的内存指针
 pub(crate) fn resolve_array_ptr_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     val: i64,
 ) -> Option<usize> {
+    #[cfg(feature = "managed-heap-v2")]
+    if value::is_array(val)
+        && ctx
+            .as_context()
+            .data()
+            .heap_access_v2()
+            .resolve_handle(value::decode_handle(val))
+            .is_ok()
+    {
+        return Some(value::decode_handle(val) as usize);
+    }
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
     resolve_handle_idx_with_env(ctx, env, handle_idx)
 }
 
-/// 读取数组的 length 字段（offset 8）
-pub(crate) fn read_array_length_with_env<C: AsContext>(
+/// 读取数组的 length 字段。
+pub(crate) fn read_array_length_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
     env: &WasmEnv,
     ptr: usize,
 ) -> Option<u32> {
+    #[cfg(feature = "managed-heap-v2")]
+    if let Ok(length) = ctx
+        .as_context()
+        .data()
+        .heap_access_v2()
+        .array_length(ptr as u32)
+    {
+        return Some(length);
+    }
     let d = env.memory.data(ctx);
     if ptr + 16 > d.len() {
         return None;
@@ -230,6 +259,16 @@ pub(crate) fn write_array_length_with_env<C: AsContextMut<Data = RuntimeState>>(
     ptr: usize,
     len: u32,
 ) {
+    #[cfg(feature = "managed-heap-v2")]
+    if ctx
+        .as_context()
+        .data()
+        .heap_access_v2()
+        .set_array_length(ptr as u32, len)
+        .is_ok()
+    {
+        return;
+    }
     let d = env.memory.data_mut(&mut *ctx);
     if ptr + 16 > d.len() {
         return;
@@ -258,12 +297,21 @@ pub(crate) fn read_array_capacity(
 }
 
 /// 读取数组原始槽位值（hole sentinel 保持原样）
-pub(crate) fn read_array_elem_raw_with_env<C: AsContext>(
+pub(crate) fn read_array_elem_raw_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
     env: &WasmEnv,
     ptr: usize,
     index: u32,
 ) -> Option<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    if let Ok(value) = ctx
+        .as_context()
+        .data()
+        .heap_access_v2()
+        .get_element(ptr as u32, index)
+    {
+        return value.map(|value| value as i64);
+    }
     let d = env.memory.data(ctx);
     let elem_offset = ptr + 16 + (index as usize) * 8;
     if elem_offset + 8 > d.len() {
@@ -282,7 +330,7 @@ pub(crate) fn read_array_elem_raw_with_env<C: AsContext>(
 }
 
 /// 读取数组元素；hole 视为缺失，返回 None。
-pub(crate) fn read_array_elem_with_env<C: AsContext>(
+pub(crate) fn read_array_elem_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
     env: &WasmEnv,
     ptr: usize,
@@ -296,7 +344,7 @@ pub(crate) fn read_array_elem_with_env<C: AsContext>(
     }
 }
 
-pub(crate) fn array_elem_present_with_env<C: AsContext>(
+pub(crate) fn array_elem_present_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
     env: &WasmEnv,
     ptr: usize,
@@ -314,6 +362,16 @@ pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     index: u32,
     val: i64,
 ) {
+    #[cfg(feature = "managed-heap-v2")]
+    if ctx
+        .as_context()
+        .data()
+        .heap_access_v2()
+        .set_element(ptr as u32, index, val as u64)
+        .is_ok()
+    {
+        return;
+    }
     let _ =
         crate::runtime_gc::heap_access::write_element_at_ptr(ctx, env, ptr, index as usize, val);
 }
@@ -513,6 +571,24 @@ pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = Runti
     obj_ptr: usize,
     prop_name: &str,
 ) -> Option<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = u32::try_from(obj_ptr).ok()?;
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    ctx.as_context().data(),
+                    RuntimeString::from_utf8_str(prop_name),
+                ),
+            );
+            return access
+                .get_property_slot_on_proto_chain(handle, key)
+                .ok()
+                .flatten()
+                .map(|property| property.value as i64);
+        }
+    }
     let num_props = {
         let data = env.memory.data(&*ctx);
         if obj_ptr + 16 > data.len() {

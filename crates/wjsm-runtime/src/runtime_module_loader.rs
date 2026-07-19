@@ -514,6 +514,37 @@ where
 {
     define_caller_export(linker, caller, "env", "memory")?;
     define_caller_export(linker, caller, "env", wjsm_ir::SHADOW_MEMORY_NAME)?;
+    #[cfg(feature = "managed-heap-v2")]
+    linker
+        .define(
+            &*caller,
+            "env",
+            wjsm_ir::HEAP_MEMORY_NAME,
+            caller.data().static_main_memory_v2(),
+        )
+        .map_err(|error| {
+            RuntimeModuleLoadError::new(
+                RuntimeModuleLoadErrorCode::InstantiateFailed,
+                format!("failed to link runtime V2 heap memory import: {error:?}"),
+            )
+        })?;
+    #[cfg(feature = "managed-heap-v2")]
+    for name in wjsm_ir::V2_HEAP_GLOBAL_IMPORTS {
+        let global = caller.data().static_heap_global_v2(name).ok_or_else(|| {
+            RuntimeModuleLoadError::new(
+                RuntimeModuleLoadErrorCode::InstantiateFailed,
+                format!("runtime V2 heap global `{name}` is not installed"),
+            )
+        })?;
+        linker
+            .define(&*caller, "env", name, global)
+            .map_err(|error| {
+                RuntimeModuleLoadError::new(
+                    RuntimeModuleLoadErrorCode::InstantiateFailed,
+                    format!("failed to link runtime V2 heap global `{name}`: {error:?}"),
+                )
+            })?;
+    }
     define_caller_export(linker, caller, "env", "__table")?;
     for global in wjsm_runtime_support::abi::ENV_GLOBALS {
         define_caller_export(linker, caller, "env", global.name)?;

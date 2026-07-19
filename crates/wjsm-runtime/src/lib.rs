@@ -31,13 +31,18 @@ mod realm_clone_v2;
 pub use handle_remap::{
     FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
 };
+pub use realm_clone::{EvalRealmArrayProbe, ExecutionRealmFrameProbe, RealmCloneProbe};
+#[cfg(not(feature = "managed-heap-v2"))]
 pub use realm_clone::{
-    EvalRealmArrayProbe, ExecutionRealmFrameProbe, RealmCloneProbe, probe_clone_pristine_realm,
-    probe_eval_array_literal_in_realm, probe_execution_realm_frame,
+    probe_clone_pristine_realm, probe_eval_array_literal_in_realm, probe_execution_realm_frame,
 };
 #[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
-pub use realm_clone_v2::remap_realm_handles_v2;
+pub use realm_clone_v2::{
+    probe_clone_pristine_realm_v2 as probe_clone_pristine_realm,
+    probe_eval_array_literal_in_realm_v2 as probe_eval_array_literal_in_realm,
+    probe_execution_realm_frame_v2 as probe_execution_realm_frame, remap_realm_handles_v2,
+};
 #[cfg(feature = "managed-heap-v2")]
 mod heap;
 mod property_key;
@@ -132,8 +137,6 @@ mod runtime_value_adapter;
 mod shared_buffer;
 mod startup_snapshot;
 pub mod startup_snapshot_remap;
-#[cfg(feature = "managed-heap-v2")]
-mod startup_snapshot_v2;
 
 /// Builtin JS 扩展：snapshot 期顺序拼接为 seed module。空 manifest 时该 mod 是
 /// no-op；任一 .js 文件变化都会经 ABI hash external input 触发 embedded snapshot 失效。
@@ -543,12 +546,6 @@ pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create tokio runtime for snapshot build: {e}"))?;
     rt.block_on(build_embedded_startup_snapshot_bytes_async(&engine, &wasm))
-}
-
-#[cfg(feature = "managed-heap-v2")]
-#[doc(hidden)]
-pub fn build_embedded_managed_heap_v2_artifact_abi_bytes() -> Result<Vec<u8>> {
-    startup_snapshot_v2::build_artifact_abi_bytes()
 }
 
 async fn build_embedded_startup_snapshot_bytes_async(
@@ -1148,7 +1145,9 @@ impl Clone for RuntimeState {
             #[cfg(feature = "managed-heap-v2")]
             heap_access_v2: self.heap_access_v2.clone(),
             #[cfg(feature = "managed-heap-v2")]
-            static_main_memory_v2: None,
+            static_main_memory_v2: self.static_main_memory_v2.clone(),
+            #[cfg(feature = "managed-heap-v2")]
+            static_heap_globals_v2: self.static_heap_globals_v2.clone(),
             shadow_stack_max: self.shadow_stack_max,
             inspect: self.inspect.clone(),
             host_temp_roots: self.host_temp_roots.clone(),
@@ -1289,6 +1288,15 @@ impl Clone for RuntimeState {
 /// eval 编译缓存：code hash → (WASM bytes, source map id)
 type EvalCacheMap = HashMap<u64, (Vec<u8>, u32)>;
 
+#[cfg(feature = "managed-heap-v2")]
+#[derive(Clone)]
+struct StaticHeapGlobalsV2 {
+    alloc_ptr: Global,
+    alloc_end: Global,
+    object_start: Global,
+    heap_limit: Global,
+}
+
 struct RuntimeState {
     output: Arc<Mutex<Vec<u8>>>,
     performance_origin: Arc<std::time::Instant>,
@@ -1345,9 +1353,12 @@ struct RuntimeState {
     /// V2 dynamic heap canonical access owner；跨 host calls 复用 shared-memory handle。
     #[cfg(feature = "managed-heap-v2")]
     heap_access_v2: Option<Arc<crate::runtime_gc::HeapAccessV2>>,
-    /// V2 property-key 解码复用的 static main-memory handle，避免热路 export lookup。
+    /// V2 dynamic heap 的唯一 memory64 import，供 eval/runtime module 与主模块共享。
     #[cfg(feature = "managed-heap-v2")]
-    static_main_memory_v2: Option<Memory>,
+    static_main_memory_v2: Option<SharedMemory>,
+    /// V2 dynamic heap 的唯一 mutable globals，供 eval/runtime module 与主模块共享。
+    #[cfg(feature = "managed-heap-v2")]
+    static_heap_globals_v2: Option<StaticHeapGlobalsV2>,
     /// CDP inspector 监听配置（来自 CLI `--inspect` / `--inspect-brk`）。
     inspect: Option<InspectConfig>,
     /// 显式编译器选择（worker 继承用）。
@@ -1609,10 +1620,15 @@ impl RuntimeState {
     fn install_heap_access_v2(
         &mut self,
         access: Arc<crate::runtime_gc::HeapAccessV2>,
-        memory: Memory,
+        memory: SharedMemory,
     ) {
         self.heap_access_v2 = Some(access);
         self.static_main_memory_v2 = Some(memory);
+    }
+
+    #[cfg(feature = "managed-heap-v2")]
+    fn install_heap_globals_v2(&mut self, globals: StaticHeapGlobalsV2) {
+        self.static_heap_globals_v2 = Some(globals);
     }
 
     #[cfg(feature = "managed-heap-v2")]
@@ -1623,9 +1639,23 @@ impl RuntimeState {
     }
 
     #[cfg(feature = "managed-heap-v2")]
-    fn static_main_memory_v2(&self) -> Memory {
+    fn static_main_memory_v2(&self) -> SharedMemory {
         self.static_main_memory_v2
+            .as_ref()
             .expect("V2 main memory must be installed before host calls")
+            .clone()
+    }
+
+    #[cfg(feature = "managed-heap-v2")]
+    fn static_heap_global_v2(&self, name: &str) -> Option<Global> {
+        let globals = self.static_heap_globals_v2.as_ref()?;
+        match name {
+            wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME => Some(globals.alloc_ptr.clone()),
+            wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME => Some(globals.alloc_end.clone()),
+            wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME => Some(globals.object_start.clone()),
+            wjsm_ir::HEAP_LIMIT_GLOBAL_NAME => Some(globals.heap_limit.clone()),
+            _ => None,
+        }
     }
     /// 记录最近一次 GC 统计，并同步推进 v2 环形观测序列。
     pub(crate) fn store_last_gc_stats(
@@ -1942,6 +1972,8 @@ impl RuntimeState {
             heap_access_v2: None,
             #[cfg(feature = "managed-heap-v2")]
             static_main_memory_v2: None,
+            #[cfg(feature = "managed-heap-v2")]
+            static_heap_globals_v2: None,
             inspect: None,
             compiler: None,
             current_entry: None,
