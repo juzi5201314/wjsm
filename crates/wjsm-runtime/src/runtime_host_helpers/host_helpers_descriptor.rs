@@ -129,6 +129,17 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
     {
         return false;
     }
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(target))
+        .is_ok()
+    {
+        // V2 对象的 non-extensible 状态由 `non_extensible_handles` side table 承载，
+        // 上方未命中即为 extensible；legacy header flag 属于 memory32 布局。
+        return true;
+    }
     if let Some(ptr) = resolve_handle(caller, target) {
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return true;
@@ -171,6 +182,12 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
             .unwrap_or_else(|e| e.into_inner());
         set.insert(target as u64);
     }
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        // V2 non-extensible 状态只由 side table 承载；resolve_handle 在 V2 下返回
+        // handle id 而非线性内存指针，继续写 `ptr + 5` 会破坏 data segment。
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
     if let Some(ptr) = resolve_handle(caller, target)
         && let Some(Extern::Memory(memory)) = caller.get_export("memory")
     {

@@ -385,9 +385,9 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
     "wjsm_init_function_props",
 ];
 
-/// 生成指定 GC flavor 的 legacy support module wasm bytes。
+/// 生成指定 GC flavor 的 support module wasm bytes（heap 模式跟随 crate feature）。
 pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
-    emit_support_module_with_heap_mode(flavor, false)
+    emit_support_module_with_heap_mode(flavor, cfg!(feature = "managed-heap-v2"))
 }
 
 /// 生成指定 GC flavor 的 support module wasm bytes。
@@ -885,45 +885,9 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
 }
 
 fn emit_obj_get_v2() -> Function {
-    let mut func = Function::new(vec![]);
-    let tag = |func: &mut Function, shift: u64, tag: u64| {
-        func.instruction(&WasmInstruction::LocalGet(0));
-        func.instruction(&WasmInstruction::I64Const(shift as i64));
-        func.instruction(&WasmInstruction::I64ShrU);
-        func.instruction(&WasmInstruction::I32WrapI64);
-        func.instruction(&WasmInstruction::I32Const(tag as i32));
-        func.instruction(&WasmInstruction::I32Eq);
-    };
-    tag(&mut func, 32, value::TAG_FUNCTION);
-    tag(&mut func, 32, value::TAG_CLOSURE);
-    func.instruction(&WasmInstruction::I32Or);
-    tag(&mut func, 32, value::TAG_BOUND);
-    func.instruction(&WasmInstruction::I32Or);
-    func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
-    func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::Call(HOST_FUNCTION_VALUE_GET_PROPERTY));
-    func.instruction(&WasmInstruction::Else);
-    tag(&mut func, 32, value::TAG_NATIVE_CALLABLE);
-    func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
-    func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::Call(HOST_NATIVE_CALLABLE_GET_PROPERTY));
-    func.instruction(&WasmInstruction::Else);
-    tag(&mut func, 32, value::TAG_PROXY);
-    func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
-    func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::Call(HOST_PROXY_TRAP_GET));
-    func.instruction(&WasmInstruction::Else);
-    func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::LocalGet(1));
-    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_GET_V2));
-    func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::End);
-    func
+    // dispatch（function/closure/bound/proxy/native callable/object）由 host 侧
+    // `gc_obj_get_v2` 统一完成；support 层只做透传。
+    emit_v2_binary_host_helper(HOST_GC_OBJ_GET_V2)
 }
 
 fn emit_obj_set_v2() -> Function {
