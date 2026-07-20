@@ -144,6 +144,13 @@ pub fn write_proto<C: AsContextMut<Data = RuntimeState>>(
     h: Handle,
     proto: u32,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        if access.resolve_handle(h).is_ok() {
+            return access.set_prototype(h, proto).ok();
+        }
+    }
     let heap_ptr = resolve(ctx, env, h)?;
     let gc_arc = ctx.as_context().data().gc_algorithm.clone();
     let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());

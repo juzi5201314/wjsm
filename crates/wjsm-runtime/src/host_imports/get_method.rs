@@ -220,7 +220,7 @@ fn read_getter_from_slot(caller: &mut Caller<'_, RuntimeState>, slot_offset: usi
     i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap())
 }
 
-fn invoke_getter_sync(caller: &mut Caller<'_, RuntimeState>, getter: i64, receiver: i64) -> i64 {
+pub(crate) fn invoke_getter_sync(caller: &mut Caller<'_, RuntimeState>, getter: i64, receiver: i64) -> i64 {
     if value::is_undefined(getter) || value::is_null(getter) {
         return value::encode_undefined();
     }

@@ -455,6 +455,11 @@ impl HeapAccessV2 {
     ) -> Result<Option<HeapAccessV2Property>, HeapAccessV2Error> {
         let mut current = handle;
         loop {
+            // 高位标记的 proxy handle 不能 resolve 为 V2 heap 地址；
+            // 交给上层 host 走 Proxy [[Get]] trap。
+            if current & 0x8000_0000 != 0 {
+                return Ok(None);
+            }
             let object = self.resolve_handle(current)?;
             let header = self
                 .memory
@@ -469,6 +474,10 @@ impl HeapAccessV2 {
             let prototype = header as u32;
             if prototype == PROTO_NULL_SENTINEL || prototype == current {
                 return Ok(None);
+            }
+            // 下一环是 Proxy：停止并返回 None，由 host 继续 proxy 路径。
+            if prototype & 0x8000_0000 != 0 {
+                return Err(HeapAccessV2Error::ProxyPrototype { handle: prototype });
             }
             current = prototype;
         }
@@ -760,6 +769,10 @@ pub enum HeapAccessV2Error {
     UnresolvedHandle {
         handle: u32,
     },
+    /// 原型链下一环是高位标记的 Proxy handle，需 host 走 trap。
+    ProxyPrototype {
+        handle: u32,
+    },
 }
 
 impl fmt::Display for HeapAccessV2Error {
@@ -795,6 +808,9 @@ impl fmt::Display for HeapAccessV2Error {
                 write!(formatter, "unable to grow V2 shared memory64: {error}")
             }
             Self::UnresolvedHandle { handle } => write!(formatter, "unresolved V2 handle {handle}"),
+            Self::ProxyPrototype { handle } => {
+                write!(formatter, "proxy prototype handle {handle:#x}")
+            }
         }
     }
 }

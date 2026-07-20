@@ -99,13 +99,32 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         }
                     }
                     let access = caller.data().heap_access_v2().clone();
-                    let property = access.get_property_slot_on_proto_chain(handle, key)?;
-                    if property.is_some()
-                        || !(value::is_function(object)
-                            || value::is_closure(object)
-                            || value::is_bound(object))
-                    {
-                        return read_v2_property_async(&mut caller, object, property).await;
+                    match access.get_property_slot_on_proto_chain(handle, key) {
+                        Ok(property) => {
+                            if property.is_some()
+                                || !(value::is_function(object)
+                                    || value::is_closure(object)
+                                    || value::is_bound(object))
+                            {
+                                return read_v2_property_async(&mut caller, object, property)
+                                    .await;
+                            }
+                        }
+                        Err(crate::runtime_gc::HeapAccessV2Error::ProxyPrototype {
+                            handle: proto_handle,
+                        }) => {
+                            // 原型链上的 Proxy：用 proxy 值继续 [[Get]]。
+                            let proxy = value::encode_proxy_handle(proto_handle & 0x7FFF_FFFF);
+                            return Ok(
+                                crate::host_imports::reentrant_async::proxy_trap_internal_get_async(
+                                    &mut caller,
+                                    proxy,
+                                    key as i32,
+                                )
+                                .await,
+                            );
+                        }
+                        Err(error) => return Err(host_error(error)),
                     }
                 } else if value::is_function(object)
                     || value::is_closure(object)
@@ -121,45 +140,88 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             })
         },
     )?;
-    linker.func_wrap(
+    linker.func_wrap_async(
         "env",
         "gc_obj_set_v2",
         |mut caller: Caller<'_, RuntimeState>,
-         object: i64,
-         key: i32,
-         new_value: i64|
-         -> wasmtime::Result<()> {
-            let raw_key = key as u32;
-            let key = property_key(&mut caller, key)?;
-            if value::is_proxy(object) {
-                return set_proxy_property_v2(&mut caller, object, raw_key, key, new_value);
-            }
-            // Function/closure/bound 的属性对象 handle 从 function_props_base 起算。
-            let handle = if value::is_function(object)
-                || value::is_closure(object)
-                || value::is_bound(object)
-            {
-                crate::handle_index_of(&mut caller, object) as u32
-            } else {
-                value::decode_handle(object)
-            };
-            if value::is_array(object) {
-                let length_key = crate::property_key::encode_runtime_string_name_id(
-                    crate::property_key::intern_runtime_property_key(
-                        caller.data(),
-                        crate::runtime_string::RuntimeString::from_utf8_str("length"),
-                    ),
-                );
-                if key == length_key {
-                    crate::host_imports::array_set_length_impl(&mut caller, object, new_value);
+         (object, key, new_value): (i64, i32, i64)| {
+            Box::new(async move {
+                let raw_key = key as u32;
+                let key = property_key(&mut caller, key)?;
+                if value::is_proxy(object) {
+                    set_proxy_property_v2(&mut caller, object, raw_key, key, new_value)?;
                     return Ok(());
                 }
-            }
-            caller
-                .data()
-                .heap_access_v2()
-                .set_property(handle, key, new_value as u64)?;
-            Ok(())
+                // Function/closure/bound 的属性对象 handle 从 function_props_base 起算。
+                let handle = if value::is_function(object)
+                    || value::is_closure(object)
+                    || value::is_bound(object)
+                {
+                    crate::handle_index_of(&mut caller, object) as u32
+                } else {
+                    value::decode_handle(object)
+                };
+                if value::is_array(object) {
+                    let length_key = crate::property_key::encode_runtime_string_name_id(
+                        crate::property_key::intern_runtime_property_key(
+                            caller.data(),
+                            crate::runtime_string::RuntimeString::from_utf8_str("length"),
+                        ),
+                    );
+                    if key == length_key {
+                        crate::host_imports::array_set_length_impl(&mut caller, object, new_value);
+                        return Ok(());
+                    }
+                }
+                // OrdinarySet：accessor 调 setter；own 数据写值；缺失时在 receiver 新建。
+                let access = caller.data().heap_access_v2().clone();
+                if let Some(property) = access
+                    .get_property_slot_on_proto_chain(handle, key)
+                    .map_err(host_error)?
+                {
+                    if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
+                        let setter = property.setter as i64;
+                        if value::is_undefined(setter) || value::is_null(setter) {
+                            return Ok(());
+                        }
+                        if value::is_callable(setter) {
+                            let _ = crate::runtime_host_helpers::call_wasm_callback_async(
+                                &mut caller,
+                                setter,
+                                object,
+                                &[new_value],
+                            )
+                            .await
+                            .map_err(host_error)?;
+                        }
+                        return Ok(());
+                    }
+                    let own = access
+                        .get_property_slot(handle, key)
+                        .map_err(host_error)?
+                        .is_some();
+                    if own {
+                        if property.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0 {
+                            return Ok(());
+                        }
+                        access
+                            .set_property(handle, key, new_value as u64)
+                            .map_err(host_error)?;
+                        return Ok(());
+                    }
+                    // proto 数据属性：在 receiver 上 CreateDataProperty（可写）或拒绝（只读）。
+                    if property.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0 {
+                        return Ok(());
+                    }
+                }
+                if !crate::is_extensible_impl(&mut caller, object) {
+                    return Ok(());
+                }
+                access
+                    .set_property(handle, key, new_value as u64)
+                    .map_err(host_error)?;
+                Ok(())
+            })
         },
     )?;
     linker.func_wrap_async(
@@ -203,11 +265,15 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         }
                     }
                 }
-                let deleted = caller
-                    .data()
-                    .heap_access_v2()
-                    .delete_property(handle, key)?;
-                Ok(value::encode_bool(deleted))
+                let access = caller.data().heap_access_v2().clone();
+                if let Some(property) = access.get_property_slot(handle, key).map_err(host_error)? {
+                    if property.flags & wjsm_ir::constants::FLAG_CONFIGURABLE as u32 == 0 {
+                        return Ok(value::encode_bool(false));
+                    }
+                    let deleted = access.delete_property(handle, key)?;
+                    return Ok(value::encode_bool(deleted));
+                }
+                Ok(value::encode_bool(true))
             })
         },
     )?;

@@ -632,23 +632,55 @@ async fn ordinary_has_instance_async(
         }
         handle_index_of(caller, regexp_proto) as u32
     } else {
-        let current_ptr = match resolve_handle(caller, value) {
-            Some(p) => p,
-            None => return value::encode_bool(false),
-        };
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return value::encode_bool(false);
-        };
-        let data = memory.data(&*caller);
-        if current_ptr + 4 > data.len() {
-            return value::encode_bool(false);
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            let handle = handle_index_of(caller, value) as u32;
+            let access = caller.data().heap_access_v2();
+            if access.resolve_handle(handle).is_ok() {
+                match access.prototype(handle) {
+                    Ok(p) => p,
+                    Err(_) => return value::encode_bool(false),
+                }
+            } else {
+                let current_ptr = match resolve_handle(caller, value) {
+                    Some(p) => p,
+                    None => return value::encode_bool(false),
+                };
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return value::encode_bool(false);
+                };
+                let data = memory.data(&*caller);
+                if current_ptr + 4 > data.len() {
+                    return value::encode_bool(false);
+                }
+                u32::from_le_bytes([
+                    data[current_ptr],
+                    data[current_ptr + 1],
+                    data[current_ptr + 2],
+                    data[current_ptr + 3],
+                ])
+            }
         }
-        u32::from_le_bytes([
-            data[current_ptr],
-            data[current_ptr + 1],
-            data[current_ptr + 2],
-            data[current_ptr + 3],
-        ])
+        #[cfg(not(feature = "managed-heap-v2"))]
+        {
+            let current_ptr = match resolve_handle(caller, value) {
+                Some(p) => p,
+                None => return value::encode_bool(false),
+            };
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return value::encode_bool(false);
+            };
+            let data = memory.data(&*caller);
+            if current_ptr + 4 > data.len() {
+                return value::encode_bool(false);
+            }
+            u32::from_le_bytes([
+                data[current_ptr],
+                data[current_ptr + 1],
+                data[current_ptr + 2],
+                data[current_ptr + 3],
+            ])
+        }
     };
     // 遍历原型链（全程 handle 空间）：比较 current_proto 与 proto_target，
     // 不匹配则解析 handle → 堆指针 → 读取其 [[Prototype]] handle 继续。
@@ -658,6 +690,19 @@ async fn ordinary_has_instance_async(
         }
         if current_proto == proto_target {
             return value::encode_bool(true);
+        }
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            let access = caller.data().heap_access_v2();
+            if access.resolve_handle(current_proto).is_ok() {
+                match access.prototype(current_proto) {
+                    Ok(next) => {
+                        current_proto = next;
+                        continue;
+                    }
+                    Err(_) => return value::encode_bool(false),
+                }
+            }
         }
         let Some(proto_ptr) = resolve_handle_idx(caller, current_proto as usize) else {
             return value::encode_bool(false);

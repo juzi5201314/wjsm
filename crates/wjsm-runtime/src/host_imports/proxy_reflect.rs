@@ -153,6 +153,58 @@ pub(crate) async fn ordinary_set_by_name_id(
     name_id: u32,
     val: i64,
 ) -> bool {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let start_handle = handle_index_of(caller, obj) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(start_handle).is_ok() {
+            let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+                return false;
+            };
+            let mut current = start_handle;
+            let mut visited = std::collections::HashSet::new();
+            loop {
+                if !visited.insert(current) {
+                    return false;
+                }
+                if let Ok(Some(property)) = access.get_property_slot(current, key) {
+                    if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
+                        return invoke_property_setter(
+                            caller,
+                            property.setter as i64,
+                            receiver,
+                            val,
+                        )
+                        .await;
+                    }
+                    if property.flags & constants::FLAG_WRITABLE as u32 == 0 {
+                        return false;
+                    }
+                    let current_val = value::encode_object_handle(current);
+                    if current_val == receiver
+                        || (value::is_function(receiver)
+                            && handle_index_of(caller, receiver) as u32 == current)
+                    {
+                        return access
+                            .set_property(current, key, val as u64)
+                            .is_ok();
+                    }
+                    return define_value_on_receiver(caller, receiver, name_id, val).await;
+                }
+                let Ok(proto) = access.prototype(current) else {
+                    return define_value_on_receiver(caller, receiver, name_id, val).await;
+                };
+                if proto == 0xFFFF_FFFF || proto == current {
+                    return define_value_on_receiver(caller, receiver, name_id, val).await;
+                }
+                if access.resolve_handle(proto).is_err() {
+                    return define_value_on_receiver(caller, receiver, name_id, val).await;
+                }
+                current = proto;
+            }
+        }
+    }
+
     let mut current = obj;
     let mut visited = std::collections::HashSet::new();
 
@@ -169,6 +221,10 @@ pub(crate) async fn ordinary_set_by_name_id(
         {
             let is_accessor = (flags & constants::FLAG_IS_ACCESSOR) != 0;
             if is_accessor {
+                // V2 find_property 可能返回哨兵偏移；禁止读 memory32。
+                if slot_offset == usize::MAX {
+                    return false;
+                }
                 let setter = read_setter_from_slot(caller, slot_offset);
                 return invoke_property_setter(caller, setter, receiver, val).await;
             }
@@ -191,6 +247,9 @@ pub(crate) async fn ordinary_set_by_name_id(
         {
             let parent_accessor = (parent_flags & constants::FLAG_IS_ACCESSOR) != 0;
             if parent_accessor {
+                if slot_offset == usize::MAX {
+                    return false;
+                }
                 let setter = read_setter_from_slot(caller, slot_offset);
                 return invoke_property_setter(caller, setter, receiver, val).await;
             }
@@ -203,6 +262,9 @@ pub(crate) async fn ordinary_set_by_name_id(
         let proto_handle = {
             let env = WasmEnv::from_caller(caller).expect("WasmEnv");
             let data = env.memory.data(&*caller);
+            if current_ptr + 4 > data.len() {
+                return define_value_on_receiver(caller, receiver, name_id, val).await;
+            }
             u32::from_le_bytes(data[current_ptr..current_ptr + 4].try_into().unwrap())
         };
         current = value::encode_object_handle(proto_handle);
@@ -368,6 +430,30 @@ pub(crate) fn delete_property_by_name_id(
     target: i64,
     name_id: u32,
 ) -> i64 {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = handle_index_of(caller, target) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+                return value::encode_bool(true);
+            };
+            return match access.get_property_slot(handle, key) {
+                Ok(Some(property)) => {
+                    if property.flags & constants::FLAG_CONFIGURABLE as u32 == 0 {
+                        value::encode_bool(false)
+                    } else {
+                        match access.delete_property(handle, key) {
+                            Ok(deleted) => value::encode_bool(deleted),
+                            Err(_) => value::encode_bool(false),
+                        }
+                    }
+                }
+                Ok(None) => value::encode_bool(true),
+                Err(_) => value::encode_bool(false),
+            };
+        }
+    }
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_bool(true);
     };

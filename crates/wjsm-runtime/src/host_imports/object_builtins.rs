@@ -239,6 +239,15 @@ pub(crate) fn define_object_builtins(
                     depth += 1;
                 }
             }
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let handle = handle_index_of(&mut caller, obj) as u32;
+                let access = caller.data().heap_access_v2();
+                if access.resolve_handle(handle).is_ok() {
+                    let _ = access.set_prototype(handle, proto_handle);
+                    return obj;
+                }
+            }
             let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
             let handle = handle_index_of(&mut caller, obj) as u32;
             let _ = crate::runtime_gc::heap_access::write_proto(
@@ -467,6 +476,26 @@ fn object_seal_or_freeze_impl(
     if !prevent_extensions_impl(caller, obj) {
         return false;
     }
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = handle_index_of(caller, obj) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let Ok(slots) = access.own_property_slots(handle) else {
+                return false;
+            };
+            for (key, flags) in slots {
+                let mut new_flags = flags & !(constants::FLAG_CONFIGURABLE as u32);
+                if freeze && (flags & constants::FLAG_IS_ACCESSOR as u32) == 0 {
+                    new_flags &= !(constants::FLAG_WRITABLE as u32);
+                }
+                if access.update_property_flags(handle, key, new_flags).is_err() {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
     let Some(ptr) = resolve_handle(caller, obj) else {
         return false;
     };
@@ -488,6 +517,21 @@ fn object_is_sealed_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> boo
     if is_extensible_impl(caller, obj) {
         return false;
     }
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = handle_index_of(caller, obj) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            return access
+                .own_property_slots(handle)
+                .map(|slots| {
+                    slots
+                        .iter()
+                        .all(|(_, flags)| (flags & constants::FLAG_CONFIGURABLE as u32) == 0)
+                })
+                .unwrap_or(false);
+        }
+    }
     let Some(ptr) = resolve_handle(caller, obj) else {
         return false;
     };
@@ -499,6 +543,22 @@ fn object_is_sealed_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> boo
 fn object_is_frozen_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> bool {
     if !object_is_sealed_impl(caller, obj) {
         return false;
+    }
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = handle_index_of(caller, obj) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            return access
+                .own_property_slots(handle)
+                .map(|slots| {
+                    slots.iter().all(|(_, flags)| {
+                        (flags & constants::FLAG_IS_ACCESSOR as u32) != 0
+                            || (flags & constants::FLAG_WRITABLE as u32) == 0
+                    })
+                })
+                .unwrap_or(false);
+        }
     }
     let Some(ptr) = resolve_handle(caller, obj) else {
         return false;
@@ -608,6 +668,30 @@ fn read_property_by_string_key(
     key_val: i64,
 ) -> i64 {
     let key = get_string_value(caller, key_val);
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        // own 数据属性优先；accessor 槽需触发 getter（与 gc_obj_get_v2 一致）。
+        let handle = value::decode_handle(obj);
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key_id = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(caller.data(), key.clone()),
+            );
+            return match access.get_property_slot(handle, key_id).ok().flatten() {
+                Some(property)
+                    if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
+                {
+                    super::get_method::invoke_getter_sync(
+                        caller,
+                        property.getter as i64,
+                        obj,
+                    )
+                }
+                Some(property) => property.value as i64,
+                None => value::encode_undefined(),
+            };
+        }
+    }
     let Some(ptr) = resolve_handle(caller, obj) else {
         return value::encode_undefined();
     };

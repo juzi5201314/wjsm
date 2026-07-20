@@ -2214,6 +2214,58 @@ pub(crate) fn object_rest_impl(
 }
 
 pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, source: i64) {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let dest_handle = handle_index_of(caller, dest) as u32;
+        let source_handle = handle_index_of(caller, source) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(dest_handle).is_ok()
+            && access.resolve_handle(source_handle).is_ok()
+        {
+            let Ok(slots) = access.own_property_slots(source_handle) else {
+                return;
+            };
+            let flags = (constants::FLAG_CONFIGURABLE
+                | constants::FLAG_ENUMERABLE
+                | constants::FLAG_WRITABLE) as u32;
+            for (key, slot_flags) in slots {
+                if slot_flags & constants::FLAG_PRIVATE as u32 != 0 {
+                    continue;
+                }
+                if slot_flags & constants::FLAG_ENUMERABLE as u32 == 0 {
+                    continue;
+                }
+                if is_symbol_name_id(key) {
+                    continue;
+                }
+                // 数据属性取 value；accessor 走 getter（spread 用 Get）。
+                let value = match access.get_property_slot(source_handle, key) {
+                    Ok(Some(property))
+                        if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
+                    {
+                        let getter = property.getter as i64;
+                        if value::is_undefined(getter) || value::is_null(getter) {
+                            value::encode_undefined()
+                        } else if value::is_callable(getter) {
+                            let rt = tokio::runtime::Handle::current();
+                            tokio::task::block_in_place(|| {
+                                rt.block_on(crate::call_wasm_callback_async(
+                                    caller, getter, source, &[],
+                                ))
+                            })
+                            .unwrap_or_else(|_| value::encode_undefined())
+                        } else {
+                            value::encode_undefined()
+                        }
+                    }
+                    Ok(Some(property)) => property.value as i64,
+                    _ => continue,
+                };
+                let _ = access.define_data_property(dest_handle, key, value as u64, flags);
+            }
+            return;
+        }
+    }
     let Some(mut dest_ptr) = resolve_handle(caller, dest) else {
         return;
     };
