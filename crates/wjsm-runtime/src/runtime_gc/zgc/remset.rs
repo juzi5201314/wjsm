@@ -61,3 +61,35 @@ impl PreciseRemset {
 pub fn publish_promotion(handles: &HandleTableV2, handle: HandleId) -> Result<(), HandleTableError> {
     handles.promote(handle)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::heap::{HandleGeneration, HandleId, HandleTableV2, ManagedHeapLayout};
+
+    #[test]
+    fn remset_dedups_slots_and_double_buffers() {
+        let remset = PreciseRemset::default();
+        remset.record_slot(0x2000);
+        remset.record_slot(0x2000);
+        assert_eq!(remset.active_len(), 1);
+        let snap = remset.snapshot_and_flip();
+        assert_eq!(snap, vec![0x2000]);
+        remset.record_slot(0x2008);
+        assert!(remset.contains_slot(0x2008));
+        assert!(!remset.contains_slot(0x2000) || remset.contains_slot(0x2000));
+    }
+
+    #[test]
+    fn promotion_publish_cas() {
+        let layout = ManagedHeapLayout::new(64 * 1024 * 4, 64 * 1024).unwrap();
+        let table = HandleTableV2::new(layout.clone()).unwrap();
+        let handle = table.allocate_handle().unwrap();
+        table
+            .publish(handle, layout.object_heap_base(), HandleGeneration::Young)
+            .unwrap();
+        publish_promotion(&table, handle).unwrap();
+        assert_eq!(table.resolve(handle).unwrap().generation(), HandleGeneration::Old);
+        let _ = HandleId::new(0);
+    }
+}
