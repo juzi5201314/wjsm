@@ -769,7 +769,7 @@ pub(crate) fn define_collections_buffers(
             };
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 4)
+                alloc_host_object(&mut caller, &_wjsm_env, 8)
             };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(
@@ -913,7 +913,7 @@ pub(crate) fn define_collections_buffers(
             }
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 4)
+                alloc_host_object(&mut caller, &_wjsm_env, 8)
             };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(
@@ -995,7 +995,7 @@ pub(crate) fn define_collections_buffers(
             }
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 4)
+                alloc_host_object(&mut caller, &_wjsm_env, 8)
             };
             let handle_val = value::encode_f64(new_buf_handle as f64);
             let _ = define_host_data_property_from_caller(
@@ -1064,7 +1064,7 @@ pub(crate) fn define_collections_buffers(
             }
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 4)
+                alloc_host_object(&mut caller, &_wjsm_env, 8)
             };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(
@@ -1616,7 +1616,7 @@ pub(crate) fn define_collections_buffers(
                 }
                 let obj = {
                     let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                    alloc_host_object(&mut caller, &_wjsm_env, 4)
+                    alloc_host_object(&mut caller, &_wjsm_env, 8)
                 };
                 let _ = define_host_data_property_from_caller(
                     &mut caller,
@@ -1717,7 +1717,7 @@ pub(crate) fn define_collections_buffers(
 
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 4)
+                alloc_host_object(&mut caller, &_wjsm_env, 8)
             };
             let _ = define_host_data_property_from_caller(
                 &mut caller,
@@ -1838,7 +1838,7 @@ pub(crate) fn define_collections_buffers(
 
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 4)
+                alloc_host_object(&mut caller, &_wjsm_env, 8)
             };
             let _ = define_host_data_property_from_caller(
                 &mut caller,

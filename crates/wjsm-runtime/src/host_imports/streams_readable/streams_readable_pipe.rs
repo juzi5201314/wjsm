@@ -644,7 +644,8 @@ pub(crate) fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
         });
         handle
     };
-    let obj = crate::runtime_heap::alloc_host_object(ctx, env, 4);
+    // 5 own data props: handles + length/byteLength/byteOffset
+    let obj = crate::runtime_heap::alloc_host_object(ctx, env, 8);
     let ta_handle_val = wjsm_ir::value::encode_f64(ta_handle as f64);
     let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
         ctx,

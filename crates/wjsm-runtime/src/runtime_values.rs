@@ -1178,7 +1178,7 @@ pub(crate) fn allocate_descriptor_object(
 ) -> Option<i64> {
     #[cfg(feature = "managed-heap-v2")]
     {
-        let desc = crate::alloc_host_object_v2(caller, 4);
+        let desc = crate::alloc_host_object_v2(caller, 6);
         if !value::is_object(desc) {
             return None;
         }

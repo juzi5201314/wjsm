@@ -2708,7 +2708,6 @@ mod tests {
             })
             .expect_err("heap budget should reject the allocation before a wasm trap escapes");
         let message = error.to_string();
-
         assert!(message.contains("JavaScript heap budget exhausted"));
         assert!(message.contains("9216 bytes used"));
         assert!(!message.contains("wasm trap"));

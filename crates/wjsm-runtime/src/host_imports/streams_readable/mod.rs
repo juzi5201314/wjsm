@@ -208,7 +208,8 @@ pub(crate) fn transfer_byob_view_with_env<C: wasmtime::AsContextMut<Data = Runti
         );
     }
 
-    let obj = crate::runtime_heap::alloc_host_object(ctx, env, 4);
+    // 5 own data props: handles + length/byteLength/byteOffset
+    let obj = crate::runtime_heap::alloc_host_object(ctx, env, 8);
     let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
         ctx,
         env,

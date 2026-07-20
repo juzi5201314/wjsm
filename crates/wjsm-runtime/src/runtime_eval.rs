@@ -1988,6 +1988,15 @@ pub(crate) fn set_host_data_property_from_caller(
     name: &str,
     val: i64,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(obj))
+        .is_ok()
+    {
+        return define_host_data_property_from_caller(caller, obj, name, val);
+    }
     let name_id = find_memory_c_string_global(caller, name)
         .or_else(|| alloc_heap_c_string_global(caller, name))?;
     let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize)?;
@@ -1998,7 +2007,8 @@ pub(crate) fn set_host_data_property_from_caller(
             return None;
         };
         let data = memory.data_mut(&mut *caller);
-        if flags & constants::FLAG_WRITABLE == 0 || slot_offset + 16 > data.len() {
+        let value_end = slot_offset.checked_add(16)?;
+        if flags & constants::FLAG_WRITABLE == 0 || value_end > data.len() {
             return None;
         }
         data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());

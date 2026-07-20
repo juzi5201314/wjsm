@@ -722,8 +722,9 @@ pub(super) async fn setup_shared_env_and_support(
             wjsm_ir::HEAP_MEMORY_NAME,
             heap_memory.clone(),
         )?;
-        let access = Arc::new(crate::runtime_gc::HeapAccessV2::new(
+        let access = Arc::new(crate::runtime_gc::HeapAccessV2::with_heap_limit(
             crate::heap::SharedHeapMemory::new(heap_memory.clone()),
+            object_start + heap_bytes,
         ));
         store.data_mut().install_heap_access_v2(access, heap_memory);
     }

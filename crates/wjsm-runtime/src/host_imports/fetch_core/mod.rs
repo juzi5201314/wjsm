@@ -55,7 +55,7 @@ pub(crate) fn create_response_object(
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = target_obj
         .filter(|obj| value::is_object(*obj))
-        .unwrap_or_else(|| alloc_host_object(caller, &env, 12));
+        .unwrap_or_else(|| alloc_host_object(caller, &env, 24));
 
     // Hidden handle for native methods
     let handle_val = value::encode_f64(handle as f64);
@@ -166,7 +166,7 @@ pub(crate) fn create_response_object_with_http_handle(
     drop(table);
 
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 12);
+    let obj = alloc_host_object(caller, &env, 24);
 
     let handle_val = value::encode_f64(handle as f64);
     let _ = define_host_data_property_from_caller(caller, obj, "__response_handle__", handle_val);
@@ -252,7 +252,8 @@ pub(crate) fn create_headers_object_from_handle(
     headers_handle: u32,
 ) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 8);
+    // handle + get/set/has/delete/append/entries/forEach/keys/values
+    let obj = alloc_host_object(caller, &env, 16);
     init_headers_object(caller, obj, headers_handle);
     obj
 }
