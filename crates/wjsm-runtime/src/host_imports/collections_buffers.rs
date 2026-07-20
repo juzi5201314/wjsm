@@ -1887,7 +1887,7 @@ pub(crate) fn define_collections_buffers(
             }
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 80)
+                alloc_host_object(&mut caller, &_wjsm_env, 128)
             };
             let temp_root_len = caller.data().push_host_temp_roots([obj]);
             let builtin_pairs: &[(&str, NativeCallable)] = &[

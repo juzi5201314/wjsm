@@ -3,6 +3,15 @@ name = "wjsm-cli"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+managed-heap-v2 = [
+    "wjsm-backend-wasm/managed-heap-v2",
+    "wjsm-runtime/managed-heap-v2",
+    "wjsm-runtime-support/managed-heap-v2",
+    "wjsm-runtime-snapshot/managed-heap-v2",
+]
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
