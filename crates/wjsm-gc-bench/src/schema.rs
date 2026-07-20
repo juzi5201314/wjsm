@@ -46,6 +46,12 @@ pub struct HardwareMetadata {
     pub architecture: String,
     pub os: String,
     pub logical_cpus: usize,
+    #[serde(default)]
+    pub isa: String,
+    #[serde(default)]
+    pub numa_nodes: usize,
+    #[serde(default)]
+    pub page_size: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

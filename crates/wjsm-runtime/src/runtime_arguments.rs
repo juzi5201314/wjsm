@@ -71,6 +71,27 @@ fn define_arguments_iterator_property(caller: &mut Caller<'_, RuntimeState>, obj
         ARGUMENTS_DATA_FLAGS,
     );
 }
+/// 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测。
+/// V2 下 resolve_handle 返回 handle id 而非线性内存指针，必须走 HeapAccessV2 owner。
+fn override_arguments_heap_type(caller: &mut Caller<'_, RuntimeState>, obj: i64) {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(obj);
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let _ = access.set_object_type(handle, wjsm_ir::HEAP_TYPE_ARGUMENTS);
+            return;
+        }
+    }
+    if let Some(ptr) = resolve_handle(caller, obj)
+        && let Some(Extern::Memory(mem)) = caller.get_export("memory")
+    {
+        let data = mem.data_mut(&mut *caller);
+        if ptr + 4 < data.len() {
+            data[ptr + 4] = wjsm_ir::HEAP_TYPE_ARGUMENTS;
+        }
+    }
+}
 
 /// CreateUnmappedArgumentsObject (ES §10.4.4.6)
 ///
@@ -98,15 +119,7 @@ pub(crate) fn create_unmapped_arguments_object(
         alloc_host_object(caller, &_wjsm_env, capacity)
     };
 
-    // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
-    if let Some(ptr) = resolve_handle(caller, obj)
-        && let Some(Extern::Memory(mem)) = caller.get_export("memory")
-    {
-        let data = mem.data_mut(&mut *caller);
-        if ptr + 4 < data.len() {
-            data[ptr + 4] = wjsm_ir::HEAP_TYPE_ARGUMENTS;
-        }
-    }
+    override_arguments_heap_type(caller, obj);
 
     // 复制参数值作为索引属性
     if let Some(ptr) = arr_ptr {
@@ -169,15 +182,7 @@ pub(crate) fn create_mapped_arguments_object(
         alloc_host_object(caller, &_wjsm_env, capacity)
     };
 
-    // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
-    if let Some(ptr) = resolve_handle(caller, obj)
-        && let Some(Extern::Memory(mem)) = caller.get_export("memory")
-    {
-        let data = mem.data_mut(&mut *caller);
-        if ptr + 4 < data.len() {
-            data[ptr + 4] = wjsm_ir::HEAP_TYPE_ARGUMENTS;
-        }
-    }
+    override_arguments_heap_type(caller, obj);
 
     // 复制参数值作为索引属性
     if let Some(ptr) = arr_ptr {

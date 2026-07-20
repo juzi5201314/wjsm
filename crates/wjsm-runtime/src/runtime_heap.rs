@@ -1976,6 +1976,24 @@ pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, ob
     } else if value::is_object(obj) {
         let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize);
         if let Some(op) = obj_ptr {
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let handle = value::decode_object_handle(obj) as u32;
+                let access = caller.data().heap_access_v2().clone();
+                if access.resolve_handle(handle).is_ok() {
+                    if access.object_type(handle).ok()
+                        == Some(u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS))
+                    {
+                        return store_runtime_string(caller, "[object Arguments]".to_string());
+                    }
+                } else if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
+                    let data = mem.data(&caller);
+                    if op + 4 < data.len() && data[op + 4] == wjsm_ir::HEAP_TYPE_ARGUMENTS {
+                        return store_runtime_string(caller, "[object Arguments]".to_string());
+                    }
+                }
+            }
+            #[cfg(not(feature = "managed-heap-v2"))]
             if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
                 let data = mem.data(&caller);
                 if op + 4 < data.len() && data[op + 4] == wjsm_ir::HEAP_TYPE_ARGUMENTS {

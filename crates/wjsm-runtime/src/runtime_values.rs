@@ -753,6 +753,7 @@ pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = Runt
 }
 
 /// 从对象中按 name_id 查找类私有成员槽。
+#[cfg(not(feature = "managed-heap-v2"))]
 pub(crate) fn find_private_property_slot_by_name_id_with_env<
     C: AsContextMut<Data = RuntimeState>,
 >(
@@ -769,6 +770,19 @@ pub(crate) fn read_object_property_by_name_id(
     obj_ptr: usize,
     name_id: u32,
 ) -> Option<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = u32::try_from(obj_ptr).ok()?;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+            return access
+                .get_property(handle, key)
+                .ok()
+                .flatten()
+                .map(|property_value| property_value as i64);
+        }
+    }
     let env = WasmEnv::from_caller(caller)?;
     let (slot_offset, _flags, val) =
         find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)?;
@@ -885,6 +899,7 @@ pub(crate) fn write_object_property_by_name_id(
 }
 
 /// 在对象上安装或合并私有访问器槽（ES 类私有 getter/setter）。
+#[cfg(not(feature = "managed-heap-v2"))]
 pub(crate) fn write_private_accessor_slot(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
@@ -2368,6 +2383,7 @@ caller_env_wrapper! {
     pub(crate) fn find_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_property_slot_by_name_id_with_env
 }
 
+#[cfg(not(feature = "managed-heap-v2"))]
 caller_env_wrapper! {
     #[inline]
     pub(crate) fn find_private_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_private_property_slot_by_name_id_with_env

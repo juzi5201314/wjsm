@@ -243,239 +243,243 @@ pub(super) fn register_common_bridges(
         },
     );
     linker.define(&mut *store, "env", "string_to_array_index", f)?;
-    // native_callable_get_property
-    let f = Func::wrap(
-        &mut *store,
-        |mut caller: Caller<'_, RuntimeState>, native: i64, name_id: i32| -> i64 {
-            let name_id = name_id as u32;
-            if is_symbol_name_id(name_id) {
-                return value::encode_undefined();
+    define_property_helpers(linker, store)
+}
+
+/// NATIVE_CALLABLE 的属性解析单一 owner：`native_callable_get_property` host import
+/// 与 V2 `gc_obj_get_v2` 分派共用。
+pub(crate) fn native_callable_get_property_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    native: i64,
+    name_id: i32,
+) -> i64 {
+    let name_id = name_id as u32;
+    if is_symbol_name_id(name_id) {
+        return value::encode_undefined();
+    }
+    let prop_bytes = read_string_bytes(caller, name_id);
+    let prop_name = match std::str::from_utf8(&prop_bytes) {
+        Ok(s) => s,
+        Err(_) => return value::encode_undefined(),
+    };
+    if let Some(val) = crate::symbol_well_known::native_callable_symbol_constructor_static_property(
+        caller, native, prop_name,
+    ) {
+        return val;
+    }
+    let idx = value::decode_native_callable_idx(native) as usize;
+    let record = {
+        let table = caller
+            .data()
+            .native_callables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        table.get(idx).cloned()
+    };
+    match &record {
+        Some(NativeCallable::ProcessHrtime) if prop_name == "bigint" => {
+            return create_native_callable(caller.data(), NativeCallable::ProcessHrtimeBigint);
+        }
+        Some(NativeCallable::CjsRequire { referrer }) => {
+            if let Some(value) = cjs_require_property(caller, referrer.clone(), prop_name) {
+                return value;
             }
-            let prop_bytes = read_string_bytes(&mut caller, name_id);
-            let prop_name = match std::str::from_utf8(&prop_bytes) {
-                Ok(s) => s,
-                Err(_) => return value::encode_undefined(),
+        }
+        Some(NativeCallable::CjsRequireResolve { referrer }) => {
+            if let Some(value) = cjs_require_resolve_property(caller, referrer.clone(), prop_name) {
+                return value;
+            }
+        }
+        _ => {}
+    }
+    if prop_name == "call" || prop_name == "apply" || prop_name == "bind" {
+        if !value::is_object(caller.data().function_prototype)
+            && let Some(env) = WasmEnv::from_caller(caller)
+        {
+            crate::runtime_heap::ensure_function_prototype_initialized(caller, &env);
+        }
+        let proto = caller.data().function_prototype;
+        if value::is_object(proto)
+            && let Some(env) = WasmEnv::from_caller(caller)
+            && let Some(ptr) = resolve_handle_idx_with_env(
+                caller,
+                &env,
+                value::decode_object_handle(proto) as usize,
+            )
+            && let Some(val) = read_object_property_by_name_with_env(caller, &env, ptr, prop_name)
+        {
+            return val;
+        }
+        return value::encode_undefined();
+    }
+    if prop_name != "prototype" {
+        if matches!(record, Some(NativeCallable::BufferConstructor)) {
+            let kind = match prop_name {
+                "alloc" => BufferStaticKind::Alloc,
+                "allocUnsafe" => BufferStaticKind::AllocUnsafe,
+                "from" => BufferStaticKind::From,
+                "concat" => BufferStaticKind::Concat,
+                "isBuffer" => BufferStaticKind::IsBuffer,
+                "byteLength" => BufferStaticKind::ByteLength,
+                _ => return value::encode_undefined(),
             };
-            if let Some(val) =
-                crate::symbol_well_known::native_callable_symbol_constructor_static_property(
-                    &mut caller,
-                    native,
-                    prop_name,
-                )
-            {
-                return val;
+            let mut table = caller
+                .data()
+                .native_callables
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let idx = table.len() as u32;
+            table.push(NativeCallable::BufferStatic { kind });
+            return value::encode_native_callable_idx(idx);
+        }
+        // Function.prototype.call/apply/bind 的 length / name
+        if let Some(nc) = record.as_ref()
+            && let Some((length, name)) = function_proto_method_meta(nc)
+        {
+            if prop_name == "length" {
+                return value::encode_f64(length as f64);
             }
-            let idx = value::decode_native_callable_idx(native) as usize;
-            let record = {
-                let table = caller
+            if prop_name == "name" {
+                return store_runtime_string(&*caller, name.to_string());
+            }
+        }
+        // Object / Promise 静态方法：可获取函数值（typeof === "function"）
+        if matches!(
+            record,
+            Some(NativeCallable::ObjectConstructor) | Some(NativeCallable::PromiseConstructor)
+        ) {
+            use crate::types::{ObjectStaticKind, PromiseStaticKind};
+            let static_nc = match (&record, prop_name) {
+                (Some(NativeCallable::ObjectConstructor), "keys") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::Keys,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "values") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::Values,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "entries") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::Entries,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "assign") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::Assign,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "create") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::Create,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "getPrototypeOf") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::GetPrototypeOf,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "setPrototypeOf") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::SetPrototypeOf,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "getOwnPropertyNames") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::GetOwnPropertyNames,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "is") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::Is,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "hasOwn") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::HasOwn,
+                    })
+                }
+                (Some(NativeCallable::ObjectConstructor), "fromEntries") => {
+                    Some(NativeCallable::ObjectStatic {
+                        kind: ObjectStaticKind::FromEntries,
+                    })
+                }
+                (Some(NativeCallable::PromiseConstructor), "resolve") => {
+                    Some(NativeCallable::PromiseStatic {
+                        kind: PromiseStaticKind::Resolve,
+                    })
+                }
+                (Some(NativeCallable::PromiseConstructor), "reject") => {
+                    Some(NativeCallable::PromiseStatic {
+                        kind: PromiseStaticKind::Reject,
+                    })
+                }
+                (Some(NativeCallable::PromiseConstructor), "all") => {
+                    Some(NativeCallable::PromiseStatic {
+                        kind: PromiseStaticKind::All,
+                    })
+                }
+                (Some(NativeCallable::PromiseConstructor), "race") => {
+                    Some(NativeCallable::PromiseStatic {
+                        kind: PromiseStaticKind::Race,
+                    })
+                }
+                (Some(NativeCallable::PromiseConstructor), "allSettled") => {
+                    Some(NativeCallable::PromiseStatic {
+                        kind: PromiseStaticKind::AllSettled,
+                    })
+                }
+                (Some(NativeCallable::PromiseConstructor), "any") => {
+                    Some(NativeCallable::PromiseStatic {
+                        kind: PromiseStaticKind::Any,
+                    })
+                }
+                (Some(NativeCallable::PromiseConstructor), "withResolvers") => {
+                    Some(NativeCallable::PromiseStatic {
+                        kind: PromiseStaticKind::WithResolvers,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(nc) = static_nc {
+                let mut table = caller
                     .data()
                     .native_callables
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                table.get(idx).cloned()
-            };
-            match &record {
-                Some(NativeCallable::ProcessHrtime) if prop_name == "bigint" => {
-                    return create_native_callable(
-                        caller.data(),
-                        NativeCallable::ProcessHrtimeBigint,
-                    );
-                }
-                Some(NativeCallable::CjsRequire { referrer }) => {
-                    if let Some(value) =
-                        cjs_require_property(&mut caller, referrer.clone(), prop_name)
-                    {
-                        return value;
-                    }
-                }
-                Some(NativeCallable::CjsRequireResolve { referrer }) => {
-                    if let Some(value) =
-                        cjs_require_resolve_property(&mut caller, referrer.clone(), prop_name)
-                    {
-                        return value;
-                    }
-                }
-                _ => {}
+                let idx = table.len() as u32;
+                table.push(nc);
+                return value::encode_native_callable_idx(idx);
             }
-            if prop_name == "call" || prop_name == "apply" || prop_name == "bind" {
-                if !value::is_object(caller.data().function_prototype)
-                    && let Some(env) = WasmEnv::from_caller(&mut caller)
-                {
-                    crate::runtime_heap::ensure_function_prototype_initialized(&mut caller, &env);
-                }
-                let proto = caller.data().function_prototype;
-                if value::is_object(proto)
-                    && let Some(env) = WasmEnv::from_caller(&mut caller)
-                    && let Some(ptr) = resolve_handle_idx_with_env(
-                        &mut caller,
-                        &env,
-                        value::decode_object_handle(proto) as usize,
-                    )
-                    && let Some(val) =
-                        read_object_property_by_name_with_env(&mut caller, &env, ptr, prop_name)
-                {
-                    return val;
-                }
-                return value::encode_undefined();
+        }
+        // EvalFunction（含 vm.compileFunction）：暴露 length / name
+        if let Some(NativeCallable::EvalFunction(func)) = record.as_ref() {
+            if prop_name == "length" {
+                return value::encode_f64(func.params.len() as f64);
             }
-            if prop_name != "prototype" {
-                if matches!(record, Some(NativeCallable::BufferConstructor)) {
-                    let kind = match prop_name {
-                        "alloc" => BufferStaticKind::Alloc,
-                        "allocUnsafe" => BufferStaticKind::AllocUnsafe,
-                        "from" => BufferStaticKind::From,
-                        "concat" => BufferStaticKind::Concat,
-                        "isBuffer" => BufferStaticKind::IsBuffer,
-                        "byteLength" => BufferStaticKind::ByteLength,
-                        _ => return value::encode_undefined(),
-                    };
-                    let mut table = caller
-                        .data()
-                        .native_callables
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    let idx = table.len() as u32;
-                    table.push(NativeCallable::BufferStatic { kind });
-                    return value::encode_native_callable_idx(idx);
-                }
-                // Function.prototype.call/apply/bind 的 length / name
-                if let Some(nc) = record.as_ref()
-                    && let Some((length, name)) = function_proto_method_meta(nc)
-                {
-                    if prop_name == "length" {
-                        return value::encode_f64(length as f64);
-                    }
-                    if prop_name == "name" {
-                        return store_runtime_string(&caller, name.to_string());
-                    }
-                }
-                // Object / Promise 静态方法：可获取函数值（typeof === "function"）
-                if matches!(
-                    record,
-                    Some(NativeCallable::ObjectConstructor)
-                        | Some(NativeCallable::PromiseConstructor)
-                ) {
-                    use crate::types::{ObjectStaticKind, PromiseStaticKind};
-                    let static_nc = match (&record, prop_name) {
-                        (Some(NativeCallable::ObjectConstructor), "keys") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::Keys,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "values") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::Values,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "entries") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::Entries,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "assign") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::Assign,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "create") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::Create,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "getPrototypeOf") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::GetPrototypeOf,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "setPrototypeOf") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::SetPrototypeOf,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "getOwnPropertyNames") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::GetOwnPropertyNames,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "is") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::Is,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "hasOwn") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::HasOwn,
-                            })
-                        }
-                        (Some(NativeCallable::ObjectConstructor), "fromEntries") => {
-                            Some(NativeCallable::ObjectStatic {
-                                kind: ObjectStaticKind::FromEntries,
-                            })
-                        }
-                        (Some(NativeCallable::PromiseConstructor), "resolve") => {
-                            Some(NativeCallable::PromiseStatic {
-                                kind: PromiseStaticKind::Resolve,
-                            })
-                        }
-                        (Some(NativeCallable::PromiseConstructor), "reject") => {
-                            Some(NativeCallable::PromiseStatic {
-                                kind: PromiseStaticKind::Reject,
-                            })
-                        }
-                        (Some(NativeCallable::PromiseConstructor), "all") => {
-                            Some(NativeCallable::PromiseStatic {
-                                kind: PromiseStaticKind::All,
-                            })
-                        }
-                        (Some(NativeCallable::PromiseConstructor), "race") => {
-                            Some(NativeCallable::PromiseStatic {
-                                kind: PromiseStaticKind::Race,
-                            })
-                        }
-                        (Some(NativeCallable::PromiseConstructor), "allSettled") => {
-                            Some(NativeCallable::PromiseStatic {
-                                kind: PromiseStaticKind::AllSettled,
-                            })
-                        }
-                        (Some(NativeCallable::PromiseConstructor), "any") => {
-                            Some(NativeCallable::PromiseStatic {
-                                kind: PromiseStaticKind::Any,
-                            })
-                        }
-                        (Some(NativeCallable::PromiseConstructor), "withResolvers") => {
-                            Some(NativeCallable::PromiseStatic {
-                                kind: PromiseStaticKind::WithResolvers,
-                            })
-                        }
-                        _ => None,
-                    };
-                    if let Some(nc) = static_nc {
-                        let mut table = caller
-                            .data()
-                            .native_callables
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        let idx = table.len() as u32;
-                        table.push(nc);
-                        return value::encode_native_callable_idx(idx);
-                    }
-                }
-                // EvalFunction（含 vm.compileFunction）：暴露 length / name
-                if let Some(NativeCallable::EvalFunction(func)) = record.as_ref() {
-                    if prop_name == "length" {
-                        return value::encode_f64(func.params.len() as f64);
-                    }
-                    if prop_name == "name" {
-                        return store_runtime_string(&caller, String::new());
-                    }
-                }
-                return value::encode_undefined();
+            if prop_name == "name" {
+                return store_runtime_string(&*caller, String::new());
             }
-            match &record {
-                Some(nc) => crate::runtime_heap::native_callable_prototype(&mut caller, nc)
-                    .unwrap_or_else(value::encode_undefined),
-                None => value::encode_undefined(),
-            }
+        }
+        return value::encode_undefined();
+    }
+    match &record {
+        Some(nc) => crate::runtime_heap::native_callable_prototype(caller, nc)
+            .unwrap_or_else(value::encode_undefined),
+        None => value::encode_undefined(),
+    }
+}
+
+fn define_property_helpers(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    // native_callable_get_property
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, native: i64, name_id: i32| -> i64 {
+            native_callable_get_property_impl(&mut caller, native, name_id)
         },
     );
     linker.define(&mut *store, "env", "native_callable_get_property", f)?;

@@ -126,6 +126,78 @@ fn v2_runtime_executes_runtime_string_computed_property_access() {
     assert!(diagnostics.is_empty());
     assert_eq!(String::from_utf8(output).unwrap(), "42\n");
 }
+
+#[test]
+fn v2_runtime_distinguishes_static_property_keys() {
+    let wasm = wjsm_runtime::compile_source(
+        "const object = {}; object.first = 1; object.second = 2; console.log(object.first, object.second);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 2\n");
+}
+
+#[test]
+fn v2_runtime_distinguishes_private_capture_property_keys() {
+    let wasm = wjsm_runtime::compile_source(
+        "const object = {}; object['$1.$private_function#1_0'] = 1; object['$1.$private_function#1_1'] = 2; console.log(object['$1.$private_function#1_0'], object['$1.$private_function#1_1']);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 2\n");
+}
+
+#[test]
+fn v2_runtime_distinguishes_private_member_function_keys() {
+    let wasm = wjsm_runtime::compile_source(
+        "const first = () => 1; const second = () => 2; const object = {}; object['#first@0'] = first; object['#second@0'] = second; console.log(object['#first@0'](), object['#second@0']());",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 2\n");
+}
+
+#[test]
+fn v2_runtime_distinguishes_function_property_values() {
+    let wasm = wjsm_runtime::compile_source(
+        "const object = { first() { return 1; }, second() { return 2; } }; console.log(object.first(), object.second());",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 2\n");
+}
 #[test]
 fn v2_runtime_executes_dynamic_string_computed_property_access() {
     let wasm = wjsm_runtime::compile_source(
@@ -235,6 +307,42 @@ fn v2_runtime_preserves_closure_lexical_mutation() {
 
     assert!(diagnostics.is_empty());
     assert_eq!(String::from_utf8(output).unwrap(), "2\n");
+}
+
+#[test]
+fn v2_runtime_distinguishes_multiple_closure_captures() {
+    let wasm = wjsm_runtime::compile_source(
+        "const first_value = 1; const second_value = 2; const first = () => first_value; const second = () => second_value; console.log(first(), second());",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 2\n");
+}
+
+#[test]
+fn v2_runtime_distinguishes_captured_function_values() {
+    let wasm = wjsm_runtime::compile_source(
+        "const first = () => 1; const second = () => 2; const invoke = () => first() * 10 + second(); console.log(invoke());",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "12\n");
 }
 
 #[test]
@@ -353,6 +461,98 @@ fn v2_runtime_publishes_array_values_method_without_memory32_reverse_lookup() {
 }
 
 #[test]
+fn v2_runtime_resolves_native_callable_prototype_properties() {
+    let wasm = wjsm_runtime::compile_source(
+        "function f() { console.log(arguments[Symbol.iterator] === Array.prototype.values); } f(1, 2);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "true\n");
+}
+
+#[test]
+fn v2_runtime_preserves_private_field_method_and_accessor_protocol() {
+    let wasm = wjsm_runtime::compile_source(
+        "let setter_calls = 0; class Counter { #value = 1; #method() { return this.#value; } get #accessor() { return this.#value + 100; } set #accessor(value) { setter_calls = setter_calls + 1; this.#value = value; } readMethod() { return this.#method(); } readAccessor() { return this.#accessor; } writeAccessor(value) { this.#accessor = value; } } const counter = new Counter(); console.log(counter.readMethod(), counter.readAccessor()); counter.writeAccessor(42); console.log(counter.readMethod(), counter.readAccessor(), setter_calls);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 101\n42 142 1\n");
+}
+
+#[test]
+fn v2_runtime_distinguishes_private_method_callbacks() {
+    let wasm = wjsm_runtime::compile_source(
+        "class Counter { #first() { return 1; } #second() { return 2; } first() { return this.#first(); } second() { return this.#second(); } } const counter = new Counter(); console.log(counter.first(), counter.second());",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 2\n");
+}
+
+#[test]
+fn v2_runtime_distinguishes_private_field_values() {
+    let wasm = wjsm_runtime::compile_source(
+        "class Counter { #first = 1; #second = 2; first() { return this.#first; } second() { return this.#second; } } const counter = new Counter(); console.log(counter.first(), counter.second());",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "1 2\n");
+}
+
+#[test]
+fn v2_runtime_invokes_private_accessors() {
+    let wasm = wjsm_runtime::compile_source(
+        "class Counter { get #accessor() { return 101; } set #accessor(value) { this.called = true; this.publicValue = value; } get() { return this.#accessor; } set(value) { this.#accessor = value; } } const counter = new Counter(); console.log(counter.get()); counter.set(42); console.log(counter.called, counter.publicValue);"
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "101\ntrue 42\n");
+}
+
+#[test]
 fn v2_runtime_executes_proxy_property_access_without_memory32_reverse_lookup() {
     let wasm = wjsm_runtime::compile_source(
         "const target = { answer: 42 }; const proxy = new Proxy(target, {}); console.log(proxy.answer);",
@@ -442,3 +642,6 @@ fn v2_runtime_executes_object_and_array_access_without_memory32_reverse_lookup()
     assert!(diagnostics.is_empty());
     assert_eq!(String::from_utf8(output).unwrap(), "42 8\n");
 }
+
+
+

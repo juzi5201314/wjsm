@@ -5195,6 +5195,7 @@ name = "wjsm-runtime-snapshot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "wjsm-backend-wasm",
  "wjsm-engine-config",
  "wjsm-runtime",
  "wjsm-runtime-support",

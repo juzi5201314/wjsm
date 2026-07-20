@@ -25,6 +25,10 @@ pub use support_module::{
     emit_support_module_with_heap_mode,
 };
 
+/// 本 crate 是否以 managed-heap-v2 feature 编译。
+/// 供 build-script 在 Cargo feature unification 后判断 support ABI。
+pub const MANAGED_HEAP_V2_ACTIVE: bool = cfg!(feature = "managed-heap-v2");
+
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 use wjsm_ir::{SHADOW_MEMORY_INDEX, SHADOW_MEMORY_NAME, SHADOW_STACK_INITIAL_SIZE};
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;

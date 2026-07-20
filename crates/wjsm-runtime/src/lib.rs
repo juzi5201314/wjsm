@@ -15,6 +15,9 @@ use tokio::time::Instant;
 use wasmtime::Func;
 use wasmtime::*;
 use wjsm_ir::{constants, value};
+
+/// 编译期是否激活 managed-heap V2 ABI（供 build-script 与 feature 统一对齐）。
+pub const MANAGED_HEAP_V2_ACTIVE: bool = cfg!(feature = "managed-heap-v2");
 use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
 mod array_named_props;
@@ -63,9 +66,11 @@ mod runtime_gc;
 pub use heap::{
     Allocation, AllocationClass, AllocatorError, ColoredHandleEntry, EpochParticipant,
     HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleState,
-    HandleTableError, HandleTableV2, HeapAddress, HeapMemoryError, ManagedAllocator,
-    ManagedHeapLayout, NativeHeapMemory, Nlab, ObjectRef, PAGE_GRANULE_BYTES, PageId,
-    PageObjectIter, PageRange, RelocationReserve, SharedHeapMemory,
+    HandleTableError, HandleTableV2, HeapAddress, HeapMemoryError, IsaDispatch, IsaKind,
+    ManagedAllocator, ManagedHeapLayout, NativeHeapMemory, Nlab, NumaNode, NumaTopology,
+    ObjectRef, PAGE_GRANULE_BYTES, PageId, PageObjectIter, PageRange, PlatformCapabilities,
+    PlatformError, PlatformVirtualMemory, RelocationReserve, ScalarBitmapOps, SharedHeapMemory,
+    VirtualRange, platform_reserve, set_thread_affinity,
 };
 pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};
@@ -81,10 +86,11 @@ pub use runtime_gc::telemetry::{
 };
 #[cfg(feature = "managed-heap-v2")]
 pub use runtime_gc::zgc::{
-    BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, ConcurrentHostRoots,
-    ConcurrentRelocator, HeaderField, HeaderFieldKind, HeaderLayout, HostRootsReport,
-    LoadBarrierOutcome, OldController, OldPhase, OldReport, PageRelocationState, PreciseRemset,
-    RelocationDescriptor, RelocationReport, WeakState, YoungController, YoungPhase, YoungReport,
+    AssistBudget, BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, ConcurrentHostRoots,
+    ConcurrentRelocator, DirectorDecision, DirectorGeneration, GcDirector, GenerationRates,
+    HeaderField, HeaderFieldKind, HeaderLayout, HostRootsReport, LoadBarrierOutcome,
+    OldController, OldPhase, OldReport, PageRelocationState, PreciseRemset, RelocationDescriptor,
+    RelocationReport, StallEvent, StallReason, WeakState, YoungController, YoungPhase, YoungReport,
     ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome, classify_entry, color_stored_value,
     load_barrier, prototype_field_kind, publish_promotion, select_bulk_copy_mode, store_barrier,
     store_barrier_with_target_generation,

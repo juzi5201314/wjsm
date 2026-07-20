@@ -15,6 +15,8 @@ pub mod remset;
 #[cfg(feature = "managed-heap-v2")]
 pub mod young;
 #[cfg(feature = "managed-heap-v2")]
+pub mod director;
+#[cfg(feature = "managed-heap-v2")]
 mod v2;
 #[cfg(feature = "managed-heap-v2")]
 pub use barrier::{
@@ -34,6 +36,11 @@ pub use old::{OldController, OldPhase, OldReport};
 pub use remset::{PreciseRemset, publish_promotion};
 #[cfg(feature = "managed-heap-v2")]
 pub use young::{YoungController, YoungPhase, YoungReport};
+#[cfg(feature = "managed-heap-v2")]
+pub use director::{
+    AssistBudget, DirectorDecision, DirectorGeneration, GcDirector, GenerationRates, StallEvent,
+    StallReason,
+};
 #[cfg(feature = "managed-heap-v2")]
 pub use v2::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome};
 

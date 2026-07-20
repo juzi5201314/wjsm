@@ -6,6 +6,9 @@
 use std::time::{Duration, Instant};
 
 use super::api::{StepBudget, StepOutcome};
+#[cfg(feature = "managed-heap-v2")]
+use super::zgc::director::{AssistBudget, DirectorDecision, GcDirector};
+
 
 const DEFAULT_PAUSE_TARGET: Duration = Duration::from_millis(4);
 const DEFAULT_GC_PERCENT: usize = 100;
@@ -14,7 +17,6 @@ const MIN_STEP_WORK_BYTES: usize = 64 * 1024;
 const MAX_STEP_WORK_BYTES: usize = 8 * 1024 * 1024;
 
 /// 根据 pause target 和 heap-goal 估算驱动增量 GC 的轻量调度器。
-#[derive(Debug, Clone)]
 pub struct GcScheduler {
     /// 单次 safepoint 期望停顿上限。
     pub pause_target: Duration,
@@ -26,6 +28,10 @@ pub struct GcScheduler {
     step_work_bytes: usize,
     /// mutator 分配跑赢 GC 时累计的待偿还工作量；T0.5 仅纳入预算上限。
     alloc_debt_bytes: usize,
+    /// Task 22 predictive young/old director (feature-gated).
+    #[cfg(feature = "managed-heap-v2")]
+    #[allow(dead_code)]
+    director: GcDirector,
 }
 
 impl Default for GcScheduler {
@@ -36,6 +42,8 @@ impl Default for GcScheduler {
             trigger_bytes: DEFAULT_TRIGGER_BYTES,
             step_work_bytes: MIN_STEP_WORK_BYTES,
             alloc_debt_bytes: 0,
+            #[cfg(feature = "managed-heap-v2")]
+            director: GcDirector::new(),
         }
     }
 }
@@ -88,6 +96,56 @@ impl GcScheduler {
             .saturating_add(growth_bytes.max(root_scan_bytes_estimate))
             .max(1);
         self.trigger_bytes = heap_goal.min(heap_limit.max(1)).max(1);
+    }
+
+    /// mutator 分配产生 debt 时累计；director assist 使用同一计数。
+    #[allow(dead_code)]
+    pub fn add_alloc_debt(&mut self, bytes: usize) {
+        self.alloc_debt_bytes = self.alloc_debt_bytes.saturating_add(bytes);
+    }
+
+    #[allow(dead_code)]
+    pub fn alloc_debt_bytes(&self) -> usize {
+        self.alloc_debt_bytes
+    }
+
+    #[allow(dead_code)]
+    pub fn repay_alloc_debt(&mut self, bytes: usize) {
+        self.alloc_debt_bytes = self.alloc_debt_bytes.saturating_sub(bytes);
+    }
+
+    #[cfg(feature = "managed-heap-v2")]
+    #[allow(dead_code)]
+    pub fn director(&self) -> &GcDirector {
+        &self.director
+    }
+
+    #[cfg(feature = "managed-heap-v2")]
+    #[allow(dead_code)]
+    pub fn director_mut(&mut self) -> &mut GcDirector {
+        &mut self.director
+    }
+
+    /// 结合 director runway 评估是否应启动 young/old cycle。
+    #[cfg(feature = "managed-heap-v2")]
+    #[allow(dead_code)]
+    pub fn evaluate_director(
+        &mut self,
+        free_bytes: u64,
+        reserve_bytes: u64,
+        young_live_bytes: u64,
+        old_live_bytes: u64,
+    ) -> DirectorDecision {
+        self.director.update_space(free_bytes, reserve_bytes);
+        self.director.evaluate(young_live_bytes, old_live_bytes)
+    }
+
+    /// 按 debt 比例给出 assist 预算，并硬上限截断。
+    #[cfg(feature = "managed-heap-v2")]
+    #[allow(dead_code)]
+    pub fn assist_for_debt(&self) -> AssistBudget {
+        self.director
+            .assist_budget(u64::try_from(self.alloc_debt_bytes).unwrap_or(u64::MAX))
     }
 }
 

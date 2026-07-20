@@ -398,7 +398,8 @@ impl Compiler {
             }
             Instruction::SetProto { object, value } => {
                 // 验证 value 是有效的对象/函数引用后再设置 __proto__
-                // 条件: is_boxed(value) AND (tag == OBJECT OR tag == FUNCTION)
+                // 条件: is_boxed(value) AND (tag == OBJECT OR tag == FUNCTION
+                //        OR CLOSURE OR ARRAY OR BOUND OR PROXY)
                 let val_local = self.local_idx(value.0);
                 let obj_local = self.local_idx(object.0);
                 let box_base = value::BOX_BASE as i64;
@@ -410,7 +411,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(box_base));
                 self.emit(WasmInstruction::I64Eq);
 
-                // (2) tag == OBJECT: ((val >> 32) & TAG_MASK) == TAG_OBJECT → i32
+                // (2) tag == OBJECT
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -419,7 +420,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
                 self.emit(WasmInstruction::I64Eq);
 
-                // (3) tag == FUNCTION: ((val >> 32) & TAG_MASK) == TAG_FUNCTION → i32
+                // (3) tag == FUNCTION
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -428,7 +429,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
                 self.emit(WasmInstruction::I64Eq);
 
-                // (4) tag == TAG_CLOSURE: ((val >> 32) & TAG_MASK) == TAG_CLOSURE → i32
+                // (4) tag == TAG_CLOSURE
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -437,7 +438,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
                 self.emit(WasmInstruction::I64Eq);
 
-                // (5) tag == TAG_ARRAY: ((val >> 32) & TAG_MASK) == TAG_ARRAY → i32
+                // (5) tag == TAG_ARRAY
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -446,7 +447,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::TAG_ARRAY as i64));
                 self.emit(WasmInstruction::I64Eq);
 
-                // (6) tag == TAG_BOUND: ((val >> 32) & TAG_MASK) == TAG_BOUND → i32
+                // (6) tag == TAG_BOUND
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -455,7 +456,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::TAG_BOUND as i64));
                 self.emit(WasmInstruction::I64Eq);
 
-                // (7) tag == TAG_PROXY: ((val >> 32) & TAG_MASK) == TAG_PROXY → i32
+                // (7) tag == TAG_PROXY
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -474,77 +475,93 @@ impl Compiler {
                 self.emit(WasmInstruction::I32And);
 
                 // 条件分支：仅当 tag 有效时执行 __proto__ 存储
-                // 需要通过 handle 表解析 obj 和 value 的真实 ptr
                 self.emit(WasmInstruction::If(BlockType::Empty));
-                // 解析 obj handle → real obj ptr；函数对象的属性对象从 __function_props_base 起算。
-                self.emit(WasmInstruction::LocalGet(obj_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
-                self.emit(WasmInstruction::LocalGet(obj_local));
-                self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::GlobalGet(
-                    self.function_props_base_global_idx,
-                ));
-                self.emit(WasmInstruction::I32Add);
-                self.emit(WasmInstruction::Else);
-                self.emit(WasmInstruction::LocalGet(obj_local));
-                self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::End);
-                self.emit(WasmInstruction::I32Const(4));
-                self.emit(WasmInstruction::I32Mul);
-                self.emit(WasmInstruction::GlobalGet(self.obj_table_global_idx));
-                self.emit(WasmInstruction::I32Add);
-                self.emit(WasmInstruction::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
-                // ZGC 在 obj_table entry 低 2 bit 存 color；普通指针路径必须先去色。
-                self.emit(WasmInstruction::I32Const(!0x3));
-                self.emit(WasmInstruction::I32And);
-                // value 为函数时同样把函数表索引重定位到函数属性 handle。
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::GlobalGet(
-                    self.function_props_base_global_idx,
-                ));
-                self.emit(WasmInstruction::I32Add);
-                self.emit(WasmInstruction::Else);
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I32WrapI64);
-                // proxy handle 需要 OR 0x8000_0000 标记，供原型链遍历识别
-                // Select 指令要求栈顶为 condition，下方依次为 if_false、if_true
-                self.emit(WasmInstruction::I32Const(0x8000_0000u32 as i32)); // if_true
-                self.emit(WasmInstruction::I32Const(0)); // if_false
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
-                self.emit(WasmInstruction::I64Eq); // condition on top
-                self.emit(WasmInstruction::Select);
-                self.emit(WasmInstruction::I32Or);
-                self.emit(WasmInstruction::End);
-                // 存储：obj[0] = value_handle_idx
-                self.emit(WasmInstruction::I32Store(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                #[cfg(feature = "managed-heap-v2")]
+                {
+                    // V2：经 host import 写原型，避免 memory32 obj_table 直接写。
+                    // obj_set_proto_of 内部走 HeapAccessV2::set_prototype。
+                    let spill = self.current_spill_locals();
+                    self.emit_safepoint_spill_prologue(&spill);
+                    self.emit(WasmInstruction::LocalGet(obj_local));
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    let func_idx = self.builtin_func_idx(&Builtin::ObjectSetPrototypeOf)?;
+                    self.emit(WasmInstruction::Call(func_idx));
+                    self.emit(WasmInstruction::Drop);
+                    self.emit_safepoint_spill_epilogue(spill.len());
+                }
+                #[cfg(not(feature = "managed-heap-v2"))]
+                {
+                    // 解析 obj handle → real obj ptr；函数对象的属性对象从
+                    // __function_props_base 起算。
+                    self.emit(WasmInstruction::LocalGet(obj_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+                    self.emit(WasmInstruction::I64Eq);
+                    self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                    self.emit(WasmInstruction::LocalGet(obj_local));
+                    self.emit(WasmInstruction::I32WrapI64);
+                    self.emit(WasmInstruction::GlobalGet(
+                        self.function_props_base_global_idx,
+                    ));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::Else);
+                    self.emit(WasmInstruction::LocalGet(obj_local));
+                    self.emit(WasmInstruction::I32WrapI64);
+                    self.emit(WasmInstruction::End);
+                    self.emit(WasmInstruction::I32Const(4));
+                    self.emit(WasmInstruction::I32Mul);
+                    self.emit(WasmInstruction::GlobalGet(self.obj_table_global_idx));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::I32Load(MemArg {
+                        offset: 0,
+                        align: 2,
+                        memory_index: 0,
+                    }));
+                    // ZGC 在 obj_table entry 低 2 bit 存 color；普通指针路径必须先去色。
+                    self.emit(WasmInstruction::I32Const(!0x3));
+                    self.emit(WasmInstruction::I32And);
+                    // value 为函数时同样把函数表索引重定位到函数属性 handle。
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+                    self.emit(WasmInstruction::I64Eq);
+                    self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I32WrapI64);
+                    self.emit(WasmInstruction::GlobalGet(
+                        self.function_props_base_global_idx,
+                    ));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::Else);
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I32WrapI64);
+                    // proxy handle 需要 OR 0x8000_0000 标记，供原型链遍历识别
+                    // Select 指令要求栈顶为 condition，下方依次为 if_false、if_true
+                    self.emit(WasmInstruction::I32Const(0x8000_0000u32 as i32)); // if_true
+                    self.emit(WasmInstruction::I32Const(0)); // if_false
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
+                    self.emit(WasmInstruction::I64Eq); // condition on top
+                    self.emit(WasmInstruction::Select);
+                    self.emit(WasmInstruction::I32Or);
+                    self.emit(WasmInstruction::End);
+                    // 存储：obj[0] = value_handle_idx
+                    self.emit(WasmInstruction::I32Store(MemArg {
+                        offset: 0,
+                        align: 2,
+                        memory_index: 0,
+                    }));
+                }
                 self.emit(WasmInstruction::End);
                 Ok(false)
             }

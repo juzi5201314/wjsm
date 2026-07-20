@@ -385,9 +385,13 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
     "wjsm_init_function_props",
 ];
 
-/// 生成指定 GC flavor 的 support module wasm bytes（heap 模式跟随 crate feature）。
+/// 生成指定 GC flavor 的 support module wasm bytes。
+///
+/// 默认始终为 memory32/V1。feature unification 可能把 `managed-heap-v2` 打开，
+/// 但 build-dep 中的 V1 runtime 仍调用本入口；V2 必须走
+/// `emit_support_module_managed_heap_v2` / `emit_support_module_with_heap_mode(..., true)`。
 pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
-    emit_support_module_with_heap_mode(flavor, cfg!(feature = "managed-heap-v2"))
+    emit_support_module_with_heap_mode(flavor, false)
 }
 
 /// 生成指定 GC flavor 的 support module wasm bytes。

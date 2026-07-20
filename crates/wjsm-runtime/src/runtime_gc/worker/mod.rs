@@ -15,6 +15,7 @@ pub use packet::{GcPacketKind, GcWorkPacket};
 
 use packet::PacketSlab;
 use queue::WorkerQueues;
+use crate::heap::platform::{NumaTopology, set_thread_affinity};
 
 /// 固定 worker pool 在关闭和容量边界上返回的显式错误。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -81,7 +82,13 @@ impl GcWorkerPool {
             shared.live_workers.fetch_add(1, Ordering::SeqCst);
             let worker_shared = Arc::clone(&shared);
             let builder = thread::Builder::new().name(format!("wjsm-gc-{worker_index}"));
-            match builder.spawn(move || worker_loop(worker_index, local, worker_shared)) {
+            // Soft NUMA affinity: prefer current topology node; portable no-op off Linux.
+            let topology = NumaTopology::detect();
+            let node = topology.current_node;
+            match builder.spawn(move || {
+                let _ = set_thread_affinity(node);
+                worker_loop(worker_index, local, worker_shared)
+            }) {
                 Ok(join) => joins.push(join),
                 Err(error) => {
                     shared.live_workers.fetch_sub(1, Ordering::SeqCst);

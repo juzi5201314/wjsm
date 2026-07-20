@@ -174,6 +174,15 @@ fn object_read_current_proto_handle(
     caller: &mut Caller<'_, RuntimeState>,
     obj: i64,
 ) -> Option<u32> {
+    #[cfg_attr(not(feature = "managed-heap-v2"), allow(unused_variables))]
+    let handle = handle_index_of(caller, obj) as u32;
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let access = caller.data().heap_access_v2();
+        if access.resolve_handle(handle).is_ok() {
+            return access.prototype(handle).ok();
+        }
+    }
     let ptr = resolve_handle(caller, obj)?;
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return None;
@@ -196,6 +205,13 @@ fn object_write_proto_handle(
     proto_handle: u32,
 ) -> bool {
     let handle = handle_index_of(caller, obj) as u32;
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let access = caller.data().heap_access_v2();
+        if access.resolve_handle(handle).is_ok() {
+            return access.set_prototype(handle, proto_handle).is_ok();
+        }
+    }
     let Some(env) = WasmEnv::from_caller(caller) else {
         return false;
     };
@@ -914,6 +930,20 @@ pub(crate) fn push_array_value(
     arr: i64,
     val: i64,
 ) -> Result<(), i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(arr);
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let len = access.array_length(handle).unwrap_or(0);
+            if array_length_would_overflow(len, 1) {
+                return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
+            }
+            return crate::push_v2_array_element(caller, handle, val as u64)
+                .map(|_| ())
+                .map_err(|_| make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
+        }
+    }
     let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;
     let len = read_array_length(caller, ptr).unwrap_or(0);
     if array_length_would_overflow(len, 1) {
@@ -2545,6 +2575,20 @@ pub(crate) fn define_array_object(
                     }
                     if current & 0x8000_0000 != 0 {
                         break; // proxy handle: 不走 obj_table，跳过
+                    }
+                    #[cfg(feature = "managed-heap-v2")]
+                    {
+                        let access = caller.data().heap_access_v2();
+                        if access.resolve_handle(current).is_ok() {
+                            match access.prototype(current) {
+                                Ok(next) => {
+                                    current = next;
+                                    depth += 1;
+                                    continue;
+                                }
+                                Err(_) => break,
+                            }
+                        }
                     }
                     let Some(current_ptr) = resolve_handle_idx(&mut caller, current as usize)
                     else {

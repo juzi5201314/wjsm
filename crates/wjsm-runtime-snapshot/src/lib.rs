@@ -1,18 +1,16 @@
 //! Build-time embedded startup snapshot bytes.
-#[cfg(all(feature = "embedded", not(feature = "managed-heap-v2")))]
-pub static EMBEDDED_STARTUP_SNAPSHOT: Option<&[u8]> = Some(include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/wjsm_startup_snapshot.bin"
-)));
+//!
+//! When the `embedded` feature is off, both artifacts are `None`.
+//! When `embedded` is on, `build.rs` generates `embeds.rs` based on the
+//! *runtime* ABI after Cargo feature unification (not only this crate's
+//! `managed-heap-v2` feature), so V1 snapshot build never runs against a V2
+//! support module.
 
-#[cfg(any(not(feature = "embedded"), feature = "managed-heap-v2"))]
+#[cfg(feature = "embedded")]
+include!(concat!(env!("OUT_DIR"), "/embeds.rs"));
+
+#[cfg(not(feature = "embedded"))]
 pub static EMBEDDED_STARTUP_SNAPSHOT: Option<&[u8]> = None;
 
-#[cfg(all(feature = "embedded", feature = "managed-heap-v2"))]
-pub static EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI: Option<&[u8]> = Some(include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/wjsm_managed_heap_v2_artifact_abi.bin"
-)));
-
-#[cfg(not(all(feature = "embedded", feature = "managed-heap-v2")))]
+#[cfg(not(feature = "embedded"))]
 pub static EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI: Option<&[u8]> = None;

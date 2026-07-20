@@ -306,11 +306,90 @@ fn name_id_to_runtime_property_string(
     }
 }
 
+/// V2 handle 的 own 形状快照；非 V2 handle 返回 None（走 legacy memory32 布局）。
+#[cfg(feature = "managed-heap-v2")]
+enum V2OwnShape {
+    Array { length: u32 },
+    Object { slots: Vec<(u32, u32)> },
+}
+
+#[cfg(feature = "managed-heap-v2")]
+fn v2_own_shape(caller: &Caller<'_, RuntimeState>, obj_ptr: usize) -> Option<V2OwnShape> {
+    let handle = u32::try_from(obj_ptr).ok()?;
+    let access = caller.data().heap_access_v2();
+    access.resolve_handle(handle).ok()?;
+    if access.object_type(handle).ok()? == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
+        Some(V2OwnShape::Array {
+            length: access.array_length(handle).ok()?,
+        })
+    } else {
+        Some(V2OwnShape::Object {
+            slots: access.own_property_slots(handle).ok()?,
+        })
+    }
+}
+
+/// V2 属性槽 → 过滤 private/enumerable/symbol 后的 name_id 列表。
+#[cfg(feature = "managed-heap-v2")]
+fn v2_filter_slot_name_ids(
+    slots: Vec<(u32, u32)>,
+    enumerable_only: bool,
+    keep_symbols: bool,
+) -> Vec<u32> {
+    slots
+        .into_iter()
+        .filter(|(_, flags)| flags & constants::FLAG_PRIVATE as u32 == 0)
+        .filter(|(_, flags)| !enumerable_only || flags & constants::FLAG_ENUMERABLE as u32 != 0)
+        .map(|(key, _)| key)
+        .filter(|key| keep_symbols || !is_symbol_name_id(*key))
+        .collect()
+}
+
+/// name_id 列表 → 规范排序的字符串键（整数索引升序在前，其余保持插入顺序）。
+#[cfg(feature = "managed-heap-v2")]
+fn property_name_strings_from_name_ids(
+    caller: &mut Caller<'_, RuntimeState>,
+    name_ids: Vec<u32>,
+) -> Vec<String> {
+    let mut int_index_names = Vec::new();
+    let mut string_names = Vec::new();
+    for name_id in name_ids {
+        let Some(name) = name_id_to_runtime_property_string(caller, name_id) else {
+            continue;
+        };
+        let name = name.to_utf8_lossy();
+        if let Some(int_idx) = canonical_integer_index(&name) {
+            int_index_names.push((int_idx, name));
+        } else {
+            string_names.push(name);
+        }
+    }
+    int_index_names.sort_by_key(|(idx, _)| *idx);
+    let mut names: Vec<String> = int_index_names.into_iter().map(|(_, name)| name).collect();
+    names.extend(string_names);
+    names
+}
 pub(crate) fn collect_own_property_names(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
     enumerable_only: bool,
 ) -> Vec<String> {
+    #[cfg(feature = "managed-heap-v2")]
+    if let Some(shape) = v2_own_shape(caller, obj_ptr) {
+        return match shape {
+            V2OwnShape::Array { length } => {
+                let mut names: Vec<String> = (0..length).map(|i| i.to_string()).collect();
+                if !enumerable_only {
+                    names.push("length".to_string());
+                }
+                names
+            }
+            V2OwnShape::Object { slots } => {
+                let name_ids = v2_filter_slot_name_ids(slots, enumerable_only, false);
+                property_name_strings_from_name_ids(caller, name_ids)
+            }
+        };
+    }
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return vec![];
     };
@@ -399,6 +478,43 @@ pub(crate) fn collect_own_property_string_key_values(
     obj_ptr: usize,
     enumerable_only: bool,
 ) -> Vec<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    if let Some(shape) = v2_own_shape(caller, obj_ptr) {
+        return match shape {
+            V2OwnShape::Array { length } => {
+                let mut keys: Vec<i64> = (0..length)
+                    .map(|i| {
+                        store_runtime_string(caller, RuntimeString::from_utf8_str(&i.to_string()))
+                    })
+                    .collect();
+                if !enumerable_only {
+                    keys.push(store_runtime_string(
+                        caller,
+                        RuntimeString::from_utf8_str("length"),
+                    ));
+                }
+                let name_ids =
+                    crate::array_named_props::ArrayNamedPropsStore::collect_string_name_ids(
+                        caller,
+                        obj,
+                        enumerable_only,
+                    );
+                for name_id in name_ids {
+                    if let Some(name) = name_id_to_runtime_property_string(caller, name_id) {
+                        keys.push(store_runtime_string(caller, name));
+                    }
+                }
+                keys
+            }
+            V2OwnShape::Object { slots } => {
+                let name_ids = v2_filter_slot_name_ids(slots, enumerable_only, false);
+                property_name_strings_from_name_ids(caller, name_ids)
+                    .into_iter()
+                    .map(|name| store_runtime_string(caller, name))
+                    .collect()
+            }
+        };
+    }
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return vec![];
     };
@@ -530,6 +646,29 @@ pub(crate) fn collect_own_property_values(
     obj_ptr: usize,
     enumerable_only: bool,
 ) -> Vec<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    if let Some(shape) = v2_own_shape(caller, obj_ptr) {
+        let handle = obj_ptr as u32;
+        let access = caller.data().heap_access_v2().clone();
+        return match shape {
+            V2OwnShape::Array { length } => {
+                let mut values: Vec<i64> = (0..length)
+                    .filter_map(|i| access.get_element(handle, i).ok().flatten())
+                    .map(|element| element as i64)
+                    .filter(|element| !value::is_array_hole(*element))
+                    .collect();
+                if !enumerable_only {
+                    values.push(value::encode_f64(length as f64));
+                }
+                values
+            }
+            V2OwnShape::Object { slots } => v2_filter_slot_name_ids(slots, enumerable_only, false)
+                .into_iter()
+                .filter_map(|key| access.get_property(handle, key).ok().flatten())
+                .map(|property_value| property_value as i64)
+                .collect(),
+        };
+    }
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return vec![];
     };
@@ -610,6 +749,66 @@ pub(crate) fn collect_own_property_key_values(
     obj_ptr: usize,
     symbols_only: bool,
 ) -> Vec<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    if let Some(shape) = v2_own_shape(caller, obj_ptr) {
+        return match shape {
+            V2OwnShape::Array { length } => {
+                if symbols_only {
+                    return crate::array_named_props::ArrayNamedPropsStore::collect_property_key_values_by_ptr(
+                        caller, obj_ptr, true,
+                    );
+                }
+                let mut keys: Vec<i64> = (0..length)
+                    .map(|i| store_runtime_string(caller, i.to_string()))
+                    .collect();
+                keys.push(store_runtime_string(caller, "length".to_string()));
+                keys.extend(
+                    crate::array_named_props::ArrayNamedPropsStore::collect_property_key_values_by_ptr(
+                        caller, obj_ptr, false,
+                    ),
+                );
+                keys
+            }
+            V2OwnShape::Object { slots } => {
+                let name_ids = v2_filter_slot_name_ids(slots, false, true);
+                let mut string_keys = Vec::new();
+                let mut sym_keys = Vec::new();
+                let mut int_index_entries = Vec::new();
+                for name_id in name_ids {
+                    match decode_name_id(name_id) {
+                        DecodedNameId::Symbol(_) => {
+                            if let Some(symbol_key) = name_id_to_property_key_value(name_id) {
+                                sym_keys.push(symbol_key);
+                            }
+                        }
+                        _ if !symbols_only => {
+                            let Some(name) = name_id_to_runtime_property_string(caller, name_id)
+                            else {
+                                continue;
+                            };
+                            let name_lossy = name.to_utf8_lossy();
+                            if let Some(int_idx) = canonical_integer_index(&name_lossy) {
+                                int_index_entries.push((int_idx, name));
+                            } else {
+                                string_keys.push(name);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                int_index_entries.sort_by_key(|(idx, _)| *idx);
+                let mut keys: Vec<i64> = int_index_entries
+                    .into_iter()
+                    .map(|(_, name)| store_runtime_string(caller, name))
+                    .collect();
+                for name in string_keys {
+                    keys.push(store_runtime_string(caller, name));
+                }
+                keys.extend(sym_keys);
+                keys
+            }
+        };
+    }
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return vec![];
     };

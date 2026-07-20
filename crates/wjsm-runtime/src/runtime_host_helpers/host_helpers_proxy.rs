@@ -790,15 +790,6 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
             .unwrap_or_else(value::encode_undefined);
     }
 
-    #[cfg(feature = "managed-heap-v2")]
-    let name_id = if value::is_runtime_string_handle(prop) {
-        Some(crate::property_key::encode_runtime_string_name_id(
-            value::decode_runtime_string_handle(prop),
-        ))
-    } else {
-        property_key_value_to_name_id(caller, prop, false)
-    };
-    #[cfg(not(feature = "managed-heap-v2"))]
     let name_id = property_key_value_to_name_id(caller, prop, false);
     #[cfg(feature = "managed-heap-v2")]
     if value::is_object(target) {

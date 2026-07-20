@@ -362,10 +362,14 @@ fn runtime_metadata(
 }
 
 pub(crate) fn hardware_metadata() -> HardwareMetadata {
+    let caps = wjsm_runtime::PlatformCapabilities::detect();
     HardwareMetadata {
         architecture: std::env::consts::ARCH.into(),
         os: std::env::consts::OS.into(),
         logical_cpus: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+        isa: caps.isa.as_str().into(),
+        numa_nodes: caps.numa.nodes.len(),
+        page_size: caps.page_size,
     }
 }
 

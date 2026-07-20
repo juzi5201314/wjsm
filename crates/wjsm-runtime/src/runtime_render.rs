@@ -816,7 +816,39 @@ async fn serialize_json_property_async(
                 }
             }
         } else {
-            let slots: Vec<(u32, i64)> = {
+            #[cfg(feature = "managed-heap-v2")]
+            let v2_slots: Option<Vec<(u32, i64)>> = {
+                let handle = value::decode_object_handle(value) as u32;
+                let access = caller.data().heap_access_v2().clone();
+                if access.resolve_handle(handle).is_ok() {
+                    Some(
+                        access
+                            .own_property_slots(handle)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|(_, flags)| {
+                                flags & crate::constants::FLAG_ENUMERABLE as u32 != 0
+                                    && flags & crate::constants::FLAG_PRIVATE as u32 == 0
+                            })
+                            .filter_map(|(key, _)| {
+                                access
+                                    .get_property(handle, key)
+                                    .ok()
+                                    .flatten()
+                                    .map(|prop_value| (key, prop_value as i64))
+                            })
+                            .filter(|(_, prop_value)| !value::is_undefined(*prop_value))
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            };
+            #[cfg(not(feature = "managed-heap-v2"))]
+            let v2_slots: Option<Vec<(u32, i64)>> = None;
+            let slots: Vec<(u32, i64)> = if let Some(slots) = v2_slots {
+                slots
+            } else {
                 let data = memory.data(&*caller);
                 let num_props = u32::from_le_bytes([
                     data[ptr + 12],
@@ -858,8 +890,20 @@ async fn serialize_json_property_async(
                 if is_symbol_name_id(name_id) {
                     continue;
                 }
-                let name_bytes = read_string_bytes(caller, name_id);
-                let name = String::from_utf8_lossy(&name_bytes).to_string();
+                let name = match crate::property_key::decode_name_id(name_id) {
+                    crate::property_key::DecodedNameId::RuntimeString(index) => {
+                        match crate::property_key::runtime_property_key_units(caller.data(), index)
+                        {
+                            Some(name) => name.to_utf8_lossy(),
+                            None => continue,
+                        }
+                    }
+                    crate::property_key::DecodedNameId::MemoryString(_) => {
+                        let name_bytes = read_string_bytes(caller, name_id);
+                        String::from_utf8_lossy(&name_bytes).to_string()
+                    }
+                    crate::property_key::DecodedNameId::Symbol(_) => continue,
+                };
                 let s = match Box::pin(serialize_json_property_async(
                     caller,
                     &name,

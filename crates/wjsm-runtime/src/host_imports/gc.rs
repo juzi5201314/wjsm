@@ -43,12 +43,8 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_obj_get_v2",
         |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
             Box::new(async move {
-                let handle = value::decode_handle(object);
-                if value::is_function(object)
-                    || value::is_closure(object)
-                    || value::is_bound(object)
-                {
-                    return Ok(crate::runtime_linker::function_value_get_property_impl(
+                if value::is_native_callable(object) {
+                    return Ok(crate::runtime_linker::native_callable_get_property_impl(
                         &mut caller,
                         object,
                         key,
@@ -64,30 +60,55 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         .await,
                     );
                 }
+                // Function/closure/bound 的 own 属性在 function_props 对象上；
+                // 先查 V2 handle table，未命中再回退 call/apply/bind 等内建解析。
+                let handle = if value::is_function(object)
+                    || value::is_closure(object)
+                    || value::is_bound(object)
+                {
+                    crate::handle_index_of(&mut caller, object) as u32
+                } else {
+                    value::decode_handle(object)
+                };
                 if caller
                     .data()
                     .heap_access_v2()
                     .resolve_handle(handle)
-                    .is_err()
+                    .is_ok()
                 {
-                    return Ok(value::encode_undefined());
-                }
-                let key = property_key(&mut caller, key)?;
-                if value::is_array(object) {
-                    let length_key = crate::property_key::encode_runtime_string_name_id(
-                        crate::property_key::intern_runtime_property_key(
-                            caller.data(),
-                            crate::runtime_string::RuntimeString::from_utf8_str("length"),
-                        ),
-                    );
-                    if key == length_key {
-                        let length = caller.data().heap_access_v2().array_length(handle)?;
-                        return Ok(value::encode_f64(length as f64));
+                    let key = property_key(&mut caller, key)?;
+                    if value::is_array(object) {
+                        let length_key = crate::property_key::encode_runtime_string_name_id(
+                            crate::property_key::intern_runtime_property_key(
+                                caller.data(),
+                                crate::runtime_string::RuntimeString::from_utf8_str("length"),
+                            ),
+                        );
+                        if key == length_key {
+                            let length = caller.data().heap_access_v2().array_length(handle)?;
+                            return Ok(value::encode_f64(length as f64));
+                        }
                     }
+                    let access = caller.data().heap_access_v2().clone();
+                    let property = access.get_property_slot_on_proto_chain(handle, key)?;
+                    if property.is_some()
+                        || !(value::is_function(object)
+                            || value::is_closure(object)
+                            || value::is_bound(object))
+                    {
+                        return read_v2_property_async(&mut caller, object, property).await;
+                    }
+                } else if value::is_function(object)
+                    || value::is_closure(object)
+                    || value::is_bound(object)
+                {
+                    return Ok(crate::runtime_linker::function_value_get_property_impl(
+                        &mut caller,
+                        object,
+                        key,
+                    ));
                 }
-                let access = caller.data().heap_access_v2().clone();
-                let property = access.get_property_slot_on_proto_chain(handle, key)?;
-                read_v2_property_async(&mut caller, object, property).await
+                Ok(value::encode_undefined())
             })
         },
     )?;
@@ -104,7 +125,15 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             if value::is_proxy(object) {
                 return set_proxy_property_v2(&mut caller, object, raw_key, key, new_value);
             }
-            let handle = value::decode_handle(object);
+            // Function/closure/bound 的属性对象 handle 从 function_props_base 起算。
+            let handle = if value::is_function(object)
+                || value::is_closure(object)
+                || value::is_bound(object)
+            {
+                crate::handle_index_of(&mut caller, object) as u32
+            } else {
+                value::decode_handle(object)
+            };
             caller
                 .data()
                 .heap_access_v2()
@@ -133,17 +162,26 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             Ok(allocate_v2_array_handle(&mut caller, capacity)? as i32)
         },
     )?;
-    linker.func_wrap(
+    linker.func_wrap_async(
         "env",
         "gc_elem_get_v2",
-        |caller: Caller<'_, RuntimeState>, array: i64, index: i32| -> wasmtime::Result<i64> {
-            let handle = value::decode_handle(array);
-            let index = u32::try_from(index).map_err(host_error)?;
-            Ok(caller
-                .data()
-                .heap_access_v2()
-                .get_element(handle, index)?
-                .unwrap_or(value::encode_undefined() as u64) as i64)
+        |mut caller: Caller<'_, RuntimeState>, (array, index): (i64, i32)| {
+            Box::new(async move {
+                let handle = value::decode_handle(array);
+                let access = caller.data().heap_access_v2().clone();
+                // arguments 等对象以 "0"/"1" 属性键承载索引访问，非数组布局。
+                if !value::is_array(array)
+                    && access.object_type(handle).ok() != Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+                {
+                    let key = v2_index_property_key(&caller, index);
+                    let property = access.get_property_slot_on_proto_chain(handle, key)?;
+                    return read_v2_property_async(&mut caller, array, property).await;
+                }
+                let index = u32::try_from(index).map_err(host_error)?;
+                Ok(access
+                    .get_element(handle, index)?
+                    .unwrap_or(value::encode_undefined() as u64) as i64)
+            })
         },
     )?;
     linker.func_wrap(
@@ -155,12 +193,31 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
          new_value: i64|
          -> wasmtime::Result<()> {
             let handle = value::decode_handle(array);
+            let access = caller.data().heap_access_v2().clone();
+            if !value::is_array(array)
+                && access.object_type(handle).ok() != Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+            {
+                let key = v2_index_property_key(&caller, index);
+                access.set_property(handle, key, new_value as u64)?;
+                return Ok(());
+            }
             let index = u32::try_from(index).map_err(host_error)?;
             crate::set_v2_array_element(&mut caller, handle, index, new_value as u64)?;
             Ok(())
         },
     )?;
     Ok(())
+}
+
+/// 数值下标 → 规范化 V2 属性键（与 define_host_data_property_v2 同一 intern 表）。
+#[cfg(feature = "managed-heap-v2")]
+fn v2_index_property_key(caller: &Caller<'_, RuntimeState>, index: i32) -> u32 {
+    crate::property_key::encode_runtime_string_name_id(
+        crate::property_key::intern_runtime_property_key(
+            caller.data(),
+            crate::runtime_string::RuntimeString::from_utf8_str(&index.to_string()),
+        ),
+    )
 }
 #[cfg(feature = "managed-heap-v2")]
 fn property_key(caller: &mut Caller<'_, RuntimeState>, key: i32) -> wasmtime::Result<u32> {

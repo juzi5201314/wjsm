@@ -7,6 +7,8 @@ mod memory;
 mod native_memory;
 mod object_map;
 mod page;
+pub mod platform;
+
 mod word;
 
 pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, RelocationReserve};
@@ -20,6 +22,11 @@ pub use memory::SharedHeapMemory;
 pub use native_memory::NativeHeapMemory;
 pub use object_map::PageObjectIter;
 pub use page::{AllocationClass, ObjectRef, PAGE_GRANULE_BYTES, PageId, PageRange};
+pub use platform::{
+    IsaDispatch, IsaKind, NumaNode, NumaTopology, PlatformCapabilities, PlatformError,
+    PlatformVirtualMemory, ScalarBitmapOps, VirtualRange, reserve as platform_reserve,
+    set_thread_affinity,
+};
 pub use word::{HeapAddress, HeapMemoryError};
 
 use memory::HeapMemory;

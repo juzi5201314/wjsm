@@ -3,7 +3,7 @@ use clap::ValueEnum;
 use serde::Serialize;
 use std::time::Instant;
 
-use wjsm_runtime::{ManagedAllocator, ManagedHeapLayout, Nlab};
+use wjsm_runtime::{ManagedAllocator, ManagedHeapLayout, Nlab, PlatformCapabilities};
 
 use crate::cli::{Cli, Command, CommonArgs, JdkArgs, MicroArgs, ReplayArgs, RunArgs};
 use crate::comparison::{compare, gate};
@@ -32,12 +32,14 @@ pub fn run(cli: Cli) -> Result<i32> {
 
 fn capabilities(args: CommonArgs) -> Result<i32> {
     let resources = SystemHostResourceProvider.snapshot()?;
+    let platform = PlatformCapabilities::detect();
     write_json(
         &args.output,
         &CapabilityReport {
             schema_version: BENCHMARK_SCHEMA_VERSION,
             hardware: hardware_metadata(),
             resources,
+            platform: PlatformCapabilityFields::from(&platform),
         },
     )?;
     Ok(0)
@@ -209,6 +211,43 @@ struct CapabilityReport {
     schema_version: u32,
     hardware: HardwareMetadata,
     resources: HostResourceSnapshot,
+    platform: PlatformCapabilityFields,
+}
+
+#[derive(Serialize)]
+struct PlatformCapabilityFields {
+    os: String,
+    arch: String,
+    isa: String,
+    page_size: usize,
+    decommit: bool,
+    hard_isolation: bool,
+    numa_nodes: Vec<u32>,
+    numa_multi_node: bool,
+    large_pages_hint: bool,
+    /// Capabilities this host cannot close; never auto-pass as GREEN.
+    needs_capability_runner: Vec<String>,
+}
+
+impl PlatformCapabilityFields {
+    fn from(caps: &PlatformCapabilities) -> Self {
+        Self {
+            os: caps.os.into(),
+            arch: caps.arch.into(),
+            isa: caps.isa.as_str().into(),
+            page_size: caps.page_size,
+            decommit: caps.decommit,
+            hard_isolation: caps.hard_isolation,
+            numa_nodes: caps.numa.nodes.iter().map(|n| n.0).collect(),
+            numa_multi_node: caps.numa.multi_node,
+            large_pages_hint: caps.large_pages_hint,
+            needs_capability_runner: caps
+                .needs_capability_runner
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Serialize)]

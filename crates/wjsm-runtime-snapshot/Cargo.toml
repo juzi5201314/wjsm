@@ -12,6 +12,7 @@ managed-heap-v2 = []
 
 [build-dependencies]
 wjsm-runtime = { path = "../wjsm-runtime" }
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 wjsm-engine-config = { path = "../wjsm-engine-config" }
 wjsm-runtime-support = { path = "../wjsm-runtime-support" }
 wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }

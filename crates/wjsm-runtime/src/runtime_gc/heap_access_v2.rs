@@ -345,6 +345,20 @@ impl HeapAccessV2 {
             .map_err(HeapAccessV2Error::Memory)?
             >> 32) as u32)
     }
+    /// 覆写对象 header 中的 heap type 标记（如 HEAP_TYPE_ARGUMENTS）。
+    pub fn set_object_type(&self, handle: u32, object_type: u8) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let header = self
+            .memory
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.memory
+            .store_word(
+                HeapAddress::new(object),
+                (header & u64::from(u32::MAX)) | (u64::from(object_type) << 32),
+            )
+            .map_err(HeapAccessV2Error::Memory)
+    }
 
     pub fn prototype(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
@@ -397,6 +411,33 @@ impl HeapAccessV2 {
         }
         Ok(slots)
     }
+    /// 覆写已存在属性槽的 flags（seal/freeze 等描述符收紧路径）。
+    pub fn update_property_flags(
+        &self,
+        handle: u32,
+        key: u32,
+        flags: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let (capacity, count) = self.property_shape(object)?;
+        for index in 0..count.min(capacity) {
+            let slot = property_slot_address(object, index)?;
+            let name = self
+                .memory
+                .load_word(HeapAddress::new(slot))
+                .map_err(HeapAccessV2Error::Memory)? as u32;
+            if name == key {
+                return self
+                    .memory
+                    .store_word(
+                        HeapAddress::new(slot),
+                        u64::from(key) | (u64::from(flags) << 32),
+                    )
+                    .map_err(HeapAccessV2Error::Memory);
+            }
+        }
+        Ok(())
+    }
 
     pub fn get_property_slot_on_proto_chain(
         &self,
@@ -431,12 +472,27 @@ impl HeapAccessV2 {
         getter: u64,
         setter: u64,
     ) -> Result<(), HeapAccessV2Error> {
+        self.define_accessor_property_with_flags(
+            handle,
+            key,
+            getter,
+            setter,
+            (constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE) as u32,
+        )
+    }
+
+    pub fn define_accessor_property_with_flags(
+        &self,
+        handle: u32,
+        key: u32,
+        getter: u64,
+        setter: u64,
+        flags: u32,
+    ) -> Result<(), HeapAccessV2Error> {
         self.define_property_slot(
             handle,
             key,
-            (constants::FLAG_CONFIGURABLE
-                | constants::FLAG_ENUMERABLE
-                | constants::FLAG_IS_ACCESSOR) as u32,
+            flags | constants::FLAG_IS_ACCESSOR as u32,
             value::encode_undefined() as u64,
             getter,
             setter,
