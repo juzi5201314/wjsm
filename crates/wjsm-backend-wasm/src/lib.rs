@@ -18,6 +18,7 @@ use wjsm_ir::{
 
 pub mod host_import_registry;
 mod shared_types;
+pub use compiler_helpers::barrier as gc_barrier;
 pub mod support_module;
 pub use support_module::{
     GcFlavor, emit_support_module, emit_support_module_managed_heap_v2,

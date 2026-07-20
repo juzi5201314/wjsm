@@ -80,7 +80,15 @@ pub use runtime_gc::telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,
 };
 #[cfg(feature = "managed-heap-v2")]
-pub use runtime_gc::zgc::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome};
+pub use runtime_gc::zgc::{
+    BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, ConcurrentHostRoots,
+    ConcurrentRelocator, HeaderField, HeaderFieldKind, HeaderLayout, HostRootsReport,
+    LoadBarrierOutcome, OldController, OldPhase, OldReport, PageRelocationState, PreciseRemset,
+    RelocationDescriptor, RelocationReport, WeakState, YoungController, YoungPhase, YoungReport,
+    ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome, classify_entry, color_stored_value,
+    load_barrier, prototype_field_kind, publish_promotion, select_bulk_copy_mode, store_barrier,
+    store_barrier_with_target_generation,
+};
 #[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
 pub use runtime_gc::{

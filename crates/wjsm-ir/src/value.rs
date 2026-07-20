@@ -146,6 +146,87 @@ pub fn strip_gc_color(value: i64) -> i64 {
         value
     }
 }
+
+/// young mark color 占用 bit 38–39（双 epoch 之一）。
+pub const YOUNG_MARK_COLOR_SHIFT: u32 = GC_COLOR_SHIFT;
+pub const YOUNG_MARK_COLOR_BITS: u32 = 2;
+pub const YOUNG_MARK_COLOR_MASK: u64 =
+    ((1_u64 << YOUNG_MARK_COLOR_BITS) - 1) << YOUNG_MARK_COLOR_SHIFT;
+
+/// old mark color 占用 bit 40–41（双 epoch 之一）。
+pub const OLD_MARK_COLOR_SHIFT: u32 = GC_COLOR_SHIFT + 2;
+pub const OLD_MARK_COLOR_BITS: u32 = 2;
+pub const OLD_MARK_COLOR_MASK: u64 = ((1_u64 << OLD_MARK_COLOR_BITS) - 1) << OLD_MARK_COLOR_SHIFT;
+
+/// remembered color 占用 bit 42–43（跨代 remset epoch）。
+pub const REMEMBERED_COLOR_SHIFT: u32 = GC_COLOR_SHIFT + 4;
+pub const REMEMBERED_COLOR_BITS: u32 = 2;
+pub const REMEMBERED_COLOR_MASK: u64 =
+    ((1_u64 << REMEMBERED_COLOR_BITS) - 1) << REMEMBERED_COLOR_SHIFT;
+
+/// 当前 generation 的 mark/remembered color 快照（仅 2 bit 字段）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GcColorMask {
+    pub young_mark: u8,
+    pub old_mark: u8,
+    pub remembered: u8,
+}
+
+impl GcColorMask {
+    pub const EMPTY: Self = Self {
+        young_mark: 0,
+        old_mark: 0,
+        remembered: 0,
+    };
+
+    pub const fn pack(self) -> u64 {
+        ((self.young_mark as u64) & 0b11) << YOUNG_MARK_COLOR_SHIFT
+            | ((self.old_mark as u64) & 0b11) << OLD_MARK_COLOR_SHIFT
+            | ((self.remembered as u64) & 0b11) << REMEMBERED_COLOR_SHIFT
+    }
+}
+
+/// 仅对 handle-backed reference 附着 color；非引用值原样返回且 color bits 必须为零。
+pub fn apply_gc_color(value: i64, mask: GcColorMask) -> i64 {
+    if !is_handle_backed_reference(value) {
+        debug_assert_eq!(value as u64 & GC_COLOR_MASK, 0);
+        return value;
+    }
+    let cleared = strip_gc_color(value) as u64;
+    (cleared | mask.pack()) as i64
+}
+
+pub fn gc_color_bits(value: i64) -> u64 {
+    if !is_handle_backed_reference(value) {
+        return 0;
+    }
+    value as u64 & GC_COLOR_MASK
+}
+
+pub fn has_young_mark_color(value: i64, young_mark: u8) -> bool {
+    if !is_handle_backed_reference(value) {
+        return false;
+    }
+    let bits = ((value as u64 & YOUNG_MARK_COLOR_MASK) >> YOUNG_MARK_COLOR_SHIFT) as u8;
+    bits == (young_mark & 0b11) && bits != 0
+}
+
+pub fn has_old_mark_color(value: i64, old_mark: u8) -> bool {
+    if !is_handle_backed_reference(value) {
+        return false;
+    }
+    let bits = ((value as u64 & OLD_MARK_COLOR_MASK) >> OLD_MARK_COLOR_SHIFT) as u8;
+    bits == (old_mark & 0b11) && bits != 0
+}
+
+pub fn has_remembered_color(value: i64, remembered: u8) -> bool {
+    if !is_handle_backed_reference(value) {
+        return false;
+    }
+    let bits = ((value as u64 & REMEMBERED_COLOR_MASK) >> REMEMBERED_COLOR_SHIFT) as u8;
+    bits == (remembered & 0b11) && bits != 0
+}
+
 pub const BOX_BASE: u64 = MASK_SIGN | MASK_EXPONENT | MASK_QUIET_NAN;
 
 pub fn encode_f64(val: f64) -> i64 {
