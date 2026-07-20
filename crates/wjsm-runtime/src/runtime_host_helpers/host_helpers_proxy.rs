@@ -30,6 +30,22 @@ pub(crate) fn define_property_on_normal_object(
         );
     }
 
+    // V2 对象堆在 memory64；resolve_handle 返回 handle id 而非 memory32 指针，
+    // 必须走 heap_access_v2，禁止继续写 main memory 槽。
+    // 函数/闭包/bound 用 function_props handle（handle_index_of）。
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = handle_index_of(caller, target) as u32;
+        if caller
+            .data()
+            .heap_access_v2()
+            .resolve_handle(handle)
+            .is_ok()
+        {
+            return define_property_on_v2_object(caller, target, name_id, desc);
+        }
+    }
+
     let obj_ptr = match resolve_handle(caller, target) {
         Some(p) => p,
         None => return Err("TypeError: Invalid target object".to_string()),
@@ -198,6 +214,160 @@ pub(crate) fn define_property_on_normal_object(
         let setter = desc.set.unwrap_or(value::encode_undefined());
 
         write_new_property_to_memory(caller, target, name_id, flags, val, getter, setter);
+        Ok(true)
+    }
+}
+
+/// V2 DefineProperty：读写均走 heap_access_v2，含 non-configurable invariants。
+#[cfg(feature = "managed-heap-v2")]
+fn define_property_on_v2_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    name_id: u32,
+    desc: &PropertyDescriptor,
+) -> Result<bool, String> {
+    // 函数/闭包/bound 的属性对象 handle 从 function_props_base 起算。
+    let handle = handle_index_of(caller, target) as u32;
+    let access = caller.data().heap_access_v2().clone();
+    let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)
+        .ok_or_else(|| "TypeError: Invalid property key".to_string())?;
+    let existing = access
+        .get_property_slot(handle, key)
+        .map_err(|error| format!("TypeError: {error}"))?;
+
+    if let Some(old) = existing {
+        let old_flags = old.flags as i32;
+        let old_configurable = (old_flags & constants::FLAG_CONFIGURABLE) != 0;
+        let old_enumerable = (old_flags & constants::FLAG_ENUMERABLE) != 0;
+        let old_writable = (old_flags & constants::FLAG_WRITABLE) != 0;
+        let old_accessor = (old_flags & constants::FLAG_IS_ACCESSOR) != 0;
+        let old_val = old.value as i64;
+        let old_getter = old.getter as i64;
+        let old_setter = old.setter as i64;
+
+        if !old_configurable {
+            if desc.configurable == Some(true) {
+                return Err("TypeError: Cannot redefine non-configurable property".to_string());
+            }
+            if let Some(new_enum) = desc.enumerable
+                && new_enum != old_enumerable
+            {
+                return Err(
+                    "TypeError: Cannot redefine enumerable attribute of non-configurable property"
+                        .to_string(),
+                );
+            }
+            let is_new_accessor = desc.get.is_some() || desc.set.is_some();
+            if is_new_accessor != old_accessor {
+                return Err("TypeError: Cannot change property type from data to accessor or vice versa on non-configurable property".to_string());
+            }
+            if !old_accessor {
+                if !old_writable {
+                    if desc.writable == Some(true) {
+                        return Err(
+                            "TypeError: Cannot make non-writable property writable".to_string(),
+                        );
+                    }
+                    if let Some(new_val) = desc.value {
+                        let same = strict_eq(caller, old_val, new_val);
+                        if value::is_falsy(same) {
+                            return Err("TypeError: Cannot change value of non-configurable non-writable property".to_string());
+                        }
+                    }
+                }
+            } else {
+                if let Some(new_getter) = desc.get
+                    && new_getter != old_getter
+                {
+                    return Err(
+                        "TypeError: Cannot change getter of non-configurable property".to_string(),
+                    );
+                }
+                if let Some(new_setter) = desc.set
+                    && new_setter != old_setter
+                {
+                    return Err(
+                        "TypeError: Cannot change setter of non-configurable property".to_string(),
+                    );
+                }
+            }
+        }
+
+        let is_accessor = desc.get.is_some()
+            || desc.set.is_some()
+            || (desc.value.is_none() && desc.writable.is_none() && old_accessor);
+        let mut flags: u32 = 0;
+        if is_accessor {
+            flags |= constants::FLAG_IS_ACCESSOR as u32;
+        }
+        let writable = desc
+            .writable
+            .unwrap_or(if !is_accessor { old_writable } else { false });
+        if writable {
+            flags |= constants::FLAG_WRITABLE as u32;
+        }
+        if desc.enumerable.unwrap_or(old_enumerable) {
+            flags |= constants::FLAG_ENUMERABLE as u32;
+        }
+        if desc.configurable.unwrap_or(old_configurable) {
+            flags |= constants::FLAG_CONFIGURABLE as u32;
+        }
+
+        if is_accessor {
+            let getter = desc.get.unwrap_or(old_getter);
+            let setter = desc.set.unwrap_or(old_setter);
+            access
+                .define_accessor_property_with_flags(
+                    handle,
+                    key,
+                    getter as u64,
+                    setter as u64,
+                    flags,
+                )
+                .map_err(|error| format!("TypeError: {error}"))?;
+        } else {
+            let val = desc.value.unwrap_or(old_val);
+            access
+                .define_data_property(handle, key, val as u64, flags)
+                .map_err(|error| format!("TypeError: {error}"))?;
+        }
+        Ok(true)
+    } else {
+        if !is_extensible_impl(caller, target) {
+            return Err("TypeError: Cannot add property to non-extensible object".to_string());
+        }
+        let is_accessor = desc.get.is_some() || desc.set.is_some();
+        let mut flags: u32 = 0;
+        if is_accessor {
+            flags |= constants::FLAG_IS_ACCESSOR as u32;
+        }
+        if desc.writable.unwrap_or(false) && !is_accessor {
+            flags |= constants::FLAG_WRITABLE as u32;
+        }
+        if desc.enumerable.unwrap_or(false) {
+            flags |= constants::FLAG_ENUMERABLE as u32;
+        }
+        if desc.configurable.unwrap_or(false) {
+            flags |= constants::FLAG_CONFIGURABLE as u32;
+        }
+        if is_accessor {
+            let getter = desc.get.unwrap_or(value::encode_undefined());
+            let setter = desc.set.unwrap_or(value::encode_undefined());
+            access
+                .define_accessor_property_with_flags(
+                    handle,
+                    key,
+                    getter as u64,
+                    setter as u64,
+                    flags,
+                )
+                .map_err(|error| format!("TypeError: {error}"))?;
+        } else {
+            let val = desc.value.unwrap_or(value::encode_undefined());
+            access
+                .define_data_property(handle, key, val as u64, flags)
+                .map_err(|error| format!("TypeError: {error}"))?;
+        }
         Ok(true)
     }
 }
@@ -414,6 +584,17 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
         };
     }
 
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = handle_index_of(caller, target) as u32;
+        let access = caller.data().heap_access_v2();
+        if access.resolve_handle(handle).is_ok() {
+            return match access.prototype(handle) {
+                Ok(proto_handle) => prototype_handle_to_value(caller, proto_handle),
+                Err(_) => value::encode_null(),
+            };
+        }
+    }
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_null();
     };
@@ -792,7 +973,12 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
 
     let name_id = property_key_value_to_name_id(caller, prop, false);
     #[cfg(feature = "managed-heap-v2")]
-    if value::is_object(target) {
+    if value::is_object(target)
+        || value::is_array(target)
+        || value::is_function(target)
+        || value::is_closure(target)
+        || value::is_bound(target)
+    {
         let Some(raw_name_id) = name_id else {
             return value::encode_undefined();
         };
@@ -800,14 +986,29 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         else {
             return value::encode_undefined();
         };
-        return caller
-            .data()
-            .heap_access_v2()
-            .get_property(value::decode_handle(target), name_id)
-            .ok()
-            .flatten()
-            .map(|property_value| property_value as i64)
-            .unwrap_or_else(value::encode_undefined);
+        let handle = handle_index_of(caller, target) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            match access
+                .get_property_slot_on_proto_chain(handle, name_id)
+                .ok()
+                .flatten()
+            {
+                Some(property)
+                    if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
+                {
+                    let getter = property.getter as i64;
+                    if value::is_undefined(getter) || value::is_null(getter) {
+                        return value::encode_undefined();
+                    }
+                    return call_wasm_callback_async(caller, getter, receiver, &[])
+                        .await
+                        .unwrap_or_else(|_| value::encode_undefined());
+                }
+                Some(property) => return property.value as i64,
+                None => return value::encode_undefined(),
+            }
+        }
     }
 
     let obj_ptr = match resolve_handle(caller, target) {

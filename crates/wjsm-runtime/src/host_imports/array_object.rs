@@ -295,6 +295,19 @@ fn define_property_on_normal_object_for_create(
         );
     }
 
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(target))
+        .is_ok()
+    {
+        // 与 define_property_on_normal_object 共享 V2 路径。
+        return crate::runtime_host_helpers::define_property_on_normal_object(
+            caller, target, name_id, desc,
+        );
+    }
+
     let obj_ptr = match resolve_handle(caller, target) {
         Some(p) => p,
         None => return Err("TypeError: Invalid target object".to_string()),
