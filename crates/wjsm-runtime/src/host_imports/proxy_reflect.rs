@@ -333,15 +333,19 @@ pub(crate) async fn object_assign_impl_async(
         }
         let names = collect_own_property_names_from_value(caller, source_val, true);
         for name in names {
-            let name_val = store_runtime_string(caller, name);
+            let name_val = store_runtime_string(caller, name.clone());
             let prop_val =
                 reflect_get_impl_with_receiver_async(caller, source_val, name_val, source_val)
                     .await;
-            let Ok(prop_name) = render_value(caller, name_val) else {
-                return make_type_error_exception(caller, "Cannot assign to read only property");
-            };
-            let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
-                return make_type_error_exception(caller, "Cannot assign to read only property");
+            // 优先 memory c-string（与编译期 name_id 同形）；否则 intern runtime key。
+            let name_id = match find_memory_c_string(caller, &name) {
+                Some(id) => id,
+                None => crate::property_key::encode_runtime_string_name_id(
+                    crate::property_key::intern_runtime_property_key(
+                        caller.data(),
+                        crate::runtime_string::RuntimeString::from_utf8_str(&name),
+                    ),
+                ),
             };
             if !ordinary_set_by_name_id(caller, target, target, name_id, prop_val).await {
                 return make_type_error_exception(caller, "Cannot assign to read only property");

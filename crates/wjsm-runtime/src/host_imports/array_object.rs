@@ -515,6 +515,25 @@ fn read_object_property_by_string_key_simple(
     let Ok(name) = render_value(caller, key_val) else {
         return value::encode_undefined();
     };
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(obj);
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    caller.data(),
+                    crate::runtime_string::RuntimeString::from_utf8_str(&name),
+                ),
+            );
+            return access
+                .get_property(handle, key)
+                .ok()
+                .flatten()
+                .map(|v| v as i64)
+                .unwrap_or_else(value::encode_undefined);
+        }
+    }
     let Some(ptr) = resolve_handle(caller, obj) else {
         return value::encode_undefined();
     };
