@@ -25,7 +25,6 @@ pub struct HeapAccessV2Property {
 }
 impl HeapAccessV2 {
     pub fn new(memory: SharedHeapMemory) -> Self {
-        let next_object = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
         let heap_limit = memory.maximum_byte_len();
         Self::with_heap_limit(memory, heap_limit)
     }
