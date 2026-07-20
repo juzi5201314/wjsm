@@ -730,3 +730,56 @@ cargo nextest run --workspace --all-features
 失败不是单一import问题：backend/host在`managed-heap-v2`下已消费8-byte atomic handles、shared memory64与V2 globals，但primordial snapshot、function table、realm clone、eval/runtime module及部分host dynamic object仍生产V1 addresses/handles。代表性症状为`unresolved V2 handle`、`indirect call type mismatch`、`invalid legacy source handle`和object property capacity不足。
 
 原计划要求该命令在active cutover前GREEN，与feature的编译期activation语义矛盾。用户已批准修订为：先保持该命令RED以枚举完整迁移缺口，完成单一V2 runtime activation，再将同一命令作为cutover GREEN硬门。禁止通过重新隔离feature、V1 fallback或runtime双轨规避失败。
+
+## Task 24–27 verification and retirement (PrettyAntlion)
+
+### Task 24 — JDK 25 normalized matrix hard gate
+
+Commands exercised on this host (2026-07-20):
+
+```bash
+cargo build --release -p wjsm-gc-bench
+target/release/wjsm-gc-bench preflight --heap 32m --profile pr --output /tmp/zgc-task24/preflight-32m.json  # exit 0 admitted
+target/release/wjsm-gc-bench preflight --heap 256m --profile pr --output /tmp/zgc-task24/preflight-256m.json # exit 0 admitted
+target/release/wjsm-gc-bench preflight --heap 1024m --profile pr --output /tmp/zgc-task24/preflight-1g.json  # exit 0 admitted
+```
+
+Host JDK: OpenJDK 25.0.3 Zulu at `/usr/lib/jvm/zulu-25` (Generational ZGC confirmed via `-XX:+UseZGC`).
+
+**Status**: infrastructure GREEN for preflight/compare CLI (`--heap`, `--duration` wired). Full 30-sample compare + gate remains **`needs-verification`**: stock JDK lacks `WjsmGcBenchmarkCounters` diagnostic numerators (patch `crates/wjsm-gc-bench/jdk-probe/0001-zgc-benchmark-counters.patch` not applied to this JVM). Thresholds/scenarios not relaxed.
+
+### Task 25 — 4/16 GiB nightly matrix
+
+```bash
+target/release/wjsm-gc-bench preflight --heap 4g --profile nightly --output /tmp/zgc-task24/preflight-4g-nightly.json
+# exit 78 needs-resource-runner
+# reasons: effective_total < required_total; effective_available short; hard isolation missing
+```
+
+Added `.github/workflows/zgc-nightly.yml`:
+- separate `build-artifacts` job (rustc/javac) vs large-heap run jobs;
+- 4g/16g named self-hosted runners disabled (`if: false`) until registered;
+- `fail-closed-local-smoke` asserts exit 78 for 4g/16g nightly preflight;
+- `gate --profile nightly` requires hard isolation, ≥3600s duration, and child ceiling evidence.
+
+**Status**: fail-closed RED path GREEN; large-heap performance GREEN deferred to named runners (`needs-resource-runner`).
+
+### Task 26 — retire legacy benchmarks
+
+Deleted:
+- `crates/wjsm-runtime/benches/gc_stress.rs` + `[[bench]]` entry
+- `crates/wjsm-runtime/examples/zgc_autoresearch.rs`
+- `crates/wjsm-runtime/examples/zgc_barrier_pressure.rs`
+
+`autoresearch.sh` now drives `wjsm-gc-bench preflight` + allocator `micro`.
+
+Residual `managed-heap-v2` cfg/feature remains until Task 15 cutover (not claimed retired here).
+
+### Task 27 — docs / ADR / AGENTS
+
+- New `docs/adr/0010-generational-zgc-managed-heap.md` superseding ADR 0005.
+- ADR 0003/0004 status lines cross-link ManagedHeap/support fingerprint.
+- `AGENTS.md` ManagedHeap/perf section.
+- `docs/aegis/INDEX.md` entries for ADR 0010 + workflows.
+- Full workspace fmt/clippy/nextest/Miri/TSan GREEN **blocked** on Task 15 activation; not claimed here.
+

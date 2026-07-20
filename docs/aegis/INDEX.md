@@ -113,3 +113,6 @@ This index tracks files created under this project's `docs/aegis/` workspace.
 | 2026-07-16 | work | docs/aegis/work/2026-07-16-zgc-performance/20-checkpoint.md | 20-checkpoint |
 | 2026-07-16 | work | docs/aegis/work/2026-07-16-zgc-performance/90-evidence.md | 90-evidence |
 | 2026-07-16 | plan | docs/aegis/plans/2026-07-16-zgc-performance.md | 2026-07-16-zgc-performance |
+| 2026-07-20 | adr | docs/adr/0010-generational-zgc-managed-heap.md | 0010-generational-zgc-managed-heap |
+| 2026-07-20 | workflow | .github/workflows/zgc-nightly.yml | zgc-nightly Task 25 |
+| 2026-07-20 | workflow | .github/workflows/zgc-capability-matrix.yml | zgc-capability-matrix Task 23 |

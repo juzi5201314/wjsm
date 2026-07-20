@@ -16,8 +16,13 @@ use crate::scenario::ScenarioKind;
 use crate::schema::{BENCHMARK_SCHEMA_VERSION, BenchmarkManifest, GateStatus, RunReport};
 
 pub(crate) fn compare(args: CompareArgs) -> Result<i32> {
-    let heaps = parse_csv(&args.heaps, crate::cli::parse_bytes)?;
-    let largest_heap = *heaps.iter().max().context("--heaps must not be empty")?;
+    // Nightly: single `--heap` (common). PR: multi `--heaps`.
+    let heaps = if args.common.profile == crate::cli::Profile::Nightly {
+        vec![args.common.heap]
+    } else {
+        parse_csv(&args.heaps, crate::cli::parse_bytes)?
+    };
+    let largest_heap = *heaps.iter().max().context("--heaps/--heap must not be empty")?;
     let resources = SystemHostResourceProvider.snapshot()?;
     let admission = admit(
         &resources,
@@ -26,6 +31,8 @@ pub(crate) fn compare(args: CompareArgs) -> Result<i32> {
             profile: args.common.profile,
         },
     );
+    std::fs::create_dir_all(&args.common.output)
+        .with_context(|| format!("create {}", args.common.output.display()))?;
     let manifest_path = args.common.output.join("manifest.json");
     if admission.status == AdmissionStatus::NeedsResourceRunner {
         let mut manifest = BenchmarkManifest::empty();
@@ -82,7 +89,7 @@ pub(crate) fn compare(args: CompareArgs) -> Result<i32> {
                     live_set: *live_set,
                     scenario: *scenario,
                     samples: args.samples,
-                    duration: 0,
+                    duration: args.duration,
                     workers: 1,
                     seed: 0x5eed,
                     manifest: None,
@@ -124,7 +131,7 @@ pub(crate) fn compare(args: CompareArgs) -> Result<i32> {
 
 pub(crate) fn gate(args: GateArgs) -> Result<i32> {
     let manifest: BenchmarkManifest = read_json(&args.manifest)?;
-    let report = gate_manifest(&manifest);
+    let report = gate_manifest_for_profile(&manifest, args.profile);
     let exit = match report.status {
         GateStatus::Passed => 0,
         GateStatus::NeedsResourceRunner => EXIT_NEEDS_RESOURCE_RUNNER,
@@ -135,7 +142,14 @@ pub(crate) fn gate(args: GateArgs) -> Result<i32> {
     Ok(exit)
 }
 
-pub(crate) fn gate_manifest(manifest: &BenchmarkManifest) -> GateReport {
+pub fn gate_manifest(manifest: &BenchmarkManifest) -> GateReport {
+    gate_manifest_for_profile(manifest, crate::cli::Profile::Pr)
+}
+
+pub fn gate_manifest_for_profile(
+    manifest: &BenchmarkManifest,
+    profile: crate::cli::Profile,
+) -> GateReport {
     if manifest.status == GateStatus::NeedsResourceRunner {
         return GateReport {
             status: GateStatus::NeedsResourceRunner,
@@ -187,7 +201,50 @@ pub(crate) fn gate_manifest(manifest: &BenchmarkManifest) -> GateReport {
             reasons: vec!["manifest 未包含 WJSM/JDK 对比对".into()],
         };
     }
-    evaluate_gate(&metrics, &pauses)
+    let mut report = evaluate_gate(&metrics, &pauses);
+    if profile == crate::cli::Profile::Nightly {
+        apply_nightly_gates(manifest, &mut report);
+    }
+    report
+}
+
+fn apply_nightly_gates(manifest: &BenchmarkManifest, report: &mut GateReport) {
+    let mut nightly_reasons = Vec::new();
+    for run in &manifest.reports {
+        if !run.resources.hard_isolation {
+            nightly_reasons.push(format!(
+                "nightly 需要 hard isolation；run {}/{} 缺少 delegated cgroup/Job",
+                run.runtime.engine, run.scenario.name
+            ));
+        }
+        if run.configuration.duration_seconds < 3600 {
+            nightly_reasons.push(format!(
+                "nightly duration={}s < 3600s for {}/{}",
+                run.configuration.duration_seconds, run.runtime.engine, run.scenario.name
+            ));
+        }
+        let child_ceiling = run
+            .scenario
+            .heap_cap_bytes
+            .saturating_mul(2)
+            .saturating_add(2 * 1024 * 1024 * 1024);
+        let observed_limit = run
+            .resources
+            .cgroup_limit_bytes
+            .or(run.resources.job_limit_bytes);
+        if observed_limit.is_none_or(|limit| limit > child_ceiling) {
+            nightly_reasons.push(format!(
+                "nightly child hard ceiling 必须 <= 2*heap+2GiB (ceiling={child_ceiling}); run {}/{} 未证明",
+                run.runtime.engine, run.scenario.name
+            ));
+        }
+    }
+    if !nightly_reasons.is_empty() {
+        report.reasons.extend(nightly_reasons);
+        if report.status == GateStatus::Passed {
+            report.status = GateStatus::NeedsResourceRunner;
+        }
+    }
 }
 
 fn paired_metric(name: &str, wjsm: &RunReport, jdk: &RunReport) -> NormalizedMetric {

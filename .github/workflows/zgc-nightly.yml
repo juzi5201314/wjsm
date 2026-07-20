@@ -1,0 +1,242 @@
+# Task 25: isolated large-heap + platform ZGC nightly matrix.
+# Fail-closed: missing named runners / hard isolation stay needs-resource-runner.
+# Local hosts must never auto-pass 4/16 GiB or shrink the matrix.
+
+name: zgc-nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-artifacts:
+    name: Build WJSM + prepare JDK probe classes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release bench CLI
+        run: cargo build --release -p wjsm-gc-bench
+      - name: Prepare JDK 25 probe classes
+        env:
+          JDK25_HOME: ${{ env.JAVA_HOME }}
+        run: |
+          if [ -z "${JDK25_HOME:-}" ]; then
+            echo "JDK25_HOME unset on build runner; probe classes deferred to large runner"
+            mkdir -p /tmp/jdk-probe-home
+          else
+            target/release/wjsm-gc-bench prepare-jdk \
+              --jdk-home "$JDK25_HOME" \
+              --jdk-probe-home /tmp/jdk-probe-home \
+              --output /tmp/jdk-prepare.json
+            cat /tmp/jdk-prepare.json
+          fi
+      - name: Upload bench binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wjsm-gc-bench-linux-x64
+          path: target/release/wjsm-gc-bench
+          if-no-files-found: error
+      - name: Upload JDK probe home
+        uses: actions/upload-artifact@v4
+        with:
+          name: jdk-probe-home
+          path: /tmp/jdk-probe-home
+          if-no-files-found: warn
+
+  large-heap-4g:
+    name: Nightly 4 GiB isolated matrix
+    needs: build-artifacts
+    # Named large runner with delegated cgroup v2 / Job hard isolation.
+    # Keep disabled until registered; never auto-pass on github-hosted.
+    runs-on: [self-hosted, linux, x64, zgc-large-32g]
+    if: ${{ false }}
+    env:
+      HEAP_CAP: 4g
+      PROFILE: nightly
+      JDK25_HOME: ${{ vars.JDK25_HOME }}
+      JDK25_PROBE_HOME: ${{ runner.temp }}/jdk-probe-home
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download bench binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wjsm-gc-bench-linux-x64
+          path: bin
+      - name: Download JDK probe home
+        uses: actions/download-artifact@v4
+        with:
+          name: jdk-probe-home
+          path: ${{ env.JDK25_PROBE_HOME }}
+      - name: Make binary executable
+        run: chmod +x bin/wjsm-gc-bench
+      - name: Preflight hard isolation
+        run: |
+          bin/wjsm-gc-bench preflight \
+            --heap "$HEAP_CAP" \
+            --profile "$PROFILE" \
+            --output /tmp/zgc-nightly-4g-resources.json
+          python3 - <<'PY'
+          import json, sys
+          d=json.load(open("/tmp/zgc-nightly-4g-resources.json"))
+          print(json.dumps(d, indent=2))
+          if d["admission"]["status"] != "admitted":
+              print("needs-resource-runner: admission rejected", file=sys.stderr)
+              sys.exit(78)
+          if not d["resources"].get("hard_isolation"):
+              print("needs-resource-runner: hard isolation missing", file=sys.stderr)
+              sys.exit(78)
+          PY
+      - name: Compare WJSM vs JDK 25 (sequential, exclusive)
+        run: |
+          # Large runners hold exclusive machine lock externally.
+          # Child hard ceiling = 2*heap + 2GiB is enforced by runner cgroup/Job.
+          bin/wjsm-gc-bench compare \
+            --jdk-home "$JDK25_HOME" \
+            --jdk-probe-home "$JDK25_PROBE_HOME" \
+            --heap "$HEAP_CAP" \
+            --live-sets 10,50,80 \
+            --duration 3600 \
+            --scenarios saturation,request,humongous,idle-uncommit \
+            --profile "$PROFILE" \
+            --output /tmp/zgc-nightly-4g
+      - name: Gate nightly profile
+        run: |
+          bin/wjsm-gc-bench gate \
+            --manifest /tmp/zgc-nightly-4g/manifest.json \
+            --profile nightly
+      - name: Upload 4g evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zgc-nightly-4g-evidence
+          path: |
+            /tmp/zgc-nightly-4g-resources.json
+            /tmp/zgc-nightly-4g
+
+  large-heap-16g:
+    name: Nightly 16 GiB isolated matrix
+    needs: build-artifacts
+    runs-on: [self-hosted, linux, x64, zgc-large-64g]
+    if: ${{ false }}
+    env:
+      HEAP_CAP: 16g
+      PROFILE: nightly
+      JDK25_HOME: ${{ vars.JDK25_HOME }}
+      JDK25_PROBE_HOME: ${{ runner.temp }}/jdk-probe-home
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download bench binary
+        uses: actions/download-artifact@v4
+        with:
+          name: wjsm-gc-bench-linux-x64
+          path: bin
+      - name: Download JDK probe home
+        uses: actions/download-artifact@v4
+        with:
+          name: jdk-probe-home
+          path: ${{ env.JDK25_PROBE_HOME }}
+      - name: Make binary executable
+        run: chmod +x bin/wjsm-gc-bench
+      - name: Preflight hard isolation
+        run: |
+          bin/wjsm-gc-bench preflight \
+            --heap "$HEAP_CAP" \
+            --profile "$PROFILE" \
+            --output /tmp/zgc-nightly-16g-resources.json
+          python3 - <<'PY'
+          import json, sys
+          d=json.load(open("/tmp/zgc-nightly-16g-resources.json"))
+          print(json.dumps(d, indent=2))
+          if d["admission"]["status"] != "admitted":
+              print("needs-resource-runner: admission rejected", file=sys.stderr)
+              sys.exit(78)
+          if not d["resources"].get("hard_isolation"):
+              print("needs-resource-runner: hard isolation missing", file=sys.stderr)
+              sys.exit(78)
+          PY
+      - name: Compare WJSM vs JDK 25 (sequential, exclusive)
+        run: |
+          bin/wjsm-gc-bench compare \
+            --jdk-home "$JDK25_HOME" \
+            --jdk-probe-home "$JDK25_PROBE_HOME" \
+            --heap "$HEAP_CAP" \
+            --live-sets 10,50,80 \
+            --duration 3600 \
+            --scenarios saturation,request,humongous,idle-uncommit \
+            --profile "$PROFILE" \
+            --output /tmp/zgc-nightly-16g
+      - name: Gate nightly profile
+        run: |
+          bin/wjsm-gc-bench gate \
+            --manifest /tmp/zgc-nightly-16g/manifest.json \
+            --profile nightly
+      - name: Upload 16g evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zgc-nightly-16g-evidence
+          path: |
+            /tmp/zgc-nightly-16g-resources.json
+            /tmp/zgc-nightly-16g
+
+  # Cross-platform ISA / OS / NUMA large-heap capability smoke (named runners only).
+  # Performance matrix above remains Linux large runners; these jobs only prove
+  # platform memory capabilities under nightly admission, never auto-pass missing ISA.
+  platform-windows-x86_64:
+    name: Nightly platform Windows x86_64 (named)
+    runs-on: windows-latest
+    if: ${{ false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p wjsm-gc-bench
+      - run: |
+          target/release/wjsm-gc-bench.exe capabilities --output gc-capabilities.json
+          python -c "import json; d=json.load(open('gc-capabilities.json')); assert d['platform']['os']=='windows'"
+
+  platform-macos-arm64:
+    name: Nightly platform macOS arm64 (named)
+    runs-on: macos-latest
+    if: ${{ false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p wjsm-gc-bench
+      - run: |
+          target/release/wjsm-gc-bench capabilities --output /tmp/gc-capabilities.json
+          python3 -c "import json; d=json.load(open('/tmp/gc-capabilities.json')); assert d['platform']['os']=='macos'"
+
+  # Local / default runner: prove fail-closed RED for 4/16 GiB nightly without
+  # recording skip as pass. Exit 78 is the contract.
+  fail-closed-local-smoke:
+    name: Fail-closed preflight (no large runner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release bench CLI
+        run: cargo build --release -p wjsm-gc-bench
+      - name: 4 GiB nightly must exit 78 without hard isolation
+        run: |
+          set +e
+          target/release/wjsm-gc-bench preflight --heap 4g --profile nightly --output /tmp/zgc-fc-4g.json
+          code=$?
+          set -e
+          echo "exit=$code"
+          cat /tmp/zgc-fc-4g.json
+          test "$code" -eq 78
+      - name: 16 GiB nightly must exit 78 without hard isolation
+        run: |
+          set +e
+          target/release/wjsm-gc-bench preflight --heap 16g --profile nightly --output /tmp/zgc-fc-16g.json
+          code=$?
+          set -e
+          echo "exit=$code"
+          cat /tmp/zgc-fc-16g.json
+          test "$code" -eq 78

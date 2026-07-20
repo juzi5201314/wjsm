@@ -65,7 +65,3 @@ criterion = { version = "0.5", features = ["html_reports"] }
 loom = "0.7"
 wjsm-engine-config = { path = "../wjsm-engine-config" }
 wasmparser = { workspace = true }
-
-[[bench]]
-name = "gc_stress"
-harness = false

@@ -1,6 +1,6 @@
 # ADR 0004: Build-Time Embedded Runtime
 
-**Status**: Workspace 全测试通过（970 passed, 1 skipped）。P0/P1/P2.0-P2.5/P2.7/P3.0/P4 实施落地。运行时磁盘 startup cache 已退役。Normal mode 下 10 个 helper（obj_new/obj_get/obj_set/obj_delete/arr_new/elem_get/elem_set/string_eq/to_int32/get_proto_from_ctor）已从 wjsm_support import；bootstrap 阶段函数（wjsm_bootstrap_once / wjsm_init_function_props）保持 user wasm 内联（仅启动时调用一次，无 wasmtime compile 收益）。Eval mode 仍走 inline helper 路径（compiled eval 无独立 support instance）。当前等价于 ADR 0003 的 snapshot 能力上**改为 build-time 固化通道 + support module 双 instance**，不再依赖客户机器缓存。
+**Status**: Workspace 全测试通过（970 passed, 1 skipped）。P0/P1/P2.0-P2.5/P2.7/P3.0/P4 实施落地。运行时磁盘 startup cache 已退役。Normal mode 下 10 个 helper（obj_new/obj_get/obj_set/obj_delete/arr_new/elem_get/elem_set/string_eq/to_int32/get_proto_from_ctor）已从 wjsm_support import；bootstrap 阶段函数（wjsm_bootstrap_once / wjsm_init_function_props）保持 user wasm 内联（仅启动时调用一次，无 wasmtime compile 收益）。Eval mode 仍走 inline helper 路径（compiled eval 无独立 support instance）。当前等价于 ADR 0003 的 snapshot 能力上**改为 build-time 固化通道 + support module 双 instance**，不再依赖客户机器缓存。ManagedHeap / shared memory64 / engine fingerprint 与 support ABI 对齐见 [ADR 0010](0010-generational-zgc-managed-heap.md) 与 `wjsm-engine-config`。
 
 **Date**: 2026-06-19
 

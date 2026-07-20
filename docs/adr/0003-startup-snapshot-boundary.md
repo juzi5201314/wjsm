@@ -1,6 +1,6 @@
 # ADR 0003: Startup Snapshot Boundary
 
-**Status**: snapshot 边界/格式仍采纳；分发与启动策略由 [ADR 0004](0004-build-time-embedded-runtime.md) 部分取代。ADR 0004 将 first-run capture 从客户运行时迁移到 build-time embedded bytes，并退役运行时磁盘 cache；本 ADR 仍是可捕获内容与 restore 重定位规则的权威文档。
+**Status**: snapshot 边界/格式仍采纳；分发与启动策略由 [ADR 0004](0004-build-time-embedded-runtime.md) 部分取代。ADR 0004 将 first-run capture 从客户运行时迁移到 build-time embedded bytes，并退役运行时磁盘 cache；本 ADR 仍是可捕获内容与 restore 重定位规则的权威文档。ManagedHeap / 8-byte handle / page metadata wire 扩展见 [ADR 0010](0010-generational-zgc-managed-heap.md)（不改变“用户对象不进 snapshot、side table 不捕获”的内容边界）。
 
 **Date**: 2026-06-18
 

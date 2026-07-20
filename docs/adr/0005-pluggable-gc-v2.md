@@ -1,8 +1,10 @@
 # ADR 0005: Pluggable GC v2 Boundary
 
-**Status**: Accepted after full implementation verification. P0-P6 已落地并通过最终矩阵：mark-sweep 默认、G1、ZGC 三算法可通过 `RuntimeOptions` / CLI `--gc` / `WJSM_GC` 选择；`WJSM_TEST_GC` 保留为测试矩阵 override。
+**Status**: **Superseded** by [ADR 0010: Generational ZGC Managed Heap](0010-generational-zgc-managed-heap.md) for ownership, concurrency, generation, and entry decisions. Retained as historical record of the safepoint-budgeted pluggable GC v2 that shipped mark-sweep/G1/ZGC under memory32 4-byte handles.
 
 **Date**: 2026-07-05
+
+**Superseded-by**: [ADR 0010](0010-generational-zgc-managed-heap.md)
 
 ## Context
 

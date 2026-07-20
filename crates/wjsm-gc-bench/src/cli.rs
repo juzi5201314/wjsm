@@ -139,6 +139,8 @@ pub struct CompareArgs {
     pub jdk_home: PathBuf,
     #[arg(long)]
     pub jdk_probe_home: PathBuf,
+    /// Comma-separated heap caps for PR matrix.
+    /// Nightly profile ignores this and uses `--heap` from common args.
     #[arg(long, default_value = "32m,256m,1024m")]
     pub heaps: String,
     #[arg(long, default_value = "10,50,80")]
@@ -150,6 +152,9 @@ pub struct CompareArgs {
     pub scenarios: String,
     #[arg(long, default_value_t = 30)]
     pub samples: usize,
+    /// Steady-state duration in seconds per sample (0 = single pass).
+    #[arg(long, default_value_t = 0)]
+    pub duration: u64,
 }
 
 #[derive(Debug, Parser)]
