@@ -11,6 +11,8 @@ pub mod host_roots;
 #[cfg(feature = "managed-heap-v2")]
 pub mod old;
 #[cfg(feature = "managed-heap-v2")]
+pub mod remset;
+#[cfg(feature = "managed-heap-v2")]
 pub mod young;
 #[cfg(feature = "managed-heap-v2")]
 mod v2;
@@ -29,7 +31,9 @@ pub use host_roots::{ConcurrentHostRoots, HostRootsReport, WeakState};
 #[cfg(feature = "managed-heap-v2")]
 pub use old::{OldController, OldPhase, OldReport};
 #[cfg(feature = "managed-heap-v2")]
-pub use young::{PreciseRemset, YoungController, YoungPhase, YoungReport, publish_promotion};
+pub use remset::{PreciseRemset, publish_promotion};
+#[cfg(feature = "managed-heap-v2")]
+pub use young::{YoungController, YoungPhase, YoungReport};
 #[cfg(feature = "managed-heap-v2")]
 pub use v2::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome};
 
