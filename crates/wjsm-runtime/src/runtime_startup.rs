@@ -620,70 +620,94 @@ fn record_and_attach_gc_heap(
     wasm_env: &WasmEnv,
     immortal_objects_end: usize,
 ) -> Result<()> {
-    let object_heap_start = wasm_env
-        .object_heap_start
-        .and_then(|g| g.get(&mut *store).i32())
-        .unwrap_or(0)
-        .max(0) as usize;
-    let immortal_objects_end = immortal_objects_end.max(object_heap_start);
-    let dynamic_heap_start = align_gc_region_start(immortal_objects_end)?;
-    if dynamic_heap_start > i32::MAX as usize {
-        anyhow::bail!("GC dynamic heap start exceeds wasm32 signed global range");
-    }
-    wasm_env
-        .heap_ptr
-        .set(&mut *store, Val::I32(dynamic_heap_start as i32))?;
-    // barrier 位于主内存 handle table 之后（不再嵌在 shadow 区后）。
-    let barrier_event_buf_base = wasm_env
-        .barrier_buf_ptr
-        .and_then(|g| g.get(&mut *store).i32())
-        .unwrap_or(0)
-        .max(0) as usize;
-    let barrier_event_buf_end = wasm_env
-        .barrier_buf_end
-        .and_then(|g| g.get(&mut *store).i32())
-        .map(|v| v.max(0) as usize)
-        .unwrap_or_else(|| {
-            barrier_event_buf_base + wjsm_ir::constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize
-        });
-    if barrier_event_buf_end > i32::MAX as usize {
-        anyhow::bail!("GC barrier buffer end exceeds wasm32 signed global range");
-    }
-    if let Some(global) = wasm_env.gc_alloc_bytes {
-        global.set(&mut *store, Val::I32(0))?;
-    }
-    if let Some(global) = wasm_env.gc_phase {
-        global.set(&mut *store, Val::I32(0))?;
-    }
-    if let Some(global) = wasm_env.good_color {
-        global.set(&mut *store, Val::I32(0))?;
-    }
-    if let Some(global) = wasm_env.barrier_buf_ptr {
-        global.set(&mut *store, Val::I32(barrier_event_buf_base as i32))?;
-    }
-    if let Some(global) = wasm_env.barrier_buf_end {
-        global.set(&mut *store, Val::I32(barrier_event_buf_end as i32))?;
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        // V2：对象堆与 handle 表在 memory64 `__heap_memory`，主 memory 只承载字符串。
+        // 禁止再走 V1 attach（会把 memory32 heap_ptr/alloc 窗口/GC 元数据当成对象堆，
+        // 并可能在扫描/清扫时踩主内存字符串区）。
+        let string_end = wasm_env
+            .heap_ptr
+            .get(&mut *store)
+            .i32()
+            .unwrap_or(0)
+            .max(0) as usize;
+        let immortal_objects_end = immortal_objects_end.max(string_end);
+        store
+            .data()
+            .store_heap_layout_boundaries(immortal_objects_end, immortal_objects_end, 0);
+        // 主内存 heap_ptr 保持字符串 tip，供 eval/runtime 模块 data 追加。
+        enforce_heap_limit(store, wasm_env)?;
+        let _ = wasm_env;
+        return Ok(());
     }
 
-    store.data().store_heap_layout_boundaries(
-        immortal_objects_end,
-        dynamic_heap_start,
-        barrier_event_buf_base,
-    );
-    enforce_heap_limit(store, wasm_env)?;
-    let (_, attached_dynamic_heap_start, _) = store.data().heap_layout_boundaries();
-    if let Some(global) = wasm_env.gc_trigger_bytes {
-        global.set(
-            &mut *store,
-            Val::I32(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES as i32),
-        )?;
-    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let object_heap_start = wasm_env
+            .object_heap_start
+            .and_then(|g| g.get(&mut *store).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        let immortal_objects_end = immortal_objects_end.max(object_heap_start);
+        let dynamic_heap_start = align_gc_region_start(immortal_objects_end)?;
+        if dynamic_heap_start > i32::MAX as usize {
+            anyhow::bail!("GC dynamic heap start exceeds wasm32 signed global range");
+        }
+        wasm_env
+            .heap_ptr
+            .set(&mut *store, Val::I32(dynamic_heap_start as i32))?;
+        // barrier 位于主内存 handle table 之后（不再嵌在 shadow 区后）。
+        let barrier_event_buf_base = wasm_env
+            .barrier_buf_ptr
+            .and_then(|g| g.get(&mut *store).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        let barrier_event_buf_end = wasm_env
+            .barrier_buf_end
+            .and_then(|g| g.get(&mut *store).i32())
+            .map(|v| v.max(0) as usize)
+            .unwrap_or_else(|| {
+                barrier_event_buf_base + wjsm_ir::constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize
+            });
+        if barrier_event_buf_end > i32::MAX as usize {
+            anyhow::bail!("GC barrier buffer end exceeds wasm32 signed global range");
+        }
+        if let Some(global) = wasm_env.gc_alloc_bytes {
+            global.set(&mut *store, Val::I32(0))?;
+        }
+        if let Some(global) = wasm_env.gc_phase {
+            global.set(&mut *store, Val::I32(0))?;
+        }
+        if let Some(global) = wasm_env.good_color {
+            global.set(&mut *store, Val::I32(0))?;
+        }
+        if let Some(global) = wasm_env.barrier_buf_ptr {
+            global.set(&mut *store, Val::I32(barrier_event_buf_base as i32))?;
+        }
+        if let Some(global) = wasm_env.barrier_buf_end {
+            global.set(&mut *store, Val::I32(barrier_event_buf_end as i32))?;
+        }
 
-    let gc_arc = store.data().gc_algorithm.clone();
-    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let mut gc_ctx = crate::runtime_gc::GcContext::new(store, wasm_env, gc.name());
-    gc.attach_heap(&mut gc_ctx, attached_dynamic_heap_start);
-    Ok(())
+        store.data().store_heap_layout_boundaries(
+            immortal_objects_end,
+            dynamic_heap_start,
+            barrier_event_buf_base,
+        );
+        enforce_heap_limit(store, wasm_env)?;
+        let (_, attached_dynamic_heap_start, _) = store.data().heap_layout_boundaries();
+        if let Some(global) = wasm_env.gc_trigger_bytes {
+            global.set(
+                &mut *store,
+                Val::I32(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES as i32),
+            )?;
+        }
+
+        let gc_arc = store.data().gc_algorithm.clone();
+        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gc_ctx = crate::runtime_gc::GcContext::new(store, wasm_env, gc.name());
+        gc.attach_heap(&mut gc_ctx, attached_dynamic_heap_start);
+        Ok(())
+    }
 }
 
 /// P2.2+P2.3: 创建 shared memory/table/globals 注册到 "env" namespace，
