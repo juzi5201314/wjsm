@@ -43,6 +43,15 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_obj_get_v2",
         |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
             Box::new(async move {
+                // V2 support obj_get 透传所有接收者；原始值必须在 host 侧分派，
+                // 否则 `"".length` / Number.prototype 方法等全部变成 undefined。
+                if value::is_string(object) {
+                    return Ok(crate::host_imports::primitive_string_get_property_impl(
+                        &mut caller,
+                        object,
+                        key as u32,
+                    ));
+                }
                 if value::is_native_callable(object) {
                     return Ok(crate::runtime_linker::native_callable_get_property_impl(
                         &mut caller,
@@ -134,6 +143,18 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             } else {
                 value::decode_handle(object)
             };
+            if value::is_array(object) {
+                let length_key = crate::property_key::encode_runtime_string_name_id(
+                    crate::property_key::intern_runtime_property_key(
+                        caller.data(),
+                        crate::runtime_string::RuntimeString::from_utf8_str("length"),
+                    ),
+                );
+                if key == length_key {
+                    crate::host_imports::array_set_length_impl(&mut caller, object, new_value);
+                    return Ok(());
+                }
+            }
             caller
                 .data()
                 .heap_access_v2()
@@ -141,17 +162,53 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             Ok(())
         },
     )?;
-    linker.func_wrap(
+    linker.func_wrap_async(
         "env",
         "gc_obj_delete_v2",
-        |mut caller: Caller<'_, RuntimeState>, object: i64, key: i32| -> wasmtime::Result<i64> {
-            let handle = value::decode_handle(object);
-            let key = property_key(&mut caller, key)?;
-            let deleted = caller
-                .data()
-                .heap_access_v2()
-                .delete_property(handle, key)?;
-            Ok(value::encode_bool(deleted))
+        |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
+            Box::new(async move {
+                if value::is_proxy(object) {
+                    return Ok(
+                        crate::host_imports::reentrant_async::proxy_trap_internal_delete_async(
+                            &mut caller, object, key,
+                        )
+                        .await,
+                    );
+                }
+                let handle = value::decode_handle(object);
+                let key = property_key(&mut caller, key)?;
+                if value::is_array(object) {
+                    if let Some(name) = match crate::property_key::decode_name_id(key) {
+                        crate::property_key::DecodedNameId::RuntimeString(index) => {
+                            crate::property_key::runtime_property_key_units(caller.data(), index)
+                                .map(|name| name.to_utf8_lossy())
+                        }
+                        crate::property_key::DecodedNameId::MemoryString(index) => {
+                            let env = crate::WasmEnv::from_caller(&mut caller)
+                                .ok_or_else(|| wasmtime::Error::msg("missing WasmEnv"))?;
+                            let bytes = crate::runtime_render::read_string_bytes_mem(
+                                &caller,
+                                &env.memory,
+                                index,
+                            );
+                            Some(String::from_utf8_lossy(&bytes).into_owned())
+                        }
+                        crate::property_key::DecodedNameId::Symbol(_) => None,
+                    } {
+                        if let Ok(index) = name.parse::<u32>() {
+                            if let Some(ptr) = crate::resolve_array_ptr(&mut caller, object) {
+                                crate::runtime_values::write_array_hole(&mut caller, ptr, index);
+                                return Ok(value::encode_bool(true));
+                            }
+                        }
+                    }
+                }
+                let deleted = caller
+                    .data()
+                    .heap_access_v2()
+                    .delete_property(handle, key)?;
+                Ok(value::encode_bool(deleted))
+            })
         },
     )?;
     linker.func_wrap(

@@ -321,19 +321,45 @@ pub(crate) fn reflect_delete_property_impl(
             Err(_) => return value::encode_bool(true),
         }
     };
+    // 数组元素删除必须在 name_id 解析前完成：数字索引可能尚未 intern 到
+    // memory c-string 表，property_key_value_to_name_id(..., false) 会失败并
+    // 误返回 true，导致 hole 从未写入。
+    if value::is_array(target)
+        && let Ok(index) = prop_name.parse::<u32>()
+    {
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            let handle = value::decode_handle(target);
+            if caller
+                .data()
+                .heap_access_v2()
+                .resolve_handle(handle)
+                .is_ok()
+            {
+                if let Err(error) = crate::set_v2_array_element(
+                    caller,
+                    handle,
+                    index,
+                    value::encode_array_hole() as u64,
+                ) {
+                    set_runtime_error(caller.data(), format!("V2 array delete hole: {error}"));
+                    return value::encode_bool(false);
+                }
+                return value::encode_bool(true);
+            }
+        }
+        if let Some(ptr) = resolve_handle(caller, target) {
+            crate::runtime_values::write_array_hole(caller, ptr, index);
+        }
+        return value::encode_bool(true);
+    }
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_bool(true);
     };
     let Some(name_id) = property_key_value_to_name_id(caller, prop, false) else {
         return value::encode_bool(true);
     };
-    // 数组元素删除：将对应 slot 置 hole
-    if value::is_array(target)
-        && let Ok(index) = prop_name.parse::<u32>()
-    {
-        crate::runtime_values::write_array_hole(caller, ptr, index);
-        return value::encode_bool(true);
-    }
+    let _ = ptr;
     delete_property_by_name_id(caller, target, name_id)
 }
 

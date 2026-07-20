@@ -206,6 +206,34 @@ fn runtime_string_from_code_point(cp: u32) -> RuntimeString {
     RuntimeString::from_utf16_units(ch.encode_utf16(&mut buf).to_vec())
 }
 
+/// 原始字符串属性读取（length + includes/startsWith/indexOf）。
+/// `gc_obj_get_v2` 与 host import `primitive_string_get_property` 共用。
+pub(crate) fn primitive_string_get_property_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    receiver: i64,
+    name_id: u32,
+) -> i64 {
+    let is_length = crate::runtime_render::read_string_bytes(caller, name_id) == b"length"
+        || WasmEnv::from_caller(caller).is_some_and(|env| {
+            let expected = RuntimeString::from_utf8_str("length");
+            crate::property_key::name_id_matches_runtime_string(caller, &env, name_id, &expected)
+        });
+    if is_length {
+        let len = get_string_value(caller, receiver).utf16_len();
+        return value::encode_f64(len as f64);
+    }
+    let method = match crate::runtime_render::read_string_bytes(caller, name_id).as_slice() {
+        b"includes" => 0,
+        b"startsWith" => 1,
+        b"indexOf" => 2,
+        _ => return value::encode_undefined(),
+    };
+    create_native_callable(
+        caller.data(),
+        NativeCallable::StringPrimitiveMethod { method },
+    )
+}
+
 pub(crate) fn define_string_methods(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -254,33 +282,11 @@ pub(crate) fn define_string_methods(
         cp <= 0x10FFFF && !(0xD800..=0xDFFF).contains(&cp)
     }
 
+
     let primitive_string_get_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, name_id: i32| -> i64 {
-            let name_id = name_id as u32;
-            let is_length = crate::runtime_render::read_string_bytes(&mut caller, name_id)
-                == b"length"
-                || WasmEnv::from_caller(&mut caller).is_some_and(|env| {
-                    let expected = RuntimeString::from_utf8_str("length");
-                    crate::property_key::name_id_matches_runtime_string(
-                        &caller, &env, name_id, &expected,
-                    )
-                });
-            if is_length {
-                let len = get_string_value(&mut caller, receiver).utf16_len();
-                return value::encode_f64(len as f64);
-            }
-            let method =
-                match crate::runtime_render::read_string_bytes(&mut caller, name_id).as_slice() {
-                    b"includes" => 0,
-                    b"startsWith" => 1,
-                    b"indexOf" => 2,
-                    _ => return value::encode_undefined(),
-                };
-            create_native_callable(
-                caller.data(),
-                NativeCallable::StringPrimitiveMethod { method },
-            )
+            primitive_string_get_property_impl(&mut caller, receiver, name_id as u32)
         },
     );
     linker.define(

@@ -509,9 +509,16 @@ pub(crate) fn allocate_v2_object_bytes_with_context<C: AsContextMut<Data = Runti
                 error,
                 crate::runtime_gc::HeapAccessV2Error::HeapExhausted { .. }
             ) {
+                let used = access.used_bytes() as usize;
+                let requested = bytes as usize;
+                let message = ctx
+                    .as_context()
+                    .data()
+                    .heap_oom_message(used, requested);
                 ctx.as_context()
                     .data()
-                    .set_heap_oom_error(access.used_bytes() as usize, bytes as usize);
+                    .set_heap_oom_error(used, requested);
+                return Err(wasmtime::Error::msg(message));
             }
             return Err(wasmtime::Error::msg(error.to_string()));
         }
@@ -532,6 +539,30 @@ pub(crate) fn allocate_v2_object_bytes(
     bytes: u64,
 ) -> wasmtime::Result<(u64, u64)> {
     allocate_v2_object_bytes_with_context(caller, bytes)
+}
+
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) fn ensure_v2_array_capacity(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    needed: u32,
+) -> wasmtime::Result<()> {
+    let access = caller.data().heap_access_v2().clone();
+    let (_, capacity) = access.array_shape(handle)?;
+    if needed <= capacity {
+        return Ok(());
+    }
+    let new_capacity = needed
+        .max(4)
+        .checked_next_power_of_two()
+        .ok_or_else(|| wasmtime::Error::msg("V2 array capacity overflow"))?;
+    let bytes = u64::from(new_capacity)
+        .checked_mul(8)
+        .and_then(|elements| elements.checked_add(constants::HEAP_OBJECT_HEADER_SIZE as u64))
+        .ok_or_else(|| wasmtime::Error::msg("V2 array size overflow"))?;
+    let (new_object, _) = allocate_v2_object_bytes(caller, bytes)?;
+    access.relocate_array(handle, new_object, new_capacity)?;
+    Ok(())
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -589,7 +620,18 @@ pub(crate) fn define_host_data_property_v2(
     {
         Ok(()) => Some(()),
         Err(error) => {
-            set_runtime_error(caller.data(), format!("V2 host property {name}: {error}"));
+            if let crate::runtime_gc::HeapAccessV2Error::HeapExhausted { requested, .. } = error {
+                let used = caller.data().heap_access_v2().used_bytes() as usize;
+                caller
+                    .data()
+                    .set_heap_oom_error(used, requested as usize);
+                set_runtime_error(
+                    caller.data(),
+                    caller.data().heap_oom_message(used, requested as usize),
+                );
+            } else {
+                set_runtime_error(caller.data(), format!("V2 host property {name}: {error}"));
+            }
             None
         }
     }

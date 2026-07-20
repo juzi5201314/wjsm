@@ -660,16 +660,18 @@ fn advance_array_like_iterator(
             .and_then(|pointer| read_object_property_by_name(caller, pointer, &key))
             .unwrap_or_else(value::encode_undefined)
     };
-    let produced = if kind == ArrayIterKind::Entries {
-        let entry = alloc_array(caller, 2);
-        if let Some(entry_ptr) = resolve_array_ptr(caller, entry) {
-            write_array_elem(caller, entry_ptr, 0, value::encode_f64(idx as f64));
-            write_array_elem(caller, entry_ptr, 1, element);
-            write_array_length(caller, entry_ptr, 2);
+    let produced = match kind {
+        ArrayIterKind::Keys => value::encode_f64(idx as f64),
+        ArrayIterKind::Values => element,
+        ArrayIterKind::Entries => {
+            let entry = alloc_array(caller, 2);
+            if let Some(entry_ptr) = resolve_array_ptr(caller, entry) {
+                write_array_elem(caller, entry_ptr, 0, value::encode_f64(idx as f64));
+                write_array_elem(caller, entry_ptr, 1, element);
+                write_array_length(caller, entry_ptr, 2);
+            }
+            entry
         }
-        entry
-    } else {
-        element
     };
     alloc_iterator_result_from_caller(caller, produced, false)
 }
@@ -989,10 +991,37 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(crate::runtime_node_globals::call_os_info(caller, kind))
         }
         NativeCallable::ArrayConstructor => {
-            if value::is_object(this_val) {
+            // `new Array(n)` / ArraySpeciesCreate: capacity+length from first arg when it is a
+            // single finite length number. Element writes grow as needed either way.
+            if value::is_object(this_val) && !value::is_array(this_val) {
                 Some(this_val)
             } else {
-                Some(alloc_array(caller, 0))
+                let length = if args.len() == 1 && value::is_f64(argument) {
+                    let n = value::decode_f64(argument);
+                    if n.is_finite() && n >= 0.0 && n == n.trunc() && n <= u32::MAX as f64 {
+                        n as u32
+                    } else {
+                        0
+                    }
+                } else {
+                    args.len() as u32
+                };
+                let arr = alloc_array(caller, length.max(args.len() as u32));
+                if let Some(ptr) = resolve_array_ptr(caller, arr) {
+                    if args.len() == 1 && value::is_f64(argument) {
+                        // length-only construction: empty slots are holes up to length
+                        for i in 0..length {
+                            write_array_hole(caller, ptr, i);
+                        }
+                        write_array_length(caller, ptr, length);
+                    } else {
+                        for (i, val) in args.iter().copied().enumerate() {
+                            write_array_elem(caller, ptr, i as u32, val);
+                        }
+                        write_array_length(caller, ptr, args.len() as u32);
+                    }
+                }
+                Some(arr)
             }
         }
         NativeCallable::ObjectConstructor => {

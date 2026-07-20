@@ -1167,6 +1167,37 @@ pub(crate) fn define_core(
             };
             let name_id = key as u32;
 
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let handle = value::decode_handle(obj);
+                let access = caller.data().heap_access_v2().clone();
+                if access.resolve_handle(handle).is_ok() {
+                    let Some(key) = crate::property_key::canonicalize_v2_name_id(&mut caller, name_id)
+                    else {
+                        return value::encode_undefined();
+                    };
+                    let Some(property) = access.get_property_slot(handle, key).ok().flatten() else {
+                        return value::encode_undefined();
+                    };
+                    let flags = property.flags as i32;
+                    let is_accessor = (flags & (1 << 3)) != 0;
+                    let configurable = (flags & 1) != 0;
+                    let enumerable = (flags & (1 << 1)) != 0;
+                    let writable = (flags & (1 << 2)) != 0;
+                    return allocate_descriptor_object(
+                        &mut caller,
+                        is_accessor,
+                        property.value as i64,
+                        writable,
+                        enumerable,
+                        configurable,
+                        property.getter as i64,
+                        property.setter as i64,
+                    )
+                    .unwrap_or_else(value::encode_undefined);
+                }
+            }
+
             // 查找属性（仅自身属性）
             let found = find_property_slot_by_name_id(&mut caller, obj_ptr, name_id);
             let Some((slot_offset, flags, _val)) = found else {

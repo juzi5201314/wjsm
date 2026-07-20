@@ -61,7 +61,14 @@ pub(crate) fn define_core_async(
             return value::encode_bool(false);
         }
         #[cfg(feature = "managed-heap-v2")]
-        if value::is_js_object(object) || value::is_array(object) {
+        if value::is_array(object) {
+            // Array exotic objects: integer indices live in the element vector, not
+            // the property slot table. Fall through to op_in_impl for hole-aware
+            // element presence + named props on the prototype chain.
+            return op_in_impl(caller, object, prop);
+        }
+        #[cfg(feature = "managed-heap-v2")]
+        if value::is_js_object(object) {
             let Some(name_id) = property_key_value_to_name_id(caller, prop, false) else {
                 return value::encode_bool(false);
             };

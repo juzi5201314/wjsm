@@ -98,6 +98,37 @@ pub(crate) fn array_set_length_impl(
             write_array_hole(caller, ptr, i);
         }
     } else if new_len > old_len {
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            let handle = value::decode_handle(arr);
+            let access = caller.data().heap_access_v2().clone();
+            if access.resolve_handle(handle).is_ok() {
+                let (_, capacity) = access.array_shape(handle).unwrap_or((old_len, old_len));
+                if new_len > capacity {
+                    let Some(needed) = array_grow_capacity_u32(capacity, new_len) else {
+                        set_runtime_error(
+                            caller.data(),
+                            format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"),
+                        );
+                        return arr;
+                    };
+                    if let Err(error) =
+                        crate::ensure_v2_array_capacity(caller, handle, needed)
+                    {
+                        set_runtime_error(
+                            caller.data(),
+                            format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}: {error}"),
+                        );
+                        return arr;
+                    }
+                }
+                for i in old_len..new_len {
+                    write_array_hole(caller, ptr, i);
+                }
+                write_array_length(caller, ptr, new_len);
+                return arr;
+            }
+        }
         let cap = read_array_capacity(caller, ptr).unwrap_or(0);
         let mut ptr = ptr;
         if new_len > cap {

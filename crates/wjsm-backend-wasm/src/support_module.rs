@@ -391,7 +391,9 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
 /// 但 build-dep 中的 V1 runtime 仍调用本入口；V2 必须走
 /// `emit_support_module_managed_heap_v2` / `emit_support_module_with_heap_mode(..., true)`。
 pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
-    emit_support_module_with_heap_mode(flavor, false)
+    // all-features / managed-heap-v2 激活时，默认 emit 必须与 user wasm 共享
+    // memory64 heap import；否则 heap_memory64 与 runtime support 会分叉。
+    emit_support_module_with_heap_mode(flavor, cfg!(feature = "managed-heap-v2"))
 }
 
 /// 生成指定 GC flavor 的 support module wasm bytes。

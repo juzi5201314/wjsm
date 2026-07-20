@@ -27,6 +27,15 @@ impl HeapAccessV2 {
     pub fn new(memory: SharedHeapMemory) -> Self {
         let next_object = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
         let heap_limit = memory.maximum_byte_len();
+        Self::with_heap_limit(memory, heap_limit)
+    }
+
+    /// 使用显式逻辑堆上限（`object_start + max_heap_size`），可小于 shared memory64 的页对齐 maximum。
+    pub fn with_heap_limit(memory: SharedHeapMemory, heap_limit: u64) -> Self {
+        let next_object = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
+        let heap_limit = heap_limit
+            .max(next_object)
+            .min(memory.maximum_byte_len());
         Self {
             memory,
             next_object: AtomicU64::new(next_object),
@@ -39,6 +48,7 @@ impl HeapAccessV2 {
             .checked_add(7)
             .map(|bytes| bytes & !7)
             .ok_or(HeapAccessV2Error::AddressOverflow)?;
+        // 优先预留至少 64KiB，但绝不超过 remaining（小 max_heap_size 时必须能精确 OOM）。
         let preferred_bytes = minimum_bytes.max(64 * 1024);
         loop {
             let start = self.next_object.load(Ordering::Acquire);
@@ -49,7 +59,7 @@ impl HeapAccessV2 {
                     heap_limit: self.heap_limit,
                 });
             }
-            let reservation = preferred_bytes.min(remaining);
+            let reservation = preferred_bytes.min(remaining).max(minimum_bytes);
             let end = start + reservation;
             if self
                 .next_object

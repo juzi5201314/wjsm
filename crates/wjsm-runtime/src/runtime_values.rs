@@ -281,6 +281,14 @@ pub(crate) fn read_array_capacity(
     caller: &mut Caller<'_, RuntimeState>,
     ptr: usize,
 ) -> Option<u32> {
+    #[cfg(feature = "managed-heap-v2")]
+    if let Ok((_, capacity)) = caller
+        .data()
+        .heap_access_v2()
+        .array_shape(ptr as u32)
+    {
+        return Some(capacity);
+    }
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return None;
     };
@@ -676,6 +684,22 @@ fn find_property_slot_by_name_id_with_visibility<C: AsContextMut<Data = RuntimeS
     name_id: u32,
     private_slot: bool,
 ) -> Option<(usize, i32, i64)> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = u32::try_from(obj_ptr).ok()?;
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::canonicalize_v2_name_id_with_env(ctx, env, name_id)?;
+            let property = access.get_property_slot(handle, key).ok().flatten()?;
+            let is_private = (property.flags as i32 & constants::FLAG_PRIVATE) != 0;
+            if is_private != private_slot {
+                return None;
+            }
+            // V2 没有线性槽偏移；调用方若只需要 flags/value（getOwnPropertyDescriptor
+            // 等），slot_offset 仅作哨兵，后续读内存路径会被 V2 专用分支覆盖。
+            return Some((usize::MAX, property.flags as i32, property.value as i64));
+        }
+    }
     let num_props = {
         let data = env.memory.data(&*ctx);
         if obj_ptr + 16 > data.len() {
@@ -1152,135 +1176,158 @@ pub(crate) fn allocate_descriptor_object(
     getter: i64,
     setter: i64,
 ) -> Option<i64> {
-    let env = WasmEnv::from_caller(caller)?;
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
-    let obj_table_count = env.obj_table_count.get(&mut *caller).i32().unwrap_or(0) as usize;
-
-    // 对象大小：16 (header) + 4 * 32 (slots) = 144 bytes
-    let obj_size = 16 + 4 * 32;
-    let handle_idx = obj_table_count;
-
-    let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
-        caller,
-        &env,
-        obj_size,
-        wjsm_ir::HEAP_TYPE_OBJECT,
-        4,
-    )?;
-    crate::runtime_gc::heap_access::init_proto_at_ptr(caller, &env, heap_ptr, 0u32)?;
+    #[cfg(feature = "managed-heap-v2")]
     {
-        let data = env.memory.data_mut(&mut *caller);
-
-        // 初始化 header: proto=0, type=OBJECT, pad=0, capacity=4, num_props=0
-        // proto initialized through heap_access owner
-        data[heap_ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT; // type byte
-        data[heap_ptr + 5..heap_ptr + 8].fill(0); // pad bytes
-        data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&4u32.to_le_bytes()); // capacity
-        data[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&0u32.to_le_bytes()); // num_props
-
-        // 注册到 handle 表
-        let slot_addr = obj_table_ptr + handle_idx * 4;
-        if slot_addr + 4 <= data.len() {
-            data[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
-        }
-    }
-
-    {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
+        let desc = crate::alloc_host_object_v2(caller, 4);
+        if !value::is_object(desc) {
             return None;
+        }
+        let define = |caller: &mut Caller<'_, RuntimeState>, name: &str, val: i64| {
+            crate::define_host_data_property_from_caller(caller, desc, name, val)
         };
-        let _ = g.set(&mut *caller, Val::I32((handle_idx + 1) as i32));
+        if is_accessor {
+            define(caller, "get", getter)?;
+            define(caller, "set", setter)?;
+        } else {
+            define(caller, "value", value)?;
+            define(caller, "writable", value::encode_bool(writable))?;
+        }
+        define(caller, "enumerable", value::encode_bool(enumerable))?;
+        define(caller, "configurable", value::encode_bool(configurable))?;
+        return Some(desc);
     }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        let env = WasmEnv::from_caller(caller)?;
+        let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
+        let obj_table_count = env.obj_table_count.get(&mut *caller).i32().unwrap_or(0) as usize;
 
-    // 现在设置描述符对象的属性
-    let desc_ptr = heap_ptr;
+        // 对象大小：16 (header) + 4 * 32 (slots) = 144 bytes
+        let obj_size = 16 + 4 * 32;
+        let handle_idx = obj_table_count;
 
-    // 写入属性的辅助闭包
-    let mut write_property = |name_id: u32, val: i64, flags: i32| -> Option<()> {
-        let num_props = {
-            let data = env.memory.data(&*caller);
-            u32::from_le_bytes([
-                data[desc_ptr + 12],
-                data[desc_ptr + 13],
-                data[desc_ptr + 14],
-                data[desc_ptr + 15],
-            ]) as usize
-        };
-        let slot_offset = desc_ptr + 16 + num_props * 32;
+        let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
+            caller,
+            &env,
+            obj_size,
+            wjsm_ir::HEAP_TYPE_OBJECT,
+            4,
+        )?;
+        crate::runtime_gc::heap_access::init_proto_at_ptr(caller, &env, heap_ptr, 0u32)?;
         {
             let data = env.memory.data_mut(&mut *caller);
-            if slot_offset + 32 > data.len() {
-                return None;
+
+            // 初始化 header: proto=0, type=OBJECT, pad=0, capacity=4, num_props=0
+            // proto initialized through heap_access owner
+            data[heap_ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT; // type byte
+            data[heap_ptr + 5..heap_ptr + 8].fill(0); // pad bytes
+            data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&4u32.to_le_bytes()); // capacity
+            data[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&0u32.to_le_bytes()); // num_props
+
+            // 注册到 handle 表
+            let slot_addr = obj_table_ptr + handle_idx * 4;
+            if slot_addr + 4 <= data.len() {
+                data[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
             }
-            data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
         }
-        let undef = value::encode_undefined();
-        crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle_idx as u32,
-            num_props,
-            crate::runtime_gc::heap_access::SlotPart::Value,
-            val,
-        )?;
-        crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle_idx as u32,
-            num_props,
-            crate::runtime_gc::heap_access::SlotPart::Getter,
-            undef,
-        )?;
-        crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle_idx as u32,
-            num_props,
-            crate::runtime_gc::heap_access::SlotPart::Setter,
-            undef,
-        )?;
-        let data = env.memory.data_mut(&mut *caller);
-        let new_num_props = (num_props + 1) as u32;
-        data[desc_ptr + 12..desc_ptr + 16].copy_from_slice(&new_num_props.to_le_bytes());
-        Some(())
-    };
 
-    // flags: enumerable 和 configurable
-    let base_flags: i32 =
-        (if enumerable { 1 << 1 } else { 0 }) | (if configurable { 1 } else { 0 });
+        {
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
+                return None;
+            };
+            let _ = g.set(&mut *caller, Val::I32((handle_idx + 1) as i32));
+        }
 
-    if is_accessor {
-        // 访问器属性：get, set, enumerable, configurable
-        // writable flag 不适用于访问器属性
-        let get_flags = base_flags | (1 << 2); // writable=true for function values
-        write_property(constants::PROP_DESC_GET_OFFSET, getter, get_flags)?;
-        write_property(constants::PROP_DESC_SET_OFFSET, setter, get_flags)?;
-    } else {
-        // 数据属性：value, writable, enumerable, configurable
-        let writable_flags = base_flags | (if writable { 1 << 2 } else { 0 });
-        write_property(constants::PROP_DESC_VALUE_OFFSET, value, writable_flags)?;
+        // 现在设置描述符对象的属性
+        let desc_ptr = heap_ptr;
+
+        // 写入属性的辅助闭包
+        let mut write_property = |name_id: u32, val: i64, flags: i32| -> Option<()> {
+            let num_props = {
+                let data = env.memory.data(&*caller);
+                u32::from_le_bytes([
+                    data[desc_ptr + 12],
+                    data[desc_ptr + 13],
+                    data[desc_ptr + 14],
+                    data[desc_ptr + 15],
+                ]) as usize
+            };
+            let slot_offset = desc_ptr + 16 + num_props * 32;
+            {
+                let data = env.memory.data_mut(&mut *caller);
+                if slot_offset + 32 > data.len() {
+                    return None;
+                }
+                data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+            }
+            let undef = value::encode_undefined();
+            crate::runtime_gc::heap_access::write_property_slot(
+                caller,
+                &env,
+                handle_idx as u32,
+                num_props,
+                crate::runtime_gc::heap_access::SlotPart::Value,
+                val,
+            )?;
+            crate::runtime_gc::heap_access::write_property_slot(
+                caller,
+                &env,
+                handle_idx as u32,
+                num_props,
+                crate::runtime_gc::heap_access::SlotPart::Getter,
+                undef,
+            )?;
+            crate::runtime_gc::heap_access::write_property_slot(
+                caller,
+                &env,
+                handle_idx as u32,
+                num_props,
+                crate::runtime_gc::heap_access::SlotPart::Setter,
+                undef,
+            )?;
+            let data = env.memory.data_mut(&mut *caller);
+            let new_num_props = (num_props + 1) as u32;
+            data[desc_ptr + 12..desc_ptr + 16].copy_from_slice(&new_num_props.to_le_bytes());
+            Some(())
+        };
+
+        // flags: enumerable 和 configurable
+        let base_flags: i32 =
+            (if enumerable { 1 << 1 } else { 0 }) | (if configurable { 1 } else { 0 });
+
+        if is_accessor {
+            // 访问器属性：get, set, enumerable, configurable
+            // writable flag 不适用于访问器属性
+            let get_flags = base_flags | (1 << 2); // writable=true for function values
+            write_property(constants::PROP_DESC_GET_OFFSET, getter, get_flags)?;
+            write_property(constants::PROP_DESC_SET_OFFSET, setter, get_flags)?;
+        } else {
+            // 数据属性：value, writable, enumerable, configurable
+            let writable_flags = base_flags | (if writable { 1 << 2 } else { 0 });
+            write_property(constants::PROP_DESC_VALUE_OFFSET, value, writable_flags)?;
+            write_property(
+                constants::PROP_DESC_WRITABLE_OFFSET,
+                value::encode_bool(writable),
+                base_flags | (1 << 2),
+            )?;
+        }
+
+        // enumerable 和 configurable 对于两种属性都要写
         write_property(
-            constants::PROP_DESC_WRITABLE_OFFSET,
-            value::encode_bool(writable),
+            constants::PROP_DESC_ENUMERABLE_OFFSET,
+            value::encode_bool(enumerable),
             base_flags | (1 << 2),
         )?;
+        write_property(
+            constants::PROP_DESC_CONFIGURABLE_OFFSET,
+            value::encode_bool(configurable),
+            base_flags | (1 << 2),
+        )?;
+
+        // 返回对象 handle
+        Some(value::encode_object_handle(handle_idx as u32))
     }
-
-    // enumerable 和 configurable 对于两种属性都要写
-    write_property(
-        constants::PROP_DESC_ENUMERABLE_OFFSET,
-        value::encode_bool(enumerable),
-        base_flags | (1 << 2),
-    )?;
-    write_property(
-        constants::PROP_DESC_CONFIGURABLE_OFFSET,
-        value::encode_bool(configurable),
-        base_flags | (1 << 2),
-    )?;
-
-    // 返回对象 handle
-    Some(value::encode_object_handle(handle_idx as u32))
 }
 
 // ── 辅助函数用于 abstract_eq 和 abstract_compare ─────────────────────────

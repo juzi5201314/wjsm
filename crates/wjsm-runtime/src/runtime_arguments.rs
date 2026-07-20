@@ -40,9 +40,34 @@ fn get_array_proto_values(caller: &mut Caller<'_, RuntimeState>) -> i64 {
         return value::encode_undefined();
     }
     let array_proto_obj = value::encode_object_handle(handle as u32);
-    let mut values = resolve_handle_idx_with_env(caller, &env, handle as usize)
-        .and_then(|ptr| read_object_property_by_name_with_env(caller, &env, ptr, "values"))
-        .unwrap_or_else(value::encode_undefined);
+    let mut values = {
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            let access = caller.data().heap_access_v2().clone();
+            if access.resolve_handle(handle as u32).is_ok() {
+                let key = crate::property_key::encode_runtime_string_name_id(
+                    crate::property_key::intern_runtime_property_key(
+                        caller.data(),
+                        crate::runtime_string::RuntimeString::from_utf8_str("values"),
+                    ),
+                );
+                access
+                    .get_property(handle as u32, key)
+                    .ok()
+                    .flatten()
+                    .map(|value| value as i64)
+                    .unwrap_or_else(value::encode_undefined)
+            } else {
+                value::encode_undefined()
+            }
+        }
+        #[cfg(not(feature = "managed-heap-v2"))]
+        {
+            resolve_handle_idx_with_env(caller, &env, handle as usize)
+                .and_then(|ptr| read_object_property_by_name_with_env(caller, &env, ptr, "values"))
+                .unwrap_or_else(value::encode_undefined)
+        }
+    };
     if value::is_undefined(values) {
         values = create_native_callable(caller.data(), NativeCallable::ArrayProtoValues);
         let _ = define_arguments_data_property(caller, array_proto_obj, "values", values);
@@ -66,7 +91,7 @@ fn define_arguments_iterator_property(caller: &mut Caller<'_, RuntimeState>, obj
     let _ = define_host_data_property_by_name_id_with_flags(
         caller,
         obj,
-        encode_symbol_name_id(0),
+        encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
         array_values,
         ARGUMENTS_DATA_FLAGS,
     );

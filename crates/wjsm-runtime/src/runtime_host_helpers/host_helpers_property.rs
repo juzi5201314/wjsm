@@ -378,7 +378,19 @@ pub(crate) fn collect_own_property_names(
     if let Some(shape) = v2_own_shape(caller, obj_ptr) {
         return match shape {
             V2OwnShape::Array { length } => {
-                let mut names: Vec<String> = (0..length).map(|i| i.to_string()).collect();
+                let handle = obj_ptr as u32;
+                let access = caller.data().heap_access_v2().clone();
+                let mut names: Vec<String> = (0..length)
+                    .filter(|&i| {
+                        access
+                            .get_element(handle, i)
+                            .ok()
+                            .flatten()
+                            .map(|element| element as i64)
+                            .is_some_and(|element| !value::is_array_hole(element))
+                    })
+                    .map(|i| i.to_string())
+                    .collect();
                 if !enumerable_only {
                     names.push("length".to_string());
                 }
@@ -482,7 +494,17 @@ pub(crate) fn collect_own_property_string_key_values(
     if let Some(shape) = v2_own_shape(caller, obj_ptr) {
         return match shape {
             V2OwnShape::Array { length } => {
+                let handle = obj_ptr as u32;
+                let access = caller.data().heap_access_v2().clone();
                 let mut keys: Vec<i64> = (0..length)
+                    .filter(|&i| {
+                        access
+                            .get_element(handle, i)
+                            .ok()
+                            .flatten()
+                            .map(|element| element as i64)
+                            .is_some_and(|element| !value::is_array_hole(element))
+                    })
                     .map(|i| {
                         store_runtime_string(caller, RuntimeString::from_utf8_str(&i.to_string()))
                     })
