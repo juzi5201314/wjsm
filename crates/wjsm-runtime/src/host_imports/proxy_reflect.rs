@@ -361,6 +361,45 @@ pub(crate) fn reflect_has_impl(
     if !value::is_js_object(target) && !value::is_array(target) && !value::is_function(target) {
         return value::encode_bool(false);
     }
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle =
+            if value::is_function(target) || value::is_closure(target) || value::is_bound(target) {
+                crate::handle_index_of(caller, target) as u32
+            } else {
+                value::decode_handle(target)
+            };
+        if caller
+            .data()
+            .heap_access_v2()
+            .resolve_handle(handle)
+            .is_ok()
+        {
+            let Some(name_id) = property_key_value_to_name_id(caller, prop, false) else {
+                return value::encode_bool(false);
+            };
+            let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+                return value::encode_bool(false);
+            };
+            // 数组命名属性在 side table
+            if value::is_array(target) {
+                if crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, target, key)
+                    .is_some()
+                {
+                    return value::encode_bool(true);
+                }
+            }
+            return value::encode_bool(
+                caller
+                    .data()
+                    .heap_access_v2()
+                    .get_property_slot_on_proto_chain(handle, key)
+                    .ok()
+                    .flatten()
+                    .is_some(),
+            );
+        }
+    }
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_bool(false);
     };

@@ -152,7 +152,77 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
     } else {
         RuntimeString::from_utf8_str(&prop_str)
     };
-
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle =
+            if value::is_function(object) || value::is_closure(object) || value::is_bound(object) {
+                crate::handle_index_of(caller, object) as u32
+            } else {
+                value::decode_handle(object)
+            };
+        if (value::is_js_object(object) || value::is_array(object))
+            && caller
+                .data()
+                .heap_access_v2()
+                .resolve_handle(handle)
+                .is_ok()
+        {
+            if value::is_array(object) {
+                if prop_str == "length" {
+                    return value::encode_bool(true);
+                }
+                if let Ok(index) = prop_str.parse::<u32>() {
+                    let access = caller.data().heap_access_v2().clone();
+                    return value::encode_bool(
+                        access
+                            .get_element(handle, index)
+                            .is_ok_and(|opt| opt.is_some_and(|v| !value::is_array_hole(v as i64))),
+                    );
+                }
+                if let Some(symbol_name_id) = prop_symbol_name_id
+                    && crate::array_named_props::ArrayNamedPropsStore::get_slot(
+                        caller,
+                        object,
+                        crate::property_key::encode_symbol_name_id(symbol_name_id),
+                    )
+                    .is_some()
+                {
+                    return value::encode_bool(true);
+                }
+            }
+            // 字符串/symbol 属性键 → V2 规范键
+            let name_id = if let Some(sym) = prop_symbol_name_id {
+                crate::property_key::encode_symbol_name_id(sym)
+            } else {
+                let rs = if value::is_string(prop) {
+                    get_string_value(caller, prop)
+                } else {
+                    RuntimeString::from_utf8_str(&prop_str)
+                };
+                crate::property_key::encode_runtime_string_name_id(
+                    crate::property_key::intern_runtime_property_key(caller.data(), rs),
+                )
+            };
+            let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+                return value::encode_bool(false);
+            };
+            if value::is_array(object)
+                && crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, object, key)
+                    .is_some()
+            {
+                return value::encode_bool(true);
+            }
+            return value::encode_bool(
+                caller
+                    .data()
+                    .heap_access_v2()
+                    .get_property_slot_on_proto_chain(handle, key)
+                    .ok()
+                    .flatten()
+                    .is_some(),
+            );
+        }
+    }
     // 解析对象指针：通过 handle 表统一解析（支持 object 和 function）
     let mut ptr = match resolve_handle(caller, object) {
         Some(p) => p,
