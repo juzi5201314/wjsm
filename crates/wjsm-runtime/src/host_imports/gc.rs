@@ -256,8 +256,30 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                     );
                     return Ok(());
                 }
-                // OrdinarySet：accessor 调 setter；own 数据写值；缺失时在 receiver 新建。
+                // eval 编译的函数从未执行 __wjsm_init_function_props，
+                // 其 handle 在 V2 handle table 中为空；按需分配属性对象。
                 let access = caller.data().heap_access_v2().clone();
+                if access.resolve_handle(handle).is_err()
+                    && (value::is_function(object)
+                        || value::is_closure(object)
+                        || value::is_bound(object))
+                {
+                    let proto_handle =
+                        value::decode_object_handle(caller.data().function_prototype);
+                    let capacity = 4u32;
+                    let bytes = u64::from(capacity)
+                        * u64::from(wjsm_ir::constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE)
+                        + u64::from(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE);
+                    if let Ok((object_addr, _)) =
+                        crate::runtime_heap::allocate_v2_object_bytes_with_context(
+                            &mut caller,
+                            bytes,
+                        )
+                    {
+                        let _ = access.publish_object(handle, object_addr, proto_handle, capacity);
+                    }
+                }
+                // OrdinarySet：accessor 调 setter；own 数据写值；缺失时在 receiver 新建。
                 if let Some(property) = access
                     .get_property_slot_on_proto_chain(handle, key)
                     .map_err(host_error)?
