@@ -282,11 +282,7 @@ pub(crate) fn read_array_capacity(
     ptr: usize,
 ) -> Option<u32> {
     #[cfg(feature = "managed-heap-v2")]
-    if let Ok((_, capacity)) = caller
-        .data()
-        .heap_access_v2()
-        .array_shape(ptr as u32)
-    {
+    if let Ok((_, capacity)) = caller.data().heap_access_v2().array_shape(ptr as u32) {
         return Some(capacity);
     }
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
@@ -491,6 +487,26 @@ pub(crate) fn read_object_property_by_name_proto_walk_with_env<
     prop_name: &str,
     visited: &mut std::collections::HashSet<usize>,
 ) -> Option<i64> {
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = u32::try_from(obj_ptr).ok()?;
+        let access = ctx.as_context().data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    ctx.as_context().data(),
+                    RuntimeString::from_utf8_str(prop_name),
+                ),
+            );
+            // V2 原型链遍历由 HeapAccessV2 统一负责（含 proxy 短路、环检测）；
+            // visited 仅用于 V1 ptr 线性内存扫描，V2 无需重复。
+            return access
+                .get_property_slot_on_proto_chain(handle, key)
+                .ok()
+                .flatten()
+                .map(|property| property.value as i64);
+        }
+    }
     if !visited.insert(obj_ptr) {
         return None; // 环路检测
     }
@@ -2121,32 +2137,115 @@ pub(crate) fn func_bind_impl(
     value::encode_bound_idx(idx)
 }
 
+/// rest 解构排除键列表 → 字符串字节序列。
+fn collect_excluded_key_bytes(
+    caller: &mut Caller<'_, RuntimeState>,
+    excluded_keys: i64,
+) -> Vec<Vec<u8>> {
+    if !value::is_array(excluded_keys) {
+        return Vec::new();
+    }
+    let mut excluded = Vec::new();
+    if let Some(arr_ptr) = resolve_array_ptr(caller, excluded_keys) {
+        let len = read_array_length(caller, arr_ptr).unwrap_or(0);
+        for i in 0..len {
+            let key = read_array_elem(caller, arr_ptr, i).unwrap_or_else(value::encode_undefined);
+            if let Some(bytes) = read_value_string_bytes(caller, key) {
+                excluded.push(bytes);
+            }
+        }
+    }
+    excluded
+}
+
+/// V2 own 属性按 CopyDataProperties 语义读值：数据属性取 value，accessor 走 getter。
+#[cfg(feature = "managed-heap-v2")]
+fn v2_own_property_get_for_copy(
+    caller: &mut Caller<'_, RuntimeState>,
+    receiver: i64,
+    handle: u32,
+    key: u32,
+) -> Option<i64> {
+    let access = caller.data().heap_access_v2().clone();
+    match access.get_property_slot(handle, key) {
+        Ok(Some(property)) if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 => {
+            let getter = property.getter as i64;
+            if value::is_undefined(getter) || value::is_null(getter) {
+                Some(value::encode_undefined())
+            } else if value::is_callable(getter) {
+                let rt = tokio::runtime::Handle::current();
+                Some(
+                    tokio::task::block_in_place(|| {
+                        rt.block_on(crate::call_wasm_callback_async(
+                            caller,
+                            getter,
+                            receiver,
+                            &[],
+                        ))
+                    })
+                    .unwrap_or_else(|_| value::encode_undefined()),
+                )
+            } else {
+                Some(value::encode_undefined())
+            }
+        }
+        Ok(Some(property)) => Some(property.value as i64),
+        _ => None,
+    }
+}
+
 pub(crate) fn object_rest_impl(
     caller: &mut Caller<'_, RuntimeState>,
     obj: i64,
     excluded_keys: i64,
 ) -> i64 {
+    // V2：own slot 走 heap 层快照；数据属性取 value，accessor 走 getter
+    // （CopyDataProperties 语义），排除键按字符串内容比较。
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let source_handle = handle_index_of(caller, obj) as u32;
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(source_handle).is_ok() {
+            let excluded = collect_excluded_key_bytes(caller, excluded_keys);
+            let Ok(slots) = access.own_property_slots(source_handle) else {
+                return crate::runtime_host_helpers::alloc_object(caller, 0);
+            };
+            let result = crate::runtime_host_helpers::alloc_object(caller, slots.len() as u32);
+            let result_handle = value::decode_handle(result);
+            let flags = (constants::FLAG_CONFIGURABLE
+                | constants::FLAG_ENUMERABLE
+                | constants::FLAG_WRITABLE) as u32;
+            for (key, slot_flags) in slots {
+                if slot_flags & constants::FLAG_PRIVATE as u32 != 0 {
+                    continue;
+                }
+                if slot_flags & constants::FLAG_ENUMERABLE as u32 == 0 {
+                    continue;
+                }
+                if !excluded.is_empty()
+                    && let Some(name) =
+                        crate::runtime_host_helpers::name_id_to_runtime_property_string(caller, key)
+                    && excluded
+                        .iter()
+                        .any(|bytes| bytes.as_slice() == name.to_utf8_lossy_bytes().as_slice())
+                {
+                    continue;
+                }
+                let Some(value) = v2_own_property_get_for_copy(caller, obj, source_handle, key)
+                else {
+                    continue;
+                };
+                let _ = access.define_data_property(result_handle, key, value as u64, flags);
+            }
+            return result;
+        }
+    }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let Some(source_ptr) = resolve_handle(caller, obj) else {
         return alloc_host_object(caller, &env, 0);
     };
 
-    let excluded_key_bytes = if value::is_array(excluded_keys) {
-        let mut excluded = Vec::new();
-        if let Some(arr_ptr) = resolve_array_ptr(caller, excluded_keys) {
-            let len = read_array_length(caller, arr_ptr).unwrap_or(0);
-            for i in 0..len {
-                let key =
-                    read_array_elem(caller, arr_ptr, i).unwrap_or_else(value::encode_undefined);
-                if let Some(bytes) = read_value_string_bytes(caller, key) {
-                    excluded.push(bytes);
-                }
-            }
-        }
-        excluded
-    } else {
-        Vec::new()
-    };
+    let excluded_key_bytes = collect_excluded_key_bytes(caller, excluded_keys);
 
     let source_props: Vec<(u32, i64)> = {
         let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
@@ -2250,28 +2349,9 @@ pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, 
                 if is_symbol_name_id(key) {
                     continue;
                 }
-                // 数据属性取 value；accessor 走 getter（spread 用 Get）。
-                let value = match access.get_property_slot(source_handle, key) {
-                    Ok(Some(property))
-                        if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
-                    {
-                        let getter = property.getter as i64;
-                        if value::is_undefined(getter) || value::is_null(getter) {
-                            value::encode_undefined()
-                        } else if value::is_callable(getter) {
-                            let rt = tokio::runtime::Handle::current();
-                            tokio::task::block_in_place(|| {
-                                rt.block_on(crate::call_wasm_callback_async(
-                                    caller, getter, source, &[],
-                                ))
-                            })
-                            .unwrap_or_else(|_| value::encode_undefined())
-                        } else {
-                            value::encode_undefined()
-                        }
-                    }
-                    Ok(Some(property)) => property.value as i64,
-                    _ => continue,
+                let Some(value) = v2_own_property_get_for_copy(caller, source, source_handle, key)
+                else {
+                    continue;
                 };
                 let _ = access.define_data_property(dest_handle, key, value as u64, flags);
             }

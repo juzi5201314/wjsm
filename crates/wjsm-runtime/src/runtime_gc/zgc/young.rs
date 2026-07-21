@@ -50,7 +50,6 @@ struct YoungObjectMeta {
     humongous: bool,
 }
 
-
 pub struct YoungController {
     phase: Mutex<YoungPhase>,
     epoch: Mutex<BarrierEpoch>,
@@ -130,8 +129,7 @@ impl YoungController {
                 humongous,
             },
         );
-        if self.black_alloc_enabled.load(Ordering::SeqCst)
-            && generation == HandleGeneration::Young
+        if self.black_alloc_enabled.load(Ordering::SeqCst) && generation == HandleGeneration::Young
         {
             self.marked.lock().insert(handle);
             self.report.lock().black_allocations += 1;

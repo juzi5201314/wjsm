@@ -35,9 +35,7 @@ mod imp {
 
     pub fn reserve(len: usize) -> Result<*mut u8, PlatformError> {
         // SAFETY: reserve-only VirtualAlloc.
-        let ptr = unsafe {
-            VirtualAlloc(ptr::null_mut(), len, MEM_RESERVE, PAGE_NOACCESS)
-        };
+        let ptr = unsafe { VirtualAlloc(ptr::null_mut(), len, MEM_RESERVE, PAGE_NOACCESS) };
         if ptr.is_null() {
             Err(PlatformError::OutOfMemory)
         } else {

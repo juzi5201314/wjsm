@@ -1,32 +1,38 @@
-pub mod color;
-mod mark;
-pub mod page;
-mod relocate;
 #[cfg(feature = "managed-heap-v2")]
 pub mod barrier;
+pub mod color;
 #[cfg(feature = "managed-heap-v2")]
 pub mod concurrent_relocate;
 #[cfg(feature = "managed-heap-v2")]
+pub mod director;
+#[cfg(feature = "managed-heap-v2")]
 pub mod host_roots;
+mod mark;
 #[cfg(feature = "managed-heap-v2")]
 pub mod old;
+pub mod page;
+mod relocate;
 #[cfg(feature = "managed-heap-v2")]
 pub mod remset;
 #[cfg(feature = "managed-heap-v2")]
-pub mod young;
-#[cfg(feature = "managed-heap-v2")]
-pub mod director;
-#[cfg(feature = "managed-heap-v2")]
 mod v2;
+#[cfg(feature = "managed-heap-v2")]
+pub mod young;
 #[cfg(feature = "managed-heap-v2")]
 pub use barrier::{
     BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, HeaderField, HeaderFieldKind,
     HeaderLayout, LoadBarrierOutcome, classify_entry, color_stored_value, load_barrier,
-    prototype_field_kind, select_bulk_copy_mode, store_barrier, store_barrier_with_target_generation,
+    prototype_field_kind, select_bulk_copy_mode, store_barrier,
+    store_barrier_with_target_generation,
 };
 #[cfg(feature = "managed-heap-v2")]
 pub use concurrent_relocate::{
     ConcurrentRelocator, PageRelocationState, RelocationDescriptor, RelocationReport,
+};
+#[cfg(feature = "managed-heap-v2")]
+pub use director::{
+    AssistBudget, DirectorDecision, DirectorGeneration, GcDirector, GenerationRates, StallEvent,
+    StallReason,
 };
 #[cfg(feature = "managed-heap-v2")]
 pub use host_roots::{ConcurrentHostRoots, HostRootsReport, WeakState};
@@ -35,14 +41,9 @@ pub use old::{OldController, OldPhase, OldReport};
 #[cfg(feature = "managed-heap-v2")]
 pub use remset::{PreciseRemset, publish_promotion};
 #[cfg(feature = "managed-heap-v2")]
-pub use young::{YoungController, YoungPhase, YoungReport};
-#[cfg(feature = "managed-heap-v2")]
-pub use director::{
-    AssistBudget, DirectorDecision, DirectorGeneration, GcDirector, GenerationRates, StallEvent,
-    StallReason,
-};
-#[cfg(feature = "managed-heap-v2")]
 pub use v2::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome};
+#[cfg(feature = "managed-heap-v2")]
+pub use young::{YoungController, YoungPhase, YoungReport};
 
 use super::api::{
     AllocRequest, GcAlgorithm, GcContext, GcStats, Handle, RootProvider, StepBudget, StepOutcome,

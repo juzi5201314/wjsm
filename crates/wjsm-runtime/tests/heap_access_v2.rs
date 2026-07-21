@@ -642,6 +642,3 @@ fn v2_runtime_executes_object_and_array_access_without_memory32_reverse_lookup()
     assert!(diagnostics.is_empty());
     assert_eq!(String::from_utf8(output).unwrap(), "42 8\n");
 }
-
-
-

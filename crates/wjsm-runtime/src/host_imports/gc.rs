@@ -187,8 +187,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     linker.func_wrap_async(
         "env",
         "gc_obj_set_v2",
-        |mut caller: Caller<'_, RuntimeState>,
-         (object, key, new_value): (i64, i32, i64)| {
+        |mut caller: Caller<'_, RuntimeState>, (object, key, new_value): (i64, i32, i64)| {
             Box::new(async move {
                 let raw_key = key as u32;
                 let key = property_key(&mut caller, key)?;
@@ -316,7 +315,9 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                 if value::is_proxy(object) {
                     return Ok(
                         crate::host_imports::reentrant_async::proxy_trap_internal_delete_async(
-                            &mut caller, object, key,
+                            &mut caller,
+                            object,
+                            key,
                         )
                         .await,
                     );

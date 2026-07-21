@@ -112,9 +112,7 @@ pub(crate) fn array_set_length_impl(
                         );
                         return arr;
                     };
-                    if let Err(error) =
-                        crate::ensure_v2_array_capacity(caller, handle, needed)
-                    {
+                    if let Err(error) = crate::ensure_v2_array_capacity(caller, handle, needed) {
                         set_runtime_error(
                             caller.data(),
                             format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}: {error}"),

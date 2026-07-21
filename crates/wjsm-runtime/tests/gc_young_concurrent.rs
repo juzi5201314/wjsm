@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use wjsm_runtime::{
-    GcRuntimeV2, HandleGeneration, HandleId, YoungController, YoungPhase, publish_promotion,
-    HandleTableV2, ManagedHeapLayout,
+    GcRuntimeV2, HandleGeneration, HandleId, HandleTableV2, ManagedHeapLayout, YoungController,
+    YoungPhase, publish_promotion,
 };
 
 const PAGE: u64 = 64 * 1024;
@@ -21,14 +21,7 @@ fn young_mark_start_snapshots_roots_and_enables_black_allocation() {
     let young = YoungController::new(8);
     let child = HandleId::new(2);
     let root = HandleId::new(1);
-    young.register_object(
-        child,
-        HandleGeneration::Young,
-        [],
-        64,
-        false,
-        false,
-    );
+    young.register_object(child, HandleGeneration::Young, [], 64, false, false);
     young.register_object(
         root,
         HandleGeneration::Young,
@@ -43,14 +36,7 @@ fn young_mark_start_snapshots_roots_and_enables_black_allocation() {
     assert!(young.epoch().young_marking);
 
     let newborn = HandleId::new(3);
-    young.register_object(
-        newborn,
-        HandleGeneration::Young,
-        [],
-        32,
-        false,
-        false,
-    );
+    young.register_object(newborn, HandleGeneration::Young, [], 32, false, false);
     assert!(young.is_marked(newborn));
     assert_eq!(young.report().black_allocations, 1);
 }
@@ -144,19 +130,19 @@ fn young_work_does_not_scale_with_old_heap_size() {
     let young = YoungController::new(16);
     // many old objects, few remset edges
     for i in 0..10_000u32 {
-        young.register_object(HandleId::new(i), HandleGeneration::Old, [], 64, false, false);
+        young.register_object(
+            HandleId::new(i),
+            HandleGeneration::Old,
+            [],
+            64,
+            false,
+            false,
+        );
     }
     let root = HandleId::new(10_001);
     let child = HandleId::new(10_002);
     young.register_object(child, HandleGeneration::Young, [], 64, false, false);
-    young.register_object(
-        root,
-        HandleGeneration::Old,
-        [Some(child)],
-        64,
-        false,
-        false,
-    );
+    young.register_object(root, HandleGeneration::Old, [Some(child)], 64, false, false);
     young.write_reference(root, 0, Some(child), 0x9000);
     young.pause_mark_start(&roots([root]));
     while young.concurrent_mark_step(32) {}

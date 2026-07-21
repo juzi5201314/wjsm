@@ -23,7 +23,14 @@ fn old_mark_starts_from_young_mark_start_and_spans_cycles() {
     old.register_object(old_a, HandleGeneration::Old, [Some(old_b)], 128);
     old.register_object(old_b, HandleGeneration::Old, [], 64);
     old.register_object(young_root, HandleGeneration::Young, [Some(old_a)], 32);
-    young.register_object(young_root, HandleGeneration::Young, [Some(old_a)], 32, false, false);
+    young.register_object(
+        young_root,
+        HandleGeneration::Young,
+        [Some(old_a)],
+        32,
+        false,
+        false,
+    );
 
     let r1 = roots([young_root, old_a]);
     old.coordinate_from_young_mark_start(&young, &r1, true);

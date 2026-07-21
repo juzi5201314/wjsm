@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use parking_lot::Mutex;
 
-use crate::heap::{HandleId, HandleTableV2, HandleTableError};
+use crate::heap::{HandleId, HandleTableError, HandleTableV2};
 
 /// precise old→young remembered set：slot bitmap + double buffer。
 #[derive(Debug, Default)]
@@ -58,7 +58,10 @@ impl PreciseRemset {
 }
 
 /// 原地晋升发布：与 young mark 竞争时通过 handle table promote CAS。
-pub fn publish_promotion(handles: &HandleTableV2, handle: HandleId) -> Result<(), HandleTableError> {
+pub fn publish_promotion(
+    handles: &HandleTableV2,
+    handle: HandleId,
+) -> Result<(), HandleTableError> {
     handles.promote(handle)
 }
 
@@ -89,7 +92,10 @@ mod tests {
             .publish(handle, layout.object_heap_base(), HandleGeneration::Young)
             .unwrap();
         publish_promotion(&table, handle).unwrap();
-        assert_eq!(table.resolve(handle).unwrap().generation(), HandleGeneration::Old);
+        assert_eq!(
+            table.resolve(handle).unwrap().generation(),
+            HandleGeneration::Old
+        );
         let _ = HandleId::new(0);
     }
 }

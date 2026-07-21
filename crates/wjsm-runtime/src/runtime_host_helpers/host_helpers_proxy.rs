@@ -265,7 +265,7 @@ fn define_property_on_v2_object(
                 if !old_writable {
                     if desc.writable == Some(true) {
                         return Err(
-                            "TypeError: Cannot make non-writable property writable".to_string(),
+                            "TypeError: Cannot make non-writable property writable".to_string()
                         );
                     }
                     if let Some(new_val) = desc.value {
@@ -994,9 +994,7 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
                 .ok()
                 .flatten()
             {
-                Some(property)
-                    if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
-                {
+                Some(property) if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 => {
                     let getter = property.getter as i64;
                     if value::is_undefined(getter) || value::is_null(getter) {
                         return value::encode_undefined();
@@ -1422,8 +1420,7 @@ pub(crate) fn define_host_accessor_property_by_name_id_with_flags(
         if value::is_array(obj) {
             set_runtime_error(
                 caller.data(),
-                "TypeError: Accessor properties are not supported on array named slots"
-                    .to_string(),
+                "TypeError: Accessor properties are not supported on array named slots".to_string(),
             );
             return None;
         }

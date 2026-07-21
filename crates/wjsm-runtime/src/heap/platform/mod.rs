@@ -13,9 +13,9 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
-use std::fmt;
 #[allow(unused_imports)]
 pub use portable::{PortableVirtualMemory, ScalarBitmapOps};
+use std::fmt;
 
 #[cfg(target_os = "linux")]
 pub use linux::LinuxVirtualMemory;
@@ -93,7 +93,11 @@ impl VirtualRange {
 
     /// Commit `[offset, offset+len)` within the reserved range.
     pub fn commit(&mut self, offset: usize, len: usize) -> Result<(), PlatformError> {
-        if offset.checked_add(len).map(|end| end > self.len).unwrap_or(true) {
+        if offset
+            .checked_add(len)
+            .map(|end| end > self.len)
+            .unwrap_or(true)
+        {
             return Err(PlatformError::InvalidRange);
         }
         // SAFETY: range is owned and bounds-checked above.
@@ -122,7 +126,11 @@ impl VirtualRange {
 
     /// Decommit `[offset, offset+len)` (pages may be reclaimed by the OS).
     pub fn decommit(&mut self, offset: usize, len: usize) -> Result<(), PlatformError> {
-        if offset.checked_add(len).map(|end| end > self.len).unwrap_or(true) {
+        if offset
+            .checked_add(len)
+            .map(|end| end > self.len)
+            .unwrap_or(true)
+        {
             return Err(PlatformError::InvalidRange);
         }
         // SAFETY: range is owned and bounds-checked above.
@@ -509,12 +517,8 @@ mod tests {
             assert_eq!(slice[0], 0xAB);
         }
 
-        range
-            .decommit(0, portable::page_size())
-            .expect("decommit");
-        range
-            .recommit(0, portable::page_size())
-            .expect("recommit");
+        range.decommit(0, portable::page_size()).expect("decommit");
+        range.recommit(0, portable::page_size()).expect("recommit");
         let slice = range.as_mut_slice();
         if !slice.is_empty() {
             slice[0] = 0xCD;
@@ -530,13 +534,11 @@ mod tests {
         assert!(caps.page_size >= 4096);
         // Missing hardware must be listed, never auto-closed.
         assert!(
-            caps.needs_capability_runner.contains(&"multi-numa")
-                || caps.numa.multi_node,
+            caps.needs_capability_runner.contains(&"multi-numa") || caps.numa.multi_node,
             "multi-numa must be covered or listed as needs-capability-runner"
         );
         assert!(
-            caps.needs_capability_runner.contains(&"aarch64-neon")
-                || caps.arch == "aarch64",
+            caps.needs_capability_runner.contains(&"aarch64-neon") || caps.arch == "aarch64",
             "aarch64-neon must stay open without the ISA"
         );
     }

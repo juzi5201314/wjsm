@@ -185,9 +185,7 @@ pub(crate) async fn ordinary_set_by_name_id(
                         || (value::is_function(receiver)
                             && handle_index_of(caller, receiver) as u32 == current)
                     {
-                        return access
-                            .set_property(current, key, val as u64)
-                            .is_ok();
+                        return access.set_property(current, key, val as u64).is_ok();
                     }
                     return define_value_on_receiver(caller, receiver, name_id, val).await;
                 }

@@ -10,8 +10,8 @@ use wjsm_ir::value::{
 };
 use wjsm_runtime::{
     BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, HANDLE_REGION_BYTES, HandleGeneration,
-    HandleId, HandleTableV2, HeaderLayout, LoadBarrierOutcome, ManagedHeapLayout, color_stored_value,
-    load_barrier, prototype_field_kind, select_bulk_copy_mode, store_barrier,
+    HandleId, HandleTableV2, HeaderLayout, LoadBarrierOutcome, ManagedHeapLayout,
+    color_stored_value, load_barrier, prototype_field_kind, select_bulk_copy_mode, store_barrier,
     store_barrier_with_target_generation,
 };
 
@@ -111,7 +111,11 @@ fn runtime_string_reference_colored_non_references_clear() {
         value::encode_string_ptr(9),
     ] {
         let stored = color_stored_value(epoch, scalar);
-        assert_eq!(stored as u64 & value::GC_COLOR_MASK, 0, "scalar {scalar:#x}");
+        assert_eq!(
+            stored as u64 & value::GC_COLOR_MASK,
+            0,
+            "scalar {scalar:#x}"
+        );
     }
 }
 
@@ -157,7 +161,10 @@ fn store_barrier_seqcst_publishes_colored_word() {
         encode_object_handle(3),
         HANDLE_REGION_BYTES + 64,
     );
-    assert_eq!(slot.load(std::sync::atomic::Ordering::SeqCst) as i64, stored);
+    assert_eq!(
+        slot.load(std::sync::atomic::Ordering::SeqCst) as i64,
+        stored
+    );
     assert_ne!(stored as u64 & value::GC_COLOR_MASK, 0);
 }
 

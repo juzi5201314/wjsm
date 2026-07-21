@@ -282,7 +282,6 @@ pub(crate) fn define_string_methods(
         cp <= 0x10FFFF && !(0xD800..=0xDFFF).contains(&cp)
     }
 
-
     let primitive_string_get_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, name_id: i32| -> i64 {

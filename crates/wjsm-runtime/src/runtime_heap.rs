@@ -522,13 +522,8 @@ pub(crate) fn allocate_v2_object_bytes_with_context<C: AsContextMut<Data = Runti
             ) {
                 let used = access.used_bytes() as usize;
                 let requested = bytes as usize;
-                let message = ctx
-                    .as_context()
-                    .data()
-                    .heap_oom_message(used, requested);
-                ctx.as_context()
-                    .data()
-                    .set_heap_oom_error(used, requested);
+                let message = ctx.as_context().data().heap_oom_message(used, requested);
+                ctx.as_context().data().set_heap_oom_error(used, requested);
                 return Err(wasmtime::Error::msg(message));
             }
             return Err(wasmtime::Error::msg(error.to_string()));
@@ -639,9 +634,7 @@ pub(crate) fn define_host_data_property_v2(
         Err(error) => {
             if let crate::runtime_gc::HeapAccessV2Error::HeapExhausted { requested, .. } = error {
                 let used = caller.data().heap_access_v2().used_bytes() as usize;
-                caller
-                    .data()
-                    .set_heap_oom_error(used, requested as usize);
+                caller.data().set_heap_oom_error(used, requested as usize);
                 set_runtime_error(
                     caller.data(),
                     caller.data().heap_oom_message(used, requested as usize),
@@ -668,7 +661,9 @@ fn define_host_accessor_property_v2(
     if value::is_array(object) {
         set_runtime_error(
             caller.data(),
-            format!("TypeError: Accessor properties are not supported on array named slots: {name}"),
+            format!(
+                "TypeError: Accessor properties are not supported on array named slots: {name}"
+            ),
         );
         return None;
     }

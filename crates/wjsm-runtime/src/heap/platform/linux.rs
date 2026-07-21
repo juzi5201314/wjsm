@@ -185,9 +185,7 @@ pub fn set_thread_affinity(node: NumaNode) -> Result<(), PlatformError> {
     if !any {
         return Ok(());
     }
-    let rc = unsafe {
-        libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set)
-    };
+    let rc = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) };
     if rc != 0 {
         Err(PlatformError::Os(io::Error::last_os_error().to_string()))
     } else {

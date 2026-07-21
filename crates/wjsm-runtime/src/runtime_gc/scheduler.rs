@@ -9,7 +9,6 @@ use super::api::{StepBudget, StepOutcome};
 #[cfg(feature = "managed-heap-v2")]
 use super::zgc::director::{AssistBudget, DirectorDecision, GcDirector};
 
-
 const DEFAULT_PAUSE_TARGET: Duration = Duration::from_millis(4);
 const DEFAULT_GC_PERCENT: usize = 100;
 const DEFAULT_TRIGGER_BYTES: usize = 256 * 1024;

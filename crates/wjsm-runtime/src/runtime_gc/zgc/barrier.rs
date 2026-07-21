@@ -18,8 +18,14 @@ use crate::heap::{ColoredHandleEntry, HandleGeneration, HandleId, HandleState, H
 /// load barrier 结果：稳定地址或需要 assist 的 relocating entry。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoadBarrierOutcome {
-    Stable { address: u64, generation: HandleGeneration },
-    Relocating { address: u64, generation: HandleGeneration },
+    Stable {
+        address: u64,
+        generation: HandleGeneration,
+    },
+    Relocating {
+        address: u64,
+        generation: HandleGeneration,
+    },
     Invalid,
 }
 
@@ -199,10 +205,12 @@ pub fn classify_entry(entry: ColoredHandleEntry) -> LoadBarrierOutcome {
                 generation: entry.generation(),
             }
         }
-        HandleState::RelocatingYoung | HandleState::RelocatingOld => LoadBarrierOutcome::Relocating {
-            address: entry.address(),
-            generation: entry.generation(),
-        },
+        HandleState::RelocatingYoung | HandleState::RelocatingOld => {
+            LoadBarrierOutcome::Relocating {
+                address: entry.address(),
+                generation: entry.generation(),
+            }
+        }
         HandleState::Free | HandleState::Retired => LoadBarrierOutcome::Invalid,
     }
 }
@@ -358,9 +366,12 @@ impl HeaderLayout {
     };
 
     pub fn rejects_bulk_copy_of_mutable_headers(self) -> bool {
-        self.fields
-            .iter()
-            .any(|field| matches!(field.kind, HeaderFieldKind::MutableAtomicWord | HeaderFieldKind::ReferenceSlot))
+        self.fields.iter().any(|field| {
+            matches!(
+                field.kind,
+                HeaderFieldKind::MutableAtomicWord | HeaderFieldKind::ReferenceSlot
+            )
+        })
     }
 }
 

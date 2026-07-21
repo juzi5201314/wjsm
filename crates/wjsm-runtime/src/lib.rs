@@ -67,10 +67,10 @@ pub use heap::{
     Allocation, AllocationClass, AllocatorError, ColoredHandleEntry, EpochParticipant,
     HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleState,
     HandleTableError, HandleTableV2, HeapAddress, HeapMemoryError, IsaDispatch, IsaKind,
-    ManagedAllocator, ManagedHeapLayout, NativeHeapMemory, Nlab, NumaNode, NumaTopology,
-    ObjectRef, PAGE_GRANULE_BYTES, PageId, PageObjectIter, PageRange, PlatformCapabilities,
-    PlatformError, PlatformVirtualMemory, RelocationReserve, ScalarBitmapOps, SharedHeapMemory,
-    VirtualRange, platform_reserve, set_thread_affinity,
+    ManagedAllocator, ManagedHeapLayout, NativeHeapMemory, Nlab, NumaNode, NumaTopology, ObjectRef,
+    PAGE_GRANULE_BYTES, PageId, PageObjectIter, PageRange, PlatformCapabilities, PlatformError,
+    PlatformVirtualMemory, RelocationReserve, ScalarBitmapOps, SharedHeapMemory, VirtualRange,
+    platform_reserve, set_thread_affinity,
 };
 pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};
@@ -88,12 +88,12 @@ pub use runtime_gc::telemetry::{
 pub use runtime_gc::zgc::{
     AssistBudget, BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, ConcurrentHostRoots,
     ConcurrentRelocator, DirectorDecision, DirectorGeneration, GcDirector, GenerationRates,
-    HeaderField, HeaderFieldKind, HeaderLayout, HostRootsReport, LoadBarrierOutcome,
-    OldController, OldPhase, OldReport, PageRelocationState, PreciseRemset, RelocationDescriptor,
+    HeaderField, HeaderFieldKind, HeaderLayout, HostRootsReport, LoadBarrierOutcome, OldController,
+    OldPhase, OldReport, PageRelocationState, PreciseRemset, RelocationDescriptor,
     RelocationReport, StallEvent, StallReason, WeakState, YoungController, YoungPhase, YoungReport,
-    ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome, classify_entry, color_stored_value,
-    load_barrier, prototype_field_kind, publish_promotion, select_bulk_copy_mode, store_barrier,
-    store_barrier_with_target_generation,
+    ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome, classify_entry,
+    color_stored_value, load_barrier, prototype_field_kind, publish_promotion,
+    select_bulk_copy_mode, store_barrier, store_barrier_with_target_generation,
 };
 #[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]

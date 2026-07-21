@@ -13,9 +13,9 @@ use crossbeam_deque::Worker;
 
 pub use packet::{GcPacketKind, GcWorkPacket};
 
+use crate::heap::platform::{NumaTopology, set_thread_affinity};
 use packet::PacketSlab;
 use queue::WorkerQueues;
-use crate::heap::platform::{NumaTopology, set_thread_affinity};
 
 /// 固定 worker pool 在关闭和容量边界上返回的显式错误。
 #[derive(Clone, Debug, Eq, PartialEq)]

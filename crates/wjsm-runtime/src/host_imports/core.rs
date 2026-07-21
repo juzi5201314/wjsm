@@ -1217,11 +1217,13 @@ pub(crate) fn define_core(
                 let handle = value::decode_handle(obj);
                 let access = caller.data().heap_access_v2().clone();
                 if access.resolve_handle(handle).is_ok() {
-                    let Some(key) = crate::property_key::canonicalize_v2_name_id(&mut caller, name_id)
+                    let Some(key) =
+                        crate::property_key::canonicalize_v2_name_id(&mut caller, name_id)
                     else {
                         return value::encode_undefined();
                     };
-                    let Some(property) = access.get_property_slot(handle, key).ok().flatten() else {
+                    let Some(property) = access.get_property_slot(handle, key).ok().flatten()
+                    else {
                         return value::encode_undefined();
                     };
                     let flags = property.flags as i32;

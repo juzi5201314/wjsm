@@ -22,7 +22,10 @@ pub(crate) fn compare(args: CompareArgs) -> Result<i32> {
     } else {
         parse_csv(&args.heaps, crate::cli::parse_bytes)?
     };
-    let largest_heap = *heaps.iter().max().context("--heaps/--heap must not be empty")?;
+    let largest_heap = *heaps
+        .iter()
+        .max()
+        .context("--heaps/--heap must not be empty")?;
     let resources = SystemHostResourceProvider.snapshot()?;
     let admission = admit(
         &resources,

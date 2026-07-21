@@ -179,8 +179,8 @@ fn gate_requires_pause_distribution_evidence() {
 #[test]
 #[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
 fn nightly_gate_requires_hard_isolation_evidence() {
-    use wjsm_gc_bench::comparison::gate_manifest_for_profile;
     use wjsm_gc_bench::cli::Profile;
+    use wjsm_gc_bench::comparison::gate_manifest_for_profile;
     use wjsm_gc_bench::schema::BenchmarkManifest;
 
     let mut manifest = BenchmarkManifest::empty();

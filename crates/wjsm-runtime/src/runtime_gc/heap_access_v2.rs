@@ -32,9 +32,7 @@ impl HeapAccessV2 {
     /// 使用显式逻辑堆上限（`object_start + max_heap_size`），可小于 shared memory64 的页对齐 maximum。
     pub fn with_heap_limit(memory: SharedHeapMemory, heap_limit: u64) -> Self {
         let next_object = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
-        let heap_limit = heap_limit
-            .max(next_object)
-            .min(memory.maximum_byte_len());
+        let heap_limit = heap_limit.max(next_object).min(memory.maximum_byte_len());
         Self {
             memory,
             next_object: AtomicU64::new(next_object),

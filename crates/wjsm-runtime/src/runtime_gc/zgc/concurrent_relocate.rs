@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
@@ -184,7 +184,10 @@ impl ConcurrentRelocator {
         Ok(elapsed)
     }
 
-    pub fn install_descriptor(&self, descriptor: RelocationDescriptor) -> Arc<RelocationDescriptor> {
+    pub fn install_descriptor(
+        &self,
+        descriptor: RelocationDescriptor,
+    ) -> Arc<RelocationDescriptor> {
         let handle = descriptor.handle;
         let arc = Arc::new(descriptor);
         self.descriptors.lock().insert(handle, Arc::clone(&arc));
@@ -240,10 +243,7 @@ impl ConcurrentRelocator {
                 match field.kind {
                     HeaderFieldKind::ImmutableByteCopy => {
                         let bytes = memory
-                            .copy_to(
-                                HeapAddress::new(descriptor.source + field.offset),
-                                8,
-                            )
+                            .copy_to(HeapAddress::new(descriptor.source + field.offset), 8)
                             .map_err(|error| error.to_string())?;
                         memory
                             .copy_from(

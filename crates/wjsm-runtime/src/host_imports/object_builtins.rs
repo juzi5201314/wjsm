@@ -489,7 +489,10 @@ fn object_seal_or_freeze_impl(
                 if freeze && (flags & constants::FLAG_IS_ACCESSOR as u32) == 0 {
                     new_flags &= !(constants::FLAG_WRITABLE as u32);
                 }
-                if access.update_property_flags(handle, key, new_flags).is_err() {
+                if access
+                    .update_property_flags(handle, key, new_flags)
+                    .is_err()
+                {
                     return false;
                 }
             }
@@ -678,14 +681,8 @@ fn read_property_by_string_key(
                 crate::property_key::intern_runtime_property_key(caller.data(), key.clone()),
             );
             return match access.get_property_slot(handle, key_id).ok().flatten() {
-                Some(property)
-                    if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
-                {
-                    super::get_method::invoke_getter_sync(
-                        caller,
-                        property.getter as i64,
-                        obj,
-                    )
+                Some(property) if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 => {
+                    super::get_method::invoke_getter_sync(caller, property.getter as i64, obj)
                 }
                 Some(property) => property.value as i64,
                 None => value::encode_undefined(),

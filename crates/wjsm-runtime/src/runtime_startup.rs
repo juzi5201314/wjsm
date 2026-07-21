@@ -625,12 +625,7 @@ fn record_and_attach_gc_heap(
         // V2：对象堆与 handle 表在 memory64 `__heap_memory`，主 memory 只承载字符串。
         // 禁止再走 V1 attach（会把 memory32 heap_ptr/alloc 窗口/GC 元数据当成对象堆，
         // 并可能在扫描/清扫时踩主内存字符串区）。
-        let string_end = wasm_env
-            .heap_ptr
-            .get(&mut *store)
-            .i32()
-            .unwrap_or(0)
-            .max(0) as usize;
+        let string_end = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
         let immortal_objects_end = immortal_objects_end.max(string_end);
         store
             .data()

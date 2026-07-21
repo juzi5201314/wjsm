@@ -269,7 +269,11 @@ impl ArrayNamedPropsStore {
                 .resolve_handle(handle)
                 .is_ok()
         }) {
-            return Self::collect_property_key_values_by_handle(caller, arr_ptr as u32, symbols_only);
+            return Self::collect_property_key_values_by_handle(
+                caller,
+                arr_ptr as u32,
+                symbols_only,
+            );
         }
         let handles: Vec<u32> = caller
             .data()

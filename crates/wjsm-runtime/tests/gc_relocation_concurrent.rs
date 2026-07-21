@@ -43,7 +43,10 @@ fn copy_ownership_assist_and_destination_publish() {
         .unwrap();
     // seed source payload
     memory
-        .store_word(wjsm_runtime::HeapAddress::new(source), 0xA1A2_A3A4_A5A6_A7A8)
+        .store_word(
+            wjsm_runtime::HeapAddress::new(source),
+            0xA1A2_A3A4_A5A6_A7A8,
+        )
         .unwrap();
     memory
         .store_word(wjsm_runtime::HeapAddress::new(source + 8), 0x1111)
@@ -108,23 +111,23 @@ fn source_write_rejected_while_relocating_and_young_old_mutex() {
     let relocator = ConcurrentRelocator::new();
     let handle = table.allocate_handle().unwrap();
     table
-        .publish(
-            handle,
-            layout.object_heap_base(),
-            HandleGeneration::Young,
-        )
+        .publish(handle, layout.object_heap_base(), HandleGeneration::Young)
         .unwrap();
     table.begin_relocation(handle).unwrap();
-    assert!(relocator
-        .reject_source_write_if_relocating(&table, handle)
-        .is_err());
+    assert!(
+        relocator
+            .reject_source_write_if_relocating(&table, handle)
+            .is_err()
+    );
 
     relocator
         .pause_relocate_start(HandleGeneration::Young)
         .unwrap();
-    assert!(relocator
-        .pause_relocate_start(HandleGeneration::Old)
-        .is_err());
+    assert!(
+        relocator
+            .pause_relocate_start(HandleGeneration::Old)
+            .is_err()
+    );
 }
 
 #[test]
@@ -133,11 +136,7 @@ fn epoch_reclaim_after_grace_period() {
     let relocator = ConcurrentRelocator::new();
     let handle = table.allocate_handle().unwrap();
     table
-        .publish(
-            handle,
-            layout.object_heap_base(),
-            HandleGeneration::Young,
-        )
+        .publish(handle, layout.object_heap_base(), HandleGeneration::Young)
         .unwrap();
     // reader epoch participant holds quarantine
     let participant = table.register_participant();
