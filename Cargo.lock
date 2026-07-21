@@ -5042,13 +5042,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wjsm-backend-wasm-v2"
-version = "0.1.0"
-dependencies = [
- "wjsm-backend-wasm",
-]
-
-[[package]]
 name = "wjsm-cli"
 version = "0.1.0"
 dependencies = [
@@ -5180,7 +5173,6 @@ dependencies = [
  "wasmtime",
  "webpki-roots 0.26.11",
  "wjsm-backend-wasm",
- "wjsm-backend-wasm-v2",
  "wjsm-engine-config",
  "wjsm-ir",
  "wjsm-module",

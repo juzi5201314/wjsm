@@ -19,7 +19,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Report capabilities
         run: |
-          cargo run --release -p wjsm-gc-bench -- capabilities --output /tmp/gc-capabilities.json
+          cargo run --release -p wjsm-gc-bench --features managed-heap-v2 -- capabilities --output /tmp/gc-capabilities.json
           python3 - <<'PY'
           import json
           d=json.load(open("/tmp/gc-capabilities.json"))
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: |
-          cargo run --release -p wjsm-gc-bench -- capabilities --output /tmp/gc-capabilities.json
+          cargo run --release -p wjsm-gc-bench --features managed-heap-v2 -- capabilities --output /tmp/gc-capabilities.json
           python3 -c 'import json; d=json.load(open("/tmp/gc-capabilities.json")); assert d["platform"]["isa"]=="avx512"'
           cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(heap_platform) | test(bitmap_simd)'
 
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: |
-          cargo run --release -p wjsm-gc-bench -- capabilities --output /tmp/gc-capabilities.json
+          cargo run --release -p wjsm-gc-bench --features managed-heap-v2 -- capabilities --output /tmp/gc-capabilities.json
           python3 -c 'import json; d=json.load(open("/tmp/gc-capabilities.json")); assert d["platform"]["isa"]=="neon"'
           cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(heap_platform) | test(bitmap_simd)'
 
@@ -87,6 +87,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: |
-          cargo run --release -p wjsm-gc-bench -- capabilities --output /tmp/gc-capabilities.json
+          cargo run --release -p wjsm-gc-bench --features managed-heap-v2 -- capabilities --output /tmp/gc-capabilities.json
           python3 -c 'import json; d=json.load(open("/tmp/gc-capabilities.json")); assert d["platform"]["numa_multi_node"] is True'
           cargo nextest run -p wjsm-runtime --features managed-heap-v2 -E 'test(heap_platform)'

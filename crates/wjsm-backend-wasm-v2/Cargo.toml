@@ -1,7 +1,0 @@
-[package]
-name = "wjsm-backend-wasm-v2"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-wjsm-backend-wasm = { path = "../wjsm-backend-wasm", features = ["managed-heap-v2"] }

@@ -463,11 +463,6 @@ pub async fn execute_with_writer_with_options_and_stats<W: Write>(
 pub fn compile_source(source: &str) -> Result<Vec<u8>> {
     let module = wjsm_parser::parse_module(source)?;
     let program = wjsm_semantic::lower_module(module, false)?;
-    #[cfg(feature = "managed-heap-v2")]
-    {
-        return wjsm_backend_wasm_v2::backend::compile(&program);
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
     wjsm_backend_wasm::compile(&program)
 }
 
@@ -482,14 +477,6 @@ pub fn compile_source_with_debug(source: &str, filename: &str) -> Result<Vec<u8>
         filename,
         true,
     )?;
-    #[cfg(feature = "managed-heap-v2")]
-    {
-        return wjsm_backend_wasm_v2::backend::compile_with_options(
-            &program,
-            wjsm_backend_wasm_v2::backend::CompileOptions { debug: true },
-        );
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
     wjsm_backend_wasm::compile_with_options(
         &program,
         wjsm_backend_wasm::CompileOptions { debug: true },

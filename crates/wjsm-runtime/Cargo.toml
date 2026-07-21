@@ -6,9 +6,11 @@ edition.workspace = true
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
+# managed-heap-v2 直接转发到后端/支持 crate 的同名 feature。V1/V2 差异整体
+# 位于 wjsm-backend-wasm 内部的 cfg 分支；不存在独立的 V2 后端 crate。
 [features]
 managed-heap-v2 = [
-    "dep:wjsm-backend-wasm-v2",
+    "wjsm-backend-wasm/managed-heap-v2",
     "wjsm-runtime-support/managed-heap-v2",
 ]
 
@@ -36,7 +38,6 @@ brotli = { workspace = true }
 wait-timeout = { workspace = true }
 swc_core = { workspace = true }
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
-wjsm-backend-wasm-v2 = { path = "../wjsm-backend-wasm-v2", optional = true }
 wjsm-module = { path = "../wjsm-module" }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }

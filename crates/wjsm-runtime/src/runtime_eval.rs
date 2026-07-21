@@ -273,10 +273,6 @@ pub(crate) fn cached_eval_wasm(
         has_scope_bridge,
         var_writes_to_scope,
     )?;
-    #[cfg(feature = "managed-heap-v2")]
-    let compiled =
-        wjsm_backend_wasm_v2::backend::compile_eval_at_data_base(&program, data_base, table_base)?;
-    #[cfg(not(feature = "managed-heap-v2"))]
     let compiled = wjsm_backend_wasm::compile_eval_at_data_base(&program, data_base, table_base)?;
     let entry = (compiled.wasm, compiled.table_len);
     state

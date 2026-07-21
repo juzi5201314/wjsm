@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(not(feature = "managed-heap-v2"))]
+use std::collections::HashSet;
 
 use wasmparser::{ExternalKind, Operator, Parser, Payload, TypeRef};
 use wjsm_backend_wasm::{GcFlavor, emit_support_module};
