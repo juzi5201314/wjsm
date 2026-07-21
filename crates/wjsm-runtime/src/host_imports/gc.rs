@@ -384,6 +384,17 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_elem_get_v2",
         |mut caller: Caller<'_, RuntimeState>, (array, index): (i64, i32)| {
             Box::new(async move {
+                // TypedArray 数字索引先走 Rust 侧 typedarray 表
+                // （与 V1 obj_get_by_index 分派一致；负数索引落入属性路径 → undefined）。
+                if index >= 0
+                    && let Some(element) = crate::runtime_typedarray::typedarray_element_read(
+                        &mut caller,
+                        array,
+                        index as u32,
+                    )
+                {
+                    return Ok(element);
+                }
                 let handle = value::decode_handle(array);
                 let access = caller.data().heap_access_v2().clone();
                 // arguments 等对象以 "0"/"1" 属性键承载索引访问，非数组布局。
@@ -409,6 +420,19 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
          index: i32,
          new_value: i64|
          -> wasmtime::Result<()> {
+            // TypedArray 数字索引写入 Rust 侧表（负数索引按规范丢弃）。
+            if crate::runtime_typedarray::typedarray_entry_from_value(&mut caller, array).is_some()
+            {
+                if index >= 0 {
+                    let _ = crate::runtime_typedarray::typedarray_element_write(
+                        &mut caller,
+                        array,
+                        index as u32,
+                        new_value,
+                    );
+                }
+                return Ok(());
+            }
             let handle = value::decode_handle(array);
             let access = caller.data().heap_access_v2().clone();
             if !value::is_array(array)

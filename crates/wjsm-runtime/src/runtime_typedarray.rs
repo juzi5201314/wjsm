@@ -27,6 +27,29 @@ pub(crate) fn typedarray_entry_from_value(
     if !value::is_object(value_raw) {
         return None;
     }
+    
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(value_raw);
+        if caller.data().heap_access_v2().resolve_handle(handle).is_ok() {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    caller.data(),
+                    crate::runtime_string::RuntimeString::from_utf8_str("__typedarray_handle__"),
+                ),
+            );
+            let property = caller
+                .data()
+                .heap_access_v2()
+                .get_property_slot_on_proto_chain(handle, key)
+                .ok()??;
+            let handle_raw = property.value;
+            let handle = value::decode_f64(handle_raw as i64) as usize;
+            let table = caller.data().typedarray_table.lock().ok()?;
+            return table.get(handle).cloned();
+        }
+    }
+    
     let ptr = resolve_handle(caller, value_raw)?;
     let handle_raw = read_object_property_by_name(caller, ptr, "__typedarray_handle__")?;
     let handle = value::decode_f64(handle_raw) as usize;
@@ -44,6 +67,31 @@ pub(crate) fn typedarray_entry_from_value_with_env<C: AsContextMut<Data = Runtim
     if !value::is_object(value_raw) {
         return None;
     }
+    
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(value_raw);
+        if ctx.as_context().data().heap_access_v2().resolve_handle(handle).is_ok() {
+            let key = crate::property_key::encode_runtime_string_name_id(
+                crate::property_key::intern_runtime_property_key(
+                    ctx.as_context().data(),
+                    crate::runtime_string::RuntimeString::from_utf8_str("__typedarray_handle__"),
+                ),
+            );
+            let property = ctx
+                .as_context()
+                .data()
+                .heap_access_v2()
+                .get_property_slot_on_proto_chain(handle, key)
+                .ok()??;
+            let handle_raw = property.value;
+            let handle = value::decode_f64(handle_raw as i64) as usize;
+            let store = ctx.as_context_mut();
+            let table = store.data().typedarray_table.lock().ok()?;
+            return table.get(handle).cloned();
+        }
+    }
+    
     let handle_idx = (value_raw as u64 & 0xFFFF_FFFF) as usize;
     let ptr = resolve_handle_idx_with_env(ctx, env, handle_idx)?;
     let handle_raw = read_object_property_by_name_with_env(ctx, env, ptr, "__typedarray_handle__")?;

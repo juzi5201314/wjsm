@@ -190,6 +190,18 @@ fn set_sab_host_data_property(
     name: &str,
     val: i64,
 ) {
+    // V2：define 路径本身覆写既有 key；V1 的 ptr 槽位扫描在 V2 handle 上会读到
+    // 主存垃圾，绝不能进入。
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(obj))
+        .is_ok()
+    {
+        let _ = define_host_data_property_from_caller(caller, obj, name, val);
+        return;
+    }
     let Some(obj_ptr) = resolve_handle(caller, obj) else {
         let _ = define_host_data_property_from_caller(caller, obj, name, val);
         return;
