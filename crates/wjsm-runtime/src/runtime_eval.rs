@@ -119,6 +119,27 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
     for import in eval_module.imports() {
         match import.ty() {
             ExternType::Func(func_ty) => {
+                // V2 eval 与 Normal 模式一样 import wjsm_support helpers；
+                // 从已实例化的 support module 导出表解析，而不是父模块 re-export。
+                #[cfg(feature = "managed-heap-v2")]
+                if import.module() == "wjsm_support" {
+                    let name = import.name();
+                    let export = caller
+                        .data()
+                        .support_exports
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .iter()
+                        .find(|(export_name, _)| *export_name == name)
+                        .map(|(_, export)| export.clone());
+                    match export {
+                        Some(Extern::Func(func)) => {
+                            imports.push(func.into());
+                            continue;
+                        }
+                        _ => anyhow::bail!("eval support import missing: {name}"),
+                    }
+                }
                 let func = compiled_eval_import(caller, import.name(), &func_ty);
                 imports.push(func.into());
             }
