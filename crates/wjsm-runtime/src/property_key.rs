@@ -107,12 +107,11 @@ pub(crate) fn runtime_property_key_units(
     state: &RuntimeState,
     index: u32,
 ) -> Option<RuntimeString> {
-    state
+    let table = state
         .runtime_property_keys
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(index)
-        .cloned()
+        .unwrap_or_else(|e| e.into_inner());
+    table.get(index).cloned()
 }
 
 pub(crate) fn name_id_matches_runtime_string<C: AsContext<Data = RuntimeState>>(
