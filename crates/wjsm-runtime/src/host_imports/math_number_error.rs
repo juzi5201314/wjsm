@@ -1193,18 +1193,7 @@ pub(crate) fn define_math_number_error(
     let primitive_bigint_get_method_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
-            if !value::is_bigint(boxed) {
-                return value::encode_undefined();
-            }
-            let method = match read_string_bytes(&mut caller, name_id as u32).as_slice() {
-                b"toString" => 0,
-                b"valueOf" => 1,
-                _ => return value::encode_undefined(),
-            };
-            create_native_callable(
-                caller.data(),
-                NativeCallable::BigIntPrimitiveMethod { method },
-            )
+            primitive_bigint_get_method_impl(&mut caller, boxed, name_id as u32)
         },
     );
     linker.define(
@@ -1217,21 +1206,7 @@ pub(crate) fn define_math_number_error(
     let primitive_number_get_method_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
-            if (boxed as u64 & value::BOX_BASE) == value::BOX_BASE {
-                return value::encode_undefined();
-            }
-            let method = match read_string_bytes(&mut caller, name_id as u32).as_slice() {
-                b"toString" => 0,
-                b"valueOf" => 1,
-                b"toFixed" => 2,
-                b"toExponential" => 3,
-                b"toPrecision" => 4,
-                _ => return value::encode_undefined(),
-            };
-            create_native_callable(
-                caller.data(),
-                NativeCallable::NumberPrimitiveMethod { method },
-            )
+            primitive_number_get_method_impl(&mut caller, boxed, name_id as u32)
         },
     );
     linker.define(
@@ -1282,4 +1257,47 @@ pub(crate) fn define_math_number_error(
 
     // ── Map / Set helper: SameValueZero equality ──────────────────────
     Ok(())
+}
+
+/// BigInt 原始值的原型方法名 → NativeCallable（obj_get TAG_BIGINT 分派）。
+pub(crate) fn primitive_bigint_get_method_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    boxed: i64,
+    name_id: u32,
+) -> i64 {
+    if !value::is_bigint(boxed) {
+        return value::encode_undefined();
+    }
+    let method = match read_string_bytes(caller, name_id).as_slice() {
+        b"toString" => 0,
+        b"valueOf" => 1,
+        _ => return value::encode_undefined(),
+    };
+    create_native_callable(
+        caller.data(),
+        NativeCallable::BigIntPrimitiveMethod { method },
+    )
+}
+
+/// raw f64 数字的原型方法名 → NativeCallable（obj_get 非 NaN-box 分派）。
+pub(crate) fn primitive_number_get_method_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    boxed: i64,
+    name_id: u32,
+) -> i64 {
+    if (boxed as u64 & value::BOX_BASE) == value::BOX_BASE {
+        return value::encode_undefined();
+    }
+    let method = match read_string_bytes(caller, name_id).as_slice() {
+        b"toString" => 0,
+        b"valueOf" => 1,
+        b"toFixed" => 2,
+        b"toExponential" => 3,
+        b"toPrecision" => 4,
+        _ => return value::encode_undefined(),
+    };
+    create_native_callable(
+        caller.data(),
+        NativeCallable::NumberPrimitiveMethod { method },
+    )
 }

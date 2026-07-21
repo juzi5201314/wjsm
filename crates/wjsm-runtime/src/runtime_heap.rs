@@ -343,50 +343,8 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     #[cfg(feature = "managed-heap-v2")]
     {
-        let handle = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(-1);
-        if handle < 0
-            || env
-                .obj_table_count
-                .set(&mut *ctx, Val::I32(handle.saturating_add(1)))
-                .is_err()
-        {
-            set_runtime_error(
-                ctx.as_context().data(),
-                "V2 host allocation exhausted handles".to_string(),
-            );
-            return value::encode_undefined();
-        }
-        let prototype = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
-        let Some(bytes) = u64::from(capacity)
-            .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
-            .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
-        else {
-            set_runtime_error(
-                ctx.as_context().data(),
-                "RangeError: V2 host object size overflow".to_string(),
-            );
-            return value::encode_undefined();
-        };
-        let access = ctx.as_context().data().heap_access_v2().clone();
-        let (object, _) = match allocate_v2_object_bytes_with_context(ctx, bytes) {
-            Ok(window) => window,
-            Err(error) => {
-                set_runtime_error(
-                    ctx.as_context().data(),
-                    format!("V2 host object allocation: {error}"),
-                );
-                return value::encode_undefined();
-            }
-        };
-        if let Err(error) = access.publish_object(handle as u32, object, prototype as u32, capacity)
-        {
-            set_runtime_error(
-                ctx.as_context().data(),
-                format!("V2 host object publication: {error}"),
-            );
-            return value::encode_undefined();
-        }
-        return value::encode_object_handle(handle as u32);
+        let prototype = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
+        return alloc_host_object_v2_with_env(ctx, env, capacity, prototype);
     }
 
     #[cfg(not(feature = "managed-heap-v2"))]
@@ -394,6 +352,59 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
         let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
         alloc_host_object_impl(ctx, env, capacity, proto)
     }
+}
+
+/// V2：host 侧对象分配 + publish；`prototype == u32::MAX` 表示 null 原型
+/// （与 heap 层 PROTO_NULL_SENTINEL 同值）。
+#[cfg(feature = "managed-heap-v2")]
+fn alloc_host_object_v2_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    capacity: u32,
+    prototype: u32,
+) -> i64 {
+    let handle = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(-1);
+    if handle < 0
+        || env
+            .obj_table_count
+            .set(&mut *ctx, Val::I32(handle.saturating_add(1)))
+            .is_err()
+    {
+        set_runtime_error(
+            ctx.as_context().data(),
+            "V2 host allocation exhausted handles".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    let Some(bytes) = u64::from(capacity)
+        .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
+        .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
+    else {
+        set_runtime_error(
+            ctx.as_context().data(),
+            "RangeError: V2 host object size overflow".to_string(),
+        );
+        return value::encode_undefined();
+    };
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    let (object, _) = match allocate_v2_object_bytes_with_context(ctx, bytes) {
+        Ok(window) => window,
+        Err(error) => {
+            set_runtime_error(
+                ctx.as_context().data(),
+                format!("V2 host object allocation: {error}"),
+            );
+            return value::encode_undefined();
+        }
+    };
+    if let Err(error) = access.publish_object(handle as u32, object, prototype, capacity) {
+        set_runtime_error(
+            ctx.as_context().data(),
+            format!("V2 host object publication: {error}"),
+        );
+        return value::encode_undefined();
+    }
+    value::encode_object_handle(handle as u32)
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -613,6 +624,12 @@ pub(crate) fn define_host_data_property_v2(
 ) -> Option<()> {
     let handle = value::decode_handle(object);
     let key = v2_host_property_key(caller, name)?;
+    // 数组：命名属性入宿主侧表——V2 数组 offset 8/12 与对象属性头布局别名，
+    // 直接写属性槽会损坏 length/元素存储（regex exec 结果的 index/input/groups 等）。
+    if value::is_array(object) {
+        crate::array_named_props::ArrayNamedPropsStore::set(caller, object, key, property_value);
+        return Some(());
+    }
     match caller
         .data()
         .heap_access_v2()
@@ -647,6 +664,14 @@ fn define_host_accessor_property_v2(
 ) -> Option<()> {
     let handle = value::decode_handle(object);
     let key = v2_host_property_key(caller, name)?;
+    // 与 define_data_property_on_array_named 保持一致：数组命名槽不承载访问器。
+    if value::is_array(object) {
+        set_runtime_error(
+            caller.data(),
+            format!("TypeError: Accessor properties are not supported on array named slots: {name}"),
+        );
+        return None;
+    }
     match caller.data().heap_access_v2().define_accessor_property(
         handle,
         key,
@@ -669,6 +694,10 @@ pub(crate) fn read_host_data_property_v2(
 ) -> Option<i64> {
     let handle = value::decode_handle(object);
     let key = v2_host_property_key(caller, name)?;
+    if value::is_array(object) {
+        return crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, object, key)
+            .map(|slot| slot.value);
+    }
     match caller.data().heap_access_v2().get_property(handle, key) {
         Ok(property) => property.map(|property_value| property_value as i64),
         Err(error) => {
@@ -692,7 +721,14 @@ pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    alloc_host_object_impl(ctx, env, capacity, u32::MAX)
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        return alloc_host_object_v2_with_env(ctx, env, capacity, u32::MAX);
+    }
+    #[cfg(not(feature = "managed-heap-v2"))]
+    {
+        alloc_host_object_impl(ctx, env, capacity, u32::MAX)
+    }
 }
 /// 各 Error 子类 prototype 对象（bootstrap 后由 `ensure_error_prototypes_initialized` 填充）。
 #[derive(Clone, Copy, Default)]

@@ -69,6 +69,39 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         .await,
                     );
                 }
+                // 与 V1 support obj_get 同序的原始值 tag 分派：undefined/null、
+                // bigint、symbol、regexp、raw f64 均不携带 V2 heap handle。
+                if value::is_undefined(object) || value::is_null(object) {
+                    return Ok(value::encode_undefined());
+                }
+                if value::is_bigint(object) {
+                    return Ok(crate::host_imports::primitive_bigint_get_method_impl(
+                        &mut caller,
+                        object,
+                        key as u32,
+                    ));
+                }
+                if value::is_symbol(object) {
+                    return Ok(crate::runtime_heap::primitive_symbol_get_property_impl(
+                        &mut caller,
+                        object,
+                        key as u32,
+                    ));
+                }
+                if value::is_regexp(object) {
+                    return Ok(crate::runtime_regexp::primitive_regexp_get_property_impl(
+                        &mut caller,
+                        object,
+                        key as u32,
+                    ));
+                }
+                if (object as u64 & value::BOX_BASE) != value::BOX_BASE {
+                    return Ok(crate::host_imports::primitive_number_get_method_impl(
+                        &mut caller,
+                        object,
+                        key as u32,
+                    ));
+                }
                 // Function/closure/bound 的 own 属性在 function_props 对象上；
                 // 先查 V2 handle table，未命中再回退 call/apply/bind 等内建解析。
                 let handle = if value::is_function(object)
@@ -96,6 +129,17 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         if key == length_key {
                             let length = caller.data().heap_access_v2().array_length(handle)?;
                             return Ok(value::encode_f64(length as f64));
+                        }
+                        // 数组命名属性（含 symbol）→ 宿主侧表；未命中落入原型链
+                        // 解析 Array.prototype 方法（proto 走查会跳过数组 own 槽）。
+                        if let Some(slot) =
+                            crate::array_named_props::ArrayNamedPropsStore::get_slot(
+                                &mut caller,
+                                object,
+                                key,
+                            )
+                        {
+                            return Ok(slot.value);
                         }
                     }
                     let access = caller.data().heap_access_v2().clone();
@@ -152,6 +196,17 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                     set_proxy_property_v2(&mut caller, object, raw_key, key, new_value)?;
                     return Ok(());
                 }
+                // TAG_REGEXP：lastIndex 等属性由 regexp 专用 owner 承载
+                // （与 V1 support obj_set 的 TAG_REGEXP 分派一致）。
+                if value::is_regexp(object) {
+                    crate::runtime_regexp::primitive_regexp_set_property_impl(
+                        &mut caller,
+                        object,
+                        raw_key,
+                        new_value,
+                    );
+                    return Ok(());
+                }
                 // Function/closure/bound 的属性对象 handle 从 function_props_base 起算。
                 let handle = if value::is_function(object)
                     || value::is_closure(object)
@@ -172,6 +227,35 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         crate::host_imports::array_set_length_impl(&mut caller, object, new_value);
                         return Ok(());
                     }
+                    // 数组命名属性（元素走 elem_set）：own slot 尊重 writable，
+                    // 缺失时按可扩展性新建——与 V1 support obj_set 数组分支同语义。
+                    if let Some(slot) = crate::array_named_props::ArrayNamedPropsStore::get_slot(
+                        &mut caller,
+                        object,
+                        key,
+                    ) {
+                        if slot.flags & wjsm_ir::constants::FLAG_WRITABLE == 0 {
+                            return Ok(());
+                        }
+                        crate::array_named_props::ArrayNamedPropsStore::set_with_flags(
+                            &mut caller,
+                            object,
+                            key,
+                            new_value,
+                            slot.flags,
+                        );
+                        return Ok(());
+                    }
+                    if !crate::is_extensible_impl(&mut caller, object) {
+                        return Ok(());
+                    }
+                    crate::array_named_props::ArrayNamedPropsStore::set(
+                        &mut caller,
+                        object,
+                        key,
+                        new_value,
+                    );
+                    return Ok(());
                 }
                 // OrdinarySet：accessor 调 setter；own 数据写值；缺失时在 receiver 新建。
                 let access = caller.data().heap_access_v2().clone();
@@ -264,6 +348,16 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                             }
                         }
                     }
+                    // 非索引命名属性（含 symbol）→ 宿主侧表；
+                    // configurable=false → false，不存在 → true。
+                    return Ok(value::encode_bool(
+                        crate::array_named_props::ArrayNamedPropsStore::remove(
+                            &mut caller,
+                            object,
+                            key,
+                        )
+                        .unwrap_or(true),
+                    ));
                 }
                 let access = caller.data().heap_access_v2().clone();
                 if let Some(property) = access.get_property_slot(handle, key).map_err(host_error)? {
@@ -519,6 +613,32 @@ fn set_proxy_target_property_v2(
 ) -> wasmtime::Result<()> {
     if value::is_proxy(target) {
         return set_proxy_property_v2(caller, target, raw_key, key, new_value);
+    }
+    // 数组 target：length / 命名属性与 gc_obj_set_v2 数组分支同语义。
+    if value::is_array(target) {
+        let length_key = crate::property_key::encode_runtime_string_name_id(
+            crate::property_key::intern_runtime_property_key(
+                caller.data(),
+                crate::runtime_string::RuntimeString::from_utf8_str("length"),
+            ),
+        );
+        if key == length_key {
+            crate::host_imports::array_set_length_impl(caller, target, new_value);
+            return Ok(());
+        }
+        if let Some(slot) =
+            crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, target, key)
+        {
+            if slot.flags & wjsm_ir::constants::FLAG_WRITABLE == 0 {
+                return Ok(());
+            }
+            crate::array_named_props::ArrayNamedPropsStore::set_with_flags(
+                caller, target, key, new_value, slot.flags,
+            );
+            return Ok(());
+        }
+        crate::array_named_props::ArrayNamedPropsStore::set(caller, target, key, new_value);
+        return Ok(());
     }
     if !value::is_object(target) {
         return Err(wasmtime::Error::msg(

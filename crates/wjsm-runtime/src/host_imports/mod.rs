@@ -99,6 +99,10 @@ pub(crate) use fetch_core::construct_request;
 pub(crate) use fetch_core::construct_response;
 pub(crate) use get_builtin_global_entry::define_get_builtin_global;
 pub(crate) use math_number_error::define_math_number_error;
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) use math_number_error::{
+    primitive_bigint_get_method_impl, primitive_number_get_method_impl,
+};
 pub(crate) use primitive_core::define_primitive_core;
 pub(crate) use proxy_traps::define_proxy_traps;
 pub(crate) use streams_queuing::call_queuing_strategy_size_from_caller;

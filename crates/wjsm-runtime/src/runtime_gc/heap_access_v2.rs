@@ -315,6 +315,9 @@ impl HeapAccessV2 {
 
     pub fn delete_property(&self, handle: u32, key: u32) -> Result<bool, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
+        }
         let (capacity, count) = self.property_shape(object)?;
         for index in 0..count.min(capacity) {
             let slot = property_slot_address(object, index)?;
@@ -354,6 +357,18 @@ impl HeapAccessV2 {
             .map_err(HeapAccessV2Error::Memory)?
             >> 32) as u32)
     }
+
+    /// 数组的 offset 8/12 是 length/元素容量，与对象属性头（capacity/count）
+    /// 布局别名；own 属性槽操作绝不能作用于数组对象——数组命名属性由宿主
+    /// `ArrayNamedPropsStore` 侧表承载（与 V1 support 模块语义一致）。
+    fn object_at_is_array(&self, object: u64) -> Result<bool, HeapAccessV2Error> {
+        let header = self
+            .memory
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        Ok((header >> 32) as u32 == u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+    }
+
     /// 覆写对象 header 中的 heap type 标记（如 HEAP_TYPE_ARGUMENTS）。
     pub fn set_object_type(&self, handle: u32, object_type: u8) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
@@ -389,6 +404,9 @@ impl HeapAccessV2 {
         key: u32,
     ) -> Result<Option<HeapAccessV2Property>, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Ok(None);
+        }
         let (capacity, count) = self.property_shape(object)?;
         for index in 0..count.min(capacity) {
             let slot = property_slot_address(object, index)?;
@@ -405,6 +423,9 @@ impl HeapAccessV2 {
 
     pub fn own_property_slots(&self, handle: u32) -> Result<Vec<(u32, u32)>, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Ok(Vec::new());
+        }
         let (capacity, count) = self.property_shape(object)?;
         let mut slots = Vec::with_capacity(count.min(capacity) as usize);
         for index in 0..count.min(capacity) {
@@ -428,6 +449,9 @@ impl HeapAccessV2 {
         flags: u32,
     ) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Ok(());
+        }
         let (capacity, count) = self.property_shape(object)?;
         for index in 0..count.min(capacity) {
             let slot = property_slot_address(object, index)?;
@@ -546,6 +570,9 @@ impl HeapAccessV2 {
 
     pub fn set_property(&self, handle: u32, key: u32, value: u64) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
+        }
         let (capacity, count) = self.property_shape(object)?;
         for index in 0..count.min(capacity) {
             let slot = property_slot_address(object, index)?;
@@ -578,6 +605,9 @@ impl HeapAccessV2 {
         setter: u64,
     ) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
+        }
         let (capacity, count) = self.property_shape(object)?;
         for index in 0..count.min(capacity) {
             let slot = property_slot_address(object, index)?;
@@ -773,6 +803,11 @@ pub enum HeapAccessV2Error {
     ProxyPrototype {
         handle: u32,
     },
+    /// 数组对象没有属性槽（offset 8/12 与 length/元素容量别名）；
+    /// 命名属性必须经宿主 `ArrayNamedPropsStore` 侧表。
+    ArrayPropertySlots {
+        handle: u32,
+    },
 }
 
 impl fmt::Display for HeapAccessV2Error {
@@ -811,6 +846,10 @@ impl fmt::Display for HeapAccessV2Error {
             Self::ProxyPrototype { handle } => {
                 write!(formatter, "proxy prototype handle {handle:#x}")
             }
+            Self::ArrayPropertySlots { handle } => write!(
+                formatter,
+                "V2 array handle {handle} has no property slots; named props live in the host side table"
+            ),
         }
     }
 }

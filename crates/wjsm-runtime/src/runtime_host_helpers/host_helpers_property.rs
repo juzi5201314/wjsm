@@ -293,7 +293,8 @@ fn canonical_integer_index(s: &str) -> Option<u32> {
     None
 }
 
-fn name_id_to_runtime_property_string(
+/// name_id → 属性名字符串（memory / runtime 双编码；symbol 返回 None）。
+pub(crate) fn name_id_to_runtime_property_string(
     caller: &mut Caller<'_, RuntimeState>,
     name_id: u32,
 ) -> Option<RuntimeString> {

@@ -26,6 +26,19 @@ fn default_data_property_flags() -> i32 {
     constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE
 }
 
+/// V2：属性键统一规范化（memory string → interned runtime string），使编译期
+/// name_id 与宿主 intern key 落在同一键空间；symbol / runtime id 原样保留。
+#[cfg(feature = "managed-heap-v2")]
+fn canonical_name_id(caller: &mut Caller<'_, RuntimeState>, name_id: u32) -> u32 {
+    crate::property_key::canonicalize_v2_name_id(caller, name_id).unwrap_or(name_id)
+}
+
+/// V1：memory c-string 偏移即规范键（find/alloc 去重），无需转换。
+#[cfg(not(feature = "managed-heap-v2"))]
+fn canonical_name_id(_caller: &mut Caller<'_, RuntimeState>, name_id: u32) -> u32 {
+    name_id
+}
+
 impl ArrayNamedPropsStore {
     pub(crate) fn new() -> Self {
         Self(Arc::new(Mutex::new(HashMap::new())))
@@ -38,10 +51,11 @@ impl ArrayNamedPropsStore {
         Some(value::decode_handle(boxed))
     }
 
-    pub(crate) fn get(caller: &Caller<'_, RuntimeState>, boxed: i64, name_id: u32) -> i64 {
+    pub(crate) fn get(caller: &mut Caller<'_, RuntimeState>, boxed: i64, name_id: u32) -> i64 {
         let Some(handle) = Self::handle_of(caller, boxed) else {
             return value::encode_undefined();
         };
+        let name_id = canonical_name_id(caller, name_id);
         let table = caller
             .data()
             .array_named_props
@@ -60,11 +74,12 @@ impl ArrayNamedPropsStore {
     }
 
     pub(crate) fn get_slot(
-        caller: &Caller<'_, RuntimeState>,
+        caller: &mut Caller<'_, RuntimeState>,
         boxed: i64,
         name_id: u32,
     ) -> Option<ArrayNamedPropSlot> {
         let handle = Self::handle_of(caller, boxed)?;
+        let name_id = canonical_name_id(caller, name_id);
         let table = caller
             .data()
             .array_named_props
@@ -90,6 +105,7 @@ impl ArrayNamedPropsStore {
         let Some(handle) = Self::handle_of(caller, boxed) else {
             return;
         };
+        let name_id = canonical_name_id(caller, name_id);
         let mut table = caller
             .data()
             .array_named_props
@@ -107,6 +123,32 @@ impl ArrayNamedPropsStore {
                 flags,
             });
         }
+    }
+
+    /// `delete arr.<named>`：configurable=false → `Some(false)`；删除成功 →
+    /// `Some(true)`；属性不存在 → `None`（调用方按规范返回 true）。
+    /// V1 编译端 obj_delete 无数组分支，仅 V2 host 路由调用。
+    #[cfg(feature = "managed-heap-v2")]
+    pub(crate) fn remove(
+        caller: &mut Caller<'_, RuntimeState>,
+        boxed: i64,
+        name_id: u32,
+    ) -> Option<bool> {
+        let handle = Self::handle_of(caller, boxed)?;
+        let name_id = canonical_name_id(caller, name_id);
+        let mut table = caller
+            .data()
+            .array_named_props
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let slots = table.get_mut(&handle)?;
+        let index = slots.iter().position(|slot| slot.name_id == name_id)?;
+        if slots[index].flags & constants::FLAG_CONFIGURABLE == 0 {
+            return Some(false);
+        }
+        slots.remove(index);
+        Some(true)
     }
 
     pub(crate) fn collect_string_name_ids(
@@ -161,9 +203,10 @@ impl ArrayNamedPropsStore {
         drop(table);
         let mut names = Vec::new();
         for name_id in name_ids {
-            let name_bytes = crate::runtime_render::read_string_bytes(caller, name_id);
-            if let Ok(name) = std::str::from_utf8(&name_bytes) {
-                names.push(name.to_string());
+            if let Some(name) =
+                crate::runtime_host_helpers::name_id_to_runtime_property_string(caller, name_id)
+            {
+                names.push(name.to_utf8_lossy());
             }
         }
         names
@@ -198,9 +241,10 @@ impl ArrayNamedPropsStore {
 
         let mut keys = Vec::with_capacity(string_name_ids.len() + symbol_name_ids.len());
         for name_id in string_name_ids {
-            let name_bytes = crate::runtime_render::read_string_bytes(caller, name_id);
-            if let Ok(name) = std::str::from_utf8(&name_bytes) {
-                keys.push(store_runtime_string(caller, name.to_string()));
+            if let Some(name) =
+                crate::runtime_host_helpers::name_id_to_runtime_property_string(caller, name_id)
+            {
+                keys.push(store_runtime_string(caller, name));
             }
         }
         keys.extend(
@@ -216,6 +260,17 @@ impl ArrayNamedPropsStore {
         arr_ptr: usize,
         symbols_only: bool,
     ) -> Vec<i64> {
+        // V2：resolve_array_ptr 返回的 "ptr" 即 V2 handle，直接按 handle 收集。
+        #[cfg(feature = "managed-heap-v2")]
+        if u32::try_from(arr_ptr).is_ok_and(|handle| {
+            caller
+                .data()
+                .heap_access_v2()
+                .resolve_handle(handle)
+                .is_ok()
+        }) {
+            return Self::collect_property_key_values_by_handle(caller, arr_ptr as u32, symbols_only);
+        }
         let handles: Vec<u32> = caller
             .data()
             .array_named_props
@@ -263,8 +318,8 @@ pub(crate) fn define_array_named_props(
 ) -> anyhow::Result<()> {
     let get_fn = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
-            ArrayNamedPropsStore::get(&caller, boxed, name_id as u32)
+        |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
+            ArrayNamedPropsStore::get(&mut caller, boxed, name_id as u32)
         },
     );
     linker.define(&mut *store, "env", "array_named_get", get_fn)?;
