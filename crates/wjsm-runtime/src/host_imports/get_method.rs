@@ -173,28 +173,37 @@ pub(crate) fn get_by_name_id_sync(
         return value::encode_undefined();
     }
     #[cfg(feature = "managed-heap-v2")]
-    if caller
-        .data()
-        .heap_access_v2()
-        .resolve_handle(value::decode_handle(obj))
-        .is_ok()
     {
-        let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
-            return value::encode_undefined();
+        let handle = if value::is_function(obj) || value::is_closure(obj) || value::is_bound(obj) {
+            crate::handle_index_of(caller, obj) as u32
+        } else {
+            value::decode_handle(obj)
         };
-        let property = caller
+        if caller
             .data()
             .heap_access_v2()
-            .get_property_slot_on_proto_chain(value::decode_handle(obj), key)
-            .ok()
-            .flatten();
-        return match property {
-            Some(property) if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 => {
-                invoke_getter_sync(caller, property.getter as i64, obj)
-            }
-            Some(property) => property.value as i64,
-            None => value::encode_undefined(),
-        };
+            .resolve_handle(handle)
+            .is_ok()
+        {
+            let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+                return value::encode_undefined();
+            };
+            let property = caller
+                .data()
+                .heap_access_v2()
+                .get_property_slot_on_proto_chain(handle, key)
+                .ok()
+                .flatten();
+            return match property {
+                Some(property)
+                    if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 =>
+                {
+                    invoke_getter_sync(caller, property.getter as i64, obj)
+                }
+                Some(property) => property.value as i64,
+                None => value::encode_undefined(),
+            };
+        }
     }
     let Some(ptr) = resolve_handle(caller, obj) else {
         return value::encode_undefined();
