@@ -1109,6 +1109,18 @@ pub(crate) fn enumerate_object_keys(
         None => return Vec::new(),
     };
 
+    // V2：ptr 即 handle，主存槽位扫描会读到垃圾；走 V2 形状感知的收集器
+    // （enumerable_only=false 与下方 V1 扫描的"非 private 全收"语义一致）。
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(val))
+        .is_ok()
+    {
+        return crate::runtime_host_helpers::collect_own_property_names(caller, ptr, false);
+    }
+
     // 读取属性列表
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         return Vec::new();
