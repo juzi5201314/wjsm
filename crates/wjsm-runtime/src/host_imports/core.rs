@@ -1284,7 +1284,7 @@ pub(crate) fn define_core(
 
             #[cfg(feature = "managed-heap-v2")]
             {
-                let handle = value::decode_handle(obj);
+                let handle = handle_index_of(&mut caller, obj) as u32;
                 let access = caller.data().heap_access_v2().clone();
                 if access.resolve_handle(handle).is_ok() {
                     let Some(key) =
