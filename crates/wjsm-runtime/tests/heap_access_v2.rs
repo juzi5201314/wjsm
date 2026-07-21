@@ -642,3 +642,65 @@ fn v2_runtime_executes_object_and_array_access_without_memory32_reverse_lookup()
     assert!(diagnostics.is_empty());
     assert_eq!(String::from_utf8(output).unwrap(), "42 8\n");
 }
+
+#[test]
+fn v2_runtime_assigns_toobject_wrapper_into_target_preserves_indexed_properties() {
+    let wasm = wjsm_runtime::compile_source(
+        "const out = Object.assign({}, \"ab\"); console.log(Object.keys(out).length, out[0], out[1]);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "2 a b\n");
+}
+
+#[test]
+fn v2_runtime_assigns_string_source_keys_preserve_distinct_names() {
+    let wasm = wjsm_runtime::compile_source(
+        "const out = Object.assign({x:1}, \"abc\"); console.log(Object.keys(out).length, out[0], out[1], out[2]);",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (output, diagnostics) = runtime
+        .block_on(wjsm_runtime::execute_with_writer(&wasm, Vec::new()))
+        .unwrap();
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(String::from_utf8(output).unwrap(), "4 a b c\n");
+}
+
+#[test]
+fn v2_set_property_with_distinct_runtime_keys_does_not_collapse_into_one_slot() {
+    // 白盒模拟 V2 to_object("abc") 写 3 个索引 + 1 个 length；
+    // 用不同 encode_runtime_string_name_id 值作 key（与 intern 表等价形态）。
+    let access = heap_access();
+    access.reserve_nlab(PAGE_BYTES).unwrap();
+    let handle = 47;
+    let object = HANDLE_REGION_BYTES + PAGE_BYTES;
+    access.publish_object(handle, object, u32::MAX, 4).unwrap();
+
+    const K0: u32 = 0x4000_0000;
+    const K1: u32 = 0x4000_0001;
+    const K2: u32 = 0x4000_0002;
+
+    access.set_property(handle, K0, 11).unwrap();
+    access.set_property(handle, K1, 22).unwrap();
+    access.set_property(handle, K2, 33).unwrap();
+
+    let slots = access.own_property_slots(handle).unwrap();
+    assert_eq!(slots.len(), 3, "expected 3 distinct slots, got {slots:?}");
+
+    assert_eq!(access.get_property(handle, K0).unwrap(), Some(11));
+    assert_eq!(access.get_property(handle, K1).unwrap(), Some(22));
+    assert_eq!(access.get_property(handle, K2).unwrap(), Some(33));
+}

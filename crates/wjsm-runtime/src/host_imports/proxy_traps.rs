@@ -94,11 +94,20 @@ pub(crate) fn proxy_trap_property_key_value(
     caller: &mut Caller<'_, RuntimeState>,
     name_id: i32,
 ) -> i64 {
+    // Symbol 与 MemoryString 直接可用的 prop 值。
     if let Some(symbol_key) = name_id_to_property_key_value(name_id as u32) {
         return symbol_key;
     }
+    // RuntimeString 必须从 runtime_property_keys 表查真实字符串，
+    // 不能复用 runtime_strings 表（两表 index 空间互不相干）。
+    if let Some(string) =
+        crate::runtime_host_helpers::name_id_to_runtime_property_string(caller, name_id as u32)
+    {
+        return crate::runtime_render::store_runtime_string(caller, string);
+    }
+    // MemoryString fallback：read main memory c-string。
     let name = read_string(caller, name_id as u32).unwrap_or_default();
-    store_runtime_string(caller, name)
+    crate::runtime_render::store_runtime_string(caller, name)
 }
 
 pub(crate) fn define_proxy_traps(

@@ -708,7 +708,8 @@ fn v2_host_property_key(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Op
         caller.data(),
         crate::runtime_string::RuntimeString::from_utf8_str(name),
     );
-    Some(crate::property_key::encode_runtime_string_name_id(index))
+    let key = crate::property_key::encode_runtime_string_name_id(index);
+    Some(key)
 }
 
 pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>(
