@@ -979,11 +979,19 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         || value::is_closure(target)
         || value::is_bound(target)
     {
-        let Some(raw_name_id) = name_id else {
-            return value::encode_undefined();
+        let resolved_name_id = match name_id {
+            Some(raw) => crate::property_key::canonicalize_v2_name_id(caller, raw),
+            None => {
+                let prop_name = crate::runtime_render::render_value(caller, prop).ok();
+                prop_name.and_then(|s| {
+                    let rs = crate::runtime_string::RuntimeString::from_utf8_str(&s);
+                    let idx =
+                        crate::property_key::intern_runtime_property_key(caller.data(), rs);
+                    Some(crate::property_key::encode_runtime_string_name_id(idx))
+                })
+            }
         };
-        let Some(name_id) = crate::property_key::canonicalize_v2_name_id(caller, raw_name_id)
-        else {
+        let Some(name_id) = resolved_name_id else {
             return value::encode_undefined();
         };
         let handle = handle_index_of(caller, target) as u32;
