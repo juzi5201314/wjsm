@@ -81,6 +81,13 @@ pub(crate) fn get_by_name_id_sync(
         let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
             return value::encode_undefined();
         };
+        // 数组命名属性（含 symbol @@isConcatSpreadable）存于 side table，
+        // 不在 V2 对象属性槽里（offset 8/12 别名 length/元素）。
+        if let Some(slot) =
+            crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, obj, key)
+        {
+            return slot.value;
+        }
         let property = caller
             .data()
             .heap_access_v2()
@@ -311,24 +318,45 @@ fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_
     }
 
     #[cfg(feature = "managed-heap-v2")]
-    if (value::is_js_object(value_val) || value::is_array(value_val))
-        && caller
-            .data()
-            .heap_access_v2()
-            .resolve_handle(value::decode_handle(value_val))
-            .is_ok()
     {
-        let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
-            return value::encode_undefined();
+        // 函数/闭包/bound 的 own 属性在 function_props 对象上，
+        // handle 需经 handle_index_of 映射（与 gc_obj_get_v2 一致）。
+        let handle = if value::is_function(value_val)
+            || value::is_closure(value_val)
+            || value::is_bound(value_val)
+        {
+            crate::handle_index_of(caller, value_val) as u32
+        } else {
+            value::decode_handle(value_val)
         };
-        return caller
-            .data()
-            .heap_access_v2()
-            .get_property_slot_on_proto_chain(value::decode_handle(value_val), key)
-            .ok()
-            .flatten()
-            .map(|property| property.value as i64)
-            .unwrap_or_else(value::encode_undefined);
+        if (value::is_js_object(value_val) || value::is_array(value_val))
+            && caller
+                .data()
+                .heap_access_v2()
+                .resolve_handle(handle)
+                .is_ok()
+        {
+            let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
+                return value::encode_undefined();
+            };
+            // 数组命名属性（含 symbol @@isConcatSpreadable / @@hasInstance 等）
+            // 存于 side table，不在 V2 对象属性槽。
+            if value::is_array(value_val) {
+                if let Some(slot) =
+                    crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, value_val, key)
+                {
+                    return slot.value;
+                }
+            }
+            return caller
+                .data()
+                .heap_access_v2()
+                .get_property_slot_on_proto_chain(handle, key)
+                .ok()
+                .flatten()
+                .map(|property| property.value as i64)
+                .unwrap_or_else(value::encode_undefined);
+        }
     }
     let Some(ptr) = resolve_handle(caller, value_val) else {
         return value::encode_undefined();
