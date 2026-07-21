@@ -1411,6 +1411,42 @@ pub(crate) fn define_host_accessor_property_by_name_id_with_flags(
     setter: i64,
     attribute_flags: i32,
 ) -> Option<()> {
+    #[cfg(feature = "managed-heap-v2")]
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(value::decode_handle(obj))
+        .is_ok()
+    {
+        // 与 define_data_property_on_array_named 一致：数组命名槽不承载访问器。
+        if value::is_array(obj) {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Accessor properties are not supported on array named slots"
+                    .to_string(),
+            );
+            return None;
+        }
+        let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+        let flags = (attribute_flags & !constants::FLAG_WRITABLE) | constants::FLAG_IS_ACCESSOR;
+        return caller
+            .data()
+            .heap_access_v2()
+            .define_accessor_property_with_flags(
+                value::decode_handle(obj),
+                key,
+                getter as u64,
+                setter as u64,
+                flags as u32,
+            )
+            .map_err(|error| {
+                set_runtime_error(
+                    caller.data(),
+                    format!("V2 host accessor key {name_id}: {error}"),
+                );
+            })
+            .ok();
+    }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj_ptr =
         resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
