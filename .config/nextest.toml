@@ -16,6 +16,8 @@ slow-timeout = { period = "3s", terminate-after = 1 }
 # 资源隔离（端口/共享 cache 路径），不是墙钟预算。
 cluster-ipc = { max-threads = 1 }
 runtime-cache-delete = { max-threads = 1 }
+perf-hooks-runtime = { max-threads = 1 }
+async-hooks-load = { max-threads = 1 }
 # Worker fixture 会额外启动 Wasmtime Engine 与 host worker；保持 3s 硬门禁，
 # 仅限制它们彼此及与 CPU 密集 fixture 的资源竞争。
 worker-runtime = { max-threads = 1 }
@@ -31,10 +33,22 @@ threads-required = "num-cpus"
 filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
 test-group = 'runtime-cache-delete'
 
+# perf_hooks fixture 会重复编译完整 builtin 模块；每例独占执行槽，避免同型任务
+# 竞争并越过 3s 硬门禁。100k async_hooks 负载同样独占执行槽。
+[[profile.default.overrides]]
+filter = 'test(/happy__node_builtin_perf_hooks_/)'
+test-group = 'perf-hooks-runtime'
+threads-required = "num-cpus"
+
+[[profile.default.overrides]]
+filter = 'test(happy__async_hooks_load_100k)'
+test-group = 'async-hooks-load'
+threads-required = "num-cpus"
+
 # Worker/async fixture 自身无墙钟豁免，但会同时启动主 Runtime 与 host worker；
-# 占用五个调度槽，避免 CPU 争用越过同一 3s 门禁，同时保留其余测试并发。
+# 独占执行槽，避免 CPU 争用越过同一 3s 门禁。
 [[profile.default.overrides]]
 filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/)'
 test-group = 'worker-runtime'
-threads-required = 5
+threads-required = "num-cpus"
 
