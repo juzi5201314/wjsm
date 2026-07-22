@@ -116,7 +116,7 @@ impl SharedHeapMemory {
     }
 
     fn word_ptr(&self, address: HeapAddress) -> Result<*mut u64, HeapMemoryError> {
-        if address.get() % 8 != 0 {
+        if !address.get().is_multiple_of(8) {
             return Err(HeapMemoryError::UnalignedWord {
                 address: address.get(),
             });

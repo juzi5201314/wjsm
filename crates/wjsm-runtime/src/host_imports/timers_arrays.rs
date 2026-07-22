@@ -75,7 +75,7 @@ pub(crate) fn define_timers_arrays(
             {
                 let mut caller = caller;
                 let handle = value::decode_handle(arr);
-                return match crate::push_v2_array_element(&mut caller, handle, val as u64) {
+                match crate::push_v2_array_element(&mut caller, handle, val as u64) {
                     Ok(length) => value::encode_f64(length as f64),
                     Err(error) => {
                         set_runtime_error(
@@ -84,7 +84,7 @@ pub(crate) fn define_timers_arrays(
                         );
                         value::encode_undefined()
                     }
-                };
+                }
             }
             #[cfg(not(feature = "managed-heap-v2"))]
             {
@@ -110,7 +110,7 @@ pub(crate) fn define_timers_arrays(
             {
                 let mut caller = caller;
                 let handle = value::decode_handle(arr);
-                return match crate::push_v2_array_element(
+                match crate::push_v2_array_element(
                     &mut caller,
                     handle,
                     value::encode_array_hole() as u64,
@@ -120,7 +120,7 @@ pub(crate) fn define_timers_arrays(
                         set_runtime_error(caller.data(), format!("V2 Array hole push: {error}"));
                         value::encode_undefined()
                     }
-                };
+                }
             }
             #[cfg(not(feature = "managed-heap-v2"))]
             {

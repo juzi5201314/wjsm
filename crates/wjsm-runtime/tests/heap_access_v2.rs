@@ -412,8 +412,10 @@ fn v2_runtime_executes_process_env_proxy_traps_without_memory32_reverse_lookup()
         .enable_all()
         .build()
         .unwrap();
-    let mut options = wjsm_runtime::RuntimeOptions::default();
-    options.env = vec![("B".to_string(), "2".to_string())];
+    let options = wjsm_runtime::RuntimeOptions {
+        env: vec![("B".to_string(), "2".to_string())],
+        ..wjsm_runtime::RuntimeOptions::default()
+    };
     let (output, diagnostics) = runtime
         .block_on(wjsm_runtime::execute_with_writer_with_options(
             &wasm,

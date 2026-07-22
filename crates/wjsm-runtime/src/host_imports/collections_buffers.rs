@@ -12,8 +12,8 @@ fn collection_handle_for_receiver(
 ) -> Option<usize> {
     #[cfg(feature = "managed-heap-v2")]
     {
-        return read_host_data_property_v2(caller, receiver, name)
-            .map(|value| value::decode_f64(value) as usize);
+        read_host_data_property_v2(caller, receiver, name)
+            .map(|value| value::decode_f64(value) as usize)
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     resolve_handle_idx(caller, value::decode_object_handle(receiver) as usize)
@@ -2524,7 +2524,7 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "date_utc", date_utc_fn)?;
 
-    super::private_fields::define_private_fields(linker, &mut store)?;
+    super::private_fields::define_private_fields(linker, store)?;
 
     Ok(())
 }

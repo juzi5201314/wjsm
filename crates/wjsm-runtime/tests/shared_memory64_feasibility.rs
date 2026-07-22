@@ -14,7 +14,7 @@ const INCREMENTS_PER_SIDE: u64 = 10_000;
 
 #[test]
 fn shared_memory64_support_cwasm_is_feasible() -> Result<()> {
-    assert!(OBJECT_HEAP_BASE > HANDLE_REGION_SIZE);
+    const { assert!(OBJECT_HEAP_BASE > HANDLE_REGION_SIZE) };
 
     let build_engine = EngineConfig::artifact().build()?;
     let runtime_engine = EngineConfig::runtime(RuntimeEngineOptions::default()).build()?;

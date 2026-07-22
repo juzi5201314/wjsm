@@ -198,10 +198,11 @@ pub fn admit(resources: &HostResourceSnapshot, request: AdmissionRequest) -> Adm
     }
 
     AdmissionDecision {
-        status: reasons
-            .is_empty()
-            .then_some(AdmissionStatus::Admitted)
-            .unwrap_or(AdmissionStatus::NeedsResourceRunner),
+        status: if reasons.is_empty() {
+            AdmissionStatus::Admitted
+        } else {
+            AdmissionStatus::NeedsResourceRunner
+        },
         required_total_bytes,
         required_available_bytes,
         required_virtual_address_bytes,

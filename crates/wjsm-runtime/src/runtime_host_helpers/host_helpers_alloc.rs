@@ -158,7 +158,7 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
         {
             return value::encode_undefined();
         }
-        return value::encode_handle(value::TAG_ARRAY, handle as u32);
+        value::encode_handle(value::TAG_ARRAY, handle as u32)
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     {
@@ -279,7 +279,7 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
         {
             return value::encode_undefined();
         }
-        return value::encode_object_handle(handle as u32);
+        value::encode_object_handle(handle as u32)
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     {

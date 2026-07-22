@@ -54,9 +54,11 @@ pub fn evaluate_metric(metric: &NormalizedMetric) -> MetricGateResult {
     let ratio = wjsm_value / jdk_value;
     MetricGateResult {
         name: metric.name.clone(),
-        status: (ratio <= 1.10)
-            .then_some(GateStatus::Passed)
-            .unwrap_or(GateStatus::Failed),
+        status: if ratio <= 1.10 {
+            GateStatus::Passed
+        } else {
+            GateStatus::Failed
+        },
         wjsm_value: Some(wjsm_value),
         jdk_value: Some(jdk_value),
         ratio: Some(ratio),
@@ -89,10 +91,11 @@ pub fn evaluate_pause(
     };
     PauseGateResult {
         scenario_hash,
-        status: reason
-            .is_none()
-            .then_some(GateStatus::Passed)
-            .unwrap_or(GateStatus::Failed),
+        status: if reason.is_none() {
+            GateStatus::Passed
+        } else {
+            GateStatus::Failed
+        },
         wjsm_p999_ns: Some(wjsm_p999_ns),
         jdk_p999_ns: Some(jdk_p999_ns),
         wjsm_max_ns: Some(wjsm_max_ns),

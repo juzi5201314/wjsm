@@ -65,7 +65,7 @@ pub(crate) fn clone_pristine_realm_v2<C: AsContextMut<Data = RuntimeState>>(
         .data()
         .js_global_object
         .load(std::sync::atomic::Ordering::Relaxed);
-    let source_realm = Realm::new(RealmId(0), source_global, roots.clone());
+    let source_realm = Realm::new(RealmId(0), source_global, roots);
     let realm = remap_realm_handles_v2_with_access(&source_realm, realm_id, &map, &access)?;
     if value::is_object(sandbox_global) || value::is_array(sandbox_global) {
         let sandbox = value::decode_handle(sandbox_global);

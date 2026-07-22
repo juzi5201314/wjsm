@@ -646,7 +646,7 @@ pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]
             GcAlgorithmKind::G1 => wjsm_runtime_support::SupportGcFlavor::G1,
             GcAlgorithmKind::Zgc => wjsm_runtime_support::SupportGcFlavor::Zgc,
         };
-        return wjsm_runtime_support::embedded_support_cwasm_v2(flavor);
+        wjsm_runtime_support::embedded_support_cwasm_v2(flavor)
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     match kind {
@@ -1651,10 +1651,10 @@ impl RuntimeState {
     fn static_heap_global_v2(&self, name: &str) -> Option<Global> {
         let globals = self.static_heap_globals_v2.as_ref()?;
         match name {
-            wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME => Some(globals.alloc_ptr.clone()),
-            wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME => Some(globals.alloc_end.clone()),
-            wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME => Some(globals.object_start.clone()),
-            wjsm_ir::HEAP_LIMIT_GLOBAL_NAME => Some(globals.heap_limit.clone()),
+            wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME => Some(globals.alloc_ptr),
+            wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME => Some(globals.alloc_end),
+            wjsm_ir::HEAP_OBJECT_START_GLOBAL_NAME => Some(globals.object_start),
+            wjsm_ir::HEAP_LIMIT_GLOBAL_NAME => Some(globals.heap_limit),
             _ => None,
         }
     }

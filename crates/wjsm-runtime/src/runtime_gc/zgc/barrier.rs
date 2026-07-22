@@ -228,20 +228,20 @@ pub fn store_barrier(
     slot.store(colored as u64, Ordering::SeqCst);
 
     let mut records = Vec::new();
-    if epoch.young_marking || epoch.old_marking {
-        if let Some(old_handle) = reference_handle(old_raw) {
-            let needs_satb = match owner_generation {
-                HandleGeneration::Young => {
-                    epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark)
-                }
-                HandleGeneration::Old => {
-                    (epoch.old_marking && !has_old_mark_color(old_raw, epoch.old_mark))
-                        || (epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark))
-                }
-            };
-            if needs_satb {
-                records.push(BarrierRecord::Satb(old_handle));
+    if (epoch.young_marking || epoch.old_marking)
+        && let Some(old_handle) = reference_handle(old_raw)
+    {
+        let needs_satb = match owner_generation {
+            HandleGeneration::Young => {
+                epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark)
             }
+            HandleGeneration::Old => {
+                (epoch.old_marking && !has_old_mark_color(old_raw, epoch.old_mark))
+                    || (epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark))
+            }
+        };
+        if needs_satb {
+            records.push(BarrierRecord::Satb(old_handle));
         }
     }
 
@@ -298,20 +298,20 @@ pub fn store_barrier_with_target_generation(
     slot.store(colored as u64, Ordering::SeqCst);
 
     let mut records = Vec::new();
-    if epoch.young_marking || epoch.old_marking {
-        if let Some(old_handle) = reference_handle(old_raw) {
-            let needs_satb = match owner_generation {
-                HandleGeneration::Young => {
-                    epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark)
-                }
-                HandleGeneration::Old => {
-                    (epoch.old_marking && !has_old_mark_color(old_raw, epoch.old_mark))
-                        || (epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark))
-                }
-            };
-            if needs_satb {
-                records.push(BarrierRecord::Satb(old_handle));
+    if (epoch.young_marking || epoch.old_marking)
+        && let Some(old_handle) = reference_handle(old_raw)
+    {
+        let needs_satb = match owner_generation {
+            HandleGeneration::Young => {
+                epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark)
             }
+            HandleGeneration::Old => {
+                (epoch.old_marking && !has_old_mark_color(old_raw, epoch.old_mark))
+                    || (epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark))
+            }
+        };
+        if needs_satb {
+            records.push(BarrierRecord::Satb(old_handle));
         }
     }
 

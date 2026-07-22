@@ -254,8 +254,8 @@ fn validate(snapshot: &ManagedHeapV2Snapshot) -> Result<()> {
         {
             bail!("managed heap V2 snapshot page range is invalid")
         }
-        if (page.range_start - layout.object_heap_base) % layout.page_bytes != 0
-            || (page.range_end - layout.object_heap_base) % layout.page_bytes != 0
+        if !(page.range_start - layout.object_heap_base).is_multiple_of(layout.page_bytes)
+            || !(page.range_end - layout.object_heap_base).is_multiple_of(layout.page_bytes)
         {
             bail!("managed heap V2 snapshot page range is not page-aligned")
         }

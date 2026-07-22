@@ -371,13 +371,11 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                             Some(String::from_utf8_lossy(&bytes).into_owned())
                         }
                         crate::property_key::DecodedNameId::Symbol(_) => None,
-                    } {
-                        if let Ok(index) = name.parse::<u32>() {
-                            if let Some(ptr) = crate::resolve_array_ptr(&mut caller, object) {
-                                crate::runtime_values::write_array_hole(&mut caller, ptr, index);
-                                return Ok(value::encode_bool(true));
-                            }
-                        }
+                    } && let Ok(index) = name.parse::<u32>()
+                        && let Some(ptr) = crate::resolve_array_ptr(&mut caller, object)
+                    {
+                        crate::runtime_values::write_array_hole(&mut caller, ptr, index);
+                        return Ok(value::encode_bool(true));
                     }
                     // 非索引命名属性（含 symbol）→ 宿主侧表；
                     // configurable=false → false，不存在 → true。

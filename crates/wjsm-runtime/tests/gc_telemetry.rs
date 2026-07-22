@@ -3,12 +3,14 @@ use wjsm_runtime::{GcExecutionStats, GcStats, GcTelemetry};
 #[test]
 fn gc_telemetry_snapshot_is_versioned_and_uses_hdr_histograms() {
     let telemetry = GcTelemetry::default();
-    let mut stats = GcStats::default();
-    stats.pause_ns_max = 42_000;
-    stats.pause_ns_total = 42_000;
-    stats.pause_count = 1;
-    stats.freed_bytes = 4096;
-    stats.relocated_bytes = 1024;
+    let stats = GcStats {
+        pause_ns_max: 42_000,
+        pause_ns_total: 42_000,
+        pause_count: 1,
+        freed_bytes: 4096,
+        relocated_bytes: 1024,
+        ..Default::default()
+    };
     telemetry.record_cycle("zgc", &stats);
 
     let snapshot = telemetry.snapshot();
@@ -27,12 +29,16 @@ fn gc_telemetry_snapshot_is_versioned_and_uses_hdr_histograms() {
 
 #[test]
 fn execution_telemetry_uses_cumulative_gc_counters() {
-    let mut last = GcStats::default();
-    last.freed_bytes = 3;
-    last.relocated_bytes = 5;
-    let mut cumulative = GcStats::default();
-    cumulative.freed_bytes = 13;
-    cumulative.relocated_bytes = 17;
+    let last = GcStats {
+        freed_bytes: 3,
+        relocated_bytes: 5,
+        ..Default::default()
+    };
+    let cumulative = GcStats {
+        freed_bytes: 13,
+        relocated_bytes: 17,
+        ..Default::default()
+    };
     let telemetry = GcTelemetry::from_execution_stats(
         "zgc",
         &GcExecutionStats {

@@ -127,9 +127,11 @@ pub(crate) fn compare(args: CompareArgs) -> Result<i32> {
         GateStatus::NeedsVerification
     };
     write_json(&manifest_path, &manifest)?;
-    Ok(requires_runner
-        .then_some(EXIT_NEEDS_RESOURCE_RUNNER)
-        .unwrap_or(0))
+    Ok(if requires_runner {
+        EXIT_NEEDS_RESOURCE_RUNNER
+    } else {
+        0
+    })
 }
 
 pub(crate) fn gate(args: GateArgs) -> Result<i32> {

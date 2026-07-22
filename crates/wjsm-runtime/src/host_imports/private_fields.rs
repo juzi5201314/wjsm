@@ -35,7 +35,7 @@ pub(crate) fn define_private_fields(
                 if slot.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
                     return invoke_private_accessor_get(&mut caller, slot.getter as i64, obj);
                 }
-                return slot.value as i64;
+                slot.value as i64
             }
             #[cfg(not(feature = "managed-heap-v2"))]
             {
@@ -124,7 +124,7 @@ pub(crate) fn define_private_fields(
                     );
                     return value::encode_undefined();
                 }
-                return val;
+                val
             }
             #[cfg(not(feature = "managed-heap-v2"))]
             {
@@ -217,7 +217,7 @@ pub(crate) fn define_private_fields(
                     );
                     return value::encode_undefined();
                 }
-                return obj;
+                obj
             }
             #[cfg(not(feature = "managed-heap-v2"))]
             {
@@ -256,9 +256,7 @@ pub(crate) fn define_private_fields(
                 else {
                     return value::encode_bool(false);
                 };
-                return value::encode_bool(
-                    private_slot_v2(&mut caller, obj, key_name_id).is_some(),
-                );
+                value::encode_bool(private_slot_v2(&mut caller, obj, key_name_id).is_some())
             }
             #[cfg(not(feature = "managed-heap-v2"))]
             {

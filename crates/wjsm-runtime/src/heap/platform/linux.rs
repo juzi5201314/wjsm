@@ -78,13 +78,13 @@ pub fn detect_numa() -> NumaTopology {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if let Some(rest) = name.strip_prefix("node") {
-                if let Ok(id) = rest.parse::<u32>() {
-                    // Only include online nodes with CPUs when possible.
-                    let online = entry.path().join("cpulist");
-                    if online.exists() {
-                        nodes.push(NumaNode(id));
-                    }
+            if let Some(rest) = name.strip_prefix("node")
+                && let Ok(id) = rest.parse::<u32>()
+            {
+                // Only include online nodes with CPUs when possible.
+                let online = entry.path().join("cpulist");
+                if online.exists() {
+                    nodes.push(NumaNode(id));
                 }
             }
         }
@@ -118,14 +118,12 @@ fn current_cpu_node() -> Option<NumaNode> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if let Some(rest) = name.strip_prefix("node") {
-                if let Ok(id) = rest.parse::<u32>() {
-                    if let Ok(list) = fs::read_to_string(entry.path().join("cpulist")) {
-                        if cpu_in_list(cpu as u32, list.trim()) {
-                            return Some(NumaNode(id));
-                        }
-                    }
-                }
+            if let Some(rest) = name.strip_prefix("node")
+                && let Ok(id) = rest.parse::<u32>()
+                && let Ok(list) = fs::read_to_string(entry.path().join("cpulist"))
+                && cpu_in_list(cpu as u32, list.trim())
+            {
+                return Some(NumaNode(id));
             }
         }
     }
@@ -140,10 +138,10 @@ fn cpu_in_list(cpu: u32, list: &str) -> bool {
             continue;
         }
         if let Some((a, b)) = part.split_once('-') {
-            if let (Ok(start), Ok(end)) = (a.parse::<u32>(), b.parse::<u32>()) {
-                if (start..=end).contains(&cpu) {
-                    return true;
-                }
+            if let (Ok(start), Ok(end)) = (a.parse::<u32>(), b.parse::<u32>())
+                && (start..=end).contains(&cpu)
+            {
+                return true;
             }
         } else if part.parse::<u32>() == Ok(cpu) {
             return true;

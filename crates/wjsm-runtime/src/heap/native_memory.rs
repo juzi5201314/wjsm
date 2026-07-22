@@ -112,7 +112,7 @@ impl HeapMemory for NativeHeapMemory {
     }
 
     fn load_word(&self, address: HeapAddress) -> Result<u64, HeapMemoryError> {
-        if address.get() % 8 != 0 {
+        if !address.get().is_multiple_of(8) {
             return Err(HeapMemoryError::UnalignedWord {
                 address: address.get(),
             });
@@ -122,7 +122,7 @@ impl HeapMemory for NativeHeapMemory {
     }
 
     fn store_word(&self, address: HeapAddress, value: u64) -> Result<(), HeapMemoryError> {
-        if address.get() % 8 != 0 {
+        if !address.get().is_multiple_of(8) {
             return Err(HeapMemoryError::UnalignedWord {
                 address: address.get(),
             });

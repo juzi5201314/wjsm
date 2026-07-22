@@ -382,12 +382,11 @@ pub(crate) fn reflect_has_impl(
                 return value::encode_bool(false);
             };
             // 数组命名属性在 side table
-            if value::is_array(target) {
-                if crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, target, key)
+            if value::is_array(target)
+                && crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, target, key)
                     .is_some()
-                {
-                    return value::encode_bool(true);
-                }
+            {
+                return value::encode_bool(true);
             }
             return value::encode_bool(
                 caller

@@ -92,7 +92,7 @@ impl ColoredHandleEntry {
         if address >= ADDRESS_LIMIT {
             return Err(HandleTableError::AddressOutOfRange { address });
         }
-        if !matches!(state, HandleState::Free) && address % HANDLE_ENTRY_BYTES != 0 {
+        if !matches!(state, HandleState::Free) && !address.is_multiple_of(HANDLE_ENTRY_BYTES) {
             return Err(HandleTableError::UnalignedAddress { address });
         }
         Ok(Self((address << 16) | u64::from(state as u16)))

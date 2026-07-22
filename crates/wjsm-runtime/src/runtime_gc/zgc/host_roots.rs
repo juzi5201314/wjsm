@@ -144,14 +144,14 @@ impl ConcurrentHostRoots {
         let mut pending = self.pending_callbacks.lock();
         let mut finalizers = self.finalizers.lock();
         while let Some(id) = pending.pop_front() {
-            if let Some(entry) = finalizers.iter_mut().find(|entry| entry.id == id) {
-                if !entry.ran {
-                    // held 值是 FinalizationRegistry 登记的 heldValue；此处保留读取
-                    // 以维持与 host 语义一致的生命周期观测点（回调本体由上层调度）。
-                    let _held = entry.held;
-                    entry.ran = true;
-                    self.report.lock().finalizers_ran += 1;
-                }
+            if let Some(entry) = finalizers.iter_mut().find(|entry| entry.id == id)
+                && !entry.ran
+            {
+                // held 值是 FinalizationRegistry 登记的 heldValue；此处保留读取
+                // 以维持与 host 语义一致的生命周期观测点（回调本体由上层调度）。
+                let _held = entry.held;
+                entry.ran = true;
+                self.report.lock().finalizers_ran += 1;
             }
         }
     }

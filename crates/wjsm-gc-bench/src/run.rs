@@ -155,14 +155,12 @@ fn build_wjsm_report(
         });
     }
     Ok(build_report(
-        args,
         scenario,
         resources,
         admission,
         configuration,
         samples,
-        None,
-        Some("wjsm-runtime-telemetry"),
+        runtime_metadata(args, None, Some("wjsm-runtime-telemetry")),
     ))
 }
 
@@ -214,20 +212,22 @@ fn build_jdk_report(
             metrics: jdk_metrics(sample.counters),
         });
     }
-    let mut report = build_report(
+    let runtime = runtime_metadata(
         args,
+        Some(metadata.patch_sha256),
+        Some(if metadata.diagnostic_counters_available {
+            "jdk-25-diagnostic-probe"
+        } else {
+            "jdk-25-stock"
+        }),
+    );
+    let mut report = build_report(
         scenario,
         resources,
         admission,
         configuration,
         samples,
-        Some(metadata.patch_sha256),
-        Some(
-            metadata
-                .diagnostic_counters_available
-                .then_some("jdk-25-diagnostic-probe")
-                .unwrap_or("jdk-25-stock"),
-        ),
+        runtime,
     );
     if !metadata.diagnostic_counters_available {
         report.status = GateStatus::NeedsVerification;
@@ -239,14 +239,12 @@ fn build_jdk_report(
 }
 
 fn build_report(
-    args: &RunArgs,
     scenario: Scenario,
     resources: HostResourceSnapshot,
     admission: AdmissionDecision,
     configuration: RunConfiguration,
     samples: Vec<SampleReport>,
-    patch_sha256: Option<String>,
-    counter_source: Option<&str>,
+    runtime: RuntimeMetadata,
 ) -> RunReport {
     let steady_samples: Vec<_> = samples
         .iter()
@@ -260,7 +258,7 @@ fn build_report(
     RunReport {
         schema_version: BENCHMARK_SCHEMA_VERSION,
         status,
-        runtime: runtime_metadata(args, patch_sha256, counter_source),
+        runtime,
         scenario: scenario.manifest,
         denominators: scenario.denominators,
         resources,

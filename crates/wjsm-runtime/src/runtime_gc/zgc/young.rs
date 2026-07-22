@@ -154,11 +154,11 @@ impl YoungController {
 
         let epoch = self.epoch();
         let mut records = Vec::new();
-        if epoch.young_marking {
-            if let Some(old) = old {
-                let _ = self.satb.push_or_mark_full(old);
-                records.push(BarrierRecord::Satb(old));
-            }
+        if epoch.young_marking
+            && let Some(old) = old
+        {
+            let _ = self.satb.push_or_mark_full(old);
+            records.push(BarrierRecord::Satb(old));
         }
         if owner_generation == HandleGeneration::Old
             && matches!(target_generation, Some(HandleGeneration::Young) | None)

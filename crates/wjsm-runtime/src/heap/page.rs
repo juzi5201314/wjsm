@@ -55,6 +55,10 @@ impl PageRange {
         self.len
     }
 
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
     pub const fn overlaps(self, other: Self) -> bool {
         let end = self.start.get() as u64 + self.len as u64;
         let other_end = other.start.get() as u64 + other.len as u64;

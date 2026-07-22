@@ -615,10 +615,10 @@ impl HeapAccessV2 {
                 .load_word(HeapAddress::new(object))
                 .map_err(HeapAccessV2Error::Memory)?;
             let object_type = (header >> 32) as u32;
-            if object_type != u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
-                if let Some(property) = self.get_property_slot(current, key)? {
-                    return Ok(Some(property));
-                }
+            if object_type != u32::from(wjsm_ir::HEAP_TYPE_ARRAY)
+                && let Some(property) = self.get_property_slot(current, key)?
+            {
+                return Ok(Some(property));
             }
             let prototype = header as u32;
             if prototype == PROTO_NULL_SENTINEL || prototype == current {

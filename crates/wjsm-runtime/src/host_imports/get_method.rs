@@ -350,12 +350,11 @@ fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_
             };
             // 数组命名属性（含 symbol @@isConcatSpreadable / @@hasInstance 等）
             // 存于 side table，不在 V2 对象属性槽。
-            if value::is_array(value_val) {
-                if let Some(slot) =
+            if value::is_array(value_val)
+                && let Some(slot) =
                     crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, value_val, key)
-                {
-                    return slot.value;
-                }
+            {
+                return slot.value;
             }
             return caller
                 .data()

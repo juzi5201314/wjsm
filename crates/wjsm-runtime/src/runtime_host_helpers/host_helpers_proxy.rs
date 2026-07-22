@@ -3,8 +3,7 @@ use super::*;
 fn proxy_handler_trap(caller: &mut Caller<'_, RuntimeState>, handler: i64, name: &str) -> i64 {
     #[cfg(feature = "managed-heap-v2")]
     {
-        return read_host_data_property_v2(caller, handler, name)
-            .unwrap_or_else(value::encode_undefined);
+        read_host_data_property_v2(caller, handler, name).unwrap_or_else(value::encode_undefined)
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     resolve_handle(caller, handler)
@@ -983,10 +982,10 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
             Some(raw) => crate::property_key::canonicalize_v2_name_id(caller, raw),
             None => {
                 let prop_name = crate::runtime_render::render_value(caller, prop).ok();
-                prop_name.and_then(|s| {
+                prop_name.map(|s| {
                     let rs = crate::runtime_string::RuntimeString::from_utf8_str(&s);
                     let idx = crate::property_key::intern_runtime_property_key(caller.data(), rs);
-                    Some(crate::property_key::encode_runtime_string_name_id(idx))
+                    crate::property_key::encode_runtime_string_name_id(idx)
                 })
             }
         };
@@ -1120,13 +1119,13 @@ macro_rules! caller_env_wrapper {
 pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
     #[cfg(feature = "managed-heap-v2")]
     {
-        return match crate::host_imports::allocate_v2_array_handle(caller, capacity) {
+        match crate::host_imports::allocate_v2_array_handle(caller, capacity) {
             Ok(handle) => value::encode_handle(value::TAG_ARRAY, handle),
             Err(error) => {
                 set_runtime_error(caller.data(), format!("V2 host array allocation: {error}"));
                 value::encode_undefined()
             }
-        };
+        }
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     {
@@ -1139,7 +1138,7 @@ pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) 
 pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
     #[cfg(feature = "managed-heap-v2")]
     {
-        return crate::alloc_host_object_v2(caller, capacity);
+        crate::alloc_host_object_v2(caller, capacity)
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     {

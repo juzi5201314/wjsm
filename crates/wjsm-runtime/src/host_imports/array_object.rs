@@ -1564,7 +1564,7 @@ pub(crate) fn define_array_object(
                         return value::encode_undefined();
                     }
                 }
-                return value::encode_f64((len + count) as f64);
+                value::encode_f64((len + count) as f64)
             }
             #[cfg(not(feature = "managed-heap-v2"))]
             {

@@ -77,13 +77,17 @@ impl VirtualRange {
         self.len
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn committed(&self) -> usize {
         self.committed
     }
 
     pub fn as_slice(&self) -> &[u8] {
         // SAFETY: exclusive owner of `len` bytes at `base`.
-        unsafe { std::slice::from_raw_parts(self.base, self.committed.max(0).min(self.len)) }
+        unsafe { std::slice::from_raw_parts(self.base, self.committed.min(self.len)) }
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
@@ -205,12 +209,12 @@ pub fn reserve(len: usize) -> Result<VirtualRange, PlatformError> {
     #[cfg(target_os = "linux")]
     {
         let base = linux::reserve(len)?;
-        return Ok(VirtualRange {
+        Ok(VirtualRange {
             base,
             len,
             committed: 0,
             backend: VirtualBackendKind::Linux,
-        });
+        })
     }
     #[cfg(target_os = "macos")]
     {
@@ -376,7 +380,7 @@ impl NumaTopology {
     pub fn detect() -> Self {
         #[cfg(target_os = "linux")]
         {
-            return linux::detect_numa();
+            linux::detect_numa()
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -390,7 +394,7 @@ impl NumaTopology {
 
     /// Prefer `preferred`, fall back to node 0 and count the fallback.
     pub fn resolve_local(&self, preferred: NumaNode, fallbacks: &mut u64) -> NumaNode {
-        if self.nodes.iter().any(|n| *n == preferred) {
+        if self.nodes.contains(&preferred) {
             preferred
         } else {
             *fallbacks = fallbacks.saturating_add(1);
@@ -468,7 +472,7 @@ impl PlatformCapabilities {
 fn platform_vm_flags() -> (bool, bool, bool) {
     #[cfg(target_os = "linux")]
     {
-        return (true, linux::has_hard_isolation(), true);
+        (true, linux::has_hard_isolation(), true)
     }
     #[cfg(target_os = "macos")]
     {
@@ -488,7 +492,7 @@ fn platform_vm_flags() -> (bool, bool, bool) {
 pub fn set_thread_affinity(node: NumaNode) -> Result<(), PlatformError> {
     #[cfg(target_os = "linux")]
     {
-        return linux::set_thread_affinity(node);
+        linux::set_thread_affinity(node)
     }
     #[cfg(not(target_os = "linux"))]
     {

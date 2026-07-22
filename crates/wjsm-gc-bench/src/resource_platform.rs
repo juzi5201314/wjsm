@@ -56,9 +56,11 @@ fn populate_cgroup_probe(probe: &mut PlatformProbe) {
     let writable = fs::metadata(path.join("memory.max"))
         .map(|metadata| !metadata.permissions().readonly())
         .unwrap_or(false);
-    let parent_enabled_memory = (location.relative != "/")
-        .then(|| parent_has_memory_subtree_control(&path, probe))
-        .unwrap_or(false);
+    let parent_enabled_memory = if location.relative != "/" {
+        parent_has_memory_subtree_control(&path, probe)
+    } else {
+        false
+    };
     let delegated = location.relative != "/"
         && probe.cgroup_limit_bytes.is_some()
         && writable

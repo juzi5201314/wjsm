@@ -41,6 +41,10 @@ impl GcWorkPacket {
         self.len
     }
 
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
     pub const fn epoch(self) -> u64 {
         self.epoch
     }

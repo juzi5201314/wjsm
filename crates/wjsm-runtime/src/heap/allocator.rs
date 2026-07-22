@@ -455,17 +455,17 @@ impl FreePageRanges {
     fn insert(&mut self, range: PageRange) {
         let mut start = range.start().get();
         let mut end = start + range.len();
-        if let Some((&previous_start, &previous_length)) = self.ranges.range(..start).next_back() {
-            if previous_start + previous_length == start {
-                start = previous_start;
-                self.ranges.remove(&previous_start);
-            }
+        if let Some((&previous_start, &previous_length)) = self.ranges.range(..start).next_back()
+            && previous_start + previous_length == start
+        {
+            start = previous_start;
+            self.ranges.remove(&previous_start);
         }
-        if let Some((&next_start, &next_length)) = self.ranges.range(end..).next() {
-            if next_start == end {
-                end += next_length;
-                self.ranges.remove(&next_start);
-            }
+        if let Some((&next_start, &next_length)) = self.ranges.range(end..).next()
+            && next_start == end
+        {
+            end += next_length;
+            self.ranges.remove(&next_start);
         }
         self.ranges.insert(start, end - start);
     }

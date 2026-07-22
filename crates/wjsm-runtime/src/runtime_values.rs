@@ -1301,7 +1301,7 @@ pub(crate) fn allocate_descriptor_object(
         }
         define(caller, "enumerable", value::encode_bool(enumerable))?;
         define(caller, "configurable", value::encode_bool(configurable))?;
-        return Some(desc);
+        Some(desc)
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     {

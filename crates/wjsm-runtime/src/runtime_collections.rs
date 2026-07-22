@@ -18,10 +18,10 @@ fn collection_handles(
 ) -> (Option<i64>, Option<i64>) {
     #[cfg(feature = "managed-heap-v2")]
     {
-        return (
+        (
             read_host_data_property_v2(caller, receiver, "__map_handle__"),
             read_host_data_property_v2(caller, receiver, "__set_handle__"),
-        );
+        )
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     {
@@ -259,7 +259,7 @@ fn map_entry_pair_from_value(
             .unwrap_or_else(value::encode_undefined);
         let val = read_host_data_property_v2(caller, entry_val, "1")
             .unwrap_or_else(value::encode_undefined);
-        return Some((key, val));
+        Some((key, val))
     }
     #[cfg(not(feature = "managed-heap-v2"))]
     {
