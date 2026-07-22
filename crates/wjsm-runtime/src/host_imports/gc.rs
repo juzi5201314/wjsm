@@ -102,6 +102,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         key as u32,
                     ));
                 }
+                let raw_key = key;
                 // Function/closure/bound 的 own 属性在 function_props 对象上；
                 // 先查 V2 handle table，未命中再回退 call/apply/bind 等内建解析。
                 let handle = if value::is_function(object)
@@ -153,6 +154,13 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                                 return read_v2_property_async(&mut caller, object, property)
                                     .await;
                             }
+                            return Ok(
+                                crate::runtime_linker::function_value_get_property_impl(
+                                    &mut caller,
+                                    object,
+                                    raw_key,
+                                ),
+                            );
                         }
                         Err(crate::runtime_gc::HeapAccessV2Error::ProxyPrototype {
                             handle: proto_handle,
@@ -177,7 +185,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                     return Ok(crate::runtime_linker::function_value_get_property_impl(
                         &mut caller,
                         object,
-                        key,
+                        raw_key,
                     ));
                 }
                 Ok(value::encode_undefined())
@@ -520,7 +528,13 @@ async fn read_v2_property_async(
 
 #[cfg(feature = "managed-heap-v2")]
 fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
-    let current = get_i32_global(caller, "__array_proto_handle")? as u32;
+    let env = crate::WasmEnv::from_caller(caller)
+        .ok_or_else(|| wasmtime::Error::msg("missing cached WasmEnv"))?;
+    let current =
+        env.array_proto_handle
+            .get(&mut *caller)
+            .i32()
+            .ok_or_else(|| wasmtime::Error::msg("__array_proto_handle is not i32"))? as u32;
     let values_key = crate::property_key::encode_runtime_string_name_id(
         crate::property_key::intern_runtime_property_key(
             caller.data(),
@@ -548,8 +562,14 @@ fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime:
         ));
     }
     let handle = value::decode_handle(prototype);
-    set_i32_global(caller, "__array_proto_handle", handle as i32)?;
-    let table_base = get_i32_global(caller, "__arr_proto_table_base")? as u32;
+    env.array_proto_handle
+        .set(&mut *caller, Val::I32(handle as i32))
+        .map_err(host_error)?;
+    let table_base = env
+        .arr_proto_table_base
+        .and_then(|global| global.get(&mut *caller).i32())
+        .ok_or_else(|| wasmtime::Error::msg("missing __arr_proto_table_base global"))?
+        as u32;
     for (offset, (_, spec)) in methods.into_iter().enumerate() {
         let name = wjsm_backend_wasm::host_import_registry::array_proto_property_name(spec.name)
             .ok_or_else(|| wasmtime::Error::msg("invalid Array.prototype method name"))?;
@@ -591,21 +611,6 @@ fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime:
         ));
     }
     Ok(handle)
-}
-
-#[cfg(feature = "managed-heap-v2")]
-fn set_i32_global(
-    caller: &mut Caller<'_, RuntimeState>,
-    name: &str,
-    value: i32,
-) -> wasmtime::Result<()> {
-    let global = caller
-        .get_export(name)
-        .and_then(Extern::into_global)
-        .ok_or_else(|| wasmtime::Error::msg(format!("missing {name} global")))?;
-    global
-        .set(&mut *caller, Val::I32(value))
-        .map_err(host_error)
 }
 
 #[cfg(feature = "managed-heap-v2")]
@@ -701,30 +706,20 @@ fn set_proxy_target_property_v2(
 
 #[cfg(feature = "managed-heap-v2")]
 fn take_next_handle(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
-    let global = caller
-        .get_export("__obj_table_count")
-        .and_then(Extern::into_global)
-        .ok_or_else(|| wasmtime::Error::msg("missing __obj_table_count global"))?;
-    let Val::I32(current) = global.get(&mut *caller) else {
-        return Err(wasmtime::Error::msg("__obj_table_count is not i32"));
-    };
+    let env = crate::WasmEnv::from_caller(caller)
+        .ok_or_else(|| wasmtime::Error::msg("missing cached WasmEnv"))?;
+    let current = env
+        .obj_table_count
+        .get(&mut *caller)
+        .i32()
+        .ok_or_else(|| wasmtime::Error::msg("__obj_table_count is not i32"))?;
     let next = current
         .checked_add(1)
         .ok_or_else(|| wasmtime::Error::msg("V2 handle table exhausted"))?;
-    global.set(&mut *caller, Val::I32(next))?;
+    env.obj_table_count
+        .set(&mut *caller, Val::I32(next))
+        .map_err(host_error)?;
     Ok(current as u32)
-}
-
-#[cfg(feature = "managed-heap-v2")]
-fn get_i32_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> wasmtime::Result<i32> {
-    let global = caller
-        .get_export(name)
-        .and_then(Extern::into_global)
-        .ok_or_else(|| wasmtime::Error::msg(format!("missing {name} global")))?;
-    let Val::I32(value) = global.get(caller) else {
-        return Err(wasmtime::Error::msg(format!("{name} is not i32")));
-    };
-    Ok(value)
 }
 
 #[cfg(feature = "managed-heap-v2")]
