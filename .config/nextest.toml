@@ -1,6 +1,6 @@
 nextest-version = "0.9.122"
 
-# 所有测试必须在 3s 内完成；超过即视为死锁、未关闭资源或性能回归。
+# 默认测试必须在 3s 内完成；超过即视为死锁、未关闭资源或性能回归。
 
 [profile.default]
 test-threads = "num-cpus"
@@ -13,7 +13,7 @@ fail-fast = false
 slow-timeout = { period = "3s", terminate-after = 1 }
 
 [test-groups]
-# 资源隔离（端口/共享 cache 路径），不是墙钟预算。
+# 资源隔离（端口/共享 cache 路径）；cluster 冷启动另有明确墙钟预算。
 cluster-ipc = { max-threads = 1 }
 runtime-cache-delete = { max-threads = 1 }
 perf-hooks-runtime = { max-threads = 1 }
@@ -22,12 +22,13 @@ async-hooks-load = { max-threads = 1 }
 # 仅限制它们彼此及与 CPU 密集 fixture 的资源竞争。
 worker-runtime = { max-threads = 1 }
 
-# cluster IPC：同二进制内串行，并独占测试执行槽；网络/子进程本身均低于 3s，
-# 但与全量 CPU 密集 fixture 并发时会越过同一硬门禁。
+# cluster IPC：同二进制内串行并独占执行槽。首次运行会冷编译父进程并启动
+# 两个真实子进程；3s 报慢测，连续三个周期（9s）才判定挂死。
 [[profile.default.overrides]]
 filter = 'binary(cluster_ipc)'
 test-group = 'cluster-ipc'
 threads-required = "num-cpus"
+slow-timeout = { period = "3s", terminate-after = 3 }
 
 [[profile.default.overrides]]
 filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
