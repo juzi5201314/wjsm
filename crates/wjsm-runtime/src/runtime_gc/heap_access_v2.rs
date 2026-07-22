@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::heap::{HeapAddress, HeapMemoryError, SharedHeapMemory};
@@ -14,6 +15,7 @@ pub struct HeapAccessV2 {
     memory: SharedHeapMemory,
     next_object: AtomicU64,
     heap_limit: u64,
+    free_regions: Mutex<Vec<(u64, u64)>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +39,7 @@ impl HeapAccessV2 {
             memory,
             next_object: AtomicU64::new(next_object),
             heap_limit,
+            free_regions: Mutex::new(Vec::new()),
         }
     }
 
@@ -45,6 +48,9 @@ impl HeapAccessV2 {
             .checked_add(7)
             .map(|bytes| bytes & !7)
             .ok_or(HeapAccessV2Error::AddressOverflow)?;
+        if let Some(region) = self.take_free_region(minimum_bytes) {
+            return Ok(region);
+        }
         // 优先预留至少 64KiB，但绝不超过 remaining（小 max_heap_size 时必须能精确 OOM）。
         let preferred_bytes = minimum_bytes.max(64 * 1024);
         loop {
@@ -71,11 +77,61 @@ impl HeapAccessV2 {
             return Ok((start, end));
         }
     }
+    fn take_free_region(&self, minimum_bytes: u64) -> Option<(u64, u64)> {
+        let mut regions = self
+            .free_regions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let index = regions
+            .iter()
+            .position(|(start, end)| end.saturating_sub(*start) >= minimum_bytes)?;
+        let (start, end) = regions.remove(index);
+        let allocation_end = start + minimum_bytes;
+        if allocation_end < end {
+            regions.push((allocation_end, end));
+        }
+        Some((start, allocation_end))
+    }
+
+    fn release_region(&self, start: u64, bytes: u64) {
+        let Some(end) = start.checked_add(bytes) else {
+            return;
+        };
+        let mut regions = self
+            .free_regions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        regions.push((start, end));
+        regions.sort_unstable_by_key(|(start, _)| *start);
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(regions.len());
+        for (start, end) in regions.drain(..) {
+            if let Some((_, previous_end)) = merged.last_mut()
+                && start <= *previous_end
+            {
+                *previous_end = (*previous_end).max(end);
+            } else {
+                merged.push((start, end));
+            }
+        }
+        *regions = merged;
+    }
+
+    pub fn free_bytes(&self) -> u64 {
+        self.free_regions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .map(|(start, end)| end.saturating_sub(*start))
+            .sum()
+    }
 
     pub fn used_bytes(&self) -> u64 {
         self.next_object
             .load(Ordering::Acquire)
             .saturating_sub(crate::heap::HANDLE_REGION_BYTES + 64 * 1024)
+    }
+    pub fn heap_limit_bytes(&self) -> u64 {
+        self.heap_limit
     }
 
     pub fn publish_object(
@@ -295,7 +351,17 @@ impl HeapAccessV2 {
                 HeapAddress::new(u64::from(handle) * 8),
                 (new_object << 16) | (old_entry & u64::from(u16::MAX)),
             )
-            .map_err(HeapAccessV2Error::Memory)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.release_region(
+            old_object,
+            u64::from(old_capacity)
+                .checked_mul(u64::from(constants::HEAP_ARRAY_ELEMENT_SIZE))
+                .and_then(|payload| {
+                    payload.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE))
+                })
+                .ok_or(HeapAccessV2Error::AddressOverflow)?,
+        );
+        Ok(())
     }
 
     pub fn push_element(&self, handle: u32, value: u64) -> Result<u32, HeapAccessV2Error> {
@@ -345,6 +411,67 @@ impl HeapAccessV2 {
             return Err(HeapAccessV2Error::UnresolvedHandle { handle });
         }
         Ok(entry >> 16)
+    }
+    pub fn live_handles(&self, count: u32) -> Vec<u32> {
+        (0..count)
+            .filter(|handle| self.resolve_handle(*handle).is_ok())
+            .collect()
+    }
+
+    pub fn object_references(&self, handle: u32) -> Result<Vec<i64>, HeapAccessV2Error> {
+        let mut references = Vec::new();
+        let prototype = self.prototype(handle)?;
+        if prototype != PROTO_NULL_SENTINEL && prototype != handle {
+            if prototype & 0x8000_0000 != 0 {
+                references.push(value::encode_proxy_handle(prototype & 0x7FFF_FFFF));
+            } else {
+                references.push(value::encode_object_handle(prototype));
+            }
+        }
+        if self.object_type(handle)? == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
+            let (length, _) = self.array_shape(handle)?;
+            for index in 0..length {
+                if let Some(element) = self.get_element(handle, index)? {
+                    references.push(element as i64);
+                }
+            }
+        } else {
+            for (key, _) in self.own_property_slots(handle)? {
+                if let Some(property) = self.get_property_slot(handle, key)? {
+                    references.extend([
+                        property.value as i64,
+                        property.getter as i64,
+                        property.setter as i64,
+                    ]);
+                }
+            }
+        }
+        Ok(references)
+    }
+
+    pub fn retire_handle(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let bytes = self.object_size(handle)?;
+        self.memory
+            .store_word(HeapAddress::new(u64::from(handle) * 8), 0)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.release_region(object, bytes);
+        Ok(bytes)
+    }
+
+    fn object_size(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
+        if self.object_type(handle)? == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
+            let (_, capacity) = self.array_shape(handle)?;
+            return u64::from(capacity)
+                .checked_mul(u64::from(constants::HEAP_ARRAY_ELEMENT_SIZE))
+                .and_then(|payload| {
+                    payload.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE))
+                })
+                .ok_or(HeapAccessV2Error::AddressOverflow);
+        }
+        let object = self.resolve_handle(handle)?;
+        let (capacity, _) = self.property_shape(object)?;
+        object_property_bytes(capacity)
     }
 
     pub fn object_type(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
@@ -681,7 +808,9 @@ impl HeapAccessV2 {
                 HeapAddress::new(entry_address),
                 (destination << 16) | (entry & 0xFFFF),
             )
-            .map_err(HeapAccessV2Error::Memory)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.release_region(object, old_bytes);
+        Ok(())
     }
 
     fn read_property_slot(&self, slot: u64) -> Result<HeapAccessV2Property, HeapAccessV2Error> {

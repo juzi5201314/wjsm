@@ -932,9 +932,7 @@ pub(crate) fn reflect_get_own_property_descriptor_impl(
         let handle = handle_index_of(caller, target) as u32;
         let access = caller.data().heap_access_v2().clone();
         if access.resolve_handle(handle).is_ok() {
-            let name_id = if let Some(id) =
-                crate::property_key::symbol_value_to_name_id(prop)
-            {
+            let name_id = if let Some(id) = crate::property_key::symbol_value_to_name_id(prop) {
                 id
             } else {
                 let prop_name = match render_value(caller, prop) {
@@ -942,8 +940,7 @@ pub(crate) fn reflect_get_own_property_descriptor_impl(
                     Err(_) => return value::encode_undefined(),
                 };
                 let rs = crate::runtime_string::RuntimeString::from_utf8_str(&prop_name);
-                let idx =
-                    crate::property_key::intern_runtime_property_key(caller.data(), rs);
+                let idx = crate::property_key::intern_runtime_property_key(caller.data(), rs);
                 crate::property_key::encode_runtime_string_name_id(idx)
             };
             let key = match crate::property_key::canonicalize_v2_name_id(caller, name_id) {
@@ -954,36 +951,21 @@ pub(crate) fn reflect_get_own_property_descriptor_impl(
                 Ok(Some(s)) => s,
                 _ => return value::encode_undefined(),
             };
-            let is_accessor =
-                (slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32) != 0;
-            let enumerable =
-                (slot.flags & wjsm_ir::constants::FLAG_ENUMERABLE as u32) != 0;
-            let configurable =
-                (slot.flags & wjsm_ir::constants::FLAG_CONFIGURABLE as u32) != 0;
+            let is_accessor = (slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32) != 0;
+            let enumerable = (slot.flags & wjsm_ir::constants::FLAG_ENUMERABLE as u32) != 0;
+            let configurable = (slot.flags & wjsm_ir::constants::FLAG_CONFIGURABLE as u32) != 0;
             let desc = {
                 let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
                 alloc_host_object(caller, &_wjsm_env, 4)
             };
             if is_accessor {
-                let _ = define_host_data_property_from_caller(
-                    caller,
-                    desc,
-                    "get",
-                    slot.getter as i64,
-                );
-                let _ = define_host_data_property_from_caller(
-                    caller,
-                    desc,
-                    "set",
-                    slot.setter as i64,
-                );
+                let _ =
+                    define_host_data_property_from_caller(caller, desc, "get", slot.getter as i64);
+                let _ =
+                    define_host_data_property_from_caller(caller, desc, "set", slot.setter as i64);
             } else {
-                let _ = define_host_data_property_from_caller(
-                    caller,
-                    desc,
-                    "value",
-                    slot.value as i64,
-                );
+                let _ =
+                    define_host_data_property_from_caller(caller, desc, "value", slot.value as i64);
                 let _ = define_host_data_property_from_caller(
                     caller,
                     desc,

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use wasmtime::{Caller, Extern, Linker, Val};
+use wasmtime::{Caller, Linker, Val};
 use wjsm_ir::value;
 
 use crate::RuntimeState;

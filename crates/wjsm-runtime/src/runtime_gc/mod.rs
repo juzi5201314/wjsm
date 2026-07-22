@@ -70,6 +70,8 @@
 //! - `wjsm-semantic/src/lowerer_function_decls.rs`: Layer 3b 填充 known_callee_vars
 //!
 //! 详细设计见 plan.md。
+#[cfg(feature = "managed-heap-v2")]
+pub(crate) mod active_v2;
 pub mod api;
 #[cfg(feature = "managed-heap-v2")]
 mod collector_context;

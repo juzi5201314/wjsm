@@ -341,14 +341,15 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
-    {
-        let prototype = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
-        return alloc_host_object_v2_with_env(ctx, env, capacity, prototype);
-    }
-
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
+    if cfg!(feature = "managed-heap-v2") {
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            let prototype = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
+            alloc_host_object_v2_with_env(ctx, env, capacity, prototype)
+        }
+        #[cfg(not(feature = "managed-heap-v2"))]
+        unreachable!("managed-heap-v2 feature dispatch is inconsistent")
+    } else {
         let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
         alloc_host_object_impl(ctx, env, capacity, proto)
     }
@@ -717,12 +718,14 @@ pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
-    {
-        return alloc_host_object_v2_with_env(ctx, env, capacity, u32::MAX);
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
+    if cfg!(feature = "managed-heap-v2") {
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            alloc_host_object_v2_with_env(ctx, env, capacity, u32::MAX)
+        }
+        #[cfg(not(feature = "managed-heap-v2"))]
+        unreachable!("managed-heap-v2 feature dispatch is inconsistent")
+    } else {
         alloc_host_object_impl(ctx, env, capacity, u32::MAX)
     }
 }
@@ -2022,17 +2025,34 @@ pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
     alloc_error_object_with_env(ctx, env, "TypeError", message, None)
 }
 
+/// 读取 `@@toStringTag`；V2 下 resolve_handle 返回 handle id，必须走 HeapAccessV2 原型链。
+fn object_to_string_tag(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<i64> {
+    let name_id = crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::TO_STRING_TAG);
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        if value::is_js_object(obj) || value::is_array(obj) {
+            let handle = value::decode_handle(obj);
+            let access = caller.data().heap_access_v2().clone();
+            if access.resolve_handle(handle).is_ok() {
+                let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+                return access
+                    .get_property_slot_on_proto_chain(handle, key)
+                    .ok()
+                    .flatten()
+                    .map(|property| property.value as i64);
+            }
+        }
+    }
+    let ptr = resolve_handle(caller, obj)?;
+    crate::host_imports::read_object_property_by_name_id_proto_walk(caller, ptr, name_id)
+}
+
 pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
     if value::is_undefined(obj) {
         store_runtime_string(caller, "[object Undefined]".to_string())
     } else if value::is_null(obj) {
         store_runtime_string(caller, "[object Null]".to_string())
-    } else if let Some(ptr) = resolve_handle(caller, obj)
-        && let Some(tag) = crate::host_imports::read_object_property_by_name_id_proto_walk(
-            caller,
-            ptr,
-            crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::TO_STRING_TAG),
-        )
+    } else if let Some(tag) = object_to_string_tag(caller, obj)
         && let Some(bytes) = read_value_string_bytes(caller, tag)
     {
         store_runtime_string(

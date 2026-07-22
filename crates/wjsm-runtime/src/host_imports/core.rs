@@ -1715,67 +1715,102 @@ pub(crate) fn define_core(
     // gc_safepoint_poll()：WASM allocation debt 达阈值后调用的增量 GC safepoint。
     // 先 flush barrier buffer，再清零 __gc_alloc_bytes，然后按 scheduler budget 推进一步。
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
-        let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
-            return;
-        };
-        let (gc_arc, scheduler_arc) = {
-            let state = caller.data();
-            (state.gc_algorithm.clone(), state.gc_scheduler.clone())
-        };
-        {
-            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
-            gc.barrier_flush(&mut ctx);
-        }
-        let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
-        if barrier_event_buf_base != 0
-            && let Some(global) = env.barrier_buf_ptr
-        {
-            let _ = global.set(
-                &mut caller,
-                wasmtime::Val::I32(barrier_event_buf_base as i32),
-            );
-        }
-        if let Some(global) = env.gc_alloc_bytes {
-            let _ = global.set(&mut caller, wasmtime::Val::I32(0));
-        }
-        let budget = {
-            let scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
-            scheduler.budget()
-        };
-        let started = std::time::Instant::now();
-        let (outcome, stats, heap_limit, algorithm) = {
-            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let algorithm = gc.name();
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
-            let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-            let outcome = gc.safepoint_step(&mut ctx, &mut roots as _, budget);
-            let heap_limit = ctx.heap_limit();
-            let stats = if matches!(outcome, crate::runtime_gc::api::StepOutcome::CycleComplete) {
-                Some(gc.last_stats().clone())
-            } else {
-                None
-            };
-            (outcome, stats, heap_limit, algorithm)
-        };
-        let elapsed = started.elapsed();
-        let next_trigger = {
-            let mut scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
-            scheduler.after_step(&outcome, elapsed);
-            if let Some(stats) = stats.as_ref() {
-                scheduler.after_cycle(stats.heap_used_bytes, 0, heap_limit);
+        if cfg!(feature = "managed-heap-v2") {
+            #[cfg(feature = "managed-heap-v2")]
+            {
+                let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
+                    return;
+                };
+                if let Some(global) = env.gc_alloc_bytes {
+                    let _ = global.set(&mut caller, wasmtime::Val::I32(0));
+                }
+                let mut stats = crate::runtime_gc::active_v2::collect_full(&mut caller, &env);
+                let next_trigger = {
+                    let heap_limit = caller.data().heap_access_v2().heap_limit_bytes();
+                    let mut scheduler = caller
+                        .data()
+                        .gc_scheduler
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    scheduler.after_cycle(
+                        stats.heap_used_bytes,
+                        0,
+                        heap_limit.min(usize::MAX as u64) as usize,
+                    );
+                    scheduler.trigger_bytes.min(i32::MAX as usize).max(1) as i32
+                };
+                if let Some(global) = env.gc_trigger_bytes {
+                    let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
+                }
+                stats.pause_ns_max = 0;
+                stats.pause_ns_total = 0;
+                stats.pause_count = 0;
+                caller.data().store_last_gc_stats("managed-heap-v2", stats);
             }
-            scheduler.trigger_bytes.min(i32::MAX as usize).max(1) as i32
-        };
-        if let Some(global) = env.gc_trigger_bytes {
-            let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
-        }
-        if let Some(mut stats) = stats {
-            stats.pause_ns_max = 0;
-            stats.pause_ns_total = 0;
-            stats.pause_count = 0;
-            stats.record_pause(elapsed);
-            caller.data().store_last_gc_stats(algorithm, stats);
+        } else {
+            let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
+                return;
+            };
+            let (gc_arc, scheduler_arc) = {
+                let state = caller.data();
+                (state.gc_algorithm.clone(), state.gc_scheduler.clone())
+            };
+            {
+                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
+                gc.barrier_flush(&mut ctx);
+            }
+            let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
+            if barrier_event_buf_base != 0
+                && let Some(global) = env.barrier_buf_ptr
+            {
+                let _ = global.set(
+                    &mut caller,
+                    wasmtime::Val::I32(barrier_event_buf_base as i32),
+                );
+            }
+            if let Some(global) = env.gc_alloc_bytes {
+                let _ = global.set(&mut caller, wasmtime::Val::I32(0));
+            }
+            let budget = {
+                let scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
+                scheduler.budget()
+            };
+            let started = std::time::Instant::now();
+            let (outcome, stats, heap_limit, algorithm) = {
+                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                let algorithm = gc.name();
+                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
+                let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+                let outcome = gc.safepoint_step(&mut ctx, &mut roots as _, budget);
+                let heap_limit = ctx.heap_limit();
+                let stats = if matches!(outcome, crate::runtime_gc::api::StepOutcome::CycleComplete)
+                {
+                    Some(gc.last_stats().clone())
+                } else {
+                    None
+                };
+                (outcome, stats, heap_limit, algorithm)
+            };
+            let elapsed = started.elapsed();
+            let next_trigger = {
+                let mut scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
+                scheduler.after_step(&outcome, elapsed);
+                if let Some(stats) = stats.as_ref() {
+                    scheduler.after_cycle(stats.heap_used_bytes, 0, heap_limit);
+                }
+                scheduler.trigger_bytes.min(i32::MAX as usize).max(1) as i32
+            };
+            if let Some(global) = env.gc_trigger_bytes {
+                let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
+            }
+            if let Some(mut stats) = stats {
+                stats.pause_ns_max = 0;
+                stats.pause_ns_total = 0;
+                stats.pause_count = 0;
+                stats.record_pause(elapsed);
+                caller.data().store_last_gc_stats(algorithm, stats);
+            }
         }
     });
     linker.define(&mut store, "env", "gc_safepoint_poll", f)?;

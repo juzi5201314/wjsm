@@ -620,24 +620,41 @@ fn record_and_attach_gc_heap(
     wasm_env: &WasmEnv,
     immortal_objects_end: usize,
 ) -> Result<()> {
-    #[cfg(feature = "managed-heap-v2")]
-    {
-        // V2：对象堆与 handle 表在 memory64 `__heap_memory`，主 memory 只承载字符串。
-        // 禁止再走 V1 attach（会把 memory32 heap_ptr/alloc 窗口/GC 元数据当成对象堆，
-        // 并可能在扫描/清扫时踩主内存字符串区）。
-        let string_end = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
-        let immortal_objects_end = immortal_objects_end.max(string_end);
-        store
-            .data()
-            .store_heap_layout_boundaries(immortal_objects_end, immortal_objects_end, 0);
-        // 主内存 heap_ptr 保持字符串 tip，供 eval/runtime 模块 data 追加。
-        enforce_heap_limit(store, wasm_env)?;
-        let _ = wasm_env;
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
+    if cfg!(feature = "managed-heap-v2") {
+        #[cfg(feature = "managed-heap-v2")]
+        {
+            // V2：对象堆与 handle 表在 memory64 `__heap_memory`，主 memory 只承载字符串。
+            // 禁止再走 V1 attach（会把 memory32 heap_ptr/alloc 窗口/GC 元数据当成对象堆，
+            // 并可能在扫描/清扫时踩主内存字符串区）。
+            let string_end = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+            let immortal_objects_end = immortal_objects_end.max(string_end);
+            store.data().store_heap_layout_boundaries(
+                immortal_objects_end,
+                immortal_objects_end,
+                0,
+            );
+            // 主内存 heap_ptr 保持字符串 tip，供 eval/runtime 模块 data 追加。
+            enforce_heap_limit(store, wasm_env)?;
+            let object_heap_base = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
+            let object_heap_capacity = store
+                .data()
+                .heap_access_v2()
+                .heap_limit_bytes()
+                .saturating_sub(object_heap_base);
+            let initial_trigger = (object_heap_capacity / 4)
+                .max(u64::from(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES))
+                .min(i32::MAX as u64) as i32;
+            if let Some(global) = wasm_env.gc_trigger_bytes {
+                global.set(&mut *store, Val::I32(initial_trigger))?;
+            }
+            store
+                .data()
+                .gc_scheduler
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .trigger_bytes = initial_trigger as usize;
+        }
+    } else {
         let object_heap_start = wasm_env
             .object_heap_start
             .and_then(|g| g.get(&mut *store).i32())
@@ -701,8 +718,8 @@ fn record_and_attach_gc_heap(
         let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
         let mut gc_ctx = crate::runtime_gc::GcContext::new(store, wasm_env, gc.name());
         gc.attach_heap(&mut gc_ctx, attached_dynamic_heap_start);
-        Ok(())
     }
+    Ok(())
 }
 
 /// P2.2+P2.3: 创建 shared memory/table/globals 注册到 "env" namespace，

@@ -474,6 +474,24 @@ fn object_prototype(caller: &mut Caller<'_, RuntimeState>, object: i64) -> Optio
     if !value::is_object(object) && !value::is_array(object) {
         return None;
     }
+    // V2 heap：handle 解析为 handle id，原型必须走 HeapAccessV2，不能读线性内存 header。
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let handle = value::decode_handle(object);
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let prototype = access.prototype(handle).ok()?;
+            if prototype == 0 || prototype == u32::MAX {
+                return None;
+            }
+            if prototype & 0x8000_0000 != 0 {
+                return Some(value::encode_proxy_handle(prototype & 0x7FFF_FFFF));
+            }
+            return Some(crate::runtime_host_helpers::prototype_handle_to_value(
+                caller, prototype,
+            ));
+        }
+    }
     let pointer = resolve_handle(caller, object)?;
     let env = WasmEnv::from_caller(caller)?;
     let prototype_handle = {

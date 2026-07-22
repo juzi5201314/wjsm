@@ -81,30 +81,8 @@ pub(crate) fn decode_name_id(name_id: u32) -> DecodedNameId {
     }
 }
 
-/// 把 name_id 转成可在 JS 层使用的 property key value。
-///
-/// MemoryString 与 Symbol 的 index 直接对应自身 handle；RuntimeString
-/// 的 index 是 `runtime_property_keys` 表，与 `runtime_strings` 表**不同**——
-/// 必须查表拿到真实 UTF-16 内容后重新 `store_runtime_string`，
-/// 不能直接把 property_key index 当 runtime_strings handle 复用。
-#[inline]
-pub(crate) fn name_id_to_property_key_value_with_state(
-    state: &RuntimeState,
-    name_id: u32,
-) -> Option<i64> {
-    match decode_name_id(name_id) {
-        DecodedNameId::MemoryString(index) => Some(value::encode_string_ptr(index)),
-        DecodedNameId::RuntimeString(index) => {
-            let string = runtime_property_key_units(state, index)?;
-            Some(crate::runtime_render::store_runtime_string_in_state(state, string))
-        }
-        DecodedNameId::Symbol(index) => Some(value::encode_symbol_handle(index)),
-    }
-}
-
-/// 旧版本：只处理 Symbol 与 MemoryString；RuntimeString 返回 None。
-/// Callers 必须在 None 时走 fallback（查表+store_runtime_string）或
-/// 直接使用 `name_id_to_property_key_value_with_state`。
+/// Symbol 与 MemoryString 可直接编码；RuntimeString 返回 None，由 caller 查表并
+/// `store_runtime_string` 后继续。
 #[inline]
 pub(crate) fn name_id_to_property_key_value(name_id: u32) -> Option<i64> {
     match decode_name_id(name_id) {

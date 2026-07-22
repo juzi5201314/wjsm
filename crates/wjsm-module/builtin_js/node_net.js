@@ -100,7 +100,7 @@ Socket.prototype.connect = function (a, b, c) {
     self.emit('connect');
     self.emit('ready');
     self._startReadLoop();
-  }, function (error) {
+  }).catch(function (error) {
     self.connecting = false;
     self.pending = false;
     self.readyState = 'closed';

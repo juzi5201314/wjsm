@@ -138,7 +138,7 @@ function scheduleObserverDispatch() {
 }
 
 function queueObserverEntry(observer, entry) {
-  if (!observer[kObserverTypes].has(entry.entryType)) return;
+  if (!observer[kObserverTypes].includes(entry.entryType)) return;
   observer[kObserverQueue].push(entry);
   pendingObservers.add(observer);
   scheduleObserverDispatch();
@@ -160,11 +160,7 @@ function enqueueNativeEntry(raw) {
     raw.detail
   );
   for (const observer of observers) {
-    let observesType = false;
-    for (let i = 0; i < observer.__wjsmNativeTypes.length; i = i + 1) {
-      if (observer.__wjsmNativeTypes[i] === entry.entryType) observesType = true;
-    }
-    if (!observesType) continue;
+    if (!observer[kObserverTypes].includes(entry.entryType)) continue;
     observer[kObserverQueue].push(entry);
     pendingObservers.add(observer);
   }
@@ -172,13 +168,11 @@ function enqueueNativeEntry(raw) {
 
 function replaceObserverTypes(observer, types) {
   for (const type of observer[kObserverTypes]) decrementNativeType(type);
-  observer[kObserverTypes].clear();
-  observer.__wjsmNativeTypes.length = 0;
+  observer[kObserverTypes].length = 0;
   for (let i = 0; i < types.length; i = i + 1) {
     const type = types[i];
-    if (!supportedEntryTypes.includes(type) || observer[kObserverTypes].has(type)) continue;
-    observer[kObserverTypes].add(type);
-    observer.__wjsmNativeTypes.push(type);
+    if (!supportedEntryTypes.includes(type) || observer[kObserverTypes].includes(type)) continue;
+    observer[kObserverTypes].push(type);
     incrementNativeType(type);
   }
   updateNativeObserverState();
@@ -186,9 +180,8 @@ function replaceObserverTypes(observer, types) {
 
 function addObserverType(observer, type) {
   if (!supportedEntryTypes.includes(type)) return false;
-  if (!observer[kObserverTypes].has(type)) {
-    observer[kObserverTypes].add(type);
-    observer.__wjsmNativeTypes.push(type);
+  if (!observer[kObserverTypes].includes(type)) {
+    observer[kObserverTypes].push(type);
     incrementNativeType(type);
     updateNativeObserverState();
   }
@@ -217,8 +210,7 @@ function PerformanceObserver(callback) {
     [kObserverBrand]: { value: true },
     [kObserverCallback]: { value: callback },
     [kObserverQueue]: { value: [], writable: true },
-    [kObserverTypes]: { value: new Set() },
-    __wjsmNativeTypes: { value: [] },
+    [kObserverTypes]: { value: [] },
     [kObserverMode]: { value: undefined, writable: true },
   });
 }
@@ -271,7 +263,7 @@ PerformanceObserver.prototype.observe = function (options) {
     }
   }
 
-  if (this[kObserverTypes].size > 0) observers.add(this);
+  if (this[kObserverTypes].length > 0) observers.add(this);
   else this.disconnect();
 };
 
@@ -282,7 +274,7 @@ PerformanceObserver.prototype.disconnect = function () {
   observers.delete(this);
   pendingObservers.delete(this);
   this[kObserverQueue] = [];
-  this[kObserverTypes].clear();
+  this[kObserverTypes].length = 0;
   this[kObserverMode] = undefined;
 };
 

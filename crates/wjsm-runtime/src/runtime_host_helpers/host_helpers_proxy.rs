@@ -985,8 +985,7 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
                 let prop_name = crate::runtime_render::render_value(caller, prop).ok();
                 prop_name.and_then(|s| {
                     let rs = crate::runtime_string::RuntimeString::from_utf8_str(&s);
-                    let idx =
-                        crate::property_key::intern_runtime_property_key(caller.data(), rs);
+                    let idx = crate::property_key::intern_runtime_property_key(caller.data(), rs);
                     Some(crate::property_key::encode_runtime_string_name_id(idx))
                 })
             }

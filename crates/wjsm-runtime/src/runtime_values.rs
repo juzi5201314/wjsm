@@ -121,6 +121,61 @@ pub(crate) fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
     resolve_handle_idx(caller, handle_idx)
 }
 
+fn nul_terminated_string_bytes(data: &[u8], ptr: u32) -> Option<&[u8]> {
+    let start = ptr as usize;
+    let tail = data.get(start..)?;
+    let len = tail
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(tail.len());
+    Some(&tail[..len])
+}
+
+fn runtime_string_matches_static(
+    caller: &Caller<'_, RuntimeState>,
+    runtime_value: i64,
+    static_value: i64,
+) -> bool {
+    let runtime_handle = value::decode_runtime_string_handle(runtime_value) as usize;
+    let strings = caller
+        .data()
+        .runtime_strings
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(runtime_string) = strings.get(runtime_handle) else {
+        return false;
+    };
+    let Some(env) = caller.data().cached_wasm_env.as_ref() else {
+        return false;
+    };
+    let data = env.memory.data(caller);
+    let Some(bytes) = nul_terminated_string_bytes(data, value::decode_string_ptr(static_value))
+    else {
+        return false;
+    };
+    std::str::from_utf8(bytes).is_ok_and(|text| {
+        runtime_string
+            .as_utf16_units()
+            .iter()
+            .copied()
+            .eq(text.encode_utf16())
+    })
+}
+
+fn static_strings_equal(caller: &Caller<'_, RuntimeState>, a: i64, b: i64) -> bool {
+    let Some(env) = caller.data().cached_wasm_env.as_ref() else {
+        return false;
+    };
+    let data = env.memory.data(caller);
+    let Some(a_bytes) = nul_terminated_string_bytes(data, value::decode_string_ptr(a)) else {
+        return false;
+    };
+    let Some(b_bytes) = nul_terminated_string_bytes(data, value::decode_string_ptr(b)) else {
+        return false;
+    };
+    a_bytes == b_bytes
+}
+
 /// SameValueZero (ECMAScript §7.2.12)：Map/Set 等键比较；NaN 与 NaN、+0 与 -0 视为相等。
 pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64) -> bool {
     if a == b {
@@ -143,26 +198,27 @@ pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64)
             }
             fa == fb
         }
-        1 => {
-            // 字符串内容比较：runtime_string handle 比较，string_ptr 退回为值比较
-            if value::is_runtime_string_handle(a) && value::is_runtime_string_handle(b) {
+        1 => match (
+            value::is_runtime_string_handle(a),
+            value::is_runtime_string_handle(b),
+        ) {
+            (true, true) => {
                 let ha = value::decode_runtime_string_handle(a) as usize;
                 let hb = value::decode_runtime_string_handle(b) as usize;
                 let strings = caller
                     .data()
                     .runtime_strings
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                    .unwrap_or_else(|error| error.into_inner());
                 strings
                     .get(ha)
                     .zip(strings.get(hb))
-                    .map(|(x, y)| x == y)
-                    .unwrap_or(false)
-            } else {
-                // string_ptr 字面量：相同内容共享同一指针
-                a == b
+                    .is_some_and(|(x, y)| x == y)
             }
-        }
+            (true, false) => runtime_string_matches_static(caller, a, b),
+            (false, true) => runtime_string_matches_static(caller, b, a),
+            (false, false) => static_strings_equal(caller, a, b),
+        },
         6 => {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -853,6 +909,29 @@ pub(crate) fn write_object_property_by_name_id(
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let handle = handle_index_of(caller, obj_handle) as u32;
+    // V2：find 返回哨兵 slot_offset，不能再按线性槽偏移写。
+    #[cfg(feature = "managed-heap-v2")]
+    {
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok() {
+            let Some(key) =
+                crate::property_key::canonicalize_v2_name_id_with_env(caller, &env, name_id)
+            else {
+                return;
+            };
+            if access
+                .get_property_slot(handle, key)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                let _ = access.set_property(handle, key, val as u64);
+            } else {
+                let _ = access.define_data_property(handle, key, val as u64, flags as u32);
+            }
+            return;
+        }
+    }
     let found = find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id);
     if let Some((slot_offset, _, _)) = found {
         let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;

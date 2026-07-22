@@ -1240,15 +1240,22 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
         NativeCallable::GcCollect => {
-            // gc() global 直接调当前 registry 选择的 GC 算法。
+            // managed-heap-v2 下直接回收 active shared-memory64 heap；默认构建继续
+            // 使用 registry 选择的 memory32 collector。
             let env = crate::wasm_env::WasmEnv::from_caller(&mut *caller).expect("WasmEnv");
             let gc_arc = caller.data().gc_algorithm.clone();
-            let (algorithm, stats) = {
-                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let algorithm = gc.name();
+            let algorithm = gc_arc
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .name();
+            #[cfg(feature = "managed-heap-v2")]
+            let stats = crate::runtime_gc::active_v2::collect_full(&mut *caller, &env);
+            #[cfg(not(feature = "managed-heap-v2"))]
+            let stats = {
+                let mut gc = gc_arc.lock().unwrap_or_else(|error| error.into_inner());
                 let mut ctx = crate::runtime_gc::GcContext::new(&mut *caller, &env, algorithm);
                 let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                (algorithm, gc.collect_full(&mut ctx, &mut roots as _))
+                gc.collect_full(&mut ctx, &mut roots as _)
             };
             caller
                 .data()
