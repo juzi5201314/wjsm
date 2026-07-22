@@ -737,7 +737,6 @@ async fn apply_reviver_async(
     key: &str,
     val: i64,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     if value::is_object(val) {
         return apply_reviver_v2_object(caller, reviver, val, key).await;
     }
@@ -890,7 +889,6 @@ pub async fn json_parse_to_wasm_async(
         Err(error) => make_exception(caller, "SyntaxError", error),
     }
 }
-#[cfg(feature = "managed-heap-v2")]
 async fn apply_reviver_v2_object(
     caller: &mut Caller<'_, RuntimeState>,
     reviver: i64,

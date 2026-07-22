@@ -1,6 +1,4 @@
 use super::*;
-#[cfg(not(feature = "managed-heap-v2"))]
-use crate::runtime_heap::{alloc_heap_region_for_host, host_handle_slot_fits};
 use std::sync::atomic::Ordering;
 use wjsm_ir::constants;
 
@@ -133,7 +131,6 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(-1);
         let proto = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
@@ -160,48 +157,6 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
         }
         value::encode_handle(value::TAG_ARRAY, handle as u32)
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let size = constants::HEAP_OBJECT_HEADER_SIZE
-            .saturating_add(capacity.saturating_mul(constants::HEAP_ARRAY_ELEMENT_SIZE));
-        let Some(ptr) =
-            alloc_heap_region_for_host(ctx, env, size as usize, wjsm_ir::HEAP_TYPE_ARRAY, capacity)
-        else {
-            return value::encode_undefined();
-        };
-        let heap_ptr = ptr as u32;
-        let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
-        let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-        let proto = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
-        if !host_handle_slot_fits(env, ctx, obj_table_count) {
-            return value::encode_undefined();
-        }
-        let ptr = heap_ptr as usize;
-        let slot_addr = obj_table_ptr as usize
-            + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-        if crate::runtime_gc::heap_access::init_proto_at_ptr(ctx, env, ptr, proto as u32).is_none()
-        {
-            return value::encode_undefined();
-        }
-        let d = env.memory.data_mut(&mut *ctx);
-        d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_ARRAY;
-        d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
-            ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
-            .fill(0);
-        d[ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize
-            ..ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize + 4]
-            .copy_from_slice(&0u32.to_le_bytes());
-        d[ptr + constants::HEAP_ARRAY_CAPACITY_OFFSET as usize
-            ..ptr + constants::HEAP_ARRAY_CAPACITY_OFFSET as usize + 4]
-            .copy_from_slice(&capacity.to_le_bytes());
-        d[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
-            .copy_from_slice(&heap_ptr.to_le_bytes());
-        let _ = d;
-        let _ = env
-            .obj_table_count
-            .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
-        value::encode_handle(value::TAG_ARRAY, obj_table_count)
-    }
 }
 // ── arr_proto_push (#49) ──────────────────────────────────────────
 /// 从 host 元素设置数组元素（直接写入堆内存）
@@ -212,7 +167,6 @@ pub(crate) fn set_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     index: i32,
     val: i64,
 ) {
-    #[cfg(feature = "managed-heap-v2")]
     if value::is_array(arr_val) {
         let handle = value::decode_handle(arr_val);
         if ctx
@@ -254,7 +208,6 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(-1);
         let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
@@ -280,51 +233,6 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
             return value::encode_undefined();
         }
         value::encode_object_handle(handle as u32)
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let size = constants::HEAP_OBJECT_HEADER_SIZE
-            .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
-        let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
-        if !host_handle_slot_fits(env, ctx, obj_table_count) {
-            return value::encode_undefined();
-        }
-        let Some(ptr) = alloc_heap_region_for_host(
-            ctx,
-            env,
-            size as usize,
-            wjsm_ir::HEAP_TYPE_OBJECT,
-            capacity,
-        ) else {
-            return value::encode_undefined();
-        };
-        let heap_ptr = ptr as u32;
-        let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-        let ptr = heap_ptr as usize;
-        let slot_addr = obj_table_ptr as usize
-            + obj_table_count as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-        if crate::runtime_gc::heap_access::init_proto_at_ptr(ctx, env, ptr, 0u32).is_none() {
-            return value::encode_undefined();
-        }
-        {
-            let d = env.memory.data_mut(&mut *ctx);
-            d[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
-            d[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
-                ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
-                .fill(0);
-            d[ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize
-                ..ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize + 4]
-                .copy_from_slice(&capacity.to_le_bytes()); // capacity
-            d[ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize
-                ..ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize + 4]
-                .copy_from_slice(&0u32.to_le_bytes()); // num_props = 0
-            d[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
-                .copy_from_slice(&heap_ptr.to_le_bytes());
-        }
-        let _ = env
-            .obj_table_count
-            .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
-        value::encode_object_handle(obj_table_count)
     }
 }
 

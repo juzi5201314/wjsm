@@ -61,67 +61,9 @@ impl Compiler {
         }
 
         // Reserve indices for object helper functions (so they're known during user function compilation).
-        if self.mode == CompileMode::Normal || cfg!(feature = "managed-heap-v2") {
+        {
             let support_import_base = host_import_specs().len() as u32;
-            #[cfg(feature = "managed-heap-v2")]
             self.bind_v2_support_helpers(support_import_base);
-            #[cfg(not(feature = "managed-heap-v2"))]
-            {
-                self.obj_new_func_idx = support_import_base;
-                self.obj_get_func_idx = support_import_base + 1;
-                self.obj_set_func_idx = support_import_base + 2;
-                self.obj_delete_func_idx = support_import_base + 3;
-                self.arr_new_func_idx = support_import_base + 4;
-                self.elem_get_func_idx = support_import_base + 5;
-                self.elem_set_func_idx = support_import_base + 6;
-                self.string_eq_func_idx = support_import_base + 7;
-                self.to_int32_func_idx = support_import_base + 8;
-                self.get_proto_from_ctor_func_idx = support_import_base + 9;
-                for offset in 0..10 {
-                    self.push_func_table(support_import_base + offset);
-                }
-            }
-        } else {
-            self.obj_new_func_idx = self._next_import_func;
-            self.functions.function(7);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.obj_get_func_idx = self._next_import_func;
-            self.functions.function(8);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.obj_set_func_idx = self._next_import_func;
-            self.functions.function(9);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.obj_delete_func_idx = self._next_import_func;
-            self.functions.function(8);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.to_int32_func_idx = self._next_import_func;
-            self.functions.function(10);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.string_eq_func_idx = self._next_import_func;
-            self.functions.function(26);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.arr_new_func_idx = self._next_import_func;
-            self.functions.function(7);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.elem_get_func_idx = self._next_import_func;
-            self.functions.function(8);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.elem_set_func_idx = self._next_import_func;
-            self.functions.function(9);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
-            self.get_proto_from_ctor_func_idx = self._next_import_func;
-            self.functions.function(3);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
         }
         let arr_proto_base = self.table_base + self.function_table.len() as u32;
         for (idx, _) in array_proto_method_specs() {
@@ -321,9 +263,8 @@ impl Compiler {
             & !(constants::HEAP_ALLOCATION_ALIGNMENT - 1);
         let num_functions = self.num_ir_functions;
         if self.mode == CompileMode::Normal {
-            #[cfg(feature = "managed-heap-v2")]
             {
-                // V2：对象在 memory64 `__heap_memory`；主 memory 只承载字符串。
+                // 对象在 memory64 `__heap_memory`；主 memory 只承载字符串。
                 // 仍在主内存地址空间预留 handle table / barrier 洞，避免任何残留
                 // V1 obj_table 写入踩到字符串；但 **不要** 把 string_data 填到
                 // object_heap_start——否则 data_len 虚高，动态模块 reserve 会用大段
@@ -366,55 +307,9 @@ impl Compiler {
                     barrier_buf_end: barrier_event_buf_end as i32,
                 });
             }
-            #[cfg(not(feature = "managed-heap-v2"))]
-            {
-                let handle_table_entries = std::cmp::max(
-                    constants::HANDLE_TABLE_MIN_ENTRIES,
-                    num_functions * constants::HANDLE_TABLE_FUNCTION_ENTRY_FACTOR,
-                );
-                let handle_table_size = handle_table_entries * constants::HANDLE_TABLE_ENTRY_SIZE;
-                // 独立 shadow memory：主内存布局为 handle table → barrier → object heap。
-                let barrier_event_buf_base = heap_start + handle_table_size;
-                let barrier_event_buf_end =
-                    barrier_event_buf_base + constants::GC_BARRIER_EVENT_BUFFER_SIZE;
-                let object_heap_start = (barrier_event_buf_end + (constants::GC_REGION_SIZE - 1))
-                    & !(constants::GC_REGION_SIZE - 1);
-                let needed_len = object_heap_start as usize;
-                if self.string_data.len() < needed_len {
-                    self.string_data.resize(needed_len, 0);
-                }
-                self.data_offset = self.data_offset.max(object_heap_start);
-                self.normal_init_values = Some(NormalGlobalsInit {
-                    heap_ptr: object_heap_start as i32,
-                    obj_table_ptr: heap_start as i32,
-                    // 影子栈在独立 memory：sp 从 0 增长，end 为当前已提交容量。
-                    shadow_sp: 0,
-                    object_heap_start: object_heap_start as i32,
-                    num_ir_functions: num_functions as i32,
-                    shadow_stack_end: SHADOW_STACK_INITIAL_SIZE as i32,
-                    eval_var_map_ptr: self.eval_var_map_ptr as i32,
-                    eval_var_map_count: self.eval_var_map_count as i32,
-                    arr_proto_table_base: self.arr_proto_table_base as i32,
-                    arr_proto_table_len: array_proto_table_len() as i32,
-                    arr_proto_table_hash: array_proto_table_hash() as i64,
-                    alloc_ptr: object_heap_start as i32,
-                    alloc_end: object_heap_start as i32,
-                    gc_alloc_bytes: 0,
-                    gc_trigger_bytes: constants::GC_INITIAL_TRIGGER_BYTES as i32,
-                    gc_phase: 0,
-                    good_color: 0,
-                    barrier_buf_ptr: barrier_event_buf_base as i32,
-                    barrier_buf_end: barrier_event_buf_end as i32,
-                });
-            }
         }
 
         // Pass 3: Compile helper functions.
-        if self.mode == CompileMode::Eval && !cfg!(feature = "managed-heap-v2") {
-            self.compile_object_helpers();
-            self.compile_array_helpers();
-            self.compile_get_proto_from_ctor();
-        }
         if self.mode == CompileMode::Normal {
             self.compile_init_globals_function();
             self.compile_bootstrap_once_function();

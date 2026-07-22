@@ -62,7 +62,6 @@ pub(crate) fn get_by_name_id_sync(
     obj: i64,
     name_id: u32,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     if value::is_array(obj)
         && caller
             .data()
@@ -172,7 +171,6 @@ pub(crate) fn get_by_name_id_sync(
     if !value::is_js_object(obj) && !value::is_array(obj) {
         return value::encode_undefined();
     }
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = if value::is_function(obj) || value::is_closure(obj) || value::is_bound(obj) {
             crate::handle_index_of(caller, obj) as u32
@@ -326,7 +324,6 @@ fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_
         return crate::primitive_regexp_get_property_impl(caller, value_val, name_id);
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     {
         // 函数/闭包/bound 的 own 属性在 function_props 对象上，
         // handle 需经 handle_index_of 映射（与 gc_obj_get_v2 一致）。

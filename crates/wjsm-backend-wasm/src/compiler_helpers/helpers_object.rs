@@ -1,18 +1,15 @@
 use super::*;
 
-#[cfg(feature = "managed-heap-v2")]
 #[path = "helpers_object/alloc.rs"]
 mod alloc;
-#[cfg(feature = "managed-heap-v2")]
 #[path = "helpers_object/array.rs"]
 mod array;
-#[cfg(feature = "managed-heap-v2")]
 #[path = "helpers_object/property.rs"]
 mod property;
-#[cfg(feature = "managed-heap-v2")]
 #[path = "helpers_object/resolve.rs"]
 mod resolve;
 
+#[allow(dead_code)]
 impl Compiler {
     pub(crate) fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
@@ -228,7 +225,6 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(value::TAG_FUNCTION as i32));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            #[cfg(feature = "managed-heap-v2")]
             {
                 func.instruction(&WasmInstruction::LocalGet(0));
                 func.instruction(&WasmInstruction::LocalGet(1));
@@ -236,41 +232,6 @@ impl Compiler {
                     self.special_host_import_indices[&SpecialHostImport::FunctionValueGetProperty],
                 ));
                 func.instruction(&WasmInstruction::Return);
-            }
-            #[cfg(not(feature = "managed-heap-v2"))]
-            {
-                func.instruction(&WasmInstruction::LocalGet(0));
-                func.instruction(&WasmInstruction::I32WrapI64);
-                func.instruction(&WasmInstruction::GlobalGet(num_ir_functions_global));
-                func.instruction(&WasmInstruction::I32LtU);
-                func.instruction(&WasmInstruction::If(BlockType::Empty));
-                func.instruction(&WasmInstruction::LocalGet(0));
-                func.instruction(&WasmInstruction::I32WrapI64);
-                func.instruction(&WasmInstruction::GlobalGet(function_props_base_global));
-                func.instruction(&WasmInstruction::I32Add);
-                func.instruction(&WasmInstruction::I32Const(4));
-                func.instruction(&WasmInstruction::I32Mul);
-                func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
-                func.instruction(&WasmInstruction::I32Add);
-                func.instruction(&WasmInstruction::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
-                // ZGC colored obj_table entry 低 2 bit 不是地址位；inline eval helper 必须去色。
-                func.instruction(&WasmInstruction::I32Const(!0x3));
-                func.instruction(&WasmInstruction::I32And);
-                func.instruction(&WasmInstruction::LocalSet(5));
-                func.instruction(&WasmInstruction::Br(2));
-                func.instruction(&WasmInstruction::End);
-                // arr_proto 等宿主函数：委托 host 解析 Function.prototype 与 length/name。
-                func.instruction(&WasmInstruction::LocalGet(0));
-                func.instruction(&WasmInstruction::LocalGet(1));
-                func.instruction(&WasmInstruction::Call(
-                    self.special_host_import_indices[&SpecialHostImport::FunctionValueGetProperty],
-                ));
-                func.instruction(&WasmInstruction::Return);
-                func.instruction(&WasmInstruction::End);
             }
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(value::TAG_CLOSURE as i32));
@@ -1741,7 +1702,6 @@ impl Compiler {
     }
 }
 
-#[cfg(feature = "managed-heap-v2")]
 impl Compiler {
     /// V2 的 object/array calls 均绑定到 memory64 support ABI，避免 inline static helper。
     pub(crate) fn bind_v2_support_helpers(&mut self, support_import_base: u32) {

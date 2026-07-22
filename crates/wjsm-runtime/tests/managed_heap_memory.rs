@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use std::sync::{Arc, Barrier};
 use std::thread;
 use wasmtime::{MemoryType, SharedMemory};

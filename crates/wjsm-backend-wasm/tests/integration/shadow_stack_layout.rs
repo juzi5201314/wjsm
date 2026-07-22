@@ -6,8 +6,6 @@ use std::collections::HashMap;
 
 use wasmparser::{Operator, Parser, Payload};
 use wjsm_ir::SHADOW_STACK_INITIAL_SIZE;
-#[cfg(not(feature = "managed-heap-v2"))]
-use wjsm_ir::constants::{GC_BARRIER_EVENT_BUFFER_SIZE, GC_REGION_SIZE};
 
 #[test]
 fn independent_shadow_memory_layout() {
@@ -15,11 +13,7 @@ fn independent_shadow_memory_layout() {
     let globals = extract_init_globals_i32_sets(&wasm);
     let memories = extract_memory_imports(&wasm);
 
-    let expected_memory_imports = if cfg!(feature = "managed-heap-v2") {
-        3
-    } else {
-        2
-    };
+    let expected_memory_imports = 3;
     assert_eq!(
         memories.len(),
         expected_memory_imports,
@@ -35,7 +29,6 @@ fn independent_shadow_memory_layout() {
             .any(|(m, n)| m == "env" && n == wjsm_ir::SHADOW_MEMORY_NAME),
         "missing env.__shadow_memory import"
     );
-    #[cfg(feature = "managed-heap-v2")]
     assert!(
         memories
             .iter()
@@ -73,9 +66,8 @@ fn independent_shadow_memory_layout() {
         "guard canary must not appear in main memory data"
     );
 
-    #[cfg(feature = "managed-heap-v2")]
     {
-        // V2：data segment 只含字符串；heap_ptr/object_heap 仍指向预留洞之后。
+        // data segment 只含字符串；heap_ptr/object_heap 仍指向预留洞之后。
         assert!(
             barrier_buf_ptr as u32 >= obj_table_ptr as u32,
             "barrier must start at/after handle table base"
@@ -88,38 +80,16 @@ fn independent_shadow_memory_layout() {
         );
         assert!(
             (obj_table_ptr as usize) >= data.len(),
-            "V2 handle table must start at/after compact string data end"
+            "handle table must start at/after compact string data end"
         );
         assert!(
             data.len() < 64 * 1024,
-            "V2 data segment must stay compact without V1 object_heap padding, got {}",
+            "data segment must stay compact without object_heap padding, got {}",
             data.len()
         );
         assert!(
             data.len() < object_heap_start as usize,
-            "V2 must not embed zero-filled object heap into active data segment"
-        );
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        assert!(
-            barrier_buf_ptr as u32 >= obj_table_ptr as u32,
-            "barrier must start at/after handle table base"
-        );
-        assert!(
-            object_heap_start as usize
-                >= barrier_buf_ptr as usize + GC_BARRIER_EVENT_BUFFER_SIZE as usize,
-            "object heap must start after barrier event buffer"
-        );
-        assert_eq!(
-            object_heap_start % GC_REGION_SIZE as i32,
-            0,
-            "object heap must start at a GC region boundary"
-        );
-        // 主内存 data 段不应再包含 256KiB 影子洞（object_heap 紧跟 barrier 对齐后即可）。
-        assert!(
-            data.len() >= object_heap_start as usize,
-            "data segment must cover up to object heap start"
+            "must not embed zero-filled object heap into active data segment"
         );
     }
 }

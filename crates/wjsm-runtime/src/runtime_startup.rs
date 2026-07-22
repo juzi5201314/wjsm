@@ -92,7 +92,6 @@ pub(crate) fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Resu
     Ok(module)
 }
 
-#[cfg_attr(feature = "managed-heap-v2", allow(dead_code))]
 pub(crate) fn startup_engine_config(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
@@ -272,7 +271,6 @@ fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &Wa
     let keys = create_native_callable(store.data(), NativeCallable::ArrayProtoKeys);
     let entries = create_native_callable(store.data(), NativeCallable::ArrayProtoEntries);
 
-    #[cfg(feature = "managed-heap-v2")]
     if store
         .data()
         .heap_access_v2()
@@ -388,22 +386,11 @@ pub(super) fn initialize_host_post_bootstrap(
     ensure_startup_object(store, generator_proto, "GeneratorPrototype")?;
     let generator_handle = value::decode_object_handle(generator_proto);
     let iterator_handle = value::decode_object_handle(iterator_proto);
-    #[cfg(feature = "managed-heap-v2")]
     store
         .data()
         .heap_access_v2()
         .set_prototype(generator_handle, iterator_handle)
         .map_err(|error| anyhow::anyhow!("V2 GeneratorPrototype prototype: {error}"))?;
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let Some(generator_ptr) =
-            resolve_handle_idx_with_env(store, wasm_env, generator_handle as usize)
-        else {
-            anyhow::bail!("startup allocation failed for GeneratorPrototype");
-        };
-        let data = wasm_env.memory.data_mut(&mut *store);
-        data[generator_ptr..generator_ptr + 4].copy_from_slice(&iterator_handle.to_le_bytes());
-    }
     let generator_tag = store_runtime_string_in_state(store.data(), "Generator".to_string());
     let _ = define_host_data_property_with_env(
         store,
@@ -443,23 +430,11 @@ pub(super) fn initialize_host_post_bootstrap(
     ensure_startup_object(store, async_gen_proto, "AsyncGeneratorPrototype")?;
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    #[cfg(feature = "managed-heap-v2")]
     store
         .data()
         .heap_access_v2()
         .set_prototype(async_gen_handle, async_iterator_handle)
         .map_err(|error| anyhow::anyhow!("V2 AsyncGeneratorPrototype prototype: {error}"))?;
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let Some(async_gen_ptr) =
-            resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize)
-        else {
-            anyhow::bail!("startup allocation failed for AsyncGeneratorPrototype");
-        };
-        let data = wasm_env.memory.data_mut(&mut *store);
-        data[async_gen_ptr..async_gen_ptr + 4]
-            .copy_from_slice(&async_iterator_handle.to_le_bytes());
-    }
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
     let _ = define_host_data_property_with_env(
         store,
@@ -607,118 +582,41 @@ fn enforce_heap_limit(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) -> Re
     Ok(())
 }
 
-fn align_gc_region_start(value: usize) -> Result<usize> {
-    let align = wjsm_ir::constants::GC_REGION_SIZE as usize;
-    value
-        .checked_add(align - 1)
-        .map(|v| v & !(align - 1))
-        .ok_or_else(|| anyhow::anyhow!("GC dynamic heap start exceeds address space"))
-}
-
 fn record_and_attach_gc_heap(
     store: &mut Store<RuntimeState>,
     wasm_env: &WasmEnv,
     immortal_objects_end: usize,
 ) -> Result<()> {
-    if cfg!(feature = "managed-heap-v2") {
-        #[cfg(feature = "managed-heap-v2")]
-        {
-            // V2：对象堆与 handle 表在 memory64 `__heap_memory`，主 memory 只承载字符串。
-            // 禁止再走 V1 attach（会把 memory32 heap_ptr/alloc 窗口/GC 元数据当成对象堆，
-            // 并可能在扫描/清扫时踩主内存字符串区）。
-            let string_end = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
-            let immortal_objects_end = immortal_objects_end.max(string_end);
-            store.data().store_heap_layout_boundaries(
-                immortal_objects_end,
-                immortal_objects_end,
-                0,
-            );
-            // 主内存 heap_ptr 保持字符串 tip，供 eval/runtime 模块 data 追加。
-            enforce_heap_limit(store, wasm_env)?;
-            let object_heap_base = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
-            let object_heap_capacity = store
-                .data()
-                .heap_access_v2()
-                .heap_limit_bytes()
-                .saturating_sub(object_heap_base);
-            let initial_trigger = (object_heap_capacity / 4)
-                .max(u64::from(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES))
-                .min(i32::MAX as u64) as i32;
-            if let Some(global) = wasm_env.gc_trigger_bytes {
-                global.set(&mut *store, Val::I32(initial_trigger))?;
-            }
-            store
-                .data()
-                .gc_scheduler
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .trigger_bytes = initial_trigger as usize;
-        }
-    } else {
-        let object_heap_start = wasm_env
-            .object_heap_start
-            .and_then(|g| g.get(&mut *store).i32())
-            .unwrap_or(0)
-            .max(0) as usize;
-        let immortal_objects_end = immortal_objects_end.max(object_heap_start);
-        let dynamic_heap_start = align_gc_region_start(immortal_objects_end)?;
-        if dynamic_heap_start > i32::MAX as usize {
-            anyhow::bail!("GC dynamic heap start exceeds wasm32 signed global range");
-        }
-        wasm_env
-            .heap_ptr
-            .set(&mut *store, Val::I32(dynamic_heap_start as i32))?;
-        // barrier 位于主内存 handle table 之后（不再嵌在 shadow 区后）。
-        let barrier_event_buf_base = wasm_env
-            .barrier_buf_ptr
-            .and_then(|g| g.get(&mut *store).i32())
-            .unwrap_or(0)
-            .max(0) as usize;
-        let barrier_event_buf_end = wasm_env
-            .barrier_buf_end
-            .and_then(|g| g.get(&mut *store).i32())
-            .map(|v| v.max(0) as usize)
-            .unwrap_or_else(|| {
-                barrier_event_buf_base + wjsm_ir::constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize
-            });
-        if barrier_event_buf_end > i32::MAX as usize {
-            anyhow::bail!("GC barrier buffer end exceeds wasm32 signed global range");
-        }
-        if let Some(global) = wasm_env.gc_alloc_bytes {
-            global.set(&mut *store, Val::I32(0))?;
-        }
-        if let Some(global) = wasm_env.gc_phase {
-            global.set(&mut *store, Val::I32(0))?;
-        }
-        if let Some(global) = wasm_env.good_color {
-            global.set(&mut *store, Val::I32(0))?;
-        }
-        if let Some(global) = wasm_env.barrier_buf_ptr {
-            global.set(&mut *store, Val::I32(barrier_event_buf_base as i32))?;
-        }
-        if let Some(global) = wasm_env.barrier_buf_end {
-            global.set(&mut *store, Val::I32(barrier_event_buf_end as i32))?;
-        }
-
-        store.data().store_heap_layout_boundaries(
-            immortal_objects_end,
-            dynamic_heap_start,
-            barrier_event_buf_base,
-        );
-        enforce_heap_limit(store, wasm_env)?;
-        let (_, attached_dynamic_heap_start, _) = store.data().heap_layout_boundaries();
-        if let Some(global) = wasm_env.gc_trigger_bytes {
-            global.set(
-                &mut *store,
-                Val::I32(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES as i32),
-            )?;
-        }
-
-        let gc_arc = store.data().gc_algorithm.clone();
-        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(store, wasm_env, gc.name());
-        gc.attach_heap(&mut gc_ctx, attached_dynamic_heap_start);
+    // V2：对象堆与 handle 表在 memory64 `__heap_memory`，主 memory 只承载字符串。
+    // 禁止再走 V1 attach（会把 memory32 heap_ptr/alloc 窗口/GC 元数据当成对象堆，
+    // 并可能在扫描/清扫时踩主内存字符串区）。
+    let string_end = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
+    let immortal_objects_end = immortal_objects_end.max(string_end);
+    store.data().store_heap_layout_boundaries(
+        immortal_objects_end,
+        immortal_objects_end,
+        0,
+    );
+    // 主内存 heap_ptr 保持字符串 tip，供 eval/runtime 模块 data 追加。
+    enforce_heap_limit(store, wasm_env)?;
+    let object_heap_base = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
+    let object_heap_capacity = store
+        .data()
+        .heap_access_v2()
+        .heap_limit_bytes()
+        .saturating_sub(object_heap_base);
+    let initial_trigger = (object_heap_capacity / 4)
+        .max(u64::from(wjsm_ir::constants::GC_INITIAL_TRIGGER_BYTES))
+        .min(i32::MAX as u64) as i32;
+    if let Some(global) = wasm_env.gc_trigger_bytes {
+        global.set(&mut *store, Val::I32(initial_trigger))?;
     }
+    store
+        .data()
+        .gc_scheduler
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .trigger_bytes = initial_trigger as usize;
     Ok(())
 }
 
@@ -733,7 +631,6 @@ pub(super) async fn setup_shared_env_and_support(
     let memory = Memory::new(&mut *store, MemoryType::new(8, None))?;
     linker.define(&*store, "env", "memory", memory)?;
 
-    #[cfg(feature = "managed-heap-v2")]
     {
         const CONTROL_BYTES: u64 = 64 * 1024;
         const DEFAULT_V2_HEAP_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -828,7 +725,6 @@ pub(super) async fn setup_shared_env_and_support(
         define_env_global(linker, store, name, ty, true, init);
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     {
         const CONTROL_BYTES: u64 = 64 * 1024;
         const DEFAULT_V2_HEAP_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -929,12 +825,7 @@ pub(super) async fn setup_shared_env_and_support(
 }
 
 fn emit_support_wasm_for_heap_mode(flavor: wjsm_backend_wasm::GcFlavor) -> anyhow::Result<Vec<u8>> {
-    #[cfg(feature = "managed-heap-v2")]
-    {
-        wjsm_backend_wasm::emit_support_module_managed_heap_v2(flavor)
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    wjsm_backend_wasm::emit_support_module(flavor)
+    wjsm_backend_wasm::emit_support_module_managed_heap_v2(flavor)
 }
 
 pub(super) fn define_env_global(

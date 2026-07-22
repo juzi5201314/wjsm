@@ -144,7 +144,6 @@ pub fn write_proto<C: AsContextMut<Data = RuntimeState>>(
     h: Handle,
     proto: u32,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let access = ctx.as_context().data().heap_access_v2().clone();
         if access.resolve_handle(h).is_ok() {
@@ -161,18 +160,6 @@ pub fn write_proto<C: AsContextMut<Data = RuntimeState>>(
     let old_val = proto_handle_to_value(old_proto);
     let new_val = proto_handle_to_value(proto);
     gc.on_host_write(&mut gc_ctx, h, slot_addr, old_val, new_val);
-    write_u32(&mut gc_ctx, slot_addr, proto)
-}
-
-/// 初始化尚未发布给 mutator 的对象 proto header；不触发 barrier。
-pub fn init_proto_at_ptr<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    ptr: usize,
-    proto: u32,
-) -> Option<()> {
-    let mut gc_ctx = GcContext::new(ctx, env, "heap-access-init");
-    let slot_addr = ptr.checked_add(constants::HEAP_OBJECT_PROTO_OFFSET as usize)?;
     write_u32(&mut gc_ctx, slot_addr, proto)
 }
 

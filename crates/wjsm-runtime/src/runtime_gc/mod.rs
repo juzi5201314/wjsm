@@ -70,49 +70,36 @@
 //! - `wjsm-semantic/src/lowerer_function_decls.rs`: Layer 3b 填充 known_callee_vars
 //!
 //! 详细设计见 plan.md。
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) mod active_v2;
 pub mod api;
-#[cfg(feature = "managed-heap-v2")]
 mod collector_context;
 pub mod context;
-#[cfg(feature = "managed-heap-v2")]
 mod control;
 pub mod g1;
 pub mod heap_access;
-#[cfg(feature = "managed-heap-v2")]
 mod heap_access_v2;
 pub mod heap_governance;
 pub mod mark_bitmap;
 pub mod mark_sweep;
-#[cfg(feature = "managed-heap-v2")]
 mod mutator;
 pub mod native_callable_refs;
 pub mod object_walker;
 pub mod registry;
 pub mod roots;
-#[cfg(feature = "managed-heap-v2")]
 mod roots_v2;
 pub mod scheduler;
 pub mod side_table_refs;
 pub mod telemetry;
 pub mod weak_refs;
-#[cfg(feature = "managed-heap-v2")]
 mod worker;
 pub mod zgc;
 
 pub use api::{GcAlgorithm, GcContext};
 pub use registry::GcAlgorithmKind;
 
-#[cfg(feature = "managed-heap-v2")]
 pub use collector_context::CollectorContext;
-#[cfg(feature = "managed-heap-v2")]
 pub use control::{GcRuntimeV2, RootSnapshot};
-#[cfg(feature = "managed-heap-v2")]
 pub use heap_access_v2::{HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property};
-#[cfg(feature = "managed-heap-v2")]
 pub use mutator::MutatorContext;
-#[cfg(feature = "managed-heap-v2")]
 pub use roots_v2::V2ConditionalRoots;
-#[cfg(feature = "managed-heap-v2")]
 pub use worker::{GcPacketKind, GcWorkPacket, GcWorkerPool, WorkerPoolError, WorkerPoolStats};

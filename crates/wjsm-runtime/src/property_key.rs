@@ -135,7 +135,6 @@ pub(crate) fn name_id_matches_runtime_string<C: AsContext<Data = RuntimeState>>(
     }
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn canonicalize_v2_name_id_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
     env: &WasmEnv,
@@ -203,7 +202,6 @@ pub(crate) fn symbol_value_to_name_id(symbol_val: i64) -> Option<u32> {
     }
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn canonicalize_v2_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     name_id: u32,

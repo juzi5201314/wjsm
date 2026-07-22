@@ -1,6 +1,7 @@
 use super::*;
 use crate::host_import_registry::SpecialHostImport;
 
+#[allow(dead_code)]
 impl Compiler {
     pub(crate) fn compile_array_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;

@@ -1,7 +1,5 @@
 //! Precise old→young remembered set, age, and in-place promotion.
 
-#![cfg(feature = "managed-heap-v2")]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use parking_lot::Mutex;

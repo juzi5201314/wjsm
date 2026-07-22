@@ -239,7 +239,6 @@ pub(crate) fn define_object_builtins(
                     depth += 1;
                 }
             }
-            #[cfg(feature = "managed-heap-v2")]
             {
                 let handle = handle_index_of(&mut caller, obj) as u32;
                 let access = caller.data().heap_access_v2();
@@ -307,7 +306,6 @@ pub(crate) fn define_object_builtins(
             } else {
                 to_object(&mut caller, obj)
             };
-            #[cfg(feature = "managed-heap-v2")]
             if value::is_js_object(boxed) || value::is_array(boxed) {
                 let Some(name_id) = object_property_name_id_from_key(&mut caller, prop) else {
                     return value::encode_bool(false);
@@ -476,7 +474,6 @@ fn object_seal_or_freeze_impl(
     if !prevent_extensions_impl(caller, obj) {
         return false;
     }
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = handle_index_of(caller, obj) as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -520,7 +517,6 @@ fn object_is_sealed_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> boo
     if is_extensible_impl(caller, obj) {
         return false;
     }
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = handle_index_of(caller, obj) as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -547,7 +543,6 @@ fn object_is_frozen_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> boo
     if !object_is_sealed_impl(caller, obj) {
         return false;
     }
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = handle_index_of(caller, obj) as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -671,7 +666,6 @@ fn read_property_by_string_key(
     key_val: i64,
 ) -> i64 {
     let key = get_string_value(caller, key_val);
-    #[cfg(feature = "managed-heap-v2")]
     {
         // own 数据属性优先；accessor 槽需触发 getter（与 gc_obj_get_v2 一致）。
         let handle = value::decode_handle(obj);

@@ -332,6 +332,7 @@ impl ZPageSpace {
     }
 }
 
+#[allow(dead_code)]
 pub fn recolor_live_obj_table_entries(
     data: &mut [u8],
     obj_table_ptr: usize,

@@ -13,6 +13,7 @@ use super::mark::{read_entry, write_entry};
 use super::page::{ZPAGE_SIZE, ZPageSpace};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(super) enum RelocateStep {
     Idle,
     Progress { remaining_estimate: usize },

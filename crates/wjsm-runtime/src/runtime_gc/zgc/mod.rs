@@ -1,48 +1,32 @@
-#[cfg(feature = "managed-heap-v2")]
 pub mod barrier;
 pub mod color;
-#[cfg(feature = "managed-heap-v2")]
 pub mod concurrent_relocate;
-#[cfg(feature = "managed-heap-v2")]
 pub mod director;
-#[cfg(feature = "managed-heap-v2")]
 pub mod host_roots;
 mod mark;
-#[cfg(feature = "managed-heap-v2")]
 pub mod old;
 pub mod page;
 mod relocate;
-#[cfg(feature = "managed-heap-v2")]
 pub mod remset;
-#[cfg(feature = "managed-heap-v2")]
 mod v2;
-#[cfg(feature = "managed-heap-v2")]
 pub mod young;
-#[cfg(feature = "managed-heap-v2")]
 pub use barrier::{
     BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, HeaderField, HeaderFieldKind,
     HeaderLayout, LoadBarrierOutcome, classify_entry, color_stored_value, load_barrier,
     prototype_field_kind, select_bulk_copy_mode, store_barrier,
     store_barrier_with_target_generation,
 };
-#[cfg(feature = "managed-heap-v2")]
 pub use concurrent_relocate::{
     ConcurrentRelocator, PageRelocationState, RelocationDescriptor, RelocationReport,
 };
-#[cfg(feature = "managed-heap-v2")]
 pub use director::{
     AssistBudget, DirectorDecision, DirectorGeneration, GcDirector, GenerationRates, StallEvent,
     StallReason,
 };
-#[cfg(feature = "managed-heap-v2")]
 pub use host_roots::{ConcurrentHostRoots, HostRootsReport, WeakState};
-#[cfg(feature = "managed-heap-v2")]
 pub use old::{OldController, OldPhase, OldReport};
-#[cfg(feature = "managed-heap-v2")]
 pub use remset::{PreciseRemset, publish_promotion};
-#[cfg(feature = "managed-heap-v2")]
 pub use v2::{ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome};
-#[cfg(feature = "managed-heap-v2")]
 pub use young::{YoungController, YoungPhase, YoungReport};
 
 use super::api::{
@@ -84,6 +68,7 @@ impl ZgcCollector {
         ctx.heap_limit().min(ctx.env.memory.data_size(&ctx.store))
     }
 
+    #[allow(dead_code)]
     fn attach_pages_and_recolor(&mut self, ctx: &mut GcContext<'_>) {
         let (_, dynamic_start, _) = ctx.with_state(|state| state.heap_layout_boundaries());
         self.pages.attach(dynamic_start, Self::committed_end(ctx));
@@ -187,6 +172,7 @@ impl ZgcCollector {
         Some(ptr)
     }
 
+    #[allow(dead_code)]
     fn sync_alloc_window(&mut self, ctx: &mut GcContext<'_>) {
         let (_, dynamic_start, _) = ctx.with_state(|state| state.heap_layout_boundaries());
         let ptr = ctx.heap_ptr().max(dynamic_start);

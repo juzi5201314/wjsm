@@ -23,6 +23,7 @@ use super::page::{ZPAGE_SIZE, ZPageSpace};
 const BARRIER_EVENT_SIZE: usize = constants::GC_BARRIER_EVENT_SIZE as usize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(super) enum MarkStep {
     Progress { remaining_estimate: usize },
     ReadyForMarkEnd,
@@ -101,6 +102,7 @@ impl ZMarkState {
         self.mark_roots_fixed_point(ctx, roots_provider, good);
     }
 
+    #[allow(dead_code)]
     pub(super) fn drain_incremental(
         &mut self,
         ctx: &mut GcContext<'_>,

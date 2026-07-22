@@ -146,6 +146,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalSet(local_idx));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn emit_resolve_callable_for_helper(
         &self,
         func: &mut Function,

@@ -70,7 +70,6 @@ impl Compiler {
                     page_size_log2: None,
                 }),
             );
-            #[cfg(feature = "managed-heap-v2")]
             imports.import(
                 "env",
                 wjsm_ir::HEAP_MEMORY_NAME,
@@ -112,9 +111,7 @@ impl Compiler {
             import_eval_global(&mut imports, "__good_color", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_end", ValType::I32, true);
-            #[cfg(feature = "managed-heap-v2")]
             import_v2_heap_globals(&mut imports);
-            #[cfg(feature = "managed-heap-v2")]
             import_support_helpers(&mut imports);
             // 与 runtime module 一样导入父模块 __table，使 FunctionRef 使用主表下标。
             imports.import(
@@ -155,7 +152,6 @@ impl Compiler {
                     page_size_log2: None,
                 }),
             );
-            #[cfg(feature = "managed-heap-v2")]
             imports.import(
                 "env",
                 wjsm_ir::HEAP_MEMORY_NAME,
@@ -207,7 +203,6 @@ impl Compiler {
             import_eval_global(&mut imports, "__good_color", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_ptr", ValType::I32, true);
             import_eval_global(&mut imports, "__barrier_buf_end", ValType::I32, true);
-            #[cfg(feature = "managed-heap-v2")]
             import_v2_heap_globals(&mut imports);
 
             // Normal mode 与 Eval V2 共用同一 support helper ABI。
@@ -235,7 +230,6 @@ impl Compiler {
             // 重新 export 父模块传入的 memory 和本模块 table。
             exports.export("memory", ExportKind::Memory, 0);
             exports.export(crate::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
-            #[cfg(feature = "managed-heap-v2")]
             exports.export(
                 wjsm_ir::HEAP_MEMORY_NAME,
                 ExportKind::Memory,
@@ -250,7 +244,6 @@ impl Compiler {
             // + table (idx 0) + 27 globals (idx 0..26)。
             exports.export("memory", ExportKind::Memory, 0);
             exports.export(crate::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
-            #[cfg(feature = "managed-heap-v2")]
             exports.export(
                 wjsm_ir::HEAP_MEMORY_NAME,
                 ExportKind::Memory,
@@ -260,7 +253,6 @@ impl Compiler {
             for (g, name) in ENV_GLOBAL_EXPORT_NAMES.iter().enumerate() {
                 exports.export(name, ExportKind::Global, g as u32);
             }
-            #[cfg(feature = "managed-heap-v2")]
             for (offset, name) in [
                 wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME,
                 wjsm_ir::HEAP_ALLOC_END_GLOBAL_NAME,
@@ -280,13 +272,8 @@ impl Compiler {
         // Normal mode 不再定义自己的 memory（已 import）；Eval mode 也不定义。
         let memory = MemorySection::new();
 
-        // Normal mode 与 V2 Eval 均导入 10 个 support helper。
-        let helper_import_count =
-            if mode == CompileMode::Normal || cfg!(feature = "managed-heap-v2") {
-                10
-            } else {
-                0
-            };
+        // Normal mode 与 Eval 均导入 10 个 support helper。
+        let helper_import_count = 10;
         let actual_import_count = host_import_specs().len() as u32 + helper_import_count;
         Self {
             module: Module::new(),

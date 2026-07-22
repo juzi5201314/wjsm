@@ -475,7 +475,6 @@ fn object_prototype(caller: &mut Caller<'_, RuntimeState>, object: i64) -> Optio
         return None;
     }
     // V2 heap：handle 解析为 handle id，原型必须走 HeapAccessV2，不能读线性内存 header。
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(object);
         let access = caller.data().heap_access_v2().clone();

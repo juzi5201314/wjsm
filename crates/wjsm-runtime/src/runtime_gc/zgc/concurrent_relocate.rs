@@ -1,7 +1,5 @@
 //! Concurrent relocation, mutator assist, and epoch reclaim for ZGC V2.
 
-#![cfg(feature = "managed-heap-v2")]
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};

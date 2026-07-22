@@ -3,24 +3,12 @@ name = "wjsm-gc-bench"
 version.workspace = true
 edition.workspace = true
 
-# managed-heap-v2 必须保持 opt-in 转发，绝不能在依赖声明里无条件启用：
-# cargo 的 feature 统一会把它泄漏进所有 `--workspace` 构建，导致全工作区
-# 测试静默切到开发中的 V2 堆（见 docs/aegis/work/2026-07-16-zgc-performance/
-# 32-root-cause-feature-unification.md）。
-[features]
-managed-heap-v2 = ["wjsm-runtime/managed-heap-v2"]
-
-# ADR 0010：性能证据只能产自 V2 ManagedHeap。bin 与契约测试都硬性要求
-# 该 feature；feature 关闭时 cargo 直接跳过这些 target 而不是构建失败，
-# 显式 `cargo run -p wjsm-gc-bench` 会得到标准的 required-features 报错。
 [[bin]]
 name = "wjsm-gc-bench"
 path = "src/main.rs"
-required-features = ["managed-heap-v2"]
 
 [[test]]
 name = "contracts"
-required-features = ["managed-heap-v2"]
 
 [dependencies]
 anyhow = { workspace = true }

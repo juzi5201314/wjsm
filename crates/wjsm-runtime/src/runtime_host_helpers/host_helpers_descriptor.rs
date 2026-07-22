@@ -129,7 +129,6 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
     {
         return false;
     }
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -182,19 +181,9 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
             .unwrap_or_else(|e| e.into_inner());
         set.insert(target as u64);
     }
-    #[cfg(feature = "managed-heap-v2")]
     {
         // V2 non-extensible 状态只由 side table 承载；resolve_handle 在 V2 下返回
         // handle id 而非线性内存指针，继续写 `ptr + 5` 会破坏 data segment。
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    if let Some(ptr) = resolve_handle(caller, target)
-        && let Some(Extern::Memory(memory)) = caller.get_export("memory")
-    {
-        let data = memory.data_mut(&mut *caller);
-        if ptr + 6 <= data.len() {
-            data[ptr + 5] = 1;
-        }
     }
     true
 }
@@ -238,7 +227,6 @@ fn descriptor_properties(
     caller: &mut Caller<'_, RuntimeState>,
     descriptor: i64,
 ) -> Option<[Option<i64>; 6]> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -337,7 +325,6 @@ pub(crate) fn get_target_descriptor(
     target: i64,
     name_id: u32,
 ) -> Option<PropertyDescriptor> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()

@@ -1,14 +1,9 @@
 use super::*;
 
 fn proxy_handler_trap(caller: &mut Caller<'_, RuntimeState>, handler: i64, name: &str) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     {
         read_host_data_property_v2(caller, handler, name).unwrap_or_else(value::encode_undefined)
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    resolve_handle(caller, handler)
-        .and_then(|handler_ptr| read_object_property_by_name(caller, handler_ptr, name))
-        .unwrap_or_else(value::encode_undefined)
 }
 
 pub(crate) fn define_property_on_normal_object(
@@ -32,7 +27,6 @@ pub(crate) fn define_property_on_normal_object(
     // V2 对象堆在 memory64；resolve_handle 返回 handle id 而非 memory32 指针，
     // 必须走 heap_access_v2，禁止继续写 main memory 槽。
     // 函数/闭包/bound 用 function_props handle（handle_index_of）。
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = handle_index_of(caller, target) as u32;
         if caller
@@ -218,7 +212,6 @@ pub(crate) fn define_property_on_normal_object(
 }
 
 /// V2 DefineProperty：读写均走 heap_access_v2，含 non-configurable invariants。
-#[cfg(feature = "managed-heap-v2")]
 fn define_property_on_v2_object(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -583,7 +576,6 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
         };
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = handle_index_of(caller, target) as u32;
         let access = caller.data().heap_access_v2();
@@ -971,7 +963,6 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     }
 
     let name_id = property_key_value_to_name_id(caller, prop, false);
-    #[cfg(feature = "managed-heap-v2")]
     if value::is_object(target)
         || value::is_array(target)
         || value::is_function(target)
@@ -1117,7 +1108,6 @@ macro_rules! caller_env_wrapper {
 
 #[inline]
 pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     {
         match crate::host_imports::allocate_v2_array_handle(caller, capacity) {
             Ok(handle) => value::encode_handle(value::TAG_ARRAY, handle),
@@ -1127,23 +1117,12 @@ pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) 
             }
         }
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        alloc_array_with_env(caller, &env, capacity)
-    }
 }
 
 #[inline]
 pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     {
         crate::alloc_host_object_v2(caller, capacity)
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        alloc_object_with_env(caller, &env, capacity)
     }
 }
 
@@ -1154,7 +1133,6 @@ pub(crate) fn set_array_elem(
     index: i32,
     val: i64,
 ) {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let Ok(index) = u32::try_from(index) else {
             return;
@@ -1164,11 +1142,6 @@ pub(crate) fn set_array_elem(
         {
             set_runtime_error(caller.data(), format!("V2 host array element: {error}"));
         }
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        set_array_elem_with_env(caller, &env, arr_val, index, val);
     }
 }
 
@@ -1269,7 +1242,6 @@ pub(crate) fn define_host_data_property_by_name_id_with_flags(
     val: i64,
     flags: i32,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -1415,7 +1387,6 @@ pub(crate) fn define_host_accessor_property_by_name_id_with_flags(
     setter: i64,
     attribute_flags: i32,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()

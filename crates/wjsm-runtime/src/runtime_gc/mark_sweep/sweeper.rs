@@ -207,6 +207,7 @@ fn finalize_free_regions(
     ctx.stats.freed_bytes = freed_bytes;
 }
 
+#[allow(dead_code)]
 pub(crate) fn prepare_lazy_sweep(
     collector: &MarkSweepCollector,
     ctx: &mut GcContext,

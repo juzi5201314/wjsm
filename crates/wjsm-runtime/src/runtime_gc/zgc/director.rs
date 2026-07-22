@@ -5,8 +5,6 @@
 //! runway, drives proportional mutator assist, and records structured stalls
 //! only when the relocation reserve is exhausted.
 
-#![cfg(feature = "managed-heap-v2")]
-
 use std::time::Duration;
 
 /// Which generation the director decision applies to.

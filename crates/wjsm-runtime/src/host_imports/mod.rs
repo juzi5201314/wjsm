@@ -55,7 +55,6 @@ mod core;
 mod fetch;
 mod fetch_core;
 mod fetch_http;
-#[cfg(feature = "managed-heap-v2")]
 mod gc;
 mod get_builtin_global_entry;
 mod math_number_error;
@@ -84,7 +83,6 @@ pub(crate) use core::{
     define_core, iterator_from_impl_async, iterator_value_impl, string_iter_advance_unit_pos,
     string_iter_current_value,
 };
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) use gc::{allocate_v2_array_handle, define_v2};
 
 pub(crate) use fetch::define_fetch;
@@ -99,7 +97,6 @@ pub(crate) use fetch_core::construct_request;
 pub(crate) use fetch_core::construct_response;
 pub(crate) use get_builtin_global_entry::define_get_builtin_global;
 pub(crate) use math_number_error::define_math_number_error;
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) use math_number_error::{
     primitive_bigint_get_method_impl, primitive_number_get_method_impl,
 };
@@ -129,7 +126,6 @@ pub(crate) use streams_writable::call_writable_stream_method_from_caller;
 pub(crate) use streams_writable::construct_writable_stream;
 pub(crate) use streams_writable::finish_writable_stream_close;
 pub(crate) use string_methods::define_string_methods;
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) use string_methods::primitive_string_get_property_impl;
 pub(crate) use timers_arrays::define_timers_arrays;
 pub(crate) use typedarray_new_methods::define_typedarray_new_methods;

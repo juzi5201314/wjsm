@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use std::time::Duration;
 
 use wasmtime::{MemoryType, SharedMemory};

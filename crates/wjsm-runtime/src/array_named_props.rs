@@ -28,16 +28,11 @@ fn default_data_property_flags() -> i32 {
 
 /// V2：属性键统一规范化（memory string → interned runtime string），使编译期
 /// name_id 与宿主 intern key 落在同一键空间；symbol / runtime id 原样保留。
-#[cfg(feature = "managed-heap-v2")]
 fn canonical_name_id(caller: &mut Caller<'_, RuntimeState>, name_id: u32) -> u32 {
     crate::property_key::canonicalize_v2_name_id(caller, name_id).unwrap_or(name_id)
 }
 
 /// V1：memory c-string 偏移即规范键（find/alloc 去重），无需转换。
-#[cfg(not(feature = "managed-heap-v2"))]
-fn canonical_name_id(_caller: &mut Caller<'_, RuntimeState>, name_id: u32) -> u32 {
-    name_id
-}
 
 impl ArrayNamedPropsStore {
     pub(crate) fn new() -> Self {
@@ -128,7 +123,6 @@ impl ArrayNamedPropsStore {
     /// `delete arr.<named>`：configurable=false → `Some(false)`；删除成功 →
     /// `Some(true)`；属性不存在 → `None`（调用方按规范返回 true）。
     /// V1 编译端 obj_delete 无数组分支，仅 V2 host 路由调用。
-    #[cfg(feature = "managed-heap-v2")]
     pub(crate) fn remove(
         caller: &mut Caller<'_, RuntimeState>,
         boxed: i64,
@@ -261,7 +255,6 @@ impl ArrayNamedPropsStore {
         symbols_only: bool,
     ) -> Vec<i64> {
         // V2：resolve_array_ptr 返回的 "ptr" 即 V2 handle，直接按 handle 收集。
-        #[cfg(feature = "managed-heap-v2")]
         if u32::try_from(arr_ptr).is_ok_and(|handle| {
             caller
                 .data()

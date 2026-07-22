@@ -3,21 +3,6 @@ use crate::wasm_env::WasmEnv;
 
 use wjsm_ir::constants;
 
-/// handle 表上界（barrier event buffer 基址），与 WASM guard 一致。
-fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(
-    env: &WasmEnv,
-    ctx: &mut C,
-) -> usize {
-    if let Some(g) = env.barrier_buf_end {
-        let end = g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-        return end.saturating_sub(constants::GC_BARRIER_EVENT_BUFFER_SIZE as usize);
-    }
-    if let Some(g) = env.object_heap_start {
-        return g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-    }
-    env.memory.data(&*ctx).len()
-}
-
 /// 确保影子栈（独立 shadow memory）有足够容量。
 /// 成功时可能 grow shadow memory 并更新 `__shadow_stack_end`；失败写 RangeError 返回 false。
 pub(crate) fn ensure_shadow_stack_capacity<C: AsContextMut<Data = RuntimeState>>(
@@ -100,20 +85,6 @@ fn set_shadow_stack_overflow<C: AsContextMut<Data = RuntimeState>>(
         .unwrap_or_else(|e| e.into_inner()) = Some(message);
 }
 
-pub(crate) fn host_handle_slot_fits<C: AsContextMut<Data = RuntimeState>>(
-    env: &WasmEnv,
-    ctx: &mut C,
-    candidate: u32,
-) -> bool {
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-    let need_end = obj_table_ptr
-        .saturating_add(
-            (candidate as usize).saturating_mul(constants::HANDLE_TABLE_ENTRY_SIZE as usize),
-        )
-        .saturating_add(constants::HANDLE_TABLE_ENTRY_SIZE as usize);
-    need_end <= handle_table_end_byte(env, ctx)
-}
-
 fn heap_limit_bytes<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, env: &WasmEnv) -> usize {
     env.heap_limit
         .and_then(|g| g.get(&mut *ctx).i32())
@@ -194,63 +165,6 @@ pub(crate) fn ensure_heap_allocation_bytes<C: AsContextMut<Data = RuntimeState>>
         }
     }
     true
-}
-
-fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    capacity: u32,
-    proto: u32,
-) -> i64 {
-    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let reused_handle = ctx.as_context().data().take_freed_handle_for_host();
-    let handle = reused_handle.unwrap_or(obj_table_count);
-    if reused_handle.is_none() && !host_handle_slot_fits(env, ctx, handle) {
-        return value::encode_undefined();
-    }
-    let size = constants::HEAP_OBJECT_HEADER_SIZE
-        .saturating_add(capacity.saturating_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE));
-    let Some(ptr) =
-        alloc_heap_region_for_host(ctx, env, size as usize, wjsm_ir::HEAP_TYPE_OBJECT, capacity)
-    else {
-        if let Some(handle) = reused_handle {
-            ctx.as_context()
-                .data()
-                .return_freed_handle_from_host(handle);
-        }
-        return value::encode_undefined();
-    };
-    let heap_ptr = ptr as u32;
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let slot_addr =
-        obj_table_ptr as usize + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-    if crate::runtime_gc::heap_access::init_proto_at_ptr(ctx, env, ptr, proto).is_none() {
-        ctx.as_context()
-            .data()
-            .return_freed_handle_from_host(handle);
-        return value::encode_undefined();
-    }
-    {
-        let data = env.memory.data_mut(&mut *ctx);
-        data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
-        data[ptr + constants::HEAP_OBJECT_HEADER_PAD_START as usize
-            ..ptr + constants::HEAP_OBJECT_HEADER_PAD_END as usize]
-            .fill(0);
-        data[ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize
-            ..ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize + 4]
-            .copy_from_slice(&capacity.to_le_bytes());
-        data[ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize
-            ..ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize + 4]
-            .copy_from_slice(&0u32.to_le_bytes());
-        data[slot_addr..slot_addr + constants::HANDLE_TABLE_ENTRY_SIZE as usize]
-            .copy_from_slice(&heap_ptr.to_le_bytes());
-    }
-    if reused_handle.is_none() {
-        let _ = env
-            .obj_table_count
-            .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
-    }
-    value::encode_object_handle(handle)
 }
 
 pub(crate) fn alloc_heap_region_without_gc<C: AsContextMut<Data = RuntimeState>>(
@@ -341,23 +255,12 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    if cfg!(feature = "managed-heap-v2") {
-        #[cfg(feature = "managed-heap-v2")]
-        {
-            let prototype = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
-            alloc_host_object_v2_with_env(ctx, env, capacity, prototype)
-        }
-        #[cfg(not(feature = "managed-heap-v2"))]
-        unreachable!("managed-heap-v2 feature dispatch is inconsistent")
-    } else {
-        let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
-        alloc_host_object_impl(ctx, env, capacity, proto)
-    }
+    let prototype = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
+    alloc_host_object_v2_with_env(ctx, env, capacity, prototype)
 }
 
 /// V2：host 侧对象分配 + publish；`prototype == u32::MAX` 表示 null 原型
 /// （与 heap 层 PROTO_NULL_SENTINEL 同值）。
-#[cfg(feature = "managed-heap-v2")]
 fn alloc_host_object_v2_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -408,7 +311,6 @@ fn alloc_host_object_v2_with_env<C: AsContextMut<Data = RuntimeState>>(
     value::encode_object_handle(handle as u32)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn alloc_host_object_v2(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
     let Some(handle) = take_v2_host_handle(caller) else {
         return value::encode_undefined();
@@ -448,7 +350,6 @@ pub(crate) fn alloc_host_object_v2(caller: &mut Caller<'_, RuntimeState>, capaci
     value::encode_object_handle(handle)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn take_v2_host_handle(caller: &mut Caller<'_, RuntimeState>) -> Option<u32> {
     let global = caller
         .get_export("__obj_table_count")
@@ -459,7 +360,6 @@ fn take_v2_host_handle(caller: &mut Caller<'_, RuntimeState>) -> Option<u32> {
     u32::try_from(current).ok()
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn v2_i32_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<i32> {
     caller
         .get_export(name)
@@ -467,13 +367,11 @@ fn v2_i32_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<i3
         .and_then(|global| global.get(&mut *caller).i32())
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn v2_i64_global<C: AsContextMut<Data = RuntimeState>>(ctx: &mut C, name: &str) -> Option<i64> {
     let global = ctx.as_context().data().static_heap_global_v2(name)?;
     global.get(&mut *ctx).i64()
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn set_v2_i64_global<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     name: &str,
@@ -485,7 +383,6 @@ fn set_v2_i64_global<C: AsContextMut<Data = RuntimeState>>(
     global.set(&mut *ctx, Val::I64(value as i64)).is_ok()
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn allocate_v2_object_bytes_with_context<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     bytes: u64,
@@ -540,7 +437,6 @@ pub(crate) fn allocate_v2_object_bytes_with_context<C: AsContextMut<Data = Runti
     Ok((start, end))
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn allocate_v2_object_bytes(
     caller: &mut Caller<'_, RuntimeState>,
     bytes: u64,
@@ -548,7 +444,6 @@ pub(crate) fn allocate_v2_object_bytes(
     allocate_v2_object_bytes_with_context(caller, bytes)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn ensure_v2_array_capacity(
     caller: &mut Caller<'_, RuntimeState>,
     handle: u32,
@@ -572,7 +467,6 @@ pub(crate) fn ensure_v2_array_capacity(
     Ok(())
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn set_v2_array_element(
     caller: &mut Caller<'_, RuntimeState>,
     handle: u32,
@@ -600,7 +494,6 @@ pub(crate) fn set_v2_array_element(
     Ok(())
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn push_v2_array_element(
     caller: &mut Caller<'_, RuntimeState>,
     handle: u32,
@@ -611,7 +504,6 @@ pub(crate) fn push_v2_array_element(
     Ok(length + 1)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn define_host_data_property_v2(
     caller: &mut Caller<'_, RuntimeState>,
     object: i64,
@@ -648,7 +540,6 @@ pub(crate) fn define_host_data_property_v2(
     }
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn define_host_accessor_property_v2(
     caller: &mut Caller<'_, RuntimeState>,
     object: i64,
@@ -682,7 +573,6 @@ fn define_host_accessor_property_v2(
     }
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn read_host_data_property_v2(
     caller: &mut Caller<'_, RuntimeState>,
     object: i64,
@@ -703,7 +593,6 @@ pub(crate) fn read_host_data_property_v2(
     }
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn v2_host_property_key(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
     let index = crate::property_key::intern_runtime_property_key(
         caller.data(),
@@ -718,16 +607,7 @@ pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    if cfg!(feature = "managed-heap-v2") {
-        #[cfg(feature = "managed-heap-v2")]
-        {
-            alloc_host_object_v2_with_env(ctx, env, capacity, u32::MAX)
-        }
-        #[cfg(not(feature = "managed-heap-v2"))]
-        unreachable!("managed-heap-v2 feature dispatch is inconsistent")
-    } else {
-        alloc_host_object_impl(ctx, env, capacity, u32::MAX)
-    }
+    alloc_host_object_v2_with_env(ctx, env, capacity, u32::MAX)
 }
 /// 各 Error 子类 prototype 对象（bootstrap 后由 `ensure_error_prototypes_initialized` 填充）。
 #[derive(Clone, Copy, Default)]
@@ -2028,7 +1908,6 @@ pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
 /// 读取 `@@toStringTag`；V2 下 resolve_handle 返回 handle id，必须走 HeapAccessV2 原型链。
 fn object_to_string_tag(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<i64> {
     let name_id = crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::TO_STRING_TAG);
-    #[cfg(feature = "managed-heap-v2")]
     {
         if value::is_js_object(obj) || value::is_array(obj) {
             let handle = value::decode_handle(obj);
@@ -2070,7 +1949,6 @@ pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, ob
     } else if value::is_object(obj) {
         let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize);
         if let Some(op) = obj_ptr {
-            #[cfg(feature = "managed-heap-v2")]
             {
                 let handle = value::decode_object_handle(obj) as u32;
                 let access = caller.data().heap_access_v2().clone();
@@ -2085,13 +1963,6 @@ pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, ob
                     if op + 4 < data.len() && data[op + 4] == wjsm_ir::HEAP_TYPE_ARGUMENTS {
                         return store_runtime_string(caller, "[object Arguments]".to_string());
                     }
-                }
-            }
-            #[cfg(not(feature = "managed-heap-v2"))]
-            if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
-                let data = mem.data(&caller);
-                if op + 4 < data.len() && data[op + 4] == wjsm_ir::HEAP_TYPE_ARGUMENTS {
-                    return store_runtime_string(caller, "[object Arguments]".to_string());
                 }
             }
             let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
@@ -2150,7 +2021,6 @@ pub(crate) fn define_host_data_property_from_caller(
     name: &str,
     val: i64,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -2170,7 +2040,6 @@ pub(crate) fn define_host_accessor_property_from_caller(
     getter: i64,
     setter: i64,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()

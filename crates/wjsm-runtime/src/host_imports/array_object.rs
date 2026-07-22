@@ -98,7 +98,6 @@ pub(crate) fn array_set_length_impl(
             write_array_hole(caller, ptr, i);
         }
     } else if new_len > old_len {
-        #[cfg(feature = "managed-heap-v2")]
         {
             let handle = value::decode_handle(arr);
             let access = caller.data().heap_access_v2().clone();
@@ -203,9 +202,7 @@ fn object_read_current_proto_handle(
     caller: &mut Caller<'_, RuntimeState>,
     obj: i64,
 ) -> Option<u32> {
-    #[cfg_attr(not(feature = "managed-heap-v2"), allow(unused_variables))]
     let handle = handle_index_of(caller, obj) as u32;
-    #[cfg(feature = "managed-heap-v2")]
     {
         let access = caller.data().heap_access_v2();
         if access.resolve_handle(handle).is_ok() {
@@ -234,7 +231,6 @@ fn object_write_proto_handle(
     proto_handle: u32,
 ) -> bool {
     let handle = handle_index_of(caller, obj) as u32;
-    #[cfg(feature = "managed-heap-v2")]
     {
         let access = caller.data().heap_access_v2();
         if access.resolve_handle(handle).is_ok() {
@@ -293,7 +289,6 @@ fn define_property_on_normal_object_for_create(
         );
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -513,7 +508,6 @@ fn read_object_property_by_string_key_simple(
     let Ok(name) = render_value(caller, key_val) else {
         return value::encode_undefined();
     };
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(obj);
         let access = caller.data().heap_access_v2().clone();
@@ -991,7 +985,6 @@ pub(crate) fn push_array_value(
     arr: i64,
     val: i64,
 ) -> Result<(), i64> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(arr);
         let access = caller.data().heap_access_v2().clone();
@@ -1022,25 +1015,6 @@ pub(crate) fn push_array_value(
     Ok(())
 }
 
-#[cfg(not(feature = "managed-heap-v2"))]
-/// 数组字面量 elision：length+1 并在新下标写入 hole。
-pub(crate) fn push_array_hole(caller: &mut Caller<'_, RuntimeState>, arr: i64) -> Result<(), i64> {
-    let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;
-    let len = read_array_length(caller, ptr).unwrap_or(0);
-    if array_length_would_overflow(len, 1) {
-        return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
-    }
-    let cap = read_array_capacity(caller, ptr).unwrap_or(0);
-    if len >= cap {
-        let Some(needed) = array_grow_capacity_u32(cap, len + 1) else {
-            return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
-        };
-        ptr = grow_array(caller, ptr, arr, needed).ok_or_else(value::encode_undefined)?;
-    }
-    write_array_hole(caller, ptr, len);
-    write_array_length(caller, ptr, len + 1);
-    Ok(())
-}
 
 async fn push_iterator_values_async(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1537,7 +1511,6 @@ pub(crate) fn define_array_object(
          args_base: i32,
          args_count: i32|
          -> i64 {
-            #[cfg(feature = "managed-heap-v2")]
             {
                 let handle = value::decode_handle(this_val);
                 let len = caller
@@ -1564,35 +1537,6 @@ pub(crate) fn define_array_object(
                         return value::encode_undefined();
                     }
                 }
-                value::encode_f64((len + count) as f64)
-            }
-            #[cfg(not(feature = "managed-heap-v2"))]
-            {
-                let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                    return value::encode_undefined();
-                };
-                let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-                let count = args_count as u32;
-                if array_length_would_overflow(len, count) {
-                    return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
-                }
-                let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
-                let mut ptr = ptr;
-                if len + count > cap {
-                    let Some(needed) = array_grow_capacity_u32(cap, len + count) else {
-                        return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
-                    };
-                    if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
-                        ptr = new_ptr;
-                    } else {
-                        return value::encode_undefined();
-                    }
-                }
-                for i in 0..count {
-                    let val = read_shadow_arg(&mut caller, args_base, i);
-                    write_array_elem(&mut caller, ptr, len + i, val);
-                }
-                write_array_length(&mut caller, ptr, len + count);
                 value::encode_f64((len + count) as f64)
             }
         },
@@ -1691,7 +1635,6 @@ pub(crate) fn define_array_object(
          args_base: i32,
          args_count: i32|
          -> i64 {
-            #[cfg(feature = "managed-heap-v2")]
             {
                 let handle = value::decode_handle(this_val);
                 let access = caller.data().heap_access_v2().clone();
@@ -2637,7 +2580,6 @@ pub(crate) fn define_array_object(
                     if current & 0x8000_0000 != 0 {
                         break; // proxy handle: 不走 obj_table，跳过
                     }
-                    #[cfg(feature = "managed-heap-v2")]
                     {
                         let access = caller.data().heap_access_v2();
                         if access.resolve_handle(current).is_ok() {

@@ -33,6 +33,7 @@ pub(crate) struct WasmEnv {
     pub gc_phase: Option<Global>,
     pub good_color: Option<Global>,
     pub barrier_buf_ptr: Option<Global>,
+    #[allow(dead_code)]
     pub barrier_buf_end: Option<Global>,
 }
 

@@ -246,7 +246,6 @@ pub(crate) fn resolve_handle_idx_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     handle_idx: usize,
 ) -> Option<usize> {
-    #[cfg(feature = "managed-heap-v2")]
     if ctx
         .as_context()
         .data()
@@ -267,7 +266,6 @@ pub(crate) fn resolve_array_ptr_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     val: i64,
 ) -> Option<usize> {
-    #[cfg(feature = "managed-heap-v2")]
     if value::is_array(val)
         && ctx
             .as_context()
@@ -288,7 +286,6 @@ pub(crate) fn read_array_length_with_env<C: AsContext<Data = RuntimeState>>(
     env: &WasmEnv,
     ptr: usize,
 ) -> Option<u32> {
-    #[cfg(feature = "managed-heap-v2")]
     if let Ok(length) = ctx
         .as_context()
         .data()
@@ -315,7 +312,6 @@ pub(crate) fn write_array_length_with_env<C: AsContextMut<Data = RuntimeState>>(
     ptr: usize,
     len: u32,
 ) {
-    #[cfg(feature = "managed-heap-v2")]
     if ctx
         .as_context()
         .data()
@@ -337,7 +333,6 @@ pub(crate) fn read_array_capacity(
     caller: &mut Caller<'_, RuntimeState>,
     ptr: usize,
 ) -> Option<u32> {
-    #[cfg(feature = "managed-heap-v2")]
     if let Ok((_, capacity)) = caller.data().heap_access_v2().array_shape(ptr as u32) {
         return Some(capacity);
     }
@@ -363,7 +358,6 @@ pub(crate) fn read_array_elem_raw_with_env<C: AsContext<Data = RuntimeState>>(
     ptr: usize,
     index: u32,
 ) -> Option<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     if let Ok(value) = ctx
         .as_context()
         .data()
@@ -422,7 +416,6 @@ pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     index: u32,
     val: i64,
 ) {
-    #[cfg(feature = "managed-heap-v2")]
     if ctx
         .as_context()
         .data()
@@ -543,7 +536,6 @@ pub(crate) fn read_object_property_by_name_proto_walk_with_env<
     prop_name: &str,
     visited: &mut std::collections::HashSet<usize>,
 ) -> Option<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = u32::try_from(obj_ptr).ok()?;
         let access = ctx.as_context().data().heap_access_v2().clone();
@@ -651,7 +643,6 @@ pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = Runti
     obj_ptr: usize,
     prop_name: &str,
 ) -> Option<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = u32::try_from(obj_ptr).ok()?;
         let access = ctx.as_context().data().heap_access_v2().clone();
@@ -756,7 +747,6 @@ fn find_property_slot_by_name_id_with_visibility<C: AsContextMut<Data = RuntimeS
     name_id: u32,
     private_slot: bool,
 ) -> Option<(usize, i32, i64)> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = u32::try_from(obj_ptr).ok()?;
         let access = ctx.as_context().data().heap_access_v2().clone();
@@ -849,24 +839,12 @@ pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = Runt
 }
 
 /// 从对象中按 name_id 查找类私有成员槽。
-#[cfg(not(feature = "managed-heap-v2"))]
-pub(crate) fn find_private_property_slot_by_name_id_with_env<
-    C: AsContextMut<Data = RuntimeState>,
->(
-    ctx: &mut C,
-    env: &WasmEnv,
-    obj_ptr: usize,
-    name_id: u32,
-) -> Option<(usize, i32, i64)> {
-    find_property_slot_by_name_id_with_visibility(ctx, env, obj_ptr, name_id, true)
-}
 
 pub(crate) fn read_object_property_by_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
     name_id: u32,
 ) -> Option<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = u32::try_from(obj_ptr).ok()?;
         let access = caller.data().heap_access_v2().clone();
@@ -910,7 +888,6 @@ pub(crate) fn write_object_property_by_name_id(
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let handle = handle_index_of(caller, obj_handle) as u32;
     // V2：find 返回哨兵 slot_offset，不能再按线性槽偏移写。
-    #[cfg(feature = "managed-heap-v2")]
     {
         let access = caller.data().heap_access_v2().clone();
         if access.resolve_handle(handle).is_ok() {
@@ -1018,176 +995,6 @@ pub(crate) fn write_object_property_by_name_id(
 }
 
 /// 在对象上安装或合并私有访问器槽（ES 类私有 getter/setter）。
-#[cfg(not(feature = "managed-heap-v2"))]
-pub(crate) fn write_private_accessor_slot(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj_ptr: usize,
-    obj_handle: i64,
-    name_id: u32,
-    getter: i64,
-    setter: i64,
-) {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let handle = handle_index_of(caller, obj_handle) as u32;
-    let undef = value::encode_undefined();
-    let accessor_flags = constants::FLAG_PRIVATE | constants::FLAG_IS_ACCESSOR;
-    if let Some((slot_offset, flags, _)) =
-        find_private_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
-    {
-        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
-        if (flags & constants::FLAG_IS_ACCESSOR) != 0 {
-            if !value::is_undefined(getter) {
-                let _ = crate::runtime_gc::heap_access::write_property_slot(
-                    caller,
-                    &env,
-                    handle,
-                    slot_idx,
-                    crate::runtime_gc::heap_access::SlotPart::Getter,
-                    getter,
-                );
-            }
-            if !value::is_undefined(setter) {
-                let _ = crate::runtime_gc::heap_access::write_property_slot(
-                    caller,
-                    &env,
-                    handle,
-                    slot_idx,
-                    crate::runtime_gc::heap_access::SlotPart::Setter,
-                    setter,
-                );
-            }
-        } else {
-            {
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return;
-                };
-                let data = memory.data_mut(&mut *caller);
-                if slot_offset + 32 > data.len() {
-                    return;
-                }
-                data[slot_offset + 4..slot_offset + 8]
-                    .copy_from_slice(&accessor_flags.to_le_bytes());
-            }
-            let _ = crate::runtime_gc::heap_access::write_property_slot(
-                caller,
-                &env,
-                handle,
-                slot_idx,
-                crate::runtime_gc::heap_access::SlotPart::Value,
-                undef,
-            );
-            let _ = crate::runtime_gc::heap_access::write_property_slot(
-                caller,
-                &env,
-                handle,
-                slot_idx,
-                crate::runtime_gc::heap_access::SlotPart::Getter,
-                getter,
-            );
-            let _ = crate::runtime_gc::heap_access::write_property_slot(
-                caller,
-                &env,
-                handle,
-                slot_idx,
-                crate::runtime_gc::heap_access::SlotPart::Setter,
-                setter,
-            );
-        }
-        return;
-    }
-
-    let (capacity, num_props) = {
-        let data = env.memory.data(&*caller);
-        if obj_ptr + 16 > data.len() {
-            return;
-        }
-        let cap = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]) as usize;
-        let num = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize;
-        (cap, num)
-    };
-    if num_props >= capacity {
-        let Some(new_cap) = grown_object_capacity(capacity, 4) else {
-            return;
-        };
-        if grow_object(caller, obj_ptr, obj_handle, new_cap).is_none() {
-            return;
-        }
-    }
-    let Some(actual_ptr) = resolve_handle_idx_with_env(caller, &env, handle as usize) else {
-        return;
-    };
-    let num_props = {
-        let data = env.memory.data(&*caller);
-        if actual_ptr + 16 > data.len() {
-            return;
-        }
-        u32::from_le_bytes([
-            data[actual_ptr + 12],
-            data[actual_ptr + 13],
-            data[actual_ptr + 14],
-            data[actual_ptr + 15],
-        ]) as usize
-    };
-    let slot_idx = num_props;
-    let slot_offset = actual_ptr + 16 + slot_idx * 32;
-    let g = if value::is_undefined(getter) {
-        undef
-    } else {
-        getter
-    };
-    let s = if value::is_undefined(setter) {
-        undef
-    } else {
-        setter
-    };
-    {
-        let data = env.memory.data_mut(&mut *caller);
-        if slot_offset + 32 > data.len() {
-            return;
-        }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&accessor_flags.to_le_bytes());
-    }
-    let _ = crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Value,
-        undef,
-    );
-    let _ = crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Getter,
-        g,
-    );
-    let _ = crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Setter,
-        s,
-    );
-    let data = env.memory.data_mut(&mut *caller);
-    if actual_ptr + 16 <= data.len() {
-        data[actual_ptr + 12..actual_ptr + 16]
-            .copy_from_slice(&((num_props + 1) as u32).to_le_bytes());
-    }
-}
 
 /// 读取对象/函数的所有属性名，用于 for...in 枚举
 pub(crate) fn enumerate_object_keys(
@@ -1206,7 +1013,6 @@ pub(crate) fn enumerate_object_keys(
 
     // V2：ptr 即 handle，主存槽位扫描会读到垃圾；走 V2 形状感知的收集器
     // （enumerable_only=false 与下方 V1 扫描的"非 private 全收"语义一致）。
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -1283,7 +1089,6 @@ pub(crate) fn allocate_descriptor_object(
     getter: i64,
     setter: i64,
 ) -> Option<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let desc = crate::alloc_host_object_v2(caller, 6);
         if !value::is_object(desc) {
@@ -1302,138 +1107,6 @@ pub(crate) fn allocate_descriptor_object(
         define(caller, "enumerable", value::encode_bool(enumerable))?;
         define(caller, "configurable", value::encode_bool(configurable))?;
         Some(desc)
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let env = WasmEnv::from_caller(caller)?;
-        let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
-        let obj_table_count = env.obj_table_count.get(&mut *caller).i32().unwrap_or(0) as usize;
-
-        // 对象大小：16 (header) + 4 * 32 (slots) = 144 bytes
-        let obj_size = 16 + 4 * 32;
-        let handle_idx = obj_table_count;
-
-        let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
-            caller,
-            &env,
-            obj_size,
-            wjsm_ir::HEAP_TYPE_OBJECT,
-            4,
-        )?;
-        crate::runtime_gc::heap_access::init_proto_at_ptr(caller, &env, heap_ptr, 0u32)?;
-        {
-            let data = env.memory.data_mut(&mut *caller);
-
-            // 初始化 header: proto=0, type=OBJECT, pad=0, capacity=4, num_props=0
-            // proto initialized through heap_access owner
-            data[heap_ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT; // type byte
-            data[heap_ptr + 5..heap_ptr + 8].fill(0); // pad bytes
-            data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&4u32.to_le_bytes()); // capacity
-            data[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&0u32.to_le_bytes()); // num_props
-
-            // 注册到 handle 表
-            let slot_addr = obj_table_ptr + handle_idx * 4;
-            if slot_addr + 4 <= data.len() {
-                data[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
-            }
-        }
-
-        {
-            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
-                return None;
-            };
-            let _ = g.set(&mut *caller, Val::I32((handle_idx + 1) as i32));
-        }
-
-        // 现在设置描述符对象的属性
-        let desc_ptr = heap_ptr;
-
-        // 写入属性的辅助闭包
-        let mut write_property = |name_id: u32, val: i64, flags: i32| -> Option<()> {
-            let num_props = {
-                let data = env.memory.data(&*caller);
-                u32::from_le_bytes([
-                    data[desc_ptr + 12],
-                    data[desc_ptr + 13],
-                    data[desc_ptr + 14],
-                    data[desc_ptr + 15],
-                ]) as usize
-            };
-            let slot_offset = desc_ptr + 16 + num_props * 32;
-            {
-                let data = env.memory.data_mut(&mut *caller);
-                if slot_offset + 32 > data.len() {
-                    return None;
-                }
-                data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-            }
-            let undef = value::encode_undefined();
-            crate::runtime_gc::heap_access::write_property_slot(
-                caller,
-                &env,
-                handle_idx as u32,
-                num_props,
-                crate::runtime_gc::heap_access::SlotPart::Value,
-                val,
-            )?;
-            crate::runtime_gc::heap_access::write_property_slot(
-                caller,
-                &env,
-                handle_idx as u32,
-                num_props,
-                crate::runtime_gc::heap_access::SlotPart::Getter,
-                undef,
-            )?;
-            crate::runtime_gc::heap_access::write_property_slot(
-                caller,
-                &env,
-                handle_idx as u32,
-                num_props,
-                crate::runtime_gc::heap_access::SlotPart::Setter,
-                undef,
-            )?;
-            let data = env.memory.data_mut(&mut *caller);
-            let new_num_props = (num_props + 1) as u32;
-            data[desc_ptr + 12..desc_ptr + 16].copy_from_slice(&new_num_props.to_le_bytes());
-            Some(())
-        };
-
-        // flags: enumerable 和 configurable
-        let base_flags: i32 =
-            (if enumerable { 1 << 1 } else { 0 }) | (if configurable { 1 } else { 0 });
-
-        if is_accessor {
-            // 访问器属性：get, set, enumerable, configurable
-            // writable flag 不适用于访问器属性
-            let get_flags = base_flags | (1 << 2); // writable=true for function values
-            write_property(constants::PROP_DESC_GET_OFFSET, getter, get_flags)?;
-            write_property(constants::PROP_DESC_SET_OFFSET, setter, get_flags)?;
-        } else {
-            // 数据属性：value, writable, enumerable, configurable
-            let writable_flags = base_flags | (if writable { 1 << 2 } else { 0 });
-            write_property(constants::PROP_DESC_VALUE_OFFSET, value, writable_flags)?;
-            write_property(
-                constants::PROP_DESC_WRITABLE_OFFSET,
-                value::encode_bool(writable),
-                base_flags | (1 << 2),
-            )?;
-        }
-
-        // enumerable 和 configurable 对于两种属性都要写
-        write_property(
-            constants::PROP_DESC_ENUMERABLE_OFFSET,
-            value::encode_bool(enumerable),
-            base_flags | (1 << 2),
-        )?;
-        write_property(
-            constants::PROP_DESC_CONFIGURABLE_OFFSET,
-            value::encode_bool(configurable),
-            base_flags | (1 << 2),
-        )?;
-
-        // 返回对象 handle
-        Some(value::encode_object_handle(handle_idx as u32))
     }
 }
 
@@ -2238,7 +1911,6 @@ fn collect_excluded_key_bytes(
 }
 
 /// V2 own 属性按 CopyDataProperties 语义读值：数据属性取 value，accessor 走 getter。
-#[cfg(feature = "managed-heap-v2")]
 fn v2_own_property_get_for_copy(
     caller: &mut Caller<'_, RuntimeState>,
     receiver: i64,
@@ -2280,7 +1952,6 @@ pub(crate) fn object_rest_impl(
 ) -> i64 {
     // V2：own slot 走 heap 层快照；数据属性取 value，accessor 走 getter
     // （CopyDataProperties 语义），排除键按字符串内容比较。
-    #[cfg(feature = "managed-heap-v2")]
     {
         let source_handle = handle_index_of(caller, obj) as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -2404,7 +2075,6 @@ pub(crate) fn object_rest_impl(
 }
 
 pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, source: i64) {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let dest_handle = handle_index_of(caller, dest) as u32;
         let source_handle = handle_index_of(caller, source) as u32;
@@ -2653,8 +2323,3 @@ caller_env_wrapper! {
     pub(crate) fn find_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_property_slot_by_name_id_with_env
 }
 
-#[cfg(not(feature = "managed-heap-v2"))]
-caller_env_wrapper! {
-    #[inline]
-    pub(crate) fn find_private_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_private_property_slot_by_name_id_with_env
-}

@@ -816,7 +816,6 @@ async fn serialize_json_property_async(
                 }
             }
         } else {
-            #[cfg(feature = "managed-heap-v2")]
             let v2_slots: Option<Vec<(u32, i64)>> = {
                 let handle = value::decode_object_handle(value) as u32;
                 let access = caller.data().heap_access_v2().clone();
@@ -844,8 +843,6 @@ async fn serialize_json_property_async(
                     None
                 }
             };
-            #[cfg(not(feature = "managed-heap-v2"))]
-            let v2_slots: Option<Vec<(u32, i64)>> = None;
             let slots: Vec<(u32, i64)> = if let Some(slots) = v2_slots {
                 slots
             } else {

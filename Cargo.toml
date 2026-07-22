@@ -72,7 +72,6 @@ wjsm-cli = { path = "crates/wjsm-cli" }
 
 [features]
 default = []
-managed-heap-v2 = ["wjsm-cli/managed-heap-v2"]
 
 [dev-dependencies]
 anyhow = { workspace = true }

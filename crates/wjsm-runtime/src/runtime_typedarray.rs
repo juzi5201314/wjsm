@@ -28,7 +28,6 @@ pub(crate) fn typedarray_entry_from_value(
         return None;
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(value_raw);
         if caller
@@ -73,7 +72,6 @@ pub(crate) fn typedarray_entry_from_value_with_env<C: AsContextMut<Data = Runtim
         return None;
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(value_raw);
         if ctx

@@ -62,6 +62,7 @@ pub trait GcAlgorithm: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// 实例化后一次性接管动态堆域 `[dynamic_start, heap_limit)`。
+    #[allow(dead_code)]
     fn attach_heap(&mut self, ctx: &mut GcContext, dynamic_start: usize);
 
     /// 分配 slow-path：返回线性内存 ptr，handle 注册仍由调用方完成。
@@ -73,6 +74,7 @@ pub trait GcAlgorithm: Send + Sync {
     ) -> Option<usize>;
 
     /// safepoint 轮询入口，按预算推进增量工作。
+    #[allow(dead_code)]
     fn safepoint_step(
         &mut self,
         ctx: &mut GcContext,
@@ -113,6 +115,7 @@ pub trait GcAlgorithm: Send + Sync {
         None
     }
 
+    #[allow(dead_code)]
     fn last_stats(&self) -> &GcStats;
 }
 

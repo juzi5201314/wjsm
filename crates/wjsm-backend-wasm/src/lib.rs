@@ -25,9 +25,9 @@ pub use support_module::{
     emit_support_module_with_heap_mode,
 };
 
-/// 本 crate 是否以 managed-heap-v2 feature 编译。
-/// 供 build-script 在 Cargo feature unification 后判断 support ABI。
-pub const MANAGED_HEAP_V2_ACTIVE: bool = cfg!(feature = "managed-heap-v2");
+/// 本 crate 始终使用 managed-heap-v2 ABI。
+/// 供 build-script 判断 support ABI。
+pub const MANAGED_HEAP_V2_ACTIVE: bool = true;
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 use wjsm_ir::{SHADOW_MEMORY_INDEX, SHADOW_MEMORY_NAME, SHADOW_STACK_INITIAL_SIZE};
@@ -403,7 +403,6 @@ fn import_eval_global(
     );
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn import_v2_heap_globals(imports: &mut ImportSection) {
     for name in [
         wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME,

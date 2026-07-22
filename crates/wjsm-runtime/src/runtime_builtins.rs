@@ -418,7 +418,6 @@ fn invoke_number_primitive_method(
 }
 
 fn array_like_length(caller: &mut Caller<'_, RuntimeState>, target: i64) -> u32 {
-    #[cfg(feature = "managed-heap-v2")]
     if value::is_array(target) {
         return caller
             .data()
@@ -456,13 +455,7 @@ fn create_array_like_iterator(
             kind,
         },
     );
-    #[cfg(feature = "managed-heap-v2")]
     let obj = alloc_host_object_v2(caller, 2);
-    #[cfg(not(feature = "managed-heap-v2"))]
-    let obj = {
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        alloc_host_object(caller, &env, 2)
-    };
     let self_fn = create_native_callable(caller.data(), NativeCallable::RegExpStringIteratorSelf);
     let _ = define_host_data_property_from_caller(caller, obj, "next", next);
     let _ = define_host_data_property_by_name_id(
@@ -480,13 +473,7 @@ pub(crate) fn create_raw_iterator_object(
 ) -> i64 {
     let next = create_native_callable(caller.data(), NativeCallable::RawIteratorNext { iterator });
     let self_fn = create_native_callable(caller.data(), NativeCallable::RegExpStringIteratorSelf);
-    #[cfg(feature = "managed-heap-v2")]
     let obj = alloc_host_object_v2(caller, 2);
-    #[cfg(not(feature = "managed-heap-v2"))]
-    let obj = {
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        alloc_host_object(caller, &env, 2)
-    };
     let _ = define_host_data_property_from_caller(caller, obj, "next", next);
     let _ = define_host_data_property_by_name_id(
         caller,
@@ -637,7 +624,6 @@ fn advance_array_like_iterator(
         idx
     };
     let element = if value::is_array(target) {
-        #[cfg(feature = "managed-heap-v2")]
         {
             caller
                 .data()
@@ -646,12 +632,6 @@ fn advance_array_like_iterator(
                 .ok()
                 .flatten()
                 .map(|element| element as i64)
-                .unwrap_or_else(value::encode_undefined)
-        }
-        #[cfg(not(feature = "managed-heap-v2"))]
-        {
-            resolve_handle(caller, target)
-                .and_then(|pointer| read_array_elem(caller, pointer, idx))
                 .unwrap_or_else(value::encode_undefined)
         }
     } else {
@@ -1240,23 +1220,13 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
         NativeCallable::GcCollect => {
-            // managed-heap-v2 下直接回收 active shared-memory64 heap；默认构建继续
-            // 使用 registry 选择的 memory32 collector。
             let env = crate::wasm_env::WasmEnv::from_caller(&mut *caller).expect("WasmEnv");
             let gc_arc = caller.data().gc_algorithm.clone();
             let algorithm = gc_arc
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .name();
-            #[cfg(feature = "managed-heap-v2")]
             let stats = crate::runtime_gc::active_v2::collect_full(&mut *caller, &env);
-            #[cfg(not(feature = "managed-heap-v2"))]
-            let stats = {
-                let mut gc = gc_arc.lock().unwrap_or_else(|error| error.into_inner());
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut *caller, &env, algorithm);
-                let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                gc.collect_full(&mut ctx, &mut roots as _)
-            };
             caller
                 .data()
                 .performance_forced_gc

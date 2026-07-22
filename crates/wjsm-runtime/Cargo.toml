@@ -6,14 +6,6 @@ edition.workspace = true
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
-# managed-heap-v2 直接转发到后端/支持 crate 的同名 feature。V1/V2 差异整体
-# 位于 wjsm-backend-wasm 内部的 cfg 分支；不存在独立的 V2 后端 crate。
-[features]
-managed-heap-v2 = [
-    "wjsm-backend-wasm/managed-heap-v2",
-    "wjsm-runtime-support/managed-heap-v2",
-]
-
 [dependencies]
 anyhow = { workspace = true }
 crossbeam-deque = "0.8.6"

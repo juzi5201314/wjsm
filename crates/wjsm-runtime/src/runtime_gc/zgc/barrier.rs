@@ -3,8 +3,6 @@
 //! Shared heap words use SeqCst atomics. NaN-box color bits (38–43) attach only
 //! to handle-backed references; non-reference values keep those bits zero.
 
-#![cfg(feature = "managed-heap-v2")]
-
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use parking_lot::Mutex;

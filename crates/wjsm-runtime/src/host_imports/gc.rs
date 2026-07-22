@@ -4,7 +4,6 @@ use wjsm_ir::value;
 
 use crate::RuntimeState;
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn allocate_v2_array_handle(
     caller: &mut Caller<'_, RuntimeState>,
     capacity: u32,
@@ -23,7 +22,6 @@ pub(crate) fn allocate_v2_array_handle(
     Ok(handle)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     linker.func_wrap(
         "env",
@@ -480,7 +478,6 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
 }
 
 /// 数值下标 → 规范化 V2 属性键（与 define_host_data_property_v2 同一 intern 表）。
-#[cfg(feature = "managed-heap-v2")]
 fn v2_index_property_key(caller: &Caller<'_, RuntimeState>, index: i32) -> u32 {
     crate::property_key::encode_runtime_string_name_id(
         crate::property_key::intern_runtime_property_key(
@@ -489,7 +486,6 @@ fn v2_index_property_key(caller: &Caller<'_, RuntimeState>, index: i32) -> u32 {
         ),
     )
 }
-#[cfg(feature = "managed-heap-v2")]
 fn property_key(caller: &mut Caller<'_, RuntimeState>, key: i32) -> wasmtime::Result<u32> {
     crate::property_key::canonicalize_v2_name_id(caller, key as u32).ok_or_else(|| {
         wasmtime::Error::msg(format!(
@@ -499,7 +495,6 @@ fn property_key(caller: &mut Caller<'_, RuntimeState>, key: i32) -> wasmtime::Re
     })
 }
 
-#[cfg(feature = "managed-heap-v2")]
 async fn read_v2_property_async(
     caller: &mut Caller<'_, RuntimeState>,
     receiver: i64,
@@ -524,7 +519,6 @@ async fn read_v2_property_async(
     .map_err(host_error)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
     let env = crate::WasmEnv::from_caller(caller)
         .ok_or_else(|| wasmtime::Error::msg("missing cached WasmEnv"))?;
@@ -611,7 +605,6 @@ fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime:
     Ok(handle)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn set_proxy_property_v2(
     caller: &mut Caller<'_, RuntimeState>,
     proxy: i64,
@@ -653,7 +646,6 @@ fn set_proxy_property_v2(
     Ok(())
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn set_proxy_target_property_v2(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -702,7 +694,6 @@ fn set_proxy_target_property_v2(
         .map_err(host_error)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn take_next_handle(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
     let env = crate::WasmEnv::from_caller(caller)
         .ok_or_else(|| wasmtime::Error::msg("missing cached WasmEnv"))?;
@@ -720,7 +711,6 @@ fn take_next_handle(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u
     Ok(current as u32)
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn host_error(error: impl std::fmt::Display) -> wasmtime::Error {
     wasmtime::Error::msg(error.to_string())
 }

@@ -8,7 +8,6 @@ pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeS
     name: &str,
     val: i64,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(obj);
         let access = ctx.as_context().data().heap_access_v2().clone();
@@ -59,7 +58,6 @@ pub(crate) fn define_host_data_property_by_name_id_with_env<
     val: i64,
     flags: i32,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(obj);
         let access = ctx.as_context().data().heap_access_v2().clone();
@@ -164,7 +162,6 @@ pub(crate) fn define_host_accessor_property_with_env<C: AsContextMut<Data = Runt
     getter: i64,
     setter: i64,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(obj);
         let access = ctx.as_context().data().heap_access_v2().clone();
@@ -308,13 +305,11 @@ pub(crate) fn name_id_to_runtime_property_string(
 }
 
 /// V2 handle 的 own 形状快照；非 V2 handle 返回 None（走 legacy memory32 布局）。
-#[cfg(feature = "managed-heap-v2")]
 enum V2OwnShape {
     Array { length: u32 },
     Object { slots: Vec<(u32, u32)> },
 }
 
-#[cfg(feature = "managed-heap-v2")]
 fn v2_own_shape(caller: &Caller<'_, RuntimeState>, obj_ptr: usize) -> Option<V2OwnShape> {
     let handle = u32::try_from(obj_ptr).ok()?;
     let access = caller.data().heap_access_v2();
@@ -331,7 +326,6 @@ fn v2_own_shape(caller: &Caller<'_, RuntimeState>, obj_ptr: usize) -> Option<V2O
 }
 
 /// V2 属性槽 → 过滤 private/enumerable/symbol 后的 name_id 列表。
-#[cfg(feature = "managed-heap-v2")]
 fn v2_filter_slot_name_ids(
     slots: Vec<(u32, u32)>,
     enumerable_only: bool,
@@ -347,7 +341,6 @@ fn v2_filter_slot_name_ids(
 }
 
 /// name_id 列表 → 规范排序的字符串键（整数索引升序在前，其余保持插入顺序）。
-#[cfg(feature = "managed-heap-v2")]
 fn property_name_strings_from_name_ids(
     caller: &mut Caller<'_, RuntimeState>,
     name_ids: Vec<u32>,
@@ -375,7 +368,6 @@ pub(crate) fn collect_own_property_names(
     obj_ptr: usize,
     enumerable_only: bool,
 ) -> Vec<String> {
-    #[cfg(feature = "managed-heap-v2")]
     if let Some(shape) = v2_own_shape(caller, obj_ptr) {
         return match shape {
             V2OwnShape::Array { length } => {
@@ -491,7 +483,6 @@ pub(crate) fn collect_own_property_string_key_values(
     obj_ptr: usize,
     enumerable_only: bool,
 ) -> Vec<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     if let Some(shape) = v2_own_shape(caller, obj_ptr) {
         return match shape {
             V2OwnShape::Array { length } => {
@@ -669,7 +660,6 @@ pub(crate) fn collect_own_property_values(
     obj_ptr: usize,
     enumerable_only: bool,
 ) -> Vec<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     if let Some(shape) = v2_own_shape(caller, obj_ptr) {
         let handle = obj_ptr as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -772,7 +762,6 @@ pub(crate) fn collect_own_property_key_values(
     obj_ptr: usize,
     symbols_only: bool,
 ) -> Vec<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     if let Some(shape) = v2_own_shape(caller, obj_ptr) {
         return match shape {
             V2OwnShape::Array { length } => {

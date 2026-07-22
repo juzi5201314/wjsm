@@ -1,4 +1,4 @@
-#![cfg(all(feature = "embedded", feature = "managed-heap-v2"))]
+#![cfg(feature = "embedded")]
 
 use wjsm_engine_config::{EngineConfig, compatibility_fingerprint};
 use wjsm_runtime_snapshot::EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI;

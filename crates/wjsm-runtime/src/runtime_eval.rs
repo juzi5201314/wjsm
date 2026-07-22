@@ -121,7 +121,6 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
             ExternType::Func(func_ty) => {
                 // V2 eval 与 Normal 模式一样 import wjsm_support helpers；
                 // 从已实例化的 support module 导出表解析，而不是父模块 re-export。
-                #[cfg(feature = "managed-heap-v2")]
                 if import.module() == "wjsm_support" {
                     let name = import.name();
                     let export = caller
@@ -144,7 +143,6 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
                 imports.push(func.into());
             }
             ExternType::Memory(_) => {
-                #[cfg(feature = "managed-heap-v2")]
                 if import.name() == wjsm_ir::HEAP_MEMORY_NAME {
                     imports.push(caller.data().static_main_memory_v2().into());
                 } else {
@@ -154,17 +152,8 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
                         .ok_or_else(|| anyhow::anyhow!("eval parent missing memory import"))?;
                     imports.push(memory.into());
                 }
-                #[cfg(not(feature = "managed-heap-v2"))]
-                {
-                    let memory = caller
-                        .get_export(import.name())
-                        .and_then(Extern::into_memory)
-                        .ok_or_else(|| anyhow::anyhow!("eval parent missing memory import"))?;
-                    imports.push(memory.into());
-                }
             }
             ExternType::Global(_) => {
-                #[cfg(feature = "managed-heap-v2")]
                 let global = caller
                     .data()
                     .static_heap_global_v2(import.name())
@@ -173,13 +162,6 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
                             .get_export(import.name())
                             .and_then(Extern::into_global)
                     })
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("eval parent missing global import `{}`", import.name())
-                    })?;
-                #[cfg(not(feature = "managed-heap-v2"))]
-                let global = caller
-                    .get_export(import.name())
-                    .and_then(Extern::into_global)
                     .ok_or_else(|| {
                         anyhow::anyhow!("eval parent missing global import `{}`", import.name())
                     })?;
@@ -2005,7 +1987,6 @@ pub(crate) fn set_host_data_property_from_caller(
     name: &str,
     val: i64,
 ) -> Option<()> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()

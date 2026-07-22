@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use wjsm_ir::value::{TAG_ARRAY, decode_handle, encode_handle, encode_object_handle};
 use wjsm_runtime::realm::{MicrotaskMode, Realm, RealmId, RealmIntrinsics};
 use wjsm_runtime::{

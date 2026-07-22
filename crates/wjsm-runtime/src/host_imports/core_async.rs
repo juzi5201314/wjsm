@@ -36,14 +36,7 @@ pub(crate) fn define_core_async(
                         "TypeError: Cannot perform 'has' on a proxy that has been revoked",
                     );
                 }
-                #[cfg(feature = "managed-heap-v2")]
                 let trap = read_host_data_property_v2(caller, entry.handler, "has")
-                    .unwrap_or_else(value::encode_undefined);
-                #[cfg(not(feature = "managed-heap-v2"))]
-                let trap = resolve_handle(caller, entry.handler)
-                    .and_then(|handler_ptr| {
-                        read_object_property_by_name(caller, handler_ptr, "has")
-                    })
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
                     let result = call_wasm_callback_async(
@@ -60,14 +53,12 @@ pub(crate) fn define_core_async(
             }
             return value::encode_bool(false);
         }
-        #[cfg(feature = "managed-heap-v2")]
         if value::is_array(object) {
             // Array exotic objects: integer indices live in the element vector, not
             // the property slot table. Fall through to op_in_impl for hole-aware
             // element presence + named props on the prototype chain.
             return op_in_impl(caller, object, prop);
         }
-        #[cfg(feature = "managed-heap-v2")]
         if value::is_js_object(object) {
             let Some(name_id) = property_key_value_to_name_id(caller, prop, false) else {
                 return value::encode_bool(false);

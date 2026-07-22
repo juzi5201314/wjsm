@@ -705,13 +705,8 @@ fn alloc_process_stream(
 }
 
 fn create_process_env_proxy(caller: &mut Caller<'_, RuntimeState>) -> Option<i64> {
-    #[cfg(not(feature = "managed-heap-v2"))]
-    let env = WasmEnv::from_caller(caller)?;
     let env_snapshot = caller.data().process.env.clone();
-    #[cfg(feature = "managed-heap-v2")]
     let target = alloc_host_object_v2(caller, env_snapshot.len() as u32);
-    #[cfg(not(feature = "managed-heap-v2"))]
-    let target = alloc_host_object(caller, &env, env_snapshot.len() as u32);
     let temp_root_len = caller.data().push_host_temp_roots([target]);
     for (key, value) in env_snapshot.iter() {
         let val = store_runtime_string(caller, value.clone());
@@ -733,10 +728,7 @@ fn create_process_env_proxy(caller: &mut Caller<'_, RuntimeState>) -> Option<i64
     }
     prevent_extensions_impl(caller, target);
 
-    #[cfg(feature = "managed-heap-v2")]
     let handler = alloc_host_object_v2(caller, 8);
-    #[cfg(not(feature = "managed-heap-v2"))]
-    let handler = alloc_host_object(caller, &env, 8);
     let _ = caller.data().push_host_temp_roots([handler]);
     attach_env_trap(caller, handler, "get", ProcessEnvTrapKind::Get);
     attach_env_trap(caller, handler, "set", ProcessEnvTrapKind::Set);

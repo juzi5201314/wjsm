@@ -2,10 +2,8 @@ mod concurrent_mark;
 mod mixed;
 mod region;
 mod rset;
-#[cfg(feature = "managed-heap-v2")]
 mod v2;
 mod young;
-#[cfg(feature = "managed-heap-v2")]
 pub use v2::{G1V2, G1V2CollectionKind, G1V2Error, G1V2Generation, G1V2Report};
 
 use super::api::{

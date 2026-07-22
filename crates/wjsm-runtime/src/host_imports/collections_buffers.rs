@@ -10,15 +10,10 @@ fn collection_handle_for_receiver(
     receiver: i64,
     name: &str,
 ) -> Option<usize> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         read_host_data_property_v2(caller, receiver, name)
             .map(|value| value::decode_f64(value) as usize)
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    resolve_handle_idx(caller, value::decode_object_handle(receiver) as usize)
-        .and_then(|object| read_object_property_by_name(caller, object, name))
-        .map(|value| value::decode_f64(value) as usize)
 }
 
 pub(crate) fn define_collections_buffers(
@@ -61,13 +56,7 @@ pub(crate) fn define_collections_buffers(
                         create_map_set_method(state, MapSetMethodKind::Entries),
                     )
                 };
-                #[cfg(feature = "managed-heap-v2")]
                 let obj = alloc_host_object_v2(&mut caller, 12);
-                #[cfg(not(feature = "managed-heap-v2"))]
-                let obj = {
-                    let wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                    alloc_host_object(&mut caller, &wjsm_env, 12)
-                };
                 if !value::is_object(obj) {
                     caller.data().release_unowned_map_entry(handle);
                     return obj;
@@ -228,13 +217,7 @@ pub(crate) fn define_collections_buffers(
                         create_map_set_method(state, MapSetMethodKind::Entries),
                     )
                 };
-                #[cfg(feature = "managed-heap-v2")]
                 let obj = alloc_host_object_v2(&mut caller, 12);
-                #[cfg(not(feature = "managed-heap-v2"))]
-                let obj = {
-                    let wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                    alloc_host_object(&mut caller, &wjsm_env, 12)
-                };
                 if !value::is_object(obj) {
                     caller.data().release_unowned_set_entry(handle);
                     return obj;

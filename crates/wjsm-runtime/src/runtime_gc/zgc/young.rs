@@ -1,7 +1,5 @@
 //! Concurrent young generation mark for ZGC V2.
 
-#![cfg(feature = "managed-heap-v2")]
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};

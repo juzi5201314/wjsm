@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use wjsm_runtime::{GcPacketKind, GcWorkPacket, HeapAddress, NativeHeapMemory};
 
 #[test]

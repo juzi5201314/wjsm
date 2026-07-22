@@ -28,6 +28,7 @@ enum MarkPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(super) enum MarkStep {
     Progress { remaining_estimate: usize },
     ReadyForRemark,
@@ -40,6 +41,7 @@ pub(super) struct ConcurrentMark {
     phase: MarkPhase,
     cycle_epoch: u64,
     started_at: Option<Instant>,
+    #[allow(dead_code)]
     ihop_percent: usize,
 }
 
@@ -97,6 +99,7 @@ impl ConcurrentMark {
         self.is_active().then_some(self.cycle_epoch)
     }
 
+    #[allow(dead_code)]
     pub(super) fn should_start(&self, ctx: &mut GcContext<'_>, regions: &RegionSpace) -> bool {
         if self.is_active() {
             return false;
@@ -127,6 +130,7 @@ impl ConcurrentMark {
         set_wasm_phase(ctx, GC_PHASE_MARK);
     }
 
+    #[allow(dead_code)]
     pub(super) fn drain_incremental(
         &mut self,
         ctx: &mut GcContext<'_>,
@@ -305,6 +309,7 @@ fn set_wasm_phase(ctx: &mut GcContext<'_>, phase: i32) {
     }
 }
 
+#[allow(dead_code)]
 fn old_occupancy_bytes(ctx: &mut GcContext<'_>, regions: &RegionSpace) -> usize {
     snapshot_mark_objects(ctx, regions, 0)
         .into_iter()
@@ -313,6 +318,7 @@ fn old_occupancy_bytes(ctx: &mut GcContext<'_>, regions: &RegionSpace) -> usize 
         .sum()
 }
 
+#[allow(dead_code)]
 fn ihop_triggered(old_bytes: usize, heap_limit: usize, percent: usize) -> bool {
     heap_limit != 0 && old_bytes.saturating_mul(100) >= heap_limit.saturating_mul(percent)
 }

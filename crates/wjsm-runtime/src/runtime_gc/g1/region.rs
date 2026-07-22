@@ -241,6 +241,7 @@ impl RegionSpace {
         true
     }
 
+    #[allow(dead_code)]
     pub fn eden_window(&self) -> Option<(usize, usize)> {
         let idx = self
             .meta

@@ -222,28 +222,3 @@ fn emitted_builtin_imports_have_registry_keys() {
         );
     }
 }
-
-#[cfg(not(feature = "managed-heap-v2"))]
-#[test]
-fn compiler_registry_matches_expected_import_count() {
-    let module = wjsm_parser::parse_module(r#"console.log('hello');"#).expect("parse");
-    let program = wjsm_semantic::lower_module(module, false).expect("lower");
-    let wasm = wjsm_backend_wasm::compile(&program).expect("compile");
-
-    let import_count = wasmparser::Parser::new(0)
-        .parse_all(&wasm)
-        .filter_map(|payload| match payload.expect("payload") {
-            wasmparser::Payload::ImportSection(s) => Some(s.count()),
-            _ => None,
-        })
-        .next()
-        .expect("import section");
-
-    // memory + __shadow_memory + table + 共享 globals
-    const SHARED_ENV_IMPORTS: usize = 1 + 1 + 1 + 27;
-    const SUPPORT_HELPER_IMPORTS: usize = 10; // obj_*/arr_*/elem_*/string_eq/to_int32/get_proto_from_ctor
-    assert_eq!(
-        import_count as usize,
-        host_import_specs().len() + SHARED_ENV_IMPORTS + SUPPORT_HELPER_IMPORTS
-    );
-}

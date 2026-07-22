@@ -12,8 +12,7 @@
 //! support module 的 global 索引与 user wasm 完全对齐（0..26），
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
 
-// V2 选择独立 dynamic helper ABI；默认 static helper 仍为 default backend 唯一实现。
-#![cfg_attr(feature = "managed-heap-v2", allow(dead_code))]
+#![allow(dead_code)]
 
 use crate::shared_types::build_shared_type_section;
 use anyhow::Result;
@@ -387,13 +386,10 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
 
 /// 生成指定 GC flavor 的 support module wasm bytes。
 ///
-/// 默认始终为 memory32/V1。feature unification 可能把 `managed-heap-v2` 打开，
-/// 但 build-dep 中的 V1 runtime 仍调用本入口；V2 必须走
-/// `emit_support_module_managed_heap_v2` / `emit_support_module_with_heap_mode(..., true)`。
+/// 默认始终为 memory64 V2 ABI。V1 路径仍可通过
+/// `emit_support_module_with_heap_mode(..., false)` 显式使用。
 pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
-    // all-features / managed-heap-v2 激活时，默认 emit 必须与 user wasm 共享
-    // memory64 heap import；否则 heap_memory64 与 runtime support 会分叉。
-    emit_support_module_with_heap_mode(flavor, cfg!(feature = "managed-heap-v2"))
+    emit_support_module_with_heap_mode(flavor, true)
 }
 
 /// 生成指定 GC flavor 的 support module wasm bytes。

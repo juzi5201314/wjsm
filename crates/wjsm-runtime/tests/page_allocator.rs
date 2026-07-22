@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use wjsm_runtime::{
     AllocationClass, ManagedAllocator, ManagedHeapLayout, Nlab, ObjectRef, PAGE_GRANULE_BYTES,
 };

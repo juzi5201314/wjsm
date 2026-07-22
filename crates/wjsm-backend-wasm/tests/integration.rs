@@ -17,6 +17,5 @@ mod startup_bootstrap_exports;
 #[path = "integration/var_slot_liveness_gc_long_loop.rs"]
 mod var_slot_liveness_gc_long_loop;
 
-#[cfg(feature = "managed-heap-v2")]
 #[path = "integration/heap_memory64.rs"]
 mod heap_memory64;

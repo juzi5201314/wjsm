@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(dead_code)]
 impl Compiler {
     pub(super) fn emit_handle_bounds_check(
         func: &mut Function,

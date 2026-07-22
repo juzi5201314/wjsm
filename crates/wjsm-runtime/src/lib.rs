@@ -16,8 +16,8 @@ use wasmtime::Func;
 use wasmtime::*;
 use wjsm_ir::{constants, value};
 
-/// 编译期是否激活 managed-heap V2 ABI（供 build-script 与 feature 统一对齐）。
-pub const MANAGED_HEAP_V2_ACTIVE: bool = cfg!(feature = "managed-heap-v2");
+/// 编译期是否激活 managed-heap V2 ABI（供 build-script 对齐校验）。
+pub const MANAGED_HEAP_V2_ACTIVE: bool = true;
 use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
 mod array_named_props;
@@ -29,24 +29,17 @@ pub use runtime_async_hooks::{
     AsyncHooksFlags, AsyncHooksState, CapturedScope, FrameId, HookRecord, ResourceMeta,
 };
 mod realm_clone;
-#[cfg(feature = "managed-heap-v2")]
 mod realm_clone_v2;
 pub use handle_remap::{
     FuncTableIndexRangePolicy, HandleMap, ObjectHandleMapPolicy, RemapPolicy, walk_and_remap_heap,
 };
 pub use realm_clone::{EvalRealmArrayProbe, ExecutionRealmFrameProbe, RealmCloneProbe};
-#[cfg(not(feature = "managed-heap-v2"))]
-pub use realm_clone::{
-    probe_clone_pristine_realm, probe_eval_array_literal_in_realm, probe_execution_realm_frame,
-};
-#[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
 pub use realm_clone_v2::{
     probe_clone_pristine_realm_v2 as probe_clone_pristine_realm,
     probe_eval_array_literal_in_realm_v2 as probe_eval_array_literal_in_realm,
     probe_execution_realm_frame_v2 as probe_execution_realm_frame, remap_realm_handles_v2,
 };
-#[cfg(feature = "managed-heap-v2")]
 mod heap;
 mod property_key;
 mod runtime_arguments;
@@ -61,7 +54,6 @@ mod runtime_date;
 mod runtime_encoding;
 mod runtime_eval;
 mod runtime_gc;
-#[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
 pub use heap::{
     Allocation, AllocationClass, AllocatorError, ColoredHandleEntry, EpochParticipant,
@@ -74,9 +66,7 @@ pub use heap::{
 };
 pub use runtime_bench::{SteadyStateExecution, execute_wasm_steady_state_for_bench};
 pub use runtime_gc::api::{CycleKind, GcStats};
-#[cfg(feature = "managed-heap-v2")]
 pub use runtime_gc::g1::{G1V2, G1V2CollectionKind, G1V2Error, G1V2Generation, G1V2Report};
-#[cfg(feature = "managed-heap-v2")]
 pub use runtime_gc::mark_sweep::{
     MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report,
 };
@@ -84,7 +74,6 @@ pub use runtime_gc::registry::GcAlgorithmKind;
 pub use runtime_gc::telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,
 };
-#[cfg(feature = "managed-heap-v2")]
 pub use runtime_gc::zgc::{
     AssistBudget, BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, ConcurrentHostRoots,
     ConcurrentRelocator, DirectorDecision, DirectorGeneration, GcDirector, GenerationRates,
@@ -95,7 +84,6 @@ pub use runtime_gc::zgc::{
     color_stored_value, load_barrier, prototype_field_kind, publish_promotion,
     select_bulk_copy_mode, store_barrier, store_barrier_with_target_generation,
 };
-#[cfg(feature = "managed-heap-v2")]
 #[doc(hidden)]
 pub use runtime_gc::{
     CollectorContext, GcPacketKind, GcRuntimeV2, GcWorkPacket, GcWorkerPool, HeapAccessV2,
@@ -613,14 +601,6 @@ static INSTALLED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
 static DEFAULT_MARK_SWEEP_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
     wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::MarkSweep)
 });
-#[cfg(not(feature = "managed-heap-v2"))]
-static DEFAULT_G1_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
-    wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::G1)
-});
-#[cfg(not(feature = "managed-heap-v2"))]
-static DEFAULT_ZGC_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
-    wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::Zgc)
-});
 
 /// 安装编译时嵌入的 support cwasm；进程内只需调用一次（重复 set 静默忽略）。
 /// 未显式调用时，`embedded_support_cwasm()` 使用 build-time 默认 artifact。
@@ -639,7 +619,6 @@ pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
 }
 
 pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let flavor = match kind {
             GcAlgorithmKind::MarkSweep => wjsm_runtime_support::SupportGcFlavor::MarkSweep,
@@ -647,12 +626,6 @@ pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]
             GcAlgorithmKind::Zgc => wjsm_runtime_support::SupportGcFlavor::Zgc,
         };
         wjsm_runtime_support::embedded_support_cwasm_v2(flavor)
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    match kind {
-        GcAlgorithmKind::MarkSweep => embedded_support_cwasm(),
-        GcAlgorithmKind::G1 => *DEFAULT_G1_SUPPORT_CWASM,
-        GcAlgorithmKind::Zgc => *DEFAULT_ZGC_SUPPORT_CWASM,
     }
 }
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
@@ -1143,11 +1116,8 @@ impl Clone for RuntimeState {
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
-            #[cfg(feature = "managed-heap-v2")]
             heap_access_v2: self.heap_access_v2.clone(),
-            #[cfg(feature = "managed-heap-v2")]
             static_main_memory_v2: self.static_main_memory_v2.clone(),
-            #[cfg(feature = "managed-heap-v2")]
             static_heap_globals_v2: self.static_heap_globals_v2.clone(),
             shadow_stack_max: self.shadow_stack_max,
             inspect: self.inspect.clone(),
@@ -1289,7 +1259,6 @@ impl Clone for RuntimeState {
 /// eval 编译缓存：code hash → (WASM bytes, source map id)
 type EvalCacheMap = HashMap<u64, (Vec<u8>, u32)>;
 
-#[cfg(feature = "managed-heap-v2")]
 #[derive(Clone)]
 struct StaticHeapGlobalsV2 {
     alloc_ptr: Global,
@@ -1352,13 +1321,10 @@ struct RuntimeState {
     /// 影子栈软上限（字节）。
     shadow_stack_max: usize,
     /// V2 dynamic heap canonical access owner；跨 host calls 复用 shared-memory handle。
-    #[cfg(feature = "managed-heap-v2")]
     heap_access_v2: Option<Arc<crate::runtime_gc::HeapAccessV2>>,
     /// V2 dynamic heap 的唯一 memory64 import，供 eval/runtime module 与主模块共享。
-    #[cfg(feature = "managed-heap-v2")]
     static_main_memory_v2: Option<SharedMemory>,
     /// V2 dynamic heap 的唯一 mutable globals，供 eval/runtime module 与主模块共享。
-    #[cfg(feature = "managed-heap-v2")]
     static_heap_globals_v2: Option<StaticHeapGlobalsV2>,
     /// CDP inspector 监听配置（来自 CLI `--inspect` / `--inspect-brk`）。
     inspect: Option<InspectConfig>,
@@ -1617,7 +1583,6 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
-    #[cfg(feature = "managed-heap-v2")]
     fn install_heap_access_v2(
         &mut self,
         access: Arc<crate::runtime_gc::HeapAccessV2>,
@@ -1627,19 +1592,16 @@ impl RuntimeState {
         self.static_main_memory_v2 = Some(memory);
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     fn install_heap_globals_v2(&mut self, globals: StaticHeapGlobalsV2) {
         self.static_heap_globals_v2 = Some(globals);
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     fn heap_access_v2(&self) -> &Arc<crate::runtime_gc::HeapAccessV2> {
         self.heap_access_v2
             .as_ref()
             .expect("V2 heap access must be installed before host calls")
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     fn static_main_memory_v2(&self) -> SharedMemory {
         self.static_main_memory_v2
             .as_ref()
@@ -1647,7 +1609,6 @@ impl RuntimeState {
             .clone()
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     fn static_heap_global_v2(&self, name: &str) -> Option<Global> {
         let globals = self.static_heap_globals_v2.as_ref()?;
         match name {
@@ -1863,20 +1824,6 @@ impl RuntimeState {
         self.handle_free_list.lock().ok()
     }
 
-    pub(crate) fn take_freed_handle_for_host(&self) -> Option<u32> {
-        self.handle_free_list
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop()
-    }
-
-    pub(crate) fn return_freed_handle_from_host(&self, handle: u32) {
-        self.handle_free_list
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(handle);
-    }
-
     /// 注册 resize（grow_array/grow_object）抛弃的旧区域 (ptr, old_size)。
     /// sweeper 读此并入 free list（P4-blocker #1）。
     pub(crate) fn abandon_region(&self, ptr: usize, size: usize) {
@@ -1969,11 +1916,8 @@ impl RuntimeState {
             js_global_object: AtomicI64::new(value::encode_undefined()),
             max_heap_size: None,
             shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
-            #[cfg(feature = "managed-heap-v2")]
             heap_access_v2: None,
-            #[cfg(feature = "managed-heap-v2")]
             static_main_memory_v2: None,
-            #[cfg(feature = "managed-heap-v2")]
             static_heap_globals_v2: None,
             inspect: None,
             compiler: None,

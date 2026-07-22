@@ -71,7 +71,6 @@ pub(crate) fn define_timers_arrays(
     let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
-            #[cfg(feature = "managed-heap-v2")]
             {
                 let mut caller = caller;
                 let handle = value::decode_handle(arr);
@@ -86,27 +85,12 @@ pub(crate) fn define_timers_arrays(
                     }
                 }
             }
-            #[cfg(not(feature = "managed-heap-v2"))]
-            {
-                let mut caller = caller;
-                match super::array_object::push_array_value(&mut caller, arr, val) {
-                    Ok(()) => {
-                        let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                            return value::encode_undefined();
-                        };
-                        let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-                        value::encode_f64(len as f64)
-                    }
-                    Err(exc) => exc,
-                }
-            }
         },
     );
     linker.define(&mut store, "env", "arr_push", f)?;
     let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            #[cfg(feature = "managed-heap-v2")]
             {
                 let mut caller = caller;
                 let handle = value::decode_handle(arr);
@@ -120,20 +104,6 @@ pub(crate) fn define_timers_arrays(
                         set_runtime_error(caller.data(), format!("V2 Array hole push: {error}"));
                         value::encode_undefined()
                     }
-                }
-            }
-            #[cfg(not(feature = "managed-heap-v2"))]
-            {
-                let mut caller = caller;
-                match super::array_object::push_array_hole(&mut caller, arr) {
-                    Ok(()) => {
-                        let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                            return value::encode_undefined();
-                        };
-                        let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-                        value::encode_f64(len as f64)
-                    }
-                    Err(exc) => exc,
                 }
             }
         },

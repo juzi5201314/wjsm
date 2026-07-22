@@ -41,7 +41,6 @@ fn get_array_proto_values(caller: &mut Caller<'_, RuntimeState>) -> i64 {
     }
     let array_proto_obj = value::encode_object_handle(handle as u32);
     let mut values = {
-        #[cfg(feature = "managed-heap-v2")]
         {
             let access = caller.data().heap_access_v2().clone();
             if access.resolve_handle(handle as u32).is_ok() {
@@ -60,12 +59,6 @@ fn get_array_proto_values(caller: &mut Caller<'_, RuntimeState>) -> i64 {
             } else {
                 value::encode_undefined()
             }
-        }
-        #[cfg(not(feature = "managed-heap-v2"))]
-        {
-            resolve_handle_idx_with_env(caller, &env, handle as usize)
-                .and_then(|ptr| read_object_property_by_name_with_env(caller, &env, ptr, "values"))
-                .unwrap_or_else(value::encode_undefined)
         }
     };
     if value::is_undefined(values) {
@@ -99,7 +92,6 @@ fn define_arguments_iterator_property(caller: &mut Caller<'_, RuntimeState>, obj
 /// 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测。
 /// V2 下 resolve_handle 返回 handle id 而非线性内存指针，必须走 HeapAccessV2 owner。
 fn override_arguments_heap_type(caller: &mut Caller<'_, RuntimeState>, obj: i64) {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = value::decode_handle(obj);
         let access = caller.data().heap_access_v2().clone();

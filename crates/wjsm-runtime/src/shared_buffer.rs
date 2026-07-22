@@ -192,7 +192,6 @@ fn set_sab_host_data_property(
 ) {
     // V2：define 路径本身覆写既有 key；V1 的 ptr 槽位扫描在 V2 handle 上会读到
     // 主存垃圾，绝不能进入。
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()

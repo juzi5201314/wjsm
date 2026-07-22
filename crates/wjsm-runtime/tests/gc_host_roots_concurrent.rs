@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use std::collections::BTreeSet;
 
 use wjsm_ir::value::encode_object_handle;

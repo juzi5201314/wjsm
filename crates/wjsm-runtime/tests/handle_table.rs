@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use wjsm_runtime::{
     HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleState,
     HandleTableV2, ManagedHeapLayout,

@@ -2,8 +2,6 @@
 //!
 //! Cleanup completes before handle quarantine; callbacks schedule after cycle publish.
 
-#![cfg(feature = "managed-heap-v2")]
-
 use std::collections::{BTreeSet, VecDeque};
 
 use parking_lot::Mutex;

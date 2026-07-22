@@ -152,7 +152,6 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
     } else {
         RuntimeString::from_utf8_str(&prop_str)
     };
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle =
             if value::is_function(object) || value::is_closure(object) || value::is_bound(object) {
@@ -702,7 +701,6 @@ async fn ordinary_has_instance_async(
         }
         handle_index_of(caller, regexp_proto) as u32
     } else {
-        #[cfg(feature = "managed-heap-v2")]
         {
             let handle = handle_index_of(caller, value) as u32;
             let access = caller.data().heap_access_v2();
@@ -731,26 +729,6 @@ async fn ordinary_has_instance_async(
                 ])
             }
         }
-        #[cfg(not(feature = "managed-heap-v2"))]
-        {
-            let current_ptr = match resolve_handle(caller, value) {
-                Some(p) => p,
-                None => return value::encode_bool(false),
-            };
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return value::encode_bool(false);
-            };
-            let data = memory.data(&*caller);
-            if current_ptr + 4 > data.len() {
-                return value::encode_bool(false);
-            }
-            u32::from_le_bytes([
-                data[current_ptr],
-                data[current_ptr + 1],
-                data[current_ptr + 2],
-                data[current_ptr + 3],
-            ])
-        }
     };
     // 遍历原型链（全程 handle 空间）：比较 current_proto 与 proto_target，
     // 不匹配则解析 handle → 堆指针 → 读取其 [[Prototype]] handle 继续。
@@ -761,7 +739,6 @@ async fn ordinary_has_instance_async(
         if current_proto == proto_target {
             return value::encode_bool(true);
         }
-        #[cfg(feature = "managed-heap-v2")]
         {
             let access = caller.data().heap_access_v2();
             if access.resolve_handle(current_proto).is_ok() {
@@ -1282,7 +1259,6 @@ pub(crate) fn define_core(
             };
             let name_id = key as u32;
 
-            #[cfg(feature = "managed-heap-v2")]
             {
                 let handle = handle_index_of(&mut caller, obj) as u32;
                 let access = caller.data().heap_access_v2().clone();
@@ -1715,103 +1691,34 @@ pub(crate) fn define_core(
     // gc_safepoint_poll()：WASM allocation debt 达阈值后调用的增量 GC safepoint。
     // 先 flush barrier buffer，再清零 __gc_alloc_bytes，然后按 scheduler budget 推进一步。
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
-        if cfg!(feature = "managed-heap-v2") {
-            #[cfg(feature = "managed-heap-v2")]
-            {
-                let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
-                    return;
-                };
-                if let Some(global) = env.gc_alloc_bytes {
-                    let _ = global.set(&mut caller, wasmtime::Val::I32(0));
-                }
-                let mut stats = crate::runtime_gc::active_v2::collect_full(&mut caller, &env);
-                let next_trigger = {
-                    let heap_limit = caller.data().heap_access_v2().heap_limit_bytes();
-                    let mut scheduler = caller
-                        .data()
-                        .gc_scheduler
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    scheduler.after_cycle(
-                        stats.heap_used_bytes,
-                        0,
-                        heap_limit.min(usize::MAX as u64) as usize,
-                    );
-                    scheduler.trigger_bytes.min(i32::MAX as usize).max(1) as i32
-                };
-                if let Some(global) = env.gc_trigger_bytes {
-                    let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
-                }
-                stats.pause_ns_max = 0;
-                stats.pause_ns_total = 0;
-                stats.pause_count = 0;
-                caller.data().store_last_gc_stats("managed-heap-v2", stats);
-            }
-        } else {
-            let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
-                return;
-            };
-            let (gc_arc, scheduler_arc) = {
-                let state = caller.data();
-                (state.gc_algorithm.clone(), state.gc_scheduler.clone())
-            };
-            {
-                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
-                gc.barrier_flush(&mut ctx);
-            }
-            let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
-            if barrier_event_buf_base != 0
-                && let Some(global) = env.barrier_buf_ptr
-            {
-                let _ = global.set(
-                    &mut caller,
-                    wasmtime::Val::I32(barrier_event_buf_base as i32),
-                );
-            }
-            if let Some(global) = env.gc_alloc_bytes {
-                let _ = global.set(&mut caller, wasmtime::Val::I32(0));
-            }
-            let budget = {
-                let scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
-                scheduler.budget()
-            };
-            let started = std::time::Instant::now();
-            let (outcome, stats, heap_limit, algorithm) = {
-                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let algorithm = gc.name();
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
-                let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                let outcome = gc.safepoint_step(&mut ctx, &mut roots as _, budget);
-                let heap_limit = ctx.heap_limit();
-                let stats = if matches!(outcome, crate::runtime_gc::api::StepOutcome::CycleComplete)
-                {
-                    Some(gc.last_stats().clone())
-                } else {
-                    None
-                };
-                (outcome, stats, heap_limit, algorithm)
-            };
-            let elapsed = started.elapsed();
-            let next_trigger = {
-                let mut scheduler = scheduler_arc.lock().unwrap_or_else(|e| e.into_inner());
-                scheduler.after_step(&outcome, elapsed);
-                if let Some(stats) = stats.as_ref() {
-                    scheduler.after_cycle(stats.heap_used_bytes, 0, heap_limit);
-                }
-                scheduler.trigger_bytes.min(i32::MAX as usize).max(1) as i32
-            };
-            if let Some(global) = env.gc_trigger_bytes {
-                let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
-            }
-            if let Some(mut stats) = stats {
-                stats.pause_ns_max = 0;
-                stats.pause_ns_total = 0;
-                stats.pause_count = 0;
-                stats.record_pause(elapsed);
-                caller.data().store_last_gc_stats(algorithm, stats);
-            }
+        let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
+            return;
+        };
+        if let Some(global) = env.gc_alloc_bytes {
+            let _ = global.set(&mut caller, wasmtime::Val::I32(0));
         }
+        let mut stats = crate::runtime_gc::active_v2::collect_full(&mut caller, &env);
+        let next_trigger = {
+            let heap_limit = caller.data().heap_access_v2().heap_limit_bytes();
+            let mut scheduler = caller
+                .data()
+                .gc_scheduler
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            scheduler.after_cycle(
+                stats.heap_used_bytes,
+                0,
+                heap_limit.min(usize::MAX as u64) as usize,
+            );
+            scheduler.trigger_bytes.min(i32::MAX as usize).max(1) as i32
+        };
+        if let Some(global) = env.gc_trigger_bytes {
+            let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
+        }
+        stats.pause_ns_max = 0;
+        stats.pause_ns_total = 0;
+        stats.pause_count = 0;
+        caller.data().store_last_gc_stats("managed-heap-v2", stats);
     });
     linker.define(&mut store, "env", "gc_safepoint_poll", f)?;
 

@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use loom::sync::Arc;
 use loom::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use loom::sync::mpsc;

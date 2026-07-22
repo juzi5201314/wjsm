@@ -153,7 +153,6 @@ pub(crate) async fn ordinary_set_by_name_id(
     name_id: u32,
     val: i64,
 ) -> bool {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let start_handle = handle_index_of(caller, obj) as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -361,7 +360,6 @@ pub(crate) fn reflect_has_impl(
     if !value::is_js_object(target) && !value::is_array(target) && !value::is_function(target) {
         return value::encode_bool(false);
     }
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle =
             if value::is_function(target) || value::is_closure(target) || value::is_bound(target) {
@@ -429,7 +427,6 @@ pub(crate) fn reflect_delete_property_impl(
     if value::is_array(target)
         && let Ok(index) = prop_name.parse::<u32>()
     {
-        #[cfg(feature = "managed-heap-v2")]
         {
             let handle = value::decode_handle(target);
             if caller
@@ -470,7 +467,6 @@ pub(crate) fn delete_property_by_name_id(
     target: i64,
     name_id: u32,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = handle_index_of(caller, target) as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -581,7 +577,6 @@ pub(crate) async fn extract_array_like_elements(
 ) -> Result<Vec<i64>, String> {
     let mut elements = Vec::new();
     if value::is_array(arr_like) {
-        #[cfg(feature = "managed-heap-v2")]
         {
             let handle = value::decode_array_handle(arr_like);
             let access = caller.data().heap_access_v2();
@@ -926,7 +921,6 @@ pub(crate) fn reflect_get_own_property_descriptor_impl(
     target: i64,
     prop: i64,
 ) -> i64 {
-    #[cfg(feature = "managed-heap-v2")]
     {
         let handle = handle_index_of(caller, target) as u32;
         let access = caller.data().heap_access_v2().clone();
@@ -1140,12 +1134,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
     if let Some(exc) = check_proxy_revoked(caller, &entry, "ownKeys") {
         return exc;
     }
-    #[cfg(feature = "managed-heap-v2")]
     let trap = read_host_data_property_v2(caller, entry.handler, "ownKeys")
-        .unwrap_or_else(value::encode_undefined);
-    #[cfg(not(feature = "managed-heap-v2"))]
-    let trap = resolve_handle(caller, entry.handler)
-        .and_then(|handler_ptr| read_object_property_by_name(caller, handler_ptr, "ownKeys"))
         .unwrap_or_else(value::encode_undefined);
     if value::is_undefined(trap) || value::is_null(trap) {
         return reflect_own_keys_impl(caller, entry.target);
@@ -1164,7 +1153,6 @@ pub(crate) async fn proxy_own_keys_trap_async(
         }
     };
     let ext = is_extensible_impl(caller, entry.target);
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -1331,7 +1319,6 @@ pub(crate) async fn proxy_own_keys_trap_async(
 }
 
 fn descriptor_enumerable(caller: &mut Caller<'_, RuntimeState>, descriptor: i64) -> Option<bool> {
-    #[cfg(feature = "managed-heap-v2")]
     if caller
         .data()
         .heap_access_v2()
@@ -1399,16 +1386,9 @@ async fn reflect_get_own_property_descriptor_on_object_async(
             if let Some(exc) = check_proxy_revoked(caller, &entry, "getOwnPropertyDescriptor") {
                 return exc;
             }
-            #[cfg(feature = "managed-heap-v2")]
             let trap =
                 read_host_data_property_v2(caller, entry.handler, "getOwnPropertyDescriptor")
                     .unwrap_or_else(value::encode_undefined);
-            #[cfg(not(feature = "managed-heap-v2"))]
-            let trap = resolve_handle(caller, entry.handler)
-                .and_then(|handler| {
-                    read_object_property_by_name(caller, handler, "getOwnPropertyDescriptor")
-                })
-                .unwrap_or_else(value::encode_undefined);
             if !value::is_undefined(trap) && !value::is_null(trap) {
                 let descriptor = match call_wasm_callback_async(
                     caller,

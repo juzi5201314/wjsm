@@ -514,7 +514,6 @@ where
 {
     define_caller_export(linker, caller, "env", "memory")?;
     define_caller_export(linker, caller, "env", wjsm_ir::SHADOW_MEMORY_NAME)?;
-    #[cfg(feature = "managed-heap-v2")]
     linker
         .define(
             &*caller,
@@ -528,7 +527,6 @@ where
                 format!("failed to link runtime V2 heap memory import: {error:?}"),
             )
         })?;
-    #[cfg(feature = "managed-heap-v2")]
     for name in wjsm_ir::V2_HEAP_GLOBAL_IMPORTS {
         let global = caller.data().static_heap_global_v2(name).ok_or_else(|| {
             RuntimeModuleLoadError::new(

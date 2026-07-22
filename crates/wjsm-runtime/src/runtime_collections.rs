@@ -16,23 +16,10 @@ fn collection_handles(
     caller: &mut Caller<'_, RuntimeState>,
     receiver: i64,
 ) -> (Option<i64>, Option<i64>) {
-    #[cfg(feature = "managed-heap-v2")]
     {
         (
             read_host_data_property_v2(caller, receiver, "__map_handle__"),
             read_host_data_property_v2(caller, receiver, "__set_handle__"),
-        )
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let Some(object) =
-            resolve_handle_idx(caller, value::decode_object_handle(receiver) as usize)
-        else {
-            return (None, None);
-        };
-        (
-            read_object_property_by_name(caller, object, "__map_handle__"),
-            read_object_property_by_name(caller, object, "__set_handle__"),
         )
     }
 }
@@ -130,56 +117,11 @@ async fn collect_iterator_object_values_async(
     caller: &mut Caller<'_, RuntimeState>,
     iterator: i64,
 ) -> Option<Vec<i64>> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         return collect_iterator_object_values_v2_async(caller, iterator).await;
     }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let iterator = if value::is_iterator(iterator) {
-            create_raw_iterator_object(caller, iterator)
-        } else {
-            iterator
-        };
-        let iter_ptr = resolve_handle(caller, iterator)?;
-        let next = read_object_property_by_name(caller, iter_ptr, "next")?;
-        if !value::is_callable(next) {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: iterator next is not callable".to_string(),
-            );
-            return None;
-        }
-        let mut out = Vec::new();
-        loop {
-            let result =
-                call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
-            if value::is_exception(result) {
-                return Some(vec![result]);
-            }
-            let Some(result_ptr) = resolve_handle(caller, result) else {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: iterator next must return an object".to_string(),
-                );
-                return None;
-            };
-            let done = read_object_property_by_name(caller, result_ptr, "done")
-                .map(nanbox_to_bool)
-                .unwrap_or(false);
-            if done {
-                break;
-            }
-            out.push(
-                read_object_property_by_name(caller, result_ptr, "value")
-                    .unwrap_or_else(value::encode_undefined),
-            );
-        }
-        Some(out)
-    }
 }
 
-#[cfg(feature = "managed-heap-v2")]
 async fn collect_iterator_object_values_v2_async(
     caller: &mut Caller<'_, RuntimeState>,
     iterator: i64,
@@ -236,7 +178,6 @@ fn map_entry_pair_from_value(
         );
         return None;
     }
-    #[cfg(feature = "managed-heap-v2")]
     {
         if value::is_array(entry_val) {
             let handle = value::decode_handle(entry_val);
@@ -258,21 +199,6 @@ fn map_entry_pair_from_value(
         let key = read_host_data_property_v2(caller, entry_val, "0")
             .unwrap_or_else(value::encode_undefined);
         let val = read_host_data_property_v2(caller, entry_val, "1")
-            .unwrap_or_else(value::encode_undefined);
-        Some((key, val))
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        if value::is_array(entry_val) {
-            let entry_ptr = resolve_handle(caller, entry_val)?;
-            let key = read_array_elem(caller, entry_ptr, 0).unwrap_or_else(value::encode_undefined);
-            let val = read_array_elem(caller, entry_ptr, 1).unwrap_or_else(value::encode_undefined);
-            return Some((key, val));
-        }
-        let entry_ptr = resolve_handle(caller, entry_val)?;
-        let key = read_object_property_by_name(caller, entry_ptr, "0")
-            .unwrap_or_else(value::encode_undefined);
-        let val = read_object_property_by_name(caller, entry_ptr, "1")
             .unwrap_or_else(value::encode_undefined);
         Some((key, val))
     }
@@ -471,7 +397,6 @@ async fn invoke_collection_callback_async(
     this_arg: i64,
     args: &[i64],
 ) -> Option<i64> {
-    #[cfg(feature = "managed-heap-v2")]
     {
         return match crate::runtime_host_helpers::call_wasm_callback_async(
             caller, callback, this_arg, args,
@@ -487,11 +412,6 @@ async fn invoke_collection_callback_async(
                 None
             }
         };
-    }
-    #[cfg(not(feature = "managed-heap-v2"))]
-    {
-        let env = WasmEnv::from_caller(caller)?;
-        invoke_resolved_callback_async_option(caller, &env, callback, this_arg, args).await
     }
 }
 

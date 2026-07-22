@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use wasmparser::{Parser, Payload};
 use wasmtime::{MemoryType, SharedMemory};
 use wjsm_engine_config::EngineConfig;

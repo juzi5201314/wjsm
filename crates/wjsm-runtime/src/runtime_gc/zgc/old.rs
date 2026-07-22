@@ -1,7 +1,5 @@
 //! Concurrent old generation mark spanning multiple young cycles.
 
-#![cfg(feature = "managed-heap-v2")]
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};

@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;

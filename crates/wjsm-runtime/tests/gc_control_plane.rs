@@ -1,5 +1,3 @@
-#![cfg(feature = "managed-heap-v2")]
-
 use wjsm_runtime::{CollectorContext, GcRuntimeV2, MutatorContext, RootSnapshot};
 
 fn assert_send_sync<T: Send + Sync>() {}

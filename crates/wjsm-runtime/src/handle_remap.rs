@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 
-#[cfg(feature = "managed-heap-v2")]
 use crate::heap::HandleId;
 use anyhow::Result;
 use wjsm_ir::constants::{
@@ -58,7 +57,6 @@ impl HandleMap {
         self.map.values().copied()
     }
 
-    #[cfg(feature = "managed-heap-v2")]
     pub fn remap_handle_v2(&self, handle: HandleId) -> HandleId {
         HandleId::new(self.get(handle.get()).unwrap_or(handle.get()))
     }
