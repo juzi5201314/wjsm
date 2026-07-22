@@ -5,8 +5,8 @@ use std::time::Duration;
 use wasmtime::{MemoryType, SharedMemory};
 use wjsm_engine_config::EngineConfig;
 use wjsm_runtime::{
-    ConcurrentRelocator, HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleTableV2,
-    HeaderLayout, ManagedHeapLayout, RelocationDescriptor, SharedHeapMemory,
+    ConcurrentRelocator, HANDLE_REGION_BYTES, HandleGeneration, HandleTableV2, HeaderLayout,
+    ManagedHeapLayout, RelocationDescriptor, SharedHeapMemory,
 };
 
 const PAGE: u64 = 64 * 1024;
