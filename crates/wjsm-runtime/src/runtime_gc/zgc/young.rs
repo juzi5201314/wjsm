@@ -45,7 +45,6 @@ struct YoungObjectMeta {
     generation: HandleGeneration,
     age: u8,
     references: Vec<Option<HandleId>>,
-    bytes: u64,
     dense: bool,
     humongous: bool,
 }
@@ -114,7 +113,6 @@ impl YoungController {
         handle: HandleId,
         generation: HandleGeneration,
         references: impl IntoIterator<Item = Option<HandleId>>,
-        bytes: u64,
         dense: bool,
         humongous: bool,
     ) {
@@ -124,7 +122,6 @@ impl YoungController {
                 generation,
                 age: 0,
                 references: references.into_iter().collect(),
-                bytes,
                 dense,
                 humongous,
             },
@@ -237,10 +234,6 @@ impl YoungController {
             report.concurrent_mark_ns = report.concurrent_mark_ns.saturating_add(elapsed_ns);
         }
         !self.pending.lock().is_empty() || !self.satb.is_empty()
-    }
-
-    fn is_old_root_edge(&self, _handle: HandleId) -> bool {
-        false
     }
 
     pub fn drain_satb(&self) {

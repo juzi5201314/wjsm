@@ -27,7 +27,6 @@ fn old_mark_starts_from_young_mark_start_and_spans_cycles() {
         young_root,
         HandleGeneration::Young,
         [Some(old_a)],
-        32,
         false,
         false,
     );

@@ -21,22 +21,15 @@ fn young_mark_start_snapshots_roots_and_enables_black_allocation() {
     let young = YoungController::new(8);
     let child = HandleId::new(2);
     let root = HandleId::new(1);
-    young.register_object(child, HandleGeneration::Young, [], 64, false, false);
-    young.register_object(
-        root,
-        HandleGeneration::Young,
-        [Some(child)],
-        64,
-        false,
-        false,
-    );
+    young.register_object(child, HandleGeneration::Young, [], false, false);
+    young.register_object(root, HandleGeneration::Young, [Some(child)], false, false);
     let pause = young.pause_mark_start(&roots([root]));
     assert!(pause < Duration::from_millis(1));
     assert_eq!(young.phase(), YoungPhase::ConcurrentMark);
     assert!(young.epoch().young_marking);
 
     let newborn = HandleId::new(3);
-    young.register_object(newborn, HandleGeneration::Young, [], 32, false, false);
+    young.register_object(newborn, HandleGeneration::Young, [], false, false);
     assert!(young.is_marked(newborn));
     assert_eq!(young.report().black_allocations, 1);
 }
@@ -47,16 +40,9 @@ fn young_satb_keeps_overwritten_reference_and_terminates() {
     let lost = HandleId::new(10);
     let root = HandleId::new(11);
     let kept = HandleId::new(12);
-    young.register_object(lost, HandleGeneration::Young, [], 16, false, false);
-    young.register_object(kept, HandleGeneration::Young, [], 16, false, false);
-    young.register_object(
-        root,
-        HandleGeneration::Young,
-        [Some(lost)],
-        32,
-        false,
-        false,
-    );
+    young.register_object(lost, HandleGeneration::Young, [], false, false);
+    young.register_object(kept, HandleGeneration::Young, [], false, false);
+    young.register_object(root, HandleGeneration::Young, [Some(lost)], false, false);
     young.pause_mark_start(&roots([root]));
     // mutator overwrites root.slot0 = kept, SATB must keep lost
     young.write_reference(root, 0, Some(kept), 0x100);
@@ -76,8 +62,8 @@ fn remset_old_to_young_write_overwrite_delete_and_dedup() {
     let young = YoungController::new(8);
     let old = HandleId::new(20);
     let young_obj = HandleId::new(21);
-    young.register_object(old, HandleGeneration::Old, [None], 64, false, false);
-    young.register_object(young_obj, HandleGeneration::Young, [], 64, false, false);
+    young.register_object(old, HandleGeneration::Old, [None], false, false);
+    young.register_object(young_obj, HandleGeneration::Young, [], false, false);
     young.write_reference(old, 0, Some(young_obj), 0x2000);
     young.write_reference(old, 0, Some(young_obj), 0x2000); // dedup
     young.write_reference(old, 0, None, 0x2000); // delete
@@ -98,9 +84,9 @@ fn promotion_dense_and_humongous_in_place() {
     let dense = HandleId::new(30);
     let humongous = HandleId::new(31);
     let sparse = HandleId::new(32);
-    young.register_object(dense, HandleGeneration::Young, [], 128, true, false);
-    young.register_object(humongous, HandleGeneration::Young, [], 4096, false, true);
-    young.register_object(sparse, HandleGeneration::Young, [], 64, false, false);
+    young.register_object(dense, HandleGeneration::Young, [], true, false);
+    young.register_object(humongous, HandleGeneration::Young, [], false, true);
+    young.register_object(sparse, HandleGeneration::Young, [], false, false);
     young.pause_mark_start(&roots([dense, humongous, sparse]));
     while young.concurrent_mark_step(8) {}
     young.pause_mark_end();
@@ -130,19 +116,12 @@ fn young_work_does_not_scale_with_old_heap_size() {
     let young = YoungController::new(16);
     // many old objects, few remset edges
     for i in 0..10_000u32 {
-        young.register_object(
-            HandleId::new(i),
-            HandleGeneration::Old,
-            [],
-            64,
-            false,
-            false,
-        );
+        young.register_object(HandleId::new(i), HandleGeneration::Old, [], false, false);
     }
     let root = HandleId::new(10_001);
     let child = HandleId::new(10_002);
-    young.register_object(child, HandleGeneration::Young, [], 64, false, false);
-    young.register_object(root, HandleGeneration::Old, [Some(child)], 64, false, false);
+    young.register_object(child, HandleGeneration::Young, [], false, false);
+    young.register_object(root, HandleGeneration::Old, [Some(child)], false, false);
     young.write_reference(root, 0, Some(child), 0x9000);
     young.pause_mark_start(&roots([root]));
     while young.concurrent_mark_step(32) {}
@@ -156,7 +135,7 @@ fn young_work_does_not_scale_with_old_heap_size() {
 fn pause_mark_phases_under_one_millisecond() {
     let young = YoungController::new(4);
     let root = HandleId::new(1);
-    young.register_object(root, HandleGeneration::Young, [], 8, false, false);
+    young.register_object(root, HandleGeneration::Young, [], false, false);
     let start = young.pause_mark_start(&roots([root]));
     while young.concurrent_mark_step(4) {}
     let end = young.pause_mark_end();

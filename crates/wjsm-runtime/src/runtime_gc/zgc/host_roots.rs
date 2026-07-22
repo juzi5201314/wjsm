@@ -4,7 +4,7 @@
 
 #![cfg(feature = "managed-heap-v2")]
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 
 use parking_lot::Mutex;
 
@@ -202,20 +202,4 @@ impl Default for ConcurrentHostRoots {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// helper used by tests to build live set maps.
-pub fn live_set_from_iter(handles: impl IntoIterator<Item = HandleId>) -> BTreeSet<HandleId> {
-    handles.into_iter().collect()
-}
-
-/// ensure side-table-only handles are not treated as strong roots.
-pub fn strong_roots_excluding_side_tables(
-    roots: impl IntoIterator<Item = HandleId>,
-    side_only: &BTreeMap<HandleId, ()>,
-) -> BTreeSet<HandleId> {
-    roots
-        .into_iter()
-        .filter(|handle| !side_only.contains_key(handle))
-        .collect()
 }
