@@ -437,12 +437,12 @@ cargo run -- run --gc g1 -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
 cargo run -- run --gc zgc -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
 ```
 
-- [ ] **Write activation audit**：确认Tasks 0–14均已有提交；运行`--workspace --all-features`并按owner归类V1 primordial/snapshot、function table、realm clone、eval/runtime module、host ABI、4-byte entry与memory32 dynamic heap残留；audit必须RED。
+- [x] **Write activation audit**：确认Tasks 0–14均已有提交；运行`--workspace --all-features`并按owner归类V1 primordial/snapshot、function table、realm clone、eval/runtime module、host ABI、4-byte entry与memory32 dynamic heap残留；audit必须RED。
 - [x] **Verify RED**：`cargo nextest run --workspace --all-features`为1274 passed、491 failed、1 timed out；主要证据为unresolved V2 handle、indirect-call type mismatch、legacy realm clone invalid handle及V2 property capacity。该结果推翻“先让pre-cutover all-features GREEN再切换”的原顺序。
-- [ ] **Implement activation**：先在单一V2 ABI内迁移primordial bootstrap/snapshot、function table、realm、eval/runtime module、全部host dynamic heap consumer；不得引入V1 fallback或第二runtime activation owner。
-- [ ] **Implement cutover**：所有active caller均已在V2上通过后，删除private feature定义/cfg、旧4-byte/memory32 dynamic heap main path与legacy collector context；三种公开`--gc`同时切换，不按collector拆分。
-- [ ] **Verify GREEN**：全部命令通过；active tree不含private gate、runtime fallback或两套dynamic heap owner。
-- [ ] **Commit**：`refactor: cut over all collectors to managed heap`。
+- [x] **Implement activation**：先在单一V2 ABI内迁移primordial bootstrap/snapshot、function table、realm、eval/runtime module、全部host dynamic heap consumer；不得引入V1 fallback或第二runtime activation owner。
+- [x] **Implement cutover**：所有active caller均已在V2上通过后，删除private feature定义/cfg、旧4-byte/memory32 dynamic heap main path与legacy collector context；三种公开`--gc`同时切换，不按collector拆分。
+- [x] **Verify GREEN**：全部命令通过；active tree不含private gate、runtime fallback或两套dynamic heap owner。
+- [x] **Commit**：`refactor: cut over all collectors to managed heap`（已有提交 `20136320` / `0466d276` / 后续 activation 修复；2026-07-23 补齐 GREEN 证据，并按用户要求删除全部 `.github/workflows`）。
 
 ---
 

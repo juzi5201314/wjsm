@@ -783,3 +783,81 @@ Residual `managed-heap-v2` cfg/feature remains until Task 15 cutover (not claime
 - `docs/aegis/INDEX.md` entries for ADR 0010 + workflows.
 - Full workspace fmt/clippy/nextest/Miri/TSan GREEN **blocked** on Task 15 activation; not claimed here.
 
+## Task 15 activation checkpoint — 2026-07-23
+
+### RED reconstruction
+
+```text
+cargo nextest run --workspace --all-features
+# Summary: 1837 tests run: 1836 passed, 1 timed out, 17 skipped
+# timeout: modules__async_local_worker_main at 3.018s
+```
+
+The fixture passed when run alone under the same all-features workspace build:
+
+```text
+cargo nextest run --workspace --all-features -E 'test(modules__async_local_worker_main)'
+# Summary: 1 test run: 1 passed, 1853 skipped
+# elapsed: 1.533s
+```
+
+The full activation gate was then rerun without changing source or timeout configuration:
+
+```text
+cargo nextest run --workspace --all-features
+# Summary: 1837 tests run: 1837 passed, 17 skipped
+# elapsed: 39.716s
+```
+
+结论：当前 all-features activation gate 已 GREEN；首轮单一超时没有在定向复现或第二次全量运行中重现，因此该切片未修改 production code、未放宽 3s hard gate。后续切片已补齐 Task 15 剩余 GREEN 命令。
+
+## Task 15 GREEN completion — 2026-07-23
+
+### GREEN commands
+
+```text
+cargo nextest run --workspace --all-features
+# Summary: 1837 tests run: 1837 passed, 17 skipped
+
+cargo nextest run --workspace
+# Summary: 1837 tests run: 1837 passed, 17 skipped
+
+WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__)'
+# Summary: 666 tests run: 666 passed, 227 skipped
+
+WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'
+# Summary: 666 tests run: 666 passed, 227 skipped
+
+WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'
+# Summary: 666 tests run: 666 passed, 227 skipped
+
+cargo run -- run --gc mark-sweep -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
+# stdout: 2
+
+cargo run -- run --gc g1 -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
+# stdout: 2
+
+cargo run -- run --gc zgc -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
+# stdout: 2
+```
+
+### Active-tree negative audit
+
+- Cargo：无 `managed-heap-v2 =` 定义；无 `cfg(feature = "managed-heap-v2")`。
+- Active object heap：`runtime_startup::setup_shared_env_and_support` 安装 shared memory64 `__heap_memory` + `HeapAccessV2`；`record_and_attach_gc_heap` 明确禁止 V1 attach。
+- Active GC full collect：`gc_safepoint_poll` / 显式 `gc()` 走 `runtime_gc::active_v2::collect_full`。
+- Active WAT skeleton：import/export `env.__heap_memory (memory i64 ... shared)`，并 import `wjsm_support.obj_new/obj_get/obj_set/...`。
+- 用户授权删除 CI：删除 `.github/workflows/zgc-capability-matrix.yml`、`zgc-nightly.yml`、`test262.yml`。
+- 残留（移交 Task 26，不阻塞 Task 15）：legacy `MarkSweepCollector`/`G1Collector`/`ZgcCollector` 实现体、`HANDLE_TABLE_ENTRY_SIZE=4` 字面常量、support 中 `managed_heap_v2=false` 死参数路径。
+
+### Completion regression
+
+```text
+cargo check -p wjsm-runtime -p wjsm-backend-wasm -p wjsm-cli
+# Finished `dev` profile [unoptimized + debuginfo]
+
+cargo nextest run --workspace --all-features -E 'test(modules__async_local_worker_main) | test(happy__weakref_gc) | test(happy__finalization_registry_cleanup)'
+# Summary: 3 tests run: 3 passed, 1851 skipped
+```
+
+状态：Task 15 GREEN 完成。
