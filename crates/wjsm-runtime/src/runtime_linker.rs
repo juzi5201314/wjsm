@@ -247,7 +247,7 @@ pub(super) fn register_common_bridges(
 }
 
 /// NATIVE_CALLABLE 的属性解析单一 owner：`native_callable_get_property` host import
-/// 与 V2 `gc_obj_get_v2` 分派共用。
+/// 与 V2 `gc_obj_get` 分派共用。
 pub(crate) fn native_callable_get_property_impl(
     caller: &mut Caller<'_, RuntimeState>,
     native: i64,

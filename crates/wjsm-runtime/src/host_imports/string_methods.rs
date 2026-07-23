@@ -207,7 +207,7 @@ fn runtime_string_from_code_point(cp: u32) -> RuntimeString {
 }
 
 /// 原始字符串属性读取（length + includes/startsWith/indexOf）。
-/// `gc_obj_get_v2` 与 host import `primitive_string_get_property` 共用。
+/// `gc_obj_get` 与 host import `primitive_string_get_property` 共用。
 pub(crate) fn primitive_string_get_property_impl(
     caller: &mut Caller<'_, RuntimeState>,
     receiver: i64,

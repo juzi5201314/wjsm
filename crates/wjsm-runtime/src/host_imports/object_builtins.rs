@@ -667,7 +667,7 @@ fn read_property_by_string_key(
 ) -> i64 {
     let key = get_string_value(caller, key_val);
     {
-        // own 数据属性优先；accessor 槽需触发 getter（与 gc_obj_get_v2 一致）。
+        // own 数据属性优先；accessor 槽需触发 getter（与 gc_obj_get 一致）。
         let handle = value::decode_handle(obj);
         let access = caller.data().heap_access_v2().clone();
         if access.resolve_handle(handle).is_ok() {

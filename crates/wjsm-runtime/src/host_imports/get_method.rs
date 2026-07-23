@@ -326,7 +326,7 @@ fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_
 
     {
         // 函数/闭包/bound 的 own 属性在 function_props 对象上，
-        // handle 需经 handle_index_of 映射（与 gc_obj_get_v2 一致）。
+        // handle 需经 handle_index_of 映射（与 gc_obj_get 一致）。
         let handle = if value::is_function(value_val)
             || value::is_closure(value_val)
             || value::is_bound(value_val)
