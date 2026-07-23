@@ -514,6 +514,15 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     if process_exit_signal.is_none() {
         process_exit_signal = crate::runtime_process::take_process_exit_signal(store.data());
     }
+    // steady-state 结束：把 V2 NLAB 窗口内 fast path 已消耗但未记账的字节
+    // 结算进累计物理分配（spec §18.4 physical allocated bytes 分母）。
+    if let Some(alloc_cursor) = store
+        .data()
+        .static_heap_global_v2(wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME)
+        && let wasmtime::Val::I64(cursor) = alloc_cursor.get(&mut store)
+    {
+        store.data().flush_v2_allocation_accounting(cursor as u64);
+    }
     let mut gc_stats = store.data().gc_execution_stats_snapshot();
     gc_stats.steady_state_ns = u64::try_from(steady_state_start.elapsed().as_nanos())
         .expect("steady-state duration fits u64 nanoseconds");

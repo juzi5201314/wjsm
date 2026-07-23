@@ -1,110 +1,80 @@
 use serde::{Deserialize, Serialize};
 
-use crate::resource::{AdmissionDecision, HostResourceSnapshot};
-use crate::scenario::{Denominators, ScenarioManifest};
-use crate::stats::DistributionSummary;
+use crate::resource::HostInfo;
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 1;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 2;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum GateStatus {
-    Passed,
-    Failed,
-    NeedsVerification,
-    NeedsResourceRunner,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CounterSource {
-    pub name: String,
-    pub detail: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MetricObservation {
-    pub name: String,
-    pub numerator: Option<f64>,
-    pub denominator: Option<f64>,
-    pub value: Option<f64>,
-    pub source: CounterSource,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RuntimeMetadata {
-    pub engine: String,
-    pub gc: String,
-    pub tool_version: String,
-    pub wasmtime_version: String,
-    pub hardware: HardwareMetadata,
-    pub jdk_probe_patch_sha256: Option<String>,
-    pub counter_source: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct HardwareMetadata {
-    pub architecture: String,
-    pub os: String,
-    pub logical_cpus: usize,
-    #[serde(default)]
-    pub isa: String,
-    #[serde(default)]
-    pub numa_nodes: usize,
-    #[serde(default)]
-    pub page_size: usize,
-}
-
+/// 单个样本的原始数据。
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SampleReport {
     pub index: usize,
+    /// user main() 执行纳秒（不含 compile/instantiate/startup）。
     pub steady_state_ns: u64,
-    pub gc_telemetry: wjsm_runtime::GcTelemetrySnapshot,
-    pub metrics: Vec<MetricObservation>,
+    /// runtime 提供的完整 GC telemetry 快照。
+    pub telemetry: wjsm_runtime::GcTelemetrySnapshot,
+}
+
+/// 分布统计摘要。
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Distribution {
+    pub count: usize,
+    pub mean: Option<f64>,
+    pub min: Option<u64>,
+    pub p50: Option<u64>,
+    pub p99: Option<u64>,
+    pub max: Option<u64>,
+}
+
+/// 从 telemetry 聚合计算的派生指标。
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DerivedMetrics {
+    /// GC CPU 时间 / 物理分配字节。
+    pub gc_cpu_per_allocated_byte: Option<f64>,
+    /// mark CPU 时间 / mark 存活字节。
+    pub mark_cpu_per_live_byte: Option<f64>,
+    /// relocation CPU 时间 / 迁移字节。
+    pub relocation_cpu_per_relocated_byte: Option<f64>,
+    /// 分配速率 bytes/s（物理分配 / steady-state 时间）。
+    pub allocation_rate_bytes_per_sec: Option<f64>,
+    /// GC CPU 占 steady-state 时间的百分比。
+    pub gc_overhead_percent: Option<f64>,
+    /// barrier load 事件 / steady-state 秒。
+    pub barrier_load_events_per_sec: Option<f64>,
+    /// barrier store 事件 / steady-state 秒。
+    pub barrier_store_events_per_sec: Option<f64>,
+    /// 每秒 GC 周期数。
+    pub gc_cycles_per_sec: Option<f64>,
+}
+
+/// 完整基准报告。
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BenchReport {
+    pub schema_version: u32,
+    pub config: BenchConfig,
+    pub hardware: HostInfo,
+    pub samples: Vec<SampleReport>,
+    pub summary: BenchSummary,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RunConfiguration {
-    pub profile: crate::cli::Profile,
+pub struct BenchConfig {
+    pub gc: String,
+    pub heap_bytes: u64,
+    pub scenario: String,
+    pub live_set_percent: u8,
     pub samples: usize,
     pub duration_seconds: u64,
-    pub workers: usize,
-    pub relocate_every_page: bool,
-    pub barrier_buffer_capacity: usize,
-    pub safepoint_every_allocation: bool,
-    pub jdk_home: Option<std::path::PathBuf>,
-    pub jdk_probe_home: Option<std::path::PathBuf>,
+    pub seed: u64,
+    pub allocations: u64,
+    pub retained: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RunReport {
-    pub schema_version: u32,
-    pub status: GateStatus,
-    pub runtime: RuntimeMetadata,
-    pub scenario: ScenarioManifest,
-    pub denominators: Denominators,
-    pub resources: HostResourceSnapshot,
-    pub admission: AdmissionDecision,
-    pub configuration: RunConfiguration,
-    pub samples: Vec<SampleReport>,
-    pub steady_state: DistributionSummary,
-    pub notes: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct BenchmarkManifest {
-    pub schema_version: u32,
-    pub status: GateStatus,
-    pub reports: Vec<RunReport>,
-    pub notes: Vec<String>,
-}
-
-impl BenchmarkManifest {
-    pub fn empty() -> Self {
-        Self {
-            schema_version: BENCHMARK_SCHEMA_VERSION,
-            status: GateStatus::NeedsVerification,
-            notes: Vec::new(),
-            reports: Vec::new(),
-        }
-    }
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct BenchSummary {
+    pub steady_state_ns: Distribution,
+    pub gc_cpu_ns: Distribution,
+    pub pause_max_ns: Distribution,
+    pub metrics: DerivedMetrics,
+    /// 所有样本 telemetry 的聚合累计。
+    pub telemetry_totals: wjsm_runtime::GcTelemetrySnapshot,
 }

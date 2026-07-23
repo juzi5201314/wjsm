@@ -1,11 +1,9 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 const MIB: u64 = 1024 * 1024;
 const BYTES_PER_LOGICAL_OBJECT: u64 = MIB / 8;
 const MAX_LOGICAL_OBJECTS: u64 = 32_768;
-pub const WORKLOAD_CONTRACT_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -36,110 +34,53 @@ impl ScenarioKind {
             Self::Saturation => "saturation",
         }
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct ScenarioSpec {
-    kind: ScenarioKind,
-    seed: u64,
-    heap_cap_bytes: u64,
-    live_set_percent: u8,
-}
-
-impl ScenarioSpec {
-    pub fn new(kind: ScenarioKind, seed: u64, heap_cap_bytes: u64, live_set_percent: u8) -> Self {
-        assert!(live_set_percent <= 100, "live set must be a percentage");
-        Self {
-            kind,
-            seed,
-            heap_cap_bytes,
-            live_set_percent,
-        }
-    }
-
-    pub fn build(&self) -> Scenario {
-        let allocations = allocation_count(self.heap_cap_bytes);
-        let retained = allocations.saturating_mul(u64::from(self.live_set_percent)) / 100;
-        let logical_graph_hash = hash_contract(self.kind, self.seed, allocations, retained);
-        Scenario {
-            manifest: ScenarioManifest {
-                name: self.kind.as_str().into(),
-                seed: self.seed,
-                heap_cap_bytes: self.heap_cap_bytes,
-                live_set_percent: self.live_set_percent,
-                retained_objects: retained,
-                workload_contract_version: WORKLOAD_CONTRACT_VERSION,
-                logical_graph_hash,
-            },
-            denominators: Denominators {
-                logical_objects: allocations,
-                reference_edges: reference_edges(self.kind, allocations),
-                planned_allocation_bytes: allocations.saturating_mul(32),
-                physical_allocated_bytes: None,
-            },
-            source: source_for(self.kind, self.seed, allocations, retained),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct ScenarioManifest {
-    pub name: String,
-    pub seed: u64,
-    pub heap_cap_bytes: u64,
-    pub live_set_percent: u8,
-    pub retained_objects: u64,
-    pub workload_contract_version: u32,
-    pub logical_graph_hash: String,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct Denominators {
-    pub logical_objects: u64,
-    pub reference_edges: u64,
-    pub planned_allocation_bytes: u64,
-    /// 当前 memory32 heap 尚不公开累计物理分配计数；缺失值必须使性能 gate
-    /// 进入 `needs-verification`，不可用逻辑对象估算替代。
-    pub physical_allocated_bytes: Option<u64>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Scenario {
-    pub manifest: ScenarioManifest,
-    pub denominators: Denominators,
-    pub source: String,
-}
-
-impl Scenario {
-    /// Java driver 接收与 WJSM source 相同的 canonical workload contract 参数。
-    pub fn java_args(&self) -> [String; 5] {
-        [
-            self.manifest.name.clone(),
-            self.denominators.logical_objects.to_string(),
-            self.manifest.retained_objects.to_string(),
-            self.manifest.seed.to_string(),
-            self.manifest.logical_graph_hash.clone(),
+    pub fn all() -> &'static [ScenarioKind] {
+        &[
+            Self::Churn,
+            Self::Request,
+            Self::Chain,
+            Self::Cycle,
+            Self::Wide,
+            Self::Mutation,
+            Self::Humongous,
+            Self::IdleUncommit,
+            Self::Saturation,
         ]
     }
 }
 
-fn allocation_count(heap_cap_bytes: u64) -> u64 {
-    // 32 MiB ZGC 的实测边界：4,096 个根对象会让单样本超过 100 秒，1,024 个
-    // 仍约 14 秒，而 256 个对象执行真实 full GC 约 5 秒。每个逻辑对象按 128 KiB
-    // 预算，既保留 heap/metadata/relocation 余量，也让 30 样本基线受 180 秒绝对
-    // 超时约束，避免 benchmark 自身成为不可控长跑。
-    (heap_cap_bytes / BYTES_PER_LOGICAL_OBJECT).clamp(256, MAX_LOGICAL_OBJECTS)
+#[derive(Clone, Debug)]
+pub struct Scenario {
+    pub name: &'static str,
+    pub heap_cap_bytes: u64,
+    pub live_set_percent: u8,
+    pub seed: u64,
+    pub allocations: u64,
+    pub retained: u64,
+    pub source: String,
 }
 
-fn reference_edges(kind: ScenarioKind, allocations: u64) -> u64 {
-    match kind {
-        ScenarioKind::Churn | ScenarioKind::Chain | ScenarioKind::IdleUncommit => allocations,
-        ScenarioKind::Request => allocations.saturating_mul(3),
-        ScenarioKind::Cycle => allocations.saturating_add(1),
-        ScenarioKind::Wide => allocations.saturating_mul(5),
-        ScenarioKind::Mutation | ScenarioKind::Humongous => allocations,
-        ScenarioKind::Saturation => allocations.saturating_mul(2),
+impl Scenario {
+    pub fn build(kind: ScenarioKind, seed: u64, heap_cap_bytes: u64, live_set_percent: u8) -> Self {
+        assert!(live_set_percent <= 100, "live set must be a percentage");
+        let allocations = allocation_count(heap_cap_bytes);
+        let retained = allocations.saturating_mul(u64::from(live_set_percent)) / 100;
+        let source = source_for(kind, seed, allocations, retained);
+        Self {
+            name: kind.as_str(),
+            heap_cap_bytes,
+            live_set_percent,
+            seed,
+            allocations,
+            retained,
+            source,
+        }
     }
+}
+
+fn allocation_count(heap_cap_bytes: u64) -> u64 {
+    (heap_cap_bytes / BYTES_PER_LOGICAL_OBJECT).clamp(256, MAX_LOGICAL_OBJECTS)
 }
 
 fn source_for(kind: ScenarioKind, seed: u64, allocations: u64, retained: u64) -> String {
@@ -178,42 +119,24 @@ fn source_for(kind: ScenarioKind, seed: u64, allocations: u64, retained: u64) ->
     format!("{common}{body}console.log(roots.length);")
 }
 
-fn hash_contract(kind: ScenarioKind, seed: u64, allocations: u64, retained: u64) -> String {
-    let contract = format!(
-        "wjsm-gc-workload-v{}|{}|{seed}|{allocations}|{retained}",
-        WORKLOAD_CONTRACT_VERSION,
-        kind.as_str()
-    );
-    let digest = Sha256::digest(contract.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
-    fn scenario_names_are_clap_values() {
-        assert_eq!(ScenarioKind::IdleUncommit.as_str(), "idle-uncommit");
+    fn scenario_source_is_deterministic() {
+        let a = Scenario::build(ScenarioKind::Churn, 42, 32 * MIB, 50);
+        let b = Scenario::build(ScenarioKind::Churn, 42, 32 * MIB, 50);
+        assert_eq!(a.source, b.source);
+        assert_eq!(a.allocations, b.allocations);
     }
 
     #[test]
-    #[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
-    fn allocation_count_stays_bounded() {
-        assert_eq!(allocation_count(1), 256);
-        assert_eq!(allocation_count(64 * MIB), 512);
-    }
-
-    #[test]
-    #[ignore = "GC benchmark 契约只通过专用 CLI 入口验证"]
-    fn java_and_wjsm_share_canonical_workload_identity() {
-        let scenario = ScenarioSpec::new(ScenarioKind::Churn, 7, 32 * MIB, 50).build();
-        let args = scenario.java_args();
-        assert_eq!(args[0], "churn");
-        assert_eq!(args[1], "256");
-        assert_eq!(args[2], "128");
-        assert_eq!(args[4], scenario.manifest.logical_graph_hash);
-        assert!(scenario.source.ends_with("gc();console.log(roots.length);"));
+    fn allocation_count_scales_with_heap() {
+        let small = allocation_count(32 * MIB);
+        let large = allocation_count(1024 * MIB);
+        assert!(large > small);
+        assert!(small >= 256);
+        assert!(large <= MAX_LOGICAL_OBJECTS);
     }
 }

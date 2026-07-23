@@ -190,6 +190,15 @@ pub struct GcStats {
     pub scan_oblets: usize,
     pub load_barrier_mark_hits: usize,
     pub load_barrier_relocate_hits: usize,
+    // ── 归一化 gate 分子/分母（spec §18.4，thread CPU time）──
+    /// 本轮 GC 工作 CPU 纳秒：worker + pause + mutator assist 全部线程 CPU 之和。
+    pub gc_cpu_ns: u64,
+    /// 本轮 young/old mark CPU 纳秒（mark worker 与 mark pause）。
+    pub mark_cpu_ns: u64,
+    /// 本轮 relocate worker 与 assist CPU 纳秒。
+    pub relocation_cpu_ns: u64,
+    /// mark-end physical live bytes：`mark CPU / live byte` 的分母。
+    pub mark_live_bytes: u64,
 }
 
 impl GcStats {
@@ -256,6 +265,12 @@ impl GcStats {
         self.load_barrier_relocate_hits = self
             .load_barrier_relocate_hits
             .saturating_add(extra.load_barrier_relocate_hits);
+        self.gc_cpu_ns = self.gc_cpu_ns.saturating_add(extra.gc_cpu_ns);
+        self.mark_cpu_ns = self.mark_cpu_ns.saturating_add(extra.mark_cpu_ns);
+        self.relocation_cpu_ns = self
+            .relocation_cpu_ns
+            .saturating_add(extra.relocation_cpu_ns);
+        self.mark_live_bytes = self.mark_live_bytes.saturating_add(extra.mark_live_bytes);
     }
 }
 

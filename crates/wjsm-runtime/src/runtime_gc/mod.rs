@@ -75,6 +75,7 @@ pub mod api;
 mod collector_context;
 pub mod context;
 mod control;
+pub(crate) mod cpu_time;
 pub mod g1;
 pub mod heap_access;
 mod heap_access_v2;

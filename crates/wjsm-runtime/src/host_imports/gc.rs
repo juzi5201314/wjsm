@@ -117,6 +117,8 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                     .resolve_handle(handle)
                     .is_ok()
                 {
+                // heap-backed receiver 解析完成 = 一次 load barrier fast-path 事件。
+                caller.data().count_barrier_load();
                     let key = property_key(&mut caller, key)?;
                     if value::is_array(object) {
                         let length_key = crate::property_key::encode_runtime_string_name_id(
@@ -221,6 +223,8 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                 } else {
                     value::decode_handle(object)
                 };
+                // heap receiver 写路径（proxy/regexp 已提前分派）= store barrier fast-path 事件。
+                caller.data().count_barrier_store();
                 if value::is_array(object) {
                     let length_key = crate::property_key::encode_runtime_string_name_id(
                         crate::property_key::intern_runtime_property_key(
@@ -424,6 +428,8 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                 }
                 let handle = value::decode_handle(array);
                 let access = caller.data().heap_access_v2().clone();
+                // heap 中介的元素读（TypedArray Rust 表已提前分派）= load barrier 事件。
+                caller.data().count_barrier_load();
                 // arguments 等对象以 "0"/"1" 属性键承载索引访问，非数组布局。
                 if !value::is_array(array)
                     && access.object_type(handle).ok() != Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
@@ -462,6 +468,8 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             }
             let handle = value::decode_handle(array);
             let access = caller.data().heap_access_v2().clone();
+            // heap 中介的元素写（TypedArray Rust 表已提前分派）= store barrier 事件。
+            caller.data().count_barrier_store();
             if !value::is_array(array)
                 && access.object_type(handle).ok() != Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
             {

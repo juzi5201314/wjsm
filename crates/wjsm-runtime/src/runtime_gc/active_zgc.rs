@@ -15,6 +15,7 @@ use super::zgc::director::{DirectorDecision, GcDirector};
 use super::zgc::{OldController, YoungController};
 use crate::WasmEnv;
 use crate::heap::{HandleGeneration, HandleId};
+use super::cpu_time;
 
 /// 按算法名分派 active full collect：仅 `zgc` 走 generational phase machine。
 pub(crate) fn collect_dispatch<C>(ctx: &mut C, env: &WasmEnv, algorithm: &str) -> GcStats
@@ -34,6 +35,7 @@ where
     C: wasmtime::AsContextMut<Data = crate::RuntimeState>,
 {
     let started = Instant::now();
+    let gc_cpu_start = cpu_time::thread_cpu_ns();
     let mut gc_ctx = GcContext::new(ctx, env, "zgc");
     let handle_count = gc_ctx.obj_table_count() as u32;
     let access = gc_ctx.with_state(|state| state.heap_access_v2().clone());
@@ -66,6 +68,7 @@ where
         || matches!(decision, DirectorDecision::StartYoung)
         || old_bytes > 0;
 
+    let mark_cpu_start = cpu_time::thread_cpu_ns();
     let pause_start = young.pause_mark_start(&root_snapshot);
     old.coordinate_from_young_mark_start(&young, &root_snapshot, start_old);
 
@@ -74,10 +77,13 @@ where
 
     let pause_end = young.pause_mark_end();
     let _ = old.pause_mark_end();
+    let mark_cpu_ns = cpu_time::thread_cpu_ns().saturating_sub(mark_cpu_start);
+    let relocate_cpu_start = cpu_time::thread_cpu_ns();
     let _sparse = young.select_relocation_set();
     apply_promotions(&access, &young, &old, graph.keys().copied());
     let pause_relocate = young.pause_relocate_start();
     young.finish_epoch_reclaim();
+    let relocation_cpu_ns = cpu_time::thread_cpu_ns().saturating_sub(relocate_cpu_start);
 
     let mut live = live_roots;
     for handle in graph.keys().copied() {
@@ -122,6 +128,14 @@ where
 
     let young_report = young.report();
     let old_report = old.report();
+    let mark_live_bytes = graph
+        .iter()
+        .filter(|(handle, _)| {
+            let id = HandleId::new(**handle);
+            young.is_marked(id) || old.is_marked(id)
+        })
+        .map(|(_, (_, _, size))| *size)
+        .sum::<u64>();
     let pause_ns = pause_start.as_nanos() as u64
         + pause_end.as_nanos() as u64
         + pause_relocate.as_nanos() as u64;
@@ -150,10 +164,14 @@ where
             DirectorDecision::StartOld => 2,
             DirectorDecision::Continue => 3,
         },
+        mark_cpu_ns,
+        relocation_cpu_ns,
+        mark_live_bytes,
         ..GcStats::default()
     };
     stats.free_bytes_reusable = stats.total_free_bytes;
     stats.record_pause(std::time::Duration::from_nanos(pause_ns.max(1)));
+    stats.gc_cpu_ns = cpu_time::thread_cpu_ns().saturating_sub(gc_cpu_start);
     stats
 }
 

@@ -38,6 +38,7 @@ pub struct GcTelemetrySnapshot {
     pub physical_allocated_bytes: Option<u64>,
     pub barrier_load_fast_events: Option<u64>,
     pub barrier_store_fast_events: Option<u64>,
+    pub mark_live_bytes: Option<u64>,
     pub committed_handle_bytes: Option<u64>,
     pub committed_page_bytes: Option<u64>,
     pub committed_bitmap_bytes: Option<u64>,
@@ -59,6 +60,13 @@ struct TelemetryInner {
     pause: PauseHistogram,
     reclaimed_bytes: u64,
     relocated_bytes: u64,
+    gc_cpu_ns: u64,
+    mark_cpu_ns: u64,
+    relocation_cpu_ns: u64,
+    mark_live_bytes: u64,
+    physical_allocated_bytes: u64,
+    barrier_load_fast_events: u64,
+    barrier_store_fast_events: u64,
 }
 
 impl GcTelemetry {
@@ -99,6 +107,27 @@ impl GcTelemetry {
         inner.relocated_bytes = inner.relocated_bytes.saturating_add(
             u64::try_from(stats.cumulative.relocated_bytes).expect("usize fits u64"),
         );
+        inner.gc_cpu_ns = inner
+            .gc_cpu_ns
+            .saturating_add(stats.cumulative.gc_cpu_ns);
+        inner.mark_cpu_ns = inner
+            .mark_cpu_ns
+            .saturating_add(stats.cumulative.mark_cpu_ns);
+        inner.relocation_cpu_ns = inner
+            .relocation_cpu_ns
+            .saturating_add(stats.cumulative.relocation_cpu_ns);
+        inner.mark_live_bytes = inner
+            .mark_live_bytes
+            .saturating_add(stats.cumulative.mark_live_bytes);
+        inner.physical_allocated_bytes = inner
+            .physical_allocated_bytes
+            .saturating_add(stats.allocated_bytes);
+        inner.barrier_load_fast_events = inner
+            .barrier_load_fast_events
+            .saturating_add(stats.barrier_load_fast_events);
+        inner.barrier_store_fast_events = inner
+            .barrier_store_fast_events
+            .saturating_add(stats.barrier_store_fast_events);
     }
 
     pub fn from_execution_stats(collector: &str, stats: &GcExecutionStats) -> Self {
@@ -109,6 +138,7 @@ impl GcTelemetry {
 
     pub fn snapshot(&self) -> GcTelemetrySnapshot {
         let inner = self.inner.lock().expect("GC telemetry lock poisoned");
+        let observed = inner.cycles > 0;
         GcTelemetrySnapshot {
             schema_version: GC_TELEMETRY_SCHEMA_VERSION,
             collector: inner.collector.clone(),
@@ -116,6 +146,13 @@ impl GcTelemetry {
             pause: inner.pause.snapshot(),
             reclaimed_bytes: inner.reclaimed_bytes,
             relocated_bytes: inner.relocated_bytes,
+            gc_cpu_ns: observed.then_some(inner.gc_cpu_ns),
+            mark_cpu_ns: observed.then_some(inner.mark_cpu_ns),
+            relocation_cpu_ns: observed.then_some(inner.relocation_cpu_ns),
+            mark_live_bytes: observed.then_some(inner.mark_live_bytes),
+            physical_allocated_bytes: Some(inner.physical_allocated_bytes),
+            barrier_load_fast_events: Some(inner.barrier_load_fast_events),
+            barrier_store_fast_events: Some(inner.barrier_store_fast_events),
             ..GcTelemetrySnapshot::default()
         }
     }

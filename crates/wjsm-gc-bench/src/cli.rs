@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::scenario::ScenarioKind;
 
 #[derive(Debug, Parser)]
-#[command(name = "wjsm-gc-bench", about = "可复现 WJSM GC 基准与归一化 gate")]
+#[command(name = "wjsm-gc-bench", about = "WJSM GC 轻量级性能基准")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -13,31 +12,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Capabilities(CommonArgs),
-    Preflight(CommonArgs),
-    PrepareJdk(JdkArgs),
-    Baseline(RunArgs),
+    /// 运行基准并输出 JSON 报告。
     Run(RunArgs),
-    Micro(MicroArgs),
-    Compare(CompareArgs),
-    Replay(ReplayArgs),
-    Gate(GateArgs),
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum EngineKind {
-    #[default]
-    Wjsm,
-    Jdk,
-}
-
-impl EngineKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Wjsm => "wjsm",
-            Self::Jdk => "jdk",
-        }
-    }
+    /// 输出主机资源与平台能力快照。
+    Info(CommonArgs),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -59,118 +37,38 @@ impl GcKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-pub enum Profile {
-    #[default]
-    Pr,
-    Nightly,
-}
-
 #[derive(Clone, Debug, Parser)]
 pub struct CommonArgs {
-    #[arg(long, default_value = "32m", value_parser = parse_bytes)]
+    /// 对象堆上限（如 32m、256m、1g）。
+    #[arg(long, default_value = "256m", value_parser = parse_bytes)]
     pub heap: u64,
+    /// JSON 输出路径。
     #[arg(long, default_value = "/tmp/wjsm-gc-bench.json")]
     pub output: PathBuf,
-    #[arg(long, value_enum, default_value_t)]
-    pub profile: Profile,
-}
-
-#[derive(Clone, Debug, Parser)]
-pub struct JdkArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    #[arg(long)]
-    pub jdk_home: Option<PathBuf>,
-    #[arg(long)]
-    pub jdk_probe_home: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Parser)]
 pub struct RunArgs {
     #[command(flatten)]
     pub common: CommonArgs,
-    #[arg(long, value_enum, default_value_t)]
-    pub engine: EngineKind,
+    /// 选择 collector。
     #[arg(long, value_enum, default_value_t)]
     pub gc: GcKind,
+    /// 存活集百分比（0–100）。
     #[arg(long, default_value_t = 50)]
     pub live_set: u8,
+    /// workload 场景。
     #[arg(long, value_enum, default_value_t)]
     pub scenario: ScenarioKind,
-    #[arg(long, default_value_t = 30)]
+    /// 重复采样次数。
+    #[arg(long, default_value_t = 10)]
     pub samples: usize,
+    /// 每个样本的 steady-state 持续秒数（0 = 单次执行）。
     #[arg(long, default_value_t = 0)]
     pub duration: u64,
-    #[arg(long, default_value_t = 1)]
-    pub workers: usize,
+    /// 随机种子。
     #[arg(long, default_value_t = 0x5eed)]
     pub seed: u64,
-    #[arg(long)]
-    pub manifest: Option<PathBuf>,
-    #[arg(long)]
-    pub jdk_home: Option<PathBuf>,
-    #[arg(long)]
-    pub jdk_probe_home: Option<PathBuf>,
-    #[arg(long, default_value_t = false)]
-    pub relocate_every_page: bool,
-    #[arg(long, default_value_t = 4096)]
-    pub barrier_buffer_capacity: usize,
-    #[arg(long, default_value_t = false)]
-    pub safepoint_every_allocation: bool,
-}
-
-#[derive(Clone, Debug, Parser)]
-pub struct MicroArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    #[arg(long)]
-    pub component: String,
-    #[arg(long, default_value_t = 30)]
-    pub samples: usize,
-}
-
-#[derive(Clone, Debug, Parser)]
-pub struct CompareArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    #[arg(long)]
-    pub jdk_home: PathBuf,
-    #[arg(long)]
-    pub jdk_probe_home: PathBuf,
-    /// Comma-separated heap caps for PR matrix.
-    /// Nightly profile ignores this and uses `--heap` from common args.
-    #[arg(long, default_value = "32m,256m,1024m")]
-    pub heaps: String,
-    #[arg(long, default_value = "10,50,80")]
-    pub live_sets: String,
-    #[arg(
-        long,
-        default_value = "churn,request,chain,cycle,wide,mutation,humongous,idle-uncommit"
-    )]
-    pub scenarios: String,
-    #[arg(long, default_value_t = 30)]
-    pub samples: usize,
-    /// Steady-state duration in seconds per sample (0 = single pass).
-    #[arg(long, default_value_t = 0)]
-    pub duration: u64,
-}
-
-#[derive(Debug, Parser)]
-pub struct ReplayArgs {
-    #[arg(long)]
-    pub manifest: PathBuf,
-    #[arg(long, default_value = "/tmp/wjsm-gc-replay.json")]
-    pub output: PathBuf,
-}
-
-#[derive(Debug, Parser)]
-pub struct GateArgs {
-    #[arg(long)]
-    pub manifest: PathBuf,
-    #[arg(long, value_enum, default_value_t)]
-    pub profile: Profile,
 }
 
 pub fn parse_bytes(input: &str) -> Result<u64, String> {

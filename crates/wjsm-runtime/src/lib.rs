@@ -382,6 +382,12 @@ pub struct GcExecutionStats {
     pub pause_hist: Vec<u64>,
     /// 最近 GC 周期的 committed/reusable footprint 序列。
     pub memory_footprint_hist: Vec<MemoryFootprintSample>,
+    /// 本运行累计物理分配字节（NLAB 窗口消耗 + host 直接分配，TLAB 记账式；spec §18.4 分母）。
+    pub allocated_bytes: u64,
+    /// 本运行 load barrier fast-path 事件累计（host 中介的 heap 引用读）。
+    pub barrier_load_fast_events: u64,
+    /// 本运行 store barrier fast-path 事件累计（host 中介的 heap 引用写）。
+    pub barrier_store_fast_events: u64,
     /// 已排除 parse/lower/codegen、Wasmtime compile、instantiate 与 startup 的执行耗时。
     pub steady_state_ns: u64,
 }
@@ -1141,6 +1147,10 @@ impl Clone for RuntimeState {
             cumulative_gc_stats: self.cumulative_gc_stats.clone(),
             gc_pause_hist: self.gc_pause_hist.clone(),
             memory_footprint_hist: self.memory_footprint_hist.clone(),
+            physical_allocated_bytes: self.physical_allocated_bytes.clone(),
+            alloc_account_cursor: self.alloc_account_cursor.clone(),
+            barrier_load_events: self.barrier_load_events.clone(),
+            barrier_store_events: self.barrier_store_events.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -1374,6 +1384,14 @@ struct RuntimeState {
     gc_pause_hist: Arc<Mutex<GcPauseHist>>,
     /// 最近 256 次 GC footprint 观测；写入 last_gc_stats 时同步推进。
     memory_footprint_hist: Arc<Mutex<MemoryFootprintHist>>,
+    /// 累计物理分配字节（NLAB 窗口消耗记账；`GC CPU / allocated byte` 分母）。
+    physical_allocated_bytes: Arc<AtomicU64>,
+    /// 上次 host touch 已记账的分配游标，用于结算 Wasm fast path 消耗的窗口字节。
+    alloc_account_cursor: Arc<AtomicU64>,
+    /// load barrier fast-path 事件累计（obj_get/elem_get 完成 heap 引用读）。
+    barrier_load_events: Arc<AtomicU64>,
+    /// store barrier fast-path 事件累计（obj_set/elem_set 完成 heap 引用写）。
+    barrier_store_events: Arc<AtomicU64>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -1598,7 +1616,7 @@ impl RuntimeState {
             .clone()
     }
 
-    fn static_heap_global_v2(&self, name: &str) -> Option<Global> {
+    pub(crate) fn static_heap_global_v2(&self, name: &str) -> Option<Global> {
         let globals = self.static_heap_globals_v2.as_ref()?;
         match name {
             wjsm_ir::HEAP_ALLOC_PTR_GLOBAL_NAME => Some(globals.alloc_ptr),
@@ -1665,8 +1683,51 @@ impl RuntimeState {
             cumulative,
             pause_hist,
             memory_footprint_hist,
+            allocated_bytes: self.physical_allocated_bytes.load(Ordering::Relaxed),
+            barrier_load_fast_events: self.barrier_load_events.load(Ordering::Relaxed),
+            barrier_store_fast_events: self.barrier_store_events.load(Ordering::Relaxed),
             steady_state_ns: 0,
         }
+    }
+
+    /// V2 分配记账：结算 Wasm fast path 自上次 host touch 起消耗的窗口字节，
+    /// 再计入本次 host 分配 `bytes`，并把游标推进到 `cursor_after`。
+    ///
+    /// TLAB 式记账：fast path 零开销，host touch 时按游标差分结算；窗口浪费
+    /// （NLAB refill 丢弃的尾部）不计入物理分配，与 JDK TLAB used 口径一致。
+    pub(crate) fn account_v2_allocation(&self, cursor_before: u64, bytes: u64, cursor_after: u64) {
+        let mut last = self.alloc_account_cursor.load(Ordering::Relaxed);
+        if last == 0 {
+            // 首次 host touch：游标之前没有可记账的 fast-path 消耗。
+            last = cursor_before;
+        }
+        let consumed = cursor_before.saturating_sub(last);
+        self.physical_allocated_bytes
+            .fetch_add(consumed.saturating_add(bytes), Ordering::Relaxed);
+        self.alloc_account_cursor.store(cursor_after, Ordering::Relaxed);
+    }
+
+    /// steady-state 结束时结算窗口内尚未记账的 fast-path 消耗。
+    pub(crate) fn flush_v2_allocation_accounting(&self, cursor: u64) {
+        let last = self.alloc_account_cursor.load(Ordering::Relaxed);
+        if last == 0 {
+            return;
+        }
+        let consumed = cursor.saturating_sub(last);
+        if consumed > 0 {
+            self.physical_allocated_bytes.fetch_add(consumed, Ordering::Relaxed);
+            self.alloc_account_cursor.store(cursor, Ordering::Relaxed);
+        }
+    }
+
+    /// load barrier fast-path 事件 +1（obj_get/elem_get 完成 heap 引用读）。
+    pub(crate) fn count_barrier_load(&self) {
+        self.barrier_load_events.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// store barrier fast-path 事件 +1（obj_set/elem_set 完成 heap 引用写）。
+    pub(crate) fn count_barrier_store(&self) {
+        self.barrier_store_events.fetch_add(1, Ordering::Relaxed);
     }
 
     fn gc_pause_hist_snapshot(&self) -> Vec<u64> {
@@ -1914,6 +1975,10 @@ impl RuntimeState {
             cumulative_gc_stats: Arc::new(Mutex::new(crate::runtime_gc::api::GcStats::default())),
             gc_pause_hist: Arc::new(Mutex::new(GcPauseHist::default())),
             memory_footprint_hist: Arc::new(Mutex::new(MemoryFootprintHist::default())),
+            physical_allocated_bytes: Arc::new(AtomicU64::new(0)),
+            alloc_account_cursor: Arc::new(AtomicU64::new(0)),
+            barrier_load_events: Arc::new(AtomicU64::new(0)),
+            barrier_store_events: Arc::new(AtomicU64::new(0)),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),

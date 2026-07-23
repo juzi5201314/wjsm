@@ -4932,15 +4932,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "hdrhistogram",
- "libc",
  "serde",
  "serde_json",
- "sha2",
  "sysinfo",
  "tokio",
- "windows-sys 0.61.2",
- "wjsm-engine-config",
  "wjsm-runtime",
 ]
 

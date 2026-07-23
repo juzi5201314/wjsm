@@ -324,6 +324,9 @@ pub(crate) fn allocate_v2_object_bytes_with_context<C: AsContextMut<Data = Runti
                 "V2 allocation cannot update heap cursor",
             ));
         }
+        ctx.as_context()
+            .data()
+            .account_v2_allocation(cursor, bytes, next);
         return Ok((cursor, end));
     }
 
@@ -351,6 +354,9 @@ pub(crate) fn allocate_v2_object_bytes_with_context<C: AsContextMut<Data = Runti
             "V2 allocation globals are unavailable",
         ));
     }
+    ctx.as_context()
+        .data()
+        .account_v2_allocation(cursor, bytes, start + bytes);
     Ok((start, end))
 }
 

@@ -13,20 +13,8 @@ name = "contracts"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-hdrhistogram = { workspace = true }
-libc = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true }
 wjsm-runtime = { path = "../wjsm-runtime" }
-wjsm-engine-config = { path = "../wjsm-engine-config" }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_JobObjects",
-    "Win32_System_Memory",
-    "Win32_System_Threading",
-] }
