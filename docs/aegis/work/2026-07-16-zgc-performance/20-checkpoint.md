@@ -2,73 +2,66 @@
 
 ## Current todo
 
-Task 16 GREEN 完成。colored load/store barrier、SATB/remset ring、backend barrier emit helpers 与 loom 模型均已验证通过。
+Task 17 GREEN 完成（协议层 concurrent young mark）。active GC 路径仍未挂 YoungController，属后续接入缺口。
 
-## Completed (this session, 2026-07-23 Task 16)
+## Completed (this session, 2026-07-23 Task 17)
 
-- 恢复检查点：Task 15 已 GREEN；下一任务为 Phase D Task 16。
-- 审计既有实现：`98dc81cc feat: add colored GC barriers` 已落地
-  - backend：`compiler_helpers/barrier.rs`
-  - runtime：`runtime_gc/zgc/barrier.rs`
-  - tests：`gc_barrier_protocol.rs` + `gc_loom_model` 的 `satb_` / `remembered_`
-- 复跑 Task 16 GREEN 三条命令全部通过；补充验证 young/old/relocation/host-roots 相关后续任务测试也已存在并通过。
-
-## Historical
-
-Task 15 cutover 证据见同目录先前 checkpoint 段与 `90-evidence.md` Task 15 段。
+- 恢复检查点：Task 16 已 GREEN；进入 Task 17 concurrent young mark。
+- 审计 owner：
+  - `runtime_gc/zgc/young.rs`：`YoungController` type-state phases / SATB / remset ring / black alloc / pause <1ms 断言
+  - tests：`gc_young_concurrent.rs`（6）、loom `young_termination_model_*`
+  - 提交：`c25f7101 feat: implement concurrent young marking`
+- GREEN 三条命令全部通过（含 30-sample churn bench）。
+- **Active-path 审计（关键）**：
+  - `gc()` / `gc_safepoint_poll` 均调用 `runtime_gc::active_v2::collect_full`
+  - `active_v2::collect_full` 是 **非移动 full mark-retire**，对 mark-sweep/g1/zgc **同一路径**
+  - `YoungController` 仅被 unit/integration tests 与 `OldController` 协作使用，**不在** `registry::create(Zgc)` 的 active collect 路径
+  - `ZgcCollector::collect_full` 仍是 legacy incremental mark/relocate，且 active host 不调用它做 full collect
+  - 因此 Task 17 关闭的是 **协议/controller + 测试 + bench 可运行证据**，不是 “active `--gc zgc` 已跑 concurrent young mark”
 
 ## Next step
 
-1. **正式下一任务：Task 24（JDK 25 归一化矩阵硬门）** 或先审计 Task 17–23 的 active 接入缺口。
-2. 代码树中 Task 17–23 的 controller/tests/commits 已存在且单元 GREEN，但：
-   - barrier emit helpers **尚未**接入 support/object helpers 热路径（`emit_*` 目前主要是 contract/unit）；
-   - ADR 0010 仍写 Task 15/24/25 为 open；
-   - 计划 checkbox 多数未同步（仅本切片关闭 Task 16）；
-   - Task 24/25 仍缺具名 JDK 25 probe / large-heap / capability runner 证据；
-   - Task 26 源码级退役（legacy `GcContext` collector 体、`HANDLE_TABLE_ENTRY_SIZE=4` 残留字符串、旧 path）仍 open；
-   - `.github/workflows` 已按用户要求删除，不得回灌 `managed-heap-v2`。
-3. 用户若要求“按计划顺序一个 task 一个 task”，下一会话从 **Task 17 接入审计** 或直接 **Task 24 preflight/compare RED** 二选一；默认推荐先做 Task 17–23 的 active-path 接入缺口审计，避免性能门在未接线 barrier 上假跑。
+1. 继续按计划顺序关闭 Task 18–23 的协议 GREEN（多数 commits/tests 已在树中），或
+2. **优先工程切片**：把 concurrent ZGC（YoungController + remset + old + relocate + director）接到 active `gc()` / safepoint，替换 `active_v2::collect_full` 对 zgc 的统一非移动回收（跨 Task 17–22 的真正 active 接入）。
+3. Task 24 在 active concurrent ZGC 接线前跑 JDK 矩阵会得到 **错误归因**（测的是 active_v2 full collect，不是 generational concurrent ZGC）。
+
+推荐下一会话：**不要盲关 Task 18 checkbox**；先开 **active concurrent ZGC wiring** 切片，或至少把缺口写进 Task 18 检查点再逐项协议关闭。
 
 ## ResumeStateHint
 
-读本文件 + `git log --oneline -15` + Task 16 GREEN 证据段即可恢复。
-环境噪声：load>10 时 3s 门禁会假超时（先 `uptime`）。
+读本文件 + `git log --oneline -10` + Task 17 evidence。bench 输出：`/tmp/young.json`（status=`needs-verification` 因缺 physical/CPU/barrier/JDK counters，属合同，非失败）。
 
-## Checkpoint 2026-07-23：Task 16 GREEN 完成
+## Checkpoint 2026-07-23：Task 17 GREEN 完成
 
 ### TodoCheckpointDraft
 
-- 当前 todo：Task 16 已完成；下一候选 Task 17 active 接入审计 或 Task 24 JDK 归一化门。
-- 已完成：Task 16 三条 GREEN 命令、loom satb/remembered、barrier protocol 8 tests、backend `gc_barrier` 5 tests。
-- 本切片代码改动：无 production 源码改动；更新计划 checkbox、checkpoint、evidence。
+- 当前 todo：Task 17 协议 GREEN 完成；下一候选 Task 18 或 active concurrent ZGC wiring。
+- 本切片：无 production 源码改动；计划 checkbox + checkpoint + evidence。
 
 ### Evidence
 
-- `cargo nextest run -p wjsm-backend-wasm -E 'test(gc_barrier)'` → 5 passed / 59 skipped
-- `cargo nextest run -p wjsm-runtime --test gc_barrier_protocol` → 8 passed
-- `cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(satb_) | test(remembered_)'` → 2 passed / 8 skipped
-- 提交：`98dc81cc feat: add colored GC barriers`
-- 旁证（后续任务已落地，不在本切片关闭范围内）：
-  - `gc_young_concurrent` 6 passed
-  - `gc_old_concurrent` 2 passed
-  - `gc_relocation_concurrent` 5 passed
-  - `gc_host_roots_concurrent` 2 passed
-  - director/platform unit tests 存在于 `director.rs` / `heap/platform/mod.rs`
+- `cargo nextest run -p wjsm-runtime --test gc_young_concurrent` → 6 passed
+- `cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(young_)'` → 4 passed（含名称含 young 的相关 loom）/ 6 skipped
+- `cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 32m --scenario churn --samples 30 --output /tmp/young.json`
+  - exit 0
+  - 30 samples；pause max_ns 样本范围约 123k–241k ns，**全部 <1ms**
+  - JSON `status=needs-verification`（notes：missing physical allocation/CPU/barrier/JDK counters）— gate 合同，非 bench 崩溃
+- 提交：`c25f7101`
 
 ### BaselineUsageDraft
 
-- 已读取：主计划 Task 16、设计 §10 Barrier、检查点、`barrier.rs` backend/runtime、`gc_barrier_protocol`、`gc_loom_model`、commit `98dc81cc`。
-- 缺失：无 Task 16 阻塞项。
+- 已读：计划 Task 17、young.rs、gc_young_concurrent、active_v2、host gc_safepoint/gc()、registry。
+- 缺失：无 Task 17 协议阻塞；active wiring 为显式 follow-up。
 
 ### DriftCheckDraft
 
-- 范围：Task 16 colored barriers + verifier；未扩展到 Task 24 性能门。
-- 兼容边界：未改 ECMAScript / 公开 `--gc`；reference-only color bits 38–43；SeqCst shared words。
-- 退役轨迹：旧 bump/4-byte 主路径已由 Task 15 删除 private gate；源码级残留仍属 Task 26。
-- 决策：`continue`（可进入 Task 17 接入审计或 Task 24）。
+- 范围：Task 17 concurrent young mark 协议。
+- 兼容：未改公开 `--gc` 语义出口；active 仍 full collect。
+- 退役：legacy ZgcCollector 仍在 registry，active full path 不依赖它。
+- 决策：`continue`（可 Task 18 或 active wiring）。
 
 ### Risk / Unknown
 
-- backend `emit_store_color_*` / `emit_atomic_*` 目前是 contract 级 helper，support 热路径仍主要靠既有 `emit_reference_barrier_event`；真正把 colored barrier 编进所有 object load/store 热路径可能要在 Task 17+ 或单独接线切片补齐。
-- Task 24/25 仍 `needs-verification`（JDK 25 probe / 大堆 runner / CI workflows 已删）。
-- ADR 0010 状态文案仍滞后于 Task 15 GREEN。
+- **Active concurrent ZGC 未接线**：性能门若现在跑，归一化的是 active_v2 而非 YoungController。
+- YoungController 使用内存内 object registry，尚未直接扫描 ManagedHeap object map/pages。
+- Task 24/25 仍 needs-verification（JDK probe / runners / CI 已删）。

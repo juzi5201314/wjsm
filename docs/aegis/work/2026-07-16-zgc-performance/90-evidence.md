@@ -921,3 +921,45 @@ cargo nextest run -p wjsm-runtime --lib -E 'test(gc_director) | test(heap_platfo
 - ADR 0010 状态文案仍滞后于 Task 15 GREEN。
 
 状态：Task 16 GREEN 完成。
+
+## Task 17 GREEN completion — 2026-07-23
+
+### 实现事实（既有提交复验）
+
+- 提交：`c25f7101 feat: implement concurrent young marking`
+- `crates/wjsm-runtime/src/runtime_gc/zgc/young.rs`
+  - `YoungPhase` type-state：Idle → PauseMarkStart → ConcurrentMark → PauseMarkEnd → SelectRelocation → Relocate → EpochReclaim
+  - `pause_mark_start`：flip young/remembered epoch、root snapshot、black allocation enable、remset snapshot
+  - `concurrent_mark_step`：drain SATB/remset ring、packet 式 mark、不在 pause 做 page scan/copy
+  - `pause_mark_end`：flush + termination handshake；assert `!page_scan && !object_copy`
+  - `register_object` 在 black_alloc 期间将 young 新对象直接标黑
+- tests：`gc_young_concurrent.rs`（root snapshot/black alloc、SATB termination、remset/promotion、old-heap 不放大 young work、pause <1ms）
+- loom：`young_termination_model_waits_for_inflight_before_end`（及相关 young 命名模型）
+
+### GREEN commands（本会话复跑）
+
+```text
+cargo nextest run -p wjsm-runtime --test gc_young_concurrent
+# Summary: 6 tests run: 6 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(young_)'
+# Summary: 4 tests run: 4 passed, 6 skipped
+# （filter 匹配 young_ 及名称中含 young 的相关模型）
+
+cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 32m --scenario churn --samples 30 --output /tmp/young.json
+# exit 0
+# 30 samples；pause max_ns 样本约 123319–241268（全部 < 1_000_000 ns）
+# JSON status=needs-verification
+# notes: missing physical allocation, CPU, barrier, or JDK counters force needs-verification
+# （资源 admission=admitted；此 status 是 metric 合同，不是 bench 失败）
+```
+
+### Active-path 审计（缺口，不阻塞 Task 17 协议 GREEN）
+
+- `host_imports/core.rs` `gc_safepoint_poll` 与 `runtime_builtins` `NativeCallable::GcCollect` 均调用 `runtime_gc::active_v2::collect_full`。
+- `active_v2::collect_full` 注释与行为：对 active shared-memory64 heap 做 **非移动完整回收**（root mark → retire dead handles），**不**分派 `YoungController` / concurrent young mark。
+- `registry::create(Zgc)` 仍构造 legacy `ZgcCollector`，但其 `collect_full` 不在 active full-collect 热路径上被调用。
+- `YoungController` 调用方：unit tests + `OldController` 协作；**无** RuntimeState / safepoint owner 持有实例。
+- 结论：Task 17 关闭的是 concurrent young mark **协议与测试**；active `--gc zgc` 的 `gc()` 仍是 active_v2 full collect。接线属于后续切片（建议在 Task 24 前完成）。
+
+状态：Task 17 GREEN 完成（协议层）；active concurrent wiring = open follow-up。

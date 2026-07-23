@@ -478,11 +478,11 @@ cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(young_)'
 cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 32m --scenario churn --samples 30 --output /tmp/young.json
 ```
 
-- [ ] **Write test**：mark-start root snapshot、SATB、new allocation black、termination、pause内无page scan/copy。
-- [ ] **Verify RED**：young phase不存在。
-- [ ] **Implement**：type-state phases、work packets、concurrent mark/termination/telemetry。
-- [ ] **Verify GREEN**：测试和benchmark通过，max pause<1ms。
-- [ ] **Commit**：`feat: implement concurrent young marking`。
+- [x] **Write test**：mark-start root snapshot、SATB、new allocation black、termination、pause内无page scan/copy。
+- [x] **Verify RED**：young phase不存在。
+- [x] **Implement**：type-state phases、work packets、concurrent mark/termination/telemetry。
+- [x] **Verify GREEN**：测试和benchmark通过，max pause<1ms。
+- [x] **Commit**：`feat: implement concurrent young marking`（`c25f7101`；2026-07-23 复跑 GREEN 关闭检查点）。
 
 ## Task 18：实现精确跨代remset、age与原地晋升
 
