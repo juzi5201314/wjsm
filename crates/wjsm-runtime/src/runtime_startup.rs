@@ -592,11 +592,9 @@ fn record_and_attach_gc_heap(
     // 并可能在扫描/清扫时踩主内存字符串区）。
     let string_end = wasm_env.heap_ptr.get(&mut *store).i32().unwrap_or(0).max(0) as usize;
     let immortal_objects_end = immortal_objects_end.max(string_end);
-    store.data().store_heap_layout_boundaries(
-        immortal_objects_end,
-        immortal_objects_end,
-        0,
-    );
+    store
+        .data()
+        .store_heap_layout_boundaries(immortal_objects_end, immortal_objects_end, 0);
     // 主内存 heap_ptr 保持字符串 tip，供 eval/runtime 模块 data 追加。
     enforce_heap_limit(store, wasm_env)?;
     let object_heap_base = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;

@@ -983,7 +983,6 @@ pub(crate) fn push_array_value(
     Err(value::encode_undefined())
 }
 
-
 async fn push_iterator_values_async(
     caller: &mut Caller<'_, RuntimeState>,
     arr: i64,

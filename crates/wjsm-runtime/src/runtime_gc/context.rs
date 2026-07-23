@@ -260,7 +260,6 @@ impl<'a> GcContext<'a> {
         };
         if ptr == 0 { None } else { Some(ptr) }
     }
-
 }
 
 #[cfg(test)]

@@ -216,7 +216,9 @@ pub(crate) fn reset_primordial_heap_before_restore(
         mem[hs..hp].fill(0);
     }
     let ot_base = obj_table_base as usize;
-    let ot_end = ot_base.saturating_add(obj_table_count as usize * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize);
+    let ot_end = ot_base.saturating_add(
+        obj_table_count as usize * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize,
+    );
     if ot_end <= mem.len() {
         mem[ot_base..ot_end].fill(0);
     }

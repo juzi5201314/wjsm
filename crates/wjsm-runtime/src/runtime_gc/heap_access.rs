@@ -19,8 +19,6 @@ pub enum SlotPart {
     Setter,
 }
 
-
-
 /// 写属性槽 value/getter/setter。
 ///
 /// V2 以 key 为索引；`slot_idx` 路径仅在调用方已定位到 own 槽位时使用
