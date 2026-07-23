@@ -861,3 +861,63 @@ cargo nextest run --workspace --all-features -E 'test(modules__async_local_worke
 ```
 
 状态：Task 15 GREEN 完成。
+
+## Task 16 GREEN completion — 2026-07-23
+
+### 实现事实（既有提交复验）
+
+- 提交：`98dc81cc feat: add colored GC barriers`
+- backend：`crates/wjsm-backend-wasm/src/compiler_helpers/barrier.rs`
+  - `color_for_store` reference-only coloring / 非引用清零 bit 38–43
+  - `emit_store_color_clear_or_set`、`emit_atomic_{load,store}_seqcst`
+  - `stable_wat_has_no_host_call` / `describe_stable_load_barrier`
+- runtime：`crates/wjsm-runtime/src/runtime_gc/zgc/barrier.rs`
+  - `load_barrier` / `classify_entry`（Stable* 直出，Relocating* assist，Free/Retired invalid）
+  - `store_barrier` / `store_barrier_with_target_generation`（SATB + old→young remset）
+  - `BarrierRing` 1-slot full → host_flush 计数
+  - `HeaderLayout` / `select_bulk_copy_mode` / `prototype_field_kind`（mutable prototype）
+- IR color helpers：`wjsm_ir::value::{GC_COLOR_MASK,strip_gc_color,apply_gc_color,has_*_color}`
+- loom：`satb_ring_model_preserves_overwritten_handle_under_race`、`remembered_slot_model_dedups_concurrent_old_to_young_writes`
+
+### GREEN commands（本会话复跑）
+
+```text
+cargo nextest run -p wjsm-backend-wasm -E 'test(gc_barrier)'
+# Summary: 5 tests run: 5 passed, 59 skipped
+
+cargo nextest run -p wjsm-runtime --test gc_barrier_protocol
+# Summary: 8 tests run: 8 passed, 0 skipped
+
+cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(satb_) | test(remembered_)'
+# Summary: 2 tests run: 2 passed, 8 skipped
+```
+
+### 旁证（后续任务已有提交与单元 GREEN，不在 Task 16 关闭范围内）
+
+```text
+cargo nextest run -p wjsm-runtime --test gc_young_concurrent
+# 6 passed
+
+cargo nextest run -p wjsm-runtime --test gc_old_concurrent
+# 2 passed
+
+cargo nextest run -p wjsm-runtime --test gc_relocation_concurrent
+# 5 passed
+
+cargo nextest run -p wjsm-runtime --test gc_host_roots_concurrent
+# 2 passed
+
+cargo nextest run -p wjsm-runtime --lib -E 'test(gc_director) | test(heap_platform) | test(bitmap_simd)'
+# 11 passed, 217 skipped
+```
+
+相关提交：`c25f7101` young、`df01a88a` remset/promotion、`dcd5ca73` old、`99f31844` relocation、`3fabed69` host roots、`4a13bb0b` director/platform。
+
+### 已知缺口（移交后续）
+
+- backend barrier emit helpers 尚未成为 support/object helpers 热路径的唯一 owner；support 仍有 `emit_reference_barrier_event`。
+- Task 24/25 JDK 归一化与大堆 runner 证据仍 `needs-verification`；CI workflows 已按用户要求删除。
+- Task 26 源码级退役（legacy collector/`GcContext` 残留字符串、`HANDLE_TABLE_ENTRY_SIZE=4` 等）仍 open。
+- ADR 0010 状态文案仍滞后于 Task 15 GREEN。
+
+状态：Task 16 GREEN 完成。

@@ -460,11 +460,11 @@ cargo nextest run -p wjsm-runtime --test gc_barrier_protocol
 cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(satb_) | test(remembered_)'
 ```
 
-- [ ] **Write test**：stable/relocating load、SATB、old→young、1-slot buffer、runtime-string reference、所有非引用值bits清零、mutable prototype header、bulk copy verifier。
-- [ ] **Verify RED**：barrier contracts缺失。
-- [ ] **Implement**：Wasm SeqCst atomic fast path、preallocated rings、reference-only coloring、mutable-header barrier/verifier。
-- [ ] **Verify GREEN**：测试通过；stable WAT无host call，非引用值不带color。
-- [ ] **Commit**：`feat: add colored GC barriers`。
+- [x] **Write test**：stable/relocating load、SATB、old→young、1-slot buffer、runtime-string reference、所有非引用值bits清零、mutable prototype header、bulk copy verifier。
+- [x] **Verify RED**：barrier contracts缺失。
+- [x] **Implement**：Wasm SeqCst atomic fast path、preallocated rings、reference-only coloring、mutable-header barrier/verifier。
+- [x] **Verify GREEN**：测试通过；stable WAT无host call，非引用值不带color。
+- [x] **Commit**：`feat: add colored GC barriers`（`98dc81cc`；2026-07-23 复跑 GREEN 证据关闭检查点）。
 
 ## Task 17：实现concurrent young mark
 
