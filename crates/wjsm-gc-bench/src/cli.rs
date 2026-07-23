@@ -69,6 +69,9 @@ pub struct RunArgs {
     /// 随机种子。
     #[arg(long, default_value_t = 0x5eed)]
     pub seed: u64,
+    /// 逻辑对象数（覆盖按堆大小自动计算的值）。
+    #[arg(long)]
+    pub objects: Option<u64>,
 }
 
 pub fn parse_bytes(input: &str) -> Result<u64, String> {

@@ -62,9 +62,15 @@ pub struct Scenario {
 }
 
 impl Scenario {
-    pub fn build(kind: ScenarioKind, seed: u64, heap_cap_bytes: u64, live_set_percent: u8) -> Self {
+    pub fn build(
+        kind: ScenarioKind,
+        seed: u64,
+        heap_cap_bytes: u64,
+        live_set_percent: u8,
+        objects_override: Option<u64>,
+    ) -> Self {
         assert!(live_set_percent <= 100, "live set must be a percentage");
-        let allocations = allocation_count(heap_cap_bytes);
+        let allocations = objects_override.unwrap_or_else(|| allocation_count(heap_cap_bytes));
         let retained = allocations.saturating_mul(u64::from(live_set_percent)) / 100;
         let source = source_for(kind, seed, allocations, retained);
         Self {
@@ -125,8 +131,8 @@ mod tests {
 
     #[test]
     fn scenario_source_is_deterministic() {
-        let a = Scenario::build(ScenarioKind::Churn, 42, 32 * MIB, 50);
-        let b = Scenario::build(ScenarioKind::Churn, 42, 32 * MIB, 50);
+        let a = Scenario::build(ScenarioKind::Churn, 42, 32 * MIB, 50, None);
+        let b = Scenario::build(ScenarioKind::Churn, 42, 32 * MIB, 50, None);
         assert_eq!(a.source, b.source);
         assert_eq!(a.allocations, b.allocations);
     }

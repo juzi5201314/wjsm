@@ -14,6 +14,7 @@ pub(crate) fn run_bench(args: &RunArgs) -> Result<BenchReport> {
         args.seed,
         args.common.heap,
         args.live_set,
+        args.objects,
     );
     let hardware = HostInfo::detect();
     let driver = WjsmDriver::compile(&scenario)?;

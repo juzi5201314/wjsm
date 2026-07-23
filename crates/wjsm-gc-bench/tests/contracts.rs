@@ -24,8 +24,8 @@ fn cli_parses_info() {
 
 #[test]
 fn scenario_deterministic() {
-    let a = Scenario::build(ScenarioKind::Churn, 42, 32 * 1024 * 1024, 50);
-    let b = Scenario::build(ScenarioKind::Churn, 42, 32 * 1024 * 1024, 50);
+    let a = Scenario::build(ScenarioKind::Churn, 42, 32 * 1024 * 1024, 50, None);
+    let b = Scenario::build(ScenarioKind::Churn, 42, 32 * 1024 * 1024, 50, None);
     assert_eq!(a.source, b.source);
     assert_eq!(a.allocations, b.allocations);
     assert_eq!(a.retained, b.retained);
@@ -34,7 +34,7 @@ fn scenario_deterministic() {
 #[test]
 fn all_scenarios_produce_source() {
     for kind in ScenarioKind::all() {
-        let s = Scenario::build(*kind, 1, 32 * 1024 * 1024, 50);
+        let s = Scenario::build(*kind, 1, 32 * 1024 * 1024, 50, None);
         assert!(!s.source.is_empty(), "scenario {} has empty source", kind.as_str());
         assert!(s.source.contains("console.log"), "scenario {} missing output", kind.as_str());
     }
