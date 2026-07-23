@@ -133,7 +133,7 @@ fn clone_runtime_options_for_worker(caller: &Caller<'_, RuntimeState>) -> Runtim
         max_heap_size: caller.data().max_heap_size,
         shadow_stack_max: caller.data().shadow_stack_max(),
         wasmtime_memory_reservation: None,
-        gc_algorithm: crate::runtime_gc::GcAlgorithmKind::MarkSweep,
+        gc_algorithm: crate::runtime_gc::GcAlgorithmKind::Zgc,
         // worker 继承父 agent 的显式编译器选择。
         compiler: caller.data().compiler,
         current_entry: caller.data().current_entry.clone(),

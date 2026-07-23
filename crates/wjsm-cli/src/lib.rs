@@ -411,7 +411,7 @@ fn install_embedded_runtime_artifacts() {
         wjsm_runtime::install_embedded_startup_snapshot(bytes);
     }
     if let Some(bytes) = wjsm_runtime_support::embedded_support_cwasm(
-        wjsm_runtime_support::SupportGcFlavor::MarkSweep,
+        wjsm_runtime_support::SupportGcFlavor::Zgc,
     ) {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }

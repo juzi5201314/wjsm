@@ -310,7 +310,7 @@ impl Default for RuntimeOptions {
             max_heap_size: None,
             shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
             wasmtime_memory_reservation: None,
-            gc_algorithm: GcAlgorithmKind::MarkSweep,
+            gc_algorithm: GcAlgorithmKind::Zgc,
             compiler: None,
             current_entry: None,
             argv: Vec::new(),
@@ -402,7 +402,7 @@ pub fn gc_algorithm_from_env(
             return value.parse();
         }
     }
-    Ok(GcAlgorithmKind::MarkSweep)
+    Ok(GcAlgorithmKind::Zgc)
 }
 
 pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
@@ -598,12 +598,12 @@ pub(crate) fn embedded_startup_snapshot_view(engine: &Engine) -> Option<&'static
 // ── Embedded support cwasm ────────────────────────────────────────────
 //
 // 运行时可显式注入 build-time 预编译的 support cwasm；未注入时使用静态
-// mark-sweep 默认 artifact。显式注入需要运行时输入，因此保留 OnceLock；默认
+// zgc 默认 artifact。显式注入需要运行时输入，因此保留 OnceLock；默认
 // artifact 初始化在声明处固定，使用 LazyLock。
 
 static INSTALLED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
-static DEFAULT_MARK_SWEEP_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
-    wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::MarkSweep)
+static DEFAULT_ZGC_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
+    wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::Zgc)
 });
 
 /// 安装编译时嵌入的 support cwasm；进程内只需调用一次（重复 set 静默忽略）。
@@ -613,13 +613,13 @@ pub fn install_embedded_support_cwasm(cwasm_bytes: &'static [u8]) {
 }
 
 /// 返回已安装的 embedded support cwasm 字节。
-/// 未通过 `install_embedded_support_cwasm` 显式注入时，使用 mark-sweep 默认 artifact。
+/// 未通过 `install_embedded_support_cwasm` 显式注入时，使用 zgc 默认 artifact。
 /// 返回 None 仅当 embedded feature 未启用（build-time artifact 为空）。
 pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
     INSTALLED_SUPPORT_CWASM
         .get()
         .copied()
-        .or(*DEFAULT_MARK_SWEEP_SUPPORT_CWASM)
+        .or(*DEFAULT_ZGC_SUPPORT_CWASM)
 }
 
 pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]> {
@@ -1967,7 +1967,7 @@ impl RuntimeState {
             immortal_objects_end: Arc::new(Mutex::new(0)),
             dynamic_heap_start: Arc::new(Mutex::new(0)),
             barrier_event_buf_base: Arc::new(Mutex::new(0)),
-            gc_algorithm: crate::runtime_gc::GcAlgorithmKind::MarkSweep,
+            gc_algorithm: crate::runtime_gc::GcAlgorithmKind::Zgc,
             gc_scheduler: Arc::new(Mutex::new(
                 crate::runtime_gc::scheduler::GcScheduler::default(),
             )),
@@ -2581,8 +2581,8 @@ mod tests {
     }
 
     #[test]
-    fn gc_algorithm_env_defaults_to_mark_sweep() {
-        assert_eq!(gc_algorithm_from_env(&[]), Ok(GcAlgorithmKind::MarkSweep));
+    fn gc_algorithm_env_defaults_to_zgc() {
+        assert_eq!(gc_algorithm_from_env(&[]), Ok(GcAlgorithmKind::Zgc));
     }
 
     #[test]
