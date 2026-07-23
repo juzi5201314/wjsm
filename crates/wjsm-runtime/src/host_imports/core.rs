@@ -1697,7 +1697,16 @@ pub(crate) fn define_core(
         if let Some(global) = env.gc_alloc_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(0));
         }
-        let mut stats = crate::runtime_gc::active_v2::collect_full(&mut caller, &env);
+        let algorithm = {
+            let gc = caller
+                .data()
+                .gc_algorithm
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            gc.name()
+        };
+        let mut stats =
+            crate::runtime_gc::active_zgc::collect_dispatch(&mut caller, &env, algorithm);
         let next_trigger = {
             let heap_limit = caller.data().heap_access_v2().heap_limit_bytes();
             let mut scheduler = caller
@@ -1715,10 +1724,13 @@ pub(crate) fn define_core(
         if let Some(global) = env.gc_trigger_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
         }
-        stats.pause_ns_max = 0;
-        stats.pause_ns_total = 0;
-        stats.pause_count = 0;
-        caller.data().store_last_gc_stats("managed-heap-v2", stats);
+        // safepoint 路径不把 host poll 自身 wall 记为 JS pause；phase pause 已在 stats 中。
+        if algorithm != "zgc" {
+            stats.pause_ns_max = 0;
+            stats.pause_ns_total = 0;
+            stats.pause_count = 0;
+        }
+        caller.data().store_last_gc_stats(algorithm, stats);
     });
     linker.define(&mut store, "env", "gc_safepoint_poll", f)?;
 

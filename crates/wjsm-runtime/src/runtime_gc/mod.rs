@@ -71,6 +71,7 @@
 //!
 //! 详细设计见 plan.md。
 pub(crate) mod active_v2;
+pub(crate) mod active_zgc;
 pub mod api;
 mod collector_context;
 pub mod context;

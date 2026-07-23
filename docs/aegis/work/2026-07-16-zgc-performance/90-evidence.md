@@ -963,3 +963,78 @@ cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 32m --
 - 结论：Task 17 关闭的是 concurrent young mark **协议与测试**；active `--gc zgc` 的 `gc()` 仍是 active_v2 full collect。接线属于后续切片（建议在 Task 24 前完成）。
 
 状态：Task 17 GREEN 完成（协议层）；active concurrent wiring = open follow-up。
+
+## Active concurrent ZGC wiring + Task 18–23 close — 2026-07-23
+
+### Wiring implementation
+
+- 新增 `crates/wjsm-runtime/src/runtime_gc/active_zgc.rs`
+  - `collect_dispatch(algorithm)`：`zgc` → generational phase machine；其它 → `active_v2::collect_full`
+  - 在唯一 `HeapAccessV2` 上 `build_object_graph`（live handles + `object_references`）
+  - 驱动 `YoungController` / `OldController` / `GcDirector::evaluate`
+  - `promote_to_old` 写回 StableOld；heap mark 保险闭包；retire dead；weak/realm/side-table cleanup
+  - `CycleKind::ZgcCycle` + phase pause 记录
+- `HeapAccessV2`：`handle_generation` / `promote_to_old` / `object_size_public`
+- 接线点：
+  - `runtime_builtins.rs` `NativeCallable::GcCollect`
+  - `host_imports/core.rs` `gc_safepoint_poll`
+  - `runtime_heap.rs` `collect_for_host_allocation_pressure`
+
+### Smoke
+
+```text
+cargo run -- run --gc zgc -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1]); console.log("ok")'
+# stdout: 2 / ok
+
+cargo run -- run --gc mark-sweep -e '...'  # stdout: 2
+cargo run -- run --gc g1 -e '...'          # stdout: 2
+```
+
+### Task 18–23 GREEN（本会话）
+
+```text
+# Task 18
+cargo nextest run -p wjsm-runtime --test gc_young_concurrent -E 'test(remset_) | test(promotion_)'
+# 2 passed
+cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(remset_) | test(promotion_)'
+# 3 passed
+
+# Task 19
+cargo nextest run -p wjsm-runtime --test gc_old_concurrent
+# 2 passed
+cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(old_)'
+# 2 passed
+
+# Task 20
+cargo nextest run -p wjsm-runtime --test gc_relocation_concurrent
+# 5 passed
+cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(relocation_) | test(epoch_reclaim)'
+# 2 passed
+
+# Task 21
+cargo nextest run -p wjsm-runtime --test gc_host_roots_concurrent
+# 2 passed
+cargo nextest run -p wjsm-runtime --test integration -E 'test(vm_gc_realm_roots) | test(startup_snapshot_gc_fixes)'
+# 3 passed
+WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__weakref_gc) | test(happy__finalization_registry_cleanup) | test(happy__gc_async_await) | test(happy__async_hooks_destroy_gc)'
+# 4 passed
+
+# Task 22
+cargo nextest run -p wjsm-runtime --lib -E 'test(gc_director)'
+# 7 passed
+
+# Task 23
+cargo nextest run -p wjsm-runtime --lib -E 'test(heap_platform) | test(bitmap_simd)'
+# 4 passed
+cargo run --release -p wjsm-gc-bench -- capabilities --output /tmp/gc-capabilities.json
+# exit 0；JSON keys: schema_version, hardware, resources, platform
+```
+
+### Explicit remaining before claiming JDK gate readiness
+
+- Task 24 本身：JDK 25 GA home、instrumented probe patch build、30-sample 全矩阵、gate 硬门。
+- Telemetry numerators：physical allocated / GC CPU / barrier events 仍可为 null → JSON `needs-verification`。
+- Active ZGC 仍是 **safepoint 内 phase drain + non-moving retire**；不是跨线程 worker 的 fully concurrent mark/copy。ConcurrentRelocator 热路径 copy 未并入 active full collect。
+- Task 26 源码退役、Task 25 大堆/CI、Task 27 ADR 闭环仍 open。
+
+状态：Task 18–23 协议 GREEN 完成；active zgc wiring 完成；**可以开始 Task 24**（预期首次 compare/gate 为 RED 证据采集）。

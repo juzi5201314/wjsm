@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::heap::{HeapAddress, HeapMemoryError, SharedHeapMemory};
+use crate::heap::{HandleGeneration, HandleState, HeapAddress, HeapMemoryError, SharedHeapMemory};
 use wjsm_ir::{constants, value};
 
 const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
@@ -411,6 +411,38 @@ impl HeapAccessV2 {
             return Err(HeapAccessV2Error::UnresolvedHandle { handle });
         }
         Ok(entry >> 16)
+    }
+
+    /// 读取 handle entry 的世代（Free/Retired 返回 None）。
+    pub fn handle_generation(&self, handle: u32) -> Option<HandleGeneration> {
+        let entry = self
+            .memory
+            .load_word(HeapAddress::new(u64::from(handle) * 8))
+            .ok()?;
+        let state = HandleState::from_raw((entry & u16::MAX as u64) as u16)?;
+        state.generation()
+    }
+
+    /// 将 StableYoung 晋升为 StableOld（失败时保留原状态）。
+    pub fn promote_to_old(&self, handle: u32) -> Result<(), HeapAccessV2Error> {
+        let entry = self
+            .memory
+            .load_word(HeapAddress::new(u64::from(handle) * 8))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let state = (entry & u16::MAX as u64) as u16;
+        if state != HandleState::StableYoung as u16 {
+            return Ok(());
+        }
+        let object = entry >> 16;
+        let next = (object << 16) | u64::from(HandleState::StableOld as u16);
+        self.memory
+            .store_word(HeapAddress::new(u64::from(handle) * 8), next)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 供 active ZGC 构图使用的对象字节数。
+    pub fn object_size_public(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
+        self.object_size(handle)
     }
     pub fn live_handles(&self, count: u32) -> Vec<u32> {
         (0..count)

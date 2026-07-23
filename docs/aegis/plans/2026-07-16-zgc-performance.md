@@ -496,11 +496,11 @@ cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(remset_) | test(
 cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 256m --scenario request --live-set 50 --samples 30 --output /tmp/remset.json
 ```
 
-- [ ] **Write test**：old→young写/覆写/删除、double buffer、slot去重、dense/humongous原地晋升；loom穷举epoch flip与并发slot写、promotion publish与young mark竞争。
-- [ ] **Verify RED**：remset/promotion缺失。
-- [ ] **Implement**：精确slot bitmap、age/survival、in-place promotion。
-- [ ] **Verify GREEN**：young work不随old heap总大小线性增长。
-- [ ] **Commit**：`feat: add precise remembered sets and promotion`。
+- [x] **Write test**：old→young写/覆写/删除、double buffer、slot去重、dense/humongous原地晋升；loom穷举epoch flip与并发slot写、promotion publish与young mark竞争。
+- [x] **Verify RED**：remset/promotion缺失。
+- [x] **Implement**：精确slot bitmap、age/survival、in-place promotion。
+- [x] **Verify GREEN**：young work不随old heap总大小线性增长。
+- [x] **Commit**：`feat: add precise remembered sets and promotion`（`df01a88a`；2026-07-23 复跑 GREEN + active wiring）。
 
 ## Task 19：实现跨young cycle的concurrent old mark
 
@@ -514,11 +514,11 @@ cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(old_)'
 cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 1024m --scenario request --live-set 80 --samples 30 --output /tmp/old.json
 ```
 
-- [ ] **Write test**：old由young mark-start协调、跨young cycles、promotion frontier、young→old roots、termination。
-- [ ] **Verify RED**：old controller缺失。
-- [ ] **Implement**：独立old epoch/bitmap/queues与young-old handshake。
-- [ ] **Verify GREEN**：old mark按old live bytes归一化，young pause不执行old全量工作。
-- [ ] **Commit**：`feat: implement concurrent old marking`。
+- [x] **Write test**：old由young mark-start协调、跨young cycles、promotion frontier、young→old roots、termination。
+- [x] **Verify RED**：old controller缺失。
+- [x] **Implement**：独立old epoch/bitmap/queues与young-old handshake。
+- [x] **Verify GREEN**：old mark按old live bytes归一化，young pause不执行old全量工作。
+- [x] **Commit**：`feat: implement concurrent old marking`（`dcd5ca73`；2026-07-23 复跑 GREEN + active wiring）。
 
 ## Task 20：实现concurrent relocation、assist与epoch reclaim
 
@@ -532,11 +532,11 @@ cargo nextest run -p wjsm-runtime --test gc_loom_model -E 'test(relocation_) | t
 cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 256m --scenario mutation --relocate-every-page --samples 30 --output /tmp/relocate.json
 ```
 
-- [ ] **Write test**：copy ownership、assist、same-slot竞争、prototype更新竞争、destination publish、grace period、young/old互斥。
-- [ ] **Verify RED**：旧同步relocate失败。
-- [ ] **Implement**：descriptor、relocate-start handshake、atomic mutable-header/value snapshot、assist与epoch reclaim。
-- [ ] **Verify GREEN**：pause内无copy、max<1ms、无source lost write。
-- [ ] **Commit**：`feat: implement concurrent ZGC relocation`。
+- [x] **Write test**：copy ownership、assist、same-slot竞争、prototype更新竞争、destination publish、grace period、young/old互斥。
+- [x] **Verify RED**：旧同步relocate失败。
+- [x] **Implement**：descriptor、relocate-start handshake、atomic mutable-header/value snapshot、assist与epoch reclaim。
+- [x] **Verify GREEN**：pause内无copy、max<1ms、无source lost write。
+- [x] **Commit**：`feat: implement concurrent ZGC relocation`（`99f31844`；2026-07-23 复跑 GREEN + active wiring）。
 
 ## Task 21：完成WeakRef/finalization/realm/side-table并发周期语义
 
@@ -549,11 +549,11 @@ cargo nextest run -p wjsm-runtime --test integration -E 'test(vm_gc_realm_roots)
 WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__weakref_gc) | test(happy__finalization_registry_cleanup) | test(happy__gc_async_await) | test(happy__async_hooks_destroy_gc)'
 ```
 
-- [ ] **Write test**：side table不反向保活、finalizer一次、realm destroy与old mark、snapshot restore后weak cleanup。
-- [ ] **Verify RED**：旧sweep-only cleanup失败。
-- [ ] **Implement**：root snapshot/conditional roots/weak queues；cleanup早于quarantine，callback晚于cycle publish。
-- [ ] **Verify GREEN**：两条命令通过，三collector语义一致。
-- [ ] **Commit**：`feat: integrate host roots with concurrent GC`。
+- [x] **Write test**：side table不反向保活、finalizer一次、realm destroy与old mark、snapshot restore后weak cleanup。
+- [x] **Verify RED**：旧sweep-only cleanup失败。
+- [x] **Implement**：root snapshot/conditional roots/weak queues；cleanup早于quarantine，callback晚于cycle publish。
+- [x] **Verify GREEN**：两条命令通过，三collector语义一致。
+- [x] **Commit**：`feat: integrate host roots with concurrent GC`（`3fabed69`；2026-07-23 复跑 GREEN + active wiring）。
 
 ---
 
@@ -570,11 +570,11 @@ cargo nextest run -p wjsm-runtime -E 'test(gc_director)'
 cargo run --release -p wjsm-gc-bench -- run --engine wjsm --gc zgc --heap 256m --scenario saturation --samples 30 --output /tmp/pacer.json
 ```
 
-- [ ] **Write test**：EWMA、prediction error、young/old start、reserve、assist cap、stall only reserve exhaustion、OOM。
-- [ ] **Verify RED**：固定scheduler不满足。
-- [ ] **Implement**：runway model、比例assist、structured stall reason。
-- [ ] **Verify GREEN**：无无因stall，稳定负载prediction收敛。
-- [ ] **Commit**：`feat: add predictive ZGC pacing`。
+- [x] **Write test**：EWMA、prediction error、young/old start、reserve、assist cap、stall only reserve exhaustion、OOM。
+- [x] **Verify RED**：固定scheduler不满足。
+- [x] **Implement**：runway model、比例assist、structured stall reason。
+- [x] **Verify GREEN**：无无因stall，稳定负载prediction收敛。
+- [x] **Commit**：`feat: add predictive ZGC pacing`（落地于 `4a13bb0b` director + `active_zgc` 接线；2026-07-23 关闭协议 GREEN）。
 
 ## Task 23：实现平台VM、NUMA与SIMD并定义capability矩阵
 
@@ -596,11 +596,11 @@ cargo nextest run -p wjsm-runtime -E 'test(heap_platform) | test(bitmap_simd)'
 cargo run --release -p wjsm-gc-bench -- capabilities --output /tmp/gc-capabilities.json
 ```
 
-- [ ] **Write test**：commit/decommit/recommit、capability JSON、NUMA local/fallback、scalar与当前ISA一致。
-- [ ] **Verify RED**：platform backend/capability缺失。
-- [ ] **Implement**：cfg VM backend、RAII ranges、node-local lists、一次ISA dispatch和CI workflow。
-- [ ] **Verify GREEN**：本地只关闭portable/实际ISA；本地缺少的ISA/OS/NUMA能力必须保持`needs-capability-runner`，禁止auto-skip为通过，直到Task 25具名CI证据到达。
-- [ ] **Commit**：`feat: add GC platform memory capabilities`。
+- [x] **Write test**：commit/decommit/recommit、capability JSON、NUMA local/fallback、scalar与当前ISA一致。
+- [x] **Verify RED**：platform backend/capability缺失。
+- [x] **Implement**：cfg VM backend、RAII ranges、node-local lists、一次ISA dispatch和CI workflow。
+- [x] **Verify GREEN**：本地只关闭portable/实际ISA；本地缺少的ISA/OS/NUMA能力必须保持`needs-capability-runner`，禁止auto-skip为通过，直到Task 25具名CI证据到达。
+- [x] **Commit**：`feat: add GC platform memory capabilities`（落地于 `4a13bb0b`；workflow 已按用户要求删除，capability 本地 GREEN）。
 
 ---
 

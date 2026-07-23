@@ -1226,7 +1226,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .name();
-            let stats = crate::runtime_gc::active_v2::collect_full(&mut *caller, &env);
+            let stats = crate::runtime_gc::active_zgc::collect_dispatch(&mut *caller, &env, algorithm);
             caller
                 .data()
                 .performance_forced_gc

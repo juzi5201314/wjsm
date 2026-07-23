@@ -109,12 +109,12 @@ fn collect_for_host_allocation_pressure<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
 ) {
-    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let algorithm = gc.name();
-    let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, algorithm);
-    let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-    let stats = gc.collect_full(&mut gc_ctx, &mut roots as _);
+    let algorithm = {
+        let gc_arc = ctx.as_context().data().gc_algorithm.clone();
+        let gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
+        gc.name()
+    };
+    let stats = crate::runtime_gc::active_zgc::collect_dispatch(ctx, env, algorithm);
     ctx.as_context()
         .data()
         .store_last_gc_stats(algorithm, stats);
