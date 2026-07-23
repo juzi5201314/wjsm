@@ -763,18 +763,7 @@ pub(super) async fn setup_shared_env_and_support(
             });
     }
 
-    let gc_kind = {
-        let gc = store
-            .data()
-            .gc_algorithm
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        match gc.name() {
-            "g1" => crate::GcAlgorithmKind::G1,
-            "zgc" => crate::GcAlgorithmKind::Zgc,
-            _ => crate::GcAlgorithmKind::MarkSweep,
-        }
-    };
+    let gc_kind = store.data().gc_algorithm;
     let support_flavor = match gc_kind {
         crate::GcAlgorithmKind::MarkSweep => wjsm_backend_wasm::GcFlavor::MarkSweep,
         crate::GcAlgorithmKind::G1 => wjsm_backend_wasm::GcFlavor::G1,

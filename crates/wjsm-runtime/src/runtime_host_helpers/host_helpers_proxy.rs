@@ -443,9 +443,9 @@ pub(crate) fn write_new_property_to_memory(
 
             data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&(new_capacity as u32).to_le_bytes());
 
-            let slot_addr = obj_table_ptr + handle_idx as usize * 4;
-            if slot_addr + 4 <= data.len() {
-                data[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
+            let slot_addr = obj_table_ptr + handle_idx as usize * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            if slot_addr + 8 <= data.len() {
+                data[slot_addr..slot_addr + 8].copy_from_slice(&(heap_ptr as u64).to_le_bytes());
             }
         }
 

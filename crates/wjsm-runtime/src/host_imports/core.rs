@@ -1632,64 +1632,39 @@ pub(crate) fn define_core(
     // ── P4 GC framework: gc_alloc_slow / gc_safepoint_poll / gc_barrier_flush / gc_load_barrier_slow / gc_take_freed_handle ──
 
     // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
-    //   fast-path bump 失败后的 slow-path：free list → bump → GC → grow。
-    //   真 OOM（无法分配）时 host 返回 `Err` → Wasmtime trap（#117）；不再返回 sentinel。
+    //   遗留 HOST_IMPORTS 槽位：V2 support 走 gc_alloc_slow_v2；本入口重定向到
+    //   HeapAccessV2.reserve_nlab，返回 i32 截断地址（仅兼容仍 import 该符号的模块）。
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          size: i32,
-         heap_type: i32,
-         capacity: i32|
+         _heap_type: i32,
+         _capacity: i32|
          -> wasmtime::Result<i32> {
-            let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
-                return Err(wasmtime::Trap::AllocationTooLarge.into());
-            };
-            let size = size.max(0) as usize;
-            let heap_type = heap_type.clamp(0, 255) as u8;
-            let capacity = capacity.max(0) as u32;
-            if caller.data().heap_layout_boundaries().1 == 0 {
-                if let Some(ptr) =
-                    crate::runtime_heap::alloc_heap_region_without_gc(&mut caller, &env, size)
-                {
-                    return Ok(ptr as i32);
+            let size = size.max(0) as u64;
+            match crate::allocate_v2_object_bytes(&mut caller, size) {
+                Ok((start, _)) => {
+                    let addr = i32::try_from(start).unwrap_or(i32::MAX);
+                    Ok(addr)
                 }
-                return Err(wasmtime::Trap::AllocationTooLarge.into());
-            }
-            // 算法持有在 RuntimeState.gc_algorithm（Arc<Mutex>），经 GcContext 调用。
-            // v2 alloc_slow 自行处理 free list、collection assist、grow 与最终 OOM 判定。
-            let gc_arc = caller.data().gc_algorithm.clone();
-            let allocated = {
-                let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let algorithm = gc.name();
-                let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, algorithm);
-                let req = crate::runtime_gc::api::AllocRequest {
-                    size,
-                    heap_type,
-                    capacity,
-                };
-                gc.alloc_slow(&mut ctx, &mut roots as _, req)
-                    .map(|ptr| (ptr, algorithm, ctx.stats.clone()))
-            };
-            if let Some((ptr, algorithm, stats)) = allocated {
-                if stats.has_pause_observation() {
-                    caller.data().store_last_gc_stats(algorithm, stats);
+                Err(_) => {
+                    let used = caller
+                        .data()
+                        .heap_access_v2()
+                        .used_bytes()
+                        .min(usize::MAX as u64) as usize;
+                    caller
+                        .data()
+                        .set_heap_oom_error(used, size.min(usize::MAX as u64) as usize);
+                    Err(wasmtime::Trap::AllocationTooLarge.into())
                 }
-                return Ok(ptr as i32);
             }
-            // 真 OOM：先写入可诊断 runtime_error，再 trap 中止执行。
-            let used = {
-                let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, "oom");
-                ctx.heap_used()
-            };
-            caller.data().set_heap_oom_error(used, size);
-            Err(wasmtime::Trap::AllocationTooLarge.into())
         },
     );
     linker.define(&mut store, "env", "gc_alloc_slow", f)?;
 
-    // gc_safepoint_poll()：WASM allocation debt 达阈值后调用的增量 GC safepoint。
-    // 先 flush barrier buffer，再清零 __gc_alloc_bytes，然后按 scheduler budget 推进一步。
+    // gc_safepoint_poll()：WASM allocation debt 达阈值后调用的 GC safepoint。
+    // 清零 __gc_alloc_bytes，按 kind 全量 collect_dispatch，再更新 trigger pacing。
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
@@ -1697,14 +1672,7 @@ pub(crate) fn define_core(
         if let Some(global) = env.gc_alloc_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(0));
         }
-        let algorithm = {
-            let gc = caller
-                .data()
-                .gc_algorithm
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            gc.name()
-        };
+        let algorithm = caller.data().gc_algorithm.as_str();
         let mut stats =
             crate::runtime_gc::active_zgc::collect_dispatch(&mut caller, &env, algorithm);
         let next_trigger = {
@@ -1724,7 +1692,6 @@ pub(crate) fn define_core(
         if let Some(global) = env.gc_trigger_bytes {
             let _ = global.set(&mut caller, wasmtime::Val::I32(next_trigger));
         }
-        // safepoint 路径不把 host poll 自身 wall 记为 JS pause；phase pause 已在 stats 中。
         if algorithm != "zgc" {
             stats.pause_ns_max = 0;
             stats.pause_ns_total = 0;
@@ -1734,17 +1701,12 @@ pub(crate) fn define_core(
     });
     linker.define(&mut store, "env", "gc_safepoint_poll", f)?;
 
-    // gc_barrier_flush()：只 drain 写屏障事件缓冲区，不触发 collect/grow/move。
+    // gc_barrier_flush()：drain 写屏障事件缓冲指针；无 dyn collector。
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
         let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
             return;
         };
-        let gc_arc = caller.data().gc_algorithm.clone();
-        {
-            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
-            gc.barrier_flush(&mut ctx);
-        }
+        // idle epoch 下无 host-side barrier ring 需要 drain；仅复位 buf 指针。
         let (_, _, barrier_event_buf_base) = caller.data().heap_layout_boundaries();
         if barrier_event_buf_base != 0
             && let Some(global) = env.barrier_buf_ptr
@@ -1757,20 +1719,21 @@ pub(crate) fn define_core(
     });
     linker.define(&mut store, "env", "gc_barrier_flush", f)?;
 
-    // gc_load_barrier_slow(handle) -> colored obj_table entry：ZGC bad-color repair。
+    // gc_load_barrier_slow(handle) -> i32：V2 load barrier；无效 handle 返回 0。
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, handle: i32| -> i32 {
+        |caller: Caller<'_, RuntimeState>, handle: i32| -> i32 {
             if handle < 0 {
                 return 0;
             }
-            let Some(env) = crate::wasm_env::WasmEnv::from_caller(&mut caller) else {
-                return 0;
-            };
-            let gc_arc = caller.data().gc_algorithm.clone();
-            let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut caller, &env, gc.name());
-            gc.load_barrier_slow(&mut ctx, handle as u32) as i32
+            let access = caller.data().heap_access_v2().clone();
+            match access.resolve_handle(handle as u32) {
+                Ok(addr) => {
+                    // 兼容遗留 i32 返回；高位地址截断为 0 表示需走 V2 i64 路径。
+                    i32::try_from(addr).unwrap_or(0)
+                }
+                Err(_) => 0,
+            }
         },
     );
     linker.define(&mut store, "env", "gc_load_barrier_slow", f)?;

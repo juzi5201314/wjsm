@@ -1,49 +1,20 @@
-//! Host 侧 JS 堆读写统一入口（spec §13）。
+//! Host 侧 JS 堆读写统一入口（V2-only）。
 //!
-//! 本模块是 INV-C2 的 host owner：任何从 `obj_table` 解出的 raw ptr 都包在
-//! `HeapPtr` 中，debug 构建会记录当前 `gc_epoch`，使用前确认期间没有 GC 点
-//! 改写 `obj_table` 指针或颜色。写属性槽、元素槽和 proto header 时先读取旧值，
-//! 再调用当前算法的 `on_host_write` hook，最后执行实际写入。
+//! 全部转发到 `HeapAccessV2`；V1 memory32 `obj_table` / dyn `GcAlgorithm` 路径已删除。
 
 use wasmtime::AsContextMut;
 
 use crate::RuntimeState;
 use crate::wasm_env::WasmEnv;
 use wjsm_ir::constants;
-use wjsm_ir::value;
 
-use super::api::{GcContext, Handle, Value};
+use super::api::Handle;
+use super::api::Value;
 
-const ZGC_COLOR_MASK: u32 = 0x3;
-const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
-
-/// 解引用后的 JS 堆指针。
+/// 解引用后的 JS 堆地址（memory64 byte offset，截断到 usize 供兼容调用方）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapPtr {
     pub ptr: usize,
-    #[cfg(debug_assertions)]
-    epoch: u64,
-}
-
-impl HeapPtr {
-    fn new(ptr: usize, ctx: &GcContext<'_>) -> Self {
-        #[cfg(not(debug_assertions))]
-        let _ = ctx;
-        Self {
-            ptr,
-            #[cfg(debug_assertions)]
-            epoch: ctx.gc_epoch(),
-        }
-    }
-
-    /// 返回 raw ptr；debug 构建确认它没有跨越可能移动/重染色的 GC 点。
-    pub fn get(&self, ctx: &mut GcContext<'_>) -> usize {
-        #[cfg(not(debug_assertions))]
-        let _ = ctx;
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.epoch, ctx.gc_epoch(), "INV-C2: ptr crossed GC point");
-        self.ptr
-    }
 }
 
 /// 属性槽中承载 JS value 的三种 8B 子槽。
@@ -55,6 +26,7 @@ pub enum SlotPart {
 }
 
 impl SlotPart {
+    #[allow(dead_code)]
     fn offset(self) -> usize {
         match self {
             Self::Value => constants::PROP_SLOT_VALUE_OFFSET as usize,
@@ -64,68 +36,75 @@ impl SlotPart {
     }
 }
 
-/// 解 handle → ptr。ZGC relocate 期可由算法 hook 强制 heal。
+/// 解 handle → 对象地址（V2 handle table）。
 pub fn resolve<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     h: Handle,
 ) -> Option<HeapPtr> {
-    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let mut gc_ctx = GcContext::new(ctx, env, gc.name());
-    let ptr = if let Some(ptr) = gc.on_host_resolve(&mut gc_ctx, h) {
-        ptr
-    } else {
-        read_obj_table_ptr(&mut gc_ctx, h)?
-    };
-    Some(HeapPtr::new(ptr, &gc_ctx))
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    let addr = access.resolve_handle(h).ok()?;
+    Some(HeapPtr {
+        ptr: addr as usize,
+    })
 }
 
-/// 写属性槽 value/getter/setter，统一经过算法写屏障 hook。
+/// 写属性槽 value/getter/setter。
+///
+/// V2 以 key 为索引；`slot_idx` 路径仅在调用方已定位到 own 槽位时使用
+/// `own_property_slots` 反查 key 后写入。无法映射时返回 None。
 pub fn write_property_slot<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     h: Handle,
     slot_idx: usize,
     part: SlotPart,
     val: Value,
 ) -> Option<()> {
-    let heap_ptr = resolve(ctx, env, h)?;
-    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let mut gc_ctx = GcContext::new(ctx, env, gc.name());
-    let ptr = heap_ptr.get(&mut gc_ctx);
-    let slot_addr = ptr
-        .checked_add(constants::HEAP_OBJECT_HEADER_SIZE as usize)?
-        .checked_add(slot_idx.checked_mul(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize)?)?
-        .checked_add(part.offset())?;
-    let old = read_i64(&mut gc_ctx, slot_addr)?;
-    gc.on_host_write(&mut gc_ctx, h, slot_addr, old, val);
-    write_i64(&mut gc_ctx, slot_addr, val)
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    let slots = access.own_property_slots(h).ok()?;
+    let (key, flags) = *slots.get(slot_idx)?;
+    match part {
+        SlotPart::Value => {
+            if flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
+                // accessor 的 value 子槽无语义；忽略
+                return Some(());
+            }
+            access.set_property(h, key, val as u64).ok()
+        }
+        SlotPart::Getter | SlotPart::Setter => {
+            let slot = access.get_property_slot(h, key).ok()??;
+            let getter = if matches!(part, SlotPart::Getter) {
+                val as u64
+            } else {
+                slot.getter
+            };
+            let setter = if matches!(part, SlotPart::Setter) {
+                val as u64
+            } else {
+                slot.setter
+            };
+            access
+                .define_accessor_property_with_flags(h, key, getter, setter, flags)
+                .ok()
+        }
+    }
 }
 
-/// 写数组元素槽，统一经过算法写屏障 hook。
+/// 写数组元素槽。
 pub fn write_element<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     h: Handle,
     idx: usize,
     val: Value,
 ) -> Option<()> {
-    let heap_ptr = resolve(ctx, env, h)?;
-    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let mut gc_ctx = GcContext::new(ctx, env, gc.name());
-    let ptr = heap_ptr.get(&mut gc_ctx);
-    let slot_addr = ptr
-        .checked_add(constants::HEAP_OBJECT_HEADER_SIZE as usize)?
-        .checked_add(idx.checked_mul(constants::HEAP_ARRAY_ELEMENT_SIZE as usize)?)?;
-    let old = read_i64(&mut gc_ctx, slot_addr)?;
-    gc.on_host_write(&mut gc_ctx, h, slot_addr, old, val);
-    write_i64(&mut gc_ctx, slot_addr, val)
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    let index = u32::try_from(idx).ok()?;
+    access.set_element(h, index, val as u64).ok()
 }
 
-/// 旧 host API 只持短生命周期 ptr 时使用：先由 obj_table 反查 handle，再走 canonical 写入口。
+/// 旧 host API 只持短生命周期 ptr 时使用：V2 下 ptr 即 memory64 地址，反查 handle 后写元素。
 pub fn write_element_at_ptr<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -133,105 +112,39 @@ pub fn write_element_at_ptr<C: AsContextMut<Data = RuntimeState>>(
     idx: usize,
     val: Value,
 ) -> Option<()> {
-    let h = handle_for_ptr(ctx, env, ptr)?;
+    let h = handle_for_object_addr(ctx, env, ptr as u64)?;
     write_element(ctx, env, h, idx, val)
 }
 
-/// 写 proto header。proto 是对象 handle 或 `0xFFFF_FFFF` null 哨兵。
+/// 写 proto header。
 pub fn write_proto<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     h: Handle,
     proto: u32,
 ) -> Option<()> {
-    {
-        let access = ctx.as_context().data().heap_access_v2().clone();
-        if access.resolve_handle(h).is_ok() {
-            return access.set_prototype(h, proto).ok();
-        }
-    }
-    let heap_ptr = resolve(ctx, env, h)?;
-    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let mut gc_ctx = GcContext::new(ctx, env, gc.name());
-    let ptr = heap_ptr.get(&mut gc_ctx);
-    let slot_addr = ptr.checked_add(constants::HEAP_OBJECT_PROTO_OFFSET as usize)?;
-    let old_proto = read_u32(&mut gc_ctx, slot_addr)?;
-    let old_val = proto_handle_to_value(old_proto);
-    let new_val = proto_handle_to_value(proto);
-    gc.on_host_write(&mut gc_ctx, h, slot_addr, old_val, new_val);
-    write_u32(&mut gc_ctx, slot_addr, proto)
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    access.set_prototype(h, proto).ok()
 }
 
-fn handle_for_ptr<C: AsContextMut<Data = RuntimeState>>(
+fn handle_for_object_addr<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
-    ptr: usize,
+    object: u64,
 ) -> Option<Handle> {
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-    let data = env.memory.data(&*ctx);
-    for h in 0..obj_table_count {
-        let slot = obj_table_ptr
-            .checked_add(h.checked_mul(constants::HANDLE_TABLE_ENTRY_SIZE as usize)?)?;
-        let bytes: [u8; 4] = data.get(slot..slot + 4)?.try_into().ok()?;
-        let entry = u32::from_le_bytes(bytes);
-        if entry != 0 && (entry & !ZGC_COLOR_MASK) as usize == ptr {
-            return Some(h as Handle);
+    let count = env
+        .obj_table_count
+        .get(&mut *ctx)
+        .i32()
+        .unwrap_or(0)
+        .max(0) as u32;
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    for h in 0..count {
+        if access.resolve_handle(h).ok() == Some(object) {
+            return Some(h);
         }
     }
     None
-}
-
-fn read_obj_table_ptr(ctx: &mut GcContext<'_>, h: Handle) -> Option<usize> {
-    let obj_table_ptr = ctx.obj_table_ptr();
-    let slot_addr =
-        obj_table_ptr.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
-    let entry = read_u32(ctx, slot_addr)?;
-    if entry == 0 {
-        return None;
-    }
-    Some((entry & !ZGC_COLOR_MASK) as usize)
-}
-
-fn proto_handle_to_value(proto: u32) -> Value {
-    if proto == PROTO_NULL_SENTINEL {
-        value::encode_null()
-    } else if proto & 0x8000_0000 != 0 {
-        value::encode_proxy_handle(proto & 0x7FFF_FFFF)
-    } else {
-        value::encode_object_handle(proto)
-    }
-}
-
-fn read_u32(ctx: &mut GcContext<'_>, addr: usize) -> Option<u32> {
-    ctx.with_memory(|data| {
-        let bytes: [u8; 4] = data.get(addr..addr + 4)?.try_into().ok()?;
-        Some(u32::from_le_bytes(bytes))
-    })
-}
-
-fn write_u32(ctx: &mut GcContext<'_>, addr: usize, val: u32) -> Option<()> {
-    ctx.with_memory_mut(|data| {
-        data.get_mut(addr..addr + 4)?
-            .copy_from_slice(&val.to_le_bytes());
-        Some(())
-    })
-}
-
-fn read_i64(ctx: &mut GcContext<'_>, addr: usize) -> Option<Value> {
-    ctx.with_memory(|data| {
-        let bytes: [u8; 8] = data.get(addr..addr + 8)?.try_into().ok()?;
-        Some(i64::from_le_bytes(bytes))
-    })
-}
-
-fn write_i64(ctx: &mut GcContext<'_>, addr: usize, val: Value) -> Option<()> {
-    ctx.with_memory_mut(|data| {
-        data.get_mut(addr..addr + 8)?
-            .copy_from_slice(&val.to_le_bytes());
-        Some(())
-    })
 }
 
 #[cfg(test)]
@@ -243,11 +156,5 @@ mod tests {
         assert_eq!(SlotPart::Value.offset(), 8);
         assert_eq!(SlotPart::Getter.offset(), 16);
         assert_eq!(SlotPart::Setter.offset(), 24);
-    }
-
-    #[test]
-    fn proto_handle_conversion_preserves_null_and_handle() {
-        assert!(value::is_null(proto_handle_to_value(PROTO_NULL_SENTINEL)));
-        assert_eq!(proto_handle_to_value(7), value::encode_object_handle(7));
     }
 }

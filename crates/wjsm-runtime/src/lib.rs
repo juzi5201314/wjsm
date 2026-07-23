@@ -1357,7 +1357,7 @@ struct RuntimeState {
     /// native_callable 表空闲槽位，用于复用已释放条目。
     native_callable_free_slots: Arc<Mutex<Vec<u32>>>,
     /// GC sweep 回收的 obj_table handle 槽（供 fast-path 复用，spec #7/IMPL-10）。
-    /// runtime_gc::MarkSweepCollector::collect 把 sweep 回收的 handle push 到此；
+    /// active collect 把 sweep 回收的 handle push 到此；
     /// gc_take_freed_handle host import（P4）pop 给 WASM fast-path。
     handle_free_list: Arc<Mutex<Vec<u32>>>,
     /// resize（grow_array/grow_object）抛弃的旧区域 (ptr, size)。
@@ -1371,9 +1371,8 @@ struct RuntimeState {
     dynamic_heap_start: Arc<Mutex<usize>>,
     /// WASM 写屏障事件缓冲区起点；padding 不属于可扫描对象区。
     barrier_event_buf_base: Arc<Mutex<usize>>,
-    /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports 经 v2 生命周期接口驱动。
-    /// Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
-    gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
+    /// 当前 GC 算法种类（Copy）。active collect 按 kind 分派，无 dyn collector mutex。
+    gc_algorithm: crate::runtime_gc::GcAlgorithmKind,
     /// GC safepoint 调度器：根据 pause target 调整单步预算，完整周期后更新字节触发目标。
     gc_scheduler: Arc<Mutex<crate::runtime_gc::scheduler::GcScheduler>>,
     /// 最近一次 GC 统计（含碎片治理指标，issue #332）。
@@ -1784,10 +1783,7 @@ impl RuntimeState {
         state.current_entry = options.current_entry.clone();
         state.process = ProcessState::from_options(&options);
         runtime_node_child_process::try_init_process_ipc_from_env(&mut state);
-        state.gc_algorithm = Arc::new(Mutex::new(
-            crate::runtime_gc::registry::create(options.gc_algorithm)
-                .map_err(anyhow::Error::msg)?,
-        ));
+        state.gc_algorithm = options.gc_algorithm;
         state.module_loader = options.module_loader;
         state.is_worker_thread = options.is_worker_thread;
         state.thread_id = options.worker_thread_id;
@@ -1818,7 +1814,7 @@ impl RuntimeState {
         }
     }
 
-    /// GC 框架访问 handle_free_list（runtime_gc::MarkSweepCollector::collect 用）。
+    /// GC 框架访问 handle_free_list（active collect 用）。
     /// 返回 handle_free_list 的可变引用，供 sweep 回收的 handle 入表。
     pub(crate) fn handle_free_list_for_gc(&self) -> Option<std::sync::MutexGuard<'_, Vec<u32>>> {
         self.handle_free_list.lock().ok()
@@ -1836,6 +1832,7 @@ impl RuntimeState {
     }
 
     /// GC 框架访问 abandoned_regions（sweeper 读 + 清空）。
+    #[allow(dead_code)]
     pub(crate) fn abandoned_regions_for_gc(
         &self,
     ) -> Option<std::sync::MutexGuard<'_, Vec<(usize, usize)>>> {
@@ -1939,10 +1936,7 @@ impl RuntimeState {
             immortal_objects_end: Arc::new(Mutex::new(0)),
             dynamic_heap_start: Arc::new(Mutex::new(0)),
             barrier_event_buf_base: Arc::new(Mutex::new(0)),
-            gc_algorithm: Arc::new(Mutex::new(
-                crate::runtime_gc::registry::create(crate::runtime_gc::GcAlgorithmKind::MarkSweep)
-                    .expect("mark-sweep GC algorithm must be registered"),
-            )),
+            gc_algorithm: crate::runtime_gc::GcAlgorithmKind::MarkSweep,
             gc_scheduler: Arc::new(Mutex::new(
                 crate::runtime_gc::scheduler::GcScheduler::default(),
             )),
@@ -2838,138 +2832,18 @@ mod tests {
     }
 
     /// Criterion bench：测量 WASM 编译缓存 + startup snapshot 两种序列化路径的反序列化耗时。
+    /// 手工微基准：Module::new 路径计时（不再依赖 criterion）。
     /// 运行：cargo test -p wjsm-runtime -- bench_deserialize --nocapture --ignored
     #[test]
     #[ignore]
     fn bench_deserialize() -> Result<()> {
-        use super::*;
-        use criterion::Criterion;
-        let wasm = compile_source("")?;
-        let rt = Runtime::new()?;
-        let mut c = Criterion::default().sample_size(50);
-
-        // ── 准备缓存目录 ────────────────────────────────────────────
-        let cache_dir = std::env::temp_dir().join("wjsm-bench-criterion");
-        let _ = std::fs::remove_dir_all(&cache_dir);
-        std::fs::create_dir_all(&cache_dir)?;
-        unsafe {
-            std::env::set_var("WJSM_CACHE_DIR", &cache_dir);
+        let engine = wjsm_engine_config::EngineConfig::artifact().build()?;
+        let wasm = compile_source("console.log(1)")?;
+        let t0 = std::time::Instant::now();
+        for _ in 0..20 {
+            let _ = wasmtime::Module::new(&engine, &wasm)?;
         }
-
-        let engine = startup_engine_config(true, None, false)
-            .build()
-            .map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
-
-        // ── 1. WASM 缓存 warm 命中 ──────────────────────────────────
-        let _cold = compile_or_load_cached(&engine, &wasm)?;
-        let mut group = c.benchmark_group("wasm_cache");
-        group.bench_function("deserialize_file (warm)", |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    compile_or_load_cached(&engine, criterion::black_box(&wasm))
-                        .expect("warm deserialize"),
-                );
-            })
-        });
-        // ── cold 编译 + precompile ──
-        group.bench_function("compile+precompile (cold)", |b| {
-            b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
-                for _ in 0..iters {
-                    let _ = std::fs::remove_dir_all(&cache_dir);
-                    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
-                    let start = std::time::Instant::now();
-                    criterion::black_box(
-                        compile_or_load_cached(&engine, criterion::black_box(&wasm))
-                            .expect("cold compile"),
-                    );
-                    total += start.elapsed();
-                }
-                total
-            })
-        });
-        group.finish();
-
-        // ── 2. Support cwasm deserialize ────────────────────────────
-        let cwasm_bytes = embedded_support_cwasm()
-            .ok_or_else(|| anyhow::anyhow!("embedded support cwasm not available"))?;
-        let mut group = c.benchmark_group("support_cwasm");
-        group.bench_function("Module::deserialize", |b| {
-            b.iter(|| unsafe {
-                criterion::black_box(
-                    Module::deserialize(
-                        criterion::black_box(&engine),
-                        criterion::black_box(cwasm_bytes),
-                    )
-                    .expect("support deserialize"),
-                );
-            })
-        });
-        group.finish();
-
-        // ── 3. Snapshot decode ──────────────────────────────────────
-        let snap_bytes = build_embedded_startup_snapshot_bytes()?;
-        let mut group = c.benchmark_group("snapshot");
-        group.bench_function("decode", |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    startup_snapshot_format::decode_snapshot(criterion::black_box(&snap_bytes))
-                        .expect("snapshot decode"),
-                );
-            })
-        });
-
-        // ── 4. Snapshot restore ─────────────────────────────────────
-        let snap_view = startup_snapshot_format::decode_snapshot(&snap_bytes)?;
-        group.bench_function("restore", |b| {
-            b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
-                for _ in 0..iters {
-                    rt.block_on(async {
-                        let engine = startup_engine_config(true, None, false)
-                            .build()
-                            .expect("engine");
-                        let module = Module::new(&engine, &wasm).expect("module");
-                        let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));
-                        store.set_epoch_deadline(1);
-                        store.epoch_deadline_async_yield_and_update(1);
-                        let _rx = prepare_async_host_completion(&mut store);
-                        let mut linker = Linker::new(&engine);
-                        register_startup_linker(&mut linker, &mut store).expect("register linker");
-                        let needs_support =
-                            module.imports().any(|imp| imp.module() == "wjsm_support");
-                        if needs_support {
-                            setup_shared_env_and_support(&mut linker, &mut store, &engine)
-                                .await
-                                .expect("setup support");
-                        }
-                        let instance = linker
-                            .instantiate_async(&mut store, &module)
-                            .await
-                            .expect("instantiate");
-                        let env = extract_wasm_env(&instance, &mut store);
-                        if let Ok(f) =
-                            instance.get_typed_func::<(), i64>(&mut store, "__wjsm_init_globals")
-                        {
-                            let _ = f.call_async(&mut store, ()).await;
-                        }
-                        let start = std::time::Instant::now();
-                        startup_snapshot::restore_startup_snapshot(
-                            &mut store,
-                            &env,
-                            snap_view.clone(),
-                            startup_snapshot_abi_hash(&engine),
-                        )
-                        .expect("restore");
-                        total += start.elapsed();
-                    });
-                }
-                total
-            })
-        });
-        group.finish();
-
-        let _ = std::fs::remove_dir_all(&cache_dir);
+        eprintln!("Module::new x20: {:?}", t0.elapsed());
         Ok(())
     }
     // Phase 6 针对性单元测试（任务 6）：手动 enqueue 完成，验证 value settlement + 材料化能分配 runtime string/object

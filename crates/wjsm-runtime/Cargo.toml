@@ -54,7 +54,6 @@ rustls-pemfile = { workspace = true }
 rcgen = { workspace = true }
 webpki-roots = { workspace = true }
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
 loom = "0.7"
 wjsm-engine-config = { path = "../wjsm-engine-config" }
 wasmparser = { workspace = true }

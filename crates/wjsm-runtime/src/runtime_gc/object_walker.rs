@@ -108,11 +108,16 @@ pub(crate) fn resolve_handle(
     if (h as usize) >= obj_table_count {
         return None;
     }
-    let addr =
-        obj_table_ptr.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
-    let bytes: [u8; 4] = data.get(addr..addr + 4)?.try_into().ok()?;
-    let entry = u32::from_le_bytes(bytes) as usize;
-    let ptr = entry & !0x3;
+    let entry_size = constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+    let addr = obj_table_ptr.checked_add(h as usize * entry_size)?;
+    let bytes: [u8; 8] = data.get(addr..addr + 8)?.try_into().ok()?;
+    let entry = u64::from_le_bytes(bytes);
+    // V2 entry: (addr << 16) | state；state==0 为空槽。兼容测试里直接写低 32 位 ptr 的布局。
+    let ptr = if entry > u32::MAX as u64 {
+        (entry >> 16) as usize
+    } else {
+        (entry as u32 & !0x3) as usize
+    };
     (ptr != 0).then_some(ptr)
 }
 
@@ -164,6 +169,7 @@ pub(crate) fn scan_tasks_for_ptr(data: &[u8], handle: Handle, ptr: usize) -> Vec
     tasks
 }
 
+#[allow(dead_code)]
 pub(crate) fn collect_slots_in_range(
     data: &[u8],
     obj_table_ptr: usize,
@@ -517,7 +523,7 @@ mod tests {
         objects: &[(Handle, usize, u32, Vec<Value>)],
         obj_table_count: usize,
     ) -> Vec<u8> {
-        let mut size = obj_table_ptr + obj_table_count * 4;
+        let mut size = obj_table_ptr + obj_table_count * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
         for (_h, ptr, _proto, props) in objects {
             let end = *ptr
                 + constants::HEAP_OBJECT_HEADER_SIZE as usize
@@ -526,8 +532,8 @@ mod tests {
         }
         let mut buf = vec![0u8; size];
         for (h, ptr, _, _) in objects {
-            let addr = obj_table_ptr + *h as usize * 4;
-            buf[addr..addr + 4].copy_from_slice(&(*ptr as u32).to_le_bytes());
+            let addr = obj_table_ptr + *h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            buf[addr..addr + 8].copy_from_slice(&(*ptr as u64).to_le_bytes());
         }
         for (_h, ptr, proto, props) in objects {
             let ptr = *ptr;
@@ -557,10 +563,11 @@ mod tests {
             0u8;
             (ptr + constants::HEAP_OBJECT_HEADER_SIZE as usize
                 + len * constants::HEAP_ARRAY_ELEMENT_SIZE as usize)
-                .max(obj_table_ptr + 4)
+                .max(obj_table_ptr + 8)
         ];
-        buf[obj_table_ptr + handle as usize * 4..obj_table_ptr + handle as usize * 4 + 4]
-            .copy_from_slice(&(ptr as u32).to_le_bytes());
+        buf[obj_table_ptr + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize
+            ..obj_table_ptr + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize + 8]
+            .copy_from_slice(&(ptr as u64).to_le_bytes());
         buf[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_ARRAY;
         let len_u32 = len as u32;
         buf[ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize

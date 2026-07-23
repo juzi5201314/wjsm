@@ -69,40 +69,40 @@ pub(crate) fn capture_startup_snapshot(
     let arr_proto_table_hash =
         read_required_u64_global(store, env.arr_proto_table_hash, "__arr_proto_table_hash")?;
 
-    let data = env.memory.data(&*store);
-    if heap_start == 0 || heap_ptr < heap_start {
-        bail!("capture: object heap not initialized");
+    // V2：对象体与 handle table 均在 memory64 ManagedHeap。
+    let access = store.data().heap_access_v2().clone();
+    let object_base = access.object_heap_base();
+    let object_bytes = access
+        .capture_object_region()
+        .map_err(|e| anyhow::anyhow!("capture: V2 object region: {e}"))?;
+    let heap_used = u32::try_from(object_bytes.len())
+        .map_err(|_| anyhow::anyhow!("capture: V2 object region exceeds u32"))?;
+    if heap_used == 0 && obj_table_count == 0 {
+        bail!("capture: V2 object heap not initialized");
     }
 
-    // 保存 object_bytes
-    let heap_used = (heap_ptr - heap_start) as u32;
-    let object_bytes = data[heap_start..heap_ptr].to_vec();
-
-    // 保存 handle rel_offsets: obj_table[0..obj_table_count]
-    // 区分 null sentinel（entry == 0，GC sweep 释放槽位）和 rel == 0（entry 恰为
-    // heap_start，handle 0 哨兵对象就在此处）：null 槽编码为 NULL_HANDLE_REL，
-    // 否则编码为 entry - heap_start。
     let mut handle_rel_offsets = Vec::with_capacity(obj_table_count);
     for i in 0..obj_table_count {
-        let offset = obj_table_base + i * 4;
-        if offset + 4 > data.len() {
-            bail!("capture: obj_table out of bounds at index {i}");
-        }
-        let entry = u32::from_le_bytes(data[offset..offset + 4].try_into()?);
-        if entry == 0 {
-            handle_rel_offsets.push(NULL_HANDLE_REL);
-        } else if entry < heap_start as u32 || entry >= heap_ptr as u32 {
-            bail!(
-                "capture: obj_table[{}] = {} not in object heap [{}..{})",
-                i,
-                entry,
-                heap_start,
-                heap_ptr
-            );
-        } else {
-            handle_rel_offsets.push(entry - heap_start as u32);
+        match access.resolve_handle(i as u32) {
+            Ok(addr) => {
+                if addr < object_base {
+                    bail!("capture: V2 handle {i} address {addr:#x} below object base");
+                }
+                let rel = addr - object_base;
+                if rel >= u64::from(heap_used) {
+                    bail!(
+                        "capture: V2 handle {i} rel {rel} outside object region (heap_used={heap_used})"
+                    );
+                }
+                if rel > u32::MAX as u64 {
+                    bail!("capture: V2 handle {i} rel {rel} exceeds u32");
+                }
+                handle_rel_offsets.push(rel as u32);
+            }
+            Err(_) => handle_rel_offsets.push(NULL_HANDLE_REL),
         }
     }
+    let _ = (heap_start, heap_ptr, obj_table_base);
 
     // 保存 runtime_strings
     let runtime_strings: Vec<SnapshotRuntimeString> = {
@@ -216,7 +216,7 @@ pub(crate) fn reset_primordial_heap_before_restore(
         mem[hs..hp].fill(0);
     }
     let ot_base = obj_table_base as usize;
-    let ot_end = ot_base.saturating_add(obj_table_count as usize * 4);
+    let ot_end = ot_base.saturating_add(obj_table_count as usize * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize);
     if ot_end <= mem.len() {
         mem[ot_base..ot_end].fill(0);
     }
@@ -558,61 +558,33 @@ pub(crate) fn restore_startup_snapshot(
         );
     }
 
-    let obj_table_base = env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0) as u32;
-    let table_end = obj_table_base
-        .checked_add(obj_table_count.saturating_mul(4))
-        .ok_or_else(|| anyhow::anyhow!("restore: obj_table range overflow"))?;
-    let mem_len = env.memory.data(&*store).len() as u32;
-    if table_end > mem_len {
-        bail!(
-            "restore: obj_table [{}..{}) exceeds memory size {}",
-            obj_table_base,
-            table_end,
-            mem_len
-        );
-    }
+    // V2 handle table 在 memory64，无需校验主 memory obj_table 范围。
+    let _ = env.obj_table_ptr.get(&mut *store);
 
-    let required_bytes = heap_start
-        .checked_add(heap_used)
-        .ok_or_else(|| anyhow::anyhow!("restore: heap range overflow"))?;
-    if required_bytes as usize > mem_len as usize {
-        let pages_needed = (required_bytes as u64).div_ceil(65536);
-        let current_pages = mem_len as u64 / 65536;
-        if pages_needed > current_pages {
-            env.memory
-                .grow(&mut *store, pages_needed - current_pages)
-                .map_err(|e| anyhow::anyhow!("restore: memory.grow: {e:?}"))?;
-        }
-    }
-
-    // 恢复 object_bytes，并把 seed 模块内的 Array.prototype 方法表索引重定位到当前模块。
-    let data = env.memory.data_mut(&mut *store);
-    let heap_start_usize = heap_start as usize;
-    let heap_end = heap_start_usize + heap_used as usize;
-    data[heap_start_usize..heap_end].copy_from_slice(snapshot.object_bytes);
+    // 恢复 V2 对象区 + handle table。
+    let access = store.data().heap_access_v2().clone();
+    let mut object_bytes = snapshot.object_bytes.to_vec();
     remap_array_proto_function_indices(
-        &mut data[heap_start_usize..heap_end],
+        &mut object_bytes,
         snapshot.header.arr_proto_table_base,
         snapshot.header.arr_proto_table_len,
         current_arr_proto_table_base,
     )?;
-
-    // 恢复 handle table
-    let obj_table_base = env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0) as usize;
-    let data = env.memory.data_mut(&mut *store);
+    access
+        .restore_object_region(&object_bytes)
+        .map_err(|e| anyhow::anyhow!("restore: V2 object region: {e}"))?;
+    let object_base = access.object_heap_base();
     for i in 0..obj_table_count as usize {
-        let offset = obj_table_base + i * 4;
         let rel = snapshot.handle_rel_offsets[i];
-        // NULL_HANDLE_REL 表示原槽位为 0（GC sweep 释放或显式 null），其它值是
-        // 相对 heap_start 的偏移；rel == 0 是合法情况（handle 0 哨兵对象就在
-        // heap_start 处），不能与 null 混淆。
-        let abs = if rel == NULL_HANDLE_REL {
-            0
-        } else {
-            heap_start + rel
-        };
-        data[offset..offset + 4].copy_from_slice(&abs.to_le_bytes());
+        if rel == NULL_HANDLE_REL {
+            continue;
+        }
+        let addr = object_base + u64::from(rel);
+        access
+            .bind_handle(i as u32, addr)
+            .map_err(|e| anyhow::anyhow!("restore: V2 bind handle {i} at {addr:#x}: {e}"))?;
     }
+    let _ = heap_start;
 
     // 写回 globals
     let _ = env

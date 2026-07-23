@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Handle 标记位图（1 bit per handle）。
 //!
 //! Mark phase 用：标记从 roots 可达的 handle。Sweep 据此判定死块。

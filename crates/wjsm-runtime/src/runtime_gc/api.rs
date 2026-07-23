@@ -1,7 +1,7 @@
-//! GC trait 框架（spec §6）。
+//! GC 运行时契约：根扫描、上下文与统计。
 //!
-//! `GcAlgorithm` 是 v2 生命周期接口：算法接管动态堆域、处理 slow-path 分配、
-//! safepoint 步进、完整回收，以及 G1/ZGC 所需的 barrier/load hook。
+//! V1 `GcAlgorithm` dyn trait 与 memory32 bump collector 已退役。
+//! active collect 由 `active_v2` / `active_zgc` 按 `GcAlgorithmKind` 分派。
 //!
 //! **关键不变量**（v2 spec §22）：
 //! - INV-C1：JS 值层引用是 handle；`obj_table[h]` 是唯一 ptr truth。
@@ -17,27 +17,11 @@ pub type Handle = u32;
 /// NaN-boxed JS 值（i64）。
 pub type Value = i64;
 
-/// fast-path 分配窗口耗尽后交给算法的完整 slow-path 请求。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AllocRequest {
-    pub size: usize,
-    pub heap_type: u8,
-    pub capacity: u32,
-}
-
-/// 增量 GC 步进预算，由调度器按 pause target 与吞吐估算生成。
+/// 增量 GC 步进预算（协议模块 / 单元测试用）。
 #[derive(Debug, Clone, Copy)]
 pub struct StepBudget {
     pub work_bytes: usize,
     pub deadline: std::time::Instant,
-}
-
-/// 单次 safepoint 步进结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepOutcome {
-    Idle,
-    Progress { remaining_estimate: usize },
-    CycleComplete,
 }
 
 // ── Root 发现（回调式，#6，避免每次 GC clone 整个 shadow stack）──
@@ -56,73 +40,9 @@ pub trait RootProvider {
     fn for_each_wasm_local_root(&mut self, _ctx: &mut GcContext, _visit: &mut dyn FnMut(Handle)) {}
 }
 
-/// v2 算法接口：用完整生命周期方法取代 v1 `Allocator + Marker + Sweeper` 切片。
-/// 默认 hook 只用于非对应算法的不可达路径，不提供行为兜底。
-pub trait GcAlgorithm: Send + Sync {
-    fn name(&self) -> &'static str;
-
-    /// 实例化后一次性接管动态堆域 `[dynamic_start, heap_limit)`。
-    #[allow(dead_code)]
-    fn attach_heap(&mut self, ctx: &mut GcContext, dynamic_start: usize);
-
-    /// 分配 slow-path：返回线性内存 ptr，handle 注册仍由调用方完成。
-    fn alloc_slow(
-        &mut self,
-        ctx: &mut GcContext,
-        roots: &mut dyn RootProvider,
-        req: AllocRequest,
-    ) -> Option<usize>;
-
-    /// safepoint 轮询入口，按预算推进增量工作。
-    #[allow(dead_code)]
-    fn safepoint_step(
-        &mut self,
-        ctx: &mut GcContext,
-        roots: &mut dyn RootProvider,
-        budget: StepBudget,
-    ) -> StepOutcome;
-
-    /// 显式 `gc()` / OOM 兜底入口：同步跑完当前或新周期。
-    fn collect_full(&mut self, ctx: &mut GcContext, roots: &mut dyn RootProvider) -> GcStats;
-
-    /// ZGC load barrier slow-path；非 ZGC 算法不应被调用。
-    fn load_barrier_slow(&mut self, ctx: &mut GcContext, h: Handle) -> u32 {
-        let _ = (ctx, h);
-        debug_assert!(false, "load_barrier_slow called on non-zgc algorithm");
-        0
-    }
-
-    /// 统一 barrier event buffer flush。硬约束：只 drain，不 collect/grow/move/recolor。
-    fn barrier_flush(&mut self, ctx: &mut GcContext) {
-        let _ = ctx;
-    }
-
-    /// host 侧堆写 hook，由 `heap_access` 统一入口调用。
-    fn on_host_write(
-        &mut self,
-        ctx: &mut GcContext,
-        target: Handle,
-        slot_addr: usize,
-        old_val: Value,
-        new_val: Value,
-    ) {
-        let _ = (ctx, target, slot_addr, old_val, new_val);
-    }
-
-    /// host 侧解引用 hook；ZGC relocate 期可同步 heal 后返回新 ptr。
-    fn on_host_resolve(&mut self, ctx: &mut GcContext, h: Handle) -> Option<usize> {
-        let _ = (ctx, h);
-        None
-    }
-
-    #[allow(dead_code)]
-    fn last_stats(&self) -> &GcStats;
-}
-
 // ── 算法运行时上下文（注入给 trait 方法） ──
 //
-// 【IMPL-8 / #9 关键约束】不持有 `&mut [u8]`。原因：gc_alloc_slow 在 mark/sweep 后可能
-// 仍不够空间，需 memory.grow()。Wasmtime 下 `memory.grow(&mut store, _)` 与
+// 【IMPL-8 / #9 关键约束】不持有 `&mut [u8]`。原因：memory.grow 可能在分配路径触发。Wasmtime 下 `memory.grow(&mut store, _)` 与
 // `memory.data_mut(&store)` 都可变借用 store —— 持有 slice 时无法 grow，强行 unsafe 是 UB
 // （grow 会 remap 后端 buffer，slice 悬垂）。
 // 故 GcContext 持 `StoreContextMut`（由 Caller 或 Store 经 as_context_mut 产生），
@@ -178,6 +98,7 @@ impl<'a> GcContext<'a> {
 
     /// 当前 GC epoch。debug INV-C2 用：任何可能改写 obj_table ptr/色位的 GC 点递增。
     #[cfg(debug_assertions)]
+    #[allow(dead_code)]
     pub fn gc_epoch(&self) -> u64 {
         self.store
             .data()

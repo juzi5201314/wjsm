@@ -22,10 +22,9 @@ pub use compiler_helpers::barrier as gc_barrier;
 pub mod support_module;
 pub use support_module::{
     GcFlavor, emit_support_module, emit_support_module_managed_heap_v2,
-    emit_support_module_with_heap_mode,
 };
 
-/// 本 crate 始终使用 managed-heap-v2 ABI。
+/// 本 crate 始终使用 ManagedHeap V2 ABI。
 /// 供 build-script 判断 support ABI。
 pub const MANAGED_HEAP_V2_ACTIVE: bool = true;
 

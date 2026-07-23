@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use super::color::{ZColor, ZEntry};
 
 pub const ZPAGE_SIZE: usize = 64 * 1024;
@@ -341,7 +342,7 @@ pub fn recolor_live_obj_table_entries(
 ) -> usize {
     let mut recolored = 0;
     for handle in 0..count {
-        let slot = obj_table_ptr + handle * 4;
+        let slot = obj_table_ptr + handle * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
         let Some(bytes) = data.get_mut(slot..slot + 4) else {
             break;
         };
@@ -394,10 +395,12 @@ mod tests {
 
     #[test]
     fn attach_recolors_all_live_obj_table_entries_non_empty() {
+        // 8-byte handle table stride；entry 载荷仍为低 4 字节 V1 colored ptr。
         let mut data = vec![0u8; 32];
-        data[0..4].copy_from_slice(&ZEntry::new(0x1000, ZColor::Empty).raw().to_le_bytes());
-        data[4..8].copy_from_slice(&0u32.to_le_bytes());
-        data[8..12].copy_from_slice(&ZEntry::new(0x2000, ZColor::Marked0).raw().to_le_bytes());
+        let e0 = ZEntry::new(0x1000, ZColor::Marked0).raw().to_le_bytes();
+        let e2 = ZEntry::new(0x2000, ZColor::Marked0).raw().to_le_bytes();
+        data[0..4].copy_from_slice(&e0);
+        data[16..20].copy_from_slice(&e2);
 
         let recolored = recolor_live_obj_table_entries(&mut data, 0, 3, ZColor::Marked1);
 
@@ -406,9 +409,9 @@ mod tests {
             ZEntry::from(u32::from_le_bytes(data[0..4].try_into().unwrap())).color(),
             ZColor::Marked1
         );
-        assert_eq!(u32::from_le_bytes(data[4..8].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(data[8..12].try_into().unwrap()), 0);
         assert_eq!(
-            ZEntry::from(u32::from_le_bytes(data[8..12].try_into().unwrap())).color(),
+            ZEntry::from(u32::from_le_bytes(data[16..20].try_into().unwrap())).color(),
             ZColor::Marked1
         );
     }

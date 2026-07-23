@@ -469,9 +469,9 @@ pub(crate) fn grow_array(
     let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
-    let slot_addr = obj_table_ptr + handle_idx * 4;
-    if slot_addr + 4 <= d.len() {
-        d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
+    let slot_addr = obj_table_ptr + handle_idx * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+    if slot_addr + 8 <= d.len() {
+        d[slot_addr..slot_addr + 8].copy_from_slice(&(heap_ptr as u64).to_le_bytes());
     }
     // 注册被抛弃的旧区域（P4-blocker #1）：handle 现在指向 heap_ptr，
     // 旧 ptr 区域不再被 obj_table 索引，sweep 单独遍历看不到 → 注册供 sweeper 回收。
@@ -517,9 +517,9 @@ pub(crate) fn grow_object(
     let d = env.memory.data_mut(&mut *caller);
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
-    let slot_addr = obj_table_ptr + handle_idx * 4;
-    if slot_addr + 4 <= d.len() {
-        d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
+    let slot_addr = obj_table_ptr + handle_idx * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+    if slot_addr + 8 <= d.len() {
+        d[slot_addr..slot_addr + 8].copy_from_slice(&(heap_ptr as u64).to_le_bytes());
     }
     // 注册被抛弃的旧区域（P4-blocker #1）：同 grow_array。
     caller.data().abandon_region(ptr, old_size);

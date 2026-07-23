@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! ZGC 增量标记 owner。
 //!
 //! 本模块维护本周期 mark bitmap、worklist、SATB 旧引用缓冲与 page live-bytes
@@ -24,13 +25,13 @@ const BARRIER_EVENT_SIZE: usize = constants::GC_BARRIER_EVENT_SIZE as usize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(super) enum MarkStep {
+pub(crate) enum MarkStep {
     Progress { remaining_estimate: usize },
     ReadyForMarkEnd,
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ZMarkState {
+pub(crate) struct ZMarkState {
     mark_bits: MarkBitmap,
     worklist: Vec<Handle>,
     satb_handles: Vec<Handle>,
@@ -75,15 +76,15 @@ const DEAD_HANDLE_CLEANUP_ORDER: [DeadHandleCleanupStage; 5] = [
 ];
 
 impl ZMarkState {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub(super) fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         self.active
     }
 
-    pub(super) fn start_cycle(
+    pub(crate) fn start_cycle(
         &mut self,
         ctx: &mut GcContext<'_>,
         roots_provider: &mut dyn RootProvider,
@@ -103,7 +104,7 @@ impl ZMarkState {
     }
 
     #[allow(dead_code)]
-    pub(super) fn drain_incremental(
+    pub(crate) fn drain_incremental(
         &mut self,
         ctx: &mut GcContext<'_>,
         good: ZColor,
@@ -121,7 +122,7 @@ impl ZMarkState {
         }
     }
 
-    pub(super) fn finish_after_barrier_flush(
+    pub(crate) fn finish_after_barrier_flush(
         &mut self,
         ctx: &mut GcContext<'_>,
         roots_provider: &mut dyn RootProvider,
@@ -144,7 +145,7 @@ impl ZMarkState {
         stats
     }
 
-    pub(super) fn mark_from_load_barrier(
+    pub(crate) fn mark_from_load_barrier(
         &mut self,
         ctx: &mut GcContext<'_>,
         h: Handle,
@@ -167,14 +168,14 @@ impl ZMarkState {
         repaired.raw()
     }
 
-    pub(super) fn record_host_write(&mut self, ctx: &mut GcContext<'_>, old_val: Value) {
+    pub(crate) fn record_host_write(&mut self, ctx: &mut GcContext<'_>, old_val: Value) {
         if self.active {
             self.barrier_events = self.barrier_events.saturating_add(1);
             self.record_satb_value(ctx, old_val);
         }
     }
 
-    pub(super) fn flush_barrier_buffer(&mut self, ctx: &mut GcContext<'_>) {
+    pub(crate) fn flush_barrier_buffer(&mut self, ctx: &mut GcContext<'_>) {
         let Some((base, ptr)) = barrier_buffer_range(ctx) else {
             return;
         };
@@ -348,7 +349,7 @@ impl ZMarkState {
     }
 }
 
-pub(super) fn obj_table_slot_addr(ctx: &mut GcContext<'_>, h: Handle) -> Option<usize> {
+pub(crate) fn obj_table_slot_addr(ctx: &mut GcContext<'_>, h: Handle) -> Option<usize> {
     if h as usize >= ctx.obj_table_count() {
         return None;
     }
@@ -356,7 +357,7 @@ pub(super) fn obj_table_slot_addr(ctx: &mut GcContext<'_>, h: Handle) -> Option<
         .checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)
 }
 
-pub(super) fn read_entry(ctx: &mut GcContext<'_>, h: Handle) -> Option<(usize, ZEntry)> {
+pub(crate) fn read_entry(ctx: &mut GcContext<'_>, h: Handle) -> Option<(usize, ZEntry)> {
     let slot = obj_table_slot_addr(ctx, h)?;
     let raw = ctx.with_memory(|data| {
         let bytes: [u8; 4] = data.get(slot..slot + 4)?.try_into().ok()?;
@@ -365,7 +366,7 @@ pub(super) fn read_entry(ctx: &mut GcContext<'_>, h: Handle) -> Option<(usize, Z
     Some((slot, zentry_from_raw(raw)))
 }
 
-pub(super) fn write_entry(ctx: &mut GcContext<'_>, slot: usize, entry: ZEntry) {
+pub(crate) fn write_entry(ctx: &mut GcContext<'_>, slot: usize, entry: ZEntry) {
     let raw = entry.raw().to_le_bytes();
     ctx.with_memory_mut(|data| {
         if let Some(dst) = data.get_mut(slot..slot + 4) {

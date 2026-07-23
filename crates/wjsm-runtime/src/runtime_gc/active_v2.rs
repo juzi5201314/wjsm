@@ -15,7 +15,8 @@ where
     C: wasmtime::AsContextMut<Data = crate::RuntimeState>,
 {
     let started = Instant::now();
-    let mut gc_ctx = GcContext::new(ctx, env, "managed-heap-v2");
+    let algorithm = ctx.as_context().data().gc_algorithm.as_str();
+    let mut gc_ctx = GcContext::new(ctx, env, algorithm);
     let handle_count = gc_ctx.obj_table_count();
     let access = gc_ctx.with_state(|state| state.heap_access_v2().clone());
 

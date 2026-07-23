@@ -109,11 +109,7 @@ fn collect_for_host_allocation_pressure<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
 ) {
-    let algorithm = {
-        let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-        let gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        gc.name()
-    };
+    let algorithm = ctx.as_context().data().gc_algorithm.as_str();
     let stats = crate::runtime_gc::active_zgc::collect_dispatch(ctx, env, algorithm);
     ctx.as_context()
         .data()
@@ -222,32 +218,26 @@ pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     size: usize,
-    heap_type: u8,
-    capacity: u32,
+    _heap_type: u8,
+    _capacity: u32,
 ) -> Option<usize> {
     if ctx.as_context().data().heap_layout_boundaries().1 == 0 {
         return alloc_heap_region_without_gc(ctx, env, size);
     }
-    let gc_arc = ctx.as_context().data().gc_algorithm.clone();
-    {
-        let mut gc = gc_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let mut roots = crate::runtime_gc::roots::RuntimeRoots;
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, gc.name());
-        let req = crate::runtime_gc::api::AllocRequest {
-            size,
-            heap_type,
-            capacity,
-        };
-        if let Some(ptr) = gc.alloc_slow(&mut gc_ctx, &mut roots as _, req) {
-            if ensure_host_memory_capacity(ctx, env, ptr, size) {
-                return Some(ptr);
-            }
-            return None;
+    // V2：经 HeapAccessV2 NLAB 分配；返回 memory64 地址的低位（兼容旧 i32 调用方）。
+    match allocate_v2_object_bytes_with_context(ctx, size as u64) {
+        Ok((start, _)) => Some(start as usize),
+        Err(_) => {
+            let used = ctx
+                .as_context()
+                .data()
+                .heap_access_v2()
+                .used_bytes()
+                .min(usize::MAX as u64) as usize;
+            ctx.as_context().data().set_heap_oom_error(used, size);
+            None
         }
     }
-    let used = heap_used_bytes(ctx, env);
-    ctx.as_context().data().set_heap_oom_error(used, size);
-    None
 }
 
 pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(

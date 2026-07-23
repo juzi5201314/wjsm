@@ -660,11 +660,11 @@ target/release/wjsm-gc-bench gate --manifest /tmp/zgc-nightly/manifest.json --pr
 cargo nextest run --workspace
 ```
 
-- [ ] **Write negative audit**：逐manifest与源码路径禁止旧GcContext、collector全局mutex、4-byte entry、`alloc_from_bump`、dynamic heap `env.memory.data_mut`、旧benchmark入口、Cargo manifests中的`managed-heap-v2`定义、所有`cfg(feature = "managed-heap-v2")`和文档中的残留feature说明。
-- [ ] **Verify RED**：删除前audit报告残余。
-- [ ] **Implement**：迁移有效workload到bench crate并删除全部残余，不留alias/shim/re-export。
-- [ ] **Verify GREEN**：workspace与audit通过。
-- [ ] **Commit**：`refactor: retire legacy GC paths and benchmarks`。
+- [x] **Write negative audit**：逐manifest与源码路径禁止旧GcContext、collector全局mutex、4-byte entry、`alloc_from_bump`、dynamic heap `env.memory.data_mut`、旧benchmark入口、Cargo manifests中的`managed-heap-v2`定义、所有`cfg(feature = "managed-heap-v2")`和文档中的残留feature说明。
+- [x] **Verify RED**：删除前audit报告残余。
+- [x] **Implement**：迁移有效workload到bench crate并删除全部残余，不留alias/shim/re-export。
+- [x] **Verify GREEN**：workspace与audit通过。
+- [x] **Commit**：`refactor: retire legacy GC paths and benchmarks`。
 
 ## Task 27：最终全量验证与ADR/AGENTS闭环
 

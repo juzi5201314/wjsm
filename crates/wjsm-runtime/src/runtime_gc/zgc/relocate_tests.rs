@@ -1,6 +1,7 @@
-use super::*;
+use super::super::color::{ZColor, ZEntry};
+use super::super::page::{ZPAGE_SIZE, ZPageKind, ZPageSpace};
+use super::{RelocateResult, ZRelocateState, copy_raw_object, release_empty_source_pages};
 use crate::runtime_gc::api::GcContext;
-use crate::runtime_gc::zgc::page::ZPageKind;
 use crate::{RuntimeState, WasmEnv};
 use wasmtime::{
     Engine, Global, GlobalType, Memory, MemoryType, Mutability, Ref, RefType, Store, Table,

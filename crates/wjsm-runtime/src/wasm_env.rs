@@ -30,7 +30,9 @@ pub(crate) struct WasmEnv {
     pub alloc_end: Option<Global>,
     pub gc_alloc_bytes: Option<Global>,
     pub gc_trigger_bytes: Option<Global>,
+    #[allow(dead_code)]
     pub gc_phase: Option<Global>,
+    #[allow(dead_code)]
     pub good_color: Option<Global>,
     pub barrier_buf_ptr: Option<Global>,
     #[allow(dead_code)]

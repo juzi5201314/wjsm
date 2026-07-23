@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! ZGC relocation set 与搬迁 owner。
 
 use std::time::Instant;
@@ -14,14 +15,14 @@ use super::page::{ZPAGE_SIZE, ZPageSpace};
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(super) enum RelocateStep {
+pub(crate) enum RelocateStep {
     Idle,
     Progress { remaining_estimate: usize },
     Complete { stats: Box<GcStats> },
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ZRelocateState {
+pub(crate) struct ZRelocateState {
     active: bool,
     started_at: Option<Instant>,
     allocator: RelocationAllocator,
@@ -51,7 +52,7 @@ struct RelocationCandidate {
 }
 
 #[derive(Debug, Default)]
-struct RelocateResult {
+pub(crate) struct RelocateResult {
     relocated_objects: usize,
     relocated_bytes: usize,
     released_pages: usize,
@@ -68,20 +69,20 @@ impl RelocateResult {
 }
 
 impl ZRelocateState {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub(super) fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         self.active
     }
 
     #[cfg(test)]
-    pub(super) fn start_cycle(&mut self, pages: &mut ZPageSpace, copy_budget: usize) -> bool {
+    pub(crate) fn start_cycle(&mut self, pages: &mut ZPageSpace, copy_budget: usize) -> bool {
         self.start_cycle_excluding(pages, copy_budget, None)
     }
 
-    pub(super) fn start_cycle_excluding(
+    pub(crate) fn start_cycle_excluding(
         &mut self,
         pages: &mut ZPageSpace,
         copy_budget: usize,
@@ -108,7 +109,7 @@ impl ZRelocateState {
         self.active
     }
 
-    pub(super) fn drain_incremental(
+    pub(crate) fn drain_incremental(
         &mut self,
         ctx: &mut GcContext<'_>,
         pages: &mut ZPageSpace,
@@ -178,7 +179,7 @@ impl ZRelocateState {
         None
     }
 
-    pub(super) fn relocate_or_remap_handle(
+    pub(crate) fn relocate_or_remap_handle(
         &mut self,
         ctx: &mut GcContext<'_>,
         pages: &mut ZPageSpace,
@@ -431,7 +432,7 @@ fn bump(page: &mut BumpPage, size: usize) -> Option<usize> {
     Some(ptr)
 }
 
-fn copy_raw_object(
+pub(crate) fn copy_raw_object(
     data: &mut [u8],
     src: usize,
     dest: usize,
@@ -459,7 +460,7 @@ fn copy_raw_object(
     true
 }
 
-fn release_empty_source_pages(pages: &mut ZPageSpace, ptr: usize, size: usize) -> usize {
+pub(crate) fn release_empty_source_pages(pages: &mut ZPageSpace, ptr: usize, size: usize) -> usize {
     let emptied = pages.subtract_live_bytes_range(ptr, size);
     let mut released = 0usize;
     for idx in emptied {

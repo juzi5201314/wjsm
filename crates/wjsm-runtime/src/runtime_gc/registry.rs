@@ -1,14 +1,9 @@
-//! GC 算法注册表。
+//! GC 算法种类注册表。
 //!
-//! 本模块只负责把装配层选择解析为具体算法实例；尚未落地的算法在这里显式拒绝，
-//! 不提供行为 stub。
+//! active collect 由 `active_v2` / `active_zgc` 按 `GcAlgorithmKind` 分派；
+//! 不再构造 V1 `Box<dyn GcAlgorithm>`。
 
 use std::str::FromStr;
-
-use crate::runtime_gc::api::GcAlgorithm;
-use crate::runtime_gc::g1::G1Collector;
-use crate::runtime_gc::mark_sweep::MarkSweepCollector;
-use crate::runtime_gc::zgc::ZgcCollector;
 
 const VALID_ALGORITHMS: &str = "mark-sweep, g1, zgc";
 
@@ -43,15 +38,6 @@ impl GcAlgorithmKind {
             Self::G1 => "g1",
             Self::Zgc => "zgc",
         }
-    }
-}
-
-/// 按种类创建 GC 算法实例。
-pub fn create(kind: GcAlgorithmKind) -> Result<Box<dyn GcAlgorithm + Send + Sync>, String> {
-    match kind {
-        GcAlgorithmKind::MarkSweep => Ok(Box::new(MarkSweepCollector::new())),
-        GcAlgorithmKind::G1 => Ok(Box::new(G1Collector::new())),
-        GcAlgorithmKind::Zgc => Ok(Box::new(ZgcCollector::new())),
     }
 }
 
@@ -92,23 +78,5 @@ mod tests {
         assert_eq!(GcAlgorithmKind::MarkSweep.as_str(), "mark-sweep");
         assert_eq!(GcAlgorithmKind::G1.as_str(), "g1");
         assert_eq!(GcAlgorithmKind::Zgc.as_str(), "zgc");
-    }
-
-    #[test]
-    fn create_available_algorithms_succeeds() {
-        assert!(create(GcAlgorithmKind::MarkSweep).is_ok());
-        assert!(create(GcAlgorithmKind::G1).is_ok());
-        assert!(create(GcAlgorithmKind::Zgc).is_ok());
-    }
-
-    #[test]
-    fn create_all_known_algorithms_succeeds() {
-        for kind in [
-            GcAlgorithmKind::MarkSweep,
-            GcAlgorithmKind::G1,
-            GcAlgorithmKind::Zgc,
-        ] {
-            assert!(create(kind).is_ok(), "{kind:?} must be registered");
-        }
     }
 }

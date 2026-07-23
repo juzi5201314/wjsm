@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub const COLOR_MASK: u32 = 0x3;
 pub const PTR_MASK: u32 = !COLOR_MASK;
 

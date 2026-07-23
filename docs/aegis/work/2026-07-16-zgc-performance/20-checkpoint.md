@@ -2,64 +2,58 @@
 
 ## Current todo
 
-**Task 24 之前的准备已完成。** Active concurrent ZGC 已接到 `gc()`；Task 16–23 协议 GREEN 已关闭。下一任务是 Task 24（JDK 25 归一化矩阵硬门）。
+**Task 26 GREEN 完成。** 下一任务是 Task 27（最终全量验证与 ADR/AGENTS 闭环）。
 
 ## Completed (this session, 2026-07-23)
 
-### Active concurrent ZGC wiring（计划外但用户指定优先）
-- 新增 `runtime_gc/active_zgc.rs`：`--gc zgc` 在唯一 `HeapAccessV2` 上
-  构图 → YoungController + OldController phase machine → director evaluate →
-  promote_to_old → heap mark 保险闭包 → retire dead → weak/realm cleanup。
-- `collect_dispatch(algorithm)`：`zgc` → active_zgc；其它 → active_v2。
-- 接线：
-  - `runtime_builtins` `NativeCallable::GcCollect`
-  - `host_imports/core` `gc_safepoint_poll`
-  - `runtime_heap` host allocation pressure
-- `HeapAccessV2` 增补：`handle_generation` / `promote_to_old` / `object_size_public`。
-- 非 zgc 路径保持 active_v2；无第二 ManagedHeap。
+### Task 26 — 删除旧 benchmark / scheduler 残余 owner + 负检查
+- 旧 bench/example 入口此前已删；本切片完成**源码级**退役：
+  - 删除 V1 `MarkSweepCollector` / `G1Collector` / `ZgcCollector` 与
+    `mark_sweep/{allocator,marker,sweeper}`、`g1/{concurrent_mark,mixed,young}`。
+  - 删除 `registry::create`、`GcAlgorithm` trait、`AllocRequest`/`StepOutcome`。
+  - `RuntimeState.gc_algorithm` 改为 `GcAlgorithmKind`（Copy），去掉
+    `Arc<Mutex<Box<dyn GcAlgorithm>>>`。
+  - `gc_alloc_slow` → `allocate_v2_object_bytes` / `HeapAccessV2.reserve_nlab`；
+    `gc_barrier_flush` / `gc_load_barrier_slow` 无 dyn lock。
+  - support 双轨折叠为 V2-only；`embedded_support_cwasm` 与 `_v2` 同字节。
+  - `HANDLE_TABLE_ENTRY_SIZE = 8`；startup snapshot 走 V2 object region capture/restore。
+  - `heap_access` 转发 `HeapAccessV2`；移除 criterion。
+- 负检查：`alloc_from_bump` / V1 collector 结构体 / `registry::create` /
+  `Arc<Mutex<Box<dyn` / `HANDLE_TABLE_ENTRY_SIZE=4` / `emit_support_module_with_heap_mode` /
+  Cargo `managed-heap-v2` / `cfg(feature = "managed-heap-v2")` / 旧 bench 源文件 → **0 实命中**。
+- GREEN：`cargo nextest run --workspace` → **1796 passed, 17 skipped**。
+- Smoke：`--gc mark-sweep|g1|zgc` 均输出 `2`。
 
-### Task 18–23 协议 GREEN 关闭
-- Task 18 remset/promotion：young remset/promotion + loom 通过
-- Task 19 old mark：gc_old_concurrent + loom 通过
-- Task 20 relocation：gc_relocation_concurrent + loom 通过
-- Task 21 host roots：gc_host_roots_concurrent + integration + WJSM_TEST_GC=zgc happy weak/finalization/async 通过
-- Task 22 director：lib `gc_director` 7 passed
-- Task 23 platform：lib `heap_platform|bitmap_simd` 4 passed；`wjsm-gc-bench capabilities` 写出 JSON
+### 此前已关闭
+- Active concurrent ZGC wiring（`active_zgc`）
+- Task 16–23 协议 GREEN
+- Task 15 V2 cutover + feature 删除
+- 旧 `gc_stress` / `zgc_autoresearch` / `zgc_barrier_pressure` 入口删除
 
-## Next step — Task 24
+## Next step — Task 27
 
 ```bash
-cargo build --release -p wjsm-gc-bench
-target/release/wjsm-gc-bench preflight --heap 1g --profile pr --output /tmp/zgc-pr-resources.json
-target/release/wjsm-gc-bench compare --jdk-home "$JDK25_HOME" --jdk-probe-home "$JDK25_PROBE_HOME" \
-  --heaps 32m,256m,1024m --live-sets 10,50,80 \
-  --scenarios churn,request,chain,cycle,wide,mutation,humongous,idle-uncommit \
-  --samples 30 --output /tmp/zgc-compare
-target/release/wjsm-gc-bench gate --manifest /tmp/zgc-compare/manifest.json
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo nextest run --workspace
+WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__)'
+WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'
+WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'
+# + Miri/TSan when available; superseding ADR / AGENTS / evidence closure
 ```
 
 ## ResumeStateHint
 
-读本文件 + 提交 `active concurrent ZGC wiring` + Task 16–23 勾选状态。
-环境：本机约 16 GiB；4/16 GiB nightly 仍 exit 78。CI workflows 已删。
-
-## Pre-Task24 readiness
-
-| 项 | 状态 |
-|---|---|
-| Active `--gc zgc` 走 young/old/director 路径 | **已接线**（`active_zgc`） |
-| mark-sweep/g1 仍 active_v2 | **是** |
-| Task 16–23 协议测试 | **GREEN** |
-| JDK 25 probe / instrumented counters | **needs-verification**（Task 24 本身） |
-| physical/CPU/barrier raw numerators | **needs-verification**（telemetry 合同） |
-| 真正 concurrent worker 后台 mark | **未完成**（active_zgc 是 safepoint 内 phase drain，非跨线程 worker） |
-| ConcurrentRelocator 热路径 copy | **未挂到 active full collect**（phase 握手有，对象 copy 仍协议层） |
-| Task 26 源码退役 | open |
-| ADR 0010 状态文案 | 滞后，Task 27 闭环 |
+读本文件 + 提交 `refactor: retire legacy GC paths and benchmarks` + plan Task 26 勾选。
+Task 24/25 性能/大堆矩阵仍 `needs-verification`（缺 JDK diagnostic / 具名 runner）。
+Task 27 负责 ADR 0010 状态文案与全量闭环。
 
 ## DriftCheckDraft
 
-- 范围：用户要求的 active wiring + Task 18–23 协议关闭；未开始 Task 24 矩阵。
-- 兼容：公开 `--gc` 不变；zgc full collect 语义变为 generational phase + 非移动 retire（与 active_v2 同为 non-moving reclaim，但 stats 为 ZgcCycle）。
-- 退役：zgc 不再经 active_v2；legacy ZgcCollector 仍在 registry 供 alloc_slow/barrier_slow。
-- 决策：`continue` → Task 24。
+- 范围：Task 26 退役；未改 Task 24 阈值/场景，未重开 CI workflows。
+- 兼容：公开 `--gc` / `WJSM_GC` / `gc()` 不变；内部去掉 dyn collector 与 memory32 bump。
+- 退役：V1 collectors、support dual path、4-byte entry 常量、criterion、collector 全局 mutex。
+- 已知残余（非阻塞 Task 26）：
+  - `compile_object_helpers` / `compile_array_helpers` 定义仍在但无调用方（Eval/Normal 走 support）。
+  - zgc 协议单测仍有 4-byte *colored payload* 布局 + 8-byte stride（非 active 热路径）。
+- 决策：`continue` → Task 27。

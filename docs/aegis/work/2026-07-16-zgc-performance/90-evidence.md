@@ -1035,6 +1035,55 @@ cargo run --release -p wjsm-gc-bench -- capabilities --output /tmp/gc-capabiliti
 - Task 24 本身：JDK 25 GA home、instrumented probe patch build、30-sample 全矩阵、gate 硬门。
 - Telemetry numerators：physical allocated / GC CPU / barrier events 仍可为 null → JSON `needs-verification`。
 - Active ZGC 仍是 **safepoint 内 phase drain + non-moving retire**；不是跨线程 worker 的 fully concurrent mark/copy。ConcurrentRelocator 热路径 copy 未并入 active full collect。
-- Task 26 源码退役、Task 25 大堆/CI、Task 27 ADR 闭环仍 open。
+- Task 25 大堆/CI、Task 27 ADR 闭环仍 open；Task 26 源码退役见下节。
 
 状态：Task 18–23 协议 GREEN 完成；active zgc wiring 完成；**可以开始 Task 24**（预期首次 compare/gate 为 RED 证据采集）。
+
+## Task 26 GREEN completion — 2026-07-23
+
+### RED residual（删除前审计）
+
+| 项 | 删除前状态 |
+|---|---|
+| `gc_stress` / `zgc_autoresearch` / `zgc_barrier_pressure` 源文件 | 已 ABSENT（先前切片） |
+| Cargo `managed-heap-v2` / `cfg(feature=…)` | 已 ABSENT（Task 15） |
+| `alloc_from_bump` / V1 collectors | PRESENT（mark_sweep/g1/zgc V1 体） |
+| `Arc<Mutex<Box<dyn GcAlgorithm>>>` + `registry::create` | PRESENT |
+| `HANDLE_TABLE_ENTRY_SIZE=4` | PRESENT |
+| support `managed_heap_v2=false` dual emit | PRESENT |
+| criterion without benches | PRESENT |
+
+### Implement
+
+- 删除 V1 collector 实现与 exclusive 模块（~5.4k 行净删）。
+- `RuntimeState.gc_algorithm: GcAlgorithmKind`；host alloc/barrier/load 无 dyn lock。
+- support 只 emit V2；`embedded_support_cwasm` ≡ `_v2`。
+- `HANDLE_TABLE_ENTRY_SIZE=8`；startup snapshot V2 object region capture/restore + bind_handle。
+- `heap_access` 转发 `HeapAccessV2`；移除 criterion。
+
+### GREEN
+
+```text
+cargo nextest run --workspace
+# Summary: 1796 tests run: 1796 passed, 17 skipped
+
+cargo run -- run --gc mark-sweep -e 'const x={a:[1,2,3]}; gc(); console.log(x.a[1])'
+# stdout: 2
+cargo run -- run --gc g1 -e '...'
+# stdout: 2
+cargo run -- run --gc zgc -e '...'
+# stdout: 2
+```
+
+### Negative audit GREEN（源码，排除 docs/aegis）
+
+全部 0 实命中：`alloc_from_bump`、`struct MarkSweepCollector|G1Collector|ZgcCollector`、
+`registry::create`、`Arc<Mutex<Box<dyn`、`HANDLE_TABLE_ENTRY_SIZE: u32 = 4`、
+`emit_support_module_with_heap_mode`、Cargo/`cfg` managed-heap-v2、旧 bench 源文件。
+
+### 已知非阻塞残余
+
+- `compile_object_helpers` / `compile_array_helpers` 无调用方定义仍在（support 已接管）。
+- zgc 协议单测 4-byte colored payload + 8-byte stride（非 active 热路径）。
+
+状态：Task 26 GREEN 完成；下一 Task 27。

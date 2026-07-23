@@ -2,6 +2,7 @@ pub mod abi;
 
 pub use abi::{SupportGcFlavor, support_abi_union_hash};
 
+// 非 _v2 文件名与 _v2 同为 V2 artifact（build.rs 双写同一字节）。
 #[cfg(feature = "embedded")]
 pub static EMBEDDED_MARK_SWEEP_SUPPORT_CWASM: Option<&[u8]> = Some(include_bytes!(concat!(
     env!("OUT_DIR"),

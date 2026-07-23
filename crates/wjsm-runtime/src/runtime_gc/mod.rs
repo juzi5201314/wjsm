@@ -1,8 +1,7 @@
 //! 可插拔 GC 框架（spec §6）。单一 canonical owner: 本模块组。
 //!
-//! 算法以 v2 生命周期 trait 抽象（`GcAlgorithm`），默认实现
-//! `MarkSweepCollector`（non-moving + lazy sweep + segregated free list）。
-//! G1 已接入 region metadata 与 registry 骨架；ZGC 通过 registry 在后续阶段接入同一接口。
+//! active collect 按 `GcAlgorithmKind` 分派到 `active_v2` / `active_zgc`；
+//! 对象堆唯一 owner 为 shared memory64 `HeapAccessV2`。
 //!
 //! 关键不变量见 v2 spec §22。
 //!
@@ -95,7 +94,7 @@ pub mod weak_refs;
 mod worker;
 pub mod zgc;
 
-pub use api::{GcAlgorithm, GcContext};
+pub use api::GcContext;
 pub use registry::GcAlgorithmKind;
 
 pub use collector_context::CollectorContext;

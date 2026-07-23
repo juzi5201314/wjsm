@@ -134,6 +134,53 @@ impl HeapAccessV2 {
         self.heap_limit
     }
 
+    /// V2 对象堆起点（handle 区 + control 页之后）。
+    pub fn object_heap_base(&self) -> u64 {
+        crate::heap::HANDLE_REGION_BYTES + 64 * 1024
+    }
+
+    /// 当前 bump 游标（已分配对象区终点）。
+    pub fn next_object_cursor(&self) -> u64 {
+        self.next_object.load(Ordering::Acquire)
+    }
+
+    /// 捕获 `[object_heap_base, next_object)` 连续对象字节，供 startup snapshot。
+    pub fn capture_object_region(&self) -> Result<Vec<u8>, HeapAccessV2Error> {
+        let base = self.object_heap_base();
+        let end = self.next_object_cursor().max(base);
+        let len = end - base;
+        self.memory
+            .copy_to(HeapAddress::new(base), len)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 恢复对象区字节并推进 bump 游标。
+    pub fn restore_object_region(&self, bytes: &[u8]) -> Result<(), HeapAccessV2Error> {
+        let base = self.object_heap_base();
+        let end = base
+            .checked_add(bytes.len() as u64)
+            .ok_or(HeapAccessV2Error::AddressOverflow)?;
+        self.memory
+            .grow_to(end)
+            .map_err(HeapAccessV2Error::VirtualMemoryGrow)?;
+        self.memory
+            .copy_from(HeapAddress::new(base), bytes)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.next_object.store(end, Ordering::Release);
+        Ok(())
+    }
+
+    /// 仅注册 handle → object 映射，不改写对象 header（snapshot restore 用）。
+    pub fn bind_handle(&self, handle: u32, object: u64) -> Result<(), HeapAccessV2Error> {
+        if object < crate::heap::HANDLE_REGION_BYTES || object & 7 != 0 || object >> 48 != 0 {
+            return Err(HeapAccessV2Error::InvalidObjectAddress { object });
+        }
+        let entry = (object << 16) | u64::from(crate::heap::HandleState::StableYoung as u16);
+        self.memory
+            .store_word(HeapAddress::new(u64::from(handle) * 8), entry)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
     pub fn publish_object(
         &self,
         handle: u32,

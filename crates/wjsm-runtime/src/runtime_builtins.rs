@@ -1221,11 +1221,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
         NativeCallable::GcCollect => {
             let env = crate::wasm_env::WasmEnv::from_caller(&mut *caller).expect("WasmEnv");
-            let gc_arc = caller.data().gc_algorithm.clone();
-            let algorithm = gc_arc
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .name();
+            let algorithm = caller.data().gc_algorithm.as_str();
             let stats = crate::runtime_gc::active_zgc::collect_dispatch(&mut *caller, &env, algorithm);
             caller
                 .data()

@@ -245,24 +245,32 @@ impl<'a> GcContext<'a> {
     #[allow(dead_code)]
     pub fn obj_table_slot(&mut self, data: &[u8], h: Handle) -> Option<usize> {
         let base = self.obj_table_ptr();
-        let addr = base + h as usize * 4;
-        if addr + 4 > data.len() {
+        let entry_size = constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+        let addr = base + h as usize * entry_size;
+        if addr + entry_size > data.len() {
             return None;
         }
-        let ptr = u32::from_le_bytes([data[addr], data[addr + 1], data[addr + 2], data[addr + 3]])
-            as usize;
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&data[addr..addr + entry_size.min(8)]);
+        let entry = u64::from_le_bytes(bytes);
+        let ptr = if entry > u32::MAX as u64 {
+            (entry >> 16) as usize
+        } else {
+            entry as usize
+        };
         if ptr == 0 { None } else { Some(ptr) }
     }
 
-    /// 写 obj_table[h] = ptr（INV-A：注册 handle）。
+    /// 写 obj_table[h] = ptr（INV-A：注册 handle）。V2 编码为 (ptr << 16) | StableYoung。
     #[allow(dead_code)]
     pub fn write_obj_table_slot(&mut self, h: Handle, ptr: usize) {
         let base = self.obj_table_ptr();
-        let bytes = (ptr as u32).to_le_bytes();
+        let entry = ((ptr as u64) << 16) | 1;
+        let bytes = entry.to_le_bytes();
         self.with_memory_mut(|data| {
-            let addr = base + h as usize * 4;
-            if addr + 4 <= data.len() {
-                data[addr..addr + 4].copy_from_slice(&bytes);
+            let addr = base + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            if addr + 8 <= data.len() {
+                data[addr..addr + 8].copy_from_slice(&bytes);
             }
         });
     }
