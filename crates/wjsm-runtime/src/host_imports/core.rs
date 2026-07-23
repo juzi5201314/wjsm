@@ -1630,7 +1630,7 @@ pub(crate) fn define_core(
     linker.define(&mut store, "env", "abstract_compare", f)?;
 
     // ── P4 GC framework: gc_safepoint_poll / gc_barrier_flush / gc_load_barrier_slow / gc_take_freed_handle ──
-    // V2 分配 slow-path 仅保留 gc_alloc_slow_v2（memory64）；已删除 gc_alloc_slow。
+    // 对象堆 slow-path：`gc_alloc_slow`（i64 地址，memory64 ManagedHeap）。
 
     // gc_safepoint_poll()：WASM allocation debt 达阈值后调用的 GC safepoint。
     // 清零 __gc_alloc_bytes，按 kind 全量 collect_dispatch，再更新 trigger pacing。

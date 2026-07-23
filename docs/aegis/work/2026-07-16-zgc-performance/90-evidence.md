@@ -1087,10 +1087,15 @@ cargo run -- run --gc zgc -e '...'
 
 - 删除 `compile_object_helpers` / `compiler_array_helpers` / `helpers_bounds` /
   孤儿 `support_object_helpers`。
-- support_module 死 emit 删除；HOST 去掉 `gc_alloc_slow` 并重编号；
-  handle 分配检查改为 V2 8-byte entry 上限（无 main-memory `I32Const(4)` stride）。
-- Runtime：`grow_array`/`grow_object` V2-only；删除 `abandon_region` 与
+- support_module 死 emit 删除；HOST 仅 safepoint/take_freed/alloc + 对象堆 helpers；
+  host 名去掉 `_v2` 后缀（`gc_alloc_slow`/`gc_obj_get`/…）；
+  handle 分配检查改为 ManagedHeap 上限（无 main-memory 4-byte stride）。
+- Runtime：`grow_array`/`grow_object` ManagedHeap-only；删除 `abandon_region` 与
   main-memory `obj_table` grow 写；属性/数组 dual-path fallback 删除。
+- support cwasm 单文件族；删除 `embedded_support_cwasm_v2` / `_v2.cwasm` 双写、
+  `emit_support_module_managed_heap_v2`、`MANAGED_HEAP_V2_ACTIVE`。
+- GREEN：`cargo nextest run --workspace` → **1795 passed, 17 skipped**；
+  smoke `a.length Object.keys(o).length` → `100 50`。
 - 负检查（`crates/**/*.rs`）：`compile_object_helpers`、`compile_array_helpers`、
   `support_object_helpers`、`helpers_bounds`、`emit_heap_bump_for_object_resize_support`、
   `emit_obj_table_entry_value`、`HANDLE_TABLE_ENTRY_SIZE: u32 = 4` → 0。

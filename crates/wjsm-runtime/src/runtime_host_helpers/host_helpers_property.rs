@@ -304,7 +304,7 @@ pub(crate) fn name_id_to_runtime_property_string(
     }
 }
 
-/// V2 handle 的 own 形状快照；非 V2 handle 返回 None（走 legacy memory32 布局）。
+/// ManagedHeap handle 的 own 形状快照；不可解析的 handle 返回 None。
 enum V2OwnShape {
     Array { length: u32 },
     Object { slots: Vec<(u32, u32)> },

@@ -1,9 +1,8 @@
-//! Build-time support module precompile（V2-only）。
+//! Build-time support module precompile（唯一 V2 ManagedHeap ABI）。
 //!
-//! 1. 调用 `wjsm_backend_wasm::emit_support_module(flavor)` 产三种 V2 support.wasm；
+//! 1. 调用 `wjsm_backend_wasm::emit_support_module(flavor)` 产三种 support.wasm；
 //! 2. 用 canonical artifact engine `precompile_module` 预编译为 cwasm；
-//! 3. 写入 OUT_DIR/wjsm_support_{mark_sweep,g1,zgc}.cwasm 与对应 `_v2.cwasm`
-//!    （两套文件名指向同一 V2 字节，兼容既有 `embedded_support_cwasm` / `_v2` API）。
+//! 3. 写入 OUT_DIR/wjsm_support_{mark_sweep,g1,zgc}.cwasm。
 
 fn main() -> anyhow::Result<()> {
     if std::env::var_os("CARGO_FEATURE_EMBEDDED").is_none() {
@@ -19,17 +18,12 @@ fn main() -> anyhow::Result<()> {
         wjsm_backend_wasm::GcFlavor::Zgc,
     ] {
         let suffix = flavor.artifact_suffix();
-        let v2_wasm = wjsm_backend_wasm::emit_support_module(flavor)?;
+        let wasm = wjsm_backend_wasm::emit_support_module(flavor)?;
         wasmparser::Validator::new()
-            .validate_all(&v2_wasm)
-            .map_err(|error| anyhow::anyhow!("V2 support wasm validation failed: {error:?}"))?;
-        let v2_cwasm = engine.precompile_module(&v2_wasm)?;
-        // 历史非 v2 文件名与 `_v2` 文件名均写入同一 V2 artifact。
-        std::fs::write(out_dir.join(format!("wjsm_support_{suffix}.cwasm")), &v2_cwasm)?;
-        std::fs::write(
-            out_dir.join(format!("wjsm_support_{suffix}_v2.cwasm")),
-            &v2_cwasm,
-        )?;
+            .validate_all(&wasm)
+            .map_err(|error| anyhow::anyhow!("support wasm validation failed: {error:?}"))?;
+        let cwasm = engine.precompile_module(&wasm)?;
+        std::fs::write(out_dir.join(format!("wjsm_support_{suffix}.cwasm")), &cwasm)?;
     }
 
     println!("cargo:rerun-if-changed=build.rs");

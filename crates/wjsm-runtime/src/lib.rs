@@ -16,8 +16,6 @@ use wasmtime::Func;
 use wasmtime::*;
 use wjsm_ir::{constants, value};
 
-/// 编译期是否激活 managed-heap V2 ABI（供 build-script 对齐校验）。
-pub const MANAGED_HEAP_V2_ACTIVE: bool = true;
 use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
 mod array_named_props;
@@ -619,14 +617,12 @@ pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
 }
 
 pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]> {
-    {
-        let flavor = match kind {
-            GcAlgorithmKind::MarkSweep => wjsm_runtime_support::SupportGcFlavor::MarkSweep,
-            GcAlgorithmKind::G1 => wjsm_runtime_support::SupportGcFlavor::G1,
-            GcAlgorithmKind::Zgc => wjsm_runtime_support::SupportGcFlavor::Zgc,
-        };
-        wjsm_runtime_support::embedded_support_cwasm_v2(flavor)
-    }
+    let flavor = match kind {
+        GcAlgorithmKind::MarkSweep => wjsm_runtime_support::SupportGcFlavor::MarkSweep,
+        GcAlgorithmKind::G1 => wjsm_runtime_support::SupportGcFlavor::G1,
+        GcAlgorithmKind::Zgc => wjsm_runtime_support::SupportGcFlavor::Zgc,
+    };
+    wjsm_runtime_support::embedded_support_cwasm(flavor)
 }
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     wasm_bytes: &[u8],

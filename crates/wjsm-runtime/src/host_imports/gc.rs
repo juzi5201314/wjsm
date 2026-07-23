@@ -25,7 +25,7 @@ pub(crate) fn allocate_v2_array_handle(
 pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     linker.func_wrap(
         "env",
-        "gc_alloc_slow_v2",
+        "gc_alloc_slow",
         |mut caller: Caller<'_, RuntimeState>,
          bytes: i64,
          _heap_type: i32,
@@ -38,7 +38,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     )?;
     linker.func_wrap_async(
         "env",
-        "gc_obj_get_v2",
+        "gc_obj_get",
         |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
             Box::new(async move {
                 // V2 support obj_get 透传所有接收者；原始值必须在 host 侧分派，
@@ -192,7 +192,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     )?;
     linker.func_wrap_async(
         "env",
-        "gc_obj_set_v2",
+        "gc_obj_set",
         |mut caller: Caller<'_, RuntimeState>, (object, key, new_value): (i64, i32, i64)| {
             Box::new(async move {
                 let raw_key = key as u32;
@@ -337,7 +337,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     )?;
     linker.func_wrap_async(
         "env",
-        "gc_obj_delete_v2",
+        "gc_obj_delete",
         |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
             Box::new(async move {
                 if value::is_proxy(object) {
@@ -400,7 +400,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     )?;
     linker.func_wrap(
         "env",
-        "gc_arr_new_v2",
+        "gc_arr_new",
         |mut caller: Caller<'_, RuntimeState>, capacity: i32| -> wasmtime::Result<i32> {
             let capacity = u32::try_from(capacity).map_err(host_error)?;
             Ok(allocate_v2_array_handle(&mut caller, capacity)? as i32)
@@ -408,7 +408,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     )?;
     linker.func_wrap_async(
         "env",
-        "gc_elem_get_v2",
+        "gc_elem_get",
         |mut caller: Caller<'_, RuntimeState>, (array, index): (i64, i32)| {
             Box::new(async move {
                 // TypedArray 数字索引先走 Rust 侧 typedarray 表
@@ -441,7 +441,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
     )?;
     linker.func_wrap(
         "env",
-        "gc_elem_set_v2",
+        "gc_elem_set",
         |mut caller: Caller<'_, RuntimeState>,
          array: i64,
          index: i32,
@@ -656,7 +656,7 @@ fn set_proxy_target_property_v2(
     if value::is_proxy(target) {
         return set_proxy_property_v2(caller, target, raw_key, key, new_value);
     }
-    // 数组 target：length / 命名属性与 gc_obj_set_v2 数组分支同语义。
+    // 数组 target：length / 命名属性与 gc_obj_set 数组分支同语义。
     if value::is_array(target) {
         let length_key = crate::property_key::encode_runtime_string_name_id(
             crate::property_key::intern_runtime_property_key(

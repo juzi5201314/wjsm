@@ -20,13 +20,7 @@ pub mod host_import_registry;
 mod shared_types;
 pub use compiler_helpers::barrier as gc_barrier;
 pub mod support_module;
-pub use support_module::{
-    GcFlavor, emit_support_module, emit_support_module_managed_heap_v2,
-};
-
-/// 本 crate 始终使用 ManagedHeap V2 ABI。
-/// 供 build-script 判断 support ABI。
-pub const MANAGED_HEAP_V2_ACTIVE: bool = true;
+pub use support_module::{GcFlavor, emit_support_module};
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 use wjsm_ir::{SHADOW_MEMORY_INDEX, SHADOW_MEMORY_NAME, SHADOW_STACK_INITIAL_SIZE};

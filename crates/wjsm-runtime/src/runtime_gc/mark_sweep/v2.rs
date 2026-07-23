@@ -1,7 +1,7 @@
 //! memory64 V2 mark-sweep policy。
 //!
 //! 该策略只依赖 V2 allocator、atomic handle table 与显式 root snapshot；不会读取
-//! legacy `obj_table` 或 memory32 heap。active default 切换留给后续 collector task。
+//! main-memory `obj_table`。active full collect 经 `active_v2` 调度本策略的语义对等路径。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;

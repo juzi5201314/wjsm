@@ -22,6 +22,11 @@
 - 残余清零：`compile_object_helpers` / `compile_array_helpers` / `support_object_helpers` /
   `helpers_bounds` / 错误 4-byte handle stride / grow 路径 main-memory obj_table → **0**。
 
+### Dual-API 折叠（同会话 follow-up）
+- support cwasm 只写一套文件名；删除 `embedded_support_cwasm_v2` / `_v2.cwasm` 双写。
+- 删除 `emit_support_module_managed_heap_v2`、`MANAGED_HEAP_V2_ACTIVE` 永远为 true 旗标。
+- 误导性 “legacy memory32 fallback” 注释修正。
+
 ### 此前已关闭
 - Task 26 V1 collectors / dyn GcAlgorithm / criterion 退役
 - Active concurrent ZGC wiring（`active_zgc`）
@@ -40,13 +45,13 @@ WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'
 
 ## ResumeStateHint
 
-读本文件 + 提交 `refactor: purge remaining V1 GC dual-path residuals`。
+读本文件 + 提交 `refactor: purge remaining V1 GC dual-path residuals` 及 dual-API 折叠提交。
 Task 24/25 性能/大堆矩阵仍 `needs-verification`。
 Task 27 负责 ADR 0010 状态文案与全量闭环。
 
 ## DriftCheckDraft
 
-- 范围：Task 26 后 dual-path / 死代码 / memory32 对象堆回落清零。
-- 兼容：公开 `--gc` / `WJSM_GC` / `gc()` 不变；support ABI 仅 V2 host imports。
-- 退役：inline object helpers、gc_alloc_slow、abandon_region、main-memory grow。
+- 范围：Task 26 后 dual-path / 死代码 / memory32 对象堆回落 / dual API 命名清零。
+- 兼容：公开 `--gc` / `WJSM_GC` / `gc()` 不变；support ABI 仅 ManagedHeap host imports。
+- 退役：inline object helpers、gc_alloc_slow、abandon_region、main-memory grow、_v2 双文件名。
 - 决策：`continue` → Task 27。

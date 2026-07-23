@@ -136,7 +136,7 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
         .is_ok()
     {
         // V2 对象的 non-extensible 状态由 `non_extensible_handles` side table 承载，
-        // 上方未命中即为 extensible；legacy header flag 属于 memory32 布局。
+        // 上方未命中即为 extensible（ManagedHeap 无独立 non-extensible header flag）。
         return true;
     }
     if let Some(ptr) = resolve_handle(caller, target) {

@@ -55,7 +55,7 @@ const TY_BOOTSTRAP: u32 = 4; // () -> i64
 // wasmtime Linker 已为所有 `env.*` host 函数注册实现。
 // 顺序决定 function import 索引（0..N-1），defined functions 从 N 开始。
 // V2 support 仅 import 实际调用的 host：safepoint / free-handle / slow alloc / 对象堆 host helpers。
-// 顺序决定 function import 索引；defined helpers 从 NUM_HOST_IMPORTS_V2 起。
+// 顺序决定 function import 索引；defined helpers 从 NUM_HOST_IMPORTS 起。
 const HOST_IMPORTS: &[(&str, u32)] = &[
     ("gc_safepoint_poll", 1),     // () -> ()
     ("gc_take_freed_handle", 36), // () -> i32
@@ -64,14 +64,14 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
 // Host import function indices（support module function index space）
 const HOST_GC_SAFEPOINT_POLL: u32 = 0;
 const HOST_GC_TAKE_FREED_HANDLE: u32 = 1;
-const HOST_GC_ALLOC_SLOW_V2: u32 = 2;
-const HOST_GC_OBJ_GET_V2: u32 = 3;
-const HOST_GC_OBJ_SET_V2: u32 = 4;
-const HOST_GC_OBJ_DELETE_V2: u32 = 5;
-const HOST_GC_ARR_NEW_V2: u32 = 6;
-const HOST_GC_ELEM_GET_V2: u32 = 7;
-const HOST_GC_ELEM_SET_V2: u32 = 8;
-const NUM_HOST_IMPORTS_V2: u32 = 9;
+const HOST_GC_ALLOC_SLOW: u32 = 2;
+const HOST_GC_OBJ_GET: u32 = 3;
+const HOST_GC_OBJ_SET: u32 = 4;
+const HOST_GC_OBJ_DELETE: u32 = 5;
+const HOST_GC_ARR_NEW: u32 = 6;
+const HOST_GC_ELEM_GET: u32 = 7;
+const HOST_GC_ELEM_SET: u32 = 8;
+const NUM_HOST_IMPORTS: u32 = 9;
 
 // ── Global indices（与 user wasm 对齐；仅列出 V2 support body 实际引用的）──
 const G_OBJ_TABLE_COUNT: u32 = 3;
@@ -155,17 +155,8 @@ const HELPER_EXPORT_NAMES: &[&str] = &[
     "wjsm_init_function_props",
 ];
 
-/// 生成指定 GC flavor 的 support module wasm bytes（始终 memory64 V2 ABI）。
+/// 生成指定 GC flavor 的 support module wasm bytes（memory64 ManagedHeap ABI）。
 pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
-    emit_support_module_impl(flavor)
-}
-
-/// 与 `emit_support_module` 相同（历史命名保留，始终 V2）。
-pub fn emit_support_module_managed_heap_v2(flavor: GcFlavor) -> Result<Vec<u8>> {
-    emit_support_module(flavor)
-}
-
-fn emit_support_module_impl(flavor: GcFlavor) -> Result<Vec<u8>> {
     let mut module = Module::new();
     let types = build_shared_type_section();
     module.section(&types);
@@ -240,14 +231,14 @@ fn emit_support_module_impl(flavor: GcFlavor) -> Result<Vec<u8>> {
     for (name, type_idx) in HOST_IMPORTS {
         imports.import("env", name, EntityType::Function(*type_idx));
     }
-    imports.import("env", "gc_alloc_slow_v2", EntityType::Function(38));
+    imports.import("env", "gc_alloc_slow", EntityType::Function(38));
     for (name, type_index) in [
-        ("gc_obj_get_v2", 8),
-        ("gc_obj_set_v2", 9),
-        ("gc_obj_delete_v2", 8),
-        ("gc_arr_new_v2", 7),
-        ("gc_elem_get_v2", 8),
-        ("gc_elem_set_v2", 9),
+        ("gc_obj_get", 8),
+        ("gc_obj_set", 9),
+        ("gc_obj_delete", 8),
+        ("gc_arr_new", 7),
+        ("gc_elem_get", 8),
+        ("gc_elem_set", 9),
     ] {
         imports.import("env", name, EntityType::Function(type_index));
     }
@@ -259,7 +250,7 @@ fn emit_support_module_impl(flavor: GcFlavor) -> Result<Vec<u8>> {
     }
     module.section(&functions);
 
-    let num_host_imports = NUM_HOST_IMPORTS_V2;
+    let num_host_imports = NUM_HOST_IMPORTS;
     let mut exports = ExportSection::new();
     exports.export("memory", ExportKind::Memory, 0);
     exports.export(wjsm_ir::SHADOW_MEMORY_NAME, ExportKind::Memory, 1);
@@ -411,7 +402,7 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::LocalGet(1));
     func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
     func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::Call(HOST_GC_ALLOC_SLOW_V2));
+    func.instruction(&WasmInstruction::Call(HOST_GC_ALLOC_SLOW));
     func.instruction(&WasmInstruction::LocalTee(2));
     func.instruction(&WasmInstruction::I64Const(-1));
     func.instruction(&WasmInstruction::I64Eq);
@@ -472,32 +463,32 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
 
 fn emit_obj_get_v2() -> Function {
     // dispatch（function/closure/bound/proxy/native callable/object）由 host 侧
-    // `gc_obj_get_v2` 统一完成；support 层只做透传。
-    emit_v2_binary_host_helper(HOST_GC_OBJ_GET_V2)
+    // `gc_obj_get` 统一完成；support 层只做透传。
+    emit_v2_binary_host_helper(HOST_GC_OBJ_GET)
 }
 
 fn emit_obj_set_v2() -> Function {
-    emit_v2_ternary_host_helper(HOST_GC_OBJ_SET_V2)
+    emit_v2_ternary_host_helper(HOST_GC_OBJ_SET)
 }
 
 fn emit_obj_delete_v2() -> Function {
-    emit_v2_binary_host_helper(HOST_GC_OBJ_DELETE_V2)
+    emit_v2_binary_host_helper(HOST_GC_OBJ_DELETE)
 }
 
 fn emit_arr_new_v2() -> Function {
     let mut func = Function::new(Vec::new());
     func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::Call(HOST_GC_ARR_NEW_V2));
+    func.instruction(&WasmInstruction::Call(HOST_GC_ARR_NEW));
     func.instruction(&WasmInstruction::End);
     func
 }
 
 fn emit_elem_get_v2() -> Function {
-    emit_v2_binary_host_helper(HOST_GC_ELEM_GET_V2)
+    emit_v2_binary_host_helper(HOST_GC_ELEM_GET)
 }
 
 fn emit_elem_set_v2() -> Function {
-    emit_v2_ternary_host_helper(HOST_GC_ELEM_SET_V2)
+    emit_v2_ternary_host_helper(HOST_GC_ELEM_SET)
 }
 
 fn emit_v2_binary_host_helper(host_index: u32) -> Function {

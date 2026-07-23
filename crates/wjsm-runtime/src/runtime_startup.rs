@@ -814,7 +814,7 @@ pub(super) async fn setup_shared_env_and_support(
 }
 
 fn emit_support_wasm_for_heap_mode(flavor: wjsm_backend_wasm::GcFlavor) -> anyhow::Result<Vec<u8>> {
-    wjsm_backend_wasm::emit_support_module_managed_heap_v2(flavor)
+    wjsm_backend_wasm::emit_support_module(flavor)
 }
 
 pub(super) fn define_env_global(
