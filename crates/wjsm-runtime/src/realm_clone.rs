@@ -3,7 +3,6 @@
 //! 禁止整段 immortal memcpy / 二次 snapshot restore；只对可达闭包中的对象逐个
 //! 分配 dynamic 槽并复制后做 ObjectHandleMapPolicy 重映射。
 
-
 use anyhow::Result;
 use wasmtime::AsContextMut;
 use wjsm_ir::value;
@@ -55,12 +54,6 @@ pub(crate) fn main_realm_intrinsics_from_env<C: AsContextMut<Data = RuntimeState
 }
 
 /// 惰性登记主 realm 为 `active_realms[0]`。
-
-
-
-
-
-
 pub(crate) fn clone_pristine_realm<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -68,10 +61,6 @@ pub(crate) fn clone_pristine_realm<C: AsContextMut<Data = RuntimeState>>(
 ) -> Result<Realm> {
     crate::realm_clone_v2::clone_pristine_realm_v2(ctx, env, sandbox_global)
 }
-
-
-
-
 
 /// 测试探针结果。
 #[derive(Debug, Clone)]
@@ -102,7 +91,6 @@ pub struct ExecutionRealmFrameProbe {
     pub inside_execution_realm: u32,
     pub after_execution_realm: u32,
 }
-
 
 /// 在克隆 realm 执行帧内分配 `[]` 同源数组，对照 proto handle。
 ///

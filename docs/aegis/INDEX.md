@@ -114,5 +114,5 @@ This index tracks files created under this project's `docs/aegis/` workspace.
 | 2026-07-16 | work | docs/aegis/work/2026-07-16-zgc-performance/90-evidence.md | 90-evidence |
 | 2026-07-16 | plan | docs/aegis/plans/2026-07-16-zgc-performance.md | 2026-07-16-zgc-performance |
 | 2026-07-20 | adr | docs/adr/0010-generational-zgc-managed-heap.md | 0010-generational-zgc-managed-heap |
-| 2026-07-20 | workflow | .github/workflows/zgc-nightly.yml | zgc-nightly Task 25 |
-| 2026-07-20 | workflow | .github/workflows/zgc-capability-matrix.yml | zgc-capability-matrix Task 23 |
+| 2026-07-23 | work | docs/aegis/work/2026-07-16-zgc-performance/27-closure-checklist.md | Task 27 closure checklist |
+| 2026-07-23 | note | (removed) `.github/workflows/zgc-nightly.yml` / `zgc-capability-matrix.yml` | workflows deleted by operator request; Task 24/25 remain needs-verification |

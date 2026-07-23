@@ -136,19 +136,15 @@ fn exported_body<'a>(info: &'a SupportModuleInfo, name: &str) -> &'a [OwnedOpera
         .unwrap_or_else(|| panic!("missing body for support export `{name}`"))
 }
 
-fn imported_func_index(info: &SupportModuleInfo, name: &str) -> u32 {
-    info.imported_funcs
-        .iter()
-        .position(|import_name| import_name == name)
-        .unwrap_or_else(|| panic!("missing imported function `{name}`")) as u32
-}
-
 #[test]
 fn mark_sweep_support_write_helpers_do_not_emit_barrier_events() {
     let info = parse_support_module();
     // V2 support 写路径透传 host helpers，不再内联 barrier event / flush。
     assert!(
-        !info.imported_funcs.iter().any(|name| name == "gc_barrier_flush"),
+        !info
+            .imported_funcs
+            .iter()
+            .any(|name| name == "gc_barrier_flush"),
         "V2 support must not import gc_barrier_flush"
     );
     for export in ["obj_set", "elem_set"] {

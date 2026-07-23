@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! ZGC relocation set 与搬迁 owner。
 
 use std::time::Instant;
@@ -472,8 +471,7 @@ pub(crate) fn release_empty_source_pages(pages: &mut ZPageSpace, ptr: usize, siz
 }
 
 fn read_entry_from_memory(data: &[u8], table_base: usize, h: Handle) -> Option<ZEntry> {
-    let slot =
-        table_base.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
+    let slot = table_base.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
     let bytes: [u8; 4] = data.get(slot..slot + 4)?.try_into().ok()?;
     Some(ZEntry::from(u32::from_le_bytes(bytes)))
 }

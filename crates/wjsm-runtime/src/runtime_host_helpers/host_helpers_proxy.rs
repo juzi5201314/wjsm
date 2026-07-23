@@ -1,9 +1,7 @@
 use super::*;
 
 fn proxy_handler_trap(caller: &mut Caller<'_, RuntimeState>, handler: i64, name: &str) -> i64 {
-    {
-        read_host_data_property_v2(caller, handler, name).unwrap_or_else(value::encode_undefined)
-    }
+    read_host_data_property_v2(caller, handler, name).unwrap_or_else(value::encode_undefined)
 }
 
 pub(crate) fn define_property_on_normal_object(
@@ -1025,9 +1023,7 @@ pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) 
 
 #[inline]
 pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
-    {
-        crate::alloc_host_object_v2(caller, capacity)
-    }
+    crate::alloc_host_object_v2(caller, capacity)
 }
 
 #[inline]
@@ -1147,7 +1143,12 @@ pub(crate) fn define_host_data_property_by_name_id_with_flags(
     flags: i32,
 ) -> Option<()> {
     let handle = value::decode_handle(obj);
-    if caller.data().heap_access_v2().resolve_handle(handle).is_err() {
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(handle)
+        .is_err()
+    {
         return None;
     }
     // 数组实例：命名属性（含 .index/.input/.groups 等）存入宿主侧表，
@@ -1216,7 +1217,12 @@ pub(crate) fn define_host_accessor_property_by_name_id_with_flags(
     attribute_flags: i32,
 ) -> Option<()> {
     let handle = value::decode_handle(obj);
-    if caller.data().heap_access_v2().resolve_handle(handle).is_err() {
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(handle)
+        .is_err()
+    {
         return None;
     }
     // 与 define_data_property_on_array_named 一致：数组命名槽不承载访问器。

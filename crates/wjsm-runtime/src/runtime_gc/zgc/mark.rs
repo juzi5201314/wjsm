@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! ZGC 增量标记 owner。
 //!
 //! 本模块维护本周期 mark bitmap、worklist、SATB 旧引用缓冲与 page live-bytes

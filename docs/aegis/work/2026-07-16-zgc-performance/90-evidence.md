@@ -1101,3 +1101,73 @@ cargo run -- run --gc zgc -e '...'
   `emit_obj_table_entry_value`、`HANDLE_TABLE_ENTRY_SIZE: u32 = 4` → 0。
 
 状态：Task 26 后残余清零；下一 Task 27。
+
+## Task 27 GREEN completion — 2026-07-23
+
+### Closure checklist
+
+- 文件：`docs/aegis/work/2026-07-16-zgc-performance/27-closure-checklist.md`
+- 父规格硬门 / platform / retirement 映射完成；Task 24/25 与 capability runners
+  保持 `needs-verification`，禁止估计通过。
+
+### RED → 阻断修复
+
+- `cargo fmt --all -- --check` 初跑失败：多处 rustfmt 空白/换行；`cargo fmt --all` 后通过。
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` 初跑失败：
+  - 删除未用 `imported_func_index`（backend `gc_alloc_window` 测试）
+  - 删除 orphan / empty-line-after-doc（array_named_props / realm_clone / runtime_values）
+  - 删除 mark/relocate 上与 `mod` 级 `#[allow(dead_code)]` 重复的 `#![allow(dead_code)]`
+  - 去掉 host_helpers 无用花括号、needless `return`、`gc_algorithm.clone()` on Copy
+- TSan 裸 `RUSTFLAGS=-Zsanitizer=thread` 因 ABI mismatch 无法链接；正确命令为
+  `-Zbuild-std --target x86_64-unknown-linux-gnu`（已写入 ADR 0010 / 检查点）。
+
+### GREEN
+
+```text
+cargo fmt --all -- --check
+# pass
+
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+# No issues found
+
+cargo nextest run --workspace
+# Summary: 1795 tests run: 1795 passed, 17 skipped
+
+WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__)'
+# Summary: 666 tests run: 666 passed, 227 skipped
+
+WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'
+# Summary: 666 tests run: 666 passed, 227 skipped
+
+WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'
+# Summary: 666 tests run: 666 passed, 227 skipped
+
+cargo +nightly miri test -p wjsm-runtime --test gc_protocol_miri
+# 2 passed
+
+RUSTFLAGS="-Zsanitizer=thread" cargo +nightly test -Zbuild-std \
+  --target x86_64-unknown-linux-gnu -p wjsm-runtime --test gc_concurrency_model
+# 2 passed
+
+cargo run -- run --gc zgc -e 'let roots=[]; for(let i=0;i<1e6;i++){let o={i,next:roots[i&1023]}; if((i&255)===0)roots[i&1023]=o;} gc(); console.log(roots.length)'
+# stdout: 769
+```
+
+### Docs / ADR
+
+- ADR 0010：Accepted cutover-complete；Task 24/25 诚实 `needs-verification`；
+  删除“Task 15 未完成 / workflow 在树内”过时表述；记录 local GREEN 命令。
+- ADR 0003：ManagedHeap wire 扩展边界（内容不变，layout 仅 8-byte/page）。
+- ADR 0004：engine-config owner + ManagedHeap support imports，禁止 memory32
+  动态对象堆 fallback。
+- AGENTS.md：WASM 主存 memory32 + 对象堆 memory64；GC/embedded 对齐退役事实。
+- INDEX：workflow 行改为 removed note；登记 27-closure-checklist。
+- 计划 Task 27 checkbox 全部勾选。
+
+### 仍开放（非本任务 GREEN）
+
+- Task 24 instrumented JDK 25 30-sample 归一化矩阵
+- Task 25 4/16 GiB hard isolation + 具名 ISA/NUMA/OS runners
+- 重新挂载 CI workflow 仅为运维选择，不改变上述 needs-verification 语义
+
+状态：Task 27 local 闭环 GREEN；计划 local 执行完成。

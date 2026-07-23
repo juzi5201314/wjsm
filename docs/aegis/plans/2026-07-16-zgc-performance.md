@@ -1,6 +1,6 @@
 # wjsm Generational ZGC 性能重构实施计划
 
-> **状态**：Round 3 共识通过；主机资源/OOM安全修订已纳入  
+> **状态**：Round 3 共识通过；主机资源/OOM安全修订已纳入。Tasks 0–23 + 26 local GREEN；Task 24/25 保持 `needs-verification`（具名 runner / instrumented JDK）；Task 27 local docs+suite GREEN（2026-07-23）。
 > **父规格**：`docs/aegis/specs/2026-07-16-zgc-performance-design.md`  
 > **执行约束**：项目不使用worktree；按任务顺序在主工作树执行。每个任务先建立RED证据，再实现，再运行GREEN命令并形成独立提交。Task 0失败时整个计划进入`blocked`。
 
@@ -689,11 +689,11 @@ Smoke：
 cargo run -- run --gc zgc -e 'let roots=[]; for(let i=0;i<1e6;i++){let o={i,next:roots[i&1023]}; if((i&255)===0)roots[i&1023]=o;} gc(); console.log(roots.length)'
 ```
 
-- [ ] **Write closure checklist**：逐项映射父规格硬门、platform gates、retirement；缺证据只能`needs-verification`。
-- [ ] **Verify RED**：文档更新前运行全命令；warning/race/fixture/perf/capability任一失败阻断完成。
-- [ ] **Implement**：修复阻断；写superseding ADR并逐条标明ADR 0005被取代的所有权、并发、分代与entry决策；同步ADR 0003/0004的snapshot/support ABI与engine fingerprint；更新AGENTS的WASM contract、GC、perf/debug流程和evidence，只记录已验证事实。
-- [ ] **Verify GREEN**：全命令、Task 24/25 gates与lingering audit通过。
-- [ ] **Commit**：`docs: record generational ZGC architecture`。
+- [x] **Write closure checklist**：`docs/aegis/work/2026-07-16-zgc-performance/27-closure-checklist.md` 映射父规格硬门、platform gates、retirement；Task 24/25 与 capability 具名 runner 证据显式 `needs-verification`。
+- [x] **Verify RED**：文档更新前运行全命令；clippy dead_code/needless_return/empty_line_after_doc/duplicated_attributes/clone_on_copy 与 fmt 偏差先修通，再进入 docs 闭环。
+- [x] **Implement**：修复 clippy 阻断；改写 ADR 0010 为 cutover-complete + 诚实 needs-verification；同步 ADR 0003/0004 ManagedHeap/support/engine fingerprint 边界；更新 AGENTS WASM/GC/embedded 合同；INDEX 去掉已删除 workflow 伪 GREEN 条目。
+- [x] **Verify GREEN**：local 全命令通过（fmt/clippy/workspace nextest/三 collector happy/Miri/TSan+build-std/ZGC smoke）；Task 24/25 gates 与 lingering audit 仍 `needs-verification`，不估计通过。
+- [x] **Commit**：`docs: record generational ZGC architecture`（含 Task 27 验证阻断修复）。
 
 ---
 

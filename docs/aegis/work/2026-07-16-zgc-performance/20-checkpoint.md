@@ -2,56 +2,62 @@
 
 ## Current todo
 
-**Task 26 后残余清零完成。** 下一任务是 Task 27（最终全量验证与 ADR/AGENTS 闭环）。
+**Task 27 GREEN（local 闭环）已完成。** 计划主路径 Tasks 0–27 local 文档与验证闭环结束。
 
-## Completed (this session, 2026-07-23)
+仍开放的外部门（**不得**记为通过）：
 
-### Task 26 residual purge — dual-path / dead helpers / memory32 obj_table 回落
-- Backend：删除 `compile_object_helpers`、`compiler_array_helpers`、`helpers_bounds`、
-  孤儿 `support_object_helpers`；`helpers_object` 仅保留 `bind_v2_support_helpers`。
-- support_module：删除未调用 emit 辅助（barrier/resolve/bounds/resize 等）；
-  HOST_IMPORTS 瘦身为 safepoint + take_freed_handle + V2 host helpers 并重编号；
-  删除 `gc_alloc_slow` import；`emit_handle_table_alloc_check` 改为 V2 handle 上限检查
-  （禁止 main-memory 4-byte entry 布局）。
-- host registry / runtime：删除 `GcAllocSlow` / `env.gc_alloc_slow` 定义。
-- Runtime grow/resolve：`grow_array` → `ensure_v2_array_capacity`；
-  `grow_object` → `HeapAccessV2::grow_object_capacity`；删除 main-memory
-  `obj_table` 写与 `abandon_region`/`abandoned_regions`。
-- 属性写/数组扩容 dual-path fallback 删除；handle 解析失败不再 silent memory32 写。
-- snapshot build.rs：折叠 V1 分支，仅嵌入 V2 artifact ABI。
-- 残余清零：`compile_object_helpers` / `compile_array_helpers` / `support_object_helpers` /
-  `helpers_bounds` / 错误 4-byte handle stride / grow 路径 main-memory obj_table → **0**。
+- Task 24 JDK 25 归一 30-sample PR 矩阵 → `needs-verification`
+- Task 25 4/16 GiB hard isolation + 具名 capability runners → `needs-verification`
+- `.github/workflows/zgc-*.yml` 已按用户要求删除；gate 合同仍在 `wjsm-gc-bench`
 
-### Dual-API 折叠（同会话 follow-up）
-- support cwasm 只写一套文件名；删除 `embedded_support_cwasm_v2` / `_v2.cwasm` 双写。
-- 删除 `emit_support_module_managed_heap_v2`、`MANAGED_HEAP_V2_ACTIVE` 永远为 true 旗标。
-- 误导性 “legacy memory32 fallback” 注释修正。
+## Completed (this session, 2026-07-23 Task 27)
 
-### 此前已关闭
-- Task 26 V1 collectors / dyn GcAlgorithm / criterion 退役
-- Active concurrent ZGC wiring（`active_zgc`）
-- Task 15–25 协议与 cutover
+### RED / 阻断修复
+- Closure checklist：`27-closure-checklist.md`
+- clippy `-D warnings` 阻断：dead_code helper、empty_line_after_doc_comments、
+  duplicated `#![allow(dead_code)]` on mark/relocate、unused braces、needless_return、
+  `clone_on_copy` for `GcAlgorithmKind`
+- fmt 偏差清理
 
-## Next step — Task 27
-
-```bash
+### GREEN 命令（实测）
+```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo nextest run --workspace
-WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__)'
-WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'
-WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'
+  → 1795 passed, 17 skipped
+WJSM_TEST_GC=mark-sweep|g1|zgc cargo nextest run -E 'test(happy__)'
+  → 各 666 passed
+cargo +nightly miri test -p wjsm-runtime --test gc_protocol_miri
+  → 2 passed
+RUSTFLAGS="-Zsanitizer=thread" cargo +nightly test -Zbuild-std \
+  --target x86_64-unknown-linux-gnu -p wjsm-runtime --test gc_concurrency_model
+  → 2 passed
+cargo run -- run --gc zgc -e '…1e6 churn + gc()…'
+  → stdout 769
 ```
+
+### Docs / ADR
+- ADR 0010 改写：cutover complete；Task 24/25 诚实 needs-verification
+- ADR 0003 / 0004 status 同步 ManagedHeap wire 与 support/engine fingerprint
+- AGENTS.md WASM contract 写明 memory32 主存 + memory64 对象堆；GC 段落对齐退役事实
+- INDEX 去掉已删除 workflow 伪条目；登记 Task 27 checklist
+- 计划 Task 27 checkbox 勾选
+
+## Next step
+
+计划 local 执行完成。后续仅在具备 instrumented JDK 25 + 具名 hard-isolation/capability
+runner 时重开 Task 24/25 证据，不得在本机估计通过。
+
+可选：`finishing-a-development-branch` 做 PR/merge 选择。
 
 ## ResumeStateHint
 
-读本文件 + 提交 `refactor: purge remaining V1 GC dual-path residuals` 及 dual-API 折叠提交。
-Task 24/25 性能/大堆矩阵仍 `needs-verification`。
-Task 27 负责 ADR 0010 状态文案与全量闭环。
+读本文件 + ADR 0010 + `27-closure-checklist.md` + 提交
+`docs: record generational ZGC architecture`。
 
 ## DriftCheckDraft
 
-- 范围：Task 26 后 dual-path / 死代码 / memory32 对象堆回落 / dual API 命名清零。
-- 兼容：公开 `--gc` / `WJSM_GC` / `gc()` 不变；support ABI 仅 ManagedHeap host imports。
-- 退役：inline object helpers、gc_alloc_slow、abandon_region、main-memory grow、_v2 双文件名。
-- 决策：`continue` → Task 27。
+- 范围：Task 27 全量验证 + ADR/AGENTS/INDEX 闭环；仅修验证阻断，不扩 runtime 语义。
+- 兼容：公开 `--gc` / snapshot 内容边界 / support 三 flavor 不变。
+- 退役：文档不再声称 private feature 未切完；workflow 文件不伪 GREEN。
+- 决策：`continue` 结束本计划 local 执行；外部 perf/platform 门 `needs-verification`。

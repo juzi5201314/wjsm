@@ -98,11 +98,7 @@ pub(crate) fn encode_handle_as_js_value(
     caller: &mut Caller<'_, RuntimeState>,
     handle: u32,
 ) -> Option<i64> {
-    let heap_type = caller
-        .data()
-        .heap_access_v2()
-        .object_type(handle)
-        .ok()?;
+    let heap_type = caller.data().heap_access_v2().object_type(handle).ok()?;
     Some(if heap_type == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
         value::encode_handle(value::TAG_ARRAY, handle)
     } else {
@@ -694,8 +690,6 @@ pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = Runt
     find_property_slot_by_name_id_with_visibility(ctx, env, obj_ptr, name_id, false)
 }
 
-/// 从对象中按 name_id 查找类私有成员槽。
-
 pub(crate) fn read_object_property_by_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
@@ -762,8 +756,6 @@ pub(crate) fn write_object_property_by_name_id(
         let _ = access.define_data_property(handle, key, val as u64, flags as u32);
     }
 }
-
-/// 在对象上安装或合并私有访问器槽（ES 类私有 getter/setter）。
 
 /// 读取对象/函数的所有属性名，用于 for...in 枚举
 pub(crate) fn enumerate_object_keys(
@@ -1873,7 +1865,6 @@ pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, 
                 };
                 let _ = access.define_data_property(dest_handle, key, value as u64, flags);
             }
-            return;
         }
     }
     // V2-only：源/目标不在 handle 表则静默跳过，禁止 main memory 回落。
@@ -1959,4 +1950,3 @@ caller_env_wrapper! {
     #[inline]
     pub(crate) fn find_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_property_slot_by_name_id_with_env
 }
-

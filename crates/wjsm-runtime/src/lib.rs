@@ -1135,7 +1135,7 @@ impl Clone for RuntimeState {
             immortal_objects_end: self.immortal_objects_end.clone(),
             dynamic_heap_start: self.dynamic_heap_start.clone(),
             barrier_event_buf_base: self.barrier_event_buf_base.clone(),
-            gc_algorithm: self.gc_algorithm.clone(),
+            gc_algorithm: self.gc_algorithm,
             gc_scheduler: self.gc_scheduler.clone(),
             last_gc_stats: self.last_gc_stats.clone(),
             cumulative_gc_stats: self.cumulative_gc_stats.clone(),

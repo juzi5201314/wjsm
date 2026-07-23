@@ -32,8 +32,6 @@ fn canonical_name_id(caller: &mut Caller<'_, RuntimeState>, name_id: u32) -> u32
     crate::property_key::canonicalize_v2_name_id(caller, name_id).unwrap_or(name_id)
 }
 
-/// V1：memory c-string 偏移即规范键（find/alloc 去重），无需转换。
-
 impl ArrayNamedPropsStore {
     pub(crate) fn new() -> Self {
         Self(Arc::new(Mutex::new(HashMap::new())))
