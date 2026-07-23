@@ -8,7 +8,7 @@ use wasm_encoder::{BlockType, Instruction as WasmInstruction, MemArg, ValType};
 
 use wjsm_ir::value::{GC_COLOR_MASK, is_handle_backed_reference, strip_gc_color};
 
-/// Memory index of the shared object heap (memory64 under managed-heap-v2).
+/// Memory index of the shared object heap（memory64 ManagedHeap V2）。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BarrierEmitContext {
     pub heap_memory_index: u32,

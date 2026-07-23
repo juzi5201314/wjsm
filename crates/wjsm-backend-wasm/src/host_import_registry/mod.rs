@@ -63,8 +63,6 @@ pub enum SpecialHostImport {
     ToNumber,
     ToBool,
     // ── P4 GC framework host imports ──
-    /// gc_alloc_slow(size, heap_type, capacity) -> handle：fast-path bump 失败后的 slow-path。
-    GcAllocSlow,
     /// gc_safepoint_poll()：allocation debt 达阈值时 WASM 调用的增量 GC safepoint。
     GcSafepointPoll,
     /// gc_barrier_flush()：只 drain 写屏障事件缓冲区，不触发 collect/grow/move。

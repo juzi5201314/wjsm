@@ -473,12 +473,6 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
-        name: "gc_alloc_slow",
-        type_idx: 35,
-        key: Some(HostImportKey::Special(SpecialHostImport::GcAllocSlow)),
-        group: None,
-    },
-    HostImportSpec {
         name: "gc_safepoint_poll",
         type_idx: 1,
         key: Some(HostImportKey::Special(SpecialHostImport::GcSafepointPoll)),

@@ -12,8 +12,6 @@
 //! support module 的 global 索引与 user wasm 完全对齐（0..26），
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
 
-#![allow(dead_code)]
-
 use crate::shared_types::build_shared_type_section;
 use anyhow::Result;
 use wasm_encoder::{
@@ -51,265 +49,39 @@ const TY_STRING_EQ: u32 = 26; // (i32, i32) -> i32
 const TY_TO_INT32: u32 = 10; // (i64) -> i32
 const TY_GET_PROTO: u32 = 3; // (i64) -> i64
 const TY_BOOTSTRAP: u32 = 4; // () -> i64
-#[allow(dead_code)]
-const TY_CALL_INDIRECT: u32 = crate::shared_types::JS_FUNC_TYPE_INDEX; // (i64, i64, i32, i32) -> i64
 
 // ── Host function imports ─────────────────────────────────────────────
 // support module 通过 `env` namespace import 它需要的 host 函数。
 // wasmtime Linker 已为所有 `env.*` host 函数注册实现。
 // 顺序决定 function import 索引（0..N-1），defined functions 从 N 开始。
+// V2 support 仅 import 实际调用的 host：safepoint / free-handle / slow alloc / 对象堆 host helpers。
+// 顺序决定 function import 索引；defined helpers 从 NUM_HOST_IMPORTS_V2 起。
 const HOST_IMPORTS: &[(&str, u32)] = &[
-    ("gc_safepoint_poll", 1),             // () -> ()
-    ("gc_alloc_slow", 35),                // (i32, i32, i32) -> i32
-    ("gc_take_freed_handle", 36),         // () -> i32
-    ("closure_get_func", 14),             // (i32) -> i32
-    ("closure_get_env", 15),              // (i32) -> i64
-    ("native_call", 12),                  // (i64, i64, i32, i32) -> i64
-    ("proxy_trap_get", 8),                // (i64, i32) -> i64
-    ("proxy_trap_set", 9),                // (i64, i32, i64) -> ()
-    ("proxy_trap_delete", 8),             // (i64, i32) -> i64
-    ("native_callable_get_property", 8),  // (i64, i32) -> i64
-    ("primitive_bigint_get_method", 8),   // (i64, i32) -> i64
-    ("primitive_number_get_method", 8),   // (i64, i32) -> i64
-    ("primitive_symbol_get_property", 8), // (i64, i32) -> i64
-    ("symbol_property_key", 10),          // (i64) -> i32
-    ("obj_get_by_index", 8),              // (i64, i32) -> i64
-    ("typedarray_set_by_index", 32),      // (i64, i32, i64) -> i64
-    ("array_set_length", 2),              // (i64, i64) -> i64
-    ("array_named_get", 8),               // (i64, i32) -> i64
-    ("array_named_set", 9),               // (i64, i32, i64) -> ()
-    ("primitive_regexp_get_property", 8), // (i64, i32) -> i64
-    ("primitive_regexp_set_property", 9), // (i64, i32, i64) -> ()
-    ("primitive_string_get_property", 8), // (i64, i32) -> i64
-    ("obj_get_runtime_key", 8),           // (i64, i32) -> i64
-    ("obj_set_runtime_key", 9),           // (i64, i32, i64) -> ()
-    ("obj_delete_runtime_key", 8),        // (i64, i32) -> i64
-    ("gc_barrier_flush", 1),              // () -> ()
-    ("gc_load_barrier_slow", 14),         // (i32) -> i32
-    ("function_value_get_property", 8),   // (i64, i32) -> i64
+    ("gc_safepoint_poll", 1),     // () -> ()
+    ("gc_take_freed_handle", 36), // () -> i32
 ];
 
-const HOST_GC_ALLOC_SLOW_V2: u32 = 28;
-const HOST_GC_OBJ_GET_V2: u32 = 29;
-const HOST_GC_OBJ_SET_V2: u32 = 30;
-const HOST_GC_OBJ_DELETE_V2: u32 = 31;
-const HOST_GC_ARR_NEW_V2: u32 = 32;
-const HOST_GC_ELEM_GET_V2: u32 = 33;
-const HOST_GC_ELEM_SET_V2: u32 = 34;
-
-// Host import function indices（在 support module 的 function index space 中）
+// Host import function indices（support module function index space）
 const HOST_GC_SAFEPOINT_POLL: u32 = 0;
-const HOST_GC_ALLOC_SLOW: u32 = 1;
-const HOST_GC_TAKE_FREED_HANDLE: u32 = 2;
-const HOST_CLOSURE_GET_FUNC: u32 = 3;
-const HOST_CLOSURE_GET_ENV: u32 = 4;
-const HOST_NATIVE_CALL: u32 = 5;
-const HOST_PROXY_TRAP_GET: u32 = 6;
-const HOST_PROXY_TRAP_SET: u32 = 7;
-const HOST_PROXY_TRAP_DELETE: u32 = 8;
-const HOST_NATIVE_CALLABLE_GET_PROPERTY: u32 = 9;
-const HOST_PRIMITIVE_BIGINT_GET_METHOD: u32 = 10;
-const HOST_PRIMITIVE_NUMBER_GET_METHOD: u32 = 11;
-const HOST_PRIMITIVE_SYMBOL_GET_PROPERTY: u32 = 12;
-const HOST_SYMBOL_PROPERTY_KEY: u32 = 13;
-const HOST_OBJ_GET_BY_INDEX: u32 = 14;
-const HOST_TYPEDARRAY_SET_BY_INDEX: u32 = 15;
-const HOST_ARRAY_SET_LENGTH: u32 = 16;
-const HOST_ARRAY_NAMED_GET: u32 = 17;
-const HOST_ARRAY_NAMED_SET: u32 = 18;
-const HOST_PRIMITIVE_REGEXP_GET_PROPERTY: u32 = 19;
-const HOST_PRIMITIVE_REGEXP_SET_PROPERTY: u32 = 20;
-const HOST_PRIMITIVE_STRING_GET_PROPERTY: u32 = 21;
-const HOST_OBJ_GET_RUNTIME_KEY: u32 = 22;
-const HOST_OBJ_SET_RUNTIME_KEY: u32 = 23;
-const HOST_OBJ_DELETE_RUNTIME_KEY: u32 = 24;
-const HOST_GC_BARRIER_FLUSH: u32 = 25;
-const HOST_GC_LOAD_BARRIER_SLOW: u32 = 26;
-const HOST_FUNCTION_VALUE_GET_PROPERTY: u32 = 27;
-const NUM_HOST_IMPORTS_V2: u32 = 35;
-/// string_eq 在 helper 导出中的 function index（host imports 之后第 8 个 helper，0-based 7）。
-const FN_STRING_EQ: u32 = NUM_HOST_IMPORTS_V2 + 7;
+const HOST_GC_TAKE_FREED_HANDLE: u32 = 1;
+const HOST_GC_ALLOC_SLOW_V2: u32 = 2;
+const HOST_GC_OBJ_GET_V2: u32 = 3;
+const HOST_GC_OBJ_SET_V2: u32 = 4;
+const HOST_GC_OBJ_DELETE_V2: u32 = 5;
+const HOST_GC_ARR_NEW_V2: u32 = 6;
+const HOST_GC_ELEM_GET_V2: u32 = 7;
+const HOST_GC_ELEM_SET_V2: u32 = 8;
+const NUM_HOST_IMPORTS_V2: u32 = 9;
 
-// ── Global indices (与 user wasm 0..26 对齐) ──────────────────────────
-#[allow(dead_code)]
-const G_FUNC_PROPS: u32 = 0;
-const G_HEAP_PTR: u32 = 1;
-const G_OBJ_TABLE_PTR: u32 = 2;
+// ── Global indices（与 user wasm 对齐；仅列出 V2 support body 实际引用的）──
 const G_OBJ_TABLE_COUNT: u32 = 3;
-const G_SHADOW_SP: u32 = 4;
-#[allow(dead_code)]
-const G_OBJECT_HEAP_START: u32 = 5;
-const G_NUM_IR_FUNCTIONS: u32 = 6;
-#[allow(dead_code)]
-const G_SHADOW_STACK_END: u32 = 7;
-const G_ARRAY_PROTO_HANDLE: u32 = 8;
 const G_OBJECT_PROTO_HANDLE: u32 = 9;
-#[allow(dead_code)]
-const G_EVAL_VAR_MAP_PTR: u32 = 10;
-#[allow(dead_code)]
-const G_EVAL_VAR_MAP_COUNT: u32 = 11;
-#[allow(dead_code)]
 const G_BOOTSTRAP_DONE: u32 = 12;
-#[allow(dead_code)]
 const G_FUNCTION_PROPS_DONE: u32 = 13;
-const G_FUNCTION_PROPS_BASE: u32 = 14;
-#[allow(dead_code)]
-const G_ARR_PROTO_TABLE_BASE: u32 = 15;
-#[allow(dead_code)]
-const G_ARR_PROTO_TABLE_LEN: u32 = 16;
-#[allow(dead_code)]
-const G_ARR_PROTO_TABLE_HASH: u32 = 17;
-#[allow(dead_code)]
-const G_ALLOC_PTR: u32 = 19;
-#[allow(dead_code)]
-const G_ALLOC_END: u32 = 20;
-#[allow(dead_code)]
 const G_GC_ALLOC_BYTES: u32 = 21;
-#[allow(dead_code)]
 const G_GC_TRIGGER_BYTES: u32 = 22;
-#[allow(dead_code)]
-const G_GC_PHASE: u32 = 23;
-#[allow(dead_code)]
-const G_GOOD_COLOR: u32 = 24;
-#[allow(dead_code)]
-const G_BARRIER_BUF_PTR: u32 = 25;
-
 const G_V2_HEAP_ALLOC_PTR: u32 = 27;
 const G_V2_HEAP_ALLOC_END: u32 = 28;
-#[allow(dead_code)]
-const G_BARRIER_BUF_END: u32 = 26;
-
-fn emit_reference_barrier_event(
-    func: &mut Function,
-    flavor: GcFlavor,
-    slot_addr_local: u32,
-    slot_offset: u64,
-    new_value_local: u32,
-) {
-    if !matches!(flavor, GcFlavor::G1 | GcFlavor::Zgc) {
-        return;
-    }
-
-    if flavor == GcFlavor::Zgc {
-        // ZGC 只需要 mark 期 SATB；idle/relocate 期不记录写屏障事件。
-        func.instruction(&WasmInstruction::GlobalGet(G_GC_PHASE));
-        func.instruction(&WasmInstruction::I32Const(1));
-        func.instruction(&WasmInstruction::I32Eq);
-        func.instruction(&WasmInstruction::If(BlockType::Empty));
-    }
-
-    // 缓冲区剩余不足 24B 时先 flush；flush 只 drain event，不触发 GC/move。
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
-    func.instruction(&WasmInstruction::I32Const(
-        constants::GC_BARRIER_EVENT_SIZE as i32,
-    ));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_END));
-    func.instruction(&WasmInstruction::I32GtU);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::Call(HOST_GC_BARRIER_FLUSH));
-    func.instruction(&WasmInstruction::End);
-
-    // flags:u32。G1 当前由 host 侧按 old/new 值精化；ZGC 标明 SATB old-value。
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
-    func.instruction(&WasmInstruction::I32Const(if flavor == GcFlavor::Zgc {
-        1
-    } else {
-        0
-    }));
-    func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    // slot_addr:u32 指向实际 inline value slot。
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
-    func.instruction(&WasmInstruction::LocalGet(slot_addr_local));
-    if slot_offset != 0 {
-        func.instruction(&WasmInstruction::I32Const(slot_offset as i32));
-        func.instruction(&WasmInstruction::I32Add);
-    }
-    func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 4,
-        align: 2,
-        memory_index: 0,
-    }));
-    // old_value:i64 必须取写前槽位的 NaN-boxed value。
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
-    func.instruction(&WasmInstruction::LocalGet(slot_addr_local));
-    func.instruction(&WasmInstruction::I64Load(MemArg {
-        offset: slot_offset,
-        align: 3,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::I64Store(MemArg {
-        offset: 8,
-        align: 3,
-        memory_index: 0,
-    }));
-    // new_value:i64 来自当前写入值，flush 不重读 slot。
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
-    func.instruction(&WasmInstruction::LocalGet(new_value_local));
-    func.instruction(&WasmInstruction::I64Store(MemArg {
-        offset: 16,
-        align: 3,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_PTR));
-    func.instruction(&WasmInstruction::I32Const(
-        constants::GC_BARRIER_EVENT_SIZE as i32,
-    ));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalSet(G_BARRIER_BUF_PTR));
-
-    if flavor == GcFlavor::Zgc {
-        func.instruction(&WasmInstruction::End);
-    }
-}
-
-fn emit_resolve_handle_ptr(
-    func: &mut Function,
-    flavor: GcFlavor,
-    handle_local: u32,
-    ptr_local: u32,
-) {
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::LocalGet(handle_local));
-    func.instruction(&WasmInstruction::I32Const(2));
-    func.instruction(&WasmInstruction::I32Shl);
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    if flavor == GcFlavor::Zgc {
-        func.instruction(&WasmInstruction::LocalTee(ptr_local));
-        func.instruction(&WasmInstruction::I32Const(3));
-        func.instruction(&WasmInstruction::I32And);
-        func.instruction(&WasmInstruction::GlobalGet(G_GOOD_COLOR));
-        func.instruction(&WasmInstruction::I32Ne);
-        func.instruction(&WasmInstruction::If(BlockType::Empty));
-        func.instruction(&WasmInstruction::LocalGet(handle_local));
-        func.instruction(&WasmInstruction::Call(HOST_GC_LOAD_BARRIER_SLOW));
-        func.instruction(&WasmInstruction::LocalSet(ptr_local));
-        func.instruction(&WasmInstruction::End);
-        func.instruction(&WasmInstruction::LocalGet(ptr_local));
-        func.instruction(&WasmInstruction::I32Const(-4));
-        func.instruction(&WasmInstruction::I32And);
-        func.instruction(&WasmInstruction::LocalSet(ptr_local));
-    } else {
-        func.instruction(&WasmInstruction::LocalSet(ptr_local));
-    }
-}
-
-fn emit_obj_table_entry_value(func: &mut Function, flavor: GcFlavor, ptr_local: u32) {
-    func.instruction(&WasmInstruction::LocalGet(ptr_local));
-    if flavor == GcFlavor::Zgc {
-        func.instruction(&WasmInstruction::GlobalGet(G_GOOD_COLOR));
-        func.instruction(&WasmInstruction::I32Or);
-    }
-}
 
 // Imported env globals — 与 abi::ENV_GLOBALS 同步：27 项。
 const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
@@ -553,162 +325,16 @@ fn emit_stub_unreachable(_flavor: GcFlavor) -> Function {
     func
 }
 
-/// handle bounds check：若 handle_idx >= obj_table_count 则返回 sentinel。
-/// 保留 handle_idx 在 handle_local（通过 LocalTee）。
-fn emit_handle_bounds_check(func: &mut Function, handle_local: u32, sentinel: Option<i64>) {
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_COUNT));
+/// V2 handle 表固定在 memory64 前缀，entry 为 8 字节。
+/// candidate 为即将占用的 handle 序号；越界则 trap（不再使用 main memory 4-byte 表布局）。
+fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
+    // 2^28 handles × 8B = 2GiB，远小于 HANDLE_REGION_BYTES(32GiB)。
+    const MAX_HANDLES: i32 = 1 << 28;
+    func.instruction(&WasmInstruction::LocalGet(candidate_local));
+    func.instruction(&WasmInstruction::I32Const(MAX_HANDLES));
     func.instruction(&WasmInstruction::I32GeU);
     func.instruction(&WasmInstruction::If(BlockType::Empty));
-    if let Some(val) = sentinel {
-        func.instruction(&WasmInstruction::I64Const(val));
-    }
-    func.instruction(&WasmInstruction::Return);
-    func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::LocalGet(handle_local));
-}
-
-/// 新 handle 分配前检查：candidate 槽位不得越过固定 handle 表。
-fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
-    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
-    func.instruction(&WasmInstruction::LocalGet(candidate_local));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_BARRIER_BUF_END));
-    func.instruction(&WasmInstruction::I32Const(
-        constants::GC_BARRIER_EVENT_BUFFER_SIZE as i32,
-    ));
-    func.instruction(&WasmInstruction::I32Sub);
-    func.instruction(&WasmInstruction::I32GtU);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
     func.instruction(&WasmInstruction::Unreachable);
-    func.instruction(&WasmInstruction::End);
-}
-
-/// 属性名 ID 匹配：先比较整数相等，若不等且两者都不是 Symbol 则调用 string_eq。
-/// left_local / right_local 持有 name_id（i32）。
-/// 结果（i32）留在栈顶：1 = 匹配，0 = 不匹配。
-fn emit_property_name_id_match(func: &mut Function, left_local: u32, right_local: u32) {
-    func.instruction(&WasmInstruction::LocalGet(left_local));
-    func.instruction(&WasmInstruction::LocalGet(right_local));
-    func.instruction(&WasmInstruction::I32Eq);
-    func.instruction(&WasmInstruction::LocalGet(left_local));
-    func.instruction(&WasmInstruction::I32Const(
-        constants::NAME_ID_SYMBOL_FLAG as i32,
-    ));
-    func.instruction(&WasmInstruction::I32And);
-    func.instruction(&WasmInstruction::LocalGet(right_local));
-    func.instruction(&WasmInstruction::I32Const(
-        constants::NAME_ID_SYMBOL_FLAG as i32,
-    ));
-    func.instruction(&WasmInstruction::I32And);
-    func.instruction(&WasmInstruction::I32Or);
-    func.instruction(&WasmInstruction::I32Eqz);
-    func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
-    func.instruction(&WasmInstruction::LocalGet(left_local));
-    func.instruction(&WasmInstruction::LocalGet(right_local));
-    func.instruction(&WasmInstruction::Call(FN_STRING_EQ));
-    func.instruction(&WasmInstruction::Else);
-    func.instruction(&WasmInstruction::I32Const(0));
-    func.instruction(&WasmInstruction::End);
-    func.instruction(&WasmInstruction::I32Or);
-}
-
-fn emit_runtime_string_name_id_test(func: &mut Function, name_id_local: u32) {
-    func.instruction(&WasmInstruction::LocalGet(name_id_local));
-    func.instruction(&WasmInstruction::I32Const(
-        constants::NAME_ID_RUNTIME_STRING_FLAG as i32,
-    ));
-    func.instruction(&WasmInstruction::I32And);
-    func.instruction(&WasmInstruction::I32Const(0));
-    func.instruction(&WasmInstruction::I32Ne);
-}
-
-/// 解析 callable：若为 closure 则通过 host 获取 func_idx + env_obj，
-/// 否则 func_idx = callee_low32，env_obj = undefined。
-fn emit_resolve_callable_for_helper(
-    func: &mut Function,
-    callee_local: u32,
-    func_idx_local: u32,
-    env_obj_local: u32,
-) {
-    func.instruction(&WasmInstruction::LocalGet(callee_local));
-    func.instruction(&WasmInstruction::I64Const(32));
-    func.instruction(&WasmInstruction::I64ShrU);
-    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
-    func.instruction(&WasmInstruction::I64And);
-    func.instruction(&WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
-    func.instruction(&WasmInstruction::I64Eq);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
-
-    func.instruction(&WasmInstruction::LocalGet(callee_local));
-    func.instruction(&WasmInstruction::I32WrapI64);
-    func.instruction(&WasmInstruction::Call(HOST_CLOSURE_GET_FUNC));
-    func.instruction(&WasmInstruction::LocalSet(func_idx_local));
-    func.instruction(&WasmInstruction::LocalGet(callee_local));
-    func.instruction(&WasmInstruction::I32WrapI64);
-    func.instruction(&WasmInstruction::Call(HOST_CLOSURE_GET_ENV));
-    func.instruction(&WasmInstruction::LocalSet(env_obj_local));
-
-    func.instruction(&WasmInstruction::Else);
-    func.instruction(&WasmInstruction::LocalGet(callee_local));
-    func.instruction(&WasmInstruction::I32WrapI64);
-    func.instruction(&WasmInstruction::LocalSet(func_idx_local));
-    func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-    func.instruction(&WasmInstruction::LocalSet(env_obj_local));
-    func.instruction(&WasmInstruction::End);
-}
-
-/// 对象扩容 bump：fast-path 使用 alloc window；失败走 gc_alloc_slow。
-fn emit_heap_bump_for_object_resize_support(
-    func: &mut Function,
-    capacity_local: u32,
-    size_scratch_local: u32,
-    new_ptr_local: u32,
-) {
-    func.instruction(&WasmInstruction::LocalGet(capacity_local));
-    func.instruction(&WasmInstruction::I32Const(32));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::I32Const(16));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::LocalSet(size_scratch_local));
-
-    func.instruction(&WasmInstruction::Block(BlockType::Empty));
-    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_END));
-    func.instruction(&WasmInstruction::I32LeU);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::GlobalGet(G_ALLOC_PTR));
-    func.instruction(&WasmInstruction::LocalTee(new_ptr_local));
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::LocalTee(size_scratch_local));
-    func.instruction(&WasmInstruction::GlobalSet(G_ALLOC_PTR));
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::GlobalGet(G_GC_ALLOC_BYTES));
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::LocalGet(new_ptr_local));
-    func.instruction(&WasmInstruction::I32Sub);
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalSet(G_GC_ALLOC_BYTES));
-    func.instruction(&WasmInstruction::Br(1));
-    func.instruction(&WasmInstruction::End);
-
-    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
-    func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
-    func.instruction(&WasmInstruction::LocalGet(capacity_local));
-    func.instruction(&WasmInstruction::Call(HOST_GC_ALLOC_SLOW_V2));
-    func.instruction(&WasmInstruction::LocalTee(new_ptr_local));
-    func.instruction(&WasmInstruction::I32Const(-1));
-    func.instruction(&WasmInstruction::I32Eq);
-    func.instruction(&WasmInstruction::If(BlockType::Empty));
-    func.instruction(&WasmInstruction::Unreachable);
-    func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
 }
 
@@ -731,8 +357,7 @@ fn emit_gc_safepoint_poll_if_due_support(func: &mut Function) {
     func.instruction(&WasmInstruction::End);
 }
 
-// ── obj_new (param $capacity i32) (result i32) — Type 0 ──
-// 移植自 compiler_helpers.rs::compile_object_helpers obj_new 段。
+/// obj_new (param $capacity i32) (result i32)
 fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
     // local 0 = capacity:i32, 1 = size:i64, 2 = ptr:i64, 3 = handle:i32, 4 = end:i64。
     let mut func = Function::new(vec![
@@ -894,9 +519,6 @@ fn emit_v2_ternary_host_helper(host_index: u32) -> Function {
     func
 }
 
-// ── obj_new (param $capacity i32) (result i32) — Type 0 ──
-
-// 移植自 compiler_helpers.rs::compile_object_helpers str_eq 段。
 fn emit_string_eq(_flavor: GcFlavor) -> Function {
     // local 0 = a, local 1 = b, local 2 = byte_a, local 3 = byte_b
     let mut func = Function::new(vec![(2, ValType::I32)]);
@@ -948,7 +570,6 @@ fn emit_string_eq(_flavor: GcFlavor) -> Function {
 }
 
 // ── to_int32 (param $val i64) (result i32) — Type 4 ──
-// 移植自 compiler_helpers.rs::compile_object_helpers to_int32 段。
 fn emit_to_int32(_flavor: GcFlavor) -> Function {
     // local 0 = $val (i64, input), local 1 = f64 scratch
     let mut func = Function::new(vec![(1, ValType::F64)]);
@@ -1169,6 +790,6 @@ mod tests {
 
     #[test]
     fn host_imports_count_locked() {
-        assert_eq!(HOST_IMPORTS.len(), 28);
+        assert_eq!(HOST_IMPORTS.len(), 2);
     }
 }

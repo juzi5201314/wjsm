@@ -57,12 +57,12 @@ impl ObjectWalker {
         &mut self,
         ctx: &mut GcContext<'_>,
         h: Handle,
-        obj_table_ptr: usize,
+        table_base: usize,
         obj_table_count: usize,
         visit: &mut dyn FnMut(Handle),
     ) {
         let tasks =
-            ctx.with_memory(|data| scan_tasks_for_handle(data, h, obj_table_ptr, obj_table_count));
+            ctx.with_memory(|data| scan_tasks_for_handle(data, h, table_base, obj_table_count));
         for task in tasks {
             ctx.with_memory(|data| {
                 self.collect_task_raw_values(data, task);
@@ -102,14 +102,14 @@ impl SideTableChildHandles {
 pub(crate) fn resolve_handle(
     data: &[u8],
     h: Handle,
-    obj_table_ptr: usize,
+    table_base: usize,
     obj_table_count: usize,
 ) -> Option<usize> {
     if (h as usize) >= obj_table_count {
         return None;
     }
     let entry_size = constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-    let addr = obj_table_ptr.checked_add(h as usize * entry_size)?;
+    let addr = table_base.checked_add(h as usize * entry_size)?;
     let bytes: [u8; 8] = data.get(addr..addr + 8)?.try_into().ok()?;
     let entry = u64::from_le_bytes(bytes);
     // V2 entry: (addr << 16) | state；state==0 为空槽。兼容测试里直接写低 32 位 ptr 的布局。
@@ -124,10 +124,10 @@ pub(crate) fn resolve_handle(
 pub(crate) fn scan_tasks_for_handle(
     data: &[u8],
     h: Handle,
-    obj_table_ptr: usize,
+    table_base: usize,
     obj_table_count: usize,
 ) -> Vec<ScanTask> {
-    let Some(ptr) = resolve_handle(data, h, obj_table_ptr, obj_table_count) else {
+    let Some(ptr) = resolve_handle(data, h, table_base, obj_table_count) else {
         return Vec::new();
     };
     if ptr + constants::HEAP_OBJECT_HEADER_SIZE as usize > data.len() {
@@ -172,14 +172,14 @@ pub(crate) fn scan_tasks_for_ptr(data: &[u8], handle: Handle, ptr: usize) -> Vec
 #[allow(dead_code)]
 pub(crate) fn collect_slots_in_range(
     data: &[u8],
-    obj_table_ptr: usize,
+    table_base: usize,
     obj_table_count: usize,
     range: Range<usize>,
     out: &mut Vec<SlotValue>,
 ) {
     out.clear();
     for h in 0..obj_table_count as Handle {
-        let Some(ptr) = resolve_handle(data, h, obj_table_ptr, obj_table_count) else {
+        let Some(ptr) = resolve_handle(data, h, table_base, obj_table_count) else {
             continue;
         };
         let tasks = scan_tasks_for_ptr(data, h, ptr);
@@ -450,7 +450,7 @@ fn read_i64(data: &[u8], addr: usize) -> Option<Value> {
 pub(crate) fn mark_drain_on_buffer(
     mark_bits: &mut crate::runtime_gc::mark_bitmap::MarkBitmap,
     data: &[u8],
-    obj_table_ptr: usize,
+    table_base: usize,
     obj_table_count: usize,
     roots: &[Handle],
     function_props_base: usize,
@@ -465,7 +465,7 @@ pub(crate) fn mark_drain_on_buffer(
     let mut raw_values = Vec::new();
     let mut side_children = SideTableChildHandles::default();
     while let Some(h) = worklist.pop() {
-        for task in scan_tasks_for_handle(data, h, obj_table_ptr, obj_table_count) {
+        for task in scan_tasks_for_handle(data, h, table_base, obj_table_count) {
             raw_values.clear();
             side_children.clear();
             collect_task_slot_values(
@@ -519,11 +519,11 @@ mod tests {
     use crate::runtime_gc::mark_bitmap::MarkBitmap;
 
     fn build_object_buffer(
-        obj_table_ptr: usize,
+        table_base: usize,
         objects: &[(Handle, usize, u32, Vec<Value>)],
         obj_table_count: usize,
     ) -> Vec<u8> {
-        let mut size = obj_table_ptr + obj_table_count * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+        let mut size = table_base + obj_table_count * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
         for (_h, ptr, _proto, props) in objects {
             let end = *ptr
                 + constants::HEAP_OBJECT_HEADER_SIZE as usize
@@ -532,7 +532,7 @@ mod tests {
         }
         let mut buf = vec![0u8; size];
         for (h, ptr, _, _) in objects {
-            let addr = obj_table_ptr + *h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            let addr = table_base + *h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
             buf[addr..addr + 8].copy_from_slice(&(*ptr as u64).to_le_bytes());
         }
         for (_h, ptr, proto, props) in objects {
@@ -558,15 +558,15 @@ mod tests {
         buf
     }
 
-    fn build_array_buffer(obj_table_ptr: usize, handle: Handle, ptr: usize, len: usize) -> Vec<u8> {
+    fn build_array_buffer(table_base: usize, handle: Handle, ptr: usize, len: usize) -> Vec<u8> {
         let mut buf = vec![
             0u8;
             (ptr + constants::HEAP_OBJECT_HEADER_SIZE as usize
                 + len * constants::HEAP_ARRAY_ELEMENT_SIZE as usize)
-                .max(obj_table_ptr + 8)
+                .max(table_base + 8)
         ];
-        buf[obj_table_ptr + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize
-            ..obj_table_ptr + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize + 8]
+        buf[table_base + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize
+            ..table_base + handle as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize + 8]
             .copy_from_slice(&(ptr as u64).to_le_bytes());
         buf[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_ARRAY;
         let len_u32 = len as u32;
@@ -585,17 +585,17 @@ mod tests {
 
     #[test]
     fn object_walker_marks_linear_chain_without_recursion() {
-        let obj_table_ptr = 1000;
+        let table_base = 1000;
         let objects = vec![
             (0u32, 2000, 1, vec![enc_obj(2)]),
             (1u32, 3000, PROTO_NULL_SENTINEL, vec![]),
             (2u32, 4000, PROTO_NULL_SENTINEL, vec![]),
         ];
-        let buf = build_object_buffer(obj_table_ptr, &objects, 3);
+        let buf = build_object_buffer(table_base, &objects, 3);
         let mut bm = MarkBitmap::new();
         bm.reset(3);
 
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0], 0, 0);
+        mark_drain_on_buffer(&mut bm, &buf, table_base, 3, &[0], 0, 0);
 
         assert!(bm.is_marked(0));
         assert!(bm.is_marked(1));
@@ -605,11 +605,11 @@ mod tests {
 
     #[test]
     fn object_walker_splits_large_arrays_into_oblets() {
-        let obj_table_ptr = 64;
+        let table_base = 64;
         let ptr = 512;
-        let buf = build_array_buffer(obj_table_ptr, 0, ptr, 600);
+        let buf = build_array_buffer(table_base, 0, ptr, 600);
 
-        let tasks = scan_tasks_for_handle(&buf, 0, obj_table_ptr, 1);
+        let tasks = scan_tasks_for_handle(&buf, 0, table_base, 1);
 
         assert_eq!(tasks[0], ScanTask::Header { handle: 0, ptr });
         assert_eq!(
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn object_walker_collects_slots_in_card_range() {
-        let obj_table_ptr = 1000;
+        let table_base = 1000;
         let obj_ptr = 2000;
         let objects = vec![(
             0u32,
@@ -651,7 +651,7 @@ mod tests {
             PROTO_NULL_SENTINEL,
             vec![enc_obj(7), enc_obj(8)],
         )];
-        let buf = build_object_buffer(obj_table_ptr, &objects, 1);
+        let buf = build_object_buffer(table_base, &objects, 1);
         let first_value_addr = obj_ptr
             + constants::HEAP_OBJECT_HEADER_SIZE as usize
             + constants::PROP_SLOT_VALUE_OFFSET as usize;
@@ -659,7 +659,7 @@ mod tests {
 
         collect_slots_in_range(
             &buf,
-            obj_table_ptr,
+            table_base,
             1,
             first_value_addr..first_value_addr + 8,
             &mut slots,
@@ -676,11 +676,11 @@ mod tests {
 
     #[test]
     fn object_walker_rejects_out_of_range_function_ids() {
-        let obj_table_ptr = 0;
+        let table_base = 0;
         let root_ptr = 100;
         let function_value = value::encode_function_idx(2);
         let buf = build_object_buffer(
-            obj_table_ptr,
+            table_base,
             &[
                 (0u32, root_ptr, PROTO_NULL_SENTINEL, vec![function_value]),
                 (1u32, 200, PROTO_NULL_SENTINEL, vec![]),
@@ -692,7 +692,7 @@ mod tests {
         let mut bm = MarkBitmap::new();
         bm.reset(4);
 
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 4, &[0], 1, 2);
+        mark_drain_on_buffer(&mut bm, &buf, table_base, 4, &[0], 1, 2);
 
         assert!(bm.is_marked(0));
         assert!(!bm.is_marked(3));

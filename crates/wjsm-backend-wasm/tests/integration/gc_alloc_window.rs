@@ -146,13 +146,20 @@ fn imported_func_index(info: &SupportModuleInfo, name: &str) -> u32 {
 #[test]
 fn mark_sweep_support_write_helpers_do_not_emit_barrier_events() {
     let info = parse_support_module();
-    let barrier_flush_idx = imported_func_index(&info, "gc_barrier_flush");
-
+    // V2 support 写路径透传 host helpers，不再内联 barrier event / flush。
+    assert!(
+        !info.imported_funcs.iter().any(|name| name == "gc_barrier_flush"),
+        "V2 support must not import gc_barrier_flush"
+    );
     for export in ["obj_set", "elem_set"] {
         let body = exported_body(&info, export);
         assert!(
-            !body.contains(&OwnedOperator::Call(barrier_flush_idx)),
-            "mark-sweep support `{export}` must not call gc_barrier_flush"
+            body.iter().any(|op| matches!(op, OwnedOperator::Call(_))),
+            "support `{export}` must call host write helper"
+        );
+        assert!(
+            !body.contains(&OwnedOperator::I32Store),
+            "support `{export}` must not write barrier event buffer in main memory"
         );
     }
 }

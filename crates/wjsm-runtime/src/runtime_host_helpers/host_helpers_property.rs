@@ -151,7 +151,7 @@ pub(crate) fn define_host_data_property_by_name_id_with_env<
     Some(())
 }
 
-/// 定义一个访问器（getter/setter）属性到宿主创建的对象上（泛型版本，不支持 grow_object）。
+/// 定义一个访问器（getter/setter）属性到宿主创建的对象上（泛型版本，V2-only）。
 /// slot 布局与数据属性相同（32字节），但 flags 标记为 IS_ACCESSOR，
 /// offset 8 = undefined（保留），offset 16 = getter，offset 24 = setter。
 pub(crate) fn define_host_accessor_property_with_env<C: AsContextMut<Data = RuntimeState>>(

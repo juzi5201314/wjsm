@@ -122,19 +122,19 @@ fn mixed_size_churn_preserves_state() -> Result<()> {
     Ok(())
 }
 
-/// 数组扩容（grow_array → abandon 旧区域）后碎片回收验证。
+/// 数组扩容（V2 ensure_v2_array_capacity → release_region）后碎片回收验证。
 /// 大量 grow 后不 OOM、不 corruption。
 #[test]
 fn array_grow_churn_no_oom() -> Result<()> {
     let output = run_js(
         r#"
-        // 反复创建并扩容数组，触发 grow_array → abandon_region → sweep 回收
+        // 反复创建并扩容数组，触发 V2 ensure_v2_array_capacity → release_region 回收
         for (let round = 0; round < 100; round++) {
             let arr = [];
             for (let i = 0; i < 100; i++) {
                 arr.push(i);
             }
-            // arr 经历多次扩容，旧区域被 abandon
+            // arr 经历多次扩容，旧区由 V2 release_region 回收
             // 验证内容正确
             if (arr.length !== 100 || arr[50] !== 50) {
                 console.log("FAIL");

@@ -32,7 +32,7 @@ fn heap_memory64_user_and_support_modules_share_dynamic_heap_import() {
 }
 
 #[test]
-fn support_object_helpers_emit_memory64_i64_accesses() {
+fn support_module_emit_memory64_i64_accesses() {
     let wasm = emit_support_module(GcFlavor::MarkSweep).unwrap();
     let mut has_heap_i64_access = false;
 

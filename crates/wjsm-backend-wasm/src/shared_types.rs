@@ -158,7 +158,7 @@ pub fn build_shared_type_section() -> TypeSection {
         ],
         vec![ValType::I64],
     );
-    // Type 35: (i32, i32, i32) -> (i32) — gc_alloc_slow
+    // Type 35: (i32, i32, i32) -> (i32) — ensure_shadow_stack_capacity 等
     types.ty().function(
         vec![ValType::I32, ValType::I32, ValType::I32],
         vec![ValType::I32],

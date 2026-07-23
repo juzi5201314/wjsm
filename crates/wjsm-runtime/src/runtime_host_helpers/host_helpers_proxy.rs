@@ -364,7 +364,7 @@ fn define_property_on_v2_object(
     }
 }
 
-/// 移植的低级对象属性扩容与新增写入逻辑
+/// 新增 own 属性（V2-only）：经 `HeapAccessV2` define；禁止 main memory 写。
 pub(crate) fn write_new_property_to_memory(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -374,122 +374,26 @@ pub(crate) fn write_new_property_to_memory(
     getter: i64,
     setter: i64,
 ) {
-    let obj_ptr = match resolve_handle(caller, target) {
-        Some(p) => p,
-        None => return,
-    };
-
-    let (capacity, num_props) = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return;
-        };
-        let data = memory.data(&*caller);
-        if obj_ptr + 16 > data.len() {
-            return;
-        }
-        let capacity = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]) as usize;
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize;
-        (capacity, num_props)
-    };
-
-    let mut actual_obj_ptr = obj_ptr;
-    let Some(env) = WasmEnv::from_caller(caller) else {
+    let handle = crate::runtime_values::handle_index_of(caller, target) as u32;
+    let access = caller.data().heap_access_v2().clone();
+    if access.resolve_handle(handle).is_err() {
+        return;
+    }
+    let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
         return;
     };
-    let handle_idx = crate::runtime_values::handle_index_of(caller, target) as u32;
-
-    if num_props >= capacity {
-        let Some(new_capacity) = capacity.max(1).checked_mul(2) else {
-            return;
-        };
-        let Some(new_size) = new_capacity
-            .checked_mul(32)
-            .and_then(|payload| 16_usize.checked_add(payload))
-        else {
-            return;
-        };
-
-        let Some(heap_ptr) = crate::runtime_heap::alloc_heap_region_for_host(
-            caller,
-            &env,
-            new_size,
-            wjsm_ir::HEAP_TYPE_OBJECT,
-            new_capacity as u32,
-        ) else {
-            return;
-        };
-        let Some(current_obj_ptr) =
-            crate::runtime_values::resolve_handle_idx_with_env(caller, &env, handle_idx as usize)
-        else {
-            return;
-        };
-        actual_obj_ptr = current_obj_ptr;
-        let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
-        {
-            let data = env.memory.data_mut(&mut *caller);
-
-            let old_size = 16 + num_props * 32;
-            data.copy_within(actual_obj_ptr..actual_obj_ptr + old_size, heap_ptr);
-
-            data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&(new_capacity as u32).to_le_bytes());
-
-            let slot_addr = obj_table_ptr + handle_idx as usize * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-            if slot_addr + 8 <= data.len() {
-                data[slot_addr..slot_addr + 8].copy_from_slice(&(heap_ptr as u64).to_le_bytes());
-            }
-        }
-
-        actual_obj_ptr = heap_ptr;
+    let is_accessor = flags as u32 & constants::FLAG_IS_ACCESSOR as u32 != 0;
+    if is_accessor {
+        let _ = access.define_accessor_property_with_flags(
+            handle,
+            key,
+            getter as u64,
+            setter as u64,
+            flags as u32,
+        );
+    } else {
+        let _ = access.define_data_property(handle, key, val as u64, flags as u32);
     }
-
-    let slot_idx = num_props;
-    let slot_offset = actual_obj_ptr + 16 + slot_idx * 32;
-    {
-        let data = env.memory.data_mut(&mut *caller);
-        if slot_offset + 32 > data.len() {
-            return;
-        }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    }
-    let _ = crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle_idx,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Value,
-        val,
-    );
-    let _ = crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle_idx,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Getter,
-        getter,
-    );
-    let _ = crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle_idx,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Setter,
-        setter,
-    );
-    let data = env.memory.data_mut(&mut *caller);
-    let new_num_props = num_props + 1;
-    data[actual_obj_ptr + 12..actual_obj_ptr + 16]
-        .copy_from_slice(&(new_num_props as u32).to_le_bytes());
 }
 
 pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
@@ -1242,101 +1146,25 @@ pub(crate) fn define_host_data_property_by_name_id_with_flags(
     val: i64,
     flags: i32,
 ) -> Option<()> {
-    if caller
+    let handle = value::decode_handle(obj);
+    if caller.data().heap_access_v2().resolve_handle(handle).is_err() {
+        return None;
+    }
+    // 数组实例：命名属性（含 .index/.input/.groups 等）存入宿主侧表，
+    // 与编译期 obj_set 的数组分支一致；直接写对象堆会把数组元素存储当属性槽而损坏。
+    if value::is_array(obj) {
+        crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
+        return Some(());
+    }
+    let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+    caller
         .data()
         .heap_access_v2()
-        .resolve_handle(value::decode_handle(obj))
-        .is_ok()
-    {
-        if value::is_array(obj) {
-            crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
-            return Some(());
-        }
-        let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
-        return caller
-            .data()
-            .heap_access_v2()
-            .define_data_property(value::decode_handle(obj), key, val as u64, flags as u32)
-            .ok();
-    }
-    {
-        // 数组实例：命名属性（含 .index/.input/.groups 等）存入宿主侧表，
-        // 与编译期 obj_set 的数组分支一致；直接写对象堆会把数组元素存储当属性槽而损坏。
-        if value::is_array(obj) {
-            crate::array_named_props::ArrayNamedPropsStore::set(caller, obj, name_id, val);
-            return Some(());
-        }
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        let obj_ptr =
-            resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
-        let (capacity, num_props) = {
-            let data = env.memory.data(&*caller);
-            if obj_ptr + 16 > data.len() {
-                return None;
-            }
-            let capacity = u32::from_le_bytes([
-                data[obj_ptr + 8],
-                data[obj_ptr + 9],
-                data[obj_ptr + 10],
-                data[obj_ptr + 11],
-            ]);
-            let num_props = u32::from_le_bytes([
-                data[obj_ptr + 12],
-                data[obj_ptr + 13],
-                data[obj_ptr + 14],
-                data[obj_ptr + 15],
-            ]);
-            (capacity, num_props)
-        };
-        let actual_ptr = if num_props >= capacity {
-            let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
-            grow_object(caller, obj_ptr, obj, new_cap)?
-        } else {
-            obj_ptr
-        };
-        let slot_idx = num_props as usize;
-        let slot_offset = actual_ptr + 16 + slot_idx * 32;
-        {
-            let data = env.memory.data_mut(&mut *caller);
-            if slot_offset + 32 > data.len() {
-                return None;
-            }
-            data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-        }
-        let undef = value::encode_undefined();
-        let handle = value::decode_object_handle(obj);
-        crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle,
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Value,
-            val,
-        )?;
-        crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle,
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Getter,
-            undef,
-        )?;
-        crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle,
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Setter,
-            undef,
-        )?;
-        let data = env.memory.data_mut(&mut *caller);
-        data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
-        Some(())
-    }
+        .define_data_property(handle, key, val as u64, flags as u32)
+        .ok()
 }
 
-/// 定义一个访问器（getter/setter）属性到宿主创建的对象上（Caller 版本，支持 grow_object）。
+/// 定义一个访问器（getter/setter）属性到宿主创建的对象上（Caller 版本，V2-only）。
 /// slot 布局与数据属性相同（32字节），但 flags 标记为 IS_ACCESSOR，
 /// offset 8 = undefined（保留），offset 16 = getter，offset 24 = setter。
 #[inline]
@@ -1387,106 +1215,35 @@ pub(crate) fn define_host_accessor_property_by_name_id_with_flags(
     setter: i64,
     attribute_flags: i32,
 ) -> Option<()> {
-    if caller
+    let handle = value::decode_handle(obj);
+    if caller.data().heap_access_v2().resolve_handle(handle).is_err() {
+        return None;
+    }
+    // 与 define_data_property_on_array_named 一致：数组命名槽不承载访问器。
+    if value::is_array(obj) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Accessor properties are not supported on array named slots".to_string(),
+        );
+        return None;
+    }
+    let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+    let flags = (attribute_flags & !constants::FLAG_WRITABLE) | constants::FLAG_IS_ACCESSOR;
+    caller
         .data()
         .heap_access_v2()
-        .resolve_handle(value::decode_handle(obj))
-        .is_ok()
-    {
-        // 与 define_data_property_on_array_named 一致：数组命名槽不承载访问器。
-        if value::is_array(obj) {
+        .define_accessor_property_with_flags(
+            handle,
+            key,
+            getter as u64,
+            setter as u64,
+            flags as u32,
+        )
+        .map_err(|error| {
             set_runtime_error(
                 caller.data(),
-                "TypeError: Accessor properties are not supported on array named slots".to_string(),
+                format!("V2 host accessor key {name_id}: {error}"),
             );
-            return None;
-        }
-        let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
-        let flags = (attribute_flags & !constants::FLAG_WRITABLE) | constants::FLAG_IS_ACCESSOR;
-        return caller
-            .data()
-            .heap_access_v2()
-            .define_accessor_property_with_flags(
-                value::decode_handle(obj),
-                key,
-                getter as u64,
-                setter as u64,
-                flags as u32,
-            )
-            .map_err(|error| {
-                set_runtime_error(
-                    caller.data(),
-                    format!("V2 host accessor key {name_id}: {error}"),
-                );
-            })
-            .ok();
-    }
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj_ptr =
-        resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
-    let (capacity, num_props) = {
-        let data = env.memory.data(&*caller);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        let capacity = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]);
-        (capacity, num_props)
-    };
-    let actual_ptr = if num_props >= capacity {
-        let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
-        grow_object(caller, obj_ptr, obj, new_cap)?
-    } else {
-        obj_ptr
-    };
-    let slot_idx = num_props as usize;
-    let slot_offset = actual_ptr + 16 + slot_idx * 32;
-    let flags = (attribute_flags & !constants::FLAG_WRITABLE) | constants::FLAG_IS_ACCESSOR;
-    {
-        let data = env.memory.data_mut(&mut *caller);
-        if slot_offset + 32 > data.len() {
-            return None;
-        }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    }
-    let undef = value::encode_undefined();
-    let handle = value::decode_object_handle(obj);
-    crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Value,
-        undef,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Getter,
-        getter,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Setter,
-        setter,
-    )?;
-    let data = env.memory.data_mut(&mut *caller);
-    data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
-    Some(())
+        })
+        .ok()
 }

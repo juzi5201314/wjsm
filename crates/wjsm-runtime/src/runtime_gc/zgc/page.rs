@@ -336,13 +336,13 @@ impl ZPageSpace {
 #[allow(dead_code)]
 pub fn recolor_live_obj_table_entries(
     data: &mut [u8],
-    obj_table_ptr: usize,
+    table_base: usize,
     count: usize,
     good: ZColor,
 ) -> usize {
     let mut recolored = 0;
     for handle in 0..count {
-        let slot = obj_table_ptr + handle * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+        let slot = table_base + handle * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
         let Some(bytes) = data.get_mut(slot..slot + 4) else {
             break;
         };

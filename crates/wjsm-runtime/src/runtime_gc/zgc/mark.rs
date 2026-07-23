@@ -284,19 +284,19 @@ impl ZMarkState {
         work_bytes: usize,
         deadline: Option<Instant>,
     ) {
-        let obj_table_ptr = ctx.obj_table_ptr();
+        let table_base = ctx.obj_table_ptr();
         let obj_table_count = ctx.obj_table_count();
         let mut walker = ObjectWalker::new();
         let mut processed = 0usize;
         let mut children = Vec::new();
         while let Some(h) = self.worklist.pop() {
             let size = ctx.with_memory(|data| {
-                object_walker::resolve_handle(data, h, obj_table_ptr, obj_table_count)
+                object_walker::resolve_handle(data, h, table_base, obj_table_count)
                     .and_then(|ptr| object_size_from_memory(data, ptr))
                     .unwrap_or(1)
             });
             children.clear();
-            walker.visit_object_children(ctx, h, obj_table_ptr, obj_table_count, &mut |child| {
+            walker.visit_object_children(ctx, h, table_base, obj_table_count, &mut |child| {
                 children.push(child);
             });
             for child in children.drain(..) {
@@ -436,12 +436,12 @@ fn decode_buffer_old_values(input: &[u8]) -> impl Iterator<Item = Value> + '_ {
 #[allow(dead_code)]
 #[cfg(test)]
 fn snapshot_mark_objects(ctx: &mut GcContext<'_>, pages: &ZPageSpace) -> Vec<MarkObject> {
-    let obj_table_ptr = ctx.obj_table_ptr();
+    let table_base = ctx.obj_table_ptr();
     let obj_table_count = ctx.obj_table_count();
     ctx.with_memory(|data| {
         let mut out = Vec::new();
         for h in 0..obj_table_count as Handle {
-            let slot = obj_table_ptr + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            let slot = table_base + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
             let Some(bytes) = data.get(slot..slot + 4) else {
                 break;
             };
@@ -477,7 +477,7 @@ fn build_cleanup_plan_from_heap(
     mark_bits: &MarkBitmap,
     good: ZColor,
 ) -> CleanupPlan {
-    let obj_table_ptr = ctx.obj_table_ptr();
+    let table_base = ctx.obj_table_ptr();
     let obj_table_count = ctx.obj_table_count();
     ctx.with_memory(|data| {
         let mut plan = CleanupPlan {
@@ -485,7 +485,7 @@ fn build_cleanup_plan_from_heap(
             ..CleanupPlan::default()
         };
         for h in 0..obj_table_count as Handle {
-            let slot = obj_table_ptr + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            let slot = table_base + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
             let Some(bytes) = data.get(slot..slot + 4) else {
                 break;
             };
@@ -572,8 +572,8 @@ fn release_dead_handles(ctx: &mut GcContext<'_>, dead_handles: &[Handle]) {
     for stage in DEAD_HANDLE_CLEANUP_ORDER {
         match stage {
             DeadHandleCleanupStage::ClearObjTableSlots => {
-                for &h in dead_handles {
-                    ctx.write_obj_table_slot(h, 0);
+                for &_h in dead_handles {
+                    // V1 main-memory obj_table 写已删除；V2 handle 清理由 HeapAccessV2 负责。
                 }
             }
             DeadHandleCleanupStage::ReclaimOwnerSideTables => {

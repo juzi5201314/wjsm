@@ -1081,9 +1081,18 @@ cargo run -- run --gc zgc -e '...'
 `registry::create`、`Arc<Mutex<Box<dyn`、`HANDLE_TABLE_ENTRY_SIZE: u32 = 4`、
 `emit_support_module_with_heap_mode`、Cargo/`cfg` managed-heap-v2、旧 bench 源文件。
 
-### 已知非阻塞残余
+### Task 26 residual purge（2026-07-23 后续）
 
-- `compile_object_helpers` / `compile_array_helpers` 无调用方定义仍在（support 已接管）。
-- zgc 协议单测 4-byte colored payload + 8-byte stride（非 active 热路径）。
+残余已清零：
 
-状态：Task 26 GREEN 完成；下一 Task 27。
+- 删除 `compile_object_helpers` / `compiler_array_helpers` / `helpers_bounds` /
+  孤儿 `support_object_helpers`。
+- support_module 死 emit 删除；HOST 去掉 `gc_alloc_slow` 并重编号；
+  handle 分配检查改为 V2 8-byte entry 上限（无 main-memory `I32Const(4)` stride）。
+- Runtime：`grow_array`/`grow_object` V2-only；删除 `abandon_region` 与
+  main-memory `obj_table` grow 写；属性/数组 dual-path fallback 删除。
+- 负检查（`crates/**/*.rs`）：`compile_object_helpers`、`compile_array_helpers`、
+  `support_object_helpers`、`helpers_bounds`、`emit_heap_bump_for_object_resize_support`、
+  `emit_obj_table_entry_value`、`HANDLE_TABLE_ENTRY_SIZE: u32 = 4` → 0。
+
+状态：Task 26 后残余清零；下一 Task 27。

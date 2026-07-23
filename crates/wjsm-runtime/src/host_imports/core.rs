@@ -1629,39 +1629,8 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "abstract_compare", f)?;
 
-    // ── P4 GC framework: gc_alloc_slow / gc_safepoint_poll / gc_barrier_flush / gc_load_barrier_slow / gc_take_freed_handle ──
-
-    // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
-    //   遗留 HOST_IMPORTS 槽位：V2 support 走 gc_alloc_slow_v2；本入口重定向到
-    //   HeapAccessV2.reserve_nlab，返回 i32 截断地址（仅兼容仍 import 该符号的模块）。
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         size: i32,
-         _heap_type: i32,
-         _capacity: i32|
-         -> wasmtime::Result<i32> {
-            let size = size.max(0) as u64;
-            match crate::allocate_v2_object_bytes(&mut caller, size) {
-                Ok((start, _)) => {
-                    let addr = i32::try_from(start).unwrap_or(i32::MAX);
-                    Ok(addr)
-                }
-                Err(_) => {
-                    let used = caller
-                        .data()
-                        .heap_access_v2()
-                        .used_bytes()
-                        .min(usize::MAX as u64) as usize;
-                    caller
-                        .data()
-                        .set_heap_oom_error(used, size.min(usize::MAX as u64) as usize);
-                    Err(wasmtime::Trap::AllocationTooLarge.into())
-                }
-            }
-        },
-    );
-    linker.define(&mut store, "env", "gc_alloc_slow", f)?;
+    // ── P4 GC framework: gc_safepoint_poll / gc_barrier_flush / gc_load_barrier_slow / gc_take_freed_handle ──
+    // V2 分配 slow-path 仅保留 gc_alloc_slow_v2（memory64）；已删除 gc_alloc_slow。
 
     // gc_safepoint_poll()：WASM allocation debt 达阈值后调用的 GC safepoint。
     // 清零 __gc_alloc_bytes，按 kind 全量 collect_dispatch，再更新 trigger pacing。

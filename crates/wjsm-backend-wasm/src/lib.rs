@@ -433,7 +433,6 @@ fn import_support_helpers(imports: &mut ImportSection) {
 pub mod analysis_liveness;
 pub mod analysis_value_ty;
 pub use analysis_value_ty::{ValueTy, builtin_returns_scalar};
-mod compiler_array_helpers;
 mod compiler_builtins;
 mod compiler_builtins_async_proxy;
 mod compiler_builtins_collections;

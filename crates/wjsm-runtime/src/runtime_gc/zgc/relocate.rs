@@ -294,13 +294,13 @@ impl RelocationAllocator {
 }
 
 fn remap_remaining_rs_entries(ctx: &mut GcContext<'_>, pages: &ZPageSpace) {
-    let obj_table_ptr = ctx.obj_table_ptr();
+    let table_base = ctx.obj_table_ptr();
     let obj_table_count = ctx.obj_table_count();
     let repairs = ctx.with_memory(|data| {
         let mut repairs = Vec::new();
         for h in 0..obj_table_count as Handle {
-            let slot = obj_table_ptr + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-            let Some(entry) = read_entry_from_memory(data, obj_table_ptr, h) else {
+            let slot = table_base + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            let Some(entry) = read_entry_from_memory(data, table_base, h) else {
                 break;
             };
             if entry.is_empty() || !pages.addr_in_relocation_set(entry.ptr() as usize) {
@@ -326,13 +326,13 @@ fn collect_relocation_candidates(
     ctx: &mut GcContext<'_>,
     pages: &ZPageSpace,
 ) -> Vec<RelocationCandidate> {
-    let obj_table_ptr = ctx.obj_table_ptr();
+    let table_base = ctx.obj_table_ptr();
     let obj_table_count = ctx.obj_table_count();
     ctx.with_memory(|data| {
         let mut candidates = Vec::new();
         for h in 0..obj_table_count as Handle {
-            let slot = obj_table_ptr + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-            let Some(entry) = read_entry_from_memory(data, obj_table_ptr, h) else {
+            let slot = table_base + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
+            let Some(entry) = read_entry_from_memory(data, table_base, h) else {
                 break;
             };
             if entry.is_empty() {
@@ -471,9 +471,9 @@ pub(crate) fn release_empty_source_pages(pages: &mut ZPageSpace, ptr: usize, siz
     released
 }
 
-fn read_entry_from_memory(data: &[u8], obj_table_ptr: usize, h: Handle) -> Option<ZEntry> {
+fn read_entry_from_memory(data: &[u8], table_base: usize, h: Handle) -> Option<ZEntry> {
     let slot =
-        obj_table_ptr.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
+        table_base.checked_add(h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize)?;
     let bytes: [u8; 4] = data.get(slot..slot + 4)?.try_into().ok()?;
     Some(ZEntry::from(u32::from_le_bytes(bytes)))
 }

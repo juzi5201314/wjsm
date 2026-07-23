@@ -98,45 +98,27 @@ pub(crate) fn array_set_length_impl(
             write_array_hole(caller, ptr, i);
         }
     } else if new_len > old_len {
-        {
-            let handle = value::decode_handle(arr);
-            let access = caller.data().heap_access_v2().clone();
-            if access.resolve_handle(handle).is_ok() {
-                let (_, capacity) = access.array_shape(handle).unwrap_or((old_len, old_len));
-                if new_len > capacity {
-                    let Some(needed) = array_grow_capacity_u32(capacity, new_len) else {
-                        set_runtime_error(
-                            caller.data(),
-                            format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"),
-                        );
-                        return arr;
-                    };
-                    if let Err(error) = crate::ensure_v2_array_capacity(caller, handle, needed) {
-                        set_runtime_error(
-                            caller.data(),
-                            format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}: {error}"),
-                        );
-                        return arr;
-                    }
-                }
-                for i in old_len..new_len {
-                    write_array_hole(caller, ptr, i);
-                }
-                write_array_length(caller, ptr, new_len);
-                return arr;
-            }
+        let handle = value::decode_handle(arr);
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_err() {
+            return arr;
         }
-        let cap = read_array_capacity(caller, ptr).unwrap_or(0);
-        let mut ptr = ptr;
-        if new_len > cap {
-            let Some(needed) = array_grow_capacity_u32(cap, new_len) else {
+        let (_, capacity) = access.array_shape(handle).unwrap_or((old_len, old_len));
+        if new_len > capacity {
+            let Some(needed) = array_grow_capacity_u32(capacity, new_len) else {
                 set_runtime_error(
                     caller.data(),
                     format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}"),
                 );
                 return arr;
             };
-            ptr = grow_array(caller, ptr, arr, needed).unwrap_or(ptr);
+            if let Err(error) = crate::ensure_v2_array_capacity(caller, handle, needed) {
+                set_runtime_error(
+                    caller.data(),
+                    format!("RangeError: {ARRAY_LENGTH_RANGE_ERROR}: {error}"),
+                );
+                return arr;
+            }
         }
         for i in old_len..new_len {
             write_array_hole(caller, ptr, i);
@@ -998,21 +980,7 @@ pub(crate) fn push_array_value(
                 .map_err(|_| make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
         }
     }
-    let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;
-    let len = read_array_length(caller, ptr).unwrap_or(0);
-    if array_length_would_overflow(len, 1) {
-        return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
-    }
-    let cap = read_array_capacity(caller, ptr).unwrap_or(0);
-    if len >= cap {
-        let Some(needed) = array_grow_capacity_u32(cap, len + 1) else {
-            return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
-        };
-        ptr = grow_array(caller, ptr, arr, needed).ok_or_else(value::encode_undefined)?;
-    }
-    write_array_elem(caller, ptr, len, val);
-    write_array_length(caller, ptr, len + 1);
-    Ok(())
+    Err(value::encode_undefined())
 }
 
 

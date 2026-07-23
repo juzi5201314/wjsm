@@ -163,82 +163,9 @@ pub(crate) fn ensure_heap_allocation_bytes<C: AsContextMut<Data = RuntimeState>>
     true
 }
 
-pub(crate) fn alloc_heap_region_without_gc<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    size: usize,
-) -> Option<usize> {
-    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
-    {
-        let mut gc_ctx = crate::runtime_gc::GcContext::new(ctx, env, "startup-no-gc");
-        if !matches!(gc_ctx.grow_to_fit_heap_allocation(size), Ok(true)) {
-            let used = gc_ctx.heap_used();
-            ctx.as_context().data().set_heap_oom_error(used, size);
-            return None;
-        }
-    }
-    let end = heap_ptr.checked_add(size)?;
-    let align = constants::HEAP_ALLOCATION_ALIGNMENT as usize;
-    let aligned_end = end.checked_add(align - 1).map(|v| v & !(align - 1))?;
-    if aligned_end > i32::MAX as usize {
-        ctx.as_context().data().set_heap_oom_error(heap_ptr, size);
-        return None;
-    }
-    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
-    if let Some(alloc_ptr) = env.alloc_ptr {
-        let _ = alloc_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
-    }
-    if let Some(gc_alloc_bytes) = env.gc_alloc_bytes {
-        let current = gc_alloc_bytes.get(&mut *ctx).i32().unwrap_or(0).max(0);
-        let added = aligned_end.saturating_sub(heap_ptr).min(i32::MAX as usize) as i32;
-        let _ = gc_alloc_bytes.set(&mut *ctx, Val::I32(current.saturating_add(added)));
-    }
-    Some(heap_ptr)
-}
-
-pub(crate) fn ensure_host_memory_capacity<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    ptr: usize,
-    size: usize,
-) -> bool {
-    let Some(end) = ptr.checked_add(size) else {
-        return false;
-    };
-    let current = env.memory.data_size(&*ctx);
-    if end <= current {
-        return true;
-    }
-    let missing = end - current;
-    let pages = missing.div_ceil(64 * 1024) as u64;
-    env.memory.grow(&mut *ctx, pages).is_ok()
-}
-
-pub(crate) fn alloc_heap_region_for_host<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    size: usize,
-    _heap_type: u8,
-    _capacity: u32,
-) -> Option<usize> {
-    if ctx.as_context().data().heap_layout_boundaries().1 == 0 {
-        return alloc_heap_region_without_gc(ctx, env, size);
-    }
-    // V2：经 HeapAccessV2 NLAB 分配；返回 memory64 地址的低位（兼容旧 i32 调用方）。
-    match allocate_v2_object_bytes_with_context(ctx, size as u64) {
-        Ok((start, _)) => Some(start as usize),
-        Err(_) => {
-            let used = ctx
-                .as_context()
-                .data()
-                .heap_access_v2()
-                .used_bytes()
-                .min(usize::MAX as u64) as usize;
-            ctx.as_context().data().set_heap_oom_error(used, size);
-            None
-        }
-    }
-}
+// 字符串 C 串堆仍走 main memory `__heap_ptr` bump（见 `alloc_heap_c_string*`）。
+// 对象/数组分配必须经 `allocate_v2_object_bytes*` / `HeapAccessV2`，禁止 main-memory
+// 对象区与 obj_table 回落路径。
 
 pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,

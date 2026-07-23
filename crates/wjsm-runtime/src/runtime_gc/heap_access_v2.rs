@@ -847,6 +847,21 @@ impl HeapAccessV2 {
         Ok((shape as u32, (shape >> 32) as u32))
     }
 
+    /// 将对象属性槽 capacity 扩到至少 `needed`（分配新区、拷贝 header+slots、更新 handle entry）。
+    /// 禁止 main memory 路径；旧区经 `release_region` 回收。
+    pub fn grow_object_capacity(&self, handle: u32, needed: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
+        }
+        let (capacity, count) = self.property_shape(object)?;
+        if needed <= capacity {
+            return Ok(());
+        }
+        let new_capacity = capacity.saturating_mul(2).max(4).max(needed);
+        self.relocate_object_to_capacity(handle, object, capacity, count, new_capacity)
+    }
+
     fn grow_object_property_capacity(
         &self,
         handle: u32,
@@ -859,6 +874,20 @@ impl HeapAccessV2 {
             .ok_or(HeapAccessV2Error::AddressOverflow)?;
         let new_capacity = capacity.saturating_mul(2).max(4).max(minimum);
         if new_capacity == capacity {
+            return Err(HeapAccessV2Error::AddressOverflow);
+        }
+        self.relocate_object_to_capacity(handle, object, capacity, count, new_capacity)
+    }
+
+    fn relocate_object_to_capacity(
+        &self,
+        handle: u32,
+        object: u64,
+        capacity: u32,
+        count: u32,
+        new_capacity: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        if new_capacity <= capacity {
             return Err(HeapAccessV2Error::AddressOverflow);
         }
         let old_bytes = object_property_bytes(capacity)?;

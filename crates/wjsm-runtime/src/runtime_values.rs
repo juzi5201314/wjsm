@@ -2,12 +2,6 @@ use super::*;
 use crate::runtime_string::RuntimeString;
 use crate::wasm_env::WasmEnv;
 
-/// 对象属性容量倍增并至少容纳 needed；溢出或超出 u32 容量时返回 None。
-fn grown_object_capacity(capacity: usize, needed: usize) -> Option<u32> {
-    let doubled = capacity.max(1).checked_mul(2)?;
-    let grown = doubled.max(needed);
-    u32::try_from(grown).ok()
-}
 /// 计算 boxed value 在 obj_table 中的 handle 索引。
 /// 函数值低 32 位是函数表索引；其属性对象 handle 从 __function_props_base 起算
 //（startup snapshot 拆分后 primordial 原型占据更低 handle）。其余值的 handle 即低 32 位。
@@ -98,16 +92,18 @@ pub(crate) fn obj_table_handle_live(caller: &mut Caller<'_, RuntimeState>, handl
     resolve_handle_idx(caller, handle as usize).is_some()
 }
 
-/// 将 obj_table handle 重新装箱为与堆 header 一致的 NaN-boxed 值（object 或 array）。
+/// 将 handle 重新装箱为与堆 header 一致的 NaN-boxed 值（object 或 array）。
+/// 仅走 V2 `HeapAccessV2::object_type`，禁止 main memory 回落。
 pub(crate) fn encode_handle_as_js_value(
     caller: &mut Caller<'_, RuntimeState>,
     handle: u32,
 ) -> Option<i64> {
-    let ptr = resolve_handle_idx(caller, handle as usize)?;
-    let env = WasmEnv::from_caller(caller)?;
-    let data = env.memory.data(&*caller);
-    let heap_type = data.get(ptr + 4).copied()?;
-    Some(if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
+    let heap_type = caller
+        .data()
+        .heap_access_v2()
+        .object_type(handle)
+        .ok()?;
+    Some(if heap_type == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
         value::encode_handle(value::TAG_ARRAY, handle)
     } else {
         value::encode_object_handle(handle)
@@ -237,26 +233,22 @@ pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64)
     }
 }
 
-/// 通过 handle_idx 解析真实对象指针。
+/// 通过 handle_idx 解析对象身份。
 ///
-/// ZGC 会在 `obj_table` entry 低位保存颜色，host 侧解引用必须复用
-/// `heap_access` 的统一 load-barrier 入口，避免把带色指针当作线性内存地址。
+/// V2-only：handle 表在 memory64；成功时返回 handle 本身（调用方按 handle 再经
+/// `HeapAccessV2` 读写）。解析失败返回 None，禁止 main memory obj_table 回落。
 pub(crate) fn resolve_handle_idx_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     handle_idx: usize,
 ) -> Option<usize> {
-    if ctx
-        .as_context()
+    let handle = u32::try_from(handle_idx).ok()?;
+    ctx.as_context()
         .data()
         .heap_access_v2()
-        .resolve_handle(u32::try_from(handle_idx).ok()?)
-        .is_ok()
-    {
-        return Some(handle_idx);
-    }
-    let handle = u32::try_from(handle_idx).ok()?;
-    Some(crate::runtime_gc::heap_access::resolve(ctx, env, handle)?.ptr)
+        .resolve_handle(handle)
+        .ok()?;
+    Some(handle_idx)
 }
 
 // ── Array helpers ──────────────────────────────────────────────────────
@@ -266,121 +258,66 @@ pub(crate) fn resolve_array_ptr_with_env<C: AsContextMut<Data = RuntimeState>>(
     env: &WasmEnv,
     val: i64,
 ) -> Option<usize> {
-    if value::is_array(val)
-        && ctx
-            .as_context()
-            .data()
-            .heap_access_v2()
-            .resolve_handle(value::decode_handle(val))
-            .is_ok()
-    {
-        return Some(value::decode_handle(val) as usize);
-    }
-    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    let handle_idx = if value::is_array(val) {
+        value::decode_handle(val) as usize
+    } else {
+        (val as u64 & 0xFFFF_FFFF) as usize
+    };
     resolve_handle_idx_with_env(ctx, env, handle_idx)
 }
 
-/// 读取数组的 length 字段。
+/// 读取数组的 length 字段（`ptr` 在 V2 下为 handle）。
 pub(crate) fn read_array_length_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     ptr: usize,
 ) -> Option<u32> {
-    if let Ok(length) = ctx
-        .as_context()
+    ctx.as_context()
         .data()
         .heap_access_v2()
         .array_length(ptr as u32)
-    {
-        return Some(length);
-    }
-    let d = env.memory.data(ctx);
-    if ptr + 16 > d.len() {
-        return None;
-    }
-    Some(u32::from_le_bytes([
-        d[ptr + 8],
-        d[ptr + 9],
-        d[ptr + 10],
-        d[ptr + 11],
-    ]))
+        .ok()
 }
 
 pub(crate) fn write_array_length_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     ptr: usize,
     len: u32,
 ) {
-    if ctx
+    let _ = ctx
         .as_context()
         .data()
         .heap_access_v2()
-        .set_array_length(ptr as u32, len)
-        .is_ok()
-    {
-        return;
-    }
-    let d = env.memory.data_mut(&mut *ctx);
-    if ptr + 16 > d.len() {
-        return;
-    }
-    d[ptr + 8..ptr + 12].copy_from_slice(&len.to_le_bytes());
+        .set_array_length(ptr as u32, len);
 }
 
-/// 读取数组的 capacity 字段（offset 12）
+/// 读取数组的 capacity 字段（`ptr` 在 V2 下为 handle）。
 pub(crate) fn read_array_capacity(
     caller: &mut Caller<'_, RuntimeState>,
     ptr: usize,
 ) -> Option<u32> {
-    if let Ok((_, capacity)) = caller.data().heap_access_v2().array_shape(ptr as u32) {
-        return Some(capacity);
-    }
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return None;
-    };
-    let d = mem.data(&*caller);
-    if ptr + 16 > d.len() {
-        return None;
-    }
-    Some(u32::from_le_bytes([
-        d[ptr + 12],
-        d[ptr + 13],
-        d[ptr + 14],
-        d[ptr + 15],
-    ]))
+    caller
+        .data()
+        .heap_access_v2()
+        .array_shape(ptr as u32)
+        .ok()
+        .map(|(_, capacity)| capacity)
 }
 
-/// 读取数组原始槽位值（hole sentinel 保持原样）
+/// 读取数组原始槽位值（hole sentinel 保持原样；`ptr` 为 handle）。
 pub(crate) fn read_array_elem_raw_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     ptr: usize,
     index: u32,
 ) -> Option<i64> {
-    if let Ok(value) = ctx
-        .as_context()
+    ctx.as_context()
         .data()
         .heap_access_v2()
         .get_element(ptr as u32, index)
-    {
-        return value.map(|value| value as i64);
-    }
-    let d = env.memory.data(ctx);
-    let elem_offset = ptr + 16 + (index as usize) * 8;
-    if elem_offset + 8 > d.len() {
-        return None;
-    }
-    Some(i64::from_le_bytes([
-        d[elem_offset],
-        d[elem_offset + 1],
-        d[elem_offset + 2],
-        d[elem_offset + 3],
-        d[elem_offset + 4],
-        d[elem_offset + 5],
-        d[elem_offset + 6],
-        d[elem_offset + 7],
-    ]))
+        .ok()?
+        .map(|value| value as i64)
 }
 
 /// 读取数组元素；hole 视为缺失，返回 None。
@@ -408,25 +345,19 @@ pub(crate) fn array_elem_present_with_env<C: AsContext<Data = RuntimeState>>(
         .is_some_and(|value| !value::is_array_hole(value))
 }
 
-/// 写入数组元素
+/// 写入数组元素（`ptr` 为 handle；V2-only）。
 pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     ptr: usize,
     index: u32,
     val: i64,
 ) {
-    if ctx
+    let _ = ctx
         .as_context()
         .data()
         .heap_access_v2()
-        .set_element(ptr as u32, index, val as u64)
-        .is_ok()
-    {
-        return;
-    }
-    let _ =
-        crate::runtime_gc::heap_access::write_element_at_ptr(ctx, env, ptr, index as usize, val);
+        .set_element(ptr as u32, index, val as u64);
 }
 
 pub(crate) fn write_array_hole_with_env<C: AsContextMut<Data = RuntimeState>>(
@@ -438,92 +369,17 @@ pub(crate) fn write_array_hole_with_env<C: AsContextMut<Data = RuntimeState>>(
     write_array_elem_with_env(ctx, env, ptr, index, value::encode_array_hole());
 }
 
-/// 数组动态扩容 — 遵循现有对象扩容的 capacity × 2 倍增策略
+/// 数组动态扩容（V2-only）：`ensure_v2_array_capacity`，返回 handle 身份。
+/// `ptr` 参数保留签名兼容（调用方常把 handle 当 ptr 传递）；实际以 `this_val` 解析 handle。
 pub(crate) fn grow_array(
     caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
+    _ptr: usize,
     this_val: i64,
     new_cap: u32,
 ) -> Option<usize> {
-    let env = WasmEnv::from_caller(caller)?;
-    let new_size = 16 + new_cap as usize * 8;
-    // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
-    let handle_idx = handle_index_of(caller, this_val);
-    let old_size = {
-        let cap = read_array_capacity(caller, ptr)?;
-        16 + cap as usize * 8
-    };
-    let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
-        caller,
-        &env,
-        new_size,
-        wjsm_ir::HEAP_TYPE_ARRAY,
-        new_cap,
-    )?;
-    let ptr = resolve_handle_idx_with_env(caller, &env, handle_idx)?;
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
-    let required_end = (ptr + old_size).max(heap_ptr + new_size);
-    if !crate::runtime_heap::ensure_host_memory_capacity(caller, &env, 0, required_end) {
-        return None;
-    }
-    let d = env.memory.data_mut(&mut *caller);
-    d.copy_within(ptr..ptr + old_size, heap_ptr);
-    d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
-    let slot_addr = obj_table_ptr + handle_idx * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-    if slot_addr + 8 <= d.len() {
-        d[slot_addr..slot_addr + 8].copy_from_slice(&(heap_ptr as u64).to_le_bytes());
-    }
-    // 注册被抛弃的旧区域（P4-blocker #1）：handle 现在指向 heap_ptr，
-    // 旧 ptr 区域不再被 obj_table 索引，sweep 单独遍历看不到 → 注册供 sweeper 回收。
-    caller.data().abandon_region(ptr, old_size);
-    Some(heap_ptr)
-}
-/// 对象动态扩容 — 遵循 capacity × 2 倍增策略，与 grow_array 同构
-/// 对象槽位大小为 32 bytes（name_id:4 + flags:4 + value:8 + reserved:16）
-pub(crate) fn grow_object(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
-    handle_val: i64,
-    new_cap: u32,
-) -> Option<usize> {
-    let env = WasmEnv::from_caller(caller)?;
-    let new_size = 16 + new_cap as usize * 32;
-    // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
-    let handle_idx = handle_index_of(caller, handle_val);
-    let old_cap = {
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-            return None;
-        };
-        let d = mem.data(&*caller);
-        if ptr + 12 > d.len() {
-            return None;
-        }
-        u32::from_le_bytes([d[ptr + 8], d[ptr + 9], d[ptr + 10], d[ptr + 11]]) as usize
-    };
-    let old_size = 16 + old_cap * 32;
-    let heap_ptr = crate::runtime_heap::alloc_heap_region_for_host(
-        caller,
-        &env,
-        new_size,
-        wjsm_ir::HEAP_TYPE_OBJECT,
-        new_cap,
-    )?;
-    let ptr = resolve_handle_idx_with_env(caller, &env, handle_idx)?;
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
-    let required_end = (ptr + old_size).max(heap_ptr + new_size);
-    if !crate::runtime_heap::ensure_host_memory_capacity(caller, &env, 0, required_end) {
-        return None;
-    }
-    let d = env.memory.data_mut(&mut *caller);
-    d.copy_within(ptr..ptr + old_size, heap_ptr);
-    d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
-    let slot_addr = obj_table_ptr + handle_idx * wjsm_ir::constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-    if slot_addr + 8 <= d.len() {
-        d[slot_addr..slot_addr + 8].copy_from_slice(&(heap_ptr as u64).to_le_bytes());
-    }
-    // 注册被抛弃的旧区域（P4-blocker #1）：同 grow_array。
-    caller.data().abandon_region(ptr, old_size);
-    Some(heap_ptr)
+    let handle = handle_index_of(caller, this_val) as u32;
+    crate::ensure_v2_array_capacity(caller, handle, new_cap).ok()?;
+    Some(handle as usize)
 }
 
 /// 沿原型链递归查找属性（带 visited set 防环路）
@@ -879,7 +735,7 @@ pub(crate) fn read_iterator_method(
 
 pub(crate) fn write_object_property_by_name_id(
     caller: &mut Caller<'_, RuntimeState>,
-    obj_ptr: usize,
+    _obj_ptr: usize,
     obj_handle: i64,
     name_id: u32,
     val: i64,
@@ -887,110 +743,23 @@ pub(crate) fn write_object_property_by_name_id(
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let handle = handle_index_of(caller, obj_handle) as u32;
-    // V2：find 返回哨兵 slot_offset，不能再按线性槽偏移写。
-    {
-        let access = caller.data().heap_access_v2().clone();
-        if access.resolve_handle(handle).is_ok() {
-            let Some(key) =
-                crate::property_key::canonicalize_v2_name_id_with_env(caller, &env, name_id)
-            else {
-                return;
-            };
-            if access
-                .get_property_slot(handle, key)
-                .ok()
-                .flatten()
-                .is_some()
-            {
-                let _ = access.set_property(handle, key, val as u64);
-            } else {
-                let _ = access.define_data_property(handle, key, val as u64, flags as u32);
-            }
-            return;
-        }
-    }
-    let found = find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id);
-    if let Some((slot_offset, _, _)) = found {
-        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
-        let _ = crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle,
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Value,
-            val,
-        );
-        let _ = flags;
+    let access = caller.data().heap_access_v2().clone();
+    if access.resolve_handle(handle).is_err() {
         return;
     }
-
-    let (num_props, capacity) = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return;
-        };
-        let data = memory.data(&*caller);
-        if obj_ptr + 16 > data.len() {
-            return;
-        }
-        let cap = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]) as usize;
-        let num = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize;
-        (num, cap)
-    };
-    if num_props >= capacity {
-        let Some(new_cap) = grown_object_capacity(capacity, 4) else {
-            return;
-        };
-        if grow_object(caller, obj_ptr, obj_handle, new_cap).is_none() {
-            return;
-        }
-    }
-    let Some(actual_ptr) = resolve_handle_idx_with_env(caller, &env, handle as usize) else {
+    let Some(key) = crate::property_key::canonicalize_v2_name_id_with_env(caller, &env, name_id)
+    else {
         return;
     };
-    let num_props = {
-        let data = env.memory.data(&*caller);
-        if actual_ptr + 16 > data.len() {
-            return;
-        }
-        u32::from_le_bytes([
-            data[actual_ptr + 12],
-            data[actual_ptr + 13],
-            data[actual_ptr + 14],
-            data[actual_ptr + 15],
-        ]) as usize
-    };
-    let new_count = num_props + 1;
-    let slot_idx = num_props;
-    let slot_offset = actual_ptr + 16 + slot_idx * 32;
+    if access
+        .get_property_slot(handle, key)
+        .ok()
+        .flatten()
+        .is_some()
     {
-        let data = env.memory.data_mut(&mut *caller);
-        if slot_offset + 32 > data.len() {
-            return;
-        }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    }
-    let _ = crate::runtime_gc::heap_access::write_property_slot(
-        caller,
-        &env,
-        handle,
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Value,
-        val,
-    );
-    let data = env.memory.data_mut(&mut *caller);
-    if actual_ptr + 16 <= data.len() {
-        data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(new_count as u32).to_le_bytes());
+        let _ = access.set_property(handle, key, val as u64);
+    } else {
+        let _ = access.define_data_property(handle, key, val as u64, flags as u32);
     }
 }
 
@@ -2107,139 +1876,7 @@ pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, 
             return;
         }
     }
-    let Some(mut dest_ptr) = resolve_handle(caller, dest) else {
-        return;
-    };
-    let Some(source_ptr) = resolve_handle(caller, source) else {
-        return;
-    };
-
-    let source_props: Vec<(u32, i64)> = {
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-            return;
-        };
-        let data = mem.data(&*caller);
-        if source_ptr + 16 > data.len() {
-            return;
-        }
-        let num_props = u32::from_le_bytes([
-            data[source_ptr + 12],
-            data[source_ptr + 13],
-            data[source_ptr + 14],
-            data[source_ptr + 15],
-        ]) as usize;
-        let mut props = Vec::new();
-        for i in 0..num_props {
-            let slot_offset = source_ptr + 16 + i * 32;
-            if slot_offset + 32 > data.len() {
-                break;
-            }
-            let flags = i32::from_le_bytes([
-                data[slot_offset + 4],
-                data[slot_offset + 5],
-                data[slot_offset + 6],
-                data[slot_offset + 7],
-            ]);
-            if (flags & constants::FLAG_ENUMERABLE) == 0 {
-                continue;
-            }
-            let name_id = u32::from_le_bytes([
-                data[slot_offset],
-                data[slot_offset + 1],
-                data[slot_offset + 2],
-                data[slot_offset + 3],
-            ]);
-            let val = i64::from_le_bytes([
-                data[slot_offset + 8],
-                data[slot_offset + 9],
-                data[slot_offset + 10],
-                data[slot_offset + 11],
-                data[slot_offset + 12],
-                data[slot_offset + 13],
-                data[slot_offset + 14],
-                data[slot_offset + 15],
-            ]);
-            props.push((name_id, val));
-        }
-        props
-    };
-
-    let mut new_count = 0usize;
-    for (name_id, _) in &source_props {
-        if find_property_slot_by_name_id(caller, dest_ptr, *name_id).is_none() {
-            new_count += 1;
-        }
-    }
-
-    if new_count > 0 {
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-            return;
-        };
-        let data = mem.data(&*caller);
-        if dest_ptr + 16 > data.len() {
-            return;
-        }
-        let capacity = u32::from_le_bytes([
-            data[dest_ptr + 8],
-            data[dest_ptr + 9],
-            data[dest_ptr + 10],
-            data[dest_ptr + 11],
-        ]) as usize;
-        let num_props = u32::from_le_bytes([
-            data[dest_ptr + 12],
-            data[dest_ptr + 13],
-            data[dest_ptr + 14],
-            data[dest_ptr + 15],
-        ]) as usize;
-        let Some(needed_props) = num_props.checked_add(new_count) else {
-            return;
-        };
-        if needed_props > capacity {
-            let Some(new_cap) = grown_object_capacity(capacity, needed_props) else {
-                return;
-            };
-            let Some(new_ptr) = grow_object(caller, dest_ptr, dest, new_cap) else {
-                return;
-            };
-            dest_ptr = new_ptr;
-        }
-    }
-
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
-    let Some(env) = WasmEnv::from_caller(caller) else {
-        return;
-    };
-    let dest_handle = handle_index_of(caller, dest) as u32;
-    for (name_id, val) in source_props {
-        if let Some((slot_offset, _, _)) = find_property_slot_by_name_id(caller, dest_ptr, name_id)
-        {
-            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                return;
-            };
-            {
-                let data = mem.data_mut(&mut *caller);
-                if slot_offset + 16 > data.len() {
-                    return;
-                }
-                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-            }
-            let slot_idx = (slot_offset - (dest_ptr + 16)) / 32;
-            let _ = crate::runtime_gc::heap_access::write_property_slot(
-                caller,
-                &env,
-                dest_handle,
-                slot_idx,
-                crate::runtime_gc::heap_access::SlotPart::Value,
-                val,
-            );
-        } else {
-            write_object_property_by_name_id(caller, dest_ptr, dest, name_id, val, flags);
-            if let Some(new_ptr) = resolve_handle(caller, dest) {
-                dest_ptr = new_ptr;
-            }
-        }
-    }
+    // V2-only：源/目标不在 handle 表则静默跳过，禁止 main memory 回落。
 }
 
 // ── Caller → _with_env 薄封装宏 ───────────────────────────────────────

@@ -261,19 +261,6 @@ impl<'a> GcContext<'a> {
         if ptr == 0 { None } else { Some(ptr) }
     }
 
-    /// 写 obj_table[h] = ptr（INV-A：注册 handle）。V2 编码为 (ptr << 16) | StableYoung。
-    #[allow(dead_code)]
-    pub fn write_obj_table_slot(&mut self, h: Handle, ptr: usize) {
-        let base = self.obj_table_ptr();
-        let entry = ((ptr as u64) << 16) | 1;
-        let bytes = entry.to_le_bytes();
-        self.with_memory_mut(|data| {
-            let addr = base + h as usize * constants::HANDLE_TABLE_ENTRY_SIZE as usize;
-            if addr + 8 <= data.len() {
-                data[addr..addr + 8].copy_from_slice(&bytes);
-            }
-        });
-    }
 }
 
 #[cfg(test)]

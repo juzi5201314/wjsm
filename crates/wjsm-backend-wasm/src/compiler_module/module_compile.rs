@@ -200,7 +200,7 @@ impl Compiler {
         // 填充 string_data 到 data_offset，确保后续用户字符串追加到正确偏移量
         self.string_data.resize(self.data_offset as usize, 0);
 
-        // Assign global indices before compile_object_helpers needs them.
+        // 分配 global 索引（user module 与 support 的 global 布局对齐）。
         self.func_props_global_idx = 0;
         self.heap_ptr_global_idx = 1;
         self.obj_table_global_idx = 2;
