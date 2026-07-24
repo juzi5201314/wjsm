@@ -9,21 +9,10 @@ impl Lowerer {
         captured: &[CapturedBinding],
         _span: Span,
     ) -> Result<ValueId, LoweringError> {
-        let existing_env_val = self
-            .shared_env_stack
-            .last()
-            .unwrap()
-            .as_ref()
-            .map(|(value, _)| *value);
-        let existing_names = self
-            .shared_env_stack
-            .last()
-            .unwrap()
-            .as_ref()
-            .map(|(_, names)| names.clone())
-            .unwrap_or_default();
+        let existing = self.shared_env_stack.last().unwrap().clone();
 
-        if existing_env_val.is_none() {
+        // ── 首次创建 ──
+        if existing.is_none() {
             self.initialize_shared_env_slot();
             let env_val = self.create_shared_env_object(block, captured);
             self.current_function.append_instruction(
@@ -33,16 +22,56 @@ impl Lowerer {
                     value: env_val,
                 },
             );
-            self.write_shared_env_bindings(block, env_val, captured, &existing_names);
+            self.write_shared_env_bindings(block, env_val, captured, &Default::default());
 
             let mut name_set = std::collections::HashSet::new();
             for binding in captured {
                 name_set.insert(binding.clone());
             }
-            *self.shared_env_stack.last_mut().unwrap() = Some((env_val, name_set));
+            // bb0 创建的 env dominate 所有后续 block，无需运行时分支检查
+            let dominates = block == BasicBlockId(0);
+            *self.shared_env_stack.last_mut().unwrap() =
+                Some((env_val, name_set, block, dominates));
             return Ok(env_val);
         }
 
+        let (existing_env_val, existing_names, last_write_block, dominates) = existing.unwrap();
+
+        // ── 快速路径 A：同一 block 内顺序执行，env 一定已存在 ──
+        if block == last_write_block {
+            self.write_shared_env_bindings(block, existing_env_val, captured, &existing_names);
+            if let Some((_, names, _, _)) = self.shared_env_stack.last_mut().unwrap() {
+                for binding in captured {
+                    names.insert(binding.clone());
+                }
+            }
+            return Ok(existing_env_val);
+        }
+
+        // ── 快速路径 B：env 在 bb0 创建，dominate 所有后续 block，只需 LoadVar +追加绑定 ──
+        if dominates {
+            let loaded_env = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: loaded_env,
+                    name: self.shared_env_ir_name(),
+                },
+            );
+            self.write_shared_env_bindings(block, loaded_env, captured, &existing_names);
+            if let Some((value, names, write_block, _)) =
+                self.shared_env_stack.last_mut().unwrap()
+            {
+                *value = loaded_env;
+                *write_block = block;
+                for binding in captured {
+                    names.insert(binding.clone());
+                }
+            }
+            return Ok(loaded_env);
+        }
+
+        // ── 慢路径：不同 block 且 env 不 dominate，需要运行时检查 env 是否已初始化 ──
         let branch_block = if self.current_function.block(block).is_some_and(|candidate| {
             candidate
                 .instructions()
@@ -149,8 +178,13 @@ impl Lowerer {
                 value: env_val,
             },
         );
-        if let Some((value, names)) = self.shared_env_stack.last_mut().unwrap() {
+        if let Some((value, names, write_block, dom)) =
+            self.shared_env_stack.last_mut().unwrap()
+        {
             *value = env_val;
+            *write_block = merge;
+            // merge block 不 dominate 后续（可能有不经过此 merge 的路径）
+            *dom = false;
             for binding in captured {
                 names.insert(binding.clone());
             }

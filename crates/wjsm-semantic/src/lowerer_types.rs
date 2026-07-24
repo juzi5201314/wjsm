@@ -60,8 +60,8 @@ pub(crate) struct Lowerer {
     /// 词法上可继承的 [[HomeObject]]（类方法体内嵌套箭头函数使用）。
     pub(crate) lexical_home_object: Option<HomeObject>,
     pub(crate) function_lexical_home_object_stack: Vec<Option<HomeObject>>,
-    /// 每层函数的共享 env 对象（ValueId + 已注册捕获变量集合）。
-    pub(crate) shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
+    /// 每层函数的共享 env 对象（ValueId + 已注册捕获变量集合 + 最后写入的 block + 是否 dominate 全部后续 block）。
+    pub(crate) shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>, BasicBlockId, bool)>>,
     // ── 模块系统相关 ────────────────────────────────────────────────────────
     /// 当前正在编译的模块 ID（用于多模块编译）
     pub(crate) current_module_id: Option<wjsm_ir::ModuleId>,

@@ -451,13 +451,13 @@ impl Lowerer {
                 .shared_env_stack
                 .last()
                 .and_then(|shared| shared.as_ref())
-                .is_some_and(|(_, names)| names.contains(binding))
+                .is_some_and(|(_, names, _, _)| names.contains(binding))
     }
 
     pub(crate) fn shared_env_value(&self) -> Option<ValueId> {
         self.shared_env_stack
             .last()
-            .and_then(|shared| shared.as_ref().map(|(value, _)| *value))
+            .and_then(|shared| shared.as_ref().map(|(value, _, _, _)| *value))
     }
 
     pub(crate) fn shared_env_ir_name(&self) -> String {

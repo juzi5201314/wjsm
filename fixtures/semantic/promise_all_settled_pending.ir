@@ -31,34 +31,28 @@ module {
     c28 = string("$0.rejectB")
     c29 = string("$0.rejectB")
     c30 = functionref(@1)
-    c31 = undefined
-    c32 = string("$0.resolveA")
-    c33 = string("$0.rejectB")
-    c34 = string("$0.rejectB")
-    c35 = undefined
-    c36 = undefined
-    c37 = number(0)
-    c38 = string("status")
-    c39 = number(0)
-    c40 = string("value")
-    c41 = number(1)
-    c42 = string("status")
-    c43 = number(1)
-    c44 = string("reason")
-    c45 = functionref(@2)
+    c31 = string("$0.rejectB")
+    c32 = undefined
+    c33 = undefined
+    c34 = number(0)
+    c35 = string("status")
+    c36 = number(0)
+    c37 = string("value")
+    c38 = number(1)
+    c39 = string("status")
+    c40 = number(1)
+    c41 = string("reason")
+    c42 = functionref(@2)
+    c43 = undefined
+    c44 = undefined
+    c45 = string("queueMicrotask")
     c46 = undefined
-    c47 = undefined
-    c48 = string("queueMicrotask")
+    c47 = string("$0.rejectB")
+    c48 = number(2)
     c49 = undefined
-    c50 = string("$0.rejectB")
-    c51 = number(2)
-    c52 = undefined
-    c53 = string("$0.resolveA")
-    c54 = number(1)
-    c55 = functionref(@3)
-    c56 = undefined
-    c57 = string("$0.rejectB")
-    c58 = string("$0.resolveA")
+    c50 = string("$0.resolveA")
+    c51 = number(1)
+    c52 = functionref(@3)
 
   fn @arrow_0 [captures: $0.resolveA] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
@@ -119,18 +113,18 @@ module {
   fn @arrow_2 [params: $3.$env, $3.$this, $3.results] [entry=bb0]:
     bb0:
       %0 = load var $3.results
-      %1 = const c37
+      %1 = const c34
       %2 = get_elem %0, %1
-      %3 = const c38
+      %3 = const c35
       %4 = get_prop %2, %3
       %5 = call builtin.console.log(%4)
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
       %8 = load var $3.results
-      %9 = const c39
+      %9 = const c36
       %10 = get_elem %8, %9
-      %11 = const c40
+      %11 = const c37
       %12 = get_prop %10, %11
       %13 = call builtin.console.log(%12)
       %14 = is_exception %13
@@ -140,9 +134,9 @@ module {
       throw %7
     bb3:
       %16 = load var $3.results
-      %17 = const c41
+      %17 = const c38
       %18 = get_elem %16, %17
-      %19 = const c42
+      %19 = const c39
       %20 = get_prop %18, %19
       %21 = call builtin.console.log(%20)
       %22 = is_exception %21
@@ -152,9 +146,9 @@ module {
       throw %15
     bb5:
       %24 = load var $3.results
-      %25 = const c43
+      %25 = const c40
       %26 = get_elem %24, %25
-      %27 = const c44
+      %27 = const c41
       %28 = get_prop %26, %27
       %29 = call builtin.console.log(%28)
       %30 = is_exception %29
@@ -170,20 +164,20 @@ module {
 
   fn @arrow_3 [captures: $0.rejectB, $0.resolveA] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
-      %0 = const c49
+      %0 = const c46
       %1 = load var $env
-      %2 = const c50
+      %2 = const c47
       %3 = get_prop %1, %2
-      %4 = const c51
+      %4 = const c48
       %5 = call %3, this=%0, args=[%4]
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      %8 = const c52
+      %8 = const c49
       %9 = load var $env
-      %10 = const c53
+      %10 = const c50
       %11 = get_prop %9, %10
-      %12 = const c54
+      %12 = const c51
       %13 = call %11, this=%8, args=[%12]
       %14 = is_exception %13
       branch %14, bb4, bb3
@@ -267,93 +261,53 @@ module {
       %36 = new_promise
       %37 = const c30
       %38 = load var $0.$shared_env
-      %39 = const c31
-      %40 = stricteq %38, %39
-      branch %40, bb3, bb4
+      %39 = load var $0.rejectB
+      %40 = const c31
+      set_prop %38, %40, %39
+      %41 = call builtin.create_closure(%37, %38)
+      %42 = call builtin.promise.create_resolve_function(%36)
+      %43 = call builtin.promise.create_reject_function(%36)
+      %44 = const c32
+      call %41, this=%44, args=[%42, %43]
+      %45 = is_exception %36
+      branch %45, bb4, bb3
     bb2:
       %35 = call builtin.exception_value(%23)
       throw %35
     bb3:
-      %41 = new_object(capacity=2)
-      %42 = load var $env
-      set_proto %41, %42
-      store var $0.$shared_env, %41
-      %43 = load var $0.resolveA
-      %44 = const c32
-      set_prop %41, %44, %43
-      %45 = load var $0.rejectB
-      %46 = const c33
-      set_prop %41, %46, %45
-      jump bb5
-    bb4:
-      %47 = load var $0.rejectB
-      %48 = const c34
-      set_prop %38, %48, %47
-      jump bb5
-    bb5:
-      %49 = phi [(bb3, %41), (bb4, %38)]
-      store var $0.$shared_env, %49
-      %50 = call builtin.create_closure(%37, %49)
-      %51 = call builtin.promise.create_resolve_function(%36)
-      %52 = call builtin.promise.create_reject_function(%36)
-      %53 = const c35
-      call %50, this=%53, args=[%51, %52]
-      %54 = is_exception %36
-      branch %54, bb7, bb6
-    bb6:
       store var $0.p2, %36
-      %56 = const c36
-      %57 = new_array(capacity=4)
-      %58 = load var $0.p1
-      call builtin.array.push(%57, %58)
-      %59 = load var $0.p2
-      call builtin.array.push(%57, %59)
-      %60 = call builtin.promise.all_settled(%56, %57)
-      %61 = const c45
-      %62 = const c46
-      %63 = call builtin.promise.then(%60, %61, %62)
-      %64 = is_exception %63
-      branch %64, bb9, bb8
+      %47 = const c33
+      %48 = new_array(capacity=4)
+      %49 = load var $0.p1
+      call builtin.array.push(%48, %49)
+      %50 = load var $0.p2
+      call builtin.array.push(%48, %50)
+      %51 = call builtin.promise.all_settled(%47, %48)
+      %52 = const c42
+      %53 = const c43
+      %54 = call builtin.promise.then(%51, %52, %53)
+      %55 = is_exception %54
+      branch %55, bb6, bb5
+    bb4:
+      %46 = call builtin.exception_value(%36)
+      throw %46
+    bb5:
+      %57 = const c44
+      %58 = load var $0.$global
+      %59 = const c45
+      %60 = get_prop %58, %59
+      %61 = const c52
+      %62 = load var $0.$shared_env
+      %63 = call builtin.create_closure(%61, %62)
+      %64 = call %60, this=%57, args=[%63]
+      %65 = is_exception %64
+      branch %65, bb8, bb7
+    bb6:
+      %56 = call builtin.exception_value(%54)
+      throw %56
     bb7:
-      %55 = call builtin.exception_value(%36)
-      throw %55
-    bb8:
-      %66 = const c47
-      %67 = load var $0.$global
-      %68 = const c48
-      %69 = get_prop %67, %68
-      %70 = const c55
-      %71 = load var $0.$shared_env
-      %72 = const c56
-      %73 = stricteq %71, %72
-      branch %73, bb10, bb11
-    bb9:
-      %65 = call builtin.exception_value(%63)
-      throw %65
-    bb10:
-      %74 = new_object(capacity=2)
-      %75 = load var $env
-      set_proto %74, %75
-      store var $0.$shared_env, %74
-      %76 = load var $0.rejectB
-      %77 = const c57
-      set_prop %74, %77, %76
-      %78 = load var $0.resolveA
-      %79 = const c58
-      set_prop %74, %79, %78
-      jump bb12
-    bb11:
-      jump bb12
-    bb12:
-      %80 = phi [(bb10, %74), (bb11, %71)]
-      store var $0.$shared_env, %80
-      %81 = call builtin.create_closure(%70, %80)
-      %82 = call %69, this=%66, args=[%81]
-      %83 = is_exception %82
-      branch %83, bb14, bb13
-    bb13:
       return
-    bb14:
-      %84 = call builtin.exception_value(%82)
-      throw %84
+    bb8:
+      %66 = call builtin.exception_value(%64)
+      throw %66
 }

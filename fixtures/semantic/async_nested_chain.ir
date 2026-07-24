@@ -95,13 +95,10 @@ module {
     c92 = undefined
     c93 = bool(false)
     c94 = functionref(@5)
-    c95 = undefined
-    c96 = string("$0.c")
-    c97 = string("$0.b")
-    c98 = string("$0.b")
-    c99 = undefined
-    c100 = functionref(@6)
-    c101 = undefined
+    c95 = string("$0.b")
+    c96 = undefined
+    c97 = functionref(@6)
+    c98 = undefined
 
   fn @c$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -408,43 +405,22 @@ module {
       %28 = call builtin.create_closure(%22, %24)
       store var $0.b, %28
       %29 = const c94
-      %30 = load var $0.$shared_env
+      %30 = load var $0.b
       %31 = const c95
-      %32 = stricteq %30, %31
-      branch %32, bb1, bb2
+      set_prop %24, %31, %30
+      %32 = call builtin.create_closure(%29, %24)
+      store var $0.a, %32
+      %33 = const c96
+      %34 = load var $0.a
+      %35 = call %34, this=%33
+      %36 = const c97
+      %37 = const c98
+      %38 = call builtin.promise.then(%35, %36, %37)
+      %39 = is_exception %38
+      branch %39, bb2, bb1
     bb1:
-      %33 = new_object(capacity=2)
-      %34 = load var $env
-      set_proto %33, %34
-      store var $0.$shared_env, %33
-      %35 = load var $0.c
-      %36 = const c96
-      set_prop %33, %36, %35
-      %37 = load var $0.b
-      %38 = const c97
-      set_prop %33, %38, %37
-      jump bb3
-    bb2:
-      %39 = load var $0.b
-      %40 = const c98
-      set_prop %30, %40, %39
-      jump bb3
-    bb3:
-      %41 = phi [(bb1, %33), (bb2, %30)]
-      store var $0.$shared_env, %41
-      %42 = call builtin.create_closure(%29, %41)
-      store var $0.a, %42
-      %43 = const c99
-      %44 = load var $0.a
-      %45 = call %44, this=%43
-      %46 = const c100
-      %47 = const c101
-      %48 = call builtin.promise.then(%45, %46, %47)
-      %49 = is_exception %48
-      branch %49, bb5, bb4
-    bb4:
       return
-    bb5:
-      %50 = call builtin.exception_value(%48)
-      throw %50
+    bb2:
+      %40 = call builtin.exception_value(%38)
+      throw %40
 }
