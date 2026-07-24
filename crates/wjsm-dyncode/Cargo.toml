@@ -1,0 +1,10 @@
+[package]
+name = "wjsm-dyncode"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+wjsm-parser = { path = "../wjsm-parser" }
+wjsm-semantic = { path = "../wjsm-semantic" }
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }

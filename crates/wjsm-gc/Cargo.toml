@@ -1,0 +1,26 @@
+[package]
+name = "wjsm-gc"
+version.workspace = true
+edition.workspace = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+[dependencies]
+wjsm-ir = { path = "../wjsm-ir" }
+parking_lot = "0.12"
+crossbeam-deque = "0.8.6"
+hdrhistogram = { workspace = true, default-features = false }
+libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+anyhow = { workspace = true }
+loom = "0.7"
+wjsm-engine-config = { path = "../wjsm-engine-config" }
+# scheme (b): only shared_memory64_feasibility hard-depends on wasmtime SharedMemory/Module.
+wasmtime = { workspace = true }

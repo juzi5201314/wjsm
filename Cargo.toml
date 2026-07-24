@@ -19,6 +19,10 @@ members = [
     "crates/wjsm-engine-config",
     "crates/wjsm-gc-bench",
     "crates/wjsm-snapshot-format",
+    "crates/wjsm-host",
+    "crates/wjsm-host-wasm",
+    "crates/wjsm-gc",
+    "crates/wjsm-dyncode",
 ]
 
 [workspace.package]

@@ -4919,11 +4919,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "wjsm-dyncode"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "wjsm-backend-wasm",
+ "wjsm-parser",
+ "wjsm-semantic",
+]
+
+[[package]]
 name = "wjsm-engine-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "wasmtime",
+]
+
+[[package]]
+name = "wjsm-gc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-deque",
+ "hdrhistogram",
+ "libc",
+ "loom",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "wasmtime",
+ "wjsm-engine-config",
+ "wjsm-ir",
 ]
 
 [[package]]
@@ -4940,34 +4967,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "wjsm-ir"
-version = "0.1.0"
-
-[[package]]
-name = "wjsm-module"
+name = "wjsm-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "serde_json",
- "swc_core",
- "thiserror 2.0.18",
- "url",
- "wjsm-backend-wasm",
  "wjsm-ir",
- "wjsm-parser",
- "wjsm-semantic",
 ]
 
 [[package]]
-name = "wjsm-parser"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "swc_core",
-]
-
-[[package]]
-name = "wjsm-runtime"
+name = "wjsm-host-wasm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5011,11 +5019,65 @@ dependencies = [
  "wasmtime",
  "webpki-roots 0.26.11",
  "wjsm-backend-wasm",
+ "wjsm-dyncode",
  "wjsm-engine-config",
+ "wjsm-gc",
+ "wjsm-host",
  "wjsm-ir",
  "wjsm-module",
  "wjsm-parser",
  "wjsm-runtime-support",
+ "wjsm-semantic",
+ "wjsm-snapshot-format",
+]
+
+[[package]]
+name = "wjsm-ir"
+version = "0.1.0"
+
+[[package]]
+name = "wjsm-module"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "swc_core",
+ "thiserror 2.0.18",
+ "url",
+ "wjsm-backend-wasm",
+ "wjsm-ir",
+ "wjsm-parser",
+ "wjsm-semantic",
+]
+
+[[package]]
+name = "wjsm-parser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "swc_core",
+]
+
+[[package]]
+name = "wjsm-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "loom",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "wasmparser 0.246.2",
+ "wasmtime",
+ "wjsm-backend-wasm",
+ "wjsm-dyncode",
+ "wjsm-engine-config",
+ "wjsm-gc",
+ "wjsm-host",
+ "wjsm-host-wasm",
+ "wjsm-ir",
+ "wjsm-parser",
  "wjsm-semantic",
  "wjsm-snapshot-format",
 ]
