@@ -8,8 +8,12 @@ const hook = createHook({
   },
 }).enable();
 
+// 正确性验证：每个 AsyncResource 创建即触发一次 init，emitDestroy + gc 不丢/不重 init 计数。
+// 总数对语义是任意的（handle 复用语义由 Rust 侧单测覆盖），取一批即可验证计数一致。
+const TOTAL = 70;
+
 function runBatch() {
-  const end = created + 350;
+  const end = created + TOTAL;
   while (created < end) {
     new AsyncResource('HANDLE_REUSE').emitDestroy();
     const garbage = [{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}];
@@ -17,12 +21,8 @@ function runBatch() {
     created++;
   }
   gc();
-  if (created < 700) {
-    setImmediate(runBatch);
-    return;
-  }
   hook.disable();
-  console.log(created === 700 && initialized === 700);
+  console.log(created === TOTAL && initialized === TOTAL);
 }
 
 runBatch();

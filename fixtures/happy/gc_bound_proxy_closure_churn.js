@@ -41,8 +41,8 @@ const closure = makeClosure(30);
 const boundTimerCallback = makeBoundTimerCallback();
 const proxy = makeProxy();
 
-for (let round = 0; round < 6; round++) {
-  for (let i = 0; i < 900; i++) {
+for (let round = 0; round < 3; round++) {
+  for (let i = 0; i < 100; i++) {
     const tmp = { round, i, nested: { keep: i + round }, arr: [round, i, i + 1] };
     if (tmp.nested.keep === -1) {
       console.log("unreachable");

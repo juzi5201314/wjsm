@@ -56,10 +56,17 @@ Linear pipeline, each stage a `fn transform(input) -> Result<output>`:
 source → wjsm-parser (swc_core → AST)
        → wjsm-semantic (AST → IR: scope analysis, TDZ, hoisting)
        → wjsm-backend-wasm (IR → WASM bytes)
-       → wjsm-runtime (wasmtime execution + host functions)
+       → wjsm-host-wasm (wasmtime execution + host functions)
 ```
 
 Multi-file: `wjsm-module` sits between semantic and backend (dependency graph + bundling).
+
+**Runtime 拆分**（ADR 0011）：原 `wjsm-runtime` 按后端无关性拆为 4 个 crate，`wjsm-runtime` 保留为向后兼容 facade：
+- `wjsm-host`：后端无关宿主能力 trait（`HostRuntime`/`HeapContext`/`ConsoleHost`/`GcHost`/`ObjectHost`/`AsyncHost`），多后端扩展点
+- `wjsm-host-wasm`：wasmtime 执行引擎（builtins、eval/vm 解释器、`RuntimeState`、GC 接合点）
+- `wjsm-gc`：后端无关 GC 算法（MarkSweepV2/G1V2/ZgcV2、`HandleTableV2`、`HeapMemory`/`GrowableHeapMemory` trait），不依赖 wasmtime
+- `wjsm-dyncode`：编译编排（`compile_source`/`compile_source_with_debug`）
+- `wjsm-runtime`：facade，`pub use wjsm_host_wasm::*` + `pub use wjsm_host::*`，外部代码零改动
 
 | Crate | Role | Public API |
 |---|---|---|
@@ -68,7 +75,11 @@ Multi-file: `wjsm-module` sits between semantic and backend (dependency graph + 
 | `wjsm-ir` | IR types (zero deps) | `Module`, `Function`, `BasicBlock`, `Instruction`, `value` |
 | `wjsm-backend-wasm` | IR → WASM | `compile(&Program)`, `compile_eval(&Program)` |
 | `wjsm-backend-jit` | Stub (not implemented) | `compile(&Program)` |
-| `wjsm-runtime` | wasmtime execution + host functions | `execute(&[u8])`, `execute_with_writer` |
+| `wjsm-host` | 后端无关宿主能力 trait（多后端扩展点） | `HostRuntime`, `HeapContext`, `ConsoleHost`, `GcHost`, `ObjectHost`, `AsyncHost` |
+| `wjsm-host-wasm` | wasmtime 执行引擎 + host functions | `execute(&[u8])`, `execute_with_writer`, `WasmHeapContext` |
+| `wjsm-gc` | 后端无关 GC 算法 + heap 抽象（无 wasmtime） | `MarkSweepV2<M>`, `G1V2<M>`, `ZgcV2<M>`, `HandleTableV2`, `HeapMemory`, `GrowableHeapMemory`, `NativeHeapMemory` |
+| `wjsm-dyncode` | 编译编排 | `compile_source`, `compile_source_with_debug` |
+| `wjsm-runtime` | facade（re-export host-wasm + host，向后兼容） | `execute`, `compile_source`, GC 类型, module loader, snapshot |
 | `wjsm-module` | ESM/CJS bundling | `bundle(entry, root_path)` |
 | `wjsm-test262` | test262 conformance runner | — |
 | `wjsm-cli` | CLI: build/run/check/eval/dump-ir/dump-ast/dump-wat/disasm/fmt/init/size/validate | `main_entry()` |
@@ -76,7 +87,7 @@ Multi-file: `wjsm-module` sits between semantic and backend (dependency graph + 
 | `wjsm-runtime-support` | build-time precompiled support cwasm variants | `embedded_support_cwasm(flavor)` |
 | `wjsm-snapshot-format` | snapshot byte format + ABI hash (zero wasmtime) | `decode_snapshot`, `abi_hash` |
 
-Dep graph: `parser → semantic → ir ← backend-wasm → runtime → cli`. `wjsm-module` branches off `semantic → backend-wasm`. Build-time support crates: `wjsm-runtime-snapshot` / `wjsm-runtime-support` → `OUT_DIR` artifacts consumed by `wjsm-runtime` → `wjsm-cli` via `install_embedded_*`; `wjsm-snapshot-format` is dependency-free and consumed by snapshot build.rs + runtime.
+Dep graph: `parser → semantic → ir ← backend-wasm → host-wasm → cli`；`host-wasm` 依赖 `host`（trait）+ `gc`（算法）+ `dyncode`（编译编排）；`runtime` facade 依赖 `host-wasm` + `host` + `dyncode` + `gc`。`wjsm-module` branches off `semantic → backend-wasm`。Build-time support crates: `wjsm-runtime-snapshot` / `wjsm-runtime-support` → `OUT_DIR` artifacts consumed by `wjsm-host-wasm` → `wjsm-cli` via `install_embedded_*`; `wjsm-snapshot-format` is dependency-free and consumed by snapshot build.rs + runtime.
 
 ### Key directories
 
@@ -84,8 +95,14 @@ Dep graph: `parser → semantic → ir ← backend-wasm → runtime → cli`. `w
 crates/wjsm-semantic/src/lowerer_*.rs        # lowering submodules (per AST category)
 crates/wjsm-backend-wasm/src/compiler_*.rs   # codegen submodules
 crates/wjsm-ir/docs/ir-design.md             # IR design doc (Chinese)
-crates/wjsm-runtime/src/runtime_*.rs         # runtime submodules
-crates/wjsm-runtime/src/host_imports/        # host import implementations
+crates/wjsm-host-wasm/src/runtime_*.rs       # runtime submodules (execution engine)
+crates/wjsm-host-wasm/src/host_imports/      # host import implementations
+crates/wjsm-host-wasm/src/heap_context_impl.rs # HeapContext impl over Caller<RuntimeState>
+crates/wjsm-gc/src/heap/                     # backend-agnostic heap abstraction (HeapMemory/HandleTableV2)
+crates/wjsm-gc/src/{mark_sweep,g1,zgc}/      # GC algorithms (generic over M: GrowableHeapMemory)
+crates/wjsm-dyncode/src/lib.rs               # compile orchestration (compile_source)
+crates/wjsm-host/src/                        # backend-agnostic host capability traits
+crates/wjsm-runtime/src/lib.rs               # facade (re-export host-wasm + host)
 fixtures/{happy,errors,semantic,modules}/    # test fixtures + snapshots
 tests/fixture_runner.rs                      # E2E harness
 ```
