@@ -9,6 +9,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 [dependencies]
 anyhow = { workspace = true }
 wjsm-host = { path = "../wjsm-host" }
+wjsm-builtins = { path = "../wjsm-builtins" }
 wjsm-dyncode = { path = "../wjsm-dyncode" }
 wjsm-gc = { path = "../wjsm-gc" }
 crossbeam-deque = "0.8.6"

@@ -4886,6 +4886,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wjsm-builtins"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "icu_normalizer",
+ "num-bigint",
+ "num-traits",
+ "rand 0.8.5",
+ "wjsm-host",
+ "wjsm-ir",
+]
+
+[[package]]
 name = "wjsm-cli"
 version = "0.1.0"
 dependencies = [
@@ -4971,6 +4985,7 @@ name = "wjsm-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "num-bigint",
  "wjsm-ir",
 ]
 
@@ -5019,6 +5034,7 @@ dependencies = [
  "wasmtime",
  "webpki-roots 0.26.11",
  "wjsm-backend-wasm",
+ "wjsm-builtins",
  "wjsm-dyncode",
  "wjsm-engine-config",
  "wjsm-gc",

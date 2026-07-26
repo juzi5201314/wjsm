@@ -27,22 +27,8 @@ pub(crate) fn string_iter_current_value(
     store_runtime_string(caller, string.slice_units(unit_pos..unit_pos + width))
 }
 
-/// 将字符串迭代器 `unit_pos` 推进到下一个码点。
-pub(crate) fn string_iter_advance_unit_pos(string: &RuntimeString, unit_pos: &mut usize) {
-    let Some(unit) = string.code_unit_at(*unit_pos) else {
-        return;
-    };
-    let width = if (0xD800..=0xDBFF).contains(&unit)
-        && string
-            .code_unit_at(*unit_pos + 1)
-            .is_some_and(|next| (0xDC00..=0xDFFF).contains(&next))
-    {
-        2
-    } else {
-        1
-    };
-    *unit_pos += width;
-}
+/// 将字符串迭代器 `unit_pos` 推进到下一个码点（Phase 0 纯函数，re-export builtins）。
+pub(crate) use wjsm_builtins::string_iter_advance_unit_pos;
 
 /// ECMAScript `Object.defineProperty` / `DefineProperty`（§10.1.6.3 ValidateAndApplyPropertyDescriptor）。
 /// 成功返回该对象（Object.defineProperty 的返回值）；失败返回可捕获 `TypeError`（`TAG_EXCEPTION`）。

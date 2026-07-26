@@ -1,11 +1,9 @@
+use crate::exec_context_impl::WasmExecContext;
 use super::*;
 use crate::runtime_string::RuntimeString;
 
-#[derive(Clone, Copy)]
-pub(crate) enum PromiseSettlement {
-    Fulfill(i64),
-    Reject(i64),
-}
+/// Promise 结算状态：共享定义在 `wjsm-host`，此处再导出保持 host-wasm 调用点不变。
+pub(crate) use wjsm_host::PromiseSettlement;
 
 pub(crate) fn raw_promise_handle(promise: i64) -> usize {
     if value::is_object(promise) {
@@ -110,6 +108,7 @@ pub(crate) async fn call_iterator_method_async(
     }
 }
 
+#[allow(dead_code)] // Phase 3 array_from / collections 仍可能复用
 pub(crate) async fn advance_object_iterator_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
     iterator: i64,
@@ -194,26 +193,6 @@ pub(crate) fn create_date_method(state: &RuntimeState, kind: DateMethodKind) -> 
         .unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(NativeCallable::DateMethod { kind });
-    value::encode_native_callable_idx(handle)
-}
-
-pub(crate) fn create_weakmap_method(state: &RuntimeState, kind: WeakMapMethodKind) -> i64 {
-    let mut table = state
-        .native_callables
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let handle = table.len() as u32;
-    table.push(NativeCallable::WeakMapMethod { kind });
-    value::encode_native_callable_idx(handle)
-}
-
-pub(crate) fn create_weakset_method(state: &RuntimeState, kind: WeakSetMethodKind) -> i64 {
-    let mut table = state
-        .native_callables
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let handle = table.len() as u32;
-    table.push(NativeCallable::WeakSetMethod { kind });
     value::encode_native_callable_idx(handle)
 }
 
@@ -1571,8 +1550,8 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
                 .unwrap_or_else(value::encode_undefined);
             let call_args = if args.len() > 1 { &args[1..] } else { &[] };
             Some(
-                crate::host_imports::reflect_apply_impl_async(
-                    caller, this_val, this_arg, call_args,
+                wjsm_builtins::proxy_reflect_async::reflect_apply_impl_async(
+                    &mut WasmExecContext::new(caller), this_val, this_arg, call_args,
                 )
                 .await,
             )
@@ -1583,19 +1562,23 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
             let arr_like = args.get(1).copied().unwrap_or_else(value::encode_undefined);
-            let call_args =
-                match crate::host_imports::extract_array_like_elements(caller, arr_like).await {
-                    Ok(v) => v,
-                    Err(msg) => {
-                        return Some(make_type_error_exception(
-                            caller,
-                            &format!("TypeError: {msg}"),
-                        ));
-                    }
-                };
+            let call_args = match wjsm_builtins::proxy_reflect_async::extract_array_like_elements(
+                &mut WasmExecContext::new(caller),
+                arr_like,
+            )
+            .await
+            {
+                Ok(v) => v,
+                Err(msg) => {
+                    return Some(make_type_error_exception(
+                        caller,
+                        &format!("TypeError: {msg}"),
+                    ));
+                }
+            };
             Some(
-                crate::host_imports::reflect_apply_impl_async(
-                    caller, this_val, this_arg, &call_args,
+                wjsm_builtins::proxy_reflect_async::reflect_apply_impl_async(
+                    &mut WasmExecContext::new(caller), this_val, this_arg, &call_args,
                 )
                 .await,
             )
@@ -2327,16 +2310,32 @@ async fn call_object_static_async(
             // 通过 re-export 的 extract 或简易实现：返回空数组作为安全回退不合适；
             match kind {
                 ObjectStaticKind::Keys => {
-                    crate::host_imports::object_enumerable_own_keys_async(caller, arg0).await
+                    wjsm_builtins::proxy_reflect_async::object_enumerable_own_keys_async(
+                        &mut WasmExecContext::new(caller),
+                        arg0,
+                    )
+                    .await
                 }
                 ObjectStaticKind::Values => {
-                    crate::host_imports::object_values_async(caller, arg0).await
+                    wjsm_builtins::proxy_reflect_async::object_values_async(
+                        &mut WasmExecContext::new(caller),
+                        arg0,
+                    )
+                    .await
                 }
                 ObjectStaticKind::Entries => {
-                    crate::host_imports::object_entries_async(caller, arg0).await
+                    wjsm_builtins::proxy_reflect_async::object_entries_async(
+                        &mut WasmExecContext::new(caller),
+                        arg0,
+                    )
+                    .await
                 }
                 ObjectStaticKind::GetOwnPropertyNames => {
-                    crate::host_imports::object_get_own_property_names_async(caller, arg0).await
+                    wjsm_builtins::proxy_reflect_async::object_get_own_property_names_async(
+                        &mut WasmExecContext::new(caller),
+                        arg0,
+                    )
+                    .await
                 }
                 _ => value::encode_undefined(),
             }

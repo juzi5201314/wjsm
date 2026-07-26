@@ -2,1002 +2,140 @@ use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
-use crate::property_key::encode_symbol_name_id;
+use crate::exec_context_impl::WasmExecContext;
 use crate::*;
-
-fn collection_handle_for_receiver(
-    caller: &mut Caller<'_, RuntimeState>,
-    receiver: i64,
-    name: &str,
-) -> Option<usize> {
-    {
-        read_host_data_property_v2(caller, receiver, name)
-            .map(|value| value::decode_f64(value) as usize)
-    }
-}
 
 pub(crate) fn define_collections_buffers(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
+    // ── Map / Set / WeakMap / WeakSet / ArrayBuffer / Date：builtins 算法 ──
     linker.func_wrap_async(
         "env",
         "map_constructor",
         |mut caller: Caller<'_, RuntimeState>, (arg,): (i64,)| {
             Box::new(async move {
-                let handle = caller.data().alloc_map_entry();
-                if !fill_map_from_constructor_arg_async(&mut caller, handle, arg).await {
-                    caller.data().release_unowned_map_entry(handle);
-                    return value::encode_undefined();
-                }
-                let (
-                    set_fn,
-                    get_fn,
-                    has_fn,
-                    delete_fn,
-                    clear_fn,
-                    size_fn,
-                    for_each_fn,
-                    keys_fn,
-                    values_fn,
-                    entries_fn,
-                ) = {
-                    let state = caller.data();
-                    (
-                        create_map_set_method(state, MapSetMethodKind::MapSet),
-                        create_map_set_method(state, MapSetMethodKind::MapGet),
-                        create_map_set_method(state, MapSetMethodKind::Has),
-                        create_map_set_method(state, MapSetMethodKind::Delete),
-                        create_map_set_method(state, MapSetMethodKind::Clear),
-                        create_map_set_method(state, MapSetMethodKind::Size),
-                        create_map_set_method(state, MapSetMethodKind::ForEach),
-                        create_map_set_method(state, MapSetMethodKind::Keys),
-                        create_map_set_method(state, MapSetMethodKind::Values),
-                        create_map_set_method(state, MapSetMethodKind::Entries),
-                    )
-                };
-                let obj = alloc_host_object_v2(&mut caller, 12);
-                if !value::is_object(obj) {
-                    caller.data().release_unowned_map_entry(handle);
-                    return obj;
-                }
-                caller
-                    .data()
-                    .bind_map_entry_owner(handle, value::decode_object_handle(obj));
-                let handle_val = value::encode_f64(handle as f64);
-                let _ = define_host_data_property_from_caller(
-                    &mut caller,
-                    obj,
-                    "__map_handle__",
-                    handle_val,
-                );
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
-                let _ = define_host_accessor_property_from_caller(
-                    &mut caller,
-                    obj,
-                    "size",
-                    size_fn,
-                    value::encode_undefined(),
-                );
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
-                let _ = define_host_data_property_by_name_id_with_flags(
-                    &mut caller,
-                    obj,
-                    encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
-                    entries_fn,
-                    constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
-                );
-                obj
+                let mut ctx = WasmExecContext::new(&mut caller);
+                wjsm_builtins::collections::map_constructor(&mut ctx, arg).await
             })
         },
     )?;
-
-    let map_proto_set_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
-            if !value::is_object(this_val) {
-                return value::encode_undefined();
-            }
-            let handle_val =
-                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__");
-            let handle = match handle_val {
-                Some(handle) => handle,
-                None => {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Method Map.prototype.set called on incompatible receiver"
-                            .to_string(),
-                    );
-                    return this_val;
-                }
-            };
-            let mut table = caller
-                .data()
-                .map_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle >= table.len() {
-                return value::encode_undefined();
-            }
-            let entry = &mut table[handle];
-            for i in 0..entry.keys.len() {
-                if same_value_zero(&caller, entry.keys[i], key) {
-                    entry.values[i] = val;
-                    return this_val;
-                }
-            }
-            entry.keys.push(key);
-            entry.values.push(val);
-            this_val
-        },
-    );
-    linker.define(&mut store, "env", "map_proto_set", map_proto_set_fn)?;
-
-    let map_proto_get_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !value::is_object(this_val) {
-                return value::encode_undefined();
-            }
-            let handle_val =
-                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__");
-            let handle = match handle_val {
-                Some(handle) => handle,
-                None => {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Method Map.prototype.get called on incompatible receiver"
-                            .to_string(),
-                    );
-                    return value::encode_undefined();
-                }
-            };
-            let table = caller
-                .data()
-                .map_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle >= table.len() {
-                return value::encode_undefined();
-            }
-            let entry = &table[handle];
-            for i in 0..entry.keys.len() {
-                if same_value_zero(&caller, entry.keys[i], key) {
-                    return entry.values[i];
-                }
-            }
-            value::encode_undefined()
-        },
-    );
-    linker.define(&mut store, "env", "map_proto_get", map_proto_get_fn)?;
-
-    // ── Set host functions ────────────────────────────────────────────
     linker.func_wrap_async(
         "env",
         "set_constructor",
         |mut caller: Caller<'_, RuntimeState>, (arg,): (i64,)| {
             Box::new(async move {
-                let handle = caller.data().alloc_set_entry();
-                if !fill_set_from_constructor_arg_async(&mut caller, handle, arg).await {
-                    caller.data().release_unowned_set_entry(handle);
-                    return value::encode_undefined();
-                }
-                let (
-                    add_fn,
-                    has_fn,
-                    delete_fn,
-                    clear_fn,
-                    size_fn,
-                    for_each_fn,
-                    keys_fn,
-                    values_fn,
-                    entries_fn,
-                ) = {
-                    let state = caller.data();
-                    (
-                        create_map_set_method(state, MapSetMethodKind::SetAdd),
-                        create_map_set_method(state, MapSetMethodKind::Has),
-                        create_map_set_method(state, MapSetMethodKind::Delete),
-                        create_map_set_method(state, MapSetMethodKind::Clear),
-                        create_map_set_method(state, MapSetMethodKind::Size),
-                        create_map_set_method(state, MapSetMethodKind::ForEach),
-                        create_map_set_method(state, MapSetMethodKind::Keys),
-                        create_map_set_method(state, MapSetMethodKind::Values),
-                        create_map_set_method(state, MapSetMethodKind::Entries),
-                    )
-                };
-                let obj = alloc_host_object_v2(&mut caller, 12);
-                if !value::is_object(obj) {
-                    caller.data().release_unowned_set_entry(handle);
-                    return obj;
-                }
-                caller
-                    .data()
-                    .bind_set_entry_owner(handle, value::decode_object_handle(obj));
-                let handle_val = value::encode_f64(handle as f64);
-                let _ = define_host_data_property_from_caller(
-                    &mut caller,
-                    obj,
-                    "__set_handle__",
-                    handle_val,
-                );
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
-                let _ = define_host_accessor_property_from_caller(
-                    &mut caller,
-                    obj,
-                    "size",
-                    size_fn,
-                    value::encode_undefined(),
-                );
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
-                let _ = define_host_data_property_by_name_id_with_flags(
-                    &mut caller,
-                    obj,
-                    encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
-                    values_fn,
-                    constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
-                );
-                obj
+                let mut ctx = WasmExecContext::new(&mut caller);
+                wjsm_builtins::collections::set_constructor(&mut ctx, arg).await
             })
         },
     )?;
 
-    let set_proto_add_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, val: i64| -> i64 {
-            if !value::is_object(this_val) {
-                return value::encode_undefined();
-            }
-            let handle_val =
-                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__");
-            let handle = match handle_val {
-                Some(handle) => handle,
-                None => {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Method Set.prototype.add called on incompatible receiver"
-                            .to_string(),
-                    );
-                    return this_val;
-                }
-            };
-            let mut table = caller
-                .data()
-                .set_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle >= table.len() {
-                return value::encode_undefined();
-            }
-            let entry = &mut table[handle];
-            for i in 0..entry.values.len() {
-                if same_value_zero(&caller, entry.values[i], val) {
-                    return this_val;
-                }
-            }
-            entry.values.push(val);
-            this_val
-        },
-    );
-    linker.define(&mut store, "env", "set_proto_add", set_proto_add_fn)?;
-
-    // ── Map/Set shared host functions (dispatch at runtime) ──────────
-    let map_set_has_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !value::is_object(this_val) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Method Map/Set.prototype.has called on incompatible receiver"
-                        .to_string(),
-                );
-                return value::encode_bool(false);
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
-            {
-                let table = caller
-                    .data()
-                    .map_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    let entry = &table[handle];
-                    for i in 0..entry.keys.len() {
-                        if same_value_zero(&caller, entry.keys[i], key) {
-                            return value::encode_bool(true);
-                        }
-                    }
-                }
-                return value::encode_bool(false);
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
-            {
-                let table = caller
-                    .data()
-                    .set_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    let entry = &table[handle];
-                    for i in 0..entry.values.len() {
-                        if same_value_zero(&caller, entry.values[i], key) {
-                            return value::encode_bool(true);
-                        }
-                    }
-                }
-                return value::encode_bool(false);
-            }
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Method Map/Set.prototype.has called on incompatible receiver"
-                    .to_string(),
+    macro_rules! wrap2 {
+        ($name:expr, $f:path) => {{
+            let f = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+                    let mut ctx = WasmExecContext::new(&mut caller);
+                    $f(&mut ctx, a, b)
+                },
             );
-            value::encode_bool(false)
-        },
-    );
-    linker.define(&mut store, "env", "map_set_has", map_set_has_fn)?;
-
-    let map_set_delete_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !value::is_object(this_val) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Method Map/Set.prototype.delete called on incompatible receiver"
-                        .to_string(),
-                );
-                return value::encode_bool(false);
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
-            {
-                let mut table = caller
-                    .data()
-                    .map_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    let entry = &mut table[handle];
-                    for i in 0..entry.keys.len() {
-                        if same_value_zero(&caller, entry.keys[i], key) {
-                            entry.keys.remove(i);
-                            entry.values.remove(i);
-                            return value::encode_bool(true);
-                        }
-                    }
-                }
-                return value::encode_bool(false);
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
-            {
-                let mut table = caller
-                    .data()
-                    .set_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    let entry = &mut table[handle];
-                    for i in 0..entry.values.len() {
-                        if same_value_zero(&caller, entry.values[i], key) {
-                            entry.values.remove(i);
-                            return value::encode_bool(true);
-                        }
-                    }
-                }
-                return value::encode_bool(false);
-            }
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Method Map/Set.prototype.delete called on incompatible receiver"
-                    .to_string(),
+            linker.define(&mut store, "env", $name, f)?;
+        }};
+    }
+    macro_rules! wrap3 {
+        ($name:expr, $f:path) => {{
+            let f = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64, c: i64| -> i64 {
+                    let mut ctx = WasmExecContext::new(&mut caller);
+                    $f(&mut ctx, a, b, c)
+                },
             );
-            value::encode_bool(false)
-        },
-    );
-    linker.define(&mut store, "env", "map_set_delete", map_set_delete_fn)?;
-
-    let map_set_clear_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            if !value::is_object(this_val) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Method Map/Set.prototype.clear called on incompatible receiver"
-                        .to_string(),
-                );
-                return value::encode_undefined();
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
-            {
-                let mut table = caller
-                    .data()
-                    .map_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    table[handle].keys.clear();
-                    table[handle].values.clear();
-                }
-                return value::encode_undefined();
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
-            {
-                let mut table = caller
-                    .data()
-                    .set_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    table[handle].values.clear();
-                }
-                return value::encode_undefined();
-            }
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Method Map/Set.prototype.clear called on incompatible receiver"
-                    .to_string(),
+            linker.define(&mut store, "env", $name, f)?;
+        }};
+    }
+    macro_rules! wrap1 {
+        ($name:expr, $f:path) => {{
+            let f = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, a: i64| -> i64 {
+                    let mut ctx = WasmExecContext::new(&mut caller);
+                    $f(&mut ctx, a)
+                },
             );
-            value::encode_undefined()
-        },
-    );
-    linker.define(&mut store, "env", "map_set_clear", map_set_clear_fn)?;
+            linker.define(&mut store, "env", $name, f)?;
+        }};
+    }
 
-    let map_set_get_size_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            if !value::is_object(this_val) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Method Map/Set.prototype.size called on incompatible receiver"
-                        .to_string(),
-                );
-                return value::encode_f64(0.0);
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__map_handle__")
-            {
-                let table = caller
-                    .data()
-                    .map_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    return value::encode_f64(table[handle].keys.len() as f64);
-                }
-                return value::encode_f64(0.0);
-            }
-            if let Some(handle) =
-                collection_handle_for_receiver(&mut caller, this_val, "__set_handle__")
-            {
-                let table = caller
-                    .data()
-                    .set_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    return value::encode_f64(table[handle].values.len() as f64);
-                }
-                return value::encode_f64(0.0);
-            }
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Method Map/Set.prototype.size called on incompatible receiver"
-                    .to_string(),
-            );
-            value::encode_f64(0.0)
-        },
-    );
-    linker.define(&mut store, "env", "map_set_get_size", map_set_get_size_fn)?;
-
+    wrap3!("map_proto_set", wjsm_builtins::collections::map_proto_set);
+    wrap2!("map_proto_get", wjsm_builtins::collections::map_proto_get);
+    wrap2!("set_proto_add", wjsm_builtins::collections::set_proto_add);
+    wrap2!("map_set_has", wjsm_builtins::collections::map_set_has);
+    wrap2!("map_set_delete", wjsm_builtins::collections::map_set_delete);
+    wrap1!("map_set_clear", wjsm_builtins::collections::map_set_clear);
+    wrap1!("map_set_get_size", wjsm_builtins::collections::map_set_get_size);
     linker.func_wrap_async(
         "env",
         "map_set_for_each",
         |mut caller: Caller<'_, RuntimeState>,
          (_env, this_val, args_base, args_count): (i64, i64, i32, i32)| {
             Box::new(async move {
-                let args: Vec<i64> = (0..args_count.max(0))
-                    .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
-                    .collect();
-                map_set_for_each_impl_async(&mut caller, this_val, &args).await
+                let mut ctx = WasmExecContext::new(&mut caller);
+                wjsm_builtins::collections::map_set_for_each(
+                    &mut ctx, this_val, args_base, args_count,
+                )
+                .await
             })
         },
     )?;
+    wrap1!("map_set_keys", wjsm_builtins::collections::map_set_keys);
+    wrap1!("map_set_values", wjsm_builtins::collections::map_set_values);
+    wrap1!("map_set_entries", wjsm_builtins::collections::map_set_entries);
 
-    let map_set_keys_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            map_set_create_iterator(&mut caller, this_val, MapSetMethodKind::Keys)
-        },
-    );
-    linker.define(&mut store, "env", "map_set_keys", map_set_keys_fn)?;
-
-    let map_set_values_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            map_set_create_iterator(&mut caller, this_val, MapSetMethodKind::Values)
-        },
-    );
-    linker.define(&mut store, "env", "map_set_values", map_set_values_fn)?;
-
-    let map_set_entries_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            map_set_create_iterator(&mut caller, this_val, MapSetMethodKind::Entries)
-        },
-    );
-    linker.define(&mut store, "env", "map_set_entries", map_set_entries_fn)?;
-
-    // ── WeakMap host functions ───────────────────────────────────────────
-    let weakmap_constructor_fn = Func::wrap(
+    let weakmap_ctor = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
-            let handle;
-            {
-                let mut table = caller
-                    .data()
-                    .weakmap_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                handle = table.len() as u32;
-                table.push(WeakMapEntry {
-                    map: HashMap::new(),
-                });
-            }
-            let (set_fn, get_fn, has_fn, delete_fn) = {
-                let state = caller.data();
-                (
-                    create_weakmap_method(state, WeakMapMethodKind::Set),
-                    create_weakmap_method(state, WeakMapMethodKind::Get),
-                    create_weakmap_method(state, WeakMapMethodKind::Has),
-                    create_weakmap_method(state, WeakMapMethodKind::Delete),
-                )
-            };
-            let obj = {
-                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 5)
-            };
-            let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(
-                &mut caller,
-                obj,
-                "__weakmap_handle__",
-                handle_val,
-            );
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
-            obj
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::collections::weakmap_constructor(&mut ctx)
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "weakmap_constructor",
-        weakmap_constructor_fn,
-    )?;
-
-    let weakmap_proto_set_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
-            if !is_object_key(key) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) =
-                    Some("TypeError: Invalid value used as weak map key".to_string());
-                return this_val;
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let key_handle = value::decode_object_handle(key);
-            {
-                let mut table = caller
-                    .data()
-                    .weakmap_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    table[handle].map.insert(key_handle, val);
-                }
-            }
-            this_val
-        },
-    );
-    linker.define(&mut store, "env", "weakmap_proto_set", weakmap_proto_set_fn)?;
-
-    let weakmap_proto_get_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !is_object_key(key) {
-                return value::encode_undefined();
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let key_handle = value::decode_object_handle(key);
-            let table = caller
-                .data()
-                .weakmap_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle < table.len()
-                && let Some(&val) = table[handle].map.get(&key_handle)
-            {
-                return val;
-            }
-            value::encode_undefined()
-        },
-    );
-    linker.define(&mut store, "env", "weakmap_proto_get", weakmap_proto_get_fn)?;
-
-    let weakmap_proto_has_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !is_object_key(key) {
-                return value::encode_bool(false);
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let key_handle = value::decode_object_handle(key);
-            let table = caller
-                .data()
-                .weakmap_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle < table.len() {
-                return value::encode_bool(table[handle].map.contains_key(&key_handle));
-            }
-            value::encode_bool(false)
-        },
-    );
-    linker.define(&mut store, "env", "weakmap_proto_has", weakmap_proto_has_fn)?;
-
-    let weakmap_proto_delete_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !is_object_key(key) {
-                return value::encode_bool(false);
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let key_handle = value::decode_object_handle(key);
-            let mut table = caller
-                .data()
-                .weakmap_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle < table.len() {
-                return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
-            }
-            value::encode_bool(false)
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
+    linker.define(&mut store, "env", "weakmap_constructor", weakmap_ctor)?;
+    wrap3!("weakmap_proto_set", wjsm_builtins::collections::weakmap_proto_set);
+    wrap2!("weakmap_proto_get", wjsm_builtins::collections::weakmap_proto_get);
+    wrap2!("weakmap_proto_has", wjsm_builtins::collections::weakmap_proto_has);
+    wrap2!(
         "weakmap_proto_delete",
-        weakmap_proto_delete_fn,
-    )?;
+        wjsm_builtins::collections::weakmap_proto_delete
+    );
 
-    // ── WeakSet host functions ───────────────────────────────────────────
-    let weakset_constructor_fn = Func::wrap(
+    let weakset_ctor = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
-            let handle;
-            {
-                let mut table = caller
-                    .data()
-                    .weakset_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                handle = table.len() as u32;
-                table.push(WeakSetEntry {
-                    set: HashSet::new(),
-                });
-            }
-            let (add_fn, has_fn, delete_fn) = {
-                let state = caller.data();
-                (
-                    create_weakset_method(state, WeakSetMethodKind::Add),
-                    create_weakset_method(state, WeakSetMethodKind::Has),
-                    create_weakset_method(state, WeakSetMethodKind::Delete),
-                )
-            };
-            let obj = {
-                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 8)
-            };
-            let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(
-                &mut caller,
-                obj,
-                "__weakset_handle__",
-                handle_val,
-            );
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
-            obj
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::collections::weakset_constructor(&mut ctx)
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "weakset_constructor",
-        weakset_constructor_fn,
-    )?;
-
-    let weakset_proto_add_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !is_object_key(key) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) =
-                    Some("TypeError: Invalid value used in weak set".to_string());
-                return this_val;
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let key_handle = value::decode_object_handle(key);
-            {
-                let mut table = caller
-                    .data()
-                    .weakset_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if handle < table.len() {
-                    table[handle].set.insert(key_handle);
-                }
-            }
-            this_val
-        },
-    );
-    linker.define(&mut store, "env", "weakset_proto_add", weakset_proto_add_fn)?;
-
-    let weakset_proto_has_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !is_object_key(key) {
-                return value::encode_bool(false);
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let key_handle = value::decode_object_handle(key);
-            let table = caller
-                .data()
-                .weakset_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle < table.len() {
-                return value::encode_bool(table[handle].set.contains(&key_handle));
-            }
-            value::encode_bool(false)
-        },
-    );
-    linker.define(&mut store, "env", "weakset_proto_has", weakset_proto_has_fn)?;
-
-    let weakset_proto_delete_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
-            if !is_object_key(key) {
-                return value::encode_bool(false);
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let key_handle = value::decode_object_handle(key);
-            let mut table = caller
-                .data()
-                .weakset_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if handle < table.len() {
-                return value::encode_bool(table[handle].set.remove(&key_handle));
-            }
-            value::encode_bool(false)
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
+    linker.define(&mut store, "env", "weakset_constructor", weakset_ctor)?;
+    wrap2!("weakset_proto_add", wjsm_builtins::collections::weakset_proto_add);
+    wrap2!("weakset_proto_has", wjsm_builtins::collections::weakset_proto_has);
+    wrap2!(
         "weakset_proto_delete",
-        weakset_proto_delete_fn,
-    )?;
-
-    let arraybuffer_constructor_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
-            let len_f64 = value::decode_f64(byte_length);
-            if len_f64 < 0.0 {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) =
-                    Some("RangeError: Invalid array buffer length".to_string());
-                return value::encode_undefined();
-            }
-            let len = len_f64 as u32;
-            let handle;
-            {
-                let mut table = caller
-                    .data()
-                    .arraybuffer_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                handle = table.len() as u32;
-                table.push(ArrayBufferEntry {
-                    data: vec![0; len as usize],
-                });
-            }
-            let obj = {
-                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 8)
-            };
-            let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(
-                &mut caller,
-                obj,
-                "__arraybuffer_handle__",
-                handle_val,
-            );
-            let bl_val = value::encode_f64(len as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
-            obj
-        },
+        wjsm_builtins::collections::weakset_proto_delete
     );
-    linker.define(
-        &mut store,
-        "env",
+
+    wrap1!(
         "arraybuffer_constructor",
-        arraybuffer_constructor_fn,
-    )?;
-
-    let arraybuffer_proto_byte_length_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            match obj_ptr {
-                Some(ptr) => match read_object_property_by_name(&mut caller, ptr, "byteLength") {
-                    Some(v) => v,
-                    None => value::encode_f64(0.0),
-                },
-                None => value::encode_f64(0.0),
-            }
-        },
+        wjsm_builtins::collections::arraybuffer_constructor
     );
-    linker.define(
-        &mut store,
-        "env",
+    wrap1!(
         "arraybuffer_proto_byte_length",
-        arraybuffer_proto_byte_length_fn,
-    )?;
-
-    let arraybuffer_proto_slice_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin: i64, end: i64| -> i64 {
-            let begin_idx = value::decode_f64(begin) as u32;
-            let end_idx = value::decode_f64(end) as u32;
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let (buf_handle, buf_len) = match obj_ptr {
-                Some(ptr) => {
-                    let h =
-                        read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
-                    let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
-                    match (h, bl) {
-                        (Some(hv), Some(lv)) => {
-                            (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32)
-                        }
-                        _ => return value::encode_undefined(),
-                    }
-                }
-                None => return value::encode_undefined(),
-            };
-            let start = begin_idx.min(buf_len);
-            let stop = end_idx.min(buf_len);
-            let new_len = stop.saturating_sub(start);
-            let new_buf_handle;
-            {
-                let mut ab_table = caller
-                    .data()
-                    .arraybuffer_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                new_buf_handle = ab_table.len() as u32;
-                let mut new_data = vec![0u8; new_len as usize];
-                if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
-                    new_data.copy_from_slice(&buf_entry.data[start as usize..stop as usize]);
-                }
-                ab_table.push(ArrayBufferEntry { data: new_data });
-            }
-            let obj = {
-                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 8)
-            };
-            let handle_val = value::encode_f64(new_buf_handle as f64);
-            let _ = define_host_data_property_from_caller(
-                &mut caller,
-                obj,
-                "__arraybuffer_handle__",
-                handle_val,
-            );
-            let bl_val = value::encode_f64(new_len as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
-            obj
-        },
+        wjsm_builtins::collections::arraybuffer_proto_byte_length
     );
-    linker.define(
-        &mut store,
-        "env",
+    wrap3!(
         "arraybuffer_proto_slice",
-        arraybuffer_proto_slice_fn,
-    )?;
+        wjsm_builtins::collections::arraybuffer_proto_slice
+    );
 
     let dataview_constructor_fn = Func::wrap(
         &mut store,
@@ -2091,6 +1229,8 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "exception_value", exception_value_fn)?;
 
+
+    // ── Date ──
     let date_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -2467,6 +1607,7 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "date_constructor", date_constructor_fn)?;
 
+
     let date_now_fn = Func::wrap(&mut store, |_caller: Caller<'_, RuntimeState>| -> i64 {
         let now = chrono::Utc::now();
         value::encode_f64(now.timestamp_millis() as f64)
@@ -2508,6 +1649,5 @@ pub(crate) fn define_collections_buffers(
     linker.define(&mut store, "env", "date_utc", date_utc_fn)?;
 
     super::private_fields::define_private_fields(linker, store)?;
-
     Ok(())
 }

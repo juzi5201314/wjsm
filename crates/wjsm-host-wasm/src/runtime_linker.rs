@@ -1,3 +1,5 @@
+use crate::exec_context_impl::WasmExecContext;
+use wjsm_host::HeapContext;
 use super::*;
 
 /// TAG_FUNCTION 在无 function_props 对象时的属性解析。
@@ -991,13 +993,14 @@ pub(super) fn register_complex_bridges(
                 if args_count < 1 {
                     return value::encode_undefined();
                 }
-                let source = read_shadow_arg(&mut caller, args_base, 0);
+                let mut ctx = WasmExecContext::new(&mut caller);
+                let source = ctx.read_shadow_arg(args_base, 0);
                 let map_fn = if args_count >= 2 {
-                    read_shadow_arg(&mut caller, args_base, 1)
+                    ctx.read_shadow_arg(args_base, 1)
                 } else {
                     value::encode_undefined()
                 };
-                crate::host_imports::array_from_impl_async(&mut caller, source, map_fn).await
+                wjsm_builtins::array_object::array_from_impl(&mut ctx, source, map_fn).await
             })
         },
     )?;
@@ -1006,7 +1009,8 @@ pub(super) fn register_complex_bridges(
         "object.from_entries",
         |mut caller: Caller<'_, RuntimeState>, (iterable,): (i64,)| {
             Box::new(async move {
-                crate::host_imports::object_from_entries_impl_async(&mut caller, iterable).await
+                let mut ctx = WasmExecContext::new(&mut caller);
+                wjsm_builtins::object_builtins::object_from_entries_impl(&mut ctx, iterable).await
             })
         },
     )?;

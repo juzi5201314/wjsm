@@ -1,125 +1,40 @@
 //! Async overrides for `define_object_builtins` reentrant host imports.
-
 use anyhow::Result;
-use wasmtime::{Caller, Linker};
-
-use super::proxy_reflect::{
-    object_assign_impl_async, object_entries_async, object_enumerable_own_keys_async,
-    object_get_own_property_names_async, object_get_own_property_symbols_async,
-    object_values_async,
-};
+use wasmtime::{Caller, Linker, Store};
+use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
 pub(crate) fn define_object_builtins_async(
     linker: &mut Linker<RuntimeState>,
     _store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    linker.func_wrap_async(
-        "env",
-        "obj_get_proto_of",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move {
-                if !value::is_js_object(obj) && !value::is_regexp(obj) {
-                    return value::encode_null();
-                }
-                proxy_or_target_get_prototype_of_impl_async(&mut caller, obj).await
-            })
-        },
-    )?;
-
-    linker.func_wrap_async(
-        "env",
-        "object.is_extensible",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move {
-                if !value::is_js_object(obj) {
-                    return value::encode_bool(false);
-                }
-                value::encode_bool(proxy_or_target_is_extensible_impl_async(&mut caller, obj).await)
-            })
-        },
-    )?;
-
-    linker.func_wrap_async(
-        "env",
-        "object.prevent_extensions",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move {
-                if !value::is_js_object(obj) {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Object.preventExtensions called on non-object".to_string(),
-                    );
-                    return obj;
-                }
-                let result = proxy_or_target_prevent_extensions_impl_async(&mut caller, obj).await;
-                let has_error = caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_some();
-                if !result && value::is_proxy(obj) && !has_error {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Object.preventExtensions proxy trap returned falsy".to_string(),
-                    );
-                }
-                obj
-            })
-        },
-    )?;
-
-    linker.func_wrap_async(
-        "env",
-        "obj_keys",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move { object_enumerable_own_keys_async(&mut caller, obj).await })
-        },
-    )?;
-
-    linker.func_wrap_async(
-        "env",
-        "obj_entries",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move { object_entries_async(&mut caller, obj).await })
-        },
-    )?;
-
-    linker.func_wrap_async(
-        "env",
-        "obj_values",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move { object_values_async(&mut caller, obj).await })
-        },
-    )?;
-
-    linker.func_wrap_async(
-        "env",
-        "obj_get_own_prop_names",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move { object_get_own_property_names_async(&mut caller, obj).await })
-        },
-    )?;
-
-    linker.func_wrap_async(
-        "env",
-        "obj_get_own_prop_symbols",
-        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-            Box::new(async move { object_get_own_property_symbols_async(&mut caller, obj).await })
-        },
-    )?;
-
+    macro_rules! wrap1 {
+        ($name:expr, $path:path) => {
+            linker.func_wrap_async("env", $name, |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
+                Box::new(async move {
+                    let mut ctx = WasmExecContext::new(&mut caller);
+                    $path(&mut ctx, obj).await
+                })
+            })?;
+        };
+    }
+    wrap1!("obj_get_proto_of", wjsm_builtins::object_builtins_async::obj_get_proto_of);
+    wrap1!("object.is_extensible", wjsm_builtins::object_builtins_async::object_is_extensible);
+    wrap1!("object.prevent_extensions", wjsm_builtins::object_builtins_async::object_prevent_extensions);
+    wrap1!("obj_keys", wjsm_builtins::object_builtins_async::obj_keys);
+    wrap1!("obj_entries", wjsm_builtins::object_builtins_async::obj_entries);
+    wrap1!("obj_values", wjsm_builtins::object_builtins_async::obj_values);
+    wrap1!("obj_get_own_prop_names", wjsm_builtins::object_builtins_async::obj_get_own_prop_names);
+    wrap1!("obj_get_own_prop_symbols", wjsm_builtins::object_builtins_async::obj_get_own_prop_symbols);
     linker.func_wrap_async(
         "env",
         "obj_assign",
-        |mut caller: Caller<'_, RuntimeState>,
-         (_env, target, args_base, args_count): (i64, i64, i32, i32)| {
+        |mut caller: Caller<'_, RuntimeState>, (_env, target, args_base, args_count): (i64, i64, i32, i32)| {
             Box::new(async move {
-                object_assign_impl_async(&mut caller, target, args_base, args_count).await
+                let mut ctx = WasmExecContext::new(&mut caller);
+                wjsm_builtins::object_builtins_async::obj_assign(&mut ctx, target, args_base, args_count).await
             })
         },
     )?;
-
     Ok(())
 }

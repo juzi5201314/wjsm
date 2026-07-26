@@ -6,9 +6,6 @@ use wasmtime::{Caller, FuncType, Linker, Store, Val, ValType};
 
 use crate::*;
 
-use super::proxy_traps::{
-    proxy_trap_handler_trap, proxy_trap_property_key_value, proxy_trap_proxy_entry,
-};
 
 fn type_error_exception_from_caller(
     caller: &mut Caller<'_, RuntimeState>,

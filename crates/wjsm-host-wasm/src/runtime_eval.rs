@@ -1622,7 +1622,10 @@ pub(crate) fn eval_assign(
             let val = eval_assignment_value(caller, assign.op, current, rhs)?;
             if value::is_array(obj) {
                 if key == "length" {
-                    crate::host_imports::array_set_length_impl(caller, obj, val);
+                    {
+                        let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
+                        let _ = wjsm_builtins::array_object::array_set_length(&mut ctx, obj, val);
+                    }
                 } else {
                     let idx = key
                         .parse::<u32>()
@@ -2038,6 +2041,19 @@ pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
         "null".to_string()
     } else if value::is_undefined(val) {
         "undefined".to_string()
+    } else if value::is_bigint(val) {
+        // Array/TypedArray.prototype.join 经 value_to_display_string → 本函数；
+        // BigInt 必须渲染为十进制数字串，不能落到 "[object Object]"。
+        let handle = value::decode_bigint_handle(val) as usize;
+        let table = caller
+            .data()
+            .bigint_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        table
+            .get(handle)
+            .map(|b| format!("{b}"))
+            .unwrap_or_else(|| "0".to_string())
     } else if value::is_symbol(val) {
         render_value(caller, val).unwrap_or_else(|_| "Symbol()".to_string())
     } else {

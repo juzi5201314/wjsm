@@ -597,21 +597,4 @@ pub(crate) fn typedarray_construct(
     obj
 }
 
-pub(crate) fn typedarray_same_value_zero(
-    caller: &mut Caller<'_, RuntimeState>,
-    left: i64,
-    right: i64,
-) -> bool {
-    if value::is_bigint(left) && value::is_bigint(right) {
-        let left_handle = value::decode_bigint_handle(left) as usize;
-        let right_handle = value::decode_bigint_handle(right) as usize;
-        let Ok(table) = caller.data().bigint_table.lock() else {
-            return false;
-        };
-        return match (table.get(left_handle), table.get(right_handle)) {
-            (Some(left), Some(right)) => left == right,
-            _ => false,
-        };
-    }
-    same_value_zero(caller, left, right)
-}
+

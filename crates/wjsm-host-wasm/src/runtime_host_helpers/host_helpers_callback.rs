@@ -164,7 +164,9 @@ fn lookup_callback_wasm_func_with_env<C: AsContextMut<Data = RuntimeState> + Run
     Ok((*func, previous_new_target))
 }
 
-fn dispatch_native_callable_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+pub(crate) fn dispatch_native_callable_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
     ctx: &mut C,
     env: &WasmEnv,
     callable: i64,

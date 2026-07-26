@@ -1,62 +1,42 @@
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
-
+use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
 pub(crate) fn define_misc(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // ECMAScript §7.2.3 IsCallable(argument) → boolean
     let is_callable_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-            value::encode_bool(is_callable_in_runtime(&mut caller, val))
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::misc::is_callable(&mut ctx, val)
         },
     );
     linker.define(&mut store, "env", "is_callable", is_callable_fn)?;
 
-    // ECMAScript [[Construct]] step 12 / Type(argument) is Object（wjsm: is_js_object）
-    let is_js_object_fn = Func::wrap(&mut store, |val: i64| -> i64 {
-        value::encode_bool(value::is_js_object(val) || value::is_regexp(val))
+    let is_js_object_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::misc::is_js_object(&mut ctx, val)
     });
     linker.define(&mut store, "env", "is_js_object", is_js_object_fn)?;
 
-    // ── Import 129: queue_microtask(i64) -> () ──────────────────────────────
     let queue_microtask_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, callback: i64| {
-            let scope = {
-                let mut hooks = caller
-                    .data()
-                    .async_hooks
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                hooks.capture_for_scheduled_callback(0, true)
-            };
-            let mut queue = caller
-                .data()
-                .microtask_queue
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            queue.push_back(Microtask::MicrotaskCallback { callback, scope });
+        |mut caller: Caller<'_, RuntimeState>, callback: i64| {
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::misc::queue_microtask(&mut ctx, callback);
         },
     );
     linker.define(&mut store, "env", "queue_microtask", queue_microtask_fn)?;
 
-    // ── Import 146: register_module_namespace(i64, i64) -> () ──────────────
-    // 静态 dynamic import 快路径也写入 registry，避免旧 ModuleId cache 成为第二 owner。
     let register_module_namespace_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, module_id: i64, namespace_obj: i64| {
-            let mid = module_id as u32;
-            let mut registry = caller
-                .data()
-                .module_registry
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            registry.register_static_namespace(mid, namespace_obj);
+        |mut caller: Caller<'_, RuntimeState>, module_id: i64, namespace_obj: i64| {
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::misc::register_module_namespace(&mut ctx, module_id, namespace_obj);
         },
     );
     linker.define(
@@ -66,54 +46,11 @@ pub(crate) fn define_misc(
         register_module_namespace_fn,
     )?;
 
-    // ── Import 147: dynamic_import(i64) -> i64 ────────────────────────────
-    // 动态导入：查找命名空间对象并返回 resolved Promise
     let dynamic_import_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, module_id: i64| -> i64 {
-            let mid = module_id as u32;
-
-            // 创建 Promise 并添加 .then/.catch/.finally 方法
-            let promise = alloc_promise(&mut caller, PromiseEntry::pending());
-            let then_fn = create_promise_resolving_function(
-                caller.data(),
-                promise,
-                Arc::new(Mutex::new(false)),
-                PromiseResolvingKind::Fulfill,
-            );
-            let catch_fn = create_promise_resolving_function(
-                caller.data(),
-                promise,
-                Arc::new(Mutex::new(false)),
-                PromiseResolvingKind::Reject,
-            );
-            let _ = define_host_data_property_from_caller(&mut caller, promise, "then", then_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, promise, "catch", catch_fn);
-
-            // 从 registry 查找命名空间对象；未迁移的静态目标通过过渡 key 进入同一 owner。
-            let namespace_obj = {
-                let registry = caller
-                    .data()
-                    .module_registry
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                registry.get_namespace_by_module_id(mid)
-            };
-
-            match namespace_obj {
-                Some(ns_obj) => {
-                    // 直接 resolve Promise（AOT 模式下命名空间对象已构建完成）
-                    resolve_promise_from_caller(&mut caller, promise, ns_obj);
-                }
-                None => {
-                    // 模块未找到：reject Promise
-                    let error_msg = format!("Cannot find module with id {}", mid);
-                    let error_val = runtime_error_value(caller.data(), error_msg);
-                    settle_promise(caller.data(), promise, PromiseSettlement::Reject(error_val));
-                }
-            }
-
-            promise
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::misc::dynamic_import(&mut ctx, module_id)
         },
     );
     linker.define(&mut store, "env", "dynamic_import", dynamic_import_fn)?;
@@ -121,14 +58,8 @@ pub(crate) fn define_misc(
     let jsx_create_element_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, tag: i64, props: i64, children: i64| -> i64 {
-            let obj = {
-                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 4)
-            };
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "type", tag);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "props", props);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "children", children);
-            obj
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::misc::jsx_create_element(&mut ctx, tag, props, children)
         },
     );
     linker.define(

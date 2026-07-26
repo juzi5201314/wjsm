@@ -24,10 +24,9 @@ pub(crate) use modules::{
 pub(crate) use promise::define_promise;
 pub(crate) use promise_combinators::define_promise_combinators;
 pub(crate) use proxy_reflect::define_proxy_reflect;
-pub(crate) use proxy_reflect::{
-    extract_array_like_elements, object_entries_async, object_enumerable_own_keys_async,
-    object_get_own_property_names_async, object_values_async, reflect_apply_impl_async,
-};
+pub(crate) use proxy_reflect::reflect_get_own_property_descriptor_impl;
+// 以下 async 函数已迁移到 wjsm_builtins::proxy_reflect_async，
+// 通过 exec_context_impl 委托调用。
 pub(crate) use proxy_reflect_async::define_proxy_reflect_async;
 pub(crate) use reentrant_async::define_array_object_async;
 pub(crate) use reentrant_async::define_misc_async;
@@ -37,12 +36,16 @@ pub(crate) use reentrant_async::define_timers_arrays_async;
 pub(crate) use reentrant_async::define_typedarray_new_methods_async;
 pub(crate) use reentrant_async::string_replace_default_async_body;
 mod object_builtins;
-pub(crate) use object_builtins::define_object_builtins;
+pub(crate) use object_builtins::{
+    define_object_builtins, proto_handle_from_value, read_property_by_string_key_impl,
+};
 mod object_builtins_async;
 pub(crate) use object_builtins_async::define_object_builtins_async;
 mod core_async;
 mod get_method;
-pub(crate) use core_async::define_core_async;
+pub(crate) use core_async::{
+    define_core_async, materialize_async_from_sync_next, resolve_async_from_sync_afs_handle,
+};
 pub(crate) use get_method::{
     get_by_name_id_sync, get_method_by_name_id, read_object_property_by_name_id_proto_walk,
 };
@@ -68,20 +71,19 @@ mod streams_transform;
 mod streams_writable;
 mod string_methods;
 mod timers_arrays;
-mod typedarray_new_methods;
+pub(crate) mod typedarray_new_methods;
 mod weakref_finalization;
 
-pub(crate) use array_object::array_from_impl_async;
-pub(crate) use array_object::array_set_length_impl;
-pub(crate) use array_object::define_array_object;
-pub(crate) use array_object::object_from_entries_impl_async;
-pub(crate) use array_object::object_get_own_property_descriptors_impl;
+pub(crate) use array_object::{
+    define_array_object, object_define_property_or_throw,
+    object_get_own_property_descriptors_impl,
+};
 pub(crate) use atomics::define_atomics;
 pub(crate) use collections_buffers::define_collections_buffers;
 
 pub(crate) use core::{
-    define_core, iterator_from_impl_async, iterator_value_impl, string_iter_advance_unit_pos,
-    string_iter_current_value,
+    define_core, iterator_from_impl_async, iterator_value_impl, op_in_impl,
+    string_iter_advance_unit_pos, string_iter_current_value,
 };
 pub(crate) use gc::{allocate_v2_array_handle, define_v2};
 

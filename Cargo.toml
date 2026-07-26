@@ -21,6 +21,7 @@ members = [
     "crates/wjsm-snapshot-format",
     "crates/wjsm-host",
     "crates/wjsm-host-wasm",
+    "crates/wjsm-builtins",
     "crates/wjsm-gc",
     "crates/wjsm-dyncode",
 ]

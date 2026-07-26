@@ -1,108 +1,42 @@
+//! Proxy trap 基础解析（薄包装层）。
+//!
+//! 算法在 `wjsm_builtins::proxy_traps`；本文件仅保留 `pub(crate)` 薄包装
+//! 供未迁移的 host_imports 文件（core.rs / reentrant_proxy_async.rs）调用。
+
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Linker};
 
+use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
-/// 是否为已撤销的代理。供返回 bool/Result（无法回传 TAG_EXCEPTION）的内部方法在其
-/// Reflect 入口处提前判定，从而返回可捕获的 TypeError。
-pub(crate) fn proxy_is_revoked(caller: &mut Caller<'_, RuntimeState>, value: i64) -> bool {
-    if !value::is_proxy(value) {
-        return false;
-    }
-    let handle = value::decode_proxy_handle(value) as usize;
-    caller
-        .data()
-        .proxy_table
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(handle)
-        .map(|entry| entry.revoked)
-        .unwrap_or(false)
-}
-
-/// 解析 proxy 的 (target, handler)。撤销代理或非代理 → 返回 `Err(TAG_EXCEPTION)`，
-/// 调用方（返回 i64 的 get/delete 等）应直接返回该异常值，从而经语义层 IsException
-/// 分叉被 try/catch 同步捕获。返回 void 的 set 路径无法回传异常值，由其自行降级处理。
+/// 解析 proxy 的 (target, handler)（薄包装）。
 pub(crate) fn proxy_trap_proxy_entry(
     caller: &mut Caller<'_, RuntimeState>,
     proxy: i64,
     op: &str,
 ) -> Result<(i64, i64), i64> {
-    if !value::is_proxy(proxy) {
-        let exc = make_type_error_exception(
-            caller,
-            &format!("TypeError: Proxy internal method {op} called on non-proxy"),
-        );
-        return Err(exc);
-    }
-    let handle = value::decode_proxy_handle(proxy) as usize;
-    let entry = {
-        let table = caller
-            .data()
-            .proxy_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        table.get(handle).cloned()
-    };
-    let entry = match entry {
-        Some(entry) => entry,
-        None => {
-            let exc = make_type_error_exception(
-                caller,
-                &format!("TypeError: Proxy internal method {op} called on non-proxy"),
-            );
-            return Err(exc);
-        }
-    };
-    if entry.revoked {
-        let exc = make_type_error_exception(
-            caller,
-            &format!("TypeError: Cannot perform '{op}' on a proxy that has been revoked"),
-        );
-        return Err(exc);
-    }
-    Ok((entry.target, entry.handler))
+    let mut ctx = WasmExecContext::new(caller);
+    wjsm_builtins::proxy_traps::proxy_trap_proxy_entry(&mut ctx, proxy, op)
 }
 
+/// 从 handler 读取 trap 方法（薄包装）。
 pub(crate) fn proxy_trap_handler_trap(
     caller: &mut Caller<'_, RuntimeState>,
     handler: i64,
     trap_name: &str,
 ) -> Option<i64> {
-    let trap = read_host_data_property_v2(caller, handler, trap_name)
-        .unwrap_or_else(value::encode_undefined);
-    if value::is_undefined(trap) || value::is_null(trap) {
-        None
-    } else if value::is_callable(trap) {
-        Some(trap)
-    } else {
-        set_runtime_error(
-            caller.data(),
-            format!("TypeError: Proxy handler trap '{trap_name}' is not callable"),
-        );
-        None
-    }
+    let mut ctx = WasmExecContext::new(caller);
+    wjsm_builtins::proxy_traps::proxy_trap_handler_trap(&mut ctx, handler, trap_name)
 }
 
+/// 将 name_id 转为属性键值（薄包装）。
 pub(crate) fn proxy_trap_property_key_value(
     caller: &mut Caller<'_, RuntimeState>,
     name_id: i32,
 ) -> i64 {
-    // Symbol 与 MemoryString 直接可用的 prop 值。
-    if let Some(symbol_key) = name_id_to_property_key_value(name_id as u32) {
-        return symbol_key;
-    }
-    // RuntimeString 必须从 runtime_property_keys 表查真实字符串，
-    // 不能复用 runtime_strings 表（两表 index 空间互不相干）。
-    if let Some(string) =
-        crate::runtime_host_helpers::name_id_to_runtime_property_string(caller, name_id as u32)
-    {
-        return crate::runtime_render::store_runtime_string(caller, string);
-    }
-    // MemoryString fallback：read main memory c-string。
-    let name = read_string(caller, name_id as u32).unwrap_or_default();
-    crate::runtime_render::store_runtime_string(caller, name)
+    let mut ctx = WasmExecContext::new(caller);
+    wjsm_builtins::proxy_traps::proxy_trap_property_key_value(&mut ctx, name_id)
 }
 
 pub(crate) fn define_proxy_traps(

@@ -1128,89 +1128,18 @@ where
     value::encode_runtime_string_handle(handle)
 }
 
+// 纯数字格式化已迁至 wjsm-builtins；此处再导出保持 `runtime_render::*` 调用路径。
+pub(crate) use wjsm_builtins::{
+    format_number_js, format_number_to_exponential_js, format_number_to_fixed_js,
+    format_number_to_precision_js,
+};
+
 fn normalize_negative_zero(x: f64) -> f64 {
     if x == 0.0 && x.is_sign_negative() {
         0.0
     } else {
         x
     }
-}
-pub(crate) fn format_number_js(x: f64) -> String {
-    if x == 0.0 {
-        return "0".to_string();
-    }
-    let abs = x.abs();
-    if abs >= 1e21 || (abs < 1e-6 && abs > 0.0) {
-        let s = format!("{:e}", x);
-        return normalize_exponent(&s);
-    }
-    let s = format!("{}", x);
-    s
-}
-
-pub(crate) fn format_number_to_fixed_js(x: f64, digits: i32) -> String {
-    if x.is_nan() {
-        return "NaN".to_string();
-    }
-    if x.is_infinite() {
-        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    // ECMA-262 §21.1.3.3 step 8: x ≥ 10^21 → ToString(x)
-    if x.abs() >= 1e21 {
-        return format_number_js(x);
-    }
-    let x = normalize_negative_zero(x);
-    format!("{:.1$}", x, digits as usize)
-}
-
-pub(crate) fn format_number_to_exponential_js(x: f64, digits: Option<i32>) -> String {
-    if x.is_nan() {
-        return "NaN".to_string();
-    }
-    if x.is_infinite() {
-        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    let x = normalize_negative_zero(x);
-    if x == 0.0 {
-        if let Some(digits) = digits
-            && digits > 0
-        {
-            return format!("0.{}e+0", "0".repeat(digits as usize));
-        }
-        return "0e+0".to_string();
-    }
-    let s = if let Some(digits) = digits {
-        format!("{:.1$e}", x, digits as usize)
-    } else {
-        format!("{:e}", x)
-    };
-    normalize_exponent(&s)
-}
-
-pub(crate) fn format_number_to_precision_js(x: f64, precision: Option<i32>) -> String {
-    if x.is_nan() {
-        return "NaN".to_string();
-    }
-    if x.is_infinite() {
-        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    let x = normalize_negative_zero(x);
-    let Some(precision) = precision else {
-        return format_number_js(x);
-    };
-    if x == 0.0 {
-        if precision == 1 {
-            return "0".to_string();
-        }
-        return format!("0.{}", "0".repeat((precision - 1) as usize));
-    }
-    let exponent = x.abs().log10().floor() as i32;
-    if exponent >= precision || exponent < -6 {
-        let s = format!("{:.1$e}", x, (precision - 1) as usize);
-        return normalize_exponent(&s);
-    }
-    let fraction_digits = (precision - exponent - 1).max(0) as usize;
-    format!("{:.1$}", x, fraction_digits)
 }
 
 pub(crate) fn format_radix(mut value: i64, radix: u32) -> String {
@@ -1270,32 +1199,6 @@ pub(crate) fn format_f64_radix_to_string(x: f64, radix: i32) -> String {
         format!("-{int_str}")
     } else {
         int_str
-    }
-}
-
-pub(crate) fn normalize_exponent(s: &str) -> String {
-    if let Some(pos) = s.find('e') {
-        let mantissa = &s[..pos];
-        let exp_part = &s[pos + 1..];
-        let exp_val: i32 = exp_part.parse().unwrap_or(0);
-        format!(
-            "{}e{}{}",
-            mantissa,
-            if exp_val >= 0 { "+" } else { "" },
-            exp_val
-        )
-    } else if let Some(pos) = s.find('E') {
-        let mantissa = &s[..pos];
-        let exp_part = &s[pos + 1..];
-        let exp_val: i32 = exp_part.parse().unwrap_or(0);
-        format!(
-            "{}e{}{}",
-            mantissa,
-            if exp_val >= 0 { "+" } else { "" },
-            exp_val
-        )
-    } else {
-        s.to_string()
     }
 }
 

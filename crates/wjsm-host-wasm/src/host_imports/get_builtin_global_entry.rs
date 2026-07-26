@@ -1,105 +1,13 @@
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
-
+use crate::exec_context_impl::WasmExecContext;
 use crate::*;
-
-pub(crate) fn define_get_builtin_global(
-    linker: &mut Linker<RuntimeState>,
-    mut store: &mut Store<RuntimeState>,
-) -> Result<()> {
-    // get_builtin_global
-    {
-        let get_builtin_global_fn = Func::wrap(
-            &mut store,
-            |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
-                let name = read_runtime_string_utf8_lossy(&mut caller, name_val);
-                let mut native_callables = caller
-                    .data()
-                    .native_callables
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let idx = native_callables.len() as u32;
-                match name.as_str() {
-                    "Array" => native_callables.push(NativeCallable::ArrayConstructor),
-                    "Object" => native_callables.push(NativeCallable::ObjectConstructor),
-                    "Function" => native_callables.push(NativeCallable::FunctionConstructor),
-                    "String" => native_callables.push(NativeCallable::StringConstructor),
-                    "Boolean" => native_callables.push(NativeCallable::BooleanConstructor),
-                    "Number" => native_callables.push(NativeCallable::NumberConstructor),
-                    "Symbol" => native_callables.push(NativeCallable::SymbolConstructor),
-                    "BigInt" => native_callables.push(NativeCallable::BigIntConstructor),
-                    "RegExp" => native_callables.push(NativeCallable::RegExpConstructor),
-                    "Error" => native_callables.push(NativeCallable::ErrorConstructor),
-                    "TypeError" => native_callables.push(NativeCallable::TypeErrorConstructor),
-                    "RangeError" => native_callables.push(NativeCallable::RangeErrorConstructor),
-                    "SyntaxError" => native_callables.push(NativeCallable::SyntaxErrorConstructor),
-                    "ReferenceError" => {
-                        native_callables.push(NativeCallable::ReferenceErrorConstructor)
-                    }
-                    "URIError" => native_callables.push(NativeCallable::URIErrorConstructor),
-                    "EvalError" => native_callables.push(NativeCallable::EvalErrorConstructor),
-                    "AggregateError" => {
-                        native_callables.push(NativeCallable::AggregateErrorConstructor)
-                    }
-                    "Map" => native_callables.push(NativeCallable::MapConstructor),
-                    "Set" => native_callables.push(NativeCallable::SetConstructor),
-                    "WeakMap" => native_callables.push(NativeCallable::WeakMapConstructor),
-                    "WeakSet" => native_callables.push(NativeCallable::WeakSetConstructor),
-                    "WeakRef" => native_callables.push(NativeCallable::WeakRefConstructor),
-                    "FinalizationRegistry" => {
-                        native_callables.push(NativeCallable::FinalizationRegistryConstructor)
-                    }
-                    "Date" => native_callables.push(NativeCallable::DateConstructorGlobal),
-                    "Promise" => native_callables.push(NativeCallable::PromiseConstructor),
-                    "Headers" => native_callables.push(NativeCallable::HeadersConstructor),
-                    "Request" => native_callables.push(NativeCallable::RequestConstructor),
-                    "Response" => native_callables.push(NativeCallable::ResponseConstructor),
-                    "ReadableStream" => {
-                        native_callables.push(NativeCallable::ReadableStreamConstructor)
-                    }
-                    "WritableStream" => {
-                        native_callables.push(NativeCallable::WritableStreamConstructor)
-                    }
-                    "TransformStream" => {
-                        native_callables.push(NativeCallable::TransformStreamConstructor)
-                    }
-                    "CountQueuingStrategy" => {
-                        native_callables.push(NativeCallable::CountQueuingStrategyConstructor)
-                    }
-                    "ByteLengthQueuingStrategy" => {
-                        native_callables.push(NativeCallable::ByteLengthQueuingStrategyConstructor)
-                    }
-                    "ArrayBuffer" => {
-                        native_callables.push(NativeCallable::ArrayBufferConstructorGlobal)
-                    }
-                    "SharedArrayBuffer" => {
-                        native_callables.push(NativeCallable::SharedArrayBufferConstructor)
-                    }
-                    "Atomics" => native_callables.push(NativeCallable::AtomicsGlobal),
-                    "DataView" => native_callables.push(NativeCallable::DataViewConstructorGlobal),
-                    "Proxy" => native_callables.push(NativeCallable::ProxyConstructor),
-                    "gc" => native_callables.push(NativeCallable::GcCollect),
-                    _ => return value::encode_undefined(),
-                }
-                drop(native_callables);
-                let val = value::encode_native_callable_idx(idx);
-                if name == "Symbol" {
-                    crate::symbol_well_known::install_well_known_symbols_on_symbol_constructor(
-                        &mut caller,
-                        val,
-                    );
-                }
-                val
-            },
-        );
-        linker.define(
-            &mut store,
-            "env",
-            "get_builtin_global",
-            get_builtin_global_fn,
-        )?;
-    }
-
+pub(crate) fn define_get_builtin_global(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::get_builtin_global::get_builtin_global(&mut ctx, name_val)
+    });
+    linker.define(&mut store, "env", "get_builtin_global", f)?;
     Ok(())
 }

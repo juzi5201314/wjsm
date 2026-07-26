@@ -1,7 +1,13 @@
+//! TypedArray 低层读写 + 薄 host 注册。
+//!
+//! 算法在 `wjsm_builtins::typedarray_methods`；本文件保留 ta_resolve/ta_read/ta_write
+//! 等后端堆布局原语（供 ExecContext 与其他 host 模块使用）。
+
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
+use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
 /// 解析 TypedArray 的 this_val，返回 (buffer_handle, byte_offset, length, element_size, element_kind, is_shared)
@@ -27,8 +33,7 @@ pub(crate) fn ta_resolve(
     ))
 }
 
-/// 读取 TypedArray 第 index 个元素，返回 NaN-boxed f64 值。
-/// 根据 element_kind 区分整数/无符号/浮点读写。
+/// 读取 TypedArray 第 index 个元素。
 pub(crate) fn ta_read(
     caller: &mut Caller<'_, RuntimeState>,
     buf_handle: usize,
@@ -113,7 +118,7 @@ pub(crate) fn ta_read(
     Some(value::encode_f64(val))
 }
 
-/// 写入 TypedArray 第 index 个元素，根据 element_kind 采用对应的整数/浮点编码。
+/// 写入 TypedArray 第 index 个元素。
 pub(crate) fn ta_write(
     caller: &mut Caller<'_, RuntimeState>,
     buf_handle: usize,
@@ -134,7 +139,7 @@ pub(crate) fn ta_write(
     Some(())
 }
 
-/// 从 SharedArrayBuffer 读取 TypedArray 第 index 个元素
+/// 从 SharedArrayBuffer 读取。
 pub(crate) fn sab_read(
     caller: &mut Caller<'_, RuntimeState>,
     buf_handle: usize,
@@ -212,7 +217,7 @@ pub(crate) fn sab_read(
     Some(value::encode_f64(val))
 }
 
-/// 写入 SharedArrayBuffer TypedArray 第 index 个元素
+/// 写入 SharedArrayBuffer TypedArray。
 pub(crate) fn sab_write(
     caller: &mut Caller<'_, RuntimeState>,
     buf_handle: usize,
@@ -239,8 +244,7 @@ pub(crate) fn define_typedarray_new_methods(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // ── typedarray_proto_fill (Type 17, 4-arg: this, value, start, end) ──
-    let typedarray_proto_fill_fn = Func::wrap(
+    let fill = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          this_val: i64,
@@ -248,635 +252,122 @@ pub(crate) fn define_typedarray_new_methods(
          start_raw: i64,
          end_raw: i64|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return this_val,
-                };
-            let start = if value::is_undefined(start_raw) {
-                0u32
-            } else {
-                let f = value::decode_f64(start_raw);
-                if f < 0.0 {
-                    (length as i32 + (f as i32)).max(0) as u32
-                } else {
-                    (f as u32).min(length)
-                }
-            };
-            let end = if value::is_undefined(end_raw) {
-                length
-            } else {
-                let f = value::decode_f64(end_raw);
-                if f < 0.0 {
-                    (length as i32 + (f as i32)).max(0) as u32
-                } else {
-                    (f as u32).min(length)
-                }
-            };
-            for i in start..end {
-                if is_shared {
-                    sab_write(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                        value,
-                    )
-                } else {
-                    ta_write(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                        value,
-                    )
-                };
-            }
-            this_val
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_fill(
+                &mut ctx, this_val, value, start_raw, end_raw,
+            )
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "typedarray_proto_fill",
-        typedarray_proto_fill_fn,
-    )?;
+    linker.define(&mut store, "env", "typedarray_proto_fill", fill)?;
 
-    // ── typedarray_proto_reverse (Type 3, 1-arg: this) ──
-    let typedarray_proto_reverse_fn = Func::wrap(
+    let reverse = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return this_val,
-                };
-            for i in 0..length / 2 {
-                let a = if is_shared {
-                    sab_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                } else {
-                    ta_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                }
-                .unwrap_or(value::encode_undefined());
-                let b = if is_shared {
-                    sab_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        length - 1 - i,
-                    )
-                } else {
-                    ta_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        length - 1 - i,
-                    )
-                }
-                .unwrap_or(value::encode_undefined());
-                if is_shared {
-                    sab_write(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                        b,
-                    )
-                } else {
-                    ta_write(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                        b,
-                    )
-                };
-                if is_shared {
-                    sab_write(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        length - 1 - i,
-                        a,
-                    )
-                } else {
-                    ta_write(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        length - 1 - i,
-                        a,
-                    )
-                };
-            }
-            this_val
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_reverse(&mut ctx, this_val)
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "typedarray_proto_reverse",
-        typedarray_proto_reverse_fn,
-    )?;
+    linker.define(&mut store, "env", "typedarray_proto_reverse", reverse)?;
 
-    // ── typedarray_proto_index_of (Type 16, 3-arg: this, searchElement, fromIndex) ──
-    let typedarray_proto_index_of_fn = Func::wrap(
+    let index_of = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          this_val: i64,
-         search_element: i64,
+         search: i64,
          from_index: i64|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return value::encode_f64(-1.0),
-                };
-            let from_idx = if value::is_undefined(from_index) {
-                0i32
-            } else {
-                let f = value::decode_f64(from_index);
-                if f < 0.0 {
-                    (length as i32 + f as i32).max(0)
-                } else {
-                    (f as i32).min(length as i32)
-                }
-            };
-            for i in from_idx as u32..length {
-                let elem = if is_shared {
-                    sab_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                } else {
-                    ta_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                }
-                .unwrap_or(value::encode_undefined());
-                if typedarray_same_value_zero(&mut caller, elem, search_element) {
-                    return value::encode_f64(i as f64);
-                }
-            }
-            value::encode_f64(-1.0)
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_index_of(
+                &mut ctx, this_val, search, from_index,
+            )
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "typedarray_proto_index_of",
-        typedarray_proto_index_of_fn,
-    )?;
+    linker.define(&mut store, "env", "typedarray_proto_index_of", index_of)?;
 
-    // ── typedarray_proto_last_index_of (Type 16, 3-arg: this, searchElement, fromIndex) ──
-    let typedarray_proto_last_index_of_fn = Func::wrap(
+    let last_index_of = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          this_val: i64,
-         search_element: i64,
+         search: i64,
          from_index: i64|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return value::encode_f64(-1.0),
-                };
-            let from_idx = if value::is_undefined(from_index) {
-                (length as i32) - 1
-            } else {
-                let f = value::decode_f64(from_index);
-                if f < 0.0 {
-                    (length as i32 + f as i32).max(-1)
-                } else {
-                    (f as i32).min(length as i32 - 1)
-                }
-            };
-            let end = if from_idx < 0 { 0 } else { from_idx as u32 + 1 };
-            for i in (0..end).rev() {
-                let elem = if is_shared {
-                    sab_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                } else {
-                    ta_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                }
-                .unwrap_or(value::encode_undefined());
-                if typedarray_same_value_zero(&mut caller, elem, search_element) {
-                    return value::encode_f64(i as f64);
-                }
-            }
-            value::encode_f64(-1.0)
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_last_index_of(
+                &mut ctx, this_val, search, from_index,
+            )
         },
     );
     linker.define(
         &mut store,
         "env",
         "typedarray_proto_last_index_of",
-        typedarray_proto_last_index_of_fn,
+        last_index_of,
     )?;
 
-    // ── typedarray_proto_includes (Type 16, 3-arg: this, searchElement, fromIndex) ──
-    let typedarray_proto_includes_fn = Func::wrap(
+    let includes = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          this_val: i64,
-         search_element: i64,
+         search: i64,
          from_index: i64|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return value::encode_bool(false),
-                };
-            let from_idx = if value::is_undefined(from_index) {
-                0i32
-            } else {
-                let f = value::decode_f64(from_index);
-                if f < 0.0 {
-                    length as i32 + (f as i32).max(0)
-                } else {
-                    (f as i32).min(length as i32)
-                }
-            };
-            for i in from_idx as u32..length {
-                let elem = if is_shared {
-                    sab_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                } else {
-                    ta_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                }
-                .unwrap_or(value::encode_undefined());
-                if typedarray_same_value_zero(&mut caller, elem, search_element) {
-                    return value::encode_bool(true);
-                }
-            }
-            value::encode_bool(false)
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_includes(
+                &mut ctx, this_val, search, from_index,
+            )
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "typedarray_proto_includes",
-        typedarray_proto_includes_fn,
-    )?;
+    linker.define(&mut store, "env", "typedarray_proto_includes", includes)?;
 
-    // ── typedarray_proto_join (Type 2, 2-arg: this, separator) ──
-    let typedarray_proto_join_fn = Func::wrap(
+    let join = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, separator: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return store_runtime_string(&caller, String::new()),
-                };
-            let sep = if value::is_undefined(separator) || value::is_null(separator) {
-                ",".to_string()
-            } else {
-                get_string_utf8_lossy(&mut caller, separator)
-            };
-            let mut parts = Vec::new();
-            for i in 0..length {
-                let elem = if is_shared {
-                    sab_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                } else {
-                    ta_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                }
-                .unwrap_or(value::encode_undefined());
-                parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
-            }
-            store_runtime_string(&caller, parts.join(&sep))
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, sep: i64| -> i64 {
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_join(&mut ctx, this_val, sep)
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "typedarray_proto_join",
-        typedarray_proto_join_fn,
-    )?;
+    linker.define(&mut store, "env", "typedarray_proto_join", join)?;
 
-    // ── typedarray_proto_to_string (Type 3, 1-arg: this) ──
-    let typedarray_proto_to_string_fn = Func::wrap(
+    let to_string = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return store_runtime_string(&caller, String::new()),
-                };
-            let mut parts = Vec::new();
-            for i in 0..length {
-                let elem = if is_shared {
-                    sab_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                } else {
-                    ta_read(
-                        &mut caller,
-                        buf_handle,
-                        byte_offset,
-                        elem_size,
-                        element_kind,
-                        i,
-                    )
-                }
-                .unwrap_or(value::encode_undefined());
-                parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
-            }
-            store_runtime_string(&caller, parts.join(","))
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_to_string(&mut ctx, this_val)
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "typedarray_proto_to_string",
-        typedarray_proto_to_string_fn,
-    )?;
+    linker.define(&mut store, "env", "typedarray_proto_to_string", to_string)?;
 
-    // ── typedarray_proto_copy_within (Type 16, 3-arg: this, target, start, end via shadow stack) ──
-    // Note: backend passes 3 WASM args (this, target, start) but end comes via shadow stack
-    let typedarray_proto_copy_within_fn = Func::wrap(
+    let copy_within = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          this_val: i64,
-         target_val: i64,
-         start_val: i64,
-         end_val: i64|
+         target: i64,
+         start: i64,
+         end: i64|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return this_val,
-                };
-            let target = if value::is_undefined(target_val) {
-                0
-            } else {
-                let f = value::decode_f64(target_val);
-                if f < 0.0 {
-                    (length as i32 + (f as i32)).max(0) as u32
-                } else {
-                    (f as u32).min(length)
-                }
-            };
-            let start = if value::is_undefined(start_val) {
-                0
-            } else {
-                let f = value::decode_f64(start_val);
-                if f < 0.0 {
-                    (length as i32 + (f as i32)).max(0) as u32
-                } else {
-                    (f as u32).min(length)
-                }
-            };
-            let end = if value::is_undefined(end_val) {
-                length
-            } else {
-                let f = value::decode_f64(end_val);
-                if f < 0.0 {
-                    (length as i32 + (f as i32)).max(0) as u32
-                } else {
-                    (f as u32).min(length)
-                }
-            };
-            let count = end.saturating_sub(start);
-            let count = count.min(length.saturating_sub(target));
-            if count == 0 {
-                return this_val;
-            }
-            if target < start {
-                for i in 0..count {
-                    let elem = if is_shared {
-                        sab_read(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            start + i,
-                        )
-                    } else {
-                        ta_read(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            start + i,
-                        )
-                    }
-                    .unwrap_or(value::encode_undefined());
-                    if is_shared {
-                        sab_write(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            target + i,
-                            elem,
-                        )
-                    } else {
-                        ta_write(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            target + i,
-                            elem,
-                        )
-                    };
-                }
-            } else {
-                for i in (0..count).rev() {
-                    let elem = if is_shared {
-                        sab_read(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            start + i,
-                        )
-                    } else {
-                        ta_read(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            start + i,
-                        )
-                    }
-                    .unwrap_or(value::encode_undefined());
-                    if is_shared {
-                        sab_write(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            target + i,
-                            elem,
-                        )
-                    } else {
-                        ta_write(
-                            &mut caller,
-                            buf_handle,
-                            byte_offset,
-                            elem_size,
-                            element_kind,
-                            target + i,
-                            elem,
-                        )
-                    };
-                }
-            }
-            this_val
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_copy_within(
+                &mut ctx, this_val, target, start, end,
+            )
         },
     );
     linker.define(
         &mut store,
         "env",
         "typedarray_proto_copy_within",
-        typedarray_proto_copy_within_fn,
+        copy_within,
     )?;
 
-    // ── typedarray_proto_at (Type 2, 2-arg: this, index) ──
-    let typedarray_proto_at_fn = Func::wrap(
+    let at = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) =
-                match ta_resolve(&mut caller, this_val) {
-                    Some(v) => v,
-                    None => return value::encode_undefined(),
-                };
-            let idx = {
-                let f = value::decode_f64(index);
-                if f.is_nan() {
-                    return value::encode_undefined();
-                }
-                if f < 0.0 {
-                    length as i32 + f as i32
-                } else {
-                    f as i32
-                }
-            };
-            if idx < 0 || idx >= length as i32 {
-                return value::encode_undefined();
-            }
-            if is_shared {
-                sab_read(
-                    &mut caller,
-                    buf_handle,
-                    byte_offset,
-                    elem_size,
-                    element_kind,
-                    idx as u32,
-                )
-            } else {
-                ta_read(
-                    &mut caller,
-                    buf_handle,
-                    byte_offset,
-                    elem_size,
-                    element_kind,
-                    idx as u32,
-                )
-            }
-            .unwrap_or(value::encode_undefined())
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::typedarray_methods::typedarray_proto_at(&mut ctx, this_val, index)
         },
     );
-    linker.define(
-        &mut store,
-        "env",
-        "typedarray_proto_at",
-        typedarray_proto_at_fn,
-    )?;
+    linker.define(&mut store, "env", "typedarray_proto_at", at)?;
 
-    // ── typedarray_proto_entries (Type 3, 1-arg: this) ──
+    // live TypedArray 迭代器（IteratorState::TypedArray*Iter）
     let typedarray_proto_entries_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
@@ -908,7 +399,6 @@ pub(crate) fn define_typedarray_new_methods(
         typedarray_proto_entries_fn,
     )?;
 
-    // ── typedarray_proto_keys (Type 3, 1-arg: this) ──
     let typedarray_proto_keys_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
@@ -938,7 +428,6 @@ pub(crate) fn define_typedarray_new_methods(
         typedarray_proto_keys_fn,
     )?;
 
-    // ── typedarray_proto_values (Type 3, 1-arg: this) ──
     let typedarray_proto_values_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {

@@ -1,253 +1,88 @@
 use anyhow::Result;
-use wasmtime::{Caller, Func, Linker};
-
+use wasmtime::{Caller, Func, Linker, Store};
+use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
 pub(crate) fn define_timers_arrays(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // ── Import 34: closure_create(i64, i64) -> i64 ────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, func_ref: i64, env_obj: i64| -> i64 {
-            let func_idx = if value::is_function(func_ref) {
-                value::decode_function_idx(func_ref)
-            } else if value::is_closure(func_ref) {
-                let idx = value::decode_closure_idx(func_ref) as usize;
-                let closures = caller
-                    .data()
-                    .closures
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                closures.get(idx).map(|e| e.func_idx).unwrap_or(0)
-            } else {
-                0
-            };
-            let mut closures = caller
-                .data()
-                .closures
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let idx = closures.len() as u32;
-            closures.push(ClosureEntry { func_idx, env_obj });
-            value::encode_closure_idx(idx)
-        },
-    );
-    linker.define(&mut store, "env", "closure_create", f)?;
-    // ── Import 35: closure_get_func(i32) -> i32 ─────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i32 {
-            let closures = caller
-                .data()
-                .closures
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            closures
-                .get(closure_idx as usize)
-                .map(|e| e.func_idx as i32)
-                .unwrap_or(-1)
-        },
-    );
-    linker.define(&mut store, "env", "closure_get_func", f)?;
-    // ── Import 36: closure_get_env(i32) -> i64 ─────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i64 {
-            let closures = caller
-                .data()
-                .closures
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            closures
-                .get(closure_idx as usize)
-                .map(|e| e.env_obj)
-                .unwrap_or_else(value::encode_undefined)
-        },
-    );
-    linker.define(&mut store, "env", "closure_get_env", f)?;
-    // ── Array method host functions (imports 37-48) ────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+    macro_rules! wrap {
+        ($name:expr, $arity:tt, $call:expr) => {
             {
-                let mut caller = caller;
-                let handle = value::decode_handle(arr);
-                match crate::push_v2_array_element(&mut caller, handle, val as u64) {
-                    Ok(length) => value::encode_f64(length as f64),
-                    Err(error) => {
-                        set_runtime_error(
-                            caller.data(),
-                            format!("V2 Array.prototype.push: {error}"),
-                        );
-                        value::encode_undefined()
-                    }
-                }
+                let f = Func::wrap(&mut store, $call);
+                linker.define(&mut store, "env", $name, f)?;
             }
-        },
-    );
-    linker.define(&mut store, "env", "arr_push", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            {
-                let mut caller = caller;
-                let handle = value::decode_handle(arr);
-                match crate::push_v2_array_element(
-                    &mut caller,
-                    handle,
-                    value::encode_array_hole() as u64,
-                ) {
-                    Ok(length) => value::encode_f64(length as f64),
-                    Err(error) => {
-                        set_runtime_error(caller.data(), format!("V2 Array hole push: {error}"));
-                        value::encode_undefined()
-                    }
-                }
-            }
-        },
-    );
-    linker.define(&mut store, "env", "arr_push_hole", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            if len == 0 {
-                return value::encode_undefined();
-            }
-            let new_len = len - 1;
-            let val =
-                read_array_elem(&mut caller, ptr, new_len).unwrap_or(value::encode_undefined());
-            write_array_length(&mut caller, ptr, new_len);
-            val
-        },
-    );
-    linker.define(&mut store, "env", "arr_pop", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_bool(false);
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            super::array_object::array_includes_from(
-                &mut caller,
-                ptr,
-                len,
-                val,
-                value::encode_undefined(),
-            )
-        },
-    );
-    linker.define(&mut store, "env", "arr_includes", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, from_val: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_f64(-1.0);
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            super::array_object::array_index_of_from(&mut caller, ptr, len, val, from_val)
-        },
-    );
-    linker.define(&mut store, "env", "arr_index_of", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, sep_val: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let sep_str = render_value(&mut caller, sep_val).unwrap_or_else(|_| ",".to_string());
-            let mut parts = Vec::new();
-            for i in 0..len {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    parts.push(super::array_object::array_join_element_string(
-                        &mut caller,
-                        elem,
-                    ));
-                } else {
-                    parts.push(String::new());
-                }
-            }
-            store_runtime_string(&caller, parts.join(&sep_str))
-        },
-    );
-    linker.define(&mut store, "env", "arr_join", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr1: i64, arr2: i64| -> i64 {
-            super::array_object::array_concat_two(&mut caller, arr1, arr2)
-        },
-    );
-    linker.define(&mut store, "env", "arr_concat", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, start: i64, end: i64| -> i64 {
-            super::array_object::array_slice_range(&mut caller, arr, start, end)
-        },
-    );
-    linker.define(&mut store, "env", "arr_slice", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, start: i64, end: i64| -> i64 {
-            super::array_object::array_fill_range(&mut caller, arr, val, start, end)
-        },
-    );
-    linker.define(&mut store, "env", "arr_fill", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return arr;
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len / 2 {
-                let a = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let b = read_array_elem(&mut caller, ptr, len - 1 - i)
-                    .unwrap_or(value::encode_undefined());
-                write_array_elem(&mut caller, ptr, i, b);
-                write_array_elem(&mut caller, ptr, len - 1 - i, a);
-            }
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "arr_reverse", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, depth: i64| -> i64 {
-            super::array_object::array_flat_with_depth(&mut caller, arr, depth)
-        },
-    );
-    linker.define(&mut store, "env", "arr_flat", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
-            super::array_object::array_set_length_impl(&mut caller, arr, len_val)
-        },
-    );
-    linker.define(&mut store, "env", "arr_init_length", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
-            super::array_object::array_set_length_impl(&mut caller, arr, len_val)
-        },
-    );
-    linker.define(&mut store, "env", "array_set_length", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            value::encode_f64(len as f64)
-        },
-    );
-    linker.define(&mut store, "env", "arr_get_length", f)?;
+        };
+    }
+
+    wrap!("closure_create", 2, |mut caller: Caller<'_, RuntimeState>, func_ref: i64, env_obj: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::closure_create(&mut ctx, func_ref, env_obj)
+    });
+    wrap!("closure_get_func", 1, |mut caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i32 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::closure_get_func(&mut ctx, closure_idx)
+    });
+    wrap!("closure_get_env", 1, |mut caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::closure_get_env(&mut ctx, closure_idx)
+    });
+    wrap!("arr_push", 2, |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_push(&mut ctx, arr, val)
+    });
+    wrap!("arr_push_hole", 1, |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_push_hole(&mut ctx, arr)
+    });
+    wrap!("arr_pop", 1, |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_pop(&mut ctx, arr)
+    });
+    wrap!("arr_includes", 2, |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_includes(&mut ctx, arr, val)
+    });
+    wrap!("arr_index_of", 3, |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, from_val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_index_of(&mut ctx, arr, val, from_val)
+    });
+    wrap!("arr_join", 2, |mut caller: Caller<'_, RuntimeState>, arr: i64, sep_val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_join(&mut ctx, arr, sep_val)
+    });
+    wrap!("arr_concat", 2, |mut caller: Caller<'_, RuntimeState>, arr1: i64, arr2: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_concat(&mut ctx, arr1, arr2)
+    });
+    wrap!("arr_slice", 3, |mut caller: Caller<'_, RuntimeState>, arr: i64, start: i64, end: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_slice(&mut ctx, arr, start, end)
+    });
+    wrap!("arr_fill", 4, |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, start: i64, end: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_fill(&mut ctx, arr, val, start, end)
+    });
+    wrap!("arr_reverse", 1, |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_reverse(&mut ctx, arr)
+    });
+    wrap!("arr_flat", 2, |mut caller: Caller<'_, RuntimeState>, arr: i64, depth: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_flat(&mut ctx, arr, depth)
+    });
+    wrap!("arr_init_length", 2, |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_init_length(&mut ctx, arr, len_val)
+    });
+    wrap!("array_set_length", 2, |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::array_set_length(&mut ctx, arr, len_val)
+    });
+    wrap!("arr_get_length", 1, |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::timers_arrays::arr_get_length(&mut ctx, arr)
+    });
     Ok(())
 }

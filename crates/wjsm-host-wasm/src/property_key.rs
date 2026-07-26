@@ -2,10 +2,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use wasmtime::{AsContext, Caller};
-use wjsm_ir::{constants, value};
+use wjsm_ir::value;
 
 use crate::runtime_string::RuntimeString;
 use crate::{RuntimeState, WasmEnv};
+
+// 纯编码/解码从 wjsm-host 再导出，保持 `property_key::*` / `use property_key::*` 路径。
+pub(crate) use wjsm_host::{
+    DecodedNameId, decode_name_id, encode_runtime_string_name_id, encode_string_name_id,
+    encode_symbol_name_id, is_symbol_name_id, name_id_to_property_key_value,
+    symbol_value_to_name_id,
+};
 
 /// 运行时属性键表：Vec 保序 + HashMap 做 O(1) intern。
 #[derive(Default)]
@@ -39,58 +46,6 @@ impl PropertyKeyTable {
 }
 
 pub(crate) type SharedPropertyKeyTable = Arc<Mutex<PropertyKeyTable>>;
-
-/// 属性槽 `name_id` 的三种存储来源。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DecodedNameId {
-    MemoryString(u32),
-    RuntimeString(u32),
-    Symbol(u32),
-}
-
-#[inline]
-pub(crate) fn encode_string_name_id(string_idx: u32) -> u32 {
-    assert!(string_idx <= constants::NAME_ID_INDEX_MASK);
-    string_idx
-}
-
-#[inline]
-pub(crate) fn encode_runtime_string_name_id(index: u32) -> u32 {
-    assert!(index <= constants::NAME_ID_INDEX_MASK);
-    constants::NAME_ID_RUNTIME_STRING_FLAG | index
-}
-
-#[inline]
-pub(crate) fn encode_symbol_name_id(symbol_idx: u32) -> u32 {
-    assert!(symbol_idx <= constants::NAME_ID_INDEX_MASK);
-    constants::NAME_ID_SYMBOL_FLAG | symbol_idx
-}
-
-#[inline]
-pub(crate) fn is_symbol_name_id(name_id: u32) -> bool {
-    matches!(decode_name_id(name_id), DecodedNameId::Symbol(_))
-}
-
-#[inline]
-pub(crate) fn decode_name_id(name_id: u32) -> DecodedNameId {
-    let index = name_id & constants::NAME_ID_INDEX_MASK;
-    match name_id & constants::NAME_ID_KIND_MASK {
-        constants::NAME_ID_SYMBOL_FLAG => DecodedNameId::Symbol(index),
-        constants::NAME_ID_RUNTIME_STRING_FLAG => DecodedNameId::RuntimeString(index),
-        _ => DecodedNameId::MemoryString(index),
-    }
-}
-
-/// Symbol 与 MemoryString 可直接编码；RuntimeString 返回 None，由 caller 查表并
-/// `store_runtime_string` 后继续。
-#[inline]
-pub(crate) fn name_id_to_property_key_value(name_id: u32) -> Option<i64> {
-    match decode_name_id(name_id) {
-        DecodedNameId::MemoryString(index) => Some(value::encode_string_ptr(index)),
-        DecodedNameId::RuntimeString(_) => None,
-        DecodedNameId::Symbol(index) => Some(value::encode_symbol_handle(index)),
-    }
-}
 
 pub(crate) fn intern_runtime_property_key(state: &RuntimeState, key: RuntimeString) -> u32 {
     let mut keys = state
@@ -189,17 +144,6 @@ pub(crate) fn property_key_value_to_name_id(
         crate::runtime_host_helpers::find_memory_c_string(caller, &prop_name)
     }?;
     Some(encode_string_name_id(memory_id))
-}
-
-#[inline]
-pub(crate) fn symbol_value_to_name_id(symbol_val: i64) -> Option<u32> {
-    if value::is_symbol(symbol_val) {
-        Some(encode_symbol_name_id(value::decode_symbol_handle(
-            symbol_val,
-        )))
-    } else {
-        None
-    }
 }
 
 pub(crate) fn canonicalize_v2_name_id(

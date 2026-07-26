@@ -233,7 +233,13 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                         ),
                     );
                     if key == length_key {
-                        crate::host_imports::array_set_length_impl(&mut caller, object, new_value);
+                        {
+                            let mut ctx =
+                                crate::exec_context_impl::WasmExecContext::new(&mut caller);
+                            let _ = wjsm_builtins::array_object::array_set_length(
+                                &mut ctx, object, new_value,
+                            );
+                        }
                         return Ok(());
                     }
                     // 数组命名属性（元素走 elem_set）：own slot 尊重 writable，
@@ -673,7 +679,10 @@ fn set_proxy_target_property_v2(
             ),
         );
         if key == length_key {
-            crate::host_imports::array_set_length_impl(caller, target, new_value);
+            {
+                let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
+                let _ = wjsm_builtins::array_object::array_set_length(&mut ctx, target, new_value);
+            }
             return Ok(());
         }
         if let Some(slot) =

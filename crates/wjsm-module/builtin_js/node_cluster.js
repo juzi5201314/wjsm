@@ -239,15 +239,16 @@ function failEntryWaiters(entry, message, primaryWorker, primarySeq) {
   entry.listening = false;
   const waiters = entry.waitList;
   entry.waitList = [];
+  // seq 仅在单 worker 内唯一；跨 worker 必须用 worker.id+seq 去重
   const seen = Object.create(null);
   if (primaryWorker) {
     sendClusterError(primaryWorker, primarySeq, message);
-    if (primarySeq !== undefined && primarySeq !== null) seen[String(primarySeq)] = true;
+    seen[String(primaryWorker.id) + ':' + String(primarySeq)] = true;
   }
   for (var i = 0; i < waiters.length; i = i + 1) {
     const item = waiters[i];
-    if (!item) continue;
-    const key = String(item.seq);
+    if (!item || !item.worker) continue;
+    const key = String(item.worker.id) + ':' + String(item.seq);
     if (seen[key]) continue;
     seen[key] = true;
     sendClusterError(item.worker, item.seq, message);
@@ -402,8 +403,13 @@ function handleQueryServer(worker, msg) {
     );
     return;
   }
-  entry.waitList.push({ worker: worker, seq: msg.seq });
-  if (entry.binding) return;
+  // 发起者不得进 waitList：各 worker 的 listenSeq 独立从 1 递增，
+  // 若用 seq 去重会把后到 worker（同 seq）一并跳过，导致永久挂在 queryServer。
+  // 与 SCHED_NONE 一致：仅 binding 中的后来者进 waitList。
+  if (entry.binding) {
+    entry.waitList.push({ worker: worker, seq: msg.seq });
+    return;
+  }
   startRoundRobin(entry, worker, msg.seq);
 
 }
@@ -490,15 +496,19 @@ function startRoundRobin(entry, firstWorker, firstSeq) {
     entry.serverHandle = handle;
     entry.boundPort = boundPort;
     entry.boundAddress = boundAddress;
-    // 1) 发起者（用局部变量，不读 entry 后加字段）
+    // 1) 发起者（局部变量；发起者不在 waitList）
     sendRrReply(replyWorker, replySeq, boundAddress, boundPort);
-    // 2) waitList 里其他人
+    // 2) binding 期间排队的后来者（按 worker+seq 去重，seq 跨 worker 不唯一）
     const waiters = entry.waitList;
     entry.waitList = [];
+    const seen = Object.create(null);
+    if (replyWorker) seen[String(replyWorker.id) + ':' + String(replySeq)] = true;
     for (var i = 0; i < waiters.length; i = i + 1) {
       const item = waiters[i];
-      if (!item) continue;
-      if (item.seq === replySeq) continue;
+      if (!item || !item.worker) continue;
+      const key = String(item.worker.id) + ':' + String(item.seq);
+      if (seen[key]) continue;
+      seen[key] = true;
       sendRrReply(item.worker, item.seq, boundAddress, boundPort);
     }
     acceptLoop(entry, netHost);

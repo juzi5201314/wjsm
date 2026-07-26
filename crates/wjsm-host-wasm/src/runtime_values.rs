@@ -288,19 +288,6 @@ pub(crate) fn write_array_length_with_env<C: AsContextMut<Data = RuntimeState>>(
         .set_array_length(ptr as u32, len);
 }
 
-/// 读取数组的 capacity 字段（`ptr` 在 V2 下为 handle）。
-pub(crate) fn read_array_capacity(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
-) -> Option<u32> {
-    caller
-        .data()
-        .heap_access_v2()
-        .array_shape(ptr as u32)
-        .ok()
-        .map(|(_, capacity)| capacity)
-}
-
 /// 读取数组原始槽位值（hole sentinel 保持原样；`ptr` 为 handle）。
 pub(crate) fn read_array_elem_raw_with_env<C: AsContext<Data = RuntimeState>>(
     ctx: &C,
@@ -363,19 +350,6 @@ pub(crate) fn write_array_hole_with_env<C: AsContextMut<Data = RuntimeState>>(
     index: u32,
 ) {
     write_array_elem_with_env(ctx, env, ptr, index, value::encode_array_hole());
-}
-
-/// 数组动态扩容（V2-only）：`ensure_v2_array_capacity`，返回 handle 身份。
-/// `ptr` 参数保留签名兼容（调用方常把 handle 当 ptr 传递）；实际以 `this_val` 解析 handle。
-pub(crate) fn grow_array(
-    caller: &mut Caller<'_, RuntimeState>,
-    _ptr: usize,
-    this_val: i64,
-    new_cap: u32,
-) -> Option<usize> {
-    let handle = handle_index_of(caller, this_val) as u32;
-    crate::ensure_v2_array_capacity(caller, handle, new_cap).ok()?;
-    Some(handle as usize)
 }
 
 /// 沿原型链递归查找属性（带 visited set 防环路）
@@ -1600,54 +1574,6 @@ pub(crate) async fn resolve_callable_and_call_async(
         return value::encode_undefined();
     }
     results[0].unwrap_i64()
-}
-
-pub(crate) async fn func_apply_impl_async(
-    caller: &mut Caller<'_, RuntimeState>,
-    func: i64,
-    this_val: i64,
-    args_array: i64,
-) -> i64 {
-    let args = crate::host_imports::extract_array_like_elements(caller, args_array)
-        .await
-        .unwrap_or_default();
-    Box::pin(crate::host_imports::reflect_apply_impl_async(
-        caller, func, this_val, &args,
-    ))
-    .await
-}
-
-pub(crate) fn func_bind_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    func: i64,
-    this_val: i64,
-    args_base: i32,
-    args_count: i32,
-) -> i64 {
-    let shadow_memory = caller
-        .get_export(wjsm_ir::SHADOW_MEMORY_NAME)
-        .and_then(|e| e.into_memory())
-        .unwrap();
-    let mut bound_args = Vec::with_capacity(args_count as usize);
-    for i in 0..args_count {
-        let mut buf = [0u8; 8];
-        shadow_memory
-            .read(&mut *caller, (args_base + i * 8) as usize, &mut buf)
-            .unwrap();
-        bound_args.push(i64::from_le_bytes(buf));
-    }
-    let mut bound = caller
-        .data()
-        .bound_objects
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let idx = bound.len() as u32;
-    bound.push(BoundRecord {
-        target_func: func,
-        bound_this: this_val,
-        bound_args,
-    });
-    value::encode_bound_idx(idx)
 }
 
 /// rest 解构排除键列表 → 字符串字节序列。
