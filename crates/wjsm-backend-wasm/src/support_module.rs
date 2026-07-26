@@ -1,9 +1,9 @@
 //! Build-time support module emitter.
 //!
-//! 产出"helper-only"的 wasm 模块，由 `wjsm-runtime-support/build.rs` 调用并
+//! 产出"helper-only"的 wasm 模块，由 `wjsm-host-wasm/build.rs` 调用并
 //! 用 `wasmtime::Engine::precompile_module` 预编译为 `support.cwasm`。
 //!
-//! ABI 边界来源：`wjsm-runtime-support::abi`（不直接依赖以避免循环）。
+//! ABI 边界来源：`wjsm-host-wasm::runtime_support::abi`（不直接依赖以避免循环）。
 //!
 //! - `obj_new`/`obj_get`/`obj_set`/`obj_delete`/`string_eq`/`to_int32`：✅ 真实 body
 //! - `arr_new`/`elem_get`/`elem_set`/`get_proto_from_ctor`：✅ 真实 body（P2.4+P2.5 完成）
@@ -121,7 +121,7 @@ const V2_HEAP_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     (wjsm_ir::HEAP_LIMIT_GLOBAL_NAME, ValType::I64, true),
 ];
 
-/// 必须与 `wjsm-runtime-support::abi::SUPPORT_TABLE_RESERVED_LEN` 一致。
+/// 必须与 `wjsm-host-wasm::runtime_support::abi::SUPPORT_TABLE_RESERVED_LEN` 一致。
 pub const SUPPORT_TABLE_RESERVED_LEN: u32 = 64;
 
 // 12 个 defined functions 的 type index（顺序与 SUPPORT_EXPORTS 一致）

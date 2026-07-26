@@ -181,7 +181,12 @@ fn compile_worker_source(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    wjsm_module::bundle_with_options(&abs, &root, wjsm_module::ResolutionOptions::default())
+    let program = wjsm_module::bundle_program_with_options(
+        &abs,
+        &root,
+        wjsm_module::ResolutionOptions::default(),
+    )?;
+    wjsm_backend_wasm::compile_with_options(&program, wjsm_backend_wasm::CompileOptions::default())
 }
 
 fn compile_eval_source(source: &str) -> anyhow::Result<Vec<u8>> {
@@ -196,10 +201,14 @@ fn compile_eval_source(source: &str) -> anyhow::Result<Vec<u8>> {
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("eval_worker.js");
     std::fs::write(&path, source)?;
-    let result =
-        wjsm_module::bundle_with_options(&path, &dir, wjsm_module::ResolutionOptions::default());
+    let result = wjsm_module::bundle_program_with_options(
+        &path,
+        &dir,
+        wjsm_module::ResolutionOptions::default(),
+    );
     let _ = std::fs::remove_dir_all(&dir);
-    result
+    let program = result?;
+    wjsm_backend_wasm::compile_with_options(&program, wjsm_backend_wasm::CompileOptions::default())
 }
 
 fn spawn_worker_thread(

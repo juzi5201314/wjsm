@@ -16,6 +16,40 @@ use wasmtime::*;
 use wjsm_ir::{constants, value};
 
 use wjsm_snapshot_format as startup_snapshot_format;
+
+/// 合并自原 `wjsm-engine-config` crate：唯一 Wasmtime engine 配置 owner。
+pub(crate) mod engine_config;
+pub use engine_config::*;
+
+/// 合并自原 `wjsm-runtime-support` crate：support module ABI + 预编译 cwasm 嵌入。
+pub mod runtime_support;
+
+/// WASM 字节层工具（WAT 打印/验证/尺寸统计/import 枚举/shared heap 构造）。
+pub mod wasm_tools;
+pub use wasm_tools::{
+    dump_wat, new_shared_heap_memory, validate_wasm, wasm_import_names, wasm_section_sizes,
+};
+
+// codegen 入口 re-export：backend-wasm 仅被 host-wasm 依赖，外部（CLI/facade tests）
+// 一律经 `wjsm_runtime::*` 使用这些符号。
+pub use wjsm_backend_wasm::host_import_registry::{
+    self, HostImportGroup, HostImportKey, HostImportSpec, SpecialHostImport,
+    array_proto_method_specs, array_proto_property_name, array_proto_table_hash,
+    array_proto_table_len, host_import_specs,
+};
+pub use wjsm_backend_wasm::{
+    CompileOptions, RuntimeCompiledModule, compile, compile_eval, compile_eval_at_data_base,
+    compile_runtime_module_at, compile_runtime_module_at_with_options, compile_with_options,
+};
+
+/// 合并自原 `wjsm-runtime-snapshot` crate 的 build-time 嵌入 artifact ABI 字节。
+#[cfg(feature = "embedded")]
+pub static EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI: Option<&[u8]> = Some(include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/wjsm_managed_heap_v2_artifact_abi.bin"
+)));
+#[cfg(not(feature = "embedded"))]
+pub static EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI: Option<&[u8]> = None;
 mod agent_cluster;
 mod array_named_props;
 mod handle_remap;
@@ -37,11 +71,11 @@ pub use realm_clone_v2::{
     probe_eval_array_literal_in_realm_v2 as probe_eval_array_literal_in_realm,
     probe_execution_realm_frame_v2 as probe_execution_realm_frame, remap_realm_handles_v2,
 };
+#[allow(dead_code)]
+mod exec_context_impl;
 mod heap;
 #[allow(dead_code)]
 mod heap_context_impl;
-#[allow(dead_code)]
-mod exec_context_impl;
 
 mod property_key;
 mod runtime_arguments;
@@ -431,13 +465,26 @@ pub async fn execute_with_writer_with_options_and_stats<W: Write>(
 /// 供本 crate 测试及外部集成测试（`tests/`）复用，避免重复定义
 /// `parse_module → lower_module → compile` 流程。
 pub fn compile_source(source: &str) -> Result<Vec<u8>> {
-    wjsm_dyncode::compile_source(source)
+    let module = wjsm_parser::parse_module(source)?;
+    let program = wjsm_semantic::lower_module(module, false)?;
+    wjsm_backend_wasm::compile(&program)
 }
 
 /// 带调试插桩的编译（语句 `DebugCheck` + `wjsm_debug` 段 + `debug_break` 调用）。
 /// 供 `--inspect` / 测试路径使用。
 pub fn compile_source_with_debug(source: &str, filename: &str) -> Result<Vec<u8>> {
-    wjsm_dyncode::compile_source_with_debug(source, filename)
+    let module = wjsm_parser::parse_module(source)?;
+    let program = wjsm_semantic::lower_module_with_debug_source(
+        module,
+        false,
+        Some(std::sync::Arc::<str>::from(source)),
+        filename,
+        true,
+    )?;
+    wjsm_backend_wasm::compile_with_options(
+        &program,
+        wjsm_backend_wasm::CompileOptions { debug: true },
+    )
 }
 
 /// 编译缓存统计信息，供 CLI `wjsm cache` 命令展示和清理。
@@ -498,7 +545,7 @@ fn cache_entry_stats(path: &std::path::Path) -> Result<(usize, u64)> {
 
 /// 构建时生成嵌入式 startup snapshot 字节（空 seed JS → cold bootstrap → capture）。
 pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
-    let engine = wjsm_engine_config::EngineConfig::artifact().build()?;
+    let engine = crate::engine_config::EngineConfig::artifact().build()?;
     let seed = concat_builtin_js_sources();
     let wasm = compile_source(&seed)?;
     let rt = tokio::runtime::Runtime::new()
@@ -542,7 +589,9 @@ pub fn install_embedded_startup_snapshot(snapshot_bytes: impl AsRef<[u8]>) {
 /// 返回已通过 decode + ABI 校验的嵌入式 snapshot 字节；未安装或校验失败时为 `None`。
 pub fn embedded_startup_snapshot() -> Option<&'static [u8]> {
     EMBEDDED_STARTUP_SNAPSHOT.get()?;
-    let engine = wjsm_engine_config::EngineConfig::artifact().build().ok()?;
+    let engine = crate::engine_config::EngineConfig::artifact()
+        .build()
+        .ok()?;
     embedded_startup_snapshot_view(&engine)
 }
 
@@ -568,7 +617,7 @@ pub(crate) fn embedded_startup_snapshot_view(engine: &Engine) -> Option<&'static
 
 static INSTALLED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
 static DEFAULT_ZGC_SUPPORT_CWASM: LazyLock<Option<&'static [u8]>> = LazyLock::new(|| {
-    wjsm_runtime_support::embedded_support_cwasm(wjsm_runtime_support::SupportGcFlavor::Zgc)
+    crate::runtime_support::embedded_support_cwasm(crate::runtime_support::SupportGcFlavor::Zgc)
 });
 
 /// 安装编译时嵌入的 support cwasm；进程内只需调用一次（重复 set 静默忽略）。
@@ -589,11 +638,11 @@ pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
 
 pub fn embedded_support_cwasm_for(kind: GcAlgorithmKind) -> Option<&'static [u8]> {
     let flavor = match kind {
-        GcAlgorithmKind::MarkSweep => wjsm_runtime_support::SupportGcFlavor::MarkSweep,
-        GcAlgorithmKind::G1 => wjsm_runtime_support::SupportGcFlavor::G1,
-        GcAlgorithmKind::Zgc => wjsm_runtime_support::SupportGcFlavor::Zgc,
+        GcAlgorithmKind::MarkSweep => crate::runtime_support::SupportGcFlavor::MarkSweep,
+        GcAlgorithmKind::G1 => crate::runtime_support::SupportGcFlavor::G1,
+        GcAlgorithmKind::Zgc => crate::runtime_support::SupportGcFlavor::Zgc,
     };
-    wjsm_runtime_support::embedded_support_cwasm(flavor)
+    crate::runtime_support::embedded_support_cwasm(flavor)
 }
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     wasm_bytes: &[u8],
@@ -1669,7 +1718,8 @@ impl RuntimeState {
         let consumed = cursor_before.saturating_sub(last);
         self.physical_allocated_bytes
             .fetch_add(consumed.saturating_add(bytes), Ordering::Relaxed);
-        self.alloc_account_cursor.store(cursor_after, Ordering::Relaxed);
+        self.alloc_account_cursor
+            .store(cursor_after, Ordering::Relaxed);
     }
 
     /// steady-state 结束时结算窗口内尚未记账的 fast-path 消耗。
@@ -1680,7 +1730,8 @@ impl RuntimeState {
         }
         let consumed = cursor.saturating_sub(last);
         if consumed > 0 {
-            self.physical_allocated_bytes.fetch_add(consumed, Ordering::Relaxed);
+            self.physical_allocated_bytes
+                .fetch_add(consumed, Ordering::Relaxed);
             self.alloc_account_cursor.store(cursor, Ordering::Relaxed);
         }
     }
@@ -2837,7 +2888,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bench_deserialize() -> Result<()> {
-        let engine = wjsm_engine_config::EngineConfig::artifact().build()?;
+        let engine = crate::engine_config::EngineConfig::artifact().build()?;
         let wasm = compile_source("console.log(1)")?;
         let t0 = std::time::Instant::now();
         for _ in 0..20 {

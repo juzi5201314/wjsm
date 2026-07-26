@@ -14,7 +14,6 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
-use wjsm_backend_wasm as backend_wasm;
 use wjsm_ir::Program;
 use wjsm_parser as parser;
 use wjsm_runtime as runtime;
@@ -405,14 +404,12 @@ impl PipelineTimings {
 // ============================================================================
 
 fn install_embedded_runtime_artifacts() {
-    // 安装构建期嵌入的 startup snapshot 与 support cwasm；CLI 与 in-process fixture runner
+    // 安装构建期嵌入的 support cwasm；CLI 与 in-process fixture runner
     // 必须共用同一 runtime artifact 边界，否则相同 WASM 在测试入口会走不同 support 路径。
-    if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
-        wjsm_runtime::install_embedded_startup_snapshot(bytes);
-    }
-    if let Some(bytes) = wjsm_runtime_support::embedded_support_cwasm(
-        wjsm_runtime_support::SupportGcFlavor::Zgc,
-    ) {
+    // V1 startup snapshot 自 ManagedHeap V2 起不再随构建产出（恒为空），无需安装。
+    if let Some(bytes) =
+        wjsm_runtime::embedded_support_cwasm_for(wjsm_runtime::GcAlgorithmKind::Zgc)
+    {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }
 }
@@ -1390,18 +1387,10 @@ fn cmd_dump_ast(
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-/// 用 wasmprinter Config 输出 WAT 字符串。`name_unnamed(true)` 始终启用，
+/// 经 host-wasm 的 wasm 工具输出 WAT 字符串。`name_unnamed(true)` 始终启用，
 /// 使合成函数获得 `$fN` 名称；`skeleton` 为 true 时省略指令体。
 fn print_wat_to_string(wasm: &[u8], skeleton: bool) -> Result<String> {
-    use wasmprinter::{Config, PrintFmtWrite};
-    let mut cfg = Config::new();
-    cfg.name_unnamed(true);
-    if skeleton {
-        cfg.print_skeleton(true);
-    }
-    let mut dst = String::new();
-    cfg.print(wasm, &mut PrintFmtWrite(&mut dst))?;
-    Ok(dst)
+    runtime::dump_wat(wasm, skeleton)
 }
 
 /// 从完整 WAT 文本中提取单个函数定义块（按 `$name` 匹配）。
@@ -1547,7 +1536,7 @@ fn cmd_fmt(input: &Path, write: bool) -> Result<ExitCode> {
 fn cmd_validate(input: &Path) -> Result<ExitCode> {
     let bytes = fs::read(input)?;
 
-    match wasmparser::validate(&bytes) {
+    match runtime::validate_wasm(&bytes) {
         Ok(_) => {
             println!("✓ {} is valid WASM", input.display());
             Ok(ExitCode::from(EXIT_SUCCESS))
@@ -1563,38 +1552,7 @@ fn cmd_validate(input: &Path) -> Result<ExitCode> {
 fn cmd_size(input: &Path) -> Result<ExitCode> {
     let bytes = fs::read(input)?;
 
-    let mut sizes: Vec<(&str, usize)> = Vec::new();
-    let mut code_size: usize = 0;
-
-    // Parse WASM sections
-    let parser = wasmparser::Parser::new(0);
-
-    for payload in parser.parse_all(&bytes) {
-        let payload = payload?;
-        use wasmparser::Payload::*;
-        let (name, size) = match payload {
-            TypeSection(s) => ("Type", s.range().len()),
-            ImportSection(s) => ("Import", s.range().len()),
-            FunctionSection(s) => ("Function", s.range().len()),
-            TableSection(s) => ("Table", s.range().len()),
-            MemorySection(s) => ("Memory", s.range().len()),
-            GlobalSection(s) => ("Global", s.range().len()),
-            ExportSection(s) => ("Export", s.range().len()),
-            StartSection { range, .. } => ("Start", range.len()),
-            ElementSection(s) => ("Element", s.range().len()),
-            CodeSectionEntry(s) => {
-                code_size += s.range().len();
-                continue;
-            }
-            DataSection(s) => ("Data", s.range().len()),
-            CustomSection(s) => ("Custom", s.range().len()),
-            _ => continue,
-        };
-        sizes.push((name, size));
-    }
-    if code_size > 0 {
-        sizes.push(("Code", code_size));
-    }
+    let sizes = runtime::wasm_section_sizes(&bytes)?;
 
     println!("WASM Size Breakdown for {}", input.display());
     println!("{}", "─".repeat(50));
@@ -1772,9 +1730,9 @@ fn compile_program_to_wasm(
     debug_codegen: bool,
 ) -> Result<Vec<u8>> {
     match target {
-        Target::Wasm => backend_wasm::compile_with_options(
+        Target::Wasm => runtime::compile_with_options(
             program,
-            backend_wasm::CompileOptions {
+            runtime::CompileOptions {
                 debug: debug_codegen,
             },
         ),

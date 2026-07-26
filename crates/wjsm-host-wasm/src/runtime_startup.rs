@@ -19,11 +19,11 @@ pub(super) fn combined_abi_external_input(engine: &Engine) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
-    wjsm_runtime_support::support_abi_union_hash().hash(&mut h);
+    crate::runtime_support::support_abi_union_hash().hash(&mut h);
     builtin_js_bundle_hash().hash(&mut h);
     // fingerprint 由唯一 engine-config owner 计算，不把 Wasmtime 泄漏进
     // snapshot-format。
-    wjsm_engine_config::compatibility_fingerprint(engine).hash(&mut h);
+    crate::engine_config::compatibility_fingerprint(engine).hash(&mut h);
     h.finish()
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn startup_engine_config(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
     guest_debug: bool,
-) -> wjsm_engine_config::EngineConfig {
+) -> crate::engine_config::EngineConfig {
     // 冷路径兼容：从环境解析 compiler，构造 EngineConfig（不经池）。
     let key = crate::runtime_engine_pool::engine_config_key(
         None,
@@ -114,7 +114,7 @@ pub(crate) fn startup_engine_config_with_compiler(
     use_epoch_async_yield: bool,
     wasmtime_memory_reservation: Option<u64>,
     guest_debug: bool,
-) -> wjsm_engine_config::EngineConfig {
+) -> crate::engine_config::EngineConfig {
     let key = crate::runtime_engine_pool::engine_config_key(
         compiler,
         use_epoch_async_yield,
@@ -794,8 +794,9 @@ pub(super) async fn setup_shared_env_and_support(
         .await
         .map_err(|e| anyhow::anyhow!("support module instantiate failed: {:?}", e))?;
 
-    let mut support_exports = Vec::with_capacity(wjsm_runtime_support::abi::SUPPORT_EXPORTS.len());
-    for export_name in wjsm_runtime_support::abi::SUPPORT_EXPORTS {
+    let mut support_exports =
+        Vec::with_capacity(crate::runtime_support::abi::SUPPORT_EXPORTS.len());
+    for export_name in crate::runtime_support::abi::SUPPORT_EXPORTS {
         let export = support_instance
             .get_export(&mut *store, export_name)
             .ok_or_else(|| anyhow::anyhow!("support module missing export: {}", export_name))?;

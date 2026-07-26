@@ -1,15 +1,15 @@
 //! 验证 mark-sweep、G1 与 ZGC embedded support cwasm。
 //!
 //! 锁住 support emitter GC flavor 参数化后的核心验收：可用 flavor cwasm
-//! 字节有效、wasmtime 可还原、export 集合与 `wjsm-runtime-support::abi::SUPPORT_EXPORTS`
+//! 字节有效、wasmtime 可还原、export 集合与 `runtime_support::abi::SUPPORT_EXPORTS`
 //! 完全一致，且 heap 为 memory64 shared。
 
 #![cfg(feature = "embedded")]
 
 use wasmparser::{Parser, Payload, TypeRef, ValType};
 use wjsm_backend_wasm::{GcFlavor, emit_support_module};
-use wjsm_engine_config::EngineConfig;
-use wjsm_runtime_support::{SupportGcFlavor, abi, embedded_support_cwasm};
+use wjsm_host_wasm::EngineConfig;
+use wjsm_host_wasm::runtime_support::{SupportGcFlavor, abi, embedded_support_cwasm};
 
 #[test]
 fn embedded_available_support_cwasm_is_present_and_nonempty() {

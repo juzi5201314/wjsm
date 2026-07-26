@@ -1,7 +1,9 @@
+//! 迁移自原 `wjsm-engine-config/tests/config.rs`：engine fingerprint 稳定性契约。
+
 use anyhow::Result;
 #[cfg(target_arch = "aarch64")]
-use wjsm_engine_config::CompilerStrategy;
-use wjsm_engine_config::{EngineConfig, RuntimeEngineOptions, compatibility_fingerprint};
+use wjsm_host_wasm::CompilerStrategy;
+use wjsm_host_wasm::{EngineConfig, RuntimeEngineOptions, compatibility_fingerprint};
 
 #[test]
 fn artifact_engine_fingerprint_is_stable() -> Result<()> {

@@ -111,23 +111,23 @@ pub fn parse_entry_ast_with_options(
     bundler.parse_entry_ast(entry)
 }
 
-/// 将入口模块和按 bundle graph 收集到的所有依赖编译为完整 WASM bytes。
+/// 将入口模块和按 bundle graph 收集到的所有依赖 lower 为 IR `Program`。
 ///
-/// 返回值可直接交给 runtime 执行；失败时错误会携带 `entry` 和 `root_path`，
-/// 方便调用方定位是哪个入口图构建失败。
-pub fn bundle(entry: &Path, root_path: &Path) -> Result<Vec<u8>> {
-    bundle_with_options(entry, root_path, ResolutionOptions::default())
+/// codegen 由调用方负责（本 crate 不依赖任何 wasm 后端）；失败时错误会携带
+/// `entry` 和 `root_path`，方便调用方定位是哪个入口图构建失败。
+pub fn bundle_program(entry: &Path, root_path: &Path) -> Result<wjsm_ir::Program> {
+    bundle_program_with_options(entry, root_path, ResolutionOptions::default())
 }
 
-/// Bundles an entry module with explicit package resolution options.
-pub fn bundle_with_options(
+/// Bundles an entry module into an IR `Program` with explicit package resolution options.
+pub fn bundle_program_with_options(
     entry: &Path,
     root_path: &Path,
     options: ResolutionOptions,
-) -> Result<Vec<u8>> {
+) -> Result<wjsm_ir::Program> {
     let bundler = ModuleBundler::with_resolution_options(root_path, options)
         .with_context(|| format!("create module bundler for root {}", root_path.display()))?;
-    bundler.bundle(entry).with_context(|| {
+    bundler.bundle_program(entry).with_context(|| {
         format!(
             "bundle entry {} from root {}",
             entry.display(),
@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn public_bundle_function_works() {
+    fn public_bundle_program_function_works() {
         let root =
             std::env::temp_dir().join(format!("wjsm_module_public_bundle_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -395,20 +395,16 @@ mod tests {
         std::fs::write(root.join("lib.js"), "export const value = 42;\n")
             .expect("lib module should be writable");
 
-        let result = bundle(Path::new("main.js"), &root);
+        let result = bundle_program(Path::new("main.js"), &root);
         assert!(
             result.is_ok(),
             "public bundle should succeed: {:?}",
             result.err()
         );
-        let wasm_bytes = result.unwrap();
+        let program = result.unwrap();
         assert!(
-            !wasm_bytes.is_empty(),
-            "should produce non-empty WASM output"
-        );
-        assert!(
-            wasm_bytes.starts_with(b"\x00asm"),
-            "output should be valid WASM binary"
+            !program.functions().is_empty(),
+            "bundled program should contain lowered functions"
         );
 
         let _ = std::fs::remove_dir_all(&root);

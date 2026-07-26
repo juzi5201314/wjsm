@@ -297,7 +297,7 @@ impl CliRuntimeModuleLoader {
 }
 
 fn backend_runtime_import_links() -> impl Iterator<Item = RuntimeModuleImportLink> {
-    wjsm_backend_wasm::host_import_registry::host_import_specs()
+    wjsm_runtime::host_import_specs()
         .iter()
         .map(|spec| RuntimeModuleImportLink::env(spec.name))
 }
@@ -307,12 +307,11 @@ fn compile_runtime_program(
     context: &mut RuntimeModuleInstantiationContext<'_, '_>,
     debug: bool,
 ) -> Result<Vec<u8>, RuntimeModuleLoadError> {
-    let options = wjsm_backend_wasm::CompileOptions { debug };
-    let measured =
-        wjsm_backend_wasm::compile_runtime_module_at_with_options(program, 0, 0, options)
-            .map_err(invalid_module_error)?;
+    let options = wjsm_runtime::CompileOptions { debug };
+    let measured = wjsm_runtime::compile_runtime_module_at_with_options(program, 0, 0, options)
+        .map_err(invalid_module_error)?;
     let placement = context.reserve_module_layout(measured.table_len, measured.data_len)?;
-    let compiled = wjsm_backend_wasm::compile_runtime_module_at_with_options(
+    let compiled = wjsm_runtime::compile_runtime_module_at_with_options(
         program,
         placement.data_base,
         placement.table_base,

@@ -1,8 +1,9 @@
 #![cfg(feature = "embedded")]
 
-use wjsm_engine_config::{EngineConfig, compatibility_fingerprint};
-use wjsm_runtime_snapshot::EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI;
-use wjsm_runtime_support::abi::managed_heap_v2_support_abi_hash;
+use wjsm_host_wasm::runtime_support::abi::managed_heap_v2_support_abi_hash;
+use wjsm_host_wasm::{
+    EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI, EngineConfig, compatibility_fingerprint,
+};
 use wjsm_snapshot_format::decode_managed_heap_v2_artifact_abi;
 
 #[test]

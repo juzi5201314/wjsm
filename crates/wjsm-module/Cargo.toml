@@ -12,6 +12,5 @@ url = { workspace = true }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-ir = { path = "../wjsm-ir" }
-wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 
 [dev-dependencies]

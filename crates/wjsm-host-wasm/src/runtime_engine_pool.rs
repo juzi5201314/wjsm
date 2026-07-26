@@ -5,13 +5,15 @@
 //! 活跃 `vm` timeout（armed > 0）时每 1ms `increment_epoch()`。
 
 use crate::RuntimeCompiler;
+use crate::engine_config::{
+    CompilerStrategy, CraneliftOptLevel, EngineConfig, RuntimeEngineOptions,
+};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::Duration;
 use wasmtime::{Engine, UpdateDeadline};
-use wjsm_engine_config::{CompilerStrategy, CraneliftOptLevel, EngineConfig, RuntimeEngineOptions};
 
 /// Engine 池键：决定 wasmtime Config 的全部可区分维度。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -59,35 +59,33 @@ source → wjsm-parser (swc_core → AST)
        → wjsm-host-wasm (wasmtime execution + host functions)
 ```
 
-Multi-file: `wjsm-module` sits between semantic and backend (dependency graph + bundling).
+Multi-file: `wjsm-module` sits between semantic and backend (dependency graph + bundling, 产出 IR `Program`；codegen 由调用方经 host-wasm re-export 完成).
 
-**Runtime 拆分**（ADR 0011）：原 `wjsm-runtime` 按后端无关性拆为 4 个 crate，`wjsm-runtime` 保留为向后兼容 facade：
+**Runtime 拆分**（ADR 0011，后端收缩后）：原 `wjsm-runtime` 按后端无关性拆分，`wjsm-runtime` 保留为向后兼容 facade。wasm 工具链依赖（wasmtime / wasm-encoder / wasmprinter / wasmparser）只允许出现在 `wjsm-backend-wasm`（codegen）与 `wjsm-host-wasm`（执行引擎 + build-time artifact）两个 crate：
 - `wjsm-host`：后端无关宿主能力 trait（`HostRuntime`/`HeapContext`/`ConsoleHost`/`GcHost`/`ObjectHost`/`AsyncHost`），多后端扩展点
-- `wjsm-host-wasm`：wasmtime 执行引擎（builtins、eval/vm 解释器、`RuntimeState`、GC 接合点）
+- `wjsm-host-wasm`：wasmtime 执行引擎（builtins、eval/vm 解释器、`RuntimeState`、GC 接合点），并内含 engine config（`engine_config` 模块）、support ABI + 预编译 cwasm（`runtime_support` 模块）、build-time artifact（build.rs）、编译编排（`compile_source`）、wasm 字节工具（`wasm_tools` 模块：`dump_wat`/`validate_wasm`/`wasm_section_sizes`/`wasm_import_names`/`new_shared_heap_memory`），并 re-export backend-wasm 的 codegen 入口（`compile*`/`CompileOptions`/`host_import_specs` 等）
 - `wjsm-gc`：后端无关 GC 算法（MarkSweepV2/G1V2/ZgcV2、`HandleTableV2`、`HeapMemory`/`GrowableHeapMemory` trait），不依赖 wasmtime
-- `wjsm-dyncode`：编译编排（`compile_source`/`compile_source_with_debug`）
 - `wjsm-runtime`：facade，`pub use wjsm_host_wasm::*` + `pub use wjsm_host::*`，外部代码零改动
 
-| Crate | Role | Public API |
+原独立 crate `wjsm-engine-config` / `wjsm-runtime-support` / `wjsm-runtime-snapshot` / `wjsm-dyncode` 已全部合并进 `wjsm-host-wasm`，不再存在。
+
+|Crate|Role|Public API|
 |---|---|---|
-| `wjsm-parser` | swc_core → AST | `parse_module(&str)` |
-| `wjsm-semantic` | AST → IR (scope tree, TDZ, hoisting) | `lower_module`, `lower_modules`, `lower_eval_module` |
-| `wjsm-ir` | IR types (zero deps) | `Module`, `Function`, `BasicBlock`, `Instruction`, `value` |
-| `wjsm-backend-wasm` | IR → WASM | `compile(&Program)`, `compile_eval(&Program)` |
-| `wjsm-backend-jit` | Stub (not implemented) | `compile(&Program)` |
-| `wjsm-builtins` | 后端无关 host builtins 算法（泛型 `<E: ExecContext>` 单态化，ADR 0012） | `promise::*`, `proxy_reflect_async::*`, `array_object::*`, `collections::*` 等 |
-| `wjsm-host` | 后端无关宿主能力 trait（多后端扩展点） | `HostRuntime`, `HeapContext`, `ConsoleHost`, `GcHost`, `ObjectHost`, `AsyncHost`, `ExecContext` |
-| `wjsm-host-wasm` | wasmtime 执行引擎 + host functions | `execute(&[u8])`, `execute_with_writer`, `WasmHeapContext` |
-| `wjsm-gc` | 后端无关 GC 算法 + heap 抽象（无 wasmtime） | `MarkSweepV2<M>`, `G1V2<M>`, `ZgcV2<M>`, `HandleTableV2`, `HeapMemory`, `GrowableHeapMemory`, `NativeHeapMemory` |
-| `wjsm-dyncode` | 编译编排 | `compile_source`, `compile_source_with_debug` |
-| `wjsm-runtime` | facade（re-export host-wasm + host，向后兼容） | `execute`, `compile_source`, GC 类型, module loader, snapshot |
-| `wjsm-module` | ESM/CJS bundling | `bundle(entry, root_path)` |
-| `wjsm-test262` | test262 conformance runner | — |
-| `wjsm-cli` | CLI: build/run/check/eval/dump-ir/dump-ast/dump-wat/disasm/fmt/init/size/validate | `main_entry()` |
-| `wjsm-runtime-snapshot` | build-time embedded snapshot bytes | `EMBEDDED_STARTUP_SNAPSHOT` |
-| `wjsm-runtime-support` | build-time precompiled support cwasm variants | `embedded_support_cwasm(flavor)` |
-| `wjsm-snapshot-format` | snapshot byte format + ABI hash (zero wasmtime) | `decode_snapshot`, `abi_hash` |
-Dep graph: `parser → semantic → ir ← backend-wasm → host-wasm → cli`；`host-wasm` 依赖 `host`（trait）+ `gc`（算法）+ `dyncode`（编译编排）+ `builtins`（后端无关算法）；`builtins` 依赖 `host`（ExecContext trait）+ `ir`；`runtime` facade 依赖 `host-wasm` + `host` + `dyncode` + `gc`。`wjsm-module` branches off `semantic → backend-wasm`。Build-time support crates: `wjsm-runtime-snapshot` / `wjsm-runtime-support` → `OUT_DIR` artifacts consumed by `wjsm-host-wasm` → `wjsm-cli` via `install_embedded_*`; `wjsm-snapshot-format` is dependency-free and consumed by snapshot build.rs + runtime. See [ADR 0012](docs/adr/0012-host-builtins-decouple.md) for the builtins decoupling.
+|`wjsm-parser`|swc_core → AST|`parse_module(&str)`|
+|`wjsm-semantic`|AST → IR (scope tree, TDZ, hoisting)|`lower_module`, `lower_modules`, `lower_eval_module`|
+|`wjsm-ir`|IR types (zero deps)|`Module`, `Function`, `BasicBlock`, `Instruction`, `value`|
+|`wjsm-backend-wasm`|IR → WASM（仅被 host-wasm 依赖）|`compile(&Program)`, `compile_eval(&Program)`, `emit_support_module`|
+|`wjsm-backend-jit`|Stub (not implemented)|`compile(&Program)`|
+|`wjsm-builtins`|后端无关 host builtins 算法（泛型 `<E: ExecContext>` 单态化，ADR 0012）|`promise::*`, `proxy_reflect_async::*`, `array_object::*`, `collections::*` 等|
+|`wjsm-host`|后端无关宿主能力 trait（多后端扩展点）|`HostRuntime`, `HeapContext`, `ConsoleHost`, `GcHost`, `ObjectHost`, `AsyncHost`, `ExecContext`|
+|`wjsm-host-wasm`|wasmtime 执行引擎 + host functions + engine config + support ABI/cwasm + 编译编排 + wasm 字节工具|`execute(&[u8])`, `execute_with_writer`, `compile_source`, `EngineConfig`, `runtime_support::abi`, `dump_wat`, `validate_wasm`, `WasmHeapContext`|
+|`wjsm-gc`|后端无关 GC 算法 + heap 抽象（无 wasmtime）|`MarkSweepV2<M>`, `G1V2<M>`, `ZgcV2<M>`, `HandleTableV2`, `HeapMemory`, `GrowableHeapMemory`, `NativeHeapMemory`|
+|`wjsm-runtime`|facade（re-export host-wasm + host，向后兼容）|`execute`, `compile_source`, GC 类型, module loader, snapshot|
+|`wjsm-module`|ESM/CJS bundling（产出 IR `Program`，无 wasm 依赖）|`bundle_program(entry, root_path)`, `lower_bundle*`|
+|`wjsm-test262`|test262 conformance runner|—|
+|`wjsm-cli`|CLI: build/run/check/eval/dump-ir/dump-ast/dump-wat/disasm/fmt/init/size/validate（无 wasm 工具链依赖，全部经 `wjsm_runtime::*`）|`main_entry()`|
+|`wjsm-snapshot-format`|snapshot byte format + ABI hash (zero wasmtime)|`decode_snapshot`, `abi_hash`|
+Dep graph: `parser → semantic → ir ← backend-wasm ← host-wasm → cli`；`host-wasm` 依赖 `host`（trait）+ `gc`（算法）+ `builtins`（后端无关算法）+ `backend-wasm`（codegen，唯一依赖方）+ `module`（bundling）；`builtins` 依赖 `host`（ExecContext trait）+ `ir`；`runtime` facade 依赖 `host-wasm` + `host` + `gc`。`wjsm-module` 只到 IR：`parser → semantic → ir`，codegen 由调用方（host-wasm/cli 经 re-export）完成。Build-time artifacts 由 `wjsm-host-wasm/build.rs` 产出到 `OUT_DIR`（support cwasm 三变体 + managed-heap V2 artifact ABI），`wjsm-cli` 经 `wjsm_runtime::install_embedded_support_cwasm` 安装；`wjsm-snapshot-format` 零依赖，被 host-wasm 的 build.rs + runtime 消费。See [ADR 0012](docs/adr/0012-host-builtins-decouple.md) for the builtins decoupling.
 
 ### Key directories
 
@@ -100,7 +98,10 @@ crates/wjsm-host-wasm/src/runtime_*.rs       # runtime submodules (execution eng
 crates/wjsm-host-wasm/src/heap_context_impl.rs # HeapContext impl over Caller<RuntimeState>
 crates/wjsm-gc/src/heap/                     # backend-agnostic heap abstraction (HeapMemory/HandleTableV2)
 crates/wjsm-gc/src/{mark_sweep,g1,zgc}/      # GC algorithms (generic over M: GrowableHeapMemory)
-crates/wjsm-dyncode/src/lib.rs               # compile orchestration (compile_source)
+crates/wjsm-host-wasm/src/engine_config.rs   # 唯一 wasmtime engine 配置 owner（原 wjsm-engine-config）
+crates/wjsm-host-wasm/src/runtime_support/   # support ABI + 预编译 cwasm 嵌入（原 wjsm-runtime-support）
+crates/wjsm-host-wasm/src/wasm_tools.rs      # WAT 打印/验证/尺寸统计/import 枚举（供 CLI re-export）
+crates/wjsm-host-wasm/build.rs               # build-time artifact：support cwasm + V2 artifact ABI
 crates/wjsm-host/src/                        # backend-agnostic host capability traits
 crates/wjsm-runtime/src/lib.rs               # facade (re-export host-wasm + host)
 fixtures/{happy,errors,semantic,modules}/    # test fixtures + snapshots
@@ -123,7 +124,7 @@ tests/fixture_runner.rs                      # E2E harness
 
 **Startup snapshot** (default on; set `WJSM_STARTUP_SNAPSHOT=0`/`false`/`off` to disable; set `WJSM_STARTUP_SNAPSHOT_DEBUG=1` for recoverable startup diagnostics): relocatable primordial heap snapshot — captures post-bootstrap object heap (after `__wjsm_bootstrap_once` and host post-bootstrap), handle table relative offsets, runtime strings, stateless NativeCallables, and seed Array.prototype method table metadata (`arr_proto_table_base`, length, ABI hash). Restore skips `__wjsm_bootstrap_once` in `main()`, verifies the current module exports the same Array.prototype table ABI, and remaps Array.prototype method function values to the current module `__arr_proto_table_base`. ABI hash inputs: format version, NaN-box constants, heap type tags, primordial string offsets **and** content, `SnapshotNativeCallable` discriminants, property slot constants — any change invalidates embedded snapshot compatibility and falls back to cold startup. New builtin/NativeCallable/primordial string must update `abi_hash()` in `wjsm-snapshot-format`; Array.prototype method table changes are guarded by backend-exported `__arr_proto_table_hash`. Runtime disk startup snapshot cache is retired; no customer-machine snapshot cache is written. See `docs/adr/0003-startup-snapshot-boundary.md` for format and current limitations.
 
-**Build-time embedded runtime** (ADR 0004; default on): three ship-time-stable artifact families produced by `cargo build` build.rs's: (1) `wjsm-runtime-snapshot/build.rs` → `OUT_DIR/wjsm_startup_snapshot.bin` (`include_bytes!`'d into binary); (2) `wjsm-runtime-support/build.rs` → precompiled support cwasm variants for `mark-sweep`, `g1`, and `zgc` (wasmtime `precompile_module` via `wjsm-engine-config` fingerprint; Normal mode user modules import 10 helpers from the selected variant: `obj_new`/`obj_get`/`obj_set`/`obj_delete`/`arr_new`/`elem_get`/`elem_set`/`string_eq`/`to_int32`/`get_proto_from_ctor`; support also exports bootstrap helpers for its own ABI and binds ManagedHeap host imports); (3) `wjsm-runtime/builtin_js/manifest.rs` lists ordered `(name, source)` for snapshot-time JS extension eval (currently empty). `wjsm-cli::main_entry` installs the embedded startup snapshot and default support cwasm; runtime instantiation selects the support flavor matching the active GC algorithm, falling back to compiling the corresponding wasm bytes if cwasm deserialization is incompatible. All artifact families feed a unified ABI hash via `wjsm-snapshot-format::register_abi_hash_external_input`: combined hash of `wjsm_runtime_support::support_module_layout_hash() || builtin_js_bundle_hash()`. ABI mismatch → cold startup only (no dual-heap fallback). Crates `wjsm-runtime-snapshot` / `wjsm-runtime-support` / `wjsm-snapshot-format` each carry an `embedded` cargo feature (default on); disabling embedded removes build-time artifacts and falls back to cold startup only. See `docs/adr/0004-build-time-embedded-runtime.md`.
+**Build-time embedded runtime** (ADR 0004; default on): all ship-time-stable artifacts are produced by a single `crates/wjsm-host-wasm/build.rs`: (1) precompiled support cwasm variants for `mark-sweep`, `g1`, and `zgc` (wasmtime `precompile_module` via the host-wasm-internal `engine_config` fingerprint; Normal mode user modules import 10 helpers from the selected variant: `obj_new`/`obj_get`/`obj_set`/`obj_delete`/`arr_new`/`elem_get`/`elem_set`/`string_eq`/`to_int32`/`get_proto_from_ctor`; support also exports bootstrap helpers for its own ABI and binds ManagedHeap host imports); (2) the managed-heap V2 artifact ABI (`OUT_DIR/wjsm_managed_heap_v2_artifact_abi.bin`, embedded as `EMBEDDED_MANAGED_HEAP_V2_ARTIFACT_ABI`); (3) `wjsm-host-wasm/builtin_js/manifest.rs` lists ordered `(name, source)` for snapshot-time JS extension eval (currently empty). `wjsm-cli::main_entry` installs the default support cwasm via `wjsm_runtime::install_embedded_support_cwasm`; runtime instantiation selects the support flavor matching the active GC algorithm, falling back to compiling the corresponding wasm bytes if cwasm deserialization is incompatible. All artifact families feed a unified ABI hash via `wjsm-snapshot-format::abi_hash_with_external_input`: combined hash of `runtime_support::support_abi_union_hash() || builtin_js_bundle_hash() || engine_config::compatibility_fingerprint(engine)`. ABI mismatch → cold startup only (no dual-heap fallback). The `embedded` cargo feature (default on) lives on `wjsm-host-wasm`; disabling it removes build-time artifacts and falls back to cold startup only. See `docs/adr/0004-build-time-embedded-runtime.md`.
 
 **GC / ManagedHeap** ([ADR 0010](docs/adr/0010-generational-zgc-managed-heap.md); supersedes ADR 0005): the unified ManagedHeap on Wasmtime shared memory64 with 8-byte atomic handles is the **only** heap path (cutover complete; private `managed-heap-v2` feature and memory32 dynamic object-heap main path deleted). Fixed GC worker pool, Generational ZGC (young/old mark, remset, concurrent relocate, pacing director). Public selection remains `RuntimeOptions` / CLI `--gc` / `WJSM_GC` (`mark-sweep`, `g1`, `zgc`); `WJSM_TEST_GC` is tests-only. Performance evidence is **only** `wjsm-gc-bench` (`run`/`info`); legacy `gc_stress` / `zgc_autoresearch` / `zgc_barrier_pressure` are retired. Do not reintroduce dual-heap fallbacks or a memory32 dynamic object-heap main path.
 

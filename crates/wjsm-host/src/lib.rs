@@ -2,7 +2,7 @@
 //!
 //! 本 crate 定义 JS runtime 的宿主能力 trait，**不依赖** wasmtime 或任何具体后端。
 //! 各后端（wasmtime / native / cranelift）实现这些 trait 即可接入同一套 builtins 与
-//! 动态代码服务（`wjsm-dyncode`）。
+//! 动态代码服务（编译编排位于 `wjsm-host-wasm::compile_source`）。
 //!
 //! # 分层
 //!

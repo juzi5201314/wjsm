@@ -1,43 +1,20 @@
-use wasmparser::{Parser, Payload};
-use wasmtime::{MemoryType, SharedMemory};
-use wjsm_engine_config::EngineConfig;
-use wjsm_runtime::{HeapAccessV2, SharedHeapMemory};
+use wjsm_runtime::{HeapAccessV2, SharedHeapMemory, new_shared_heap_memory, wasm_import_names};
 
 const HANDLE_REGION_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const PAGE_BYTES: u64 = 64 * 1024;
 
 fn heap_access() -> HeapAccessV2 {
-    let engine = EngineConfig::artifact().build().unwrap();
     let min_pages = HANDLE_REGION_BYTES / PAGE_BYTES + 2;
     let max_pages = min_pages + 4;
-    let memory = SharedMemory::new(
-        &engine,
-        MemoryType::builder()
-            .memory64(true)
-            .shared(true)
-            .min(min_pages)
-            .max(Some(max_pages))
-            .build()
-            .unwrap(),
-    )
-    .unwrap();
-    HeapAccessV2::new(SharedHeapMemory::new(memory))
+    let memory: SharedHeapMemory = new_shared_heap_memory(min_pages, max_pages).unwrap();
+    HeapAccessV2::new(memory)
 }
 
 #[test]
 fn v2_compiler_imports_memory64_array_host_abi() {
     let wasm =
         wjsm_runtime::compile_source("const array = ['value']; console.log(array);").unwrap();
-    let imports = Parser::new(0)
-        .parse_all(&wasm)
-        .filter_map(Result::ok)
-        .filter_map(|payload| match payload {
-            Payload::ImportSection(section) => Some(section),
-            _ => None,
-        })
-        .flat_map(|section| section.into_imports().filter_map(Result::ok))
-        .map(|import| import.name.to_string())
-        .collect::<Vec<_>>();
+    let imports = wasm_import_names(&wasm);
 
     assert!(imports.iter().any(|name| name == "__heap_memory"));
 }

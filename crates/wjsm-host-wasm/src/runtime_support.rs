@@ -1,3 +1,6 @@
+//! 合并自原 `wjsm-runtime-support` crate：support module ABI（`abi`）与
+//! build-time 预编译 support cwasm 的嵌入访问。
+
 pub mod abi;
 
 pub use abi::{SupportGcFlavor, support_abi_union_hash};

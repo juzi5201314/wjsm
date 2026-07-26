@@ -4919,35 +4919,12 @@ dependencies = [
  "tokio",
  "toml",
  "walkdir",
- "wasmparser 0.246.2",
- "wasmprinter",
  "wjsm-backend-jit",
- "wjsm-backend-wasm",
  "wjsm-ir",
  "wjsm-module",
  "wjsm-parser",
  "wjsm-runtime",
- "wjsm-runtime-snapshot",
- "wjsm-runtime-support",
  "wjsm-semantic",
-]
-
-[[package]]
-name = "wjsm-dyncode"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "wjsm-backend-wasm",
- "wjsm-parser",
- "wjsm-semantic",
-]
-
-[[package]]
-name = "wjsm-engine-config"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "wasmtime",
 ]
 
 [[package]]
@@ -4962,8 +4939,6 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
- "wasmtime",
- "wjsm-engine-config",
  "wjsm-ir",
 ]
 
@@ -5031,18 +5006,16 @@ dependencies = [
  "uuid",
  "wait-timeout",
  "wasmparser 0.246.2",
+ "wasmprinter",
  "wasmtime",
  "webpki-roots 0.26.11",
  "wjsm-backend-wasm",
  "wjsm-builtins",
- "wjsm-dyncode",
- "wjsm-engine-config",
  "wjsm-gc",
  "wjsm-host",
  "wjsm-ir",
  "wjsm-module",
  "wjsm-parser",
- "wjsm-runtime-support",
  "wjsm-semantic",
  "wjsm-snapshot-format",
 ]
@@ -5060,7 +5033,6 @@ dependencies = [
  "swc_core",
  "thiserror 2.0.18",
  "url",
- "wjsm-backend-wasm",
  "wjsm-ir",
  "wjsm-parser",
  "wjsm-semantic",
@@ -5084,11 +5056,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
- "wasmparser 0.246.2",
- "wasmtime",
- "wjsm-backend-wasm",
- "wjsm-dyncode",
- "wjsm-engine-config",
  "wjsm-gc",
  "wjsm-host",
  "wjsm-host-wasm",
@@ -5096,30 +5063,6 @@ dependencies = [
  "wjsm-parser",
  "wjsm-semantic",
  "wjsm-snapshot-format",
-]
-
-[[package]]
-name = "wjsm-runtime-snapshot"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "wjsm-backend-wasm",
- "wjsm-engine-config",
- "wjsm-runtime",
- "wjsm-runtime-support",
- "wjsm-snapshot-format",
-]
-
-[[package]]
-name = "wjsm-runtime-support"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "wasmparser 0.246.2",
- "wasmtime",
- "wjsm-backend-wasm",
- "wjsm-engine-config",
- "wjsm-ir",
 ]
 
 [[package]]

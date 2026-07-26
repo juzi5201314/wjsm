@@ -544,7 +544,7 @@ where
             })?;
     }
     define_caller_export(linker, caller, "env", "__table")?;
-    for global in wjsm_runtime_support::abi::ENV_GLOBALS {
+    for global in crate::runtime_support::abi::ENV_GLOBALS {
         define_caller_export(linker, caller, "env", global.name)?;
     }
     for import_link in import_links {

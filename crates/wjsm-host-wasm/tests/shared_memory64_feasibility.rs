@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use wasmtime::{Linker, MemoryType, Module, SharedMemory, Store};
-use wjsm_engine_config::{EngineConfig, RuntimeEngineOptions, compatibility_fingerprint};
+use wjsm_host_wasm::{EngineConfig, RuntimeEngineOptions, compatibility_fingerprint};
 
 const WASM_PAGE_SIZE: u64 = 64 * 1024;
 const HANDLE_REGION_SIZE: u64 = 32 * 1024 * 1024 * 1024;

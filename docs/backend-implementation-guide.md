@@ -16,10 +16,9 @@ wjsm-gc            后端无关 GC 算法（MarkSweepV2 / G1V2 / ZgcV2 / HandleT
 wjsm-host-wasm     使用 wjsm-gc 算法 + SharedHeapMemory（wasmtime shared memory64）
 wjsm-host-native   使用 wjsm-gc 算法 + 你的 HeapMemory 实现
 
-wjsm-dyncode       编译编排（compile_source / compile_source_with_debug）
-     ↑ 依赖
-wjsm-host-wasm     调用 compile_source 编译 JS → WASM
-wjsm-host-native   调用 compile_source 编译 JS → WASM，再用自己的方式执行
+wjsm-host-wasm     编译编排 owner（compile_source / compile_source_with_debug，
+                   parse → lower → compile 内联在 host-wasm；经 wjsm-runtime facade re-export）
+wjsm-host-native   调用 wjsm_runtime::compile_source 编译 JS → WASM，再用自己的方式执行
 ```
 
 ## 步骤 1：实现 `HeapMemory` trait
@@ -130,7 +129,7 @@ impl HeapContext for NativeHeapContext<'_> {
 
 ## 步骤 5：执行编译后的代码
 
-`wjsm-dyncode::compile_source`把 JS 编译为 WASM 字节。你的后端需要：
+`wjsm_runtime::compile_source`（实现位于 `wjsm-host-wasm`）把 JS 编译为 WASM 字节。你的后端需要：
 1. 调用 `compile_source` 获得 WASM 字节
 2. 用自己的方式执行（如：把 WASM 翻译为 native 代码，或用另一个 WASM 运行时）
 3. 在执行过程中通过 `HeapContext` 提供 host 能力

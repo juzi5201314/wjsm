@@ -21,6 +21,3 @@ libc = "0.2"
 [dev-dependencies]
 anyhow = { workspace = true }
 loom = "0.7"
-wjsm-engine-config = { path = "../wjsm-engine-config" }
-# scheme (b): only shared_memory64_feasibility hard-depends on wasmtime SharedMemory/Module.
-wasmtime = { workspace = true }

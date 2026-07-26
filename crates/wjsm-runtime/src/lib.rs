@@ -4,8 +4,8 @@
 //! 拆分后，真正的实现迁到了以下 crate，本 crate 仅 re-export 它们的公开 API，
 //! 保证现有代码（CLI / tests / 集成）零改动：
 //!
-//! - [`wjsm_host_wasm`]：wasmtime 执行引擎（builtins、解释器、RuntimeState、GC 接合点）
-//! - [`wjsm_dyncode`]：动态代码编译编排（`compile_source` 等）
+//! - [`wjsm_host_wasm`]：wasmtime 执行引擎（builtins、解释器、RuntimeState、GC 接合点、
+//!   `compile_source` 编译编排、engine config、support ABI、build-time 嵌入 artifact）
 //! - [`wjsm_gc`]：后端无关 GC 算法（经 host-wasm re-export）
 //! - [`wjsm_host`]：后端无关宿主能力 trait（多后端扩展点）
 //!

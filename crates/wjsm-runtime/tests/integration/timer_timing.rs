@@ -9,7 +9,7 @@ use tokio::runtime::Builder;
 fn run_js(code: &str) -> String {
     let module = wjsm_parser::parse_module(code).expect("parse");
     let program = wjsm_semantic::lower_module(module, false).expect("lower");
-    let wasm = wjsm_backend_wasm::compile(&program).expect("compile");
+    let wasm = wjsm_runtime::compile(&program).expect("compile");
     let mut buf = Vec::new();
     Builder::new_current_thread()
         .enable_all()

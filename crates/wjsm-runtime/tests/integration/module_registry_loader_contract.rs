@@ -367,7 +367,7 @@ fn compile_cjs_source(source: &str) -> Result<Vec<u8>> {
         &HashMap::<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>::new(),
         &HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>::new(),
     )?;
-    wjsm_backend_wasm::compile(&program)
+    wjsm_runtime::compile(&program)
 }
 
 fn compile_esm_source(source: &str) -> Result<Vec<u8>> {
@@ -390,7 +390,7 @@ fn compile_esm_source(source: &str) -> Result<Vec<u8>> {
         &HashMap::<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>::new(),
         &HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>::new(),
     )?;
-    wjsm_backend_wasm::compile(&program)
+    wjsm_runtime::compile(&program)
 }
 
 fn run_esm_source(source: &str, options: RuntimeOptions) -> Result<String> {

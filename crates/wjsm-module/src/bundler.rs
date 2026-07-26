@@ -108,19 +108,10 @@ impl ModuleBundler {
         Ok(node.ast.clone())
     }
 
-    /// Bundle 入口模块及其所有依赖
-    pub fn bundle(&self, entry: &Path) -> Result<Vec<u8>> {
-        let program = self
-            .lower_bundle(entry)
-            .with_context(|| "Failed to lower modules")?;
-
-        wjsm_backend_wasm::compile_with_options(
-            &program,
-            wjsm_backend_wasm::CompileOptions {
-                debug: self.emit_debug_checks,
-            },
-        )
-        .with_context(|| "Failed to compile to WASM")
+    /// Bundle 入口模块及其所有依赖，产出 IR `Program`（codegen 由调用方负责）
+    pub fn bundle_program(&self, entry: &Path) -> Result<wjsm_ir::Program> {
+        self.lower_bundle(entry)
+            .with_context(|| "Failed to lower modules")
     }
 }
 
@@ -284,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn bundle_simple_modules_produces_wasm() {
+    fn bundle_simple_modules_produces_program() {
         let root = create_temp_project("simple_bundle");
         write_type_module_package(&root);
         write_file(
@@ -295,16 +286,12 @@ mod tests {
         write_file(&root, "lib.js", "export const value = 42;\n");
 
         let bundler = ModuleBundler::new(&root).expect("bundler should be created");
-        let result = bundler.bundle(Path::new("main.js"));
+        let result = bundler.bundle_program(Path::new("main.js"));
         assert!(result.is_ok(), "bundle should succeed: {:?}", result.err());
-        let wasm_bytes = result.unwrap();
+        let program = result.unwrap();
         assert!(
-            !wasm_bytes.is_empty(),
-            "should produce non-empty WASM output"
-        );
-        assert!(
-            wasm_bytes.starts_with(b"\x00asm"),
-            "output should be valid WASM binary"
+            !program.functions().is_empty(),
+            "bundled program should contain lowered functions"
         );
     }
 

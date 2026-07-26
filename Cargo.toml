@@ -14,16 +14,12 @@ members = [
     "crates/wjsm-cli",
     "crates/wjsm-test262",
     "crates/wjsm-module",
-    "crates/wjsm-runtime-snapshot",
-    "crates/wjsm-runtime-support",
-    "crates/wjsm-engine-config",
     "crates/wjsm-gc-bench",
     "crates/wjsm-snapshot-format",
     "crates/wjsm-host",
     "crates/wjsm-host-wasm",
     "crates/wjsm-builtins",
     "crates/wjsm-gc",
-    "crates/wjsm-dyncode",
 ]
 
 [workspace.package]
