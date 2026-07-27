@@ -1,16 +1,16 @@
 use super::*;
+/// 影子栈前置：压入回调实参，返回 `__shadow_sp` 全局与压栈前的 sp。
+///
+/// `shadow_sp` 直接取自 `WasmEnv`（与 `__shadow_sp` 导出同一个全局），
+/// 不再按名字二次 `get_export`。
 fn prepare_callback_shadow_stack(
     caller: &mut Caller<'_, RuntimeState>,
+    env: &WasmEnv,
     args: &[i64],
 ) -> anyhow::Result<(wasmtime::Global, i32)> {
-    let env = WasmEnv::from_caller(caller).ok_or_else(|| anyhow::anyhow!("WasmEnv"))?;
-    let shadow_sp_global = caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-        .ok_or_else(|| anyhow::anyhow!("no __shadow_sp"))?;
-    let saved_sp = push_args_to_shadow_stack(caller, &env, args)
+    let saved_sp = push_args_to_shadow_stack(caller, env, args)
         .ok_or_else(|| anyhow::anyhow!("shadow stack push failed"))?;
-    Ok((shadow_sp_global, saved_sp))
+    Ok((env.shadow_sp, saved_sp))
 }
 
 fn resolve_handle_val_with_env<C: AsContextMut<Data = RuntimeState>>(
@@ -523,7 +523,7 @@ pub(crate) async fn call_wasm_callback_async(
     args: &[i64],
 ) -> anyhow::Result<i64> {
     let env = WasmEnv::from_caller(caller).ok_or_else(|| anyhow::anyhow!("WasmEnv"))?;
-    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(caller, args)?;
+    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(caller, &env, args)?;
     let target = resolve_callback_target_with_env(caller, &env, func_val)?;
     dispatch_callback_target_caller_async(
         caller,

@@ -25,12 +25,12 @@ impl JsBackend for JitBackend {
         None
     }
 
-    fn execute<'a, W: Write + 'a>(
+    async fn execute<'a, W: Write + 'a>(
         &'a self,
         _artifact: &'a Self::Artifact,
         _options: Self::ExecOptions,
         _writer: W,
-    ) -> impl Future<Output = Result<(W, Vec<u8>)>> + 'a {
-        async { bail!("JIT backend is not implemented yet") }
+    ) -> Result<(W, Vec<u8>)> {
+        bail!("JIT backend is not implemented yet")
     }
 }

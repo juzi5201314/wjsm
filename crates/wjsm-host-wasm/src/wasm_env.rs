@@ -41,13 +41,19 @@ pub(crate) struct WasmEnv {
 
 impl WasmEnv {
     /// 从 Caller 上下文中一次性提取所有导出句柄。
-    /// 嵌套 host→host 重入时 `Caller::get_export` 会返回 None（未经过 WASM 帧），
-    /// 此时回退到 RuntimeState 上缓存的实例句柄。
+    ///
+    /// 优先读取 `RuntimeState::cached_wasm_env`：该缓存在 instantiate 之后、任何
+    /// host 调用之前由 `extract_wasm_env` 写入，且一个 Store 只有一份 env
+    /// （动态加载的运行时模块经 `define_runtime_imports` 复用 caller 的
+    /// memory / `__table` / env globals，句柄完全相同）。
+    /// 回退到导出扫描仅覆盖缓存尚未安装的启动窗口——`get_export` 每个名字都要
+    /// 走一次字符串哈希 + IndexMap 查找，28 个名字乘以每次回调，热路径不得付费。
+    #[inline]
     pub fn from_caller(caller: &mut Caller<'_, RuntimeState>) -> Option<Self> {
-        if let Some(env) = Self::from_caller_exports(caller) {
+        if let Some(env) = caller.data().cached_wasm_env {
             return Some(env);
         }
-        caller.data().cached_wasm_env
+        Self::from_caller_exports(caller)
     }
 
     fn from_caller_exports(caller: &mut Caller<'_, RuntimeState>) -> Option<Self> {
