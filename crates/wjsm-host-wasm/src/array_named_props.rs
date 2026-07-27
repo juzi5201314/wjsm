@@ -17,6 +17,8 @@ pub(crate) struct ArrayNamedPropSlot {
     pub name_id: u32,
     pub value: i64,
     pub flags: i32,
+    pub getter: i64,
+    pub setter: i64,
 }
 
 #[derive(Clone, Default)]
@@ -32,6 +34,41 @@ fn canonical_name_id(caller: &mut Caller<'_, RuntimeState>, name_id: u32) -> u32
     crate::property_key::canonicalize_v2_name_id(caller, name_id).unwrap_or(name_id)
 }
 
+fn invoke_getter_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    getter: i64,
+    receiver: i64,
+) -> i64 {
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::block_in_place(|| {
+        runtime
+            .block_on(crate::runtime_host_helpers::call_wasm_callback_async(
+                caller,
+                getter,
+                receiver,
+                &[],
+            ))
+            .unwrap_or_else(|_| value::encode_undefined())
+    })
+}
+
+fn invoke_setter_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    setter: i64,
+    receiver: i64,
+    value: i64,
+) {
+    let runtime = tokio::runtime::Handle::current();
+    let _ = tokio::task::block_in_place(|| {
+        runtime.block_on(crate::runtime_host_helpers::call_wasm_callback_async(
+            caller,
+            setter,
+            receiver,
+            &[value],
+        ))
+    });
+}
+
 impl ArrayNamedPropsStore {
     pub(crate) fn new() -> Self {
         Self(Arc::new(Mutex::new(HashMap::new())))
@@ -45,25 +82,18 @@ impl ArrayNamedPropsStore {
     }
 
     pub(crate) fn get(caller: &mut Caller<'_, RuntimeState>, boxed: i64, name_id: u32) -> i64 {
-        let Some(handle) = Self::handle_of(caller, boxed) else {
+        let Some(slot) = Self::get_slot(caller, boxed, name_id) else {
             return value::encode_undefined();
         };
-        let name_id = canonical_name_id(caller, name_id);
-        let table = caller
-            .data()
-            .array_named_props
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        table
-            .get(&handle)
-            .and_then(|slots| {
-                slots
-                    .iter()
-                    .find(|slot| slot.name_id == name_id)
-                    .map(|slot| slot.value)
-            })
-            .unwrap_or_else(value::encode_undefined)
+        if slot.flags & constants::FLAG_IS_ACCESSOR != 0 {
+            if value::is_undefined(slot.getter) || value::is_null(slot.getter) {
+                value::encode_undefined()
+            } else {
+                invoke_getter_sync(caller, slot.getter, boxed)
+            }
+        } else {
+            slot.value
+        }
     }
 
     pub(crate) fn get_slot(
@@ -85,6 +115,14 @@ impl ArrayNamedPropsStore {
     }
 
     pub(crate) fn set(caller: &mut Caller<'_, RuntimeState>, boxed: i64, name_id: u32, val: i64) {
+        if let Some(slot) = Self::get_slot(caller, boxed, name_id)
+            && slot.flags & constants::FLAG_IS_ACCESSOR != 0
+        {
+            if !value::is_undefined(slot.setter) && !value::is_null(slot.setter) {
+                invoke_setter_sync(caller, slot.setter, boxed, val);
+            }
+            return;
+        }
         Self::set_with_flags(caller, boxed, name_id, val, default_data_property_flags());
     }
 
@@ -93,6 +131,27 @@ impl ArrayNamedPropsStore {
         boxed: i64,
         name_id: u32,
         val: i64,
+        flags: i32,
+    ) {
+        Self::set_descriptor(
+            caller,
+            boxed,
+            name_id,
+            val,
+            value::encode_undefined(),
+            value::encode_undefined(),
+            flags,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn set_descriptor(
+        caller: &mut Caller<'_, RuntimeState>,
+        boxed: i64,
+        name_id: u32,
+        val: i64,
+        getter: i64,
+        setter: i64,
         flags: i32,
     ) {
         let Some(handle) = Self::handle_of(caller, boxed) else {
@@ -108,12 +167,16 @@ impl ArrayNamedPropsStore {
         let slots = table.entry(handle).or_default();
         if let Some(slot) = slots.iter_mut().find(|slot| slot.name_id == name_id) {
             slot.value = val;
+            slot.getter = getter;
+            slot.setter = setter;
             slot.flags = flags;
         } else {
             slots.push(ArrayNamedPropSlot {
                 name_id,
                 value: val,
                 flags,
+                getter,
+                setter,
             });
         }
     }
@@ -142,7 +205,6 @@ impl ArrayNamedPropsStore {
         slots.remove(index);
         Some(true)
     }
-
 
     /// 收集数组命名 own 属性名（可选仅可枚举；不含 symbol）。
     pub(crate) fn collect_string_property_names(
@@ -269,8 +331,10 @@ impl ArrayNamedPropsStore {
         let table = store.0.lock().unwrap_or_else(|e| e.into_inner());
         for slots in table.values() {
             for slot in slots {
-                if value::tag_needs_root(slot.value) {
-                    roots.push(slot.value);
+                for value in [slot.value, slot.getter, slot.setter] {
+                    if crate::value::tag_needs_root(value) {
+                        roots.push(value);
+                    }
                 }
             }
         }
@@ -305,18 +369,6 @@ pub(crate) fn define_array_named_props(
     Ok(())
 }
 
-/// 供 `IsConcatSpreadable` / `Get` 在数组上读取命名属性（含 symbol）。
-pub(crate) fn array_named_get_sync(
-    caller: &mut Caller<'_, RuntimeState>,
-    arr: i64,
-    name_id: u32,
-) -> i64 {
-    if value::is_array(arr) {
-        return ArrayNamedPropsStore::get(caller, arr, name_id);
-    }
-    value::encode_undefined()
-}
-
 #[allow(dead_code)]
 pub(crate) fn array_named_set_sync(
     caller: &mut Caller<'_, RuntimeState>,
@@ -329,7 +381,7 @@ pub(crate) fn array_named_set_sync(
     }
 }
 
-/// 数组上非索引命名属性的 DefineOwnProperty（数据描述符）。
+/// 数组上非索引命名属性的 DefineOwnProperty。
 pub(crate) fn define_data_property_on_array_named(
     caller: &mut Caller<'_, RuntimeState>,
     arr: i64,
@@ -340,14 +392,11 @@ pub(crate) fn define_data_property_on_array_named(
         return Err("TypeError: target is not an array".to_string());
     }
     let completed = crate::runtime_host_helpers::complete_property_descriptor(desc.clone());
-    if crate::runtime_host_helpers::is_accessor_descriptor(&completed) {
-        return Err(
-            "TypeError: Accessor properties are not supported on array symbol slots".to_string(),
-        );
-    }
-    let val = completed.value.unwrap_or_else(value::encode_undefined);
+    let is_accessor = crate::runtime_host_helpers::is_accessor_descriptor(&completed);
     let mut flags = 0i32;
-    if completed.writable.unwrap_or(false) {
+    if is_accessor {
+        flags |= constants::FLAG_IS_ACCESSOR;
+    } else if completed.writable.unwrap_or(false) {
         flags |= constants::FLAG_WRITABLE;
     }
     if completed.enumerable.unwrap_or(false) {
@@ -356,6 +405,14 @@ pub(crate) fn define_data_property_on_array_named(
     if completed.configurable.unwrap_or(false) {
         flags |= constants::FLAG_CONFIGURABLE;
     }
-    ArrayNamedPropsStore::set_with_flags(caller, arr, name_id, val, flags);
+    ArrayNamedPropsStore::set_descriptor(
+        caller,
+        arr,
+        name_id,
+        completed.value.unwrap_or_else(value::encode_undefined),
+        completed.get.unwrap_or_else(value::encode_undefined),
+        completed.set.unwrap_or_else(value::encode_undefined),
+        flags,
+    );
     Ok(true)
 }

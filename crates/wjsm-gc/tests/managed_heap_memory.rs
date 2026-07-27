@@ -56,6 +56,8 @@ fn native_memory_copies_only_checked_unpublished_byte_ranges() {
 fn native_memory_growable_word_store_is_seqcst_visible() {
     let memory = NativeHeapMemory::with_capacity(0, 0, 64);
     memory.grow_to(24).unwrap();
-    memory.store_word(HeapAddress::new(16), 0xfeed_face).unwrap();
+    memory
+        .store_word(HeapAddress::new(16), 0xfeed_face)
+        .unwrap();
     assert_eq!(memory.load_word(HeapAddress::new(16)).unwrap(), 0xfeed_face);
 }

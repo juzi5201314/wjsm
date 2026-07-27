@@ -3,4 +3,8 @@ exit_code: 0
 5
 x
 7
+true
+1
+custom
+[object Array]
 --- stderr ---

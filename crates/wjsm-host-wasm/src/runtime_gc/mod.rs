@@ -14,7 +14,6 @@ pub(crate) mod active_zgc;
 pub mod api;
 pub mod context;
 pub mod heap_access;
-mod heap_access_v2;
 pub mod heap_governance;
 pub mod native_callable_refs;
 pub mod object_walker;
@@ -33,15 +32,18 @@ pub mod zgc;
 pub use wjsm_gc::api::{CycleKind, GcStats, Handle, StepBudget, Value};
 #[allow(unused_imports)]
 pub use wjsm_gc::{
-    CollectorContext, GcAlgorithmKind, GcPacketKind, GcRuntimeV2, GcTelemetry, GcTelemetrySnapshot,
-    GcWorkPacket, GcWorkerPool, HistogramSnapshot, MarkBitmap, MutatorContext, RootSnapshot,
-    WorkerPoolError, WorkerPoolStats, GC_TELEMETRY_SCHEMA_VERSION, g1, mark_sweep, telemetry,
+    CollectorContext, GC_TELEMETRY_SCHEMA_VERSION, GcAlgorithmKind, GcPacketKind, GcRuntimeV2,
+    GcTelemetry, GcTelemetrySnapshot, GcWorkPacket, GcWorkerPool, HistogramSnapshot, MarkBitmap,
+    MutatorContext, RootSnapshot, WorkerPoolError, WorkerPoolStats, g1, mark_sweep, telemetry,
     worker,
 };
 
 // ── host-only 接合导出 ──
 pub use api::GcContext;
-pub use heap_access_v2::{HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property};
+/// `HeapAccessV2` 在本 crate 的具体实例化（wasmtime shared memory64 后端）。
+/// 算法已下沉至 `wjsm-gc::heap_access`，本路径仅做单态化类型别名。
+pub type HeapAccessV2 = wjsm_gc::HeapAccessV2<crate::heap::SharedHeapMemory>;
+pub use wjsm_gc::HeapAccessV2Error;
 pub use roots_v2::V2ConditionalRoots;
 
 // 兼容旧路径（crate::runtime_gc::{control,registry,...}）

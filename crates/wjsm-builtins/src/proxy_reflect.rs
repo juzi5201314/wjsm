@@ -50,9 +50,7 @@ pub fn reflect_get_own_property_descriptor_impl<E: ExecContext>(
             ctx.define_data_property(
                 desc,
                 "writable",
-                value::encode_bool(
-                    (flags & wjsm_ir::constants::FLAG_WRITABLE as u32) != 0,
-                ),
+                value::encode_bool((flags & wjsm_ir::constants::FLAG_WRITABLE as u32) != 0),
             );
         }
         ctx.define_data_property(desc, "enumerable", value::encode_bool(enumerable));
@@ -81,18 +79,13 @@ pub fn reflect_has_impl<E: ExecContext>(ctx: &mut E, target: Value, prop: Value)
             return value::encode_bool(false);
         };
         // 数组命名属性在 side table
-        if value::is_array(target) {
-            if ctx.array_named_prop_get(target, name_id).is_some() {
-                return value::encode_bool(true);
-            }
+        if value::is_array(target) && ctx.array_named_prop_get(target, name_id).is_some() {
+            return value::encode_bool(true);
         }
-        let found = ctx
-            .get_property_slot_on_proto(handle, name_id)
-            .is_some();
+        let found = ctx.get_property_slot_on_proto(handle, name_id).is_some();
         return value::encode_bool(found);
     }
-    // legacy fallback：通过 has_in_property
-    value::encode_bool(value::is_truthy(ctx.has_in_property(target, prop)))
+    crate::core::ordinary_has_property(ctx, target, prop)
 }
 
 /// `delete property by name_id`（V2 堆路径）。
@@ -130,12 +123,12 @@ pub fn reflect_delete_property_impl<E: ExecContext>(
     // 数组元素删除必须在 name_id 解析前完成：数字索引可能尚未 intern 到
     // memory c-string 表，property_key_value_to_name_id(..., false) 会失败并
     // 误返回 true，导致 hole 从未写入。
-    if value::is_array(target) {
-        if let Ok(index) = prop_name.parse::<u32>() {
-            // 数组元素删除：写 hole（array_write_hole 是数组语义正确路径）
-            ctx.array_write_hole(target, index);
-            return value::encode_bool(true);
-        }
+    if value::is_array(target)
+        && let Ok(index) = prop_name.parse::<u32>()
+    {
+        // 数组元素删除：写 hole（array_write_hole 是数组语义正确路径）
+        ctx.array_write_hole(target, index);
+        return value::encode_bool(true);
     }
     let Some(name_id) = ctx.property_value_to_name_id(prop, false) else {
         return value::encode_bool(true);

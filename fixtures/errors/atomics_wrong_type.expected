@@ -1,4 +1,5 @@
 exit_code: 2
 --- stdout ---
+Uncaught exception: TypeError: Typed array is not an integer type for Atomics
 --- stderr ---
-Runtime error: TypeError: Typed array is not an integer type for Atomics
+Runtime error: Uncaught exception: TypeError: Typed array is not an integer type for Atomics

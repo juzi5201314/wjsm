@@ -72,11 +72,7 @@ pub async fn map_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
 }
 
 /// 从 iterable 填充 Map 表（SameValueZero 去重）。
-async fn fill_map_from_iterable<E: ExecContext>(
-    ctx: &mut E,
-    handle: u32,
-    arg: Value,
-) -> bool {
+async fn fill_map_from_iterable<E: ExecContext>(ctx: &mut E, handle: u32, arg: Value) -> bool {
     let Some(values) = collect_constructor_iterable_values(ctx, arg).await else {
         return false;
     };
@@ -136,11 +132,7 @@ pub async fn set_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
 }
 
 /// 从 iterable 填充 Set 表（SameValueZero 去重）。
-async fn fill_set_from_iterable<E: ExecContext>(
-    ctx: &mut E,
-    handle: u32,
-    arg: Value,
-) -> bool {
+async fn fill_set_from_iterable<E: ExecContext>(ctx: &mut E, handle: u32, arg: Value) -> bool {
     let Some(values) = collect_constructor_iterable_values(ctx, arg).await else {
         return false;
     };
@@ -151,7 +143,12 @@ async fn fill_set_from_iterable<E: ExecContext>(
     true
 }
 
-pub fn map_proto_set<E: ExecContext>(ctx: &mut E, this_val: Value, key: Value, val: Value) -> Value {
+pub fn map_proto_set<E: ExecContext>(
+    ctx: &mut E,
+    this_val: Value,
+    key: Value,
+    val: Value,
+) -> Value {
     let Some(handle) = collection_handle(ctx, this_val, "__map_handle__") else {
         ctx.set_last_error(
             "TypeError: Method Map.prototype.set called on incompatible receiver".to_string(),

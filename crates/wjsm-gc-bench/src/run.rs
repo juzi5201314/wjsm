@@ -56,10 +56,7 @@ fn build_summary(samples: &[SampleReport]) -> BenchSummary {
         .iter()
         .map(|s| s.telemetry.gc_cpu_ns.unwrap_or(0))
         .collect();
-    let pause_max: Vec<u64> = samples
-        .iter()
-        .map(|s| s.telemetry.pause.max_ns)
-        .collect();
+    let pause_max: Vec<u64> = samples.iter().map(|s| s.telemetry.pause.max_ns).collect();
 
     let totals = aggregate_telemetry(samples);
     let metrics = derive_metrics(samples, &totals);
@@ -149,9 +146,9 @@ fn derive_metrics(
 }
 
 fn ratio_f64(numerator: Option<u64>, denominator: Option<u64>) -> Option<f64> {
-    numerator.zip(denominator).and_then(|(n, d)| {
-        (d > 0).then_some(n as f64 / d as f64)
-    })
+    numerator
+        .zip(denominator)
+        .and_then(|(n, d)| (d > 0).then_some(n as f64 / d as f64))
 }
 
 fn to_distribution(s: &crate::stats::DistributionSummary) -> Distribution {

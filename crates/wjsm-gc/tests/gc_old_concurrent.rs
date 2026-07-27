@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use wjsm_gc::{
-    GcRuntimeV2, HandleGeneration, HandleId, OldController, OldPhase, YoungController,
-};
+use wjsm_gc::{GcRuntimeV2, HandleGeneration, HandleId, OldController, OldPhase, YoungController};
 
 fn roots(handles: impl IntoIterator<Item = HandleId>) -> wjsm_gc::RootSnapshot {
     let runtime = GcRuntimeV2::new();

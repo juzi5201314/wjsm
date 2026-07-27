@@ -26,8 +26,10 @@ pub(crate) async fn proxy_trap_internal_set_async(
     val: i64,
 ) {
     let mut ctx = WasmExecContext::new(caller);
-    wjsm_builtins::proxy_reflect_async::proxy_trap_internal_set_async(&mut ctx, proxy, name_id, val)
-        .await;
+    wjsm_builtins::proxy_reflect_async::proxy_trap_internal_set_async(
+        &mut ctx, proxy, name_id, val,
+    )
+    .await;
 }
 
 /// `proxy_trap_delete`：Proxy [[Delete]] 内部方法（薄包装，供 gc.rs 调用）。
@@ -50,9 +52,9 @@ pub(crate) fn define_proxy_traps_async(
         "env",
         "proxy_trap_get",
         |mut caller: Caller<'_, RuntimeState>, (proxy, name_id): (i64, i32)| {
-            Box::new(async move {
-                proxy_trap_internal_get_async(&mut caller, proxy, name_id).await
-            })
+            Box::new(
+                async move { proxy_trap_internal_get_async(&mut caller, proxy, name_id).await },
+            )
         },
     )?;
 
@@ -72,9 +74,9 @@ pub(crate) fn define_proxy_traps_async(
         "env",
         "proxy_trap_delete",
         |mut caller: Caller<'_, RuntimeState>, (proxy, name_id): (i64, i32)| {
-            Box::new(async move {
-                proxy_trap_internal_delete_async(&mut caller, proxy, name_id).await
-            })
+            Box::new(
+                async move { proxy_trap_internal_delete_async(&mut caller, proxy, name_id).await },
+            )
         },
     )?;
 
@@ -134,7 +136,8 @@ pub(crate) fn define_proxy_traps_async(
                 let Some(nid) = ctx.property_value_to_name_id(key, false) else {
                     return;
                 };
-                let _ = wjsm_builtins::proxy_reflect::delete_property_by_name_id(&mut ctx, obj, nid);
+                let _ =
+                    wjsm_builtins::proxy_reflect::delete_property_by_name_id(&mut ctx, obj, nid);
             })
         },
     )?;

@@ -94,7 +94,8 @@ pub fn get_by_name_id<E: ExecContext>(ctx: &mut E, obj: Value, name_id: u32) -> 
     }
 
     let handle = if value::is_function(obj) || value::is_closure(obj) || value::is_bound(obj) {
-        ctx.handle_index_of(obj).unwrap_or_else(|| value::decode_handle(obj))
+        ctx.handle_index_of(obj)
+            .unwrap_or_else(|| value::decode_handle(obj))
     } else {
         value::decode_handle(obj)
     };

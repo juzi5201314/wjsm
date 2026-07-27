@@ -21,5 +21,5 @@ pub use wjsm_host_wasm::*;
 // 后端无关宿主能力 trait（多后端扩展点）。与 host-wasm 的 HostRuntime 实现并存。
 pub use wjsm_host::{
     AsyncHookEvent, AsyncHost, ConsoleHost, GcHost, GcOutcome, Handle, HeapContext, HostRuntime,
-    ObjectHost, Value,
+    JsBackend, ObjectHost, Value,
 };

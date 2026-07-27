@@ -1,8 +1,8 @@
+use crate::exec_context_impl::WasmExecContext;
+use crate::*;
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
-use crate::exec_context_impl::WasmExecContext;
-use crate::*;
 
 pub(crate) fn define_generator(
     linker: &mut Linker<RuntimeState>,

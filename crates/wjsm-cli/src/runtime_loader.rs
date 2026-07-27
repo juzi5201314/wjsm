@@ -55,10 +55,6 @@ impl CliRuntimeModuleLoader {
                     "runtime loader cannot resolve relative to a compiled module id",
                 ))
             }
-            _ => Err(RuntimeModuleLoadError::new(
-                RuntimeModuleLoadErrorCode::Unsupported,
-                "runtime loader does not support this referrer kind",
-            )),
         }
     }
 
@@ -80,10 +76,6 @@ impl CliRuntimeModuleLoader {
             RuntimeModuleFormat::Json => Err(RuntimeModuleLoadError::new(
                 RuntimeModuleLoadErrorCode::Unsupported,
                 "CLI runtime loader cannot compile this module format as WASM",
-            )),
-            _ => Err(RuntimeModuleLoadError::new(
-                RuntimeModuleLoadErrorCode::Unsupported,
-                "CLI runtime loader does not support this module format",
             )),
         }
     }
@@ -196,7 +188,6 @@ impl RuntimeModuleLoader for CliRuntimeModuleLoader {
                 wjsm_module::RuntimeResolveKind::Import
             }
             RuntimeModuleResolutionKind::Require => wjsm_module::RuntimeResolveKind::Require,
-            _ => wjsm_module::RuntimeResolveKind::Import,
         };
         let resolved = wjsm_module::resolve_runtime_specifier(
             specifier,

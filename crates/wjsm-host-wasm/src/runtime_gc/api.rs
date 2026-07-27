@@ -122,4 +122,3 @@ impl<'a> GcContext<'a> {
         }
     }
 }
-

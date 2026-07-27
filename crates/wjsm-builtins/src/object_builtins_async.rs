@@ -19,9 +19,7 @@ pub async fn object_is_extensible<E: ExecContext>(ctx: &mut E, obj: Value) -> Va
 
 pub async fn object_prevent_extensions<E: ExecContext>(ctx: &mut E, obj: Value) -> Value {
     if !value::is_js_object(obj) {
-        ctx.set_last_error(
-            "TypeError: Object.preventExtensions called on non-object".to_string(),
-        );
+        ctx.set_last_error("TypeError: Object.preventExtensions called on non-object".to_string());
         return obj;
     }
     let result = ctx.object_prevent_extensions_async(obj).await;

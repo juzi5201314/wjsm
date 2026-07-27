@@ -77,9 +77,7 @@ pub fn bigint_pow<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
     match (ctx.read_bigint(a), ctx.read_bigint(b)) {
         (Some(x), Some(y)) => {
             if y.sign() == Sign::Minus {
-                ctx.set_last_error(
-                    "RangeError: BigInt exponent must be non-negative".to_string(),
-                );
+                ctx.set_last_error("RangeError: BigInt exponent must be non-negative".to_string());
                 return value::encode_undefined();
             }
             let exp = match y.to_u32() {

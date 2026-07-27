@@ -1,4 +1,4 @@
-//! Date 纯解析 / 时区转换（不依赖 Caller / RuntimeState）。
+//! Date 纯解析 / 时区转换（不依赖任何具体执行后端）。
 
 use chrono::{DateTime, Local, TimeZone, Utc};
 

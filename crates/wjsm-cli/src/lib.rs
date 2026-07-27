@@ -1729,15 +1729,31 @@ fn compile_program_to_wasm(
     target: Target,
     debug_codegen: bool,
 ) -> Result<Vec<u8>> {
-    match target {
-        Target::Wasm => runtime::compile_with_options(
-            program,
-            runtime::CompileOptions {
-                debug: debug_codegen,
-            },
-        ),
-        Target::Jit => bail!("JIT backend is not implemented yet"),
-    }
+    // 静态分发到具体后端；新后端在此 match 接入 `<Backend>.compile`。
+    // `compile`/`artifact_bytes` 经完全限定语法调用，避开 `dyn`。
+    let bytes: Vec<u8> = match target {
+        Target::Wasm => {
+            let a = <runtime::WasmBackend as runtime::JsBackend>::compile(
+                &runtime::WasmBackend,
+                program,
+                debug_codegen,
+            )?;
+            <runtime::WasmBackend as runtime::JsBackend>::artifact_bytes(&a)
+                .map(|b| b.to_vec())
+                .unwrap_or_default()
+        }
+        Target::Jit => {
+            let a = <wjsm_backend_jit::JitBackend as runtime::JsBackend>::compile(
+                &wjsm_backend_jit::JitBackend,
+                program,
+                debug_codegen,
+            )?;
+            <wjsm_backend_jit::JitBackend as runtime::JsBackend>::artifact_bytes(&a)
+                .map(|b| b.to_vec())
+                .unwrap_or_default()
+        }
+    };
+    Ok(bytes)
 }
 
 fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
@@ -2204,10 +2220,7 @@ fn compile_file_input_to_pipeline_result(
                 timings: PipelineTimings::default(),
             };
             result.timings.compile_us = start.elapsed().as_micros() as u64;
-            match target {
-                Target::Wasm => result.wasm = Some(wasm),
-                Target::Jit => bail!("JIT backend is not implemented yet"),
-            }
+            result.wasm = Some(wasm);
             Ok(result)
         }
         CompilePlan::SingleSource { source, filename } => compile_source_to_pipeline_result(
@@ -2279,28 +2292,23 @@ fn compile_bundle(
     debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<Vec<u8>> {
-    match target {
-        Target::Wasm => {
-            let program = wjsm_module::lower_bundle_with_debug(
-                entry,
-                root,
-                resolution_options.clone(),
-                debug_codegen,
-            )
-            .with_context(|| {
-                format!(
-                    "bundle entry {} from root {}",
-                    entry.display(),
-                    root.display()
-                )
-            })?;
-            if verify_ir {
-                verify_ir_for_pipeline(&program, true)?;
-            }
-            compile_program_to_wasm(&program, target, debug_codegen)
-        }
-        Target::Jit => bail!("JIT backend is not implemented yet"),
+    let program = wjsm_module::lower_bundle_with_debug(
+        entry,
+        root,
+        resolution_options.clone(),
+        debug_codegen,
+    )
+    .with_context(|| {
+        format!(
+            "bundle entry {} from root {}",
+            entry.display(),
+            root.display()
+        )
+    })?;
+    if verify_ir {
+        verify_ir_for_pipeline(&program, true)?;
     }
+    compile_program_to_wasm(&program, target, debug_codegen)
 }
 
 /// In-process 复现 `wjsm run <file>` 的可观测行为（stdout / stderr / exit_code），

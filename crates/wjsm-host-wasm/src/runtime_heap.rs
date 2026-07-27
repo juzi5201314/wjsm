@@ -472,15 +472,17 @@ fn define_host_accessor_property_v2(
 ) -> Option<()> {
     let handle = value::decode_handle(object);
     let key = v2_host_property_key(caller, name)?;
-    // 与 define_data_property_on_array_named 保持一致：数组命名槽不承载访问器。
     if value::is_array(object) {
-        set_runtime_error(
-            caller.data(),
-            format!(
-                "TypeError: Accessor properties are not supported on array named slots: {name}"
-            ),
+        crate::array_named_props::ArrayNamedPropsStore::set_descriptor(
+            caller,
+            object,
+            key,
+            value::encode_undefined(),
+            getter,
+            setter,
+            constants::FLAG_CONFIGURABLE | constants::FLAG_IS_ACCESSOR,
         );
-        return None;
+        return Some(());
     }
     match caller.data().heap_access_v2().define_accessor_property(
         handle,
@@ -1829,83 +1831,110 @@ pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
 }
 
 /// 读取 `@@toStringTag`；V2 下 resolve_handle 返回 handle id，必须走 HeapAccessV2 原型链。
-fn object_to_string_tag(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<i64> {
-    let name_id = crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::TO_STRING_TAG);
-    {
-        if value::is_js_object(obj) || value::is_array(obj) {
-            let handle = value::decode_handle(obj);
-            let access = caller.data().heap_access_v2().clone();
-            if access.resolve_handle(handle).is_ok() {
-                let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
-                return access
-                    .get_property_slot_on_proto_chain(handle, key)
-                    .ok()
-                    .flatten()
-                    .map(|property| property.value as i64);
-            }
-        }
+fn object_to_string_tag(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+) -> Result<Option<i64>, i64> {
+    let property = crate::property_key::name_id_to_property_key_value(
+        crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::TO_STRING_TAG),
+    )
+    .expect("well-known Symbol.toStringTag property key");
+    let runtime = tokio::runtime::Handle::current();
+    let tag = tokio::task::block_in_place(|| {
+        runtime.block_on(
+            crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
+                caller, object, property, object,
+            ),
+        )
+    });
+    if value::is_exception(tag) {
+        Err(tag)
+    } else {
+        Ok(value::is_string(tag).then_some(tag))
     }
-    let ptr = resolve_handle(caller, obj)?;
-    crate::host_imports::read_object_property_by_name_id_proto_walk(caller, ptr, name_id)
 }
 
-pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
-    if value::is_undefined(obj) {
-        store_runtime_string(caller, "[object Undefined]".to_string())
-    } else if value::is_null(obj) {
-        store_runtime_string(caller, "[object Null]".to_string())
-    } else if let Some(tag) = object_to_string_tag(caller, obj)
-        && let Some(bytes) = read_value_string_bytes(caller, tag)
-    {
-        store_runtime_string(
-            caller,
-            format!("[object {}]", String::from_utf8_lossy(&bytes)),
-        )
-    } else if value::is_array(obj) {
-        store_runtime_string(caller, "[object Array]".to_string())
-    } else if value::is_function(obj) || value::is_callable(obj) {
-        store_runtime_string(caller, "[object Function]".to_string())
-    } else if is_promise_value(caller.data(), obj) {
-        store_runtime_string(caller, "[object Promise]".to_string())
-    } else if value::is_regexp(obj) {
-        store_runtime_string(caller, "[object RegExp]".to_string())
-    } else if value::is_object(obj) {
-        let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize);
-        if let Some(op) = obj_ptr {
-            {
-                let handle = value::decode_object_handle(obj) as u32;
-                let access = caller.data().heap_access_v2().clone();
-                if access.resolve_handle(handle).is_ok() {
-                    if access.object_type(handle).ok()
-                        == Some(u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS))
-                    {
-                        return store_runtime_string(caller, "[object Arguments]".to_string());
-                    }
-                } else if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
-                    let data = mem.data(&caller);
-                    if op + 4 < data.len() && data[op + 4] == wjsm_ir::HEAP_TYPE_ARGUMENTS {
-                        return store_runtime_string(caller, "[object Arguments]".to_string());
-                    }
-                }
-            }
-            let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
-            if map_handle.is_some() {
-                return store_runtime_string(caller, "[object Map]".to_string());
-            }
-            let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
-            if set_handle.is_some() {
-                return store_runtime_string(caller, "[object Set]".to_string());
-            }
+fn builtin_object_tag(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+) -> Result<&'static str, i64> {
+    let value = crate::runtime_values::primitive_wrapper_value(caller, object).unwrap_or(object);
+    if value::is_undefined(value) {
+        return Ok("Undefined");
+    }
+    if value::is_null(value) {
+        return Ok("Null");
+    }
+    if value::is_bool(value) {
+        return Ok("Boolean");
+    }
+    if value::is_f64(value) {
+        return Ok("Number");
+    }
+    if value::is_string(value) {
+        return Ok("String");
+    }
+    if value::is_bigint(value) {
+        return Ok("BigInt");
+    }
+    if value::is_symbol(value) {
+        return Ok("Symbol");
+    }
+    if value::is_proxy(value) {
+        let entry = {
+            let table = caller
+                .data()
+                .proxy_table
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            table
+                .get(value::decode_proxy_handle(value) as usize)
+                .cloned()
+        };
+        let Some(entry) = entry else {
+            return Ok("Object");
+        };
+        if entry.revoked {
+            return Err(make_type_error_exception(
+                caller,
+                "TypeError: Cannot perform Object.prototype.toString on a revoked proxy",
+            ));
         }
-        let name_val = obj_ptr.and_then(|p| read_object_property_by_name(caller, p, "name"));
-        let msg_val = obj_ptr.and_then(|p| read_object_property_by_name(caller, p, "message"));
-        match (name_val, msg_val) {
-            (Some(nv), Some(_mv)) => {
-                let name_str = read_value_string_bytes(caller, nv)
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
-                    .unwrap_or_default();
-                if matches!(
-                    name_str.as_str(),
+        return builtin_object_tag(caller, entry.target);
+    }
+    if value::is_array(value) {
+        return Ok("Array");
+    }
+    if value::is_function(value) || value::is_callable(value) {
+        return Ok("Function");
+    }
+    if is_promise_value(caller.data(), value) {
+        return Ok("Promise");
+    }
+    if value::is_regexp(value) {
+        return Ok("RegExp");
+    }
+    if value::is_object(value) {
+        let handle = value::decode_object_handle(value);
+        let access = caller.data().heap_access_v2().clone();
+        if access.resolve_handle(handle).is_ok()
+            && access.object_type(handle).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS))
+        {
+            return Ok("Arguments");
+        }
+        if let Some(pointer) = resolve_handle_idx(caller, handle as usize) {
+            if read_object_property_by_name(caller, pointer, "__map_handle__").is_some() {
+                return Ok("Map");
+            }
+            if read_object_property_by_name(caller, pointer, "__set_handle__").is_some() {
+                return Ok("Set");
+            }
+            let name = read_object_property_by_name(caller, pointer, "name")
+                .and_then(|value| read_value_string_bytes(caller, value))
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+            if name.as_deref().is_some_and(|name| {
+                matches!(
+                    name,
                     "Error"
                         | "TypeError"
                         | "RangeError"
@@ -1914,28 +1943,26 @@ pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, ob
                         | "URIError"
                         | "EvalError"
                         | "AggregateError"
-                ) {
-                    let obj_ptr2 =
-                        resolve_handle_idx(caller, value::decode_object_handle(obj) as usize);
-                    let msg_str = obj_ptr2
-                        .and_then(|p| read_object_property_by_name(caller, p, "message"))
-                        .and_then(|v| read_value_string_bytes(caller, v))
-                        .map(|b| String::from_utf8_lossy(&b).into_owned())
-                        .unwrap_or_default();
-                    if msg_str.is_empty() {
-                        store_runtime_string(caller, name_str)
-                    } else {
-                        store_runtime_string(caller, format!("{}: {}", name_str, msg_str))
-                    }
-                } else {
-                    store_runtime_string(caller, "[object Object]".to_string())
-                }
+                )
+            }) {
+                return Ok("Error");
             }
-            _ => store_runtime_string(caller, "[object Object]".to_string()),
         }
-    } else {
-        store_runtime_string(caller, "[object Object]".to_string())
     }
+    Ok("Object")
+}
+
+pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, object: i64) -> i64 {
+    let builtin_tag = match builtin_object_tag(caller, object) {
+        Ok(tag) => tag,
+        Err(exception) => return exception,
+    };
+    let tag = match object_to_string_tag(caller, object) {
+        Ok(Some(tag)) => get_string_value(caller, tag).to_utf8_lossy(),
+        Ok(None) => builtin_tag.to_string(),
+        Err(exception) => return exception,
+    };
+    store_runtime_string(caller, format!("[object {tag}]"))
 }
 
 pub(crate) fn define_host_data_property_from_caller(

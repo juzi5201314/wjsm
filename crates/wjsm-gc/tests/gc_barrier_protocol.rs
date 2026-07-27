@@ -1,15 +1,14 @@
 use std::sync::atomic::AtomicU64;
 
+use wjsm_gc::{
+    BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, GrowableHeapMemory,
+    HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleTableV2, HeaderLayout,
+    LoadBarrierOutcome, ManagedHeapLayout, color_stored_value, load_barrier, prototype_field_kind,
+    select_bulk_copy_mode, store_barrier, store_barrier_with_target_generation,
+};
 use wjsm_ir::value::{
     self, encode_f64, encode_null, encode_object_handle, encode_runtime_string_handle,
     encode_undefined, strip_gc_color,
-};
-use wjsm_gc::{
-    GrowableHeapMemory,
-    BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, HANDLE_REGION_BYTES, HandleGeneration,
-    HandleId, HandleTableV2, HeaderLayout, LoadBarrierOutcome, ManagedHeapLayout,
-    color_stored_value, load_barrier, prototype_field_kind, select_bulk_copy_mode, store_barrier,
-    store_barrier_with_target_generation,
 };
 
 const PAGE: u64 = 64 * 1024;

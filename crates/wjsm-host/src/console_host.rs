@@ -3,8 +3,8 @@
 //! 对应 ECMAScript host 环境的 `console.*` 输出。语义实现基于 [`HeapContext`]
 //! 的后端无关操作，各后端只需提供 `HeapContext` 即可获得完整 console 行为。
 
-use crate::heap_context::HeapContext;
 use crate::Value;
+use crate::heap_context::HeapContext;
 
 /// `console.*` 输出能力。方法接收后端上下文 `ctx`。
 pub trait ConsoleHost {

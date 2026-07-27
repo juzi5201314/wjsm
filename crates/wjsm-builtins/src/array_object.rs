@@ -6,7 +6,6 @@ use crate::object_builtins::same_value_zero;
 use wjsm_host::{ExecContext, Value};
 use wjsm_ir::{value, wk_symbol};
 
-const MAX_ARRAY_LENGTH: u32 = u32::MAX;
 const ARRAY_LENGTH_RANGE_ERROR: &str = "Invalid array length";
 
 fn array_length_to_uint32(n: f64) -> u32 {
@@ -387,7 +386,7 @@ pub fn arr_proto_push<E: ExecContext>(
     }
     let len = ctx.array_read_length(this_val).unwrap_or(0);
     let count = args_count.max(0) as u32;
-    if len.checked_add(count).is_none() || len.saturating_add(count) > MAX_ARRAY_LENGTH {
+    if len.checked_add(count).is_none() {
         return ctx.make_range_error(ARRAY_LENGTH_RANGE_ERROR);
     }
     for index in 0..count {
@@ -833,6 +832,28 @@ pub fn arr_proto_join_args<E: ExecContext>(
     crate::timers_arrays::arr_join(ctx, this_val, sep)
 }
 
+/// Array.prototype.toString（ECMAScript §23.1.3.30）。
+pub fn arr_proto_to_string<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value {
+    let object = ctx.to_object(this_val);
+    if value::is_exception(object) {
+        return object;
+    }
+    let join_key = ctx.store_string("join");
+    let join = ctx.reflect_get_sync(object, join_key, object);
+    if value::is_exception(join) {
+        return join;
+    }
+    if ctx.is_callable(join) {
+        if ctx.is_array_prototype_join(join) {
+            return crate::timers_arrays::arr_join(ctx, object, value::encode_undefined());
+        }
+        return ctx
+            .call_js(join, object, &[])
+            .unwrap_or_else(|_| value::encode_undefined());
+    }
+    ctx.obj_proto_to_string(object)
+}
+
 /// Array.prototype.concat（shadow args）
 pub fn arr_proto_concat_args<E: ExecContext>(
     ctx: &mut E,
@@ -905,14 +926,9 @@ pub fn arr_proto_reverse<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value 
 }
 
 /// `Array.from(items, mapFn?)`：支持可迭代对象（@@iterator）、类数组、字符串、TypedArray。
-pub async fn array_from_impl<E: ExecContext>(
-    ctx: &mut E,
-    source: Value,
-    map_fn: Value,
-) -> Value {
+pub async fn array_from_impl<E: ExecContext>(ctx: &mut E, source: Value, map_fn: Value) -> Value {
     let has_map_fn = ctx.is_callable(map_fn);
-    let Some(values) = crate::iterable_collect::collect_array_from_values(ctx, source).await
-    else {
+    let Some(values) = crate::iterable_collect::collect_array_from_values(ctx, source).await else {
         ctx.set_last_error(
             "TypeError: Array.from requires an array-like or iterable object".to_string(),
         );
@@ -924,7 +940,10 @@ pub async fn array_from_impl<E: ExecContext>(
     for (i, raw) in values.into_iter().enumerate() {
         let mapped = if has_map_fn {
             let idx_val = value::encode_f64(i as f64);
-            match ctx.call_js_async(map_fn, value::encode_undefined(), &[raw, idx_val]).await {
+            match ctx
+                .call_js_async(map_fn, value::encode_undefined(), &[raw, idx_val])
+                .await
+            {
                 Ok(v) => {
                     if value::is_exception(v) {
                         return v;

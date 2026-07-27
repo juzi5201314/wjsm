@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use crate::heap::{HandleGeneration, HandleId};
 use crate::RootSnapshot;
+use crate::heap::{HandleGeneration, HandleId};
 
 use super::barrier::BarrierEpoch;
 use super::young::YoungController;

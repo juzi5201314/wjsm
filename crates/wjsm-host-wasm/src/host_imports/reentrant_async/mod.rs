@@ -6,7 +6,6 @@ use wasmtime::{Caller, FuncType, Linker, Store, Val, ValType};
 
 use crate::*;
 
-
 fn type_error_exception_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     msg: &'static str,

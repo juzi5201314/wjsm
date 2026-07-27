@@ -7,13 +7,17 @@ use wjsm_ir::value;
 
 use crate::proxy_reflect::{reflect_get_own_property_descriptor_impl, reflect_own_keys_impl};
 use crate::proxy_traps::{
-    proxy_trap_handler_trap, proxy_trap_proxy_entry, proxy_trap_property_key_value,
+    proxy_trap_handler_trap, proxy_trap_property_key_value, proxy_trap_proxy_entry,
 };
 
 // ── Proxy trap 检查 ──────────────────────────────────────────────────────
 
 /// D4: 检查 proxy 是否已撤销，返回 Some(exception) 如果已撤销，否则 None。
-pub fn check_proxy_revoked<E: ExecContext>(ctx: &mut E, entry: &ProxyEntry, op: &str) -> Option<Value> {
+pub fn check_proxy_revoked<E: ExecContext>(
+    ctx: &mut E,
+    entry: &ProxyEntry,
+    op: &str,
+) -> Option<Value> {
     if ctx.proxy_is_revoked(value::decode_proxy_handle(entry.target) as u32) {
         Some(ctx.make_type_error(&format!(
             "Cannot perform '{}' on a proxy that has been revoked",
@@ -48,11 +52,7 @@ fn proxy_target_handler<E: ExecContext>(
 // ── Reflect.has (async, Proxy-aware) ──────────────────────────────────────
 
 /// `Reflect.has(target, prop)` 异步路径（含 Proxy has trap）。
-pub async fn reflect_has_async<E: ExecContext>(
-    ctx: &mut E,
-    target: Value,
-    prop: Value,
-) -> Value {
+pub async fn reflect_has_async<E: ExecContext>(ctx: &mut E, target: Value, prop: Value) -> Value {
     if !value::is_js_object(target) && !value::is_array(target) && !value::is_function(target) {
         return value::encode_bool(false);
     }
@@ -80,9 +80,8 @@ pub async fn reflect_has_async<E: ExecContext>(
 
 /// `Reflect.get(target, prop, receiver)` 异步路径（含 Proxy get trap）。
 ///
-/// 完全异步实现：不调用 `reflect_get_sync`（后者用 `block_in_place`，
-/// 在 current-thread tokio runtime 上会 panic）。对普通对象走 OrdinaryGet
-/// 算法：沿原型链查找属性槽，accessor 属性异步调用 getter。
+/// 完全异步实现：不调用同步再入桥；对普通对象走 OrdinaryGet
+/// 算法，沿原型链查找属性槽，accessor 属性异步调用 getter。
 pub async fn reflect_get_impl_with_receiver_async<E: ExecContext>(
     ctx: &mut E,
     target: Value,
@@ -95,10 +94,7 @@ pub async fn reflect_get_impl_with_receiver_async<E: ExecContext>(
             Err(exc) => return exc,
         };
         if let Some(trap) = proxy_trap_handler_trap(ctx, handler, "get") {
-            return match ctx
-                .call_js_async(trap, handler, &[t, prop, receiver])
-                .await
-            {
+            return match ctx.call_js_async(trap, handler, &[t, prop, receiver]).await {
                 Ok(v) => v,
                 Err(_) => value::encode_undefined(),
             };
@@ -218,108 +214,116 @@ pub async fn ordinary_set_by_name_id<E: ExecContext>(
     name_id: u32,
     val: Value,
 ) -> bool {
-    let Some(handle) = ctx.handle_index_of(obj) else {
+    let Some(obj_handle) = ctx.handle_index_of(obj) else {
         return false;
     };
-    // 沿原型链搜索属性槽
-    let mut current = handle;
+    let receiver_handle = ctx.handle_index_of(receiver);
+    let mut current = obj_handle;
     let mut visited = std::collections::HashSet::new();
     loop {
         if !visited.insert(current) {
             return false;
         }
-        if let Some((_slot_val, flags, _getter, setter)) = ctx.get_own_property_slot(current, name_id) {
-            let is_accessor = (flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32) != 0;
-            if is_accessor {
-                // 调用 setter（非 getter）
-                if !value::is_undefined(setter) && !value::is_null(setter) {
-                    let _ = ctx.call_js_async(setter, receiver, &[val]).await;
-                    return true;
+        if let Some((_slot, flags, _getter, setter)) =
+            ctx.get_own_property_slot(current, name_id)
+        {
+            if flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
+                if value::is_undefined(setter) || value::is_null(setter) {
+                    return false;
                 }
+                return ctx.call_js_async(setter, receiver, &[val]).await.is_ok();
+            }
+            if flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0 {
                 return false;
             }
-            if (flags & wjsm_ir::constants::FLAG_WRITABLE as u32) == 0 {
-                return false;
-            }
-            // current == receiver → 直接写
-            let current_val = ctx.encode_handle_as_value(current);
-            if current_val == receiver {
+            if receiver_handle == Some(current) {
                 return ctx.set_property_by_name_id(current, name_id, val);
             }
             return define_value_on_receiver(ctx, receiver, name_id, val).await;
         }
-        // 沿原型链上行
-        let Some(proto) = ctx.prototype_of(current) else {
+        let Some(prototype) = ctx.prototype_of(current) else {
             return define_value_on_receiver(ctx, receiver, name_id, val).await;
         };
-        if proto == 0xFFFF_FFFF || proto == current {
+        if prototype == 0xFFFF_FFFF || prototype == current {
             return define_value_on_receiver(ctx, receiver, name_id, val).await;
         }
-        current = proto;
+        current = prototype;
     }
 }
 
-/// §10.1.9.2: define {value:V} on Receiver。
-///
-/// 先通过 `reflect_get_own_property_descriptor_on_object_async` 查询 receiver上
-/// 是否已有该属性（对 proxy 会触发 getOwnPropertyDescriptor trap），再根据结果
-/// 决定是更新还是新建（对 proxy 会触发 defineProperty trap）。
+/// §10.1.9.2：在 Receiver 上更新现有数据属性或创建新属性。
 pub async fn define_value_on_receiver<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
     name_id: u32,
     val: Value,
 ) -> bool {
-    if !value::is_object(receiver)
-        && !value::is_function(receiver)
-        && !value::is_array(receiver)
-        && !value::is_proxy(receiver)
-    {
-        return false;
-    }
-    let prop = match ctx.name_id_to_property_key_value(name_id) {
-        Some(v) => v,
-        None => return false,
-    };
-    // 查询 receiver 上是否已有该属性（proxy 会触发 getOwnPropertyDescriptor trap）
-    let existing_handle = Box::pin(
-        reflect_get_own_property_descriptor_on_object_async(ctx, receiver, prop),
-    )
-    .await;
-    if value::is_exception(existing_handle) {
-        return false;
-    }
-    // 解析已有描述符
-    if !value::is_undefined(existing_handle) && value::is_js_object(existing_handle) {
-        if let Ok(desc) = parse_descriptor(ctx, existing_handle) {
-            let completed = complete_property_descriptor(desc);
-            if is_accessor_descriptor(&completed) {
-                return false;
-            }
-            if completed.writable == Some(false) {
-                return false;
-            }
-        }
-    } else if !ctx.is_extensible(receiver) {
-        return false;
-    }
-    // 执行 defineProperty（proxy 会触发 defineProperty trap）
-    let desc_obj = crate::proxy_reflect::alloc_data_property_descriptor(ctx, val, true, true, true);
     if value::is_proxy(receiver) {
-        let (t, handler) = match proxy_target_handler(ctx, receiver, "defineProperty") {
+        let Some(property) = ctx.name_id_to_property_key_value(name_id) else {
+            return false;
+        };
+        let existing = Box::pin(reflect_get_own_property_descriptor_on_object_async(
+            ctx,
+            receiver,
+            property,
+        ))
+        .await;
+        if value::is_exception(existing) {
+            return false;
+        }
+        if !value::is_undefined(existing) && value::is_js_object(existing) {
+            if let Ok(descriptor) = parse_descriptor(ctx, existing) {
+                let descriptor = complete_property_descriptor(descriptor);
+                if is_accessor_descriptor(&descriptor) || descriptor.writable == Some(false) {
+                    return false;
+                }
+            }
+        } else if !ctx.is_extensible(receiver) {
+            return false;
+        }
+        let descriptor =
+            crate::proxy_reflect::alloc_data_property_descriptor(ctx, val, true, true, true);
+        let (target, handler) = match proxy_target_handler(ctx, receiver, "defineProperty") {
             Ok(pair) => pair,
             Err(_) => return false,
         };
         if let Some(trap) = proxy_trap_handler_trap(ctx, handler, "defineProperty") {
-            let result = match ctx.call_js_async(trap, handler, &[t, prop, desc_obj]).await {
-                Ok(v) => v,
-                Err(_) => return false,
+            return match ctx
+                .call_js_async(trap, handler, &[target, property, descriptor])
+                .await
+            {
+                Ok(result) => value::is_truthy(result),
+                Err(_) => false,
             };
-            return value::is_truthy(result);
         }
-        return ctx.define_property_or_throw(t, prop, desc_obj);
+        return ctx.define_property_or_throw(target, property, descriptor);
     }
-    ctx.define_property_or_throw(receiver, prop, desc_obj)
+    if !value::is_object(receiver)
+        && !value::is_function(receiver)
+        && !value::is_closure(receiver)
+        && !value::is_bound(receiver)
+        && !value::is_array(receiver)
+    {
+        return false;
+    }
+    if !ctx.ensure_property_storage(receiver) {
+        return false;
+    }
+    let Some(handle) = ctx.handle_index_of(receiver) else {
+        return false;
+    };
+    if let Some((_slot, flags, _getter, _setter)) = ctx.get_own_property_slot(handle, name_id) {
+        if flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0
+            || flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0
+        {
+            return false;
+        }
+        return ctx.set_property_by_name_id(handle, name_id, val);
+    }
+    if !ctx.is_extensible(receiver) {
+        return false;
+    }
+    ctx.set_property_by_name_id(handle, name_id, val)
 }
 
 // ── Reflect.apply / construct ─────────────────────────────────────────────
@@ -352,12 +356,15 @@ pub async fn reflect_construct_impl_async<E: ExecContext>(
         };
         if let Some(trap) = proxy_trap_handler_trap(ctx, handler, "construct") {
             // 构造 args 数组传给 trap
- let args_arr = ctx.alloc_array(args.len() as u32);
+            let args_arr = ctx.alloc_array(args.len() as u32);
             for (i, arg) in args.iter().enumerate() {
                 ctx.array_write_elem(args_arr, i as u32, *arg);
             }
             ctx.array_write_length(args_arr, args.len() as u32);
-            let result = match ctx.call_js_async(trap, handler, &[t, args_arr, new_target]).await {
+            let result = match ctx
+                .call_js_async(trap, handler, &[t, args_arr, new_target])
+                .await
+            {
                 Ok(v) => v,
                 Err(_) => return ctx.make_type_error("Proxy construct trap failed"),
             };
@@ -386,10 +393,7 @@ async fn ordinary_construct<E: ExecContext>(
     // 通过 Reflect.get 读取 new_target.prototype（proxy-aware）
     let proto_prop = ctx.store_runtime_string(wjsm_host::RuntimeString::from_utf8_str("prototype"));
     let proto_val = Box::pin(reflect_get_impl_with_receiver_async(
-        ctx,
-        new_target,
-        proto_prop,
-        new_target,
+        ctx, new_target, proto_prop, new_target,
     ))
     .await;
     if value::is_object(proto_val)
@@ -414,10 +418,7 @@ async fn ordinary_construct<E: ExecContext>(
 // ── Reflect.getPrototypeOf / setPrototypeOf ───────────────────────────────
 
 /// `Reflect.getPrototypeOf(target)` 异步路径（含 Proxy getPrototypeOf trap）。
-pub async fn reflect_get_prototype_of_async<E: ExecContext>(
-    ctx: &mut E,
-    target: Value,
-) -> Value {
+pub async fn reflect_get_prototype_of_async<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
     if value::is_proxy(target) {
         let (t, handler) = match proxy_target_handler(ctx, target, "getPrototypeOf") {
             Ok(pair) => pair,
@@ -573,9 +574,9 @@ pub async fn proxy_own_keys_trap_async<E: ExecContext>(ctx: &mut E, target: Valu
                 .iter()
                 .any(|(key, _)| !trap_keys_str.contains(key))
             || target_symbols.iter().any(|(key, _)| {
-                !trap_keys_sym.iter().any(|trap_key| {
-                    crate::object_builtins::same_value_zero(ctx, *trap_key, *key)
-                })
+                !trap_keys_sym
+                    .iter()
+                    .any(|trap_key| crate::object_builtins::same_value_zero(ctx, *trap_key, *key))
             })
     } else {
         target_strings
@@ -583,11 +584,9 @@ pub async fn proxy_own_keys_trap_async<E: ExecContext>(ctx: &mut E, target: Valu
             .any(|(key, configurable)| !*configurable && !trap_keys_str.contains(key))
             || target_symbols.iter().any(|(key, configurable)| {
                 !*configurable
-                    && !trap_keys_sym
-                        .iter()
-                        .any(|trap_key| {
-                            crate::object_builtins::same_value_zero(ctx, *trap_key, *key)
-                        })
+                    && !trap_keys_sym.iter().any(|trap_key| {
+                        crate::object_builtins::same_value_zero(ctx, *trap_key, *key)
+                    })
             })
     };
     if violates_invariant {
@@ -616,7 +615,9 @@ pub async fn extract_array_like_elements<E: ExecContext>(
         };
         let len = ctx.array_read_length(arr_like).unwrap_or(0);
         for index in 0..len {
-            let elem = ctx.array_elem_at(arr_like, index).unwrap_or_else(value::encode_undefined);
+            let elem = ctx
+                .array_elem_at(arr_like, index)
+                .unwrap_or_else(value::encode_undefined);
             elements.push(elem);
         }
     } else if value::is_object(arr_like) || value::is_proxy(arr_like) {
@@ -881,7 +882,10 @@ fn complete_property_descriptor(mut desc: PropertyDescriptor) -> PropertyDescrip
 }
 
 /// 解析 JS 对象形式的描述符为 PropertyDescriptor。
-fn parse_descriptor<E: ExecContext>(ctx: &mut E, desc_obj: Value) -> Result<PropertyDescriptor, String> {
+fn parse_descriptor<E: ExecContext>(
+    ctx: &mut E,
+    desc_obj: Value,
+) -> Result<PropertyDescriptor, String> {
     if !value::is_object(desc_obj)
         && !value::is_function(desc_obj)
         && !value::is_array(desc_obj)
@@ -898,12 +902,36 @@ fn parse_descriptor<E: ExecContext>(ctx: &mut E, desc_obj: Value) -> Result<Prop
 
     // read_data_property 对不存在的属性返回 undefined；区分"显式 undefined"和"不存在"
     // 在不变量检查中，undefined 等同于不存在（规范 ToPropertyDescriptor 行为）
-    let prop_value = if value::is_undefined(prop_value) { None } else { Some(prop_value) };
-    let prop_writable = if value::is_undefined(prop_writable) { None } else { Some(prop_writable) };
-    let prop_enumerable = if value::is_undefined(prop_enumerable) { None } else { Some(prop_enumerable) };
-    let prop_configurable = if value::is_undefined(prop_configurable) { None } else { Some(prop_configurable) };
-    let prop_get = if value::is_undefined(prop_get) { None } else { Some(prop_get) };
-    let prop_set = if value::is_undefined(prop_set) { None } else { Some(prop_set) };
+    let prop_value = if value::is_undefined(prop_value) {
+        None
+    } else {
+        Some(prop_value)
+    };
+    let prop_writable = if value::is_undefined(prop_writable) {
+        None
+    } else {
+        Some(prop_writable)
+    };
+    let prop_enumerable = if value::is_undefined(prop_enumerable) {
+        None
+    } else {
+        Some(prop_enumerable)
+    };
+    let prop_configurable = if value::is_undefined(prop_configurable) {
+        None
+    } else {
+        Some(prop_configurable)
+    };
+    let prop_get = if value::is_undefined(prop_get) {
+        None
+    } else {
+        Some(prop_get)
+    };
+    let prop_set = if value::is_undefined(prop_set) {
+        None
+    } else {
+        Some(prop_set)
+    };
 
     if let Some(getter) = prop_get
         && !value::is_null(getter)
@@ -920,7 +948,10 @@ fn parse_descriptor<E: ExecContext>(ctx: &mut E, desc_obj: Value) -> Result<Prop
 
     let has_accessor = prop_get.is_some() || prop_set.is_some();
     if has_accessor && (prop_value.is_some() || prop_writable.is_some()) {
-        return Err("Invalid property descriptor: cannot specify both accessor and value/writable".to_string());
+        return Err(
+            "Invalid property descriptor: cannot specify both accessor and value/writable"
+                .to_string(),
+        );
     }
 
     Ok(PropertyDescriptor {
@@ -988,16 +1019,14 @@ fn is_compatible_property_descriptor<E: ExecContext>(
         }
         return true;
     }
-    if !current_configurable {
-        if desc.get != current.get || desc.set != current.set {
-            return false;
-        }
+    if !current_configurable && (desc.get != current.get || desc.set != current.set) {
+        return false;
     }
     true
 }
 
 /// §10.5.11 [[GetOwnProperty]] 不变量验证。
-fn validate_proxy_get_own_property_descriptor_result<E: ExecContext>(
+pub(crate) fn validate_proxy_get_own_property_descriptor_result<E: ExecContext>(
     ctx: &mut E,
     target: Value,
     name_id: Option<u32>,
@@ -1020,7 +1049,10 @@ fn validate_proxy_get_own_property_descriptor_result<E: ExecContext>(
     }
 
     if !value::is_js_object(trap_result) {
-        return Err("TypeError: Proxy getOwnPropertyDescriptor trap must return an object or undefined".to_string());
+        return Err(
+            "TypeError: Proxy getOwnPropertyDescriptor trap must return an object or undefined"
+                .to_string(),
+        );
     }
 
     let result_desc = complete_property_descriptor(parse_descriptor(ctx, trap_result)?);
@@ -1105,7 +1137,7 @@ pub async fn proxy_trap_internal_get_async<E: ExecContext>(
             Err(_) => value::encode_undefined(),
         };
     }
-    // 无 trap → target OrdinaryGet（异步，避免 block_in_place）
+    // 无 trap → target OrdinaryGet 异步路径。
     let prop = proxy_trap_property_key_value(ctx, name_id);
     ordinary_get_async(ctx, target, prop, proxy).await
 }
@@ -1128,7 +1160,9 @@ pub async fn proxy_trap_internal_set_async<E: ExecContext>(
     };
     if let Some(trap) = proxy_trap_handler_trap(ctx, handler, "set") {
         let prop = proxy_trap_property_key_value(ctx, name_id);
-        let _ = ctx.call_js_async(trap, handler, &[target, prop, val, proxy]).await;
+        let _ = ctx
+            .call_js_async(trap, handler, &[target, prop, val, proxy])
+            .await;
         return;
     }
     // 无 trap → target OrdinarySet
@@ -1157,5 +1191,10 @@ pub async fn proxy_trap_internal_delete_async<E: ExecContext>(
         };
         return value::encode_bool(value::is_truthy(result));
     }
-    value::encode_bool(true)
+    Box::pin(crate::property::delete_by_name_id(
+        ctx,
+        target,
+        name_id as u32,
+    ))
+    .await
 }

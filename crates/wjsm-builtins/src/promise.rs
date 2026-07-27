@@ -4,9 +4,7 @@
 //! 算法逻辑通过 `<E: ExecContext>` 泛型单态化，零 vtable 开销。
 //! host-wasm 注册层仅做 `WasmExecContext::new(caller)` + 委托调用。
 
-use wjsm_host::{
-    ExecContext, PromiseEntry, PromiseReaction, PromiseState, ReactionType, Value,
-};
+use wjsm_host::{ExecContext, PromiseEntry, PromiseReaction, PromiseState, ReactionType, Value};
 use wjsm_ir::value;
 
 /// §27.2.5.4 `Promise.prototype.then(onFulfilled, onRejected)`。
@@ -20,7 +18,10 @@ pub fn promise_then_impl<E: ExecContext>(
     let species_constructor = ctx.promise_result_species_constructor_handle(promise);
     let result_promise = ctx.alloc_object(0);
     ctx.push_host_temp_roots(&[result_promise]);
-    ctx.set_promise_proto_from_constructor(result_promise, species_constructor.unwrap_or_else(value::encode_undefined));
+    ctx.set_promise_proto_from_constructor(
+        result_promise,
+        species_constructor.unwrap_or_else(value::encode_undefined),
+    );
     let result_handle = ctx.raw_promise_handle(result_promise);
 
     // 查询源 promise 的 capture_scope（parent scope 继承）
@@ -92,7 +93,10 @@ pub fn promise_finally_impl<E: ExecContext>(
     let species_constructor = ctx.promise_result_species_constructor_handle(promise);
     let result_promise = ctx.alloc_object(0);
     ctx.push_host_temp_roots(&[result_promise]);
-    ctx.set_promise_proto_from_constructor(result_promise, species_constructor.unwrap_or_else(value::encode_undefined));
+    ctx.set_promise_proto_from_constructor(
+        result_promise,
+        species_constructor.unwrap_or_else(value::encode_undefined),
+    );
     let result_handle = ctx.raw_promise_handle(result_promise);
 
     let parent_scope = ctx.promise_capture_scope(promise);
@@ -109,12 +113,20 @@ pub fn promise_finally_impl<E: ExecContext>(
         PromiseState::Pending => {
             ctx.push_promise_reaction(
                 promise,
-                PromiseReaction::new(on_finally, result_handle as Value, ReactionType::FinallyFulfill),
+                PromiseReaction::new(
+                    on_finally,
+                    result_handle as Value,
+                    ReactionType::FinallyFulfill,
+                ),
                 true,
             );
             ctx.push_promise_reaction(
                 promise,
-                PromiseReaction::new(on_finally, result_handle as Value, ReactionType::FinallyReject),
+                PromiseReaction::new(
+                    on_finally,
+                    result_handle as Value,
+                    ReactionType::FinallyReject,
+                ),
                 false,
             );
         }
@@ -151,9 +163,9 @@ pub fn promise_resolve_static_impl<E: ExecContext>(
     if ctx.is_promise_value(val) {
         let ctor_handle = ctx.promise_constructor_handle(val);
         let matches = match (ctor_handle, value::is_undefined(constructor)) {
-            (None, true) => true, // 都是内建 Promise
-            (Some(_), true) => false, // 子类 vs 内建
-            (None, false) => false, // 内建 vs 子类
+            (None, true) => true,                       // 都是内建 Promise
+            (Some(_), true) => false,                   // 子类 vs 内建
+            (None, false) => false,                     // 内建 vs 子类
             (Some(ctor), false) => ctor == constructor, // 同一子类
         };
         if matches {

@@ -163,26 +163,56 @@ pub fn arr_last_index_of<E: ExecContext>(
     value::encode_f64(-1.0)
 }
 
-pub fn arr_join<E: ExecContext>(ctx: &mut E, arr: Value, sep_val: Value) -> Value {
-    let Some(len) = ctx.array_read_length(arr) else {
-        return value::encode_undefined();
+pub fn arr_join<E: ExecContext>(ctx: &mut E, this_val: Value, sep_val: Value) -> Value {
+    let object = ctx.to_object(this_val);
+    if value::is_exception(object) {
+        return object;
+    }
+    let length = if value::is_array(object) {
+        ctx.array_read_length(object).map(u64::from).unwrap_or(0)
+    } else {
+        let length = ctx.read_property_by_string_key(object, "length");
+        if value::is_exception(length) {
+            return length;
+        }
+        let number = crate::core::to_number(ctx, length);
+        if value::is_exception(number) {
+            return number;
+        }
+        let number = value::decode_f64(number);
+        if number.is_nan() || number <= 0.0 {
+            0
+        } else {
+            number.floor().min(9_007_199_254_740_991.0) as u64
+        }
     };
-    let sep_str = if value::is_undefined(sep_val) {
+    let separator = if value::is_undefined(sep_val) {
         ",".to_string()
     } else {
         ctx.value_to_display_string(sep_val)
     };
-    let mut parts = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        match ctx.array_elem_at(arr, i) {
-            Some(elem) if value::is_null(elem) || value::is_undefined(elem) => {
-                parts.push(String::new());
+    let mut output = String::new();
+    for index in 0..length {
+        if index != 0 {
+            output.push_str(&separator);
+        }
+        let element = if value::is_array(object) {
+            ctx.array_elem_at(object, index as u32)
+        } else {
+            let element = ctx.read_property_by_string_key(object, &index.to_string());
+            if value::is_exception(element) {
+                return element;
             }
-            Some(elem) => parts.push(ctx.value_to_display_string(elem)),
-            None => parts.push(String::new()),
+            Some(element)
+        };
+        if let Some(element) = element
+            && !value::is_null(element)
+            && !value::is_undefined(element)
+        {
+            output.push_str(&ctx.value_to_display_string(element));
         }
     }
-    ctx.store_string_owned(parts.join(&sep_str))
+    ctx.store_string_owned(output)
 }
 
 pub fn arr_concat<E: ExecContext>(ctx: &mut E, arr1: Value, arr2: Value) -> Value {

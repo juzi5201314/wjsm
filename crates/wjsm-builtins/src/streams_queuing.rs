@@ -37,9 +37,16 @@ pub fn construct_count_queuing_strategy<E: ExecContext>(
     _this_val: Value,
     args: &[Value],
 ) -> Option<Value> {
-    let init = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let init = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let high_water_mark = high_water_mark_from_init(ctx, init);
-    Some(create_queuing_strategy_object(ctx, high_water_mark, QueuingStrategySizeKind::Count))
+    Some(create_queuing_strategy_object(
+        ctx,
+        high_water_mark,
+        QueuingStrategySizeKind::Count,
+    ))
 }
 
 /// `ByteLengthQueuingStrategy` 构造器。
@@ -48,7 +55,10 @@ pub fn construct_byte_length_queuing_strategy<E: ExecContext>(
     _this_val: Value,
     args: &[Value],
 ) -> Option<Value> {
-    let init = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let init = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let high_water_mark = high_water_mark_from_init(ctx, init);
     Some(create_queuing_strategy_object(
         ctx,
@@ -66,7 +76,10 @@ pub fn call_queuing_strategy_size<E: ExecContext>(
     match kind {
         QueuingStrategySizeKind::Count => Some(value::encode_f64(1.0)),
         QueuingStrategySizeKind::ByteLength => {
-            let chunk = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let chunk = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             if value::is_object(chunk)
                 || value::is_function(chunk)
                 || value::is_array(chunk)

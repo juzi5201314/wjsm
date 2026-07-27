@@ -4867,6 +4867,7 @@ name = "wjsm-backend-jit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "wjsm-host",
  "wjsm-ir",
 ]
 
@@ -4890,11 +4891,13 @@ name = "wjsm-builtins"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "icu_normalizer",
  "num-bigint",
  "num-traits",
  "rand 0.8.5",
+ "thiserror 2.0.18",
  "wjsm-host",
  "wjsm-ir",
 ]

@@ -1,9 +1,13 @@
-use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
 use wasmtime::{AsContext, Caller, Linker, Module, Ref, Val};
+pub use wjsm_host::{
+    RuntimeInstantiatedModule, RuntimeInstantiationEnv, RuntimeModuleFormat, RuntimeModuleLoadError,
+    RuntimeModuleLoadErrorCode, RuntimeModuleReferrer, RuntimeModuleResolutionKind,
+    RuntimeResolvedModule,
+};
 
 use crate::runtime_host_helpers::{
     alloc_heap_c_string_with_env, exception_reason, find_memory_c_string_with_env,
@@ -16,143 +20,7 @@ use crate::{
     RuntimeState, WasmEnv, alloc_host_object, define_host_data_property_from_caller, value,
 };
 
-use crate::RuntimeModuleKey;
 
-/// 运行时解析请求的来源模块。
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RuntimeModuleReferrer {
-    /// 没有调用方模块，例如入口模块或宿主触发的加载。
-    None,
-    /// 调用方已经有规范化 registry key。
-    Module(RuntimeModuleKey),
-    /// 调用方只有文件路径，loader 负责按项目 root 规范化。
-    Path(PathBuf),
-}
-
-/// 运行时解析语义：`import` 与 `require` 使用不同 package conditions。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RuntimeModuleResolutionKind {
-    Import,
-    Require,
-    ImportMetaResolve,
-}
-
-/// loader 返回给 runtime 的模块格式。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RuntimeModuleFormat {
-    EsModule,
-    CommonJs,
-    Json,
-    Builtin,
-}
-
-/// 已由外部 resolver 规范化的模块目标。
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct RuntimeResolvedModule {
-    pub key: RuntimeModuleKey,
-    pub url: String,
-    pub path: Option<PathBuf>,
-    pub format: RuntimeModuleFormat,
-}
-
-impl RuntimeResolvedModule {
-    /// 构造外部 loader 解析后交还 runtime 的模块目标。
-    pub fn new(
-        key: RuntimeModuleKey,
-        url: impl Into<String>,
-        path: Option<PathBuf>,
-        format: RuntimeModuleFormat,
-    ) -> Self {
-        Self {
-            key,
-            url: url.into(),
-            path,
-            format,
-        }
-    }
-}
-
-/// 动态实例化所需的运行时上下文占位 DTO。
-///
-/// 当前 Task 只建立 trait 边界；后续 CLI loader 会在不让 runtime 依赖编译 crate 的前提下
-/// 扩展这里的 plain fields，用于传递共享 env/memory/table 的宿主句柄。
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct RuntimeInstantiationEnv {
-    pub referrer: RuntimeModuleReferrer,
-}
-
-impl RuntimeInstantiationEnv {
-    /// 构造传给外部 loader 的实例化上下文。
-    pub fn new(referrer: RuntimeModuleReferrer) -> Self {
-        Self { referrer }
-    }
-}
-
-/// loader 实例化后交还给 registry 的 JS 值。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct RuntimeInstantiatedModule {
-    pub module_id: Option<u32>,
-    pub module_object: i64,
-    pub exports_object: i64,
-    pub namespace_object: i64,
-}
-
-impl RuntimeInstantiatedModule {
-    /// 构造外部 loader 实例化后交还 registry 的 JS 值。
-    pub fn new(
-        module_id: Option<u32>,
-        module_object: i64,
-        exports_object: i64,
-        namespace_object: i64,
-    ) -> Self {
-        Self {
-            module_id,
-            module_object,
-            exports_object,
-            namespace_object,
-        }
-    }
-}
-
-/// runtime loader 的错误分类；JS Error value 由 host import 边界再包装。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RuntimeModuleLoadErrorCode {
-    NotFound,
-    Unsupported,
-    InvalidModule,
-    InstantiateFailed,
-}
-
-/// loader contract 使用的 plain error DTO。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuntimeModuleLoadError {
-    pub code: RuntimeModuleLoadErrorCode,
-    pub message: String,
-}
-
-impl RuntimeModuleLoadError {
-    pub fn new(code: RuntimeModuleLoadErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for RuntimeModuleLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:?}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for RuntimeModuleLoadError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeModulePlacement {

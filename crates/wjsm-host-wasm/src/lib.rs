@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::{Datelike, Local, TimeZone, Timelike};
-use num_traits::cast::ToPrimitive;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -80,12 +79,20 @@ mod heap_context_impl;
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
+mod runtime_atomics;
 mod runtime_bench;
 mod runtime_buffer;
 mod runtime_builtins;
 mod runtime_collection_gc;
 mod runtime_collections;
 mod runtime_combinators;
+mod backend_impl;
+pub use backend_impl::WasmBackend;
+
+mod runtime_core_ops;
+pub(crate) use runtime_core_ops::{
+    iterator_value_impl, string_iter_advance_unit_pos, string_iter_current_value,
+};
 mod runtime_date;
 mod runtime_encoding;
 mod runtime_eval;
@@ -168,8 +175,8 @@ mod runtime_source_map;
 
 mod runtime_startup;
 mod runtime_string;
-mod runtime_string_to_number;
 mod runtime_structured_clone;
+mod runtime_streams;
 mod runtime_typedarray;
 mod runtime_value_adapter;
 mod shared_buffer;
@@ -241,6 +248,7 @@ use runtime_regexp::*;
 use runtime_render::*;
 use runtime_typedarray::*;
 use runtime_values::*;
+use exec_context_impl::to_number;
 use types::*;
 
 /// 预编译入口 handoff：同入口 fork 时子进程直接加载 raw WASM，跳过再编译。

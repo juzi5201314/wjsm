@@ -12,10 +12,11 @@
 //! `HeapMemory`，接合点负责从 `RuntimeState`/wasm 内存收集根并驱动算法。
 
 pub mod api;
+pub mod g1;
 pub mod heap;
+pub mod heap_access;
 pub mod mark_bitmap;
 pub mod mark_sweep;
-pub mod g1;
 pub mod telemetry;
 pub mod zgc;
 
@@ -30,8 +31,8 @@ pub use api::{
     CycleKind, GcExecutionStats, GcStats, Handle, MemoryFootprintSample, StepBudget, Value,
 };
 pub use collector_context::CollectorContext;
-pub use cpu_time::thread_cpu_ns;
 pub use control::{GcRuntimeV2, RootSnapshot};
+pub use cpu_time::thread_cpu_ns;
 pub use g1::{G1V2, G1V2CollectionKind, G1V2Error, G1V2Generation, G1V2Report};
 pub use heap::{
     Allocation, AllocationClass, AllocatorError, GrowableHeapMemory, HANDLE_ENTRY_BYTES,
@@ -39,6 +40,7 @@ pub use heap::{
     HeapAddress, HeapMemory, HeapMemoryError, ManagedAllocator, ManagedHeap, ManagedHeapLayout,
     NativeHeapMemory, Nlab, ObjectRef, PAGE_GRANULE_BYTES,
 };
+pub use heap_access::{HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property};
 pub use mark_bitmap::MarkBitmap;
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;
@@ -49,8 +51,8 @@ pub use telemetry::{
 pub use worker::{GcPacketKind, GcWorkPacket, GcWorkerPool, WorkerPoolError, WorkerPoolStats};
 pub use zgc::{
     BarrierEpoch, BarrierRecord, BarrierRing, BulkCopyMode, ConcurrentRelocator, HeaderFieldKind,
-    HeaderLayout, LoadBarrierOutcome, OldController, OldPhase, RelocationDescriptor, YoungController,
-    YoungPhase, ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome, color_stored_value,
-    load_barrier, prototype_field_kind, publish_promotion, select_bulk_copy_mode, store_barrier,
-    store_barrier_with_target_generation,
+    HeaderLayout, LoadBarrierOutcome, OldController, OldPhase, RelocationDescriptor,
+    YoungController, YoungPhase, ZgcV2, ZgcV2Error, ZgcV2Phase, ZgcV2Report, ZgcV2StepOutcome,
+    color_stored_value, load_barrier, prototype_field_kind, publish_promotion,
+    select_bulk_copy_mode, store_barrier, store_barrier_with_target_generation,
 };

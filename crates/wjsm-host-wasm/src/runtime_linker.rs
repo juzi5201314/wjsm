@@ -1,6 +1,6 @@
+use super::*;
 use crate::exec_context_impl::WasmExecContext;
 use wjsm_host::HeapContext;
-use super::*;
 
 /// TAG_FUNCTION 在无 function_props 对象时的属性解析。
 /// 覆盖 Array.prototype 宿主方法（arr_proto_* table entries）的
@@ -13,15 +13,10 @@ pub(crate) fn function_value_get_property_impl(
     if !value::is_function(func_val) {
         return value::encode_undefined();
     }
-    let name_id = name_id as u32;
-    if is_symbol_name_id(name_id) {
+    let Some(prop_name_owned) = property_name_from_name_id(caller, name_id as u32) else {
         return value::encode_undefined();
-    }
-    let prop_bytes = read_string_bytes(caller, name_id);
-    let prop_name = match std::str::from_utf8(&prop_bytes) {
-        Ok(s) => s,
-        Err(_) => return value::encode_undefined(),
     };
+    let prop_name = prop_name_owned.as_str();
 
     // call / apply / bind → Function.prototype 上的方法
     if prop_name == "call" || prop_name == "apply" || prop_name == "bind" {
@@ -56,6 +51,22 @@ pub(crate) fn function_value_get_property_impl(
     }
 
     value::encode_undefined()
+}
+
+fn property_name_from_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    name_id: u32,
+) -> Option<String> {
+    match crate::property_key::decode_name_id(name_id) {
+        crate::property_key::DecodedNameId::MemoryString(index) => {
+            String::from_utf8(read_string_bytes(caller, index)).ok()
+        }
+        crate::property_key::DecodedNameId::RuntimeString(index) => {
+            crate::property_key::runtime_property_key_units(caller.data(), index)
+                .map(|name| name.to_utf8_lossy())
+        }
+        crate::property_key::DecodedNameId::Symbol(_) => None,
+    }
 }
 
 /// 若 `func_val` 落在 arr_proto table 区间，返回 (property_name, length)。
@@ -104,6 +115,7 @@ fn function_proto_method_meta(nc: &NativeCallable) -> Option<(u32, &'static str)
         NativeCallable::FunctionProtoCall => Some((1, "call")),
         NativeCallable::FunctionProtoApply => Some((2, "apply")),
         NativeCallable::FunctionProtoBind => Some((1, "bind")),
+        NativeCallable::ArrayProtoToString => Some((0, "toString")),
         _ => None,
     }
 }
@@ -255,15 +267,10 @@ pub(crate) fn native_callable_get_property_impl(
     native: i64,
     name_id: i32,
 ) -> i64 {
-    let name_id = name_id as u32;
-    if is_symbol_name_id(name_id) {
+    let Some(prop_name_owned) = property_name_from_name_id(caller, name_id as u32) else {
         return value::encode_undefined();
-    }
-    let prop_bytes = read_string_bytes(caller, name_id);
-    let prop_name = match std::str::from_utf8(&prop_bytes) {
-        Ok(s) => s,
-        Err(_) => return value::encode_undefined(),
     };
+    let prop_name = prop_name_owned.as_str();
     if let Some(val) = crate::symbol_well_known::native_callable_symbol_constructor_static_property(
         caller, native, prop_name,
     ) {
@@ -283,12 +290,22 @@ pub(crate) fn native_callable_get_property_impl(
             return create_native_callable(caller.data(), NativeCallable::ProcessHrtimeBigint);
         }
         Some(NativeCallable::CjsRequire { referrer }) => {
-            if let Some(value) = cjs_require_property(caller, referrer.clone(), prop_name) {
+            let mut context = WasmExecContext::new(caller);
+            if let Some(value) = wjsm_builtins::modules::cjs_require_property(
+                &mut context,
+                referrer.clone(),
+                prop_name,
+            ) {
                 return value;
             }
         }
         Some(NativeCallable::CjsRequireResolve { referrer }) => {
-            if let Some(value) = cjs_require_resolve_property(caller, referrer.clone(), prop_name) {
+            let mut context = WasmExecContext::new(caller);
+            if let Some(value) = wjsm_builtins::modules::cjs_require_resolve_property(
+                &mut context,
+                referrer.clone(),
+                prop_name,
+            ) {
                 return value;
             }
         }
@@ -575,7 +592,6 @@ pub(super) fn register_linker(
     define_string_methods(linker, store)?;
     define_math_number_error(linker, store)?;
     define_collections_buffers(linker, store)?;
-    define_proxy_traps(linker, store)?;
     define_typedarray_new_methods(linker, store)?;
     define_weakref_finalization(linker, store)?;
     define_atomics(linker, store)?;
@@ -1018,7 +1034,10 @@ pub(super) fn register_complex_bridges(
         "env",
         "object.get_own_property_descriptors",
         |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
-            crate::host_imports::object_get_own_property_descriptors_impl(&mut caller, target)
+            wjsm_builtins::object_builtins::object_get_own_property_descriptors(
+                &mut WasmExecContext::new(&mut caller),
+                target,
+            )
         },
     )?;
 

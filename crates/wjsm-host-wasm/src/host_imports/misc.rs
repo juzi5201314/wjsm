@@ -1,8 +1,8 @@
+use crate::exec_context_impl::WasmExecContext;
+use crate::*;
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
-use crate::exec_context_impl::WasmExecContext;
-use crate::*;
 
 pub(crate) fn define_misc(
     linker: &mut Linker<RuntimeState>,
@@ -17,10 +17,13 @@ pub(crate) fn define_misc(
     );
     linker.define(&mut store, "env", "is_callable", is_callable_fn)?;
 
-    let is_js_object_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-        let mut ctx = WasmExecContext::new(&mut caller);
-        wjsm_builtins::misc::is_js_object(&mut ctx, val)
-    });
+    let is_js_object_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::misc::is_js_object(&mut ctx, val)
+        },
+    );
     linker.define(&mut store, "env", "is_js_object", is_js_object_fn)?;
 
     let queue_microtask_fn = Func::wrap(

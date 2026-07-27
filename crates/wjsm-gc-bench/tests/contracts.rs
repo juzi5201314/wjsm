@@ -35,7 +35,15 @@ fn scenario_deterministic() {
 fn all_scenarios_produce_source() {
     for kind in ScenarioKind::all() {
         let s = Scenario::build(*kind, 1, 32 * 1024 * 1024, 50, None);
-        assert!(!s.source.is_empty(), "scenario {} has empty source", kind.as_str());
-        assert!(s.source.contains("console.log"), "scenario {} missing output", kind.as_str());
+        assert!(
+            !s.source.is_empty(),
+            "scenario {} has empty source",
+            kind.as_str()
+        );
+        assert!(
+            s.source.contains("console.log"),
+            "scenario {} missing output",
+            kind.as_str()
+        );
     }
 }

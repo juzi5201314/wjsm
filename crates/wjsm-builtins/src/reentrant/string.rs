@@ -278,12 +278,7 @@ pub async fn string_replace<E: ExecContext>(
     replace: Value,
 ) -> Value {
     if let Some(result) = ctx
-        .call_symbol_method_async(
-            search,
-            wk_symbol::REPLACE,
-            search,
-            &[receiver, replace],
-        )
+        .call_symbol_method_async(search, wk_symbol::REPLACE, search, &[receiver, replace])
         .await
     {
         return result;
@@ -291,11 +286,7 @@ pub async fn string_replace<E: ExecContext>(
     string_replace_default(ctx, receiver, search, replace).await
 }
 
-pub async fn string_match<E: ExecContext>(
-    ctx: &mut E,
-    receiver: Value,
-    regexp: Value,
-) -> Value {
+pub async fn string_match<E: ExecContext>(ctx: &mut E, receiver: Value, regexp: Value) -> Value {
     if let Some(result) = ctx
         .call_symbol_method_async(regexp, wk_symbol::MATCH, regexp, &[receiver])
         .await
@@ -305,11 +296,7 @@ pub async fn string_match<E: ExecContext>(
     ctx.regexp_string_match_default(receiver, regexp)
 }
 
-pub async fn string_search<E: ExecContext>(
-    ctx: &mut E,
-    receiver: Value,
-    regexp: Value,
-) -> Value {
+pub async fn string_search<E: ExecContext>(ctx: &mut E, receiver: Value, regexp: Value) -> Value {
     if let Some(result) = ctx
         .call_symbol_method_async(regexp, wk_symbol::SEARCH, regexp, &[receiver])
         .await

@@ -5,10 +5,12 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = "0.22"
 chrono = { version = "0.4", features = ["wasmbind"] }
 num-bigint = { version = "0.4", features = ["std"] }
 num-traits = { version = "0.2" }
 rand = { version = "0.8" }
+thiserror = { workspace = true }
 wjsm-host = { path = "../wjsm-host" }
 wjsm-ir = { path = "../wjsm-ir" }
 icu_normalizer = { version = "2.2", features = ["compiled_data"] }

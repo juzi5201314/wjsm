@@ -60,7 +60,7 @@ pub(crate) fn write_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64
 }
 
 // 纯时间转换 / 日期解析已迁至 wjsm-builtins。
-pub(crate) use wjsm_builtins::{ms_to_datetime_local, ms_to_datetime_utc, parse_date_string};
+pub(crate) use wjsm_builtins::{ms_to_datetime_local, ms_to_datetime_utc};
 
 /// Milliseconds within the current second (0 ≤ m < 1000), per ES `mod` / floor division.
 fn ms_within_second(ms: f64) -> f64 {

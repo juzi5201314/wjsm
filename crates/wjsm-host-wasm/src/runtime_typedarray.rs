@@ -596,5 +596,3 @@ pub(crate) fn typedarray_construct(
 
     obj
 }
-
-

@@ -1,5 +1,5 @@
-use crate::exec_context_impl::WasmExecContext;
 use super::*;
+use crate::exec_context_impl::WasmExecContext;
 use crate::runtime_string::RuntimeString;
 
 /// Promise 结算状态：共享定义在 `wjsm-host`，此处再导出保持 host-wasm 调用点不变。
@@ -519,26 +519,6 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
             *set_handle >= table.len() as u32
                 || *index as usize >= table[*set_handle as usize].values.len()
         }
-        IteratorState::HeadersKeyIter {
-            index,
-            headers_handle,
-        }
-        | IteratorState::HeadersValueIter {
-            index,
-            headers_handle,
-        }
-        | IteratorState::HeadersEntryIter {
-            index,
-            headers_handle,
-        } => {
-            let table = caller
-                .data()
-                .headers_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            *headers_handle >= table.len() as u32
-                || *index as usize >= table[*headers_handle as usize].pairs.len()
-        }
         IteratorState::IndexValueIter { index, values } => *index as usize >= values.len(),
         IteratorState::TypedArrayValueIter { index, length, .. }
         | IteratorState::TypedArrayEntryIter { index, length, .. } => *index >= *length,
@@ -570,9 +550,6 @@ fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize
         | IteratorState::MapEntryIter { index, .. }
         | IteratorState::SetValueIter { index, .. }
         | IteratorState::SetEntryIter { index, .. }
-        | IteratorState::HeadersKeyIter { index, .. }
-        | IteratorState::HeadersValueIter { index, .. }
-        | IteratorState::HeadersEntryIter { index, .. }
         | IteratorState::IndexValueIter { index, .. }
         | IteratorState::TypedArrayValueIter { index, .. }
         | IteratorState::TypedArrayEntryIter { index, .. } => {
@@ -678,6 +655,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             this_val,
             ArrayIterKind::Entries,
         )),
+        NativeCallable::ArrayProtoToString => {
+            let mut ctx = WasmExecContext::new(caller);
+            Some(wjsm_builtins::array_object::arr_proto_to_string(
+                &mut ctx, this_val,
+            ))
+        }
         NativeCallable::ArrayLikeIteratorNext {
             target,
             index,
@@ -732,19 +715,39 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(value::encode_undefined())
         }
 
-        NativeCallable::CjsRequire { referrer } => Some(call_cjs_require(caller, referrer, args)),
-        NativeCallable::CjsRequireResolve { referrer } => {
-            Some(call_cjs_require_resolve(caller, referrer, args))
-        }
-        NativeCallable::CjsRequireResolvePaths { referrer } => {
-            Some(call_cjs_require_resolve_paths(caller, referrer, args))
-        }
-        NativeCallable::ImportMetaResolve { referrer } => {
-            Some(call_import_meta_resolve(caller, referrer, args))
-        }
-        NativeCallable::CjsRequireCacheTrap { kind } => {
-            Some(call_cjs_require_cache_trap(caller, kind, &args))
-        }
+        NativeCallable::CjsRequire { referrer } => Some(wjsm_builtins::modules::call_cjs_require(
+            &mut WasmExecContext::new(caller),
+            referrer,
+            &args,
+        )),
+        NativeCallable::CjsRequireResolve { referrer } => Some(
+            wjsm_builtins::modules::call_cjs_require_resolve(
+                &mut WasmExecContext::new(caller),
+                referrer,
+                &args,
+            ),
+        ),
+        NativeCallable::CjsRequireResolvePaths { referrer } => Some(
+            wjsm_builtins::modules::call_cjs_require_resolve_paths(
+                &mut WasmExecContext::new(caller),
+                referrer,
+                &args,
+            ),
+        ),
+        NativeCallable::ImportMetaResolve { referrer } => Some(
+            wjsm_builtins::modules::call_import_meta_resolve(
+                &mut WasmExecContext::new(caller),
+                referrer,
+                &args,
+            ),
+        ),
+        NativeCallable::CjsRequireCacheTrap { kind } => Some(
+            wjsm_builtins::modules::call_cjs_require_cache_trap(
+                &mut WasmExecContext::new(caller),
+                kind,
+                &args,
+            ),
+        ),
         NativeCallable::PromiseResolvingFunction {
             promise,
             already_resolved,
@@ -984,13 +987,17 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             }
         }
         NativeCallable::ObjectConstructor => {
-            if value::is_object(this_val) || value::is_function(this_val) {
-                Some(this_val)
-            } else {
+            let argument = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if value::is_undefined(argument) || value::is_null(argument) {
                 Some({
-                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
-                    alloc_host_object(caller, &_wjsm_env, 4)
+                    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                    alloc_host_object(caller, &env, 4)
                 })
+            } else {
+                Some(to_object(caller, argument))
             }
         }
         NativeCallable::ErrorProtoToString => Some(error_proto_to_string_impl(caller, this_val)),
@@ -1003,17 +1010,26 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             None
         }
         NativeCallable::StringConstructor => {
-            let arg = args
+            let argument = args
                 .first()
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
-            if value::is_undefined(arg) {
+            if value::is_undefined(argument) {
                 Some(store_runtime_string(caller, String::new()))
-            } else if value::is_symbol(arg) {
-                Some(symbol_proto_to_string_impl(caller, arg))
             } else {
-                let s = render_value(caller, arg).unwrap_or_default();
-                Some(store_runtime_string(caller, s))
+                let primitive = if is_object_like(argument) {
+                    to_primitive_with_hint(caller, argument, ToPrimitiveHint::String)
+                } else {
+                    argument
+                };
+                if value::is_exception(primitive) {
+                    Some(primitive)
+                } else if value::is_symbol(primitive) {
+                    Some(symbol_proto_to_string_impl(caller, primitive))
+                } else {
+                    let string = render_value(caller, primitive).unwrap_or_default();
+                    Some(store_runtime_string(caller, string))
+                }
             }
         }
         NativeCallable::BooleanConstructor
@@ -1211,10 +1227,10 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(value::encode_undefined())
         }
         NativeCallable::SharedArrayBufferConstructor => {
-            let length = argument;
             let options = args.get(1).copied().unwrap_or_else(value::encode_undefined);
-            Some(crate::shared_buffer::construct_shared_array_buffer(
-                caller, length, options, this_val,
+            let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
+            Some(wjsm_builtins::atomics::shared_arraybuffer_constructor(
+                &mut ctx, argument, options, this_val,
             ))
         }
         // ── Agent harness ──
@@ -1306,23 +1322,72 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             settle_promise(caller.data(), promise, PromiseSettlement::Reject(arg));
             Some(promise)
         }
-        NativeCallable::HeadersMethod { kind, .. } => {
-            call_headers_method_from_caller(caller, this_val, kind, &args)
+        NativeCallable::HeadersMethod { handle, kind } => {
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::fetch::call_headers_method(
+                &mut context,
+                this_val,
+                handle,
+                kind,
+                &args,
+            )
         }
-        NativeCallable::ResponseMethod { kind, .. } => {
-            call_response_method_from_caller(caller, this_val, kind, &args)
+        NativeCallable::ResponseMethod { handle, kind } => {
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::fetch::call_response_method(
+                &mut context,
+                this_val,
+                handle,
+                kind,
+            )
         }
-        NativeCallable::RequestMethod { kind, .. } => {
-            call_request_method_from_caller(caller, this_val, kind, &args)
+        NativeCallable::RequestMethod { handle, kind } => {
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::fetch::call_request_method(
+                &mut context,
+                this_val,
+                handle,
+                kind,
+            )
         }
-        NativeCallable::HeadersConstructor => construct_headers(caller, this_val, &args),
-        NativeCallable::ResponseConstructor => construct_response(caller, this_val, &args),
-        NativeCallable::RequestConstructor => construct_request(caller, this_val, &args),
+        NativeCallable::HeadersConstructor => {
+            let mut context = WasmExecContext::new(caller);
+            Some(wjsm_builtins::fetch::headers::construct(
+                &mut context,
+                this_val,
+                &args,
+            ))
+        }
+        NativeCallable::ResponseConstructor => {
+            let mut context = WasmExecContext::new(caller);
+            Some(wjsm_builtins::fetch::construct_response(
+                &mut context,
+                this_val,
+                &args,
+            ))
+        }
+        NativeCallable::RequestConstructor => {
+            let mut context = WasmExecContext::new(caller);
+            Some(wjsm_builtins::fetch::construct_request(
+                &mut context,
+                this_val,
+                &args,
+            ))
+        }
         NativeCallable::AbortControllerConstructor => {
-            construct_abort_controller(caller, this_val, &args)
+            let mut context = WasmExecContext::new(caller);
+            Some(wjsm_builtins::fetch::construct_abort_controller(
+                &mut context,
+                this_val,
+            ))
         }
         NativeCallable::AbortControllerAbort { signal_handle } => {
-            abort_controller_abort(caller, signal_handle, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::fetch::abort_controller_abort(
+                &mut context,
+                signal_handle,
+                &args,
+            )
         }
         // ── ReadableStream (WHATWG Streams Phase 1) ──
         // ReadableStreamConstructor is async-only: routed through the host-import
@@ -1330,62 +1395,73 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         // never dispatched via the sync NativeCallable path.
         NativeCallable::ReadableStreamConstructor => Some(value::encode_undefined()),
         NativeCallable::ReadableStreamMethod { handle, kind } => {
-            call_readable_stream_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::readable_dispatch::call_readable_stream_method(
+                &mut context,
+                handle,
+                kind,
+                &args,
+            )
         }
         NativeCallable::ReadableStreamDefaultReaderMethod { handle, kind } => {
-            call_default_reader_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::readable_pipe::call_default_reader_method(
+                &mut context,
+                handle,
+                kind,
+                &args,
+            )
         }
         NativeCallable::ReadableStreamDefaultControllerMethod { handle, kind } => {
-            call_default_controller_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::readable_pipe::call_default_controller_method(
+                &mut context,
+                handle,
+                kind,
+                &args,
+            )
         }
         NativeCallable::ReadableStreamByobRequestMethod { handle, kind } => {
-            call_byob_request_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::readable_pipe::call_byob_request_method(
+                &mut context,
+                handle,
+                kind,
+                &args,
+            )
         }
         // ── ReadableStream async iterator (WHATWG Streams Phase 2) ──
         NativeCallable::ReadableStreamAsyncIteratorNext { reader_handle } => {
-            call_default_reader_method_from_caller(
-                caller,
-                this_val,
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::readable_pipe::call_default_reader_method(
+                &mut context,
                 reader_handle,
                 ReadableStreamDefaultReaderMethodKind::Read,
                 &args,
             )
         }
         NativeCallable::ReadableStreamPipeToWriteFulfilled { readable_handle } => {
-            Some(finish_pipe_to_write(caller, readable_handle, None))
+            let mut context = WasmExecContext::new(caller);
+            Some(wjsm_builtins::streams::readable_pipe::finish_pipe_to_write(
+                &mut context,
+                readable_handle,
+                None,
+            ))
         }
-        NativeCallable::ReadableStreamPipeToWriteRejected { readable_handle } => Some(
-            finish_pipe_to_write(caller, readable_handle, Some(argument)),
-        ),
+        NativeCallable::ReadableStreamPipeToWriteRejected { readable_handle } => {
+            let mut context = WasmExecContext::new(caller);
+            Some(wjsm_builtins::streams::readable_pipe::finish_pipe_to_write(
+                &mut context,
+                readable_handle,
+                Some(argument),
+            ))
+        }
         NativeCallable::ReadableStreamAsyncIteratorReturn { reader_handle } => {
-            // releaseLock：释放流的锁定
-            let stream_handle = {
-                let reader_table = caller
-                    .data()
-                    .reader_table
-                    .inner
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                reader_table
-                    .get(reader_handle as usize)
-                    .map(|e| e.stream_handle)
-            };
-            if let Some(sh) = stream_handle {
-                let mut stream_table = caller
-                    .data()
-                    .readable_stream_table
-                    .inner
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(entry) = stream_table.get_mut(sh as usize) {
-                    entry.locked = false;
-                }
-            }
-            // 返回 {done: true, value: undefined} 作为 resolved Promise
-            let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
-            let result = build_reader_result(caller, true, None);
-            settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
-            Some(p)
+            let mut context = WasmExecContext::new(caller);
+            Some(wjsm_builtins::streams::readable_pipe::async_iterator_return(
+                &mut context,
+                reader_handle,
+            ))
         }
         // ── WritableStream (WHATWG Streams Phase 4) ──
         // WritableStreamConstructor is async-only: routed through the host-import
@@ -1393,20 +1469,39 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         // never dispatched via the sync NativeCallable path.
         NativeCallable::WritableStreamConstructor => Some(value::encode_undefined()),
         NativeCallable::WritableStreamMethod { handle, kind } => {
-            call_writable_stream_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::writable::call_writable_stream_method(
+                &mut context,
+                handle,
+                kind,
+                &args,
+            )
         }
         NativeCallable::WritableStreamDefaultWriterMethod { handle, kind } => {
-            call_default_writer_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::writable::call_default_writer_method(
+                &mut context,
+                handle,
+                kind,
+                &args,
+            )
         }
         NativeCallable::WritableStreamDefaultControllerMethod { handle, kind } => {
-            call_writable_controller_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::writable::call_controller_method(
+                &mut context,
+                handle,
+                kind,
+                &args,
+            )
         }
         // ── TransformStream (WHATWG Streams Phase 5) ──
         // TransformStreamConstructor is async-only: routed through the host-import
         // `transform_stream_constructor`. It is never dispatched via the sync NativeCallable path.
         NativeCallable::TransformStreamConstructor => Some(value::encode_undefined()),
         NativeCallable::TransformStreamMethod { handle, kind } => {
-            call_transform_stream_method_from_caller(caller, this_val, handle, kind, &args)
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::streams::transform::call_method(&mut context, handle, kind)
         }
         // ── QueuingStrategy (WHATWG Streams Phase 2) ──
         NativeCallable::CountQueuingStrategyConstructor => {
@@ -1551,7 +1646,10 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
             let call_args = if args.len() > 1 { &args[1..] } else { &[] };
             Some(
                 wjsm_builtins::proxy_reflect_async::reflect_apply_impl_async(
-                    &mut WasmExecContext::new(caller), this_val, this_arg, call_args,
+                    &mut WasmExecContext::new(caller),
+                    this_val,
+                    this_arg,
+                    call_args,
                 )
                 .await,
             )
@@ -1578,7 +1676,10 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
             };
             Some(
                 wjsm_builtins::proxy_reflect_async::reflect_apply_impl_async(
-                    &mut WasmExecContext::new(caller), this_val, this_arg, &call_args,
+                    &mut WasmExecContext::new(caller),
+                    this_val,
+                    this_arg,
+                    &call_args,
                 )
                 .await,
             )
@@ -1613,15 +1714,28 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         NativeCallable::MapSetMethod {
             kind: MapSetMethodKind::ForEach,
         } => Some(map_set_for_each_impl_async(caller, this_val, &args).await),
-        NativeCallable::HeadersMethod { kind, .. } => {
-            call_headers_method_from_caller_async(caller, this_val, kind, &args).await
+        NativeCallable::HeadersMethod { handle, kind } => {
+            let mut context = WasmExecContext::new(caller);
+            wjsm_builtins::fetch::call_headers_method_async(
+                &mut context,
+                this_val,
+                handle,
+                kind,
+                &args,
+            )
+            .await
         }
         NativeCallable::GeneratorMethod { generator, kind } => {
             Some(call_generator_method_from_caller_async(caller, generator, kind, argument).await)
         }
-        NativeCallable::CjsRequire { referrer } => {
-            Some(call_cjs_require_async(caller, referrer, args).await)
-        }
+        NativeCallable::CjsRequire { referrer } => Some(
+            wjsm_builtins::modules::call_cjs_require_async(
+                &mut WasmExecContext::new(caller),
+                referrer,
+                &args,
+            )
+            .await,
+        ),
         NativeCallable::VmMethod { kind } => {
             Some(crate::runtime_node_vm::call_vm_method_async(caller, kind, &args).await)
         }

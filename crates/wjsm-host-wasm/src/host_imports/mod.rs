@@ -16,15 +16,10 @@ pub(crate) use async_generator::define_async_generator;
 pub(crate) use generator::define_generator;
 pub(crate) use inspector_host::define_inspector_host;
 pub(crate) use misc::define_misc;
-pub(crate) use modules::{
-    call_cjs_require, call_cjs_require_async, call_cjs_require_cache_trap,
-    call_cjs_require_resolve, call_cjs_require_resolve_paths, call_import_meta_resolve,
-    cjs_require_property, cjs_require_resolve_property, define_modules,
-};
+pub(crate) use modules::{create_require_cache_proxy, define_modules};
 pub(crate) use promise::define_promise;
 pub(crate) use promise_combinators::define_promise_combinators;
 pub(crate) use proxy_reflect::define_proxy_reflect;
-pub(crate) use proxy_reflect::reflect_get_own_property_descriptor_impl;
 // 以下 async 函数已迁移到 wjsm_builtins::proxy_reflect_async，
 // 通过 exec_context_impl 委托调用。
 pub(crate) use proxy_reflect_async::define_proxy_reflect_async;
@@ -37,18 +32,14 @@ pub(crate) use reentrant_async::define_typedarray_new_methods_async;
 pub(crate) use reentrant_async::string_replace_default_async_body;
 mod object_builtins;
 pub(crate) use object_builtins::{
-    define_object_builtins, proto_handle_from_value, read_property_by_string_key_impl,
+    define_object_builtins, proto_handle_from_value, read_property_by_string_key_raw,
 };
 mod object_builtins_async;
 pub(crate) use object_builtins_async::define_object_builtins_async;
 mod core_async;
 mod get_method;
-pub(crate) use core_async::{
-    define_core_async, materialize_async_from_sync_next, resolve_async_from_sync_afs_handle,
-};
-pub(crate) use get_method::{
-    get_by_name_id_sync, get_method_by_name_id, read_object_property_by_name_id_proto_walk,
-};
+pub(crate) use core_async::define_core_async;
+pub(crate) use get_method::{get_by_name_id_sync, get_method_by_name_id};
 
 // 原 include! 裸块文件 → 模块声明
 mod array_object;
@@ -63,72 +54,43 @@ mod get_builtin_global_entry;
 mod math_number_error;
 mod primitive_core;
 mod private_fields;
-mod proxy_traps;
 mod streams_fetch_body;
 mod streams_queuing;
 mod streams_readable;
-mod streams_transform;
 mod streams_writable;
 mod string_methods;
 mod timers_arrays;
 pub(crate) mod typedarray_new_methods;
 mod weakref_finalization;
 
-pub(crate) use array_object::{
-    define_array_object, object_define_property_or_throw,
-    object_get_own_property_descriptors_impl,
-};
+pub(crate) use array_object::define_array_object;
 pub(crate) use atomics::define_atomics;
 pub(crate) use collections_buffers::define_collections_buffers;
 
-pub(crate) use core::{
-    define_core, iterator_from_impl_async, iterator_value_impl, op_in_impl,
-    string_iter_advance_unit_pos, string_iter_current_value,
-};
+pub(crate) use core::define_core;
 pub(crate) use gc::{allocate_v2_array_handle, define_v2};
 
 pub(crate) use fetch::define_fetch;
-pub(crate) use fetch_core::abort_controller_abort;
-pub(crate) use fetch_core::call_headers_method_from_caller;
-pub(crate) use fetch_core::call_headers_method_from_caller_async;
-pub(crate) use fetch_core::call_request_method_from_caller;
-pub(crate) use fetch_core::call_response_method_from_caller;
-pub(crate) use fetch_core::construct_abort_controller;
-pub(crate) use fetch_core::construct_headers;
-pub(crate) use fetch_core::construct_request;
-pub(crate) use fetch_core::construct_response;
+pub(crate) use fetch_http::perform_http_fetch;
+pub(crate) use fetch_core::create_arraybuffer_with_bytes;
 pub(crate) use get_builtin_global_entry::define_get_builtin_global;
 pub(crate) use math_number_error::define_math_number_error;
-pub(crate) use math_number_error::{
-    primitive_bigint_get_method_impl, primitive_number_get_method_impl,
-};
 pub(crate) use primitive_core::define_primitive_core;
-pub(crate) use proxy_traps::define_proxy_traps;
 pub(crate) use streams_queuing::call_queuing_strategy_size_from_caller;
 pub(crate) use streams_queuing::construct_byte_length_queuing_strategy;
 pub(crate) use streams_queuing::construct_count_queuing_strategy;
-pub(crate) use streams_readable::build_reader_result;
 pub(crate) use streams_readable::build_reader_result_with_env;
-pub(crate) use streams_readable::call_byob_request_method_from_caller;
-pub(crate) use streams_readable::call_default_controller_method_from_caller;
-pub(crate) use streams_readable::call_default_reader_method_from_caller;
-pub(crate) use streams_readable::call_readable_stream_method_from_caller;
-pub(crate) use streams_readable::clear_pipe_to;
-pub(crate) use streams_readable::construct_readable_stream;
-pub(crate) use streams_readable::finish_pipe_to_write;
-pub(crate) use streams_readable::finish_pipe_to_write_with_env;
-pub(crate) use streams_readable::pump_readable_stream_pipe_to_with_env;
-pub(crate) use streams_transform::call_flush_from_writable_close;
-pub(crate) use streams_transform::call_transform_from_writable;
-pub(crate) use streams_transform::call_transform_stream_method_from_caller;
-pub(crate) use streams_transform::construct_transform_stream;
-pub(crate) use streams_writable::call_default_writer_method_from_caller;
-pub(crate) use streams_writable::call_writable_controller_method_from_caller;
-pub(crate) use streams_writable::call_writable_stream_method_from_caller;
-pub(crate) use streams_writable::construct_writable_stream;
-pub(crate) use streams_writable::finish_writable_stream_close;
+pub(crate) use streams_readable::{
+    create_uint8array_with_env, mark_response_body_used_from_caller,
+    transfer_byob_view_with_env, typedarray_u8_bytes, write_u8_bytes_to_view,
+};
+pub(crate) use streams_readable::cancel_http_response_from_caller;
+pub(crate) use streams_fetch_body::call_fetch_body_reader_read;
+pub(crate) use streams_fetch_body::consume_fetch_body_to_bytes;
+pub(crate) use streams_writable::{
+    create_writable_abort_signal_object, mark_writable_stream_signal_aborted,
+};
 pub(crate) use string_methods::define_string_methods;
-pub(crate) use string_methods::primitive_string_get_property_impl;
 pub(crate) use timers_arrays::define_timers_arrays;
 pub(crate) use typedarray_new_methods::define_typedarray_new_methods;
 pub(crate) use weakref_finalization::define_weakref_finalization;

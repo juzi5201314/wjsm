@@ -10,11 +10,16 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::{Handle, HeapContext, Value};
+use crate::{
+    Handle, HeapContext, JsonValue, ReadableStreamByobRequestMethodKind,
+    ReadableStreamDefaultControllerMethodKind, ReadableStreamDefaultReaderMethodKind,
+    ReadableStreamMethodKind, TransformStreamMethodKind, Value,
+    WritableStreamDefaultControllerMethodKind, WritableStreamDefaultWriterMethodKind,
+    WritableStreamMethodKind,
+};
 
 /// 异步回调返回类型（BoxFuture）。默认产出 `anyhow::Result<Value>`。
-pub type ExecFuture<'a, T = anyhow::Result<Value>> =
-    Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type ExecFuture<'a, T = anyhow::Result<Value>> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 // ── 共享类型（后端无关）──
 
@@ -64,10 +69,10 @@ pub struct PromiseEntry {
     pub handled: bool,
     /// `Some(Arc)` = 构造器 resolving function 的 already_resolved 记录。
     pub constructor_resolver: Option<std::sync::Arc<std::sync::Mutex<bool>>>,
- /// 构造器引用（species-aware；`None` = 内建 Promise）。
+    /// 构造器引用（species-aware；`None` = 内建 Promise）。
     pub constructor_handle: Option<Value>,
     pub is_promise: bool,
- /// 创建时捕获的 ALS/hooks scope（then 反应继承）。
+    /// 创建时捕获的 ALS/hooks scope（then 反应继承）。
     pub capture_scope: Option<CapturedScope>,
 }
 
@@ -118,7 +123,11 @@ pub struct PromiseReaction {
 
 impl PromiseReaction {
     pub fn new(handler: Value, target_promise: Value, reaction_type: ReactionType) -> Self {
-        Self { handler, target_promise, reaction_type }
+        Self {
+            handler,
+            target_promise,
+            reaction_type,
+        }
     }
 }
 
@@ -158,8 +167,68 @@ pub struct CapturedScope {
 /// builtins 直接创建的变体）；完整枚举留在 `wjsm-host-wasm` types.rs。
 #[derive(Clone, Debug)]
 pub enum NativeCallableRef {
-    /// QueuingStrategy size 函数（Count / ByteLength）。
     QueuingStrategySize { kind: QueuingStrategySizeKind },
+    HeadersMethod {
+        handle: u32,
+        kind: crate::HeadersMethodKind,
+    },
+    ResponseMethod {
+        handle: u32,
+        kind: crate::ResponseMethodKind,
+    },
+    RequestMethod {
+        handle: u32,
+        kind: crate::RequestMethodKind,
+    },
+    AbortControllerAbort { signal_handle: u32 },
+    CjsRequireResolve {
+        referrer: crate::RuntimeModuleReferrer,
+    },
+    CjsRequireResolvePaths {
+        referrer: crate::RuntimeModuleReferrer,
+    },
+    ImportMetaResolve {
+        referrer: crate::RuntimeModuleReferrer,
+    },
+    ReadableStreamConstructor,
+    ReadableStreamMethod {
+        handle: u32,
+        kind: ReadableStreamMethodKind,
+    },
+    ReadableStreamDefaultReaderMethod {
+        handle: u32,
+        kind: ReadableStreamDefaultReaderMethodKind,
+    },
+    ReadableStreamDefaultControllerMethod {
+        handle: u32,
+        kind: ReadableStreamDefaultControllerMethodKind,
+    },
+    ReadableStreamByobRequestMethod {
+        handle: u32,
+        kind: ReadableStreamByobRequestMethodKind,
+    },
+    ReadableStreamAsyncIteratorNext { reader_handle: u32 },
+    ReadableStreamAsyncIteratorReturn { reader_handle: u32 },
+    ReadableStreamPipeToWriteFulfilled { readable_handle: u32 },
+    ReadableStreamPipeToWriteRejected { readable_handle: u32 },
+    WritableStreamConstructor,
+    WritableStreamMethod {
+        handle: u32,
+        kind: WritableStreamMethodKind,
+    },
+    WritableStreamDefaultWriterMethod {
+        handle: u32,
+        kind: WritableStreamDefaultWriterMethodKind,
+    },
+    WritableStreamDefaultControllerMethod {
+        handle: u32,
+        kind: WritableStreamDefaultControllerMethodKind,
+    },
+    TransformStreamConstructor,
+    TransformStreamMethod {
+        handle: u32,
+        kind: TransformStreamMethodKind,
+    },
 }
 
 /// QueuingStrategy size 计算类型。
@@ -167,6 +236,24 @@ pub enum NativeCallableRef {
 pub enum QueuingStrategySizeKind {
     Count,
     ByteLength,
+}
+/// ECMAScript §7.1.1 ToPrimitive hint（后端无关三态）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToPrimitiveHintKind {
+    Default,
+    Number,
+    String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum PropertyLookup {
+    Missing,
+    Slot {
+        value: Value,
+        is_accessor: bool,
+        getter: Value,
+    },
+    Proxy(Value),
 }
 
 // ── ExecContext trait ──
@@ -217,17 +304,18 @@ pub trait ExecContext: HeapContext {
 
     /// 查询 Proxy 条目（已撤销或缺失返回 None）。
     fn proxy_entry(&mut self, proxy: Handle) -> Option<ProxyEntry>;
+    /// 查询 Proxy 条目，不因 revoked 过滤；仅用于 `typeof` 的 [[Call]] 能力判定。
+    fn proxy_entry_any(&mut self, proxy: Handle) -> Option<ProxyEntry>;
+    /// 分配 Proxy 记录并返回 NaN-boxed proxy 值。
+    fn alloc_proxy(&mut self, target: Value, handler: Value) -> Value;
+    /// 创建绑定到指定 Proxy 的撤销函数。
+    fn create_proxy_revoker(&mut self, proxy: Value) -> Value;
     /// 查询 Closure 条目。
     fn closure_entry(&mut self, handle: Handle) -> Option<ClosureEntry>;
     /// 查询 Bound function 条目。
     fn bound_entry(&mut self, handle: Handle) -> Option<BoundEntry>;
     /// 分派 NativeCallable（Promise resolving / stream 等）。
-    fn dispatch_native_callable(
-        &mut self,
-        idx: u32,
-        this: Value,
-        args: &[Value],
-    ) -> Option<Value>;
+    fn dispatch_native_callable(&mut self, idx: u32, this: Value, args: &[Value]) -> Option<Value>;
 
     // ═══ 枚举器 ═══
 
@@ -250,6 +338,10 @@ pub trait ExecContext: HeapContext {
     fn take_last_error(&mut self) -> Option<String>;
     /// 创建 TypeError 异常值。
     fn make_type_error(&mut self, msg: &str) -> Value;
+    /// 将任意 JS value 包装为 exception。
+    fn make_exception(&mut self, value: Value) -> Value;
+    /// 创建 SyntaxError 异常值。
+    fn make_syntax_error(&mut self, msg: &str) -> Value;
 
     // ═══ 属性助手（高层）═══
 
@@ -258,11 +350,7 @@ pub trait ExecContext: HeapContext {
     /// 按 name_id 读取属性值。
     fn get_property_by_name_id(&mut self, obj: Value, name_id: u32) -> Value;
     /// 按 name_id 获取方法（含 callable 检查）。
-    fn get_method_by_name_id(
-        &mut self,
-        obj: Value,
-        name_id: u32,
-    ) -> anyhow::Result<Option<Value>>;
+    fn get_method_by_name_id(&mut self, obj: Value, name_id: u32) -> anyhow::Result<Option<Value>>;
 
     // ═══ 数组助手 ═══
 
@@ -270,6 +358,8 @@ pub trait ExecContext: HeapContext {
     fn array_write_elem(&mut self, arr: Value, index: u32, value: Value);
     /// 读数组长度（值级，含 handle 解析）。
     fn array_read_length(&mut self, arr: Value) -> Option<u32>;
+    fn array_read_elem(&mut self, arr: Value, index: u32) -> Option<Value>;
+
     /// 写数组长度。
     fn array_write_length(&mut self, arr: Value, len: u32);
 
@@ -277,6 +367,16 @@ pub trait ExecContext: HeapContext {
 
     /// 将值渲染为显示字符串。
     fn render_value(&mut self, val: Value) -> String;
+    /// 渲染路径的属性读取：own + 原型链数据槽（legacy 与 V2 堆统一），
+    /// 不触发 getter/Proxy trap；不存在返回 None。
+    fn read_property_for_render(&mut self, obj: Value, key: &str) -> Option<Value>;
+    /// RegExp 条目的 (pattern, flags)；非 regexp 或缺失返回 None。
+    fn regexp_pattern_flags(&mut self, val: Value) -> Option<(String, String)>;
+    /// 对象 own 可枚举数据槽快照：(name_id, value)；跳过 undefined 与私有槽。
+    /// 对象 handle 无效时返回 None（JSON.stringify 序列化为 "null"）。
+    fn own_enumerable_data_slots(&mut self, obj: Value) -> Option<Vec<(u32, Value)>>;
+    /// 将 JSON 中间值物化为 JS 值（后端负责堆分配与属性定义）。
+    fn json_materialize(&mut self, json_value: &JsonValue) -> Value;
 
     // ═══ Promise ═══
 
@@ -287,6 +387,8 @@ pub trait ExecContext: HeapContext {
     /// 解析 Promise（可能触发 thenable 链）。
     fn resolve_promise(&mut self, promise: Value, value: Value);
 
+    /// 分配动态 import promise，并安装当前后端的可观察方法属性。
+    fn alloc_dynamic_import_promise(&mut self) -> Value;
     // ── Promise 高层算法原语（P5 迁移所需） ──
 
     /// 分配带初始 entry 的 Promise（含 prototype + promise_table 插入 + async_hooks scope）。
@@ -299,11 +401,19 @@ pub trait ExecContext: HeapContext {
     /// 按 constructor 设置 promise 原型（species-aware）。
     fn set_promise_proto_from_constructor(&mut self, promise: Value, constructor: Value);
     /// 创建 promise resolving function（含 already_resolved 记录）。
-    fn create_promise_resolving_function(&mut self, promise: Value, kind: PromiseResolvingKind) -> Value;
+    fn create_promise_resolving_function(
+        &mut self,
+        promise: Value,
+        kind: PromiseResolvingKind,
+    ) -> Value;
     /// `NewPromiseCapability(C)`：返回 (promise, resolve, reject)。
     fn new_promise_capability(&mut self, constructor: Value) -> (Value, Value, Value);
     /// 捕获 child promise scope（async_hooks ALS 继承）。
-    fn capture_child_promise_scope(&mut self, promise: Value, parent: Option<CapturedScope>) -> Option<CapturedScope>;
+    fn capture_child_promise_scope(
+        &mut self,
+        promise: Value,
+        parent: Option<CapturedScope>,
+    ) -> Option<CapturedScope>;
     /// 清除 pending unhandled rejection 记录。
     fn clear_pending_unhandled_rejection(&self, handle: usize);
     /// 注册 pending unhandled rejection（rejected promise 未被 .then/.catch 处理时）。
@@ -313,15 +423,47 @@ pub trait ExecContext: HeapContext {
     /// 是否为 thenable（有 `.then` 方法的对象/函数）。
     fn is_thenable(&mut self, val: Value) -> bool;
     /// 创建 combinator reaction handler（Promise.all/race/allSettled/any 用）。
-    fn create_combinator_reaction_handler(&self, context: u32, index: usize, kind: PromiseCombinatorReactionKind) -> Value;
+    fn create_combinator_reaction_handler(
+        &self,
+        context: u32,
+        index: usize,
+        kind: PromiseCombinatorReactionKind,
+    ) -> Value;
     /// 创建 combinator context（allSettled/any 等）。
     fn create_combinator_context(&self, result_promise: Value, result_array: Value) -> u32;
+    /// 设置 combinator context 的 remaining 计数。
+    fn set_combinator_remaining(&self, context: u32, remaining: usize);
+    /// 递增 combinator context 的 outstanding settlement 计数（pending 元素挂接 reaction 时）。
+    fn increment_combinator_outstanding_settlements(&self, context: u32);
+    /// 标记 combinator context 已结算。
+    fn mark_combinator_settled(&self, context: u32);
+    /// 尝试回收 combinator context（已结算且无 outstanding settlement 时归还 free list）。
+    fn try_recycle_combinator_context(&self, context: u32);
+    /// 分配 AggregateError 对象（Promise.any 全拒绝路径；含 name/message/errors/stack）。
+    fn alloc_aggregate_error(&mut self, errors: Value) -> Value;
+    /// 分配 allSettled result record（`{ status, value }` / `{ status, reason }`）。
+    fn alloc_all_settled_result(&mut self, status: &str, value_name: &str, value: Value) -> Value;
     /// 查询 promise entry 的 constructor_resolver（already_resolved 记录）。
-    fn promise_constructor_resolver(&self, promise: Value) -> Option<std::sync::Arc<std::sync::Mutex<bool>>>;
+    fn promise_constructor_resolver(
+        &self,
+        promise: Value,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<bool>>>;
     /// 推入 promise reaction 到 entry。
-    fn push_promise_reaction(&mut self, promise: Value, reaction: PromiseReaction, is_fulfill: bool);
+    fn push_promise_reaction(
+        &mut self,
+        promise: Value,
+        reaction: PromiseReaction,
+        is_fulfill: bool,
+    );
     /// 推入 promise reaction microtask（promise 已 settled 时）。
-    fn queue_promise_reaction_microtask(&self, promise: Value, reaction_type: ReactionType, handler: Value, argument: Value, scope: Option<CapturedScope>);
+    fn queue_promise_reaction_microtask(
+        &self,
+        promise: Value,
+        reaction_type: ReactionType,
+        handler: Value,
+        argument: Value,
+        scope: Option<CapturedScope>,
+    );
     /// 创建 NativeCallable 值。
     fn create_native_callable(&self, callable: NativeCallableRef) -> Value;
 
@@ -370,6 +512,14 @@ pub trait ExecContext: HeapContext {
     fn to_number(&mut self, val: Value) -> Value;
     /// ToBoolean。
     fn to_boolean(&mut self, val: Value) -> bool;
+    /// ToPrimitive（三态 hint 完整版；`to_primitive` 的超集，String hint 路径用）。
+    fn to_primitive_hinted(&mut self, val: Value, hint: ToPrimitiveHintKind) -> Value;
+    /// 相同 RuntimeString 语义的字符串相等（strict_eq 字符串分支用）。
+    fn string_values_equal(&mut self, a: Value, b: Value) -> bool;
+    /// 字符串 UTF-16 字典序比较（abstract_compare 字符串分支用）；a < b 返回 true。
+    fn string_lt(&mut self, a: Value, b: Value) -> bool;
+    /// TAG_FUNCTION 与 TAG_CLOSURE 交叉相等：closure.func_idx == function idx。
+    fn function_closure_identity_eq(&mut self, func: Value, closure: Value) -> bool;
 
     // ═══ 错误构造 ═══
 
@@ -392,11 +542,7 @@ pub trait ExecContext: HeapContext {
     // ═══ Symbol 侧表 ═══
 
     /// 创建 Symbol（可选 description / global_key）。
-    fn create_symbol(
-        &mut self,
-        description: Option<String>,
-        global_key: Option<String>,
-    ) -> Value;
+    fn create_symbol(&mut self, description: Option<String>, global_key: Option<String>) -> Value;
     /// 读取 Symbol 条目 (description, global_key)。
     fn symbol_entry(&mut self, val: Value) -> Option<(Option<String>, Option<String>)>;
     /// 按 global_key 查找 Symbol.for 注册表。
@@ -446,6 +592,8 @@ pub trait ExecContext: HeapContext {
     fn name_id_to_property_key_value(&mut self, name_id: u32) -> Option<Value>;
     /// Reflect.get 同步路径（含 Proxy trap；后端自行 block_on）。
     fn reflect_get_sync(&mut self, target: Value, prop: Value, receiver: Value) -> Value;
+    /// 判定函数值是否为当前 realm 的 `%Array.prototype.join%`。
+    fn is_array_prototype_join(&mut self, candidate: Value) -> bool;
     /// 同步调用 getter。
     fn invoke_getter_sync(&mut self, getter: Value, receiver: Value) -> Value;
     /// 数组命名属性（side table）读取。
@@ -456,6 +604,9 @@ pub trait ExecContext: HeapContext {
         handle: Handle,
         name_id: u32,
     ) -> Option<(Value, bool, Value)>;
+    /// V2 原型链查找，保留遇到 Proxy prototype 的分派信息。
+    fn lookup_property_on_proto(&mut self, handle: Handle, name_id: u32) -> PropertyLookup;
+
     /// 字符串 UTF-16 长度。
     fn string_utf16_len(&mut self, val: Value) -> Option<u32>;
     /// 解析对象到线性内存指针（legacy path）。
@@ -475,6 +626,12 @@ pub trait ExecContext: HeapContext {
     ) -> Option<Value>;
     /// function/closure/bound 的 props handle。
     fn handle_index_of(&mut self, val: Value) -> Option<Handle>;
+    /// 确保对象（含延迟分配 props 的函数值）具备可写属性存储。
+    fn ensure_property_storage(&mut self, value: Value) -> bool;
+    /// function/closure/bound 的内建与 props 属性读取 adapter。
+    fn callable_get_property(&mut self, value: Value, name_id: u32) -> Value;
+    /// NativeCallable 的内建静态/原型属性读取 adapter。
+    fn native_callable_get_property(&mut self, value: Value, name_id: u32) -> Value;
     /// 值转 JSON/显示字符串（Symbol.for key 等）；失败返回 exception。
     fn value_to_key_string(&mut self, val: Value) -> Result<String, Value>;
 
@@ -539,12 +696,7 @@ pub trait ExecContext: HeapContext {
         resume_val: Value,
     ) -> ExecFuture<'a, bool>;
     /// await suspend：挂起 continuation 到 promise reactions。
-    fn async_function_suspend(
-        &mut self,
-        continuation: Value,
-        awaited_promise: Value,
-        state: Value,
-    );
+    fn async_function_suspend(&mut self, continuation: Value, awaited_promise: Value, state: Value);
     /// 分配 iterator result 对象 `{value, done}`。
     fn alloc_iterator_result(&mut self, value: Value, done: bool) -> Value;
 
@@ -704,13 +856,27 @@ pub trait ExecContext: HeapContext {
     /// ArrayBuffer 切片复制到新 buffer，返回新 handle。
     fn arraybuffer_slice(&mut self, handle: u32, start: u32, end: u32) -> Option<u32>;
     /// ArrayBuffer 原始字节读。
-    fn arraybuffer_read_bytes(&mut self, handle: u32, offset: usize, len: usize) -> Option<Vec<u8>>;
+    fn arraybuffer_read_bytes(&mut self, handle: u32, offset: usize, len: usize)
+    -> Option<Vec<u8>>;
     /// ArrayBuffer 原始字节写。
     fn arraybuffer_write_bytes(&mut self, handle: u32, offset: usize, bytes: &[u8]) -> bool;
 
     /// SharedArrayBuffer 表。
     fn shared_arraybuffer_create(&mut self, byte_length: u32) -> Option<u32>;
     fn shared_arraybuffer_byte_length(&mut self, handle: u32) -> Option<u32>;
+    /// 创建 SAB backing 并将元数据挂到目标对象；`max_byte_length=None` 表示定长。
+    fn shared_arraybuffer_create_object(
+        &mut self,
+        target: Value,
+        byte_length: u64,
+        max_byte_length: Option<u64>,
+    ) -> Value;
+    /// 读取 `(handle, byte_length, max_byte_length)`。
+    fn shared_arraybuffer_info(&mut self, this: Value) -> Option<(u32, u64, Option<u64>)>;
+    /// 扩容 backing 并同步可观察元数据。
+    fn shared_arraybuffer_grow(&mut self, this: Value, new_length: u64) -> bool;
+    /// 复制 `[start, end)` 为新的定长 SAB 对象。
+    fn shared_arraybuffer_slice(&mut self, this: Value, start: u64, end: u64) -> Option<Value>;
 
     /// 解析 ArrayBuffer / SharedArrayBuffer 底层 backing。
     /// 返回 `(table_handle, byte_length, is_shared)`。
@@ -733,6 +899,50 @@ pub trait ExecContext: HeapContext {
         bytes: &[u8],
     ) -> bool;
 
+    // ═══ Atomics 后端原语 ═══
+
+    fn buffer_atomic_load(&mut self, view: &TypedArrayView, byte_offset: u64) -> Option<i64>;
+    fn buffer_atomic_store(
+        &mut self,
+        view: &TypedArrayView,
+        byte_offset: u64,
+        value: i64,
+    ) -> Option<()>;
+    fn buffer_atomic_rmw(
+        &mut self,
+        view: &TypedArrayView,
+        byte_offset: u64,
+        op: AtomicsRmwOp,
+        operand: i64,
+    ) -> Option<i64>;
+    fn buffer_atomic_compare_exchange(
+        &mut self,
+        view: &TypedArrayView,
+        byte_offset: u64,
+        expected: i64,
+        replacement: i64,
+    ) -> Option<i64>;
+    fn atomics_notify(
+        &mut self,
+        view: &TypedArrayView,
+        byte_offset: u64,
+        count: Option<u32>,
+    ) -> u32;
+    fn atomics_wait_async_op<'a>(
+        &'a mut self,
+        view: TypedArrayView,
+        byte_offset: u64,
+        expected: i64,
+        timeout_ms: f64,
+    ) -> ExecFuture<'a>;
+    fn atomics_wait_sync<'a>(
+        &'a mut self,
+        view: TypedArrayView,
+        byte_offset: u64,
+        expected: i64,
+        timeout_ms: f64,
+    ) -> ExecFuture<'a>;
+
     /// DataView 表：挂到 buffer 上；`buffer_object` 为可选 identity 引用。
     fn dataview_create(
         &mut self,
@@ -742,12 +952,10 @@ pub trait ExecContext: HeapContext {
         byte_length: u32,
         is_shared: bool,
     ) -> Option<u32>;
-    fn dataview_resolve(
-        &mut self,
-        handle: u32,
-    ) -> Option<(u32, u32, u32, bool)>;
+    fn dataview_resolve(&mut self, handle: u32) -> Option<(u32, u32, u32, bool)>;
 
     /// TypedArray 表登记。
+    #[allow(clippy::too_many_arguments)]
     fn typedarray_table_create(
         &mut self,
         buffer_handle: u32,
@@ -803,6 +1011,57 @@ pub trait ExecContext: HeapContext {
     fn queue_microtask(&mut self, callback: Value);
     fn register_module_namespace(&mut self, module_id: u32, namespace: Value);
     fn dynamic_import(&mut self, module_id: u32) -> Value;
+
+    fn module_resolve(
+        &mut self,
+        referrer: crate::RuntimeModuleReferrer,
+        specifier: &str,
+        kind: crate::RuntimeModuleResolutionKind,
+    ) -> Result<crate::RuntimeResolvedModule, crate::RuntimeModuleLoadError>;
+    fn module_resolve_paths(
+        &mut self,
+        referrer: crate::RuntimeModuleReferrer,
+        specifier: &str,
+    ) -> Result<Option<Vec<std::path::PathBuf>>, crate::RuntimeModuleLoadError>;
+    fn module_cached_require(
+        &mut self,
+        key: &crate::RuntimeModuleKey,
+    ) -> crate::RuntimeModuleRequireResult;
+    fn module_cached_import(
+        &mut self,
+        key: &crate::RuntimeModuleKey,
+    ) -> crate::RuntimeModuleImportResult;
+    fn module_instantiate_sync(
+        &mut self,
+        resolved: &crate::RuntimeResolvedModule,
+        env: crate::RuntimeInstantiationEnv,
+    ) -> Result<crate::RuntimeInstantiatedModule, crate::RuntimeModuleLoadError>;
+    fn module_instantiate_async<'a>(
+        &'a mut self,
+        resolved: crate::RuntimeResolvedModule,
+        env: crate::RuntimeInstantiationEnv,
+    ) -> ExecFuture<
+        'a,
+        Result<crate::RuntimeInstantiatedModule, crate::RuntimeModuleLoadError>,
+    >;
+    fn module_finish_loaded(
+        &mut self,
+        key: crate::RuntimeModuleKey,
+        instantiated: crate::RuntimeInstantiatedModule,
+    );
+    fn module_finish_errored(
+        &mut self,
+        key: crate::RuntimeModuleKey,
+        module_id: Option<u32>,
+        reason: Value,
+    );
+    fn module_require_cache_entry(
+        &mut self,
+        cache_key: &str,
+    ) -> Option<crate::RuntimeRequireCacheEntry>;
+    fn module_require_cache_entries(&mut self) -> Vec<crate::RuntimeRequireCacheEntry>;
+    fn module_delete_require_cache_entry(&mut self, cache_key: &str) -> bool;
+    fn create_require_cache_proxy(&mut self) -> Value;
     /// 分配 null 原型对象。
     fn alloc_null_proto_object(&mut self, capacity: u32) -> Value;
 
@@ -860,11 +1119,7 @@ pub trait ExecContext: HeapContext {
         unregister_token: Option<Value>,
     );
     /// 按 token 注销；返回是否移除了至少一条。
-    fn finalization_registry_unregister_token(
-        &mut self,
-        registry_idx: u32,
-        token: Value,
-    ) -> bool;
+    fn finalization_registry_unregister_token(&mut self, registry_idx: u32, token: Value) -> bool;
     /// 创建 WeakRef/FR 原型方法 NativeCallable。
     /// kind: "weakref_deref" | "fr_register" | "fr_unregister"
     fn create_weakref_method(&mut self, kind: &str) -> Value;
@@ -896,18 +1151,11 @@ pub trait ExecContext: HeapContext {
     /// RegExp 默认 match/search/split/matchAll（无 @@ 方法时的回退）。
     fn regexp_string_match_default(&mut self, receiver: Value, regexp: Value) -> Value;
     fn regexp_string_search_default(&mut self, receiver: Value, regexp: Value) -> Value;
-    fn regexp_string_split_default(
-        &mut self,
-        receiver: Value,
-        sep: Value,
-        limit: Value,
-    ) -> Value;
+    fn regexp_string_split_default(&mut self, receiver: Value, sep: Value, limit: Value) -> Value;
     fn regexp_match_all_default(&mut self, this_val: Value, regexp: Value) -> Value;
 
     // ═══ op_in / 迭代器低层原语 ═══
 
-    /// 非 Proxy 路径的 `in` 算符（含 array exotic / 原型链）。
-    fn has_in_property(&mut self, object: Value, prop: Value) -> Value;
     /// Proxy 是否已撤销（存在且 revoked）。
     fn proxy_is_revoked(&mut self, proxy: Handle) -> bool;
     /// 从属性对象读 `"has"` 等 trap（own + proto）。
@@ -918,9 +1166,163 @@ pub trait ExecContext: HeapContext {
     /// 创建 Set 值迭代器（若 val 为 set 包装对象）。
     fn try_create_set_iterator(&mut self, val: Value) -> Option<Value>;
     /// 包装普通对象迭代器（读 next/return/throw）。
+    // ═══ Fetch 状态表与 I/O 边界 ═══
+    fn alloc_headers(&mut self, entry: crate::HeadersEntry) -> u32;
+    fn with_headers<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::HeadersEntry) -> R,
+    ) -> Option<R>;
+    fn alloc_fetch_response(&mut self, entry: crate::FetchResponseEntry) -> u32;
+    fn with_fetch_response<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::FetchResponseEntry) -> R,
+    ) -> Option<R>;
+    fn alloc_fetch_request(&mut self, entry: crate::FetchRequestEntry) -> u32;
+    fn with_fetch_request<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::FetchRequestEntry) -> R,
+    ) -> Option<R>;
+    fn alloc_abort_signal(&mut self, entry: crate::AbortSignalEntry) -> u32;
+    fn with_abort_signal<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::AbortSignalEntry) -> R,
+    ) -> Option<R>;
+    fn http_fetch_begin<'a>(
+        &'a mut self,
+        request: crate::HttpRequestSpec,
+    ) -> ExecFuture<'a>;
+    fn create_arraybuffer_from_bytes(&mut self, bytes: &[u8]) -> Value;
+    fn consume_fetch_body_to_bytes(
+        &mut self,
+        http_handle: u32,
+        promise: Value,
+        kind: crate::ResponseMethodKind,
+    ) -> bool;
+
+    fn fetch_resource_timing_enabled(&mut self) -> bool;
+    fn performance_now(&mut self) -> f64;
+    fn commit_fetch_resource_timing(&mut self, timing: &crate::FetchResourceTimingState);
+
+    // ═══ WHATWG Streams 状态表 ═══
+
+    fn stream_create_uint8array(&mut self, bytes: &[u8]) -> Value;
+    fn stream_typedarray_u8_bytes(&mut self, typedarray: Value) -> Option<Vec<u8>>;
+    fn stream_write_u8_bytes(&mut self, view: Value, bytes: &[u8]) -> Option<usize>;
+    fn stream_transfer_byob_view(&mut self, view: Value, bytes_written: usize) -> Option<Value>;
+    fn mark_response_body_used(&mut self, response_handle: Option<u32>, response_obj: Option<Value>);
+    fn schedule_readable_pull(&mut self, callback: Value, this_value: Value, controller: Value);
+    fn schedule_readable_pipe_pump(&mut self, readable_handle: u32);
+    fn fetch_body_reader_read(
+        &mut self,
+        reader_handle: u32,
+        http_handle: u32,
+        byob_view: Option<Value>,
+    ) -> Option<Value>;
+    fn create_writable_abort_signal(&mut self) -> Value;
+    fn mark_writable_stream_signal_aborted(&mut self, stream_handle: u32, reason: Value);
+    fn schedule_writable_sink_write(
+        &mut self,
+        callback: Value,
+        this_value: Value,
+        chunk: Value,
+        controller: Value,
+        write_promise: Value,
+    );
+    fn schedule_writable_sink_close(
+        &mut self,
+        callback: Option<Value>,
+        this_value: Value,
+        controller: Value,
+        writable_stream_handle: u32,
+        close_promise: Value,
+    );
+    fn schedule_transform_stream_transform(
+        &mut self,
+        callback: Value,
+        this_value: Value,
+        chunk: Value,
+        controller: Value,
+        write_promise: Value,
+    );
+    fn schedule_transform_stream_flush(&mut self, params: TransformStreamFlushParams);
+
+    fn cancel_http_response(&mut self, http_handle: u32);
+
+
+    fn alloc_readable_stream(&mut self, entry: crate::ReadableStreamEntry) -> u32;
+    fn with_readable_stream<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::ReadableStreamEntry) -> R,
+    ) -> Option<R>;
+    fn bind_readable_stream_object(&mut self, object: Handle, handle: u32);
+
+    fn alloc_reader(&mut self, entry: crate::ReaderEntry) -> u32;
+    fn with_reader<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::ReaderEntry) -> R,
+    ) -> Option<R>;
+    fn with_readers<R>(
+        &mut self,
+        f: impl FnOnce(&mut [Option<crate::ReaderEntry>]) -> R,
+    ) -> R;
+    fn bind_reader_object(&mut self, object: Handle, handle: u32);
+
+    fn alloc_stream_controller(&mut self, entry: crate::StreamControllerEntry) -> u32;
+    fn with_stream_controller<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::StreamControllerEntry) -> R,
+    ) -> Option<R>;
+    fn bind_stream_controller_object(&mut self, object: Handle, handle: u32);
+
+    fn alloc_byob_request(&mut self, entry: crate::ByobRequestEntry) -> u32;
+    fn with_byob_request<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::ByobRequestEntry) -> R,
+    ) -> Option<R>;
+    fn bind_byob_request_object(&mut self, object: Handle, handle: u32);
+
+    fn alloc_writable_stream(&mut self, entry: crate::WritableStreamEntry) -> u32;
+    fn with_writable_stream<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::WritableStreamEntry) -> R,
+    ) -> Option<R>;
+    fn bind_writable_stream_object(&mut self, object: Handle, handle: u32);
+
+    fn alloc_writer(&mut self, entry: crate::WriterEntry) -> u32;
+    fn with_writer<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::WriterEntry) -> R,
+    ) -> Option<R>;
+    fn with_writers<R>(
+        &mut self,
+        f: impl FnOnce(&mut [Option<crate::WriterEntry>]) -> R,
+    ) -> R;
+    fn bind_writer_object(&mut self, object: Handle, handle: u32);
+
+    fn alloc_transform_stream(&mut self, entry: crate::TransformStreamEntry) -> u32;
+    fn with_transform_stream<R>(
+        &mut self,
+        handle: u32,
+        f: impl FnOnce(&mut crate::TransformStreamEntry) -> R,
+    ) -> Option<R>;
+    fn with_transform_streams<R>(
+        &mut self,
+        f: impl FnOnce(&mut [Option<crate::TransformStreamEntry>]) -> R,
+    ) -> R;
+    fn bind_transform_stream_object(&mut self, object: Handle, handle: u32);
     fn create_object_iterator(&mut self, iterator: Value) -> Value;
-    /// 通用 GetIterator 回退（含 Map 等侧表路径）；内部可再入 call_js。
-    fn iterator_from_fallback_async<'a>(&'a mut self, val: Value) -> ExecFuture<'a, Value>;
+    /// 创建错误迭代器状态。
+    fn create_error_iterator(&mut self) -> Value;
 
     /// 同步推进非 Object 迭代器；若需调用 .next() 返回 NeedObjectNext。
     fn iterator_next_sync_step(&mut self, handle: Value) -> IteratorNextStep;
@@ -942,8 +1344,12 @@ pub trait ExecContext: HeapContext {
     fn iterator_mark_done(&mut self, handle: Value);
     /// 查 async-from-sync 表。
     fn iterator_lookup_afs(&mut self, handle: Value) -> Option<u32>;
-    /// 推进 async-from-sync 迭代器。
-    fn iterator_materialize_afs_next<'a>(&'a mut self, afs: u32) -> ExecFuture<'a, Value>;
+    /// 读取 async-from-sync 条目关联的外层迭代器 handle。
+    fn async_from_sync_outer_iterator(&mut self, afs: u32) -> Option<Value>;
+    /// 从 AsyncFromSyncNext native callable 读取条目索引。
+    fn async_from_sync_native_handle(&mut self, next: Value) -> Option<u32>;
+    /// 推进 async-from-sync 状态机，返回其 promise/IteratorResult。
+    fn advance_async_from_sync<'a>(&'a mut self, afs: u32) -> ExecFuture<'a, Value>;
     /// IteratorValue（当前项）。
     fn iterator_current_value(&mut self, handle: Value) -> Value;
     /// 异常 → rejected promise。
@@ -958,6 +1364,19 @@ pub trait ExecContext: HeapContext {
     fn exception_reason(&mut self, exc: Value) -> Value;
     /// 分配 rejected promise。
     fn alloc_rejected_promise(&mut self, reason: Value) -> Value;
+}
+
+/// `schedule_transform_stream_flush` 参数包：归集 8 个独立参数为单 struct，
+/// 降低 trait 方法参数数，避免 clippy `too many arguments` 警告。
+#[derive(Clone, Copy, Debug)]
+pub struct TransformStreamFlushParams {
+    pub callback: Option<Value>,
+    pub this_value: Value,
+    pub controller: Value,
+    pub writable_stream_handle: u32,
+    pub readable_stream_handle: u32,
+    pub readable_controller_handle: u32,
+    pub close_promise: Value,
 }
 
 /// RegExp 单次匹配的 Send-safe 投影。
@@ -984,6 +1403,17 @@ pub enum IteratorNextStep {
     ErrorDone,
 }
 
+/// Atomics read-modify-write 操作。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AtomicsRmwOp {
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Exchange,
+}
+
 /// TypedArray 视图（后端无关投影）。
 #[derive(Clone, Copy, Debug)]
 pub struct TypedArrayView {
@@ -994,4 +1424,3 @@ pub struct TypedArrayView {
     pub element_kind: u8,
     pub is_shared: bool,
 }
-

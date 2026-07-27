@@ -1,8 +1,8 @@
+use crate::exec_context_impl::WasmExecContext;
+use crate::*;
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
-use crate::exec_context_impl::WasmExecContext;
-use crate::*;
 
 pub(crate) fn define_math_number_error(
     linker: &mut Linker<RuntimeState>,
@@ -280,13 +280,10 @@ pub(crate) fn define_math_number_error(
         },
     );
     linker.define(&mut store, "env", "math_pow", math_pow_fn)?;
-    let math_random_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>| -> i64 {
-            let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::math_random(&mut ctx)
-        },
-    );
+    let math_random_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
+        let mut ctx = WasmExecContext::new(&mut caller);
+        wjsm_builtins::math_number_error::math_random(&mut ctx)
+    });
     linker.define(&mut store, "env", "math_random", math_random_fn)?;
     let number_constructor_fn = Func::wrap(
         &mut store,
@@ -295,7 +292,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::number_constructor(&mut ctx, arg)
         },
     );
-    linker.define(&mut store, "env", "number_constructor", number_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_constructor",
+        number_constructor_fn,
+    )?;
     let number_is_nan_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
@@ -327,7 +329,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::number_is_safe_integer(&mut ctx, arg)
         },
     );
-    linker.define(&mut store, "env", "number_is_safe_integer", number_is_safe_integer_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_is_safe_integer",
+        number_is_safe_integer_fn,
+    )?;
     let number_parse_int_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, radix_val: i64| -> i64 {
@@ -343,7 +350,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::number_parse_float(&mut ctx, arg)
         },
     );
-    linker.define(&mut store, "env", "number_parse_float", number_parse_float_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_parse_float",
+        number_parse_float_fn,
+    )?;
     let number_proto_to_string_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, radix_val: i64| -> i64 {
@@ -351,7 +363,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::number_proto_to_string(&mut ctx, this_val, radix_val)
         },
     );
-    linker.define(&mut store, "env", "number_proto_to_string", number_proto_to_string_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_proto_to_string",
+        number_proto_to_string_fn,
+    )?;
     let number_proto_value_of_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
@@ -359,7 +376,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::number_proto_value_of(&mut ctx, this_val)
         },
     );
-    linker.define(&mut store, "env", "number_proto_value_of", number_proto_value_of_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_proto_value_of",
+        number_proto_value_of_fn,
+    )?;
     let number_proto_to_fixed_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
@@ -367,23 +389,42 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::number_proto_to_fixed(&mut ctx, this_val, digits_val)
         },
     );
-    linker.define(&mut store, "env", "number_proto_to_fixed", number_proto_to_fixed_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_proto_to_fixed",
+        number_proto_to_fixed_fn,
+    )?;
     let number_proto_to_exponential_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::number_proto_to_exponential(&mut ctx, this_val, digits_val)
+            wjsm_builtins::math_number_error::number_proto_to_exponential(
+                &mut ctx, this_val, digits_val,
+            )
         },
     );
-    linker.define(&mut store, "env", "number_proto_to_exponential", number_proto_to_exponential_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_proto_to_exponential",
+        number_proto_to_exponential_fn,
+    )?;
     let number_proto_to_precision_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::number_proto_to_precision(&mut ctx, this_val, digits_val)
+            wjsm_builtins::math_number_error::number_proto_to_precision(
+                &mut ctx, this_val, digits_val,
+            )
         },
     );
-    linker.define(&mut store, "env", "number_proto_to_precision", number_proto_to_precision_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "number_proto_to_precision",
+        number_proto_to_precision_fn,
+    )?;
     let boolean_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
@@ -391,7 +432,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::boolean_constructor(&mut ctx, arg)
         },
     );
-    linker.define(&mut store, "env", "boolean_constructor", boolean_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "boolean_constructor",
+        boolean_constructor_fn,
+    )?;
     let boolean_proto_to_string_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
@@ -399,7 +445,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::boolean_proto_to_string(&mut ctx, this_val)
         },
     );
-    linker.define(&mut store, "env", "boolean_proto_to_string", boolean_proto_to_string_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "boolean_proto_to_string",
+        boolean_proto_to_string_fn,
+    )?;
     let boolean_proto_value_of_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
@@ -407,7 +458,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::boolean_proto_value_of(&mut ctx, this_val)
         },
     );
-    linker.define(&mut store, "env", "boolean_proto_value_of", boolean_proto_value_of_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "boolean_proto_value_of",
+        boolean_proto_value_of_fn,
+    )?;
     let error_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
@@ -423,7 +479,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::type_error_constructor(&mut ctx, arg, options)
         },
     );
-    linker.define(&mut store, "env", "type_error_constructor", type_error_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "type_error_constructor",
+        type_error_constructor_fn,
+    )?;
     let range_error_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
@@ -431,7 +492,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::range_error_constructor(&mut ctx, arg, options)
         },
     );
-    linker.define(&mut store, "env", "range_error_constructor", range_error_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "range_error_constructor",
+        range_error_constructor_fn,
+    )?;
     let syntax_error_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
@@ -439,7 +505,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::syntax_error_constructor(&mut ctx, arg, options)
         },
     );
-    linker.define(&mut store, "env", "syntax_error_constructor", syntax_error_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "syntax_error_constructor",
+        syntax_error_constructor_fn,
+    )?;
     let reference_error_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
@@ -447,7 +518,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::reference_error_constructor(&mut ctx, arg, options)
         },
     );
-    linker.define(&mut store, "env", "reference_error_constructor", reference_error_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "reference_error_constructor",
+        reference_error_constructor_fn,
+    )?;
     let uri_error_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
@@ -455,7 +531,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::uri_error_constructor(&mut ctx, arg, options)
         },
     );
-    linker.define(&mut store, "env", "uri_error_constructor", uri_error_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "uri_error_constructor",
+        uri_error_constructor_fn,
+    )?;
     let eval_error_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, options: i64| -> i64 {
@@ -463,7 +544,12 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::eval_error_constructor(&mut ctx, arg, options)
         },
     );
-    linker.define(&mut store, "env", "eval_error_constructor", eval_error_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "eval_error_constructor",
+        eval_error_constructor_fn,
+    )?;
     let error_proto_to_string_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
@@ -471,55 +557,98 @@ pub(crate) fn define_math_number_error(
             wjsm_builtins::math_number_error::error_proto_to_string(&mut ctx, this_val)
         },
     );
-    linker.define(&mut store, "env", "error_proto_to_string", error_proto_to_string_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "error_proto_to_string",
+        error_proto_to_string_fn,
+    )?;
     let primitive_bigint_get_method_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
             let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::primitive_bigint_get_method(&mut ctx, boxed, name_id as u32)
+            wjsm_builtins::math_number_error::primitive_bigint_get_method(
+                &mut ctx,
+                boxed,
+                name_id as u32,
+            )
         },
     );
-    linker.define(&mut store, "env", "primitive_bigint_get_method", primitive_bigint_get_method_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_bigint_get_method",
+        primitive_bigint_get_method_fn,
+    )?;
     let primitive_number_get_method_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
             let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::primitive_number_get_method(&mut ctx, boxed, name_id as u32)
+            wjsm_builtins::math_number_error::primitive_number_get_method(
+                &mut ctx,
+                boxed,
+                name_id as u32,
+            )
         },
     );
-    linker.define(&mut store, "env", "primitive_number_get_method", primitive_number_get_method_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_number_get_method",
+        primitive_number_get_method_fn,
+    )?;
     let primitive_symbol_get_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
             let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::primitive_symbol_get_property(&mut ctx, boxed, name_id as u32)
+            wjsm_builtins::math_number_error::primitive_symbol_get_property(
+                &mut ctx,
+                boxed,
+                name_id as u32,
+            )
         },
     );
-    linker.define(&mut store, "env", "primitive_symbol_get_property", primitive_symbol_get_property_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_symbol_get_property",
+        primitive_symbol_get_property_fn,
+    )?;
     let primitive_regexp_get_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
             let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::primitive_regexp_get_property(&mut ctx, boxed, name_id as u32)
+            wjsm_builtins::math_number_error::primitive_regexp_get_property(
+                &mut ctx,
+                boxed,
+                name_id as u32,
+            )
         },
     );
-    linker.define(&mut store, "env", "primitive_regexp_get_property", primitive_regexp_get_property_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_regexp_get_property",
+        primitive_regexp_get_property_fn,
+    )?;
     let primitive_regexp_set_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32, val: i64| {
             let mut ctx = WasmExecContext::new(&mut caller);
-            wjsm_builtins::math_number_error::primitive_regexp_set_property(&mut ctx, boxed, name_id as u32, val);
+            wjsm_builtins::math_number_error::primitive_regexp_set_property(
+                &mut ctx,
+                boxed,
+                name_id as u32,
+                val,
+            );
         },
     );
-    linker.define(&mut store, "env", "primitive_regexp_set_property", primitive_regexp_set_property_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_regexp_set_property",
+        primitive_regexp_set_property_fn,
+    )?;
     Ok(())
 }
 
-pub(crate) fn primitive_bigint_get_method_impl(caller: &mut Caller<'_, RuntimeState>, boxed: i64, name_id: u32) -> i64 {
-    let mut ctx = WasmExecContext::new(caller);
-    wjsm_builtins::math_number_error::primitive_bigint_get_method(&mut ctx, boxed, name_id)
-}
-pub(crate) fn primitive_number_get_method_impl(caller: &mut Caller<'_, RuntimeState>, boxed: i64, name_id: u32) -> i64 {
-    let mut ctx = WasmExecContext::new(caller);
-    wjsm_builtins::math_number_error::primitive_number_get_method(&mut ctx, boxed, name_id)
-}

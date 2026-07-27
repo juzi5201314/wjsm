@@ -137,7 +137,6 @@ impl NativeHeapMemory {
     }
 }
 
-
 impl HeapMemory for NativeHeapMemory {
     fn byte_len(&self) -> u64 {
         // 对算法呈现「从地址 0 起」的绝对已提交上限，与 SharedHeapMemory 语义对齐。

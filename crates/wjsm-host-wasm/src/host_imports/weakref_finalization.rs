@@ -23,7 +23,12 @@ pub(crate) fn define_weakref_finalization(
             )
         },
     );
-    linker.define(&mut store, "env", "weakref_constructor", weakref_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakref_constructor",
+        weakref_constructor_fn,
+    )?;
 
     let weakref_proto_deref_fn = Func::wrap(
         &mut store,
@@ -32,7 +37,12 @@ pub(crate) fn define_weakref_finalization(
             wjsm_builtins::weakref_finalization::weakref_proto_deref(&mut ctx, this_val)
         },
     );
-    linker.define(&mut store, "env", "weakref_proto_deref", weakref_proto_deref_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakref_proto_deref",
+        weakref_proto_deref_fn,
+    )?;
 
     let finalization_registry_constructor_fn = Func::wrap(
         &mut store,

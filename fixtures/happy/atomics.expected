@@ -13,4 +13,13 @@ not-equal
 timed-out
 false
 not-equal
+Infinity
+0
+9223372036854776000
+0
+0
+0
+1
+1
+Infinity
 --- stderr ---

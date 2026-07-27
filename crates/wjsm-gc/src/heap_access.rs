@@ -5,14 +5,14 @@ use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::heap::{HandleGeneration, HandleState, HeapAddress, HeapMemoryError, SharedHeapMemory};
+use crate::heap::{GrowableHeapMemory, HandleGeneration, HandleState, HeapAddress, HeapMemoryError};
 use wjsm_ir::{constants, value};
 
 const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
 
 /// V2 dynamic heap 的唯一 host access owner；所有地址均为 memory64 byte offset。
-pub struct HeapAccessV2 {
-    memory: SharedHeapMemory,
+pub struct HeapAccessV2<M: GrowableHeapMemory> {
+    memory: M,
     next_object: AtomicU64,
     heap_limit: u64,
     free_regions: Mutex<Vec<(u64, u64)>>,
@@ -25,14 +25,14 @@ pub struct HeapAccessV2Property {
     pub getter: u64,
     pub setter: u64,
 }
-impl HeapAccessV2 {
-    pub fn new(memory: SharedHeapMemory) -> Self {
+impl<M: GrowableHeapMemory> HeapAccessV2<M> {
+    pub fn new(memory: M) -> Self {
         let heap_limit = memory.maximum_byte_len();
         Self::with_heap_limit(memory, heap_limit)
     }
 
     /// 使用显式逻辑堆上限（`object_start + max_heap_size`），可小于 shared memory64 的页对齐 maximum。
-    pub fn with_heap_limit(memory: SharedHeapMemory, heap_limit: u64) -> Self {
+    pub fn with_heap_limit(memory: M, heap_limit: u64) -> Self {
         let next_object = crate::heap::HANDLE_REGION_BYTES + 64 * 1024;
         let heap_limit = heap_limit.max(next_object).min(memory.maximum_byte_len());
         Self {

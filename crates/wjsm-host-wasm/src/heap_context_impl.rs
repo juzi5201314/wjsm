@@ -46,12 +46,7 @@ impl HeapContext for WasmHeapContext<'_, '_> {
         let Some(env) = self.env else {
             return value::encode_undefined();
         };
-        crate::runtime_host_helpers::read_shadow_arg_with_env(
-            self.caller,
-            &env,
-            args_base,
-            index,
-        )
+        crate::runtime_host_helpers::read_shadow_arg_with_env(self.caller, &env, args_base, index)
     }
 
     fn read_string_utf8(&mut self, val: Value) -> String {
@@ -129,11 +124,8 @@ impl HeapContext for WasmHeapContext<'_, '_> {
         };
         // 先 Copy 算法 kind，避免 data() 借用与 mut caller 冲突。
         let algorithm = self.caller.data().gc_algorithm;
-        let stats = crate::runtime_gc::active_zgc::collect_dispatch(
-            self.caller,
-            &env,
-            algorithm.as_str(),
-        );
+        let stats =
+            crate::runtime_gc::active_zgc::collect_dispatch(self.caller, &env, algorithm.as_str());
         self.caller
             .data()
             .store_last_gc_stats(algorithm.as_str(), stats.clone());

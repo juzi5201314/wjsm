@@ -6,103 +6,6 @@ use wjsm_host::{ExecContext, HeapContext};
 use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
-pub(crate) fn object_define_property_or_throw(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    prop: i64,
-    desc_handle: i64,
-) -> bool {
-    let desc = match parse_descriptor(caller, desc_handle) {
-        Ok(d) => d,
-        Err(msg) => {
-            set_runtime_error(caller.data(), msg);
-            return false;
-        }
-    };
-    let Some(name_id) = crate::property_key::property_key_value_to_name_id(caller, prop, true)
-    else {
-        set_runtime_error(caller.data(), "TypeError: Invalid property key".to_string());
-        return false;
-    };
-    match crate::runtime_host_helpers::define_property_on_normal_object(
-        caller,
-        target,
-        name_id,
-        &desc,
-    ) {
-        Ok(_) => true,
-        Err(msg) => {
-            set_runtime_error(caller.data(), msg);
-            false
-        }
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// array_from_impl_async / collect_array_from_values_async /
-// drain_raw_iterator_values / advance_raw_iterator /
-// collect_iterator_values_async / object_from_entries_impl_async
-// 已迁移到 wjsm-builtins::array_object + iterable_collect + object_builtins，
-// 由 ExecContext 原语调用。
-
-
-/// `Object.getOwnPropertyDescriptors(obj)`：返回所有自有属性描述符对象。
-pub(crate) fn object_get_own_property_descriptors_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-) -> i64 {
-    if value::is_null(target) || value::is_undefined(target) {
-        set_runtime_error(
-            caller.data(),
-            "TypeError: Cannot convert undefined or null to object".to_string(),
-        );
-        return value::encode_undefined();
-    }
-    let boxed = if value::is_js_object(target) {
-        target
-    } else {
-        to_object(caller, target)
-    };
-    let keys_arr = super::proxy_reflect::reflect_own_keys_impl(caller, boxed);
-    let Some(keys_ptr) = resolve_array_ptr(caller, keys_arr) else {
-        return value::encode_undefined();
-    };
-    let len = read_array_length(caller, keys_ptr).unwrap_or(0);
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let result = alloc_host_object(caller, &env, 0);
-    for i in 0..len {
-        let key = read_array_elem(caller, keys_ptr, i).unwrap_or_else(value::encode_undefined);
-        let desc =
-            super::proxy_reflect::reflect_get_own_property_descriptor_impl(caller, boxed, key);
-        if value::is_undefined(desc) {
-            continue;
-        }
-        if let Some(name_id) = crate::property_key::property_key_value_to_name_id(caller, key, true)
-        {
-            let _ = define_host_data_property_by_name_id(caller, result, name_id, desc);
-        }
-    }
-    result
-}
 
 pub(crate) fn define_array_object(
     linker: &mut Linker<RuntimeState>,
@@ -143,7 +46,10 @@ pub(crate) fn define_array_object(
         }};
     }
 
-    wrap_arr!("arr_proto_push", wjsm_builtins::array_object::arr_proto_push);
+    wrap_arr!(
+        "arr_proto_push",
+        wjsm_builtins::array_object::arr_proto_push
+    );
     wrap_arr1!("arr_proto_pop", wjsm_builtins::array_object::arr_proto_pop);
     wrap_arr!(
         "arr_proto_includes",
@@ -177,7 +83,10 @@ pub(crate) fn define_array_object(
         "arr_proto_flat",
         wjsm_builtins::array_object::arr_proto_flat_args
     );
-    wrap_arr1!("arr_proto_shift", wjsm_builtins::array_object::arr_proto_shift);
+    wrap_arr1!(
+        "arr_proto_shift",
+        wjsm_builtins::array_object::arr_proto_shift
+    );
     wrap_arr!(
         "arr_proto_unshift",
         wjsm_builtins::array_object::arr_proto_unshift
@@ -203,7 +112,10 @@ pub(crate) fn define_array_object(
         "arr_proto_to_spliced",
         wjsm_builtins::array_object::arr_proto_to_spliced
     );
-    wrap_arr!("arr_proto_with", wjsm_builtins::array_object::arr_proto_with);
+    wrap_arr!(
+        "arr_proto_with",
+        wjsm_builtins::array_object::arr_proto_with
+    );
 
     let arr_static_of_fn = Func::wrap(
         &mut store,

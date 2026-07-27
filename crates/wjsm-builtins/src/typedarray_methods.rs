@@ -271,7 +271,7 @@ pub fn typedarray_proto_length<E: ExecContext>(ctx: &mut E, this_val: Value) -> 
 
 pub fn typedarray_proto_byte_length<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value {
     ctx.typedarray_resolve(this_val)
-        .map(|v| value::encode_f64((v.length as u32 * v.element_size as u32) as f64))
+        .map(|v| value::encode_f64((v.length * v.element_size as u32) as f64))
         .unwrap_or_else(|| value::encode_f64(0.0))
 }
 

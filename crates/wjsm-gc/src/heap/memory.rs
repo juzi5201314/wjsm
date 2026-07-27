@@ -16,6 +16,29 @@ pub trait HeapMemory: Send + Sync {
     fn store_word(&self, address: HeapAddress, value: u64) -> Result<(), HeapMemoryError>;
     fn copy_from(&self, address: HeapAddress, bytes: &[u8]) -> Result<(), HeapMemoryError>;
     fn copy_to(&self, address: HeapAddress, length: u64) -> Result<Vec<u8>, HeapMemoryError>;
+
+    /// 读取 nul 结尾字节串的 owned snapshot。
+    ///
+    /// 默认实现按 `copy_to` 分块扫描；具体后端可用直接内存视图覆写以加速
+    /// （wasm 后端保留 memchr 快路径）。
+    fn read_c_string(&self, address: HeapAddress) -> Result<Vec<u8>, HeapMemoryError> {
+        const CHUNK: u64 = 4096;
+        let base = address.get();
+        let mut buf = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let chunk = self.copy_to(HeapAddress::new(base + offset), CHUNK.min(1024))?;
+            if let Some(pos) = chunk.iter().position(|&b| b == 0) {
+                buf.extend_from_slice(&chunk[..pos]);
+                return Ok(buf);
+            }
+            buf.extend_from_slice(&chunk);
+            if chunk.len() < CHUNK as usize {
+                return Ok(buf);
+            }
+            offset += CHUNK;
+        }
+    }
 }
 
 /// 可增长堆的后端无关接口。

@@ -3,31 +3,21 @@
 use wjsm_host::{ExecContext, Value};
 use wjsm_ir::value;
 
-pub fn weakref_constructor<E: ExecContext>(
-    ctx: &mut E,
-    args_base: i32,
-    args_count: i32,
-) -> Value {
+pub fn weakref_constructor<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Value {
     if args_count < 1 {
-        let msg_val = ctx.store_string(
-            "TypeError: WeakRef constructor requires a target argument",
-        );
-        let error_obj =
-            ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
+        let msg_val = ctx.store_string("TypeError: WeakRef constructor requires a target argument");
+        let error_obj = ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
         return value::encode_exception(value::decode_object_handle(error_obj));
     }
     let target = ctx.read_shadow_arg(args_base, 0);
     if !value::is_js_object(target) {
         let msg_val = ctx.store_string("TypeError: WeakRef: target must be an object");
-        let error_obj =
-            ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
+        let error_obj = ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
         return value::encode_exception(value::decode_object_handle(error_obj));
     }
     let Some(target_handle) = ctx.weak_target_handle(target) else {
-        let msg_val =
-            ctx.store_string("TypeError: WeakRef: cannot resolve target handle");
-        let error_obj =
-            ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
+        let msg_val = ctx.store_string("TypeError: WeakRef: cannot resolve target handle");
+        let error_obj = ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
         return value::encode_exception(value::decode_object_handle(error_obj));
     };
     let handle = ctx.weakref_table_push(target_handle);
@@ -63,8 +53,7 @@ pub fn finalization_registry_constructor<E: ExecContext>(
 ) -> Value {
     if args_count < 1 {
         ctx.set_last_error(
-            "TypeError: FinalizationRegistry constructor requires a callback argument"
-                .to_string(),
+            "TypeError: FinalizationRegistry constructor requires a callback argument".to_string(),
         );
         return value::encode_undefined();
     }
@@ -120,8 +109,7 @@ pub fn finalization_registry_proto_register<E: ExecContext>(
     if !value::is_object(this_val) {
         return value::encode_undefined();
     }
-    let handle_val =
-        ctx.read_property_by_string_key(this_val, "__finalization_registry_handle__");
+    let handle_val = ctx.read_property_by_string_key(this_val, "__finalization_registry_handle__");
     if value::is_undefined(handle_val) {
         return value::encode_undefined();
     }
@@ -138,8 +126,7 @@ pub fn finalization_registry_proto_unregister<E: ExecContext>(
     if !value::is_object(this_val) {
         return value::encode_bool(false);
     }
-    let handle_val =
-        ctx.read_property_by_string_key(this_val, "__finalization_registry_handle__");
+    let handle_val = ctx.read_property_by_string_key(this_val, "__finalization_registry_handle__");
     if value::is_undefined(handle_val) {
         return value::encode_bool(false);
     }

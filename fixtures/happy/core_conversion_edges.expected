@@ -1,0 +1,44 @@
+exit_code: 0
+--- stdout ---
+object
+function
+object
+true
+false
+true
+number
+12
+string
+hinted
+41
+ordinary
+NaN
+/x/
+[object Null]
+[object Undefined]
+[object Boolean]
+[object Number]
+[object String]
+[object BigInt]
+[object Symbol]
+[object Array]
+[object Function]
+[object RegExp]
+[object Error]
+[object Custom]
+[object Array]
+x
+custom
+[object Object]
+7
+9
+function
+function
+true
+true
+toString
+0
+true
+false
+true
+--- stderr ---

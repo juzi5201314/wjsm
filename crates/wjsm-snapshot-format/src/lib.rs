@@ -176,6 +176,7 @@ pub enum SnapshotNativeCallable {
     WorkerThreadsMethod = 85,
     VmMethod = 86,
     PerfHooksMethod = 87,
+    ArrayProtoToString = 88,
 }
 
 impl SnapshotNativeCallable {
@@ -269,6 +270,7 @@ impl SnapshotNativeCallable {
             85 => Some(Self::WorkerThreadsMethod),
             86 => Some(Self::VmMethod),
             87 => Some(Self::PerfHooksMethod),
+            88 => Some(Self::ArrayProtoToString),
             _ => None,
         }
     }
@@ -699,7 +701,7 @@ fn abi_hasher() -> DefaultHasher {
     }
 
     // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=87 {
+    for d in 0u32..=88 {
         if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
             // hash the discriminant
             d.hash(&mut hasher);
@@ -793,7 +795,7 @@ mod tests {
             s.hash(&mut hasher);
         }
 
-        for d in 0u32..=87 {
+        for d in 0u32..=88 {
             if SnapshotNativeCallable::from_discriminant(d).is_some() {
                 d.hash(&mut hasher);
             }

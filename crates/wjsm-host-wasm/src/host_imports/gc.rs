@@ -41,154 +41,16 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_obj_get",
         |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
             Box::new(async move {
-                // V2 support obj_get 透传所有接收者；原始值必须在 host 侧分派，
-                // 否则 `"".length` / Number.prototype 方法等全部变成 undefined。
-                if value::is_string(object) {
-                    return Ok(crate::host_imports::primitive_string_get_property_impl(
-                        &mut caller,
-                        object,
-                        key as u32,
-                    ));
+                let name_id = key as u32;
+                if value::is_js_object(object) && !value::is_proxy(object) {
+                    caller.data().count_barrier_load();
                 }
-                if value::is_native_callable(object) {
-                    return Ok(crate::runtime_linker::native_callable_get_property_impl(
-                        &mut caller,
-                        object,
-                        key,
-                    ));
-                }
-                if value::is_proxy(object) {
-                    return Ok(
-                        crate::host_imports::reentrant_async::proxy_trap_internal_get_async(
-                            &mut caller,
-                            object,
-                            key,
-                        )
-                        .await,
-                    );
-                }
-                // 与 V1 support obj_get 同序的原始值 tag 分派：undefined/null、
-                // bigint、symbol、regexp、raw f64 均不携带 V2 heap handle。
-                if value::is_undefined(object) || value::is_null(object) {
-                    return Ok(value::encode_undefined());
-                }
-                if value::is_bigint(object) {
-                    return Ok(crate::host_imports::primitive_bigint_get_method_impl(
-                        &mut caller,
-                        object,
-                        key as u32,
-                    ));
-                }
-                if value::is_symbol(object) {
-                    return Ok(crate::runtime_heap::primitive_symbol_get_property_impl(
-                        &mut caller,
-                        object,
-                        key as u32,
-                    ));
-                }
-                if value::is_regexp(object) {
-                    return Ok(crate::runtime_regexp::primitive_regexp_get_property_impl(
-                        &mut caller,
-                        object,
-                        key as u32,
-                    ));
-                }
-                if (object as u64 & value::BOX_BASE) != value::BOX_BASE {
-                    return Ok(crate::host_imports::primitive_number_get_method_impl(
-                        &mut caller,
-                        object,
-                        key as u32,
-                    ));
-                }
-                let raw_key = key;
-                // Function/closure/bound 的 own 属性在 function_props 对象上；
-                // 先查 V2 handle table，未命中再回退 call/apply/bind 等内建解析。
-                let handle = if value::is_function(object)
-                    || value::is_closure(object)
-                    || value::is_bound(object)
-                {
-                    crate::handle_index_of(&mut caller, object) as u32
-                } else {
-                    value::decode_handle(object)
-                };
-                if caller
-                    .data()
-                    .heap_access_v2()
-                    .resolve_handle(handle)
-                    .is_ok()
-                {
-                // heap-backed receiver 解析完成 = 一次 load barrier fast-path 事件。
-                caller.data().count_barrier_load();
-                    let key = property_key(&mut caller, key)?;
-                    if value::is_array(object) {
-                        let length_key = crate::property_key::encode_runtime_string_name_id(
-                            crate::property_key::intern_runtime_property_key(
-                                caller.data(),
-                                crate::runtime_string::RuntimeString::from_utf8_str("length"),
-                            ),
-                        );
-                        if key == length_key {
-                            let length = caller.data().heap_access_v2().array_length(handle)?;
-                            return Ok(value::encode_f64(length as f64));
-                        }
-                        // 数组命名属性（含 symbol）→ 宿主侧表；未命中落入原型链
-                        // 解析 Array.prototype 方法（proto 走查会跳过数组 own 槽）。
-                        if let Some(slot) =
-                            crate::array_named_props::ArrayNamedPropsStore::get_slot(
-                                &mut caller,
-                                object,
-                                key,
-                            )
-                        {
-                            return Ok(slot.value);
-                        }
-                    }
-                    let access = caller.data().heap_access_v2().clone();
-                    match access.get_property_slot_on_proto_chain(handle, key) {
-                        Ok(property) => {
-                            if property.is_some()
-                                || !(value::is_function(object)
-                                    || value::is_closure(object)
-                                    || value::is_bound(object))
-                            {
-                                return read_v2_property_async(&mut caller, object, property)
-                                    .await;
-                            }
-                            return Ok(
-                                crate::runtime_linker::function_value_get_property_impl(
-                                    &mut caller,
-                                    object,
-                                    raw_key,
-                                ),
-                            );
-                        }
-                        Err(crate::runtime_gc::HeapAccessV2Error::ProxyPrototype {
-                            handle: proto_handle,
-                        }) => {
-                            // 原型链上的 Proxy：用 proxy 值继续 [[Get]]。
-                            let proxy = value::encode_proxy_handle(proto_handle & 0x7FFF_FFFF);
-                            return Ok(
-                                crate::host_imports::reentrant_async::proxy_trap_internal_get_async(
-                                    &mut caller,
-                                    proxy,
-                                    key as i32,
-                                )
-                                .await,
-                            );
-                        }
-                        Err(error) => return Err(host_error(error)),
-                    }
-                } else if value::is_function(object)
-                    || value::is_closure(object)
-                    || value::is_bound(object)
-                {
-                    return Ok(crate::runtime_linker::function_value_get_property_impl(
-                        &mut caller,
-                        object,
-                        raw_key,
-                    ));
-                }
-                Ok(value::encode_undefined())
+                Ok(wjsm_builtins::property::get_by_name_id(
+                    &mut crate::exec_context_impl::WasmExecContext::new(&mut caller),
+                    object,
+                    name_id,
+                )
+                .await)
             })
         },
     )?;
@@ -197,150 +59,20 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_obj_set",
         |mut caller: Caller<'_, RuntimeState>, (object, key, new_value): (i64, i32, i64)| {
             Box::new(async move {
-                let raw_key = key as u32;
-                let key = property_key(&mut caller, key)?;
-                if value::is_proxy(object) {
-                    set_proxy_property_v2(&mut caller, object, raw_key, key, new_value)?;
-                    return Ok(());
-                }
-                // TAG_REGEXP：lastIndex 等属性由 regexp 专用 owner 承载
-                // （与 V1 support obj_set 的 TAG_REGEXP 分派一致）。
-                if value::is_regexp(object) {
-                    crate::runtime_regexp::primitive_regexp_set_property_impl(
-                        &mut caller,
-                        object,
-                        raw_key,
-                        new_value,
-                    );
-                    return Ok(());
-                }
-                // Function/closure/bound 的属性对象 handle 从 function_props_base 起算。
-                let handle = if value::is_function(object)
-                    || value::is_closure(object)
-                    || value::is_bound(object)
+                let name_id = key as u32;
+                if value::is_js_object(object)
+                    && !value::is_proxy(object)
+                    && !value::is_regexp(object)
                 {
-                    crate::handle_index_of(&mut caller, object) as u32
-                } else {
-                    value::decode_handle(object)
-                };
-                // heap receiver 写路径（proxy/regexp 已提前分派）= store barrier fast-path 事件。
-                caller.data().count_barrier_store();
-                if value::is_array(object) {
-                    let length_key = crate::property_key::encode_runtime_string_name_id(
-                        crate::property_key::intern_runtime_property_key(
-                            caller.data(),
-                            crate::runtime_string::RuntimeString::from_utf8_str("length"),
-                        ),
-                    );
-                    if key == length_key {
-                        {
-                            let mut ctx =
-                                crate::exec_context_impl::WasmExecContext::new(&mut caller);
-                            let _ = wjsm_builtins::array_object::array_set_length(
-                                &mut ctx, object, new_value,
-                            );
-                        }
-                        return Ok(());
-                    }
-                    // 数组命名属性（元素走 elem_set）：own slot 尊重 writable，
-                    // 缺失时按可扩展性新建——与 V1 support obj_set 数组分支同语义。
-                    if let Some(slot) = crate::array_named_props::ArrayNamedPropsStore::get_slot(
-                        &mut caller,
-                        object,
-                        key,
-                    ) {
-                        if slot.flags & wjsm_ir::constants::FLAG_WRITABLE == 0 {
-                            return Ok(());
-                        }
-                        crate::array_named_props::ArrayNamedPropsStore::set_with_flags(
-                            &mut caller,
-                            object,
-                            key,
-                            new_value,
-                            slot.flags,
-                        );
-                        return Ok(());
-                    }
-                    if !crate::is_extensible_impl(&mut caller, object) {
-                        return Ok(());
-                    }
-                    crate::array_named_props::ArrayNamedPropsStore::set(
-                        &mut caller,
-                        object,
-                        key,
-                        new_value,
-                    );
-                    return Ok(());
+                    caller.data().count_barrier_store();
                 }
-                // eval 编译的函数从未执行 __wjsm_init_function_props，
-                // 其 handle 在 V2 handle table 中为空；按需分配属性对象。
-                let access = caller.data().heap_access_v2().clone();
-                if access.resolve_handle(handle).is_err()
-                    && (value::is_function(object)
-                        || value::is_closure(object)
-                        || value::is_bound(object))
-                {
-                    let proto_handle =
-                        value::decode_object_handle(caller.data().function_prototype);
-                    let capacity = 4u32;
-                    let bytes = u64::from(capacity)
-                        * u64::from(wjsm_ir::constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE)
-                        + u64::from(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE);
-                    if let Ok((object_addr, _)) =
-                        crate::runtime_heap::allocate_v2_object_bytes_with_context(
-                            &mut caller,
-                            bytes,
-                        )
-                    {
-                        let _ = access.publish_object(handle, object_addr, proto_handle, capacity);
-                    }
-                }
-                // OrdinarySet：accessor 调 setter；own 数据写值；缺失时在 receiver 新建。
-                if let Some(property) = access
-                    .get_property_slot_on_proto_chain(handle, key)
-                    .map_err(host_error)?
-                {
-                    if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
-                        let setter = property.setter as i64;
-                        if value::is_undefined(setter) || value::is_null(setter) {
-                            return Ok(());
-                        }
-                        if value::is_callable(setter) {
-                            let _ = crate::runtime_host_helpers::call_wasm_callback_async(
-                                &mut caller,
-                                setter,
-                                object,
-                                &[new_value],
-                            )
-                            .await
-                            .map_err(host_error)?;
-                        }
-                        return Ok(());
-                    }
-                    let own = access
-                        .get_property_slot(handle, key)
-                        .map_err(host_error)?
-                        .is_some();
-                    if own {
-                        if property.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0 {
-                            return Ok(());
-                        }
-                        access
-                            .set_property(handle, key, new_value as u64)
-                            .map_err(host_error)?;
-                        return Ok(());
-                    }
-                    // proto 数据属性：在 receiver 上 CreateDataProperty（可写）或拒绝（只读）。
-                    if property.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0 {
-                        return Ok(());
-                    }
-                }
-                if !crate::is_extensible_impl(&mut caller, object) {
-                    return Ok(());
-                }
-                access
-                    .set_property(handle, key, new_value as u64)
-                    .map_err(host_error)?;
+                wjsm_builtins::property::set_by_name_id(
+                    &mut crate::exec_context_impl::WasmExecContext::new(&mut caller),
+                    object,
+                    name_id,
+                    new_value,
+                )
+                .await;
                 Ok(())
             })
         },
@@ -350,61 +82,13 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_obj_delete",
         |mut caller: Caller<'_, RuntimeState>, (object, key): (i64, i32)| {
             Box::new(async move {
-                if value::is_proxy(object) {
-                    return Ok(
-                        crate::host_imports::reentrant_async::proxy_trap_internal_delete_async(
-                            &mut caller,
-                            object,
-                            key,
-                        )
-                        .await,
-                    );
-                }
-                let handle = value::decode_handle(object);
-                let key = property_key(&mut caller, key)?;
-                if value::is_array(object) {
-                    if let Some(name) = match crate::property_key::decode_name_id(key) {
-                        crate::property_key::DecodedNameId::RuntimeString(index) => {
-                            crate::property_key::runtime_property_key_units(caller.data(), index)
-                                .map(|name| name.to_utf8_lossy())
-                        }
-                        crate::property_key::DecodedNameId::MemoryString(index) => {
-                            let env = crate::WasmEnv::from_caller(&mut caller)
-                                .ok_or_else(|| wasmtime::Error::msg("missing WasmEnv"))?;
-                            let bytes = crate::runtime_render::read_string_bytes_mem(
-                                &caller,
-                                &env.memory,
-                                index,
-                            );
-                            Some(String::from_utf8_lossy(&bytes).into_owned())
-                        }
-                        crate::property_key::DecodedNameId::Symbol(_) => None,
-                    } && let Ok(index) = name.parse::<u32>()
-                        && let Some(ptr) = crate::resolve_array_ptr(&mut caller, object)
-                    {
-                        crate::runtime_values::write_array_hole(&mut caller, ptr, index);
-                        return Ok(value::encode_bool(true));
-                    }
-                    // 非索引命名属性（含 symbol）→ 宿主侧表；
-                    // configurable=false → false，不存在 → true。
-                    return Ok(value::encode_bool(
-                        crate::array_named_props::ArrayNamedPropsStore::remove(
-                            &mut caller,
-                            object,
-                            key,
-                        )
-                        .unwrap_or(true),
-                    ));
-                }
-                let access = caller.data().heap_access_v2().clone();
-                if let Some(property) = access.get_property_slot(handle, key).map_err(host_error)? {
-                    if property.flags & wjsm_ir::constants::FLAG_CONFIGURABLE as u32 == 0 {
-                        return Ok(value::encode_bool(false));
-                    }
-                    let deleted = access.delete_property(handle, key)?;
-                    return Ok(value::encode_bool(deleted));
-                }
-                Ok(value::encode_bool(true))
+                let name_id = key as u32;
+                Ok(wjsm_builtins::property::delete_by_name_id(
+                    &mut crate::exec_context_impl::WasmExecContext::new(&mut caller),
+                    object,
+                    name_id,
+                )
+                .await)
             })
         },
     )?;
@@ -421,8 +105,6 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
         "gc_elem_get",
         |mut caller: Caller<'_, RuntimeState>, (array, index): (i64, i32)| {
             Box::new(async move {
-                // TypedArray 数字索引先走 Rust 侧 typedarray 表
-                // （与 V1 obj_get_by_index 分派一致；负数索引落入属性路径 → undefined）。
                 if index >= 0
                     && let Some(element) = crate::runtime_typedarray::typedarray_element_read(
                         &mut caller,
@@ -434,58 +116,71 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                 }
                 let handle = value::decode_handle(array);
                 let access = caller.data().heap_access_v2().clone();
-                // heap 中介的元素读（TypedArray Rust 表已提前分派）= load barrier 事件。
                 caller.data().count_barrier_load();
-                // arguments 等对象以 "0"/"1" 属性键承载索引访问，非数组布局。
-                if !value::is_array(array)
-                    && access.object_type(handle).ok() != Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+                if value::is_array(array)
+                    && index >= 0
+                    && access.object_type(handle).ok()
+                        == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
                 {
-                    let key = v2_index_property_key(&caller, index);
-                    let property = access.get_property_slot_on_proto_chain(handle, key)?;
-                    return read_v2_property_async(&mut caller, array, property).await;
+                    return Ok(access
+                        .get_element(handle, index as u32)?
+                        .unwrap_or(value::encode_undefined() as u64)
+                        as i64);
                 }
-                let index = u32::try_from(index).map_err(host_error)?;
-                Ok(access
-                    .get_element(handle, index)?
-                    .unwrap_or(value::encode_undefined() as u64) as i64)
+                let name_id = v2_index_property_key(&caller, index);
+                Ok(wjsm_builtins::property::get_by_name_id(
+                    &mut crate::exec_context_impl::WasmExecContext::new(&mut caller),
+                    array,
+                    name_id,
+                )
+                .await)
             })
         },
     )?;
-    linker.func_wrap(
+    linker.func_wrap_async(
         "env",
         "gc_elem_set",
-        |mut caller: Caller<'_, RuntimeState>,
-         array: i64,
-         index: i32,
-         new_value: i64|
-         -> wasmtime::Result<()> {
-            // TypedArray 数字索引写入 Rust 侧表（负数索引按规范丢弃）。
-            if crate::runtime_typedarray::typedarray_entry_from_value(&mut caller, array).is_some()
-            {
-                if index >= 0 {
-                    let _ = crate::runtime_typedarray::typedarray_element_write(
-                        &mut caller,
-                        array,
-                        index as u32,
-                        new_value,
-                    );
+        |mut caller: Caller<'_, RuntimeState>, (array, index, new_value): (i64, i32, i64)| {
+            Box::new(async move {
+                if crate::runtime_typedarray::typedarray_entry_from_value(&mut caller, array)
+                    .is_some()
+                {
+                    if index >= 0 {
+                        let _ = crate::runtime_typedarray::typedarray_element_write(
+                            &mut caller,
+                            array,
+                            index as u32,
+                            new_value,
+                        );
+                    }
+                    return Ok(());
                 }
-                return Ok(());
-            }
-            let handle = value::decode_handle(array);
-            let access = caller.data().heap_access_v2().clone();
-            // heap 中介的元素写（TypedArray Rust 表已提前分派）= store barrier 事件。
-            caller.data().count_barrier_store();
-            if !value::is_array(array)
-                && access.object_type(handle).ok() != Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
-            {
-                let key = v2_index_property_key(&caller, index);
-                access.set_property(handle, key, new_value as u64)?;
-                return Ok(());
-            }
-            let index = u32::try_from(index).map_err(host_error)?;
-            crate::set_v2_array_element(&mut caller, handle, index, new_value as u64)?;
-            Ok(())
+                let handle = value::decode_handle(array);
+                let access = caller.data().heap_access_v2().clone();
+                caller.data().count_barrier_store();
+                if value::is_array(array)
+                    && index >= 0
+                    && access.object_type(handle).ok()
+                        == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+                {
+                    crate::set_v2_array_element(
+                        &mut caller,
+                        handle,
+                        index as u32,
+                        new_value as u64,
+                    )?;
+                    return Ok(());
+                }
+                let name_id = v2_index_property_key(&caller, index);
+                wjsm_builtins::property::set_by_name_id(
+                    &mut crate::exec_context_impl::WasmExecContext::new(&mut caller),
+                    array,
+                    name_id,
+                    new_value,
+                )
+                .await;
+                Ok(())
+            })
         },
     )?;
     Ok(())
@@ -500,38 +195,7 @@ fn v2_index_property_key(caller: &Caller<'_, RuntimeState>, index: i32) -> u32 {
         ),
     )
 }
-fn property_key(caller: &mut Caller<'_, RuntimeState>, key: i32) -> wasmtime::Result<u32> {
-    crate::property_key::canonicalize_v2_name_id(caller, key as u32).ok_or_else(|| {
-        wasmtime::Error::msg(format!(
-            "V2 property key offset {} is outside main memory",
-            key as u32
-        ))
-    })
-}
 
-async fn read_v2_property_async(
-    caller: &mut Caller<'_, RuntimeState>,
-    receiver: i64,
-    property: Option<crate::runtime_gc::HeapAccessV2Property>,
-) -> wasmtime::Result<i64> {
-    let Some(property) = property else {
-        return Ok(value::encode_undefined());
-    };
-    if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 == 0 {
-        return Ok(property.value as i64);
-    }
-    if value::is_undefined(property.getter as i64) {
-        return Ok(value::encode_undefined());
-    }
-    crate::runtime_host_helpers::call_wasm_callback_async(
-        caller,
-        property.getter as i64,
-        receiver,
-        &[],
-    )
-    .await
-    .map_err(host_error)
-}
 
 fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
     let env = crate::WasmEnv::from_caller(caller)
@@ -588,6 +252,10 @@ fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime:
             ));
         }
     }
+    crate::runtime_startup::install_array_proto_to_string(caller, &env, prototype)
+        .ok_or_else(|| {
+            wasmtime::Error::msg("V2 Array.prototype toString installation failed")
+        })?;
     let iterator_value =
         crate::create_native_callable(caller.data(), crate::NativeCallable::ArrayProtoValues);
     let keys = crate::create_native_callable(caller.data(), crate::NativeCallable::ArrayProtoKeys);
@@ -619,97 +287,7 @@ fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime:
     Ok(handle)
 }
 
-fn set_proxy_property_v2(
-    caller: &mut Caller<'_, RuntimeState>,
-    proxy: i64,
-    raw_key: u32,
-    key: u32,
-    new_value: i64,
-) -> wasmtime::Result<()> {
-    let handle = value::decode_proxy_handle(proxy) as usize;
-    let entry = caller
-        .data()
-        .proxy_table
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .get(handle)
-        .cloned()
-        .ok_or_else(|| wasmtime::Error::msg("invalid V2 proxy handle"))?;
-    if entry.revoked {
-        return Err(wasmtime::Error::msg(
-            "TypeError: Cannot perform 'set' on a proxy that has been revoked",
-        ));
-    }
-    let trap = crate::runtime_heap::read_host_data_property_v2(caller, entry.handler, "set")
-        .unwrap_or_else(value::encode_undefined);
-    if value::is_undefined(trap) || value::is_null(trap) {
-        return set_proxy_target_property_v2(caller, entry.target, raw_key, key, new_value);
-    }
-    let prop = crate::property_key::name_id_to_property_key_value(raw_key)
-        .ok_or_else(|| wasmtime::Error::msg("invalid V2 proxy property key"))?;
-    let runtime = tokio::runtime::Handle::current();
-    tokio::task::block_in_place(|| {
-        runtime.block_on(crate::runtime_host_helpers::call_wasm_callback_async(
-            caller,
-            trap,
-            entry.handler,
-            &[entry.target, prop, new_value, proxy],
-        ))
-    })
-    .map_err(host_error)?;
-    Ok(())
-}
 
-fn set_proxy_target_property_v2(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    raw_key: u32,
-    key: u32,
-    new_value: i64,
-) -> wasmtime::Result<()> {
-    if value::is_proxy(target) {
-        return set_proxy_property_v2(caller, target, raw_key, key, new_value);
-    }
-    // 数组 target：length / 命名属性与 gc_obj_set 数组分支同语义。
-    if value::is_array(target) {
-        let length_key = crate::property_key::encode_runtime_string_name_id(
-            crate::property_key::intern_runtime_property_key(
-                caller.data(),
-                crate::runtime_string::RuntimeString::from_utf8_str("length"),
-            ),
-        );
-        if key == length_key {
-            {
-                let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
-                let _ = wjsm_builtins::array_object::array_set_length(&mut ctx, target, new_value);
-            }
-            return Ok(());
-        }
-        if let Some(slot) =
-            crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, target, key)
-        {
-            if slot.flags & wjsm_ir::constants::FLAG_WRITABLE == 0 {
-                return Ok(());
-            }
-            crate::array_named_props::ArrayNamedPropsStore::set_with_flags(
-                caller, target, key, new_value, slot.flags,
-            );
-            return Ok(());
-        }
-        crate::array_named_props::ArrayNamedPropsStore::set(caller, target, key, new_value);
-        return Ok(());
-    }
-    if !value::is_object(target) {
-        return Err(wasmtime::Error::msg(
-            "TypeError: Proxy target is not an object",
-        ));
-    }
-    caller
-        .data()
-        .heap_access_v2()
-        .set_property(value::decode_handle(target), key, new_value as u64)
-        .map_err(host_error)
-}
 
 fn take_next_handle(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
     let env = crate::WasmEnv::from_caller(caller)

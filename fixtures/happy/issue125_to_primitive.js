@@ -11,3 +11,10 @@ console.log(
     return +o;
   })()
 );
+console.log([1] == "1");
+const array = [1];
+console.log(array.toString());
+array.join = () => "custom";
+console.log(array.toString());
+array.join = 0;
+console.log(array.toString());

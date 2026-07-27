@@ -275,7 +275,11 @@ pub fn math_clz32<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
         Err(e) => return e,
     };
     let n = x as i32 as u32;
-    value::encode_f64(if n == 0 { 32.0 } else { n.leading_zeros() as f64 })
+    value::encode_f64(if n == 0 {
+        32.0
+    } else {
+        n.leading_zeros() as f64
+    })
 }
 
 pub fn math_hypot<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Value {
@@ -401,7 +405,6 @@ pub fn math_sign<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
     }
     value::encode_f64(if x > 0.0 { 1.0 } else { -1.0 })
 }
-
 
 pub fn number_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
     if value::is_f64(arg) {
@@ -775,11 +778,7 @@ pub fn boolean_proto_value_of<E: ExecContext>(_ctx: &mut E, this_val: Value) -> 
     }
 }
 
-pub fn error_constructor<E: ExecContext>(
-    ctx: &mut E,
-    arg: Value,
-    options: Value,
-) -> Value {
+pub fn error_constructor<E: ExecContext>(ctx: &mut E, arg: Value, options: Value) -> Value {
     ctx.create_error_object("Error", arg, options)
 }
 pub fn type_error_constructor<E: ExecContext>(ctx: &mut E, arg: Value, options: Value) -> Value {

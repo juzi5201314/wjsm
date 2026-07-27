@@ -216,10 +216,20 @@ pub(crate) fn dispatch_native_callable_with_env<
             Some(value::encode_undefined())
         }
         NativeCallable::ReadableStreamPipeToWriteFulfilled { readable_handle } => Some(
-            finish_pipe_to_write_with_env(ctx, env, readable_handle, None),
+            crate::runtime_streams::finish_pipe_to_write_with_env(
+                ctx,
+                env,
+                readable_handle,
+                None,
+            ),
         ),
         NativeCallable::ReadableStreamPipeToWriteRejected { readable_handle } => Some(
-            finish_pipe_to_write_with_env(ctx, env, readable_handle, Some(argument)),
+            crate::runtime_streams::finish_pipe_to_write_with_env(
+                ctx,
+                env,
+                readable_handle,
+                Some(argument),
+            ),
         ),
         NativeCallable::PromiseCombinatorReaction { .. } => Some(value::encode_undefined()),
         _ => None,

@@ -30,23 +30,44 @@
 mod async_host;
 mod console_host;
 mod exec_context;
+pub mod backend;
 mod gc_host;
 mod heap_context;
+mod fetch_types;
+mod json_value;
 mod object_host;
+mod module_types;
 pub mod property_key;
 mod runtime_string;
 mod runtime_trait;
+mod stream_types;
 
+pub use backend::JsBackend;
 pub use async_host::AsyncHost;
 pub use console_host::ConsoleHost;
 pub use exec_context::{
-    BoundEntry, CapturedScope, ClosureEntry, ExecContext, ExecFuture, IteratorNextStep,
-    NativeCallableRef, PromiseCombinatorReactionKind, PromiseEntry, PromiseReaction,
-    PromiseResolvingKind, PromiseSettlement, PromiseState, ProxyEntry, QueuingStrategySizeKind,
-    ReactionType, RegExpMatchInfo, TypedArrayView,
+    AtomicsRmwOp, BoundEntry, CapturedScope, ClosureEntry, ExecContext, ExecFuture,
+    IteratorNextStep, NativeCallableRef, PromiseCombinatorReactionKind, PromiseEntry,
+    PromiseReaction, PromiseResolvingKind, PromiseSettlement, PromiseState, PropertyLookup,
+    ProxyEntry, QueuingStrategySizeKind, ReactionType, RegExpMatchInfo, ToPrimitiveHintKind,
+    TransformStreamFlushParams, TypedArrayView,
+};
+pub use fetch_types::{
+    AbortSignalEntry, FetchRequestEntry, FetchResourceTimingState, FetchResponseEntry,
+    HeadersEntry, HeadersGuard, HeadersMethodKind, HttpRequestSpec, RedirectMode, RequestCache,
+    RequestCredentials, RequestMethodKind, RequestMode, ResponseMethodKind, ResponseType,
+    SharedFetchResourceTiming,
+
 };
 pub use gc_host::{GcHost, GcOutcome};
 pub use heap_context::{AsyncHookEvent, HeapContext};
+pub use json_value::JsonValue;
+pub use module_types::{
+    CjsRequireCacheTrapKind, RuntimeInstantiatedModule, RuntimeInstantiationEnv,
+    RuntimeModuleFormat, RuntimeModuleImportResult, RuntimeModuleKey, RuntimeModuleLoadError,
+    RuntimeModuleLoadErrorCode, RuntimeModuleReferrer, RuntimeModuleRequireResult,
+    RuntimeModuleResolutionKind, RuntimeRequireCacheEntry, RuntimeResolvedModule,
+};
 pub use object_host::ObjectHost;
 pub use property_key::{
     DecodedNameId, decode_name_id, encode_runtime_string_name_id, encode_string_name_id,
@@ -54,6 +75,15 @@ pub use property_key::{
     symbol_value_to_name_id,
 };
 pub use runtime_string::RuntimeString;
+pub use stream_types::{
+    ByobRequestEntry, ControllerKind, ReadableStreamByobRequestMethodKind,
+    ReadableStreamDefaultControllerMethodKind, ReadableStreamDefaultReaderMethodKind,
+    ReadableStreamEntry, ReadableStreamMethodKind, ReadableStreamPipeToEntry, ReaderEntry,
+    ReaderKind, StreamControllerEntry, StreamState, TransformStreamEntry,
+    TransformStreamMethodKind, WritableStreamDefaultControllerMethodKind,
+    WritableStreamDefaultWriterMethodKind, WritableStreamEntry, WritableStreamMethodKind,
+    WritableStreamState, WriterEntry,
+};
 pub use runtime_trait::HostRuntime;
 
 // ── 值与 handle：单一来源是 wjsm-ir 的 NaN-boxing 定义 ──

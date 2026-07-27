@@ -11,12 +11,6 @@ pub(crate) fn define_property_on_normal_object(
     desc: &PropertyDescriptor,
 ) -> Result<bool, String> {
     if value::is_array(target) {
-        if desc.get.is_some() || desc.set.is_some() {
-            return Err(
-                "TypeError: Accessor properties are not supported on array symbol slots"
-                    .to_string(),
-            );
-        }
         return crate::array_named_props::define_data_property_on_array_named(
             caller, target, name_id, desc,
         );
@@ -91,7 +85,10 @@ pub(crate) fn define_property_on_normal_object(
                         );
                     }
                     if let Some(new_val) = desc.value {
-                        let same = strict_eq(caller, old_val, new_val);
+                        let same = {
+                            let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
+                            wjsm_builtins::core::strict_eq_impl(&mut ctx, old_val, new_val)
+                        };
                         if value::is_falsy(same) {
                             return Err("TypeError: Cannot change value of non-configurable non-writable property".to_string());
                         }
@@ -259,7 +256,10 @@ fn define_property_on_v2_object(
                         );
                     }
                     if let Some(new_val) = desc.value {
-                        let same = strict_eq(caller, old_val, new_val);
+                        let same = {
+                            let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
+                            wjsm_builtins::core::strict_eq_impl(&mut ctx, old_val, new_val)
+                        };
                         if value::is_falsy(same) {
                             return Err("TypeError: Cannot change value of non-configurable non-writable property".to_string());
                         }
@@ -656,6 +656,33 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         return value::encode_undefined();
     }
 
+    if value::is_regexp(target) {
+        if let Some(name_id) = crate::property_key::property_key_value_to_name_id(caller, prop, true)
+        {
+            let own = crate::runtime_regexp::primitive_regexp_get_property_impl(
+                caller,
+                target,
+                name_id,
+            );
+            if !value::is_undefined(own) {
+                return own;
+            }
+        }
+        if !value::is_object(caller.data().regexp_prototype)
+            && let Some(env) = WasmEnv::from_caller(caller)
+        {
+            crate::runtime_heap::ensure_regexp_prototype_initialized(caller, &env);
+        }
+        let prototype = caller.data().regexp_prototype;
+        if value::is_object(prototype) {
+            return Box::pin(reflect_get_impl_with_receiver_async(
+                caller, prototype, prop, receiver,
+            ))
+            .await;
+        }
+        return value::encode_undefined();
+    }
+
     let prop_name = if value::is_string(prop) {
         get_string_utf8_lossy(caller, prop)
     } else {
@@ -729,15 +756,27 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         let Some(name_id) = resolved_name_id else {
             return value::encode_undefined();
         };
+        if value::is_array(target)
+            && let Some(slot) =
+                crate::array_named_props::ArrayNamedPropsStore::get_slot(caller, target, name_id)
+        {
+            if slot.flags & constants::FLAG_IS_ACCESSOR != 0 {
+                if value::is_undefined(slot.getter) || value::is_null(slot.getter) {
+                    return value::encode_undefined();
+                }
+                return call_wasm_callback_async(caller, slot.getter, receiver, &[])
+                    .await
+                    .unwrap_or_else(|_| value::encode_undefined());
+            }
+            return slot.value;
+        }
         let handle = handle_index_of(caller, target) as u32;
         let access = caller.data().heap_access_v2().clone();
         if access.resolve_handle(handle).is_ok() {
-            match access
-                .get_property_slot_on_proto_chain(handle, name_id)
-                .ok()
-                .flatten()
-            {
-                Some(property) if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 => {
+            match access.get_property_slot_on_proto_chain(handle, name_id) {
+                Ok(Some(property))
+                    if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
+                {
                     let getter = property.getter as i64;
                     if value::is_undefined(getter) || value::is_null(getter) {
                         return value::encode_undefined();
@@ -746,8 +785,16 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
                         .await
                         .unwrap_or_else(|_| value::encode_undefined());
                 }
-                Some(property) => return property.value as i64,
-                None => return value::encode_undefined(),
+                Ok(Some(property)) => return property.value as i64,
+                Ok(None) => return value::encode_undefined(),
+                Err(crate::HeapAccessV2Error::ProxyPrototype { handle }) => {
+                    let proxy = value::encode_proxy_handle(handle & 0x7FFF_FFFF);
+                    return Box::pin(reflect_get_impl_with_receiver_async(
+                        caller, proxy, prop, receiver,
+                    ))
+                    .await;
+                }
+                Err(_) => return value::encode_undefined(),
             }
         }
     }
@@ -1069,16 +1116,20 @@ pub(crate) fn define_host_accessor_property_by_name_id_with_flags(
     {
         return None;
     }
-    // 与 define_data_property_on_array_named 一致：数组命名槽不承载访问器。
-    if value::is_array(obj) {
-        set_runtime_error(
-            caller.data(),
-            "TypeError: Accessor properties are not supported on array named slots".to_string(),
-        );
-        return None;
-    }
     let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
     let flags = (attribute_flags & !constants::FLAG_WRITABLE) | constants::FLAG_IS_ACCESSOR;
+    if value::is_array(obj) {
+        crate::array_named_props::ArrayNamedPropsStore::set_descriptor(
+            caller,
+            obj,
+            key,
+            value::encode_undefined(),
+            getter,
+            setter,
+            flags,
+        );
+        return Some(());
+    }
     caller
         .data()
         .heap_access_v2()

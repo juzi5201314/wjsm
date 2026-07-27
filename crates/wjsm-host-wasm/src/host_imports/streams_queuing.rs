@@ -1,8 +1,8 @@
 // QueuingStrategy 实现（WHATWG Streams Phase 2）— 薄注册层。
+use crate::RuntimeState;
+use crate::exec_context_impl::WasmExecContext;
 use wasmtime::Caller;
 use wjsm_host::QueuingStrategySizeKind;
-use crate::exec_context_impl::WasmExecContext;
-use crate::RuntimeState;
 
 fn convert_kind(kind: crate::QueuingStrategySizeKind) -> QueuingStrategySizeKind {
     match kind {
@@ -26,7 +26,9 @@ pub(crate) fn construct_byte_length_queuing_strategy(
     args: &[i64],
 ) -> Option<i64> {
     let mut ctx = WasmExecContext::new(caller);
-    wjsm_builtins::streams_queuing::construct_byte_length_queuing_strategy(&mut ctx, _this_val, args)
+    wjsm_builtins::streams_queuing::construct_byte_length_queuing_strategy(
+        &mut ctx, _this_val, args,
+    )
 }
 
 pub(crate) fn call_queuing_strategy_size_from_caller(

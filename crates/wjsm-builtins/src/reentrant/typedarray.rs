@@ -234,7 +234,11 @@ pub async fn typedarray_proto_reduce<E: ExecContext>(
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
         acc = match ctx
-            .call_js_async(cb, value::encode_undefined(), &[acc, elem, idx_val, this_val])
+            .call_js_async(
+                cb,
+                value::encode_undefined(),
+                &[acc, elem, idx_val, this_val],
+            )
             .await
         {
             Ok(v) => v,
@@ -284,7 +288,11 @@ pub async fn typedarray_proto_reduce_right<E: ExecContext>(
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
         acc = match ctx
-            .call_js_async(cb, value::encode_undefined(), &[acc, elem, idx_val, this_val])
+            .call_js_async(
+                cb,
+                value::encode_undefined(),
+                &[acc, elem, idx_val, this_val],
+            )
             .await
         {
             Ok(v) => v,

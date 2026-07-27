@@ -3,8 +3,8 @@
 //! Proxy `has` trap 与 ObjectIter `.next`/`.return` 经 `call_js_async` 再入；
 //! 非 Proxy `in`、迭代器表推进走 ExecContext 低层原语。
 
-use wjsm_host::{ExecContext, IteratorNextStep, Value};
-use wjsm_ir::value;
+use wjsm_host::{ExecContext, IteratorNextStep, Value, encode_symbol_name_id};
+use wjsm_ir::{value, wk_symbol};
 
 pub async fn op_in<E: ExecContext>(ctx: &mut E, object: Value, prop: Value) -> Value {
     if value::is_proxy(object) {
@@ -27,8 +27,7 @@ pub async fn op_in<E: ExecContext>(ctx: &mut E, object: Value, prop: Value) -> V
         }
         return Box::pin(op_in(ctx, entry.target, prop)).await;
     }
-    // 数组 / 普通对象 / 非对象：堆路径原语
-    ctx.has_in_property(object, prop)
+    crate::core::ordinary_has_property(ctx, object, prop)
 }
 
 pub async fn iterator_from<E: ExecContext>(ctx: &mut E, val: Value) -> Value {
@@ -45,8 +44,72 @@ pub async fn iterator_from<E: ExecContext>(ctx: &mut E, val: Value) -> Value {
     if let Some(it) = ctx.try_create_set_iterator(val) {
         return it;
     }
-    // Map / Object @@iterator / async-from-sync 等完整路径
-    ctx.iterator_from_fallback_async(val).await
+    iterator_from_fallback(ctx, val).await
+}
+
+async fn iterator_from_fallback<E: ExecContext>(ctx: &mut E, val: Value) -> Value {
+    if !value::is_js_object(val) {
+        return ctx.create_error_iterator();
+    }
+    let name_id = encode_symbol_name_id(wk_symbol::ITERATOR);
+    let method = match crate::get_method::get_method_by_name_id(ctx, val, name_id) {
+        Ok(Some(method)) => method,
+        Ok(None) => return ctx.create_error_iterator(),
+        Err(exception) => return exception,
+    };
+    let iterator = match ctx.call_js_async(method, val, &[]).await {
+        Ok(iterator) => iterator,
+        Err(_) => return ctx.create_error_iterator(),
+    };
+    if value::is_exception(iterator) || value::is_iterator(iterator) {
+        return iterator;
+    }
+    if !value::is_js_object(iterator) {
+        return ctx.create_error_iterator();
+    }
+    let wrapped = ctx.create_object_iterator(iterator);
+    if value::is_undefined(wrapped) {
+        ctx.create_error_iterator()
+    } else {
+        wrapped
+    }
+}
+
+/// 将外层 iterator/next 对应到 async-from-sync 条目。
+pub fn resolve_async_from_sync_afs_handle<E: ExecContext>(
+    ctx: &mut E,
+    handle: Value,
+    next: Value,
+) -> Option<u32> {
+    ctx.iterator_lookup_afs(handle)
+        .or_else(|| ctx.async_from_sync_native_handle(next))
+}
+
+/// 推进 async-from-sync，并把已物化 IteratorResult 写回外层迭代器状态。
+pub async fn materialize_async_from_sync_next<E: ExecContext>(ctx: &mut E, afs: u32) -> Value {
+    let outer = ctx
+        .async_from_sync_outer_iterator(afs)
+        .unwrap_or_else(|| value::encode_handle(value::TAG_ITERATOR, afs));
+    let promise = ctx.advance_async_from_sync(afs).await;
+    if value::is_exception(promise) {
+        let reason = ctx.exception_reason(promise);
+        return ctx.alloc_rejected_promise(reason);
+    }
+    if !ctx.is_promise_value(promise) {
+        if let Some((current, done)) = ctx.parse_iterator_result(promise) {
+            ctx.iterator_store_object_current(outer, current, done, true);
+        }
+        return promise;
+    }
+    match ctx.promise_settled(promise) {
+        Some(Ok(result)) => {
+            if let Some((current, done)) = ctx.parse_iterator_result(result) {
+                ctx.iterator_store_object_current(outer, current, done, true);
+            }
+            result
+        }
+        Some(Err(_)) | None => promise,
+    }
 }
 
 pub async fn iterator_next<E: ExecContext>(ctx: &mut E, handle: Value) -> Value {
@@ -57,7 +120,7 @@ pub async fn iterator_next<E: ExecContext>(ctx: &mut E, handle: Value) -> Value 
         IteratorNextStep::Advanced | IteratorNextStep::Missing => value::encode_undefined(),
         IteratorNextStep::ErrorDone => ctx.alloc_iterator_result(value::encode_undefined(), true),
         IteratorNextStep::NeedAsyncFromSync { afs } => {
-            ctx.iterator_materialize_afs_next(afs).await
+            materialize_async_from_sync_next(ctx, afs).await
         }
         IteratorNextStep::NeedObjectNext { iterator, next } => {
             advance_object_iterator_next(ctx, handle, iterator, next).await

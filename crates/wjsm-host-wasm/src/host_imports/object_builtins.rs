@@ -202,11 +202,13 @@ pub(crate) fn read_property_by_string_key_raw(
     // NativeCallable（内置构造器）：prototype 等静态属性在 side table 中，
     // V2 堆查不到，委托 native_callable_get_property_impl 统一分派。
     if value::is_native_callable(obj) {
-        if let Some(name_id) = crate::property_key::property_key_value_to_name_id(
-            caller, key_val, true,
-        ) {
+        if let Some(name_id) =
+            crate::property_key::property_key_value_to_name_id(caller, key_val, true)
+        {
             return crate::runtime_linker::native_callable_get_property_impl(
-                caller, obj, name_id as i32,
+                caller,
+                obj,
+                name_id as i32,
             );
         }
         return value::encode_undefined();
@@ -219,7 +221,7 @@ pub(crate) fn read_property_by_string_key_raw(
             let key_id = crate::property_key::encode_runtime_string_name_id(
                 crate::property_key::intern_runtime_property_key(caller.data(), key.clone()),
             );
-            return match access.get_property_slot(handle, key_id).ok().flatten() {
+            return match access.get_property_slot_on_proto_chain(handle, key_id).ok().flatten() {
                 Some(property) if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 => {
                     super::get_method::invoke_getter_sync(caller, property.getter as i64, obj)
                 }
@@ -237,13 +239,4 @@ pub(crate) fn read_property_by_string_key_raw(
         return value::encode_undefined();
     };
     val
-}
-
-pub(crate) fn read_property_by_string_key_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-    key: &str,
-) -> i64 {
-    let key_val = store_runtime_string(&*caller, key.to_string());
-    read_property_by_string_key_raw(caller, obj, key_val)
 }

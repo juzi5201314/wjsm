@@ -4,44 +4,12 @@ pub(crate) fn value_to_number_wasm(
     caller: &mut Caller<'_, RuntimeState>,
     arg: i64,
 ) -> Result<f64, i64> {
-    if value::is_f64(arg) {
-        return Ok(value::decode_f64(arg));
+    let number = to_number(caller, arg);
+    if value::is_exception(number) {
+        Err(number)
+    } else {
+        Ok(value::decode_f64(number))
     }
-    if value::is_bool(arg) {
-        return Ok(if value::decode_bool(arg) { 1.0 } else { 0.0 });
-    }
-    if value::is_undefined(arg) {
-        return Ok(f64::NAN);
-    }
-    if value::is_null(arg) {
-        return Ok(0.0);
-    }
-    if value::is_string(arg) {
-        let string_lossy = get_string_utf8_lossy(caller, arg);
-        return Ok(crate::runtime_string_to_number::js_string_content_to_f64(
-            &string_lossy,
-        ));
-    }
-    if value::is_symbol(arg) {
-        return Err(make_type_error_exception(
-            caller,
-            "TypeError: Cannot convert a Symbol value to a number",
-        ));
-    }
-    if value::is_bigint(arg) {
-        return Err(make_type_error_exception(
-            caller,
-            "TypeError: Cannot convert a BigInt value to a number",
-        ));
-    }
-    if value::is_object(arg) || value::is_callable(arg) {
-        let num = to_number(caller, arg);
-        if value::is_exception(num) {
-            return Err(num);
-        }
-        return Ok(value::decode_f64(num));
-    }
-    Ok(f64::NAN)
 }
 
 pub(crate) fn value_to_number_or_exception(caller: &mut Caller<'_, RuntimeState>, arg: i64) -> i64 {
@@ -319,73 +287,8 @@ pub(crate) fn parse_descriptor(
     })
 }
 
-/// 从 target 对象的指定属性中提取出 PropertyDescriptor 结构体
-pub(crate) fn get_target_descriptor(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    name_id: u32,
-) -> Option<PropertyDescriptor> {
-    if caller
-        .data()
-        .heap_access_v2()
-        .resolve_handle(value::decode_handle(target))
-        .is_ok()
-    {
-        let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
-        let property = caller
-            .data()
-            .heap_access_v2()
-            .get_property_slot(value::decode_handle(target), key)
-            .ok()??;
-        let is_accessor = property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0;
-        return Some(PropertyDescriptor {
-            value: (!is_accessor).then_some(property.value as i64),
-            writable: (!is_accessor)
-                .then_some(property.flags & constants::FLAG_WRITABLE as u32 != 0),
-            enumerable: Some(property.flags & constants::FLAG_ENUMERABLE as u32 != 0),
-            configurable: Some(property.flags & constants::FLAG_CONFIGURABLE as u32 != 0),
-            get: is_accessor.then_some(property.getter as i64),
-            set: is_accessor.then_some(property.setter as i64),
-        });
-    }
-    let obj_ptr = resolve_handle(caller, target)?;
-    let (slot_offset, flags, val) = find_property_slot_by_name_id(caller, obj_ptr, name_id)?;
-
-    let is_accessor = (flags & constants::FLAG_IS_ACCESSOR) != 0;
-    let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
-    let enumerable = (flags & constants::FLAG_ENUMERABLE) != 0;
-    let writable = (flags & constants::FLAG_WRITABLE) != 0;
-
-    let (getter, setter) = if is_accessor {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(caller);
-        let getter =
-            i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
-        let setter =
-            i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
-        (Some(getter), Some(setter))
-    } else {
-        (None, None)
-    };
-
-    Some(PropertyDescriptor {
-        value: if !is_accessor { Some(val) } else { None },
-        writable: if !is_accessor { Some(writable) } else { None },
-        enumerable: Some(enumerable),
-        configurable: Some(configurable),
-        get: getter,
-        set: setter,
-    })
-}
-
 pub(crate) fn is_accessor_descriptor(desc: &PropertyDescriptor) -> bool {
     desc.get.is_some() || desc.set.is_some()
-}
-
-pub(crate) fn is_data_descriptor(desc: &PropertyDescriptor) -> bool {
-    desc.value.is_some() || desc.writable.is_some()
 }
 
 pub(crate) fn complete_property_descriptor(mut desc: PropertyDescriptor) -> PropertyDescriptor {
@@ -399,115 +302,4 @@ pub(crate) fn complete_property_descriptor(mut desc: PropertyDescriptor) -> Prop
     desc.enumerable.get_or_insert(false);
     desc.configurable.get_or_insert(false);
     desc
-}
-
-pub(crate) fn descriptor_value_same(
-    caller: &mut Caller<'_, RuntimeState>,
-    left: i64,
-    right: i64,
-) -> bool {
-    !value::is_falsy(strict_eq(caller, left, right))
-}
-
-pub(crate) fn is_compatible_property_descriptor(
-    caller: &mut Caller<'_, RuntimeState>,
-    extensible: bool,
-    desc: &PropertyDescriptor,
-    current: Option<&PropertyDescriptor>,
-) -> bool {
-    let Some(current) = current else {
-        return extensible;
-    };
-
-    let current_configurable = current.configurable.unwrap_or(false);
-    if !current_configurable {
-        if desc.configurable == Some(true) {
-            return false;
-        }
-        if desc.enumerable != current.enumerable {
-            return false;
-        }
-    }
-
-    let current_is_data = is_data_descriptor(current);
-    let desc_is_data = is_data_descriptor(desc);
-    if current_is_data != desc_is_data {
-        return current_configurable;
-    }
-
-    if current_is_data {
-        if !current_configurable && current.writable == Some(false) {
-            if desc.writable == Some(true) {
-                return false;
-            }
-            let current_value = current.value.unwrap_or_else(value::encode_undefined);
-            let desc_value = desc.value.unwrap_or_else(value::encode_undefined);
-            if !descriptor_value_same(caller, current_value, desc_value) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    if !current_configurable {
-        if desc.get != current.get {
-            return false;
-        }
-        if desc.set != current.set {
-            return false;
-        }
-    }
-    true
-}
-
-pub(crate) fn validate_proxy_get_own_property_descriptor_result(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    name_id: Option<u32>,
-    trap_result: i64,
-) -> Result<(), String> {
-    let target_desc = name_id.and_then(|id| get_target_descriptor(caller, target, id));
-    let extensible = is_extensible_impl(caller, target);
-
-    if value::is_undefined(trap_result) {
-        let Some(target_desc) = target_desc else {
-            return Ok(());
-        };
-        if target_desc.configurable == Some(false) {
-            return Err("TypeError: Proxy getOwnPropertyDescriptor invariant violated: non-configurable property must not be reported as undefined".to_string());
-        }
-        if !extensible {
-            return Err("TypeError: Proxy getOwnPropertyDescriptor invariant violated: target is non-extensible and property cannot be reported as missing".to_string());
-        }
-        return Ok(());
-    }
-
-    if !value::is_js_object(trap_result) {
-        return Err(
-            "TypeError: Proxy getOwnPropertyDescriptor trap must return an object or undefined"
-                .to_string(),
-        );
-    }
-
-    let result_desc = complete_property_descriptor(parse_descriptor(caller, trap_result)?);
-    if !is_compatible_property_descriptor(caller, extensible, &result_desc, target_desc.as_ref()) {
-        return Err("TypeError: Proxy getOwnPropertyDescriptor invariant violated: descriptor is incompatible with target".to_string());
-    }
-
-    if result_desc.configurable == Some(false) {
-        let Some(target_desc) = target_desc.as_ref() else {
-            return Err("TypeError: Proxy getOwnPropertyDescriptor invariant violated: non-configurable descriptor is incompatible with target".to_string());
-        };
-        if target_desc.configurable != Some(false) {
-            return Err("TypeError: Proxy getOwnPropertyDescriptor invariant violated: non-configurable descriptor is incompatible with target".to_string());
-        }
-        if is_data_descriptor(target_desc)
-            && target_desc.writable == Some(false)
-            && result_desc.writable == Some(true)
-        {
-            return Err("TypeError: Proxy getOwnPropertyDescriptor invariant violated: non-configurable descriptor is incompatible with target".to_string());
-        }
-    }
-
-    Ok(())
 }

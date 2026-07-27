@@ -1,7 +1,7 @@
-use anyhow::Result;
-use wasmtime::{Caller, Func, Linker, Store};
 use crate::exec_context_impl::WasmExecContext;
 use crate::*;
+use anyhow::Result;
+use wasmtime::{Caller, Func, Linker, Store};
 
 pub(crate) fn define_private_fields(
     linker: &mut Linker<RuntimeState>,
@@ -35,7 +35,11 @@ pub(crate) fn define_private_fields(
          -> i64 {
             let mut ctx = WasmExecContext::new(&mut caller);
             wjsm_builtins::private_fields::private_accessor_bind(
-                &mut ctx, obj, key_name_id, getter, setter,
+                &mut ctx,
+                obj,
+                key_name_id,
+                getter,
+                setter,
             )
         },
     );

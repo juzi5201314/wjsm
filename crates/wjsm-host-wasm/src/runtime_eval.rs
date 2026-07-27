@@ -1092,7 +1092,11 @@ pub(crate) fn eval_stmt(
                 if !matched {
                     let test =
                         eval_expr(caller, case.test.as_ref().unwrap(), scope_env, eval_locals)?;
-                    if !value::is_falsy(strict_eq(caller, test, discriminant)) {
+                    let same = {
+                        let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
+                        wjsm_builtins::core::strict_eq_impl(&mut ctx, test, discriminant)
+                    };
+                    if !value::is_falsy(same) {
                         matched = true;
                     }
                 }

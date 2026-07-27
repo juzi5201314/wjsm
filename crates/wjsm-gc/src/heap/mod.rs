@@ -12,9 +12,9 @@ mod allocator;
 mod bitmap;
 #[allow(dead_code)]
 mod epoch;
+mod handle;
 #[allow(dead_code)]
 mod handle_entry;
-mod handle;
 mod layout;
 mod memory;
 mod native_memory;
@@ -27,11 +27,11 @@ mod word;
 
 pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, RelocationReserve};
 pub use epoch::EpochParticipant;
+pub use handle::{HandleRegionBackend, HandleTableV2, PlatformHandleRegion};
 pub use handle_entry::{
     ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId,
     HandleState, HandleTableError,
 };
-pub use handle::{HandleRegionBackend, HandleTableV2, PlatformHandleRegion};
 pub use layout::ManagedHeapLayout;
 pub use memory::{GrowableHeapMemory, HeapMemory};
 pub use native_memory::NativeHeapMemory;

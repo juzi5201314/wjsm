@@ -16,10 +16,18 @@ fn decode_surrogate_pair(high: u16, low: u16) -> u32 {
 
 fn normalize_string_by_form(s: &str, form: &str) -> Result<String, &'static str> {
     match form {
-        "NFC" => Ok(ComposingNormalizerBorrowed::new_nfc().normalize(s).into_owned()),
-        "NFD" => Ok(DecomposingNormalizerBorrowed::new_nfd().normalize(s).into_owned()),
-        "NFKC" => Ok(ComposingNormalizerBorrowed::new_nfkc().normalize(s).into_owned()),
-        "NFKD" => Ok(DecomposingNormalizerBorrowed::new_nfkd().normalize(s).into_owned()),
+        "NFC" => Ok(ComposingNormalizerBorrowed::new_nfc()
+            .normalize(s)
+            .into_owned()),
+        "NFD" => Ok(DecomposingNormalizerBorrowed::new_nfd()
+            .normalize(s)
+            .into_owned()),
+        "NFKC" => Ok(ComposingNormalizerBorrowed::new_nfkc()
+            .normalize(s)
+            .into_owned()),
+        "NFKD" => Ok(DecomposingNormalizerBorrowed::new_nfkd()
+            .normalize(s)
+            .into_owned()),
         _ => Err("The normalization form should be one of NFC, NFD, NFKC, NFKD"),
     }
 }
@@ -589,11 +597,7 @@ pub fn string_slice<E: ExecContext>(
     let len = s.utf16_len() as i64;
     let si = if value::is_f64(start) {
         let v = to_f64_or(start, 0.0) as i64;
-        if v < 0 {
-            (v + len).max(0)
-        } else {
-            v.min(len)
-        }
+        if v < 0 { (v + len).max(0) } else { v.min(len) }
     } else {
         0
     };
@@ -601,11 +605,7 @@ pub fn string_slice<E: ExecContext>(
         len
     } else if value::is_f64(end) {
         let v = to_f64_or(end, 0.0) as i64;
-        if v < 0 {
-            (v + len).max(0)
-        } else {
-            v.min(len)
-        }
+        if v < 0 { (v + len).max(0) } else { v.min(len) }
     } else {
         0
     };

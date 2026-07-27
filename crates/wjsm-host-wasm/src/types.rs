@@ -10,6 +10,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
 use tokio::time::Instant;
+pub(crate) use wjsm_host::{
+    AbortSignalEntry, ByobRequestEntry, CjsRequireCacheTrapKind, FetchRequestEntry,
+    FetchResponseEntry, HeadersEntry, HeadersMethodKind, ReadableStreamByobRequestMethodKind,
+    ReadableStreamDefaultControllerMethodKind, ReadableStreamDefaultReaderMethodKind,
+    ReadableStreamEntry, ReadableStreamMethodKind, RedirectMode, ReaderEntry, RequestMethodKind,
+    ResponseMethodKind, ResponseType, SharedFetchResourceTiming, StreamControllerEntry,
+    StreamState, TransformStreamEntry, TransformStreamMethodKind,
+    WritableStreamDefaultControllerMethodKind, WritableStreamDefaultWriterMethodKind,
+    WritableStreamEntry, WritableStreamMethodKind, WriterEntry,
+};
+#[cfg(test)]
+pub(crate) use wjsm_host::{
+    ControllerKind, ReadableStreamPipeToEntry, RequestCache, RequestCredentials, RequestMode,
+};
 
 /// 绑定函数记录
 pub(crate) struct BoundRecord {
@@ -134,137 +148,6 @@ pub(crate) struct TypedArrayEntry {
     pub(crate) element_kind: u8,
     pub(crate) is_shared: bool,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) enum ResponseType {
-    Basic,
-    Cors,
-    Error,
-    Opaque,
-    OpaqueRedirect,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum RedirectMode {
-    Follow,
-    Error,
-    Manual,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[allow(dead_code)]
-pub(crate) enum HeadersGuard {
-    #[default]
-    None,
-    Request,
-    RequestNoCors,
-    Response,
-    Immutable,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[allow(dead_code)]
-pub(crate) enum RequestMode {
-    #[default]
-    Cors,
-    SameOrigin,
-    NoCors,
-    Navigate,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[allow(dead_code)]
-pub(crate) enum RequestCredentials {
-    #[default]
-    SameOrigin,
-    Omit,
-    Include,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[allow(dead_code)]
-pub(crate) enum RequestCache {
-    #[default]
-    Default,
-    NoStore,
-    Reload,
-    NoCache,
-    ForceCache,
-    OnlyIfCached,
-}
-#[derive(Clone, Debug)]
-pub(crate) struct HeadersEntry {
-    /// Lowercased key → value (append allows multi-value; we store duplicates)
-    pub(crate) pairs: Vec<(String, String)>,
-    #[allow(dead_code)]
-    pub(crate) guard: HeadersGuard,
-}
-#[derive(Clone, Debug)]
-pub(crate) struct FetchResponseEntry {
-    pub(crate) status: u16,
-    pub(crate) status_text: String,
-    pub(crate) headers_handle: u32,
-    /// 与 headers_handle 对应的 JS Headers wrapper；由 GC 追踪。
-    pub(crate) headers_object: Option<i64>,
-    pub(crate) url: String,
-    pub(crate) body: Vec<u8>,
-    pub(crate) response_type: ResponseType,
-    pub(crate) redirected: bool,
-    pub(crate) body_used: bool,
-    pub(crate) http_response_handle: Option<u32>,
-    /// body ReadableStream 在 readable_stream_table 中的 handle（用于 locked 检查）
-    pub(crate) stream_handle: Option<u32>,
-    /// Fetch Resource Timing 的共享完成状态；Response.clone() 必须共享同一状态。
-    pub(crate) resource_timing: Option<SharedFetchResourceTiming>,
-}
-
-pub(crate) type SharedFetchResourceTiming = Arc<Mutex<FetchResourceTimingState>>;
-
-#[derive(Debug)]
-pub(crate) struct FetchResourceTimingState {
-    pub(crate) requested_url: String,
-    pub(crate) start_time: f64,
-    pub(crate) request_start_time: f64,
-    pub(crate) response_start_time: f64,
-    pub(crate) response_status: u16,
-    pub(crate) encoded_body_size: u64,
-    pub(crate) decoded_body_size: u64,
-    pub(crate) completed: bool,
-}
-#[derive(Clone, Debug)]
-pub(crate) struct FetchRequestEntry {
-    pub(crate) method: String,
-    pub(crate) url: String,
-    pub(crate) headers_handle: u32,
-    /// 与 headers_handle 对应的 JS Headers wrapper；由 GC 追踪。
-    pub(crate) headers_object: Option<i64>,
-    pub(crate) body: Option<Vec<u8>>,
-    pub(crate) redirect: RedirectMode,
-    #[allow(dead_code)]
-    pub(crate) body_used: bool,
-    #[allow(dead_code)]
-    pub(crate) signal_handle: Option<u32>,
-    // Extended observable fields per Fetch Standard
-    #[allow(dead_code)]
-    pub(crate) mode: RequestMode,
-    #[allow(dead_code)]
-    pub(crate) credentials: RequestCredentials,
-    #[allow(dead_code)]
-    pub(crate) cache: RequestCache,
-    #[allow(dead_code)]
-    pub(crate) referrer: String,
-    #[allow(dead_code)]
-    pub(crate) referrer_policy: String,
-    #[allow(dead_code)]
-    pub(crate) integrity: String,
-    #[allow(dead_code)]
-    pub(crate) keepalive: bool,
-    #[allow(dead_code)]
-    pub(crate) destination: String,
-    #[allow(dead_code)]
-    pub(crate) duplex: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct AbortSignalEntry {
-    pub(crate) aborted: bool,
-    pub(crate) reason: Option<i64>,
-}
 
 #[derive(Debug)]
 pub(crate) struct HttpResponseEntry {
@@ -276,161 +159,6 @@ pub(crate) struct HttpResponseEntry {
     pub resource_timing: Option<SharedFetchResourceTiming>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum StreamState {
-    Readable,
-    Closed,
-    Errored,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ReadableStreamEntry {
-    pub(crate) state: StreamState,
-    pub(crate) error: Option<String>,
-    pub(crate) disturbed: bool,
-    pub(crate) locked: bool,
-    pub(crate) http_response_handle: Option<u32>,
-    /// 该流作为 Response.body 暴露时，对应的 Fetch Response 侧表 handle
-    pub(crate) response_body_handle: Option<u32>,
-    /// 该流作为 Response.body 暴露时，对应的 Response JS 对象
-    pub(crate) response_body_object: Option<i64>,
-    /// 关联的 controller handle（自定义流使用；HTTP 流为 None）
-    pub(crate) controller_handle: Option<u32>,
-    /// 是否为 byte stream（Phase 3 BYOB 支持预留）
-    pub(crate) is_byte_stream: bool,
-    pub(crate) pipe_to: Option<ReadableStreamPipeToEntry>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ReadableStreamPipeToEntry {
-    pub(crate) destination: u32,
-    pub(crate) promise: i64,
-    pub(crate) write_in_flight: bool,
-    pub(crate) closing: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum ReaderKind {
-    Default,
-    Byob,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ReaderEntry {
-    pub(crate) stream_handle: u32,
-    pub(crate) kind: ReaderKind,
-    /// 等待 enqueue 的 read Promise（自定义流路径使用）
-    pub(crate) pending_read_promise: Option<i64>,
-    /// BYOB read(view) 等待填充的目标 view
-    pub(crate) pending_byob_view: Option<i64>,
-    /// reader.closed Promise
-    pub(crate) closed_promise: Option<i64>,
-}
-/// WritableStream 状态
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum WritableStreamState {
-    Writable,
-    Closing,
-    Closed,
-    Errored,
-}
-/// WritableStream 侧表条目
-#[derive(Debug, Clone)]
-pub(crate) struct WritableStreamEntry {
-    pub(crate) state: WritableStreamState,
-    pub(crate) error: Option<i64>,
-    pub(crate) locked: bool,
-    pub(crate) controller_handle: Option<u32>,
-    pub(crate) abort_signal: Option<i64>,
-}
-/// WritableStreamDefaultWriter 侧表条目
-#[derive(Debug, Clone)]
-pub(crate) struct WriterEntry {
-    pub(crate) writable_stream_handle: u32,
-    pub(crate) closed_promise: Option<i64>,
-    pub(crate) ready_promise: Option<i64>,
-}
-/// TransformStream 侧表条目
-#[derive(Debug, Clone)]
-pub(crate) struct TransformStreamEntry {
-    pub(crate) readable_stream_handle: Option<u32>,
-    pub(crate) writable_stream_handle: Option<u32>,
-    pub(crate) transform_callback: Option<i64>,
-    pub(crate) flush_callback: Option<i64>,
-    pub(crate) readable_controller_handle: Option<u32>,
-    /// transformer 对象（作为 transform/flush 回调的 this 值）
-    pub(crate) transformer_this: Option<i64>,
-    #[allow(dead_code)]
-    pub(crate) backpressure: bool,
-    /// readable JS 对象缓存（getter 返回用）
-    pub(crate) readable_obj: Option<i64>,
-    /// writable JS 对象缓存（getter 返回用）
-    pub(crate) writable_obj: Option<i64>,
-}
-
-/// Controller 类型
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum ControllerKind {
-    ReadableDefault,
-    Writable,
-    // 后续 Phase 使用：
-    // ReadableByteStream,
-    // Transform,
-}
-
-/// Stream Controller 侧表条目
-#[derive(Clone)]
-pub(crate) struct StreamControllerEntry {
-    #[allow(dead_code)]
-    pub(crate) kind: ControllerKind,
-    pub(crate) stream_handle: u32,
-    /// 排队的 chunk（NaN-boxed JS values）
-    pub(crate) chunk_queue: VecDeque<i64>,
-    pub(crate) high_water_mark: f64,
-    pub(crate) strategy_size: Option<i64>,
-    pub(crate) started: bool,
-    pub(crate) close_requested: bool,
-
-    #[allow(dead_code)]
-    pub(crate) byob_reader_handle: Option<u32>,
-
-    #[allow(dead_code)]
-    pub(crate) pull_requested: bool,
-
-    #[allow(dead_code)]
-    pub(crate) abort_requested: bool,
-
-    #[allow(dead_code)]
-    pub(crate) abort_reason: Option<i64>,
-
-    #[allow(dead_code)]
-    pub(crate) flush_requested: bool,
-
-    /// underlyingSource 对象（JS 值，GC root）
-    pub(crate) underlying_source: Option<i64>,
-    /// underlyingSource.pull 回调（JS callable）
-    pub(crate) pull_callback: Option<i64>,
-    /// underlyingSink.write 回调（Writable controller）
-    pub(crate) write_callback: Option<i64>,
-    /// underlyingSink.close 回调（Writable controller）
-    pub(crate) sink_close_callback: Option<i64>,
-    /// underlyingSource.cancel 回调（JS callable）
-    pub(crate) cancel_callback: Option<i64>,
-    /// 当前活动的 BYOB request handle（指向 byob_request_table）
-    pub(crate) active_byob_request: Option<u32>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ByobRequestEntry {
-    pub controller_handle: u32,
-    pub reader_handle: u32,
-    /// 用户提供的 Uint8Array view
-    pub view: i64,
-    /// 等待 fulfill 的 read() promise
-    pub promise: i64,
-    /// 是否已调用 respond()
-    pub responded: bool,
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProxyEntry {
@@ -498,14 +226,6 @@ impl OsInfoKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CjsRequireCacheTrapKind {
-    Get,
-    Has,
-    DeleteProperty,
-    OwnKeys,
-    GetOwnPropertyDescriptor,
-}
 
 #[derive(Clone)]
 pub(crate) enum NativeCallable {
@@ -602,6 +322,8 @@ pub(crate) enum NativeCallable {
     ArrayProtoKeys,
     /// Array.prototype.entries()（产出 [下标, 元素]）。
     ArrayProtoEntries,
+    /// Array.prototype.toString()：Get(this, "join") 后调用或回落 Object.prototype.toString。
+    ArrayProtoToString,
     ArrayLikeIteratorNext {
         target: i64,
         index: Arc<Mutex<u32>>,
@@ -1134,89 +856,6 @@ pub(crate) enum DateMethodKind {
     ValueOf,
 }
 #[derive(Clone, Copy)]
-pub(crate) enum HeadersMethodKind {
-    Get,
-    Set,
-    Has,
-    Delete,
-    Append,
-    Entries,
-    ForEach,
-    Keys,
-    Values,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum ResponseMethodKind {
-    Text,
-    Json,
-    ArrayBuffer,
-    Clone,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum RequestMethodKind {
-    Clone,
-}
-// ── ReadableStream (WHATWG Streams Phase 1) method kinds ──
-#[derive(Clone, Copy)]
-pub(crate) enum ReadableStreamMethodKind {
-    GetReader,
-    GetLocked,
-    Cancel,
-    Tee,
-    AsyncIterator,
-    PipeTo,
-    PipeThrough,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum ReadableStreamDefaultReaderMethodKind {
-    Read,
-    ReleaseLock,
-    GetClosed,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum ReadableStreamDefaultControllerMethodKind {
-    Enqueue,
-    Close,
-    Error,
-    GetDesiredSize,
-    GetByobRequest,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum ReadableStreamByobRequestMethodKind {
-    #[allow(dead_code)]
-    GetView,
-    Respond,
-}
-// ── TransformStream (WHATWG Streams Phase 5) method kinds ──
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum TransformStreamMethodKind {
-    GetReadable,
-    GetWritable,
-}
-// ── WritableStream (WHATWG Streams Phase 4) method kinds ──
-#[derive(Clone, Copy)]
-pub(crate) enum WritableStreamMethodKind {
-    GetWriter,
-    Abort,
-    Close,
-    GetLocked,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum WritableStreamDefaultWriterMethodKind {
-    Write,
-    Close,
-    Abort,
-    ReleaseLock,
-    GetClosed,
-    GetReady,
-    GetDesiredSize,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum WritableStreamDefaultControllerMethodKind {
-    Error,
-    GetSignal,
-}
-#[derive(Clone, Copy)]
 pub(crate) enum QueuingStrategySizeKind {
     Count,
     ByteLength,
@@ -1335,19 +974,6 @@ pub(crate) enum IteratorState {
         owner: i64,
         index: u32,
     },
-    /// Headers 迭代：按 pairs 顺序产出 name 或 value
-    HeadersKeyIter {
-        headers_handle: u32,
-        index: u32,
-    },
-    HeadersValueIter {
-        headers_handle: u32,
-        index: u32,
-    },
-    HeadersEntryIter {
-        headers_handle: u32,
-        index: u32,
-    },
     /// 预物化索引序列（如 TypedArray.prototype.keys 的 0..length）
     IndexValueIter {
         values: Vec<i64>,
@@ -1420,19 +1046,6 @@ impl PromiseEntry {
     pub(crate) fn pending() -> Self {
         Self {
             state: PromiseState::Pending,
-            fulfill_reactions: Vec::new(),
-            reject_reactions: Vec::new(),
-            handled: false,
-            constructor_resolver: None,
-            constructor_handle: None,
-            is_promise: true,
-            capture_scope: None,
-        }
-    }
-
-    pub(crate) fn rejected(reason: i64) -> Self {
-        Self {
-            state: PromiseState::Rejected(reason),
             fulfill_reactions: Vec::new(),
             reject_reactions: Vec::new(),
             handled: false,

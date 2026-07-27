@@ -311,7 +311,11 @@ pub async fn arr_proto_reduce<E: ExecContext>(
         let elem = array_get_or_undefined(ctx, this_val, i as u32);
         let idx_val = value::encode_f64(i as f64);
         match ctx
-            .call_js_async(cb, value::encode_undefined(), &[acc, elem, idx_val, this_val])
+            .call_js_async(
+                cb,
+                value::encode_undefined(),
+                &[acc, elem, idx_val, this_val],
+            )
             .await
         {
             Ok(r) => acc = r,
@@ -357,7 +361,11 @@ pub async fn arr_proto_reduce_right<E: ExecContext>(
         let elem = array_get_or_undefined(ctx, this_val, i as u32);
         let idx_val = value::encode_f64(i as f64);
         match ctx
-            .call_js_async(cb, value::encode_undefined(), &[acc, elem, idx_val, this_val])
+            .call_js_async(
+                cb,
+                value::encode_undefined(),
+                &[acc, elem, idx_val, this_val],
+            )
             .await
         {
             Ok(r) => acc = r,
@@ -725,11 +733,7 @@ fn extract_array_like_elements<E: ExecContext>(ctx: &mut E, args_array: Value) -
 ///
 /// 协议：对同步侧表迭代器（String/Array/…）先判定 done → 读 current → 再 advance，
 /// 与 for-of / `drain_raw_iterator_values` 一致；禁止 advance-first（会丢掉首元素）。
-pub async fn array_push_spread<E: ExecContext>(
-    ctx: &mut E,
-    arr: Value,
-    iterable: Value,
-) -> Value {
+pub async fn array_push_spread<E: ExecContext>(ctx: &mut E, arr: Value, iterable: Value) -> Value {
     if value::is_array(iterable) {
         let len = ctx.array_read_length(iterable).unwrap_or(0);
         for i in 0..len {
@@ -763,7 +767,7 @@ pub async fn array_push_spread<E: ExecContext>(
         return arr;
     }
     // 通用迭代器路径：GetIterator + next 循环
-    let iterator = match ctx.iterator_from_fallback_async(iterable).await {
+    let iterator = match crate::core_async::iterator_from(ctx, iterable).await {
         it if !value::is_undefined(it) && !value::is_null(it) => it,
         _ => {
             ctx.set_last_error("TypeError: object is not iterable".to_string());
@@ -853,7 +857,7 @@ async fn spread_push_object_next<E: ExecContext>(
 }
 
 async fn spread_push_afs_next<E: ExecContext>(ctx: &mut E, arr: Value, afs: u32) -> bool {
-    let result = ctx.iterator_materialize_afs_next(afs).await;
+    let result = crate::core_async::materialize_async_from_sync_next(ctx, afs).await;
     if value::is_exception(result) {
         return false;
     }

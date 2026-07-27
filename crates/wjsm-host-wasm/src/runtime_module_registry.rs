@@ -1,36 +1,25 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use wjsm_ir::value;
+pub use wjsm_host::{
+    RuntimeModuleImportResult, RuntimeModuleKey, RuntimeModuleRequireResult,
+    RuntimeRequireCacheEntry,
+};
+
+fn module_key_can_delete_from_require_cache(key: &RuntimeModuleKey) -> bool {
+    matches!(key, RuntimeModuleKey::File(_) | RuntimeModuleKey::Json(_))
+}
+
+fn module_key_from_registered_module_id(module_id: u32) -> RuntimeModuleKey {
+    if module_id >= RUNTIME_MODULE_ID_BASE {
+        RuntimeModuleKey::RuntimeModuleId(module_id)
+    } else {
+        RuntimeModuleKey::PrecompiledModuleId(module_id)
+    }
+}
 
 const RUNTIME_MODULE_ID_BASE: u32 = 1 << 30;
 
-/// 运行时模块缓存使用的规范化 key。
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum RuntimeModuleKey {
-    File(PathBuf),
-    Json(PathBuf),
-    Builtin(String),
-    /// 初始 AOT bundle 的旧 ModuleId 兼容 key。
-    PrecompiledModuleId(u32),
-    /// 运行时编译 bundle 预留后的全局 ModuleId key。
-    RuntimeModuleId(u32),
-}
-
-impl RuntimeModuleKey {
-    fn can_delete_from_require_cache(&self) -> bool {
-        matches!(self, Self::File(_) | Self::Json(_))
-    }
-
-    fn from_registered_module_id(module_id: u32) -> Self {
-        if module_id >= RUNTIME_MODULE_ID_BASE {
-            Self::RuntimeModuleId(module_id)
-        } else {
-            Self::PrecompiledModuleId(module_id)
-        }
-    }
-}
 
 fn require_cache_id_for_key(key: &RuntimeModuleKey) -> Option<String> {
     match key {
@@ -46,12 +35,6 @@ fn require_cache_id_matches_key(cache_id: &str, key: &RuntimeModuleKey) -> bool 
     require_cache_id_for_key(key).as_deref() == Some(cache_id)
 }
 
-/// `require.cache` 上可观察的一条缓存记录。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuntimeRequireCacheEntry {
-    pub id: String,
-    pub module_object: i64,
-}
 
 /// registry 中单个模块的执行状态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,25 +54,6 @@ pub enum RuntimeModuleState {
     },
 }
 
-/// CJS `require()` 查询 registry 后的结果。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RuntimeModuleRequireResult {
-    Missing,
-    Exports(i64),
-    LoadedModule {
-        module_object: i64,
-        exports_object: i64,
-    },
-    Errored(i64),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RuntimeModuleImportResult {
-    Missing,
-    Namespace(i64),
-    Errored(i64),
-}
 
 /// 运行时模块状态的唯一 owner。
 #[derive(Clone, Debug)]
@@ -171,7 +135,7 @@ impl RuntimeModuleRegistry {
 
     pub fn register_static_namespace(&mut self, module_id: u32, namespace_object: i64) {
         self.finish_loaded(
-            RuntimeModuleKey::from_registered_module_id(module_id),
+            module_key_from_registered_module_id(module_id),
             Some(module_id),
             value::encode_undefined(),
             namespace_object,
@@ -284,7 +248,7 @@ impl RuntimeModuleRegistry {
     pub fn delete_cache_entry(&mut self, key: &RuntimeModuleKey) -> bool {
         match self.by_key.get(key) {
             Some(RuntimeModuleState::Loading { .. }) => false,
-            Some(_) if key.can_delete_from_require_cache() => {
+            Some(_) if module_key_can_delete_from_require_cache(key) => {
                 self.by_key.remove(key);
                 self.by_module_id.retain(|_, mapped_key| mapped_key != key);
                 true
@@ -327,7 +291,7 @@ impl RuntimeModuleRegistry {
         let Some(module_id) = module_id else {
             return;
         };
-        let module_id_key = RuntimeModuleKey::from_registered_module_id(module_id);
+        let module_id_key = module_key_from_registered_module_id(module_id);
         if &module_id_key != key {
             self.by_key.remove(&module_id_key);
         }

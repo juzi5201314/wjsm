@@ -63,10 +63,7 @@ pub fn object_is<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
 pub fn object_create<E: ExecContext>(ctx: &mut E, proto: Value, properties: Value) -> Value {
     // ECMA-262 OrdinaryCreateFromConstructor / Object.create：
     // proto 必须是 Object 或 null；返回可捕获 TypeError（TAG_EXCEPTION）。
-    if !value::is_undefined(proto)
-        && !value::is_null(proto)
-        && !value::is_js_object(proto)
-    {
+    if !value::is_undefined(proto) && !value::is_null(proto) && !value::is_js_object(proto) {
         return ctx.make_type_error("Object.create prototype may only be an object or null");
     }
     let o = if value::is_null(proto) {
@@ -152,9 +149,8 @@ pub fn object_set_prototype_of<E: ExecContext>(ctx: &mut E, obj: Value, proto: V
     if !ctx.is_extensible(obj) {
         let current = ctx.object_proto_handle(obj).unwrap_or(0xFFFF_FFFF);
         if current != new_handle {
-            return ctx.make_type_error(
-                "TypeError: Object.setPrototypeOf: object is not extensible",
-            );
+            return ctx
+                .make_type_error("TypeError: Object.setPrototypeOf: object is not extensible");
         }
         return obj;
     }
@@ -215,9 +211,7 @@ pub fn object_has_own<E: ExecContext>(ctx: &mut E, obj: Value, prop: Value) -> V
     let Some(key) = ctx.canonicalize_name_id(name_id) else {
         return value::encode_bool(false);
     };
-    let handle = if value::is_function(boxed)
-        || value::is_closure(boxed)
-        || value::is_bound(boxed)
+    let handle = if value::is_function(boxed) || value::is_closure(boxed) || value::is_bound(boxed)
     {
         ctx.handle_index_of(boxed)
             .unwrap_or_else(|| value::decode_handle(boxed))
@@ -305,15 +299,9 @@ fn is_frozen<E: ExecContext>(ctx: &mut E, obj: Value) -> bool {
     })
 }
 
-pub fn object_define_properties<E: ExecContext>(
-    ctx: &mut E,
-    target: Value,
-    props: Value,
-) -> Value {
+pub fn object_define_properties<E: ExecContext>(ctx: &mut E, target: Value, props: Value) -> Value {
     if value::is_null(target) || value::is_undefined(target) {
-        ctx.set_last_error(
-            "TypeError: Cannot convert undefined or null to object".to_string(),
-        );
+        ctx.set_last_error("TypeError: Cannot convert undefined or null to object".to_string());
         return value::encode_undefined();
     }
     let boxed = if value::is_js_object(target) {
@@ -356,15 +344,49 @@ pub fn object_define_properties<E: ExecContext>(
     boxed
 }
 
-/// `Object.fromEntries(iterable)`：从 [key, value] 可迭代序列创建普通对象。
-pub async fn object_from_entries_impl<E: ExecContext>(
+/// `Object.getOwnPropertyDescriptors(obj)`：返回全部自有属性的描述符对象。
+pub fn object_get_own_property_descriptors<E: ExecContext>(
     ctx: &mut E,
-    iterable: Value,
+    target: Value,
 ) -> Value {
+    if value::is_null(target) || value::is_undefined(target) {
+        ctx.set_last_error("TypeError: Cannot convert undefined or null to object".to_string());
+        return value::encode_undefined();
+    }
+    let object = if value::is_js_object(target) {
+        target
+    } else {
+        ctx.to_object(target)
+    };
+    let keys = ctx.reflect_own_keys(object);
+    let length = ctx.array_read_length(keys).unwrap_or(0);
+    let result = ctx.alloc_object(0);
+    for index in 0..length {
+        let key = ctx
+            .array_read_elem(keys, index)
+            .unwrap_or_else(value::encode_undefined);
+        let descriptor = ctx.get_own_property_descriptor_value(object, key);
+        if value::is_undefined(descriptor) {
+            continue;
+        }
+        if let Some(name_id) = ctx.property_value_to_name_id(key, true) {
+            ctx.define_data_property_by_name_id(
+                result,
+                name_id,
+                descriptor,
+                constants::FLAG_WRITABLE
+                    | constants::FLAG_CONFIGURABLE
+                    | constants::FLAG_ENUMERABLE,
+            );
+        }
+    }
+    result
+}
+
+/// `Object.fromEntries(iterable)`：从 [key, value] 可迭代序列创建普通对象。
+pub async fn object_from_entries_impl<E: ExecContext>(ctx: &mut E, iterable: Value) -> Value {
     if value::is_null(iterable) || value::is_undefined(iterable) {
-        ctx.set_last_error(
-            "TypeError: Cannot convert undefined or null to object".to_string(),
-        );
+        ctx.set_last_error("TypeError: Cannot convert undefined or null to object".to_string());
         return value::encode_undefined();
     }
     let result = ctx.alloc_object(0);
@@ -377,21 +399,19 @@ pub async fn object_from_entries_impl<E: ExecContext>(
         return value::encode_undefined();
     };
     for entry_val in values {
-        let Some((key_elem, val_elem)) =
-            crate::iterable_collect::map_entry_pair(ctx, entry_val)
+        let Some((key_elem, val_elem)) = crate::iterable_collect::map_entry_pair(ctx, entry_val)
         else {
-            ctx.set_last_error(
-                "TypeError: Iterator value is not an entry object".to_string(),
-            );
+            ctx.set_last_error("TypeError: Iterator value is not an entry object".to_string());
             return value::encode_undefined();
         };
         if let Some(name_id) = ctx.property_value_to_name_id(key_elem, true) {
-            let _ = ctx.define_data_property_by_name_id(
+            ctx.define_data_property_by_name_id(
                 result,
                 name_id,
                 val_elem,
-                (constants::FLAG_WRITABLE | constants::FLAG_CONFIGURABLE
-                    | constants::FLAG_ENUMERABLE) as i32,
+                constants::FLAG_WRITABLE
+                    | constants::FLAG_CONFIGURABLE
+                    | constants::FLAG_ENUMERABLE,
             );
         }
     }

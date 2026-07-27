@@ -390,11 +390,19 @@ pub(crate) async fn drain_microtasks_async<
                     let result = build_reader_result_with_env(ctx, env, true, None);
                     settle_promise(ctx.state_mut(), promise, PromiseSettlement::Fulfill(result));
                 }
-                finish_writable_stream_close(ctx, writable_stream_handle, close_promise);
-                clear_pipe_to(ctx, readable_stream_handle);
+                crate::runtime_streams::finish_writable_stream_close(
+                    ctx,
+                    writable_stream_handle,
+                    close_promise,
+                );
+                crate::runtime_streams::clear_pipe_to(ctx, readable_stream_handle);
             }
             Some(Microtask::ReadableStreamPipeToPump { readable_handle }) => {
-                pump_readable_stream_pipe_to_with_env(ctx, env, readable_handle);
+                crate::runtime_streams::pump_readable_stream_pipe_to_with_env(
+                    ctx,
+                    env,
+                    readable_handle,
+                );
             }
             Some(Microtask::AsyncResume {
                 fn_table_idx,
@@ -510,7 +518,11 @@ pub(crate) async fn drain_microtasks_async<
                         PromiseSettlement::Reject(err),
                     );
                 } else {
-                    finish_writable_stream_close(ctx, writable_stream_handle, close_promise);
+                    crate::runtime_streams::finish_writable_stream_close(
+                        ctx,
+                        writable_stream_handle,
+                        close_promise,
+                    );
                 }
             }
             None => break,

@@ -1,34 +1,14 @@
-use crate::host_imports::fetch_core::*;
-use crate::*;
-use base64::Engine;
+//! Fetch HTTP I/O bridge：仅持有 reqwest 请求/响应与 runtime 侧表接合。
+//!
+//! Request/Response/Headers、data URL 与 Resource Timing 语义位于 `wjsm-builtins::fetch`。
+
+use crate::exec_context_impl::WasmExecContext;
+use crate::{
+    HttpResponseEntry, RedirectMode, ResponseType, RuntimeState, SharedFetchResourceTiming,
+};
 use wasmtime::Caller;
 
-// ── Input parsing (URL string or Request + optional init) ───────────────────
 
-pub(crate) fn parse_fetch_input(
-    caller: &mut Caller<'_, RuntimeState>,
-    input: i64,
-    init: i64,
-) -> (
-    String,
-    String,
-    u32,
-    Option<Vec<u8>>,
-    RedirectMode,
-    Option<u32>,
-) {
-    match resolve_fetch_request_params(caller, input, init) {
-        Ok(v) => v,
-        Err(_) => (
-            "GET".to_string(),
-            String::new(),
-            create_empty_headers(caller),
-            None,
-            RedirectMode::Follow,
-            None,
-        ),
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn perform_http_fetch(
@@ -72,7 +52,13 @@ pub(crate) async fn perform_http_fetch(
     if let Some(body_bytes) = body {
         req_builder = req_builder.body(body_bytes);
     }
-    mark_fetch_request_start(caller.data(), &resource_timing);
+    {
+        let mut context = WasmExecContext::new(caller);
+        wjsm_builtins::fetch::resource_timing::mark_request_start(
+            &mut context,
+            &resource_timing,
+        );
+    }
 
     let response = req_builder
         .send()
@@ -84,7 +70,14 @@ pub(crate) async fn perform_http_fetch(
         return Err("The operation was aborted".to_string());
     }
     let status = response.status().as_u16();
-    mark_fetch_response_start(caller.data(), &resource_timing, status);
+    {
+        let mut context = WasmExecContext::new(caller);
+        wjsm_builtins::fetch::resource_timing::mark_response_start(
+            &mut context,
+            &resource_timing,
+            status,
+        );
+    }
     let status_text = response
         .status()
         .canonical_reason()
@@ -93,7 +86,10 @@ pub(crate) async fn perform_http_fetch(
     let final_url = response.url().to_string();
     let redirected = final_url != url;
 
-    let response_headers = create_empty_headers(caller);
+    let response_headers = {
+        let mut context = WasmExecContext::new(caller);
+        wjsm_builtins::fetch::objects::create_empty_headers(&mut context)
+    };
     {
         let mut htable = caller
             .data()
@@ -111,19 +107,27 @@ pub(crate) async fn perform_http_fetch(
         }
     }
     if method.eq_ignore_ascii_case("HEAD") || matches!(status, 204 | 205 | 304) {
-        let response = create_response_object(
-            caller,
-            status,
-            status_text,
-            response_headers,
-            final_url,
-            Vec::new(),
-            ResponseType::Basic,
-            redirected,
-            None,
+        let mut context = WasmExecContext::new(caller);
+        let response = wjsm_builtins::fetch::create_response(
+            &mut context,
+            wjsm_builtins::fetch::ResponseSpec {
+                status,
+                status_text,
+                headers_handle: response_headers,
+                url: final_url,
+                body: Vec::new(),
+                response_type: ResponseType::Basic,
+                redirected,
+                target: None,
+                http_handle: None,
+            },
         );
-        set_response_resource_timing(caller, response, resource_timing.clone());
-        complete_fetch_resource_timing(caller.data(), &resource_timing);
+        wjsm_builtins::fetch::set_response_resource_timing(
+            &mut context,
+            response,
+            resource_timing.clone(),
+        );
+        wjsm_builtins::fetch::resource_timing::complete(&mut context, &resource_timing);
         return Ok(response);
     }
 
@@ -144,17 +148,26 @@ pub(crate) async fn perform_http_fetch(
         });
         handle
     };
-    let response = create_response_object_with_http_handle(
-        caller,
-        status,
-        status_text,
-        response_headers,
-        final_url,
-        ResponseType::Basic,
-        redirected,
-        http_handle,
+    let mut context = WasmExecContext::new(caller);
+    let response = wjsm_builtins::fetch::create_response(
+        &mut context,
+        wjsm_builtins::fetch::ResponseSpec {
+            status,
+            status_text,
+            headers_handle: response_headers,
+            url: final_url,
+            body: Vec::new(),
+            response_type: ResponseType::Basic,
+            redirected,
+            target: None,
+            http_handle: Some(http_handle),
+        },
     );
-    set_response_resource_timing(caller, response, resource_timing);
+    wjsm_builtins::fetch::set_response_resource_timing(
+        &mut context,
+        response,
+        resource_timing,
+    );
     Ok(response)
 }
 
@@ -169,93 +182,3 @@ fn is_signal_aborted(caller: &Caller<'_, RuntimeState>, handle: u32) -> bool {
         .unwrap_or(false)
 }
 
-// ── Core fetch execution + Response construction ────────────────────────────
-
-pub(crate) fn perform_data_url_fetch(
-    caller: &mut Caller<'_, RuntimeState>,
-    url: &str,
-) -> std::result::Result<i64, String> {
-    let (mediatype, is_base64, data_part) = parse_data_url(url)?;
-    let bytes = if is_base64 {
-        base64::engine::general_purpose::STANDARD
-            .decode(data_part.as_bytes())
-            .map_err(|e| format!("invalid base64 in data URL: {}", e))?
-    } else {
-        percent_decode_to_bytes(&data_part)
-    };
-    let resp_headers = create_empty_headers(caller);
-    {
-        let mut htable = caller
-            .data()
-            .headers_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = htable.get_mut(resp_headers as usize) {
-            entry.pairs.push(("content-type".to_string(), mediatype));
-        }
-    }
-    Ok(create_response_object(
-        caller,
-        200,
-        "OK".to_string(),
-        resp_headers,
-        url.to_string(),
-        bytes,
-        ResponseType::Basic,
-        false,
-        None,
-    ))
-}
-
-const DATA_URL_DEFAULT_MEDIATYPE: &str = "text/plain;charset=US-ASCII";
-
-/// RFC 2397: `data:[<mediatype>][;base64],<data>`
-fn parse_data_url(url: &str) -> std::result::Result<(String, bool, String), String> {
-    let rest = url
-        .strip_prefix("data:")
-        .ok_or_else(|| "invalid data URL".to_string())?;
-    let comma = rest
-        .find(',')
-        .ok_or_else(|| "invalid data URL: missing ','".to_string())?;
-    let meta = &rest[..comma];
-    let data_part = rest[comma + 1..].to_string();
-    let meta_lower = meta.to_ascii_lowercase();
-    let is_base64 = meta_lower.contains(";base64");
-    let mediatype_raw = if is_base64 {
-        meta_lower
-            .split_once(";base64")
-            .map(|(before, _)| before)
-            .unwrap_or("")
-    } else {
-        meta
-    };
-    let mediatype = if mediatype_raw.is_empty() {
-        DATA_URL_DEFAULT_MEDIATYPE.to_string()
-    } else {
-        mediatype_raw.to_string()
-    };
-    Ok((mediatype, is_base64, data_part))
-}
-
-fn percent_decode_to_bytes(input: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(input.len());
-    let mut chars = input.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '%' {
-            let high = chars.next().and_then(|c| c.to_digit(16));
-            let low = chars.next().and_then(|c| c.to_digit(16));
-            if let (Some(h), Some(l)) = (high, low) {
-                bytes.push((h * 16 + l) as u8);
-            } else {
-                bytes.push(b'%');
-            }
-        } else if ch == '+' {
-            bytes.push(b' ');
-        } else {
-            let mut buf = [0u8; 4];
-            let encoded = ch.encode_utf8(&mut buf);
-            bytes.extend_from_slice(encoded.as_bytes());
-        }
-    }
-    bytes
-}

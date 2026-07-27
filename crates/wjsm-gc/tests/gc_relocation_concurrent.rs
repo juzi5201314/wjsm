@@ -27,10 +27,7 @@ fn copy_ownership_assist_and_destination_publish() {
         .unwrap();
     // seed source payload
     memory
-        .store_word(
-            wjsm_gc::HeapAddress::new(source),
-            0xA1A2_A3A4_A5A6_A7A8,
-        )
+        .store_word(wjsm_gc::HeapAddress::new(source), 0xA1A2_A3A4_A5A6_A7A8)
         .unwrap();
     memory
         .store_word(wjsm_gc::HeapAddress::new(source + 8), 0x1111)
@@ -82,9 +79,7 @@ fn same_slot_and_prototype_update_use_seqcst() {
         .store_word(wjsm_gc::HeapAddress::new(slot), 0xDEAD)
         .unwrap();
     assert_eq!(
-        memory
-            .load_word(wjsm_gc::HeapAddress::new(slot))
-            .unwrap(),
+        memory.load_word(wjsm_gc::HeapAddress::new(slot)).unwrap(),
         0xDEAD
     );
 }

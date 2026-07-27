@@ -46,10 +46,12 @@ filter = 'test(happy__async_hooks_load_100k)'
 test-group = 'async-hooks-load'
 threads-required = "num-cpus"
 
-# Worker/async fixture 自身无墙钟豁免，但会同时启动主 Runtime 与 host worker；
-# 独占执行槽，避免 CPU 争用越过同一 3s 门禁。
+# worker_threads / async_local_worker fixture 在 debug 模式下需冷编译 worker 源码
+# + 启动独立 wasmtime engine + thread spawn，3s 门禁不足；允许 15s 才判死。
 [[profile.default.overrides]]
 filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/)'
 test-group = 'worker-runtime'
-threads-required = "num-cpus"
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 5 }
+
 

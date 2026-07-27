@@ -59,8 +59,7 @@ impl Lowerer {
                 },
             );
             self.write_shared_env_bindings(block, loaded_env, captured, &existing_names);
-            if let Some((value, names, write_block, _)) =
-                self.shared_env_stack.last_mut().unwrap()
+            if let Some((value, names, write_block, _)) = self.shared_env_stack.last_mut().unwrap()
             {
                 *value = loaded_env;
                 *write_block = block;
@@ -178,9 +177,7 @@ impl Lowerer {
                 value: env_val,
             },
         );
-        if let Some((value, names, write_block, dom)) =
-            self.shared_env_stack.last_mut().unwrap()
-        {
+        if let Some((value, names, write_block, dom)) = self.shared_env_stack.last_mut().unwrap() {
             *value = env_val;
             *write_block = merge;
             // merge block 不 dominate 后续（可能有不经过此 merge 的路径）

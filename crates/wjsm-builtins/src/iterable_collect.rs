@@ -16,8 +16,10 @@ pub async fn collect_constructor_iterable_values<E: ExecContext>(
         return Some(Vec::new());
     }
     if value::is_object(source) || value::is_array(source) || value::is_function(source) {
-        match ctx.get_method_by_name_id(source, wjsm_host::encode_symbol_name_id(wk_symbol::ITERATOR))
-        {
+        match ctx.get_method_by_name_id(
+            source,
+            wjsm_host::encode_symbol_name_id(wk_symbol::ITERATOR),
+        ) {
             Ok(Some(method)) => {
                 let iterator = match ctx.call_js_async(method, source, &[]).await {
                     Ok(v) => v,
@@ -79,8 +81,10 @@ pub async fn collect_array_from_values<E: ExecContext>(
         return Some(out);
     }
     if value::is_object(source) || value::is_function(source) {
-        match ctx.get_method_by_name_id(source, wjsm_host::encode_symbol_name_id(wk_symbol::ITERATOR))
-        {
+        match ctx.get_method_by_name_id(
+            source,
+            wjsm_host::encode_symbol_name_id(wk_symbol::ITERATOR),
+        ) {
             Ok(Some(method)) => {
                 let iterator = match ctx.call_js_async(method, source, &[]).await {
                     Ok(v) => v,
@@ -144,9 +148,7 @@ async fn collect_iterator_protocol_values<E: ExecContext>(
             return Some(vec![result]);
         }
         if !value::is_object(result) && !value::is_function(result) && !value::is_array(result) {
-            ctx.set_last_error(
-                "TypeError: iterator next must return an object".to_string(),
-            );
+            ctx.set_last_error("TypeError: iterator next must return an object".to_string());
             return None;
         }
         let done = ctx.read_property_by_string_key(result, "done");
@@ -198,9 +200,7 @@ fn string_code_point_at<E: ExecContext>(
 /// Map 构造器 entry → (key, value)
 pub fn map_entry_pair<E: ExecContext>(ctx: &mut E, entry_val: Value) -> Option<(Value, Value)> {
     if !value::is_js_object(entry_val) && !value::is_array(entry_val) {
-        ctx.set_last_error(
-            "TypeError: Iterator value is not an entry object".to_string(),
-        );
+        ctx.set_last_error("TypeError: Iterator value is not an entry object".to_string());
         return None;
     }
     if value::is_array(entry_val) {

@@ -4,9 +4,9 @@ mod histogram;
 mod json;
 
 use crate::api::{GcExecutionStats, GcStats};
+use histogram::PauseHistogram;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use histogram::PauseHistogram;
 
 pub const GC_TELEMETRY_SCHEMA_VERSION: u32 = 1;
 

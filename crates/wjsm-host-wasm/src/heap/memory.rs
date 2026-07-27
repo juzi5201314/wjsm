@@ -163,6 +163,11 @@ impl HeapMemory for SharedHeapMemory {
         }
         Ok(bytes)
     }
+
+    /// 覆写默认实现：复用 SharedHeapMemory 的 memchr 快路径。
+    fn read_c_string(&self, address: HeapAddress) -> Result<Vec<u8>, HeapMemoryError> {
+        SharedHeapMemory::read_c_string(self, address)
+    }
 }
 
 impl GrowableHeapMemory for SharedHeapMemory {

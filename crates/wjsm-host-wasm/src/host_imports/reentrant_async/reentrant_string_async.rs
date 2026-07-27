@@ -56,8 +56,7 @@ pub(crate) fn define_primitive_core_async(
         |mut caller: Caller<'_, RuntimeState>, (receiver, sep, limit): (i64, i64, i64)| {
             Box::new(async move {
                 let mut ctx = WasmExecContext::new(&mut caller);
-                wjsm_builtins::reentrant::string::string_split(&mut ctx, receiver, sep, limit)
-                    .await
+                wjsm_builtins::reentrant::string::string_split(&mut ctx, receiver, sep, limit).await
             })
         },
     )?;

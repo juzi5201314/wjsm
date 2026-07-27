@@ -256,7 +256,32 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
     wasm_env
 }
 
-fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
+pub(crate) fn install_array_proto_to_string<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    wasm_env: &WasmEnv,
+    array_proto: i64,
+) -> Option<()> {
+    let callable = create_native_callable(
+        ctx.as_context().data(),
+        NativeCallable::ArrayProtoToString,
+    );
+    let key = crate::property_key::encode_runtime_string_name_id(
+        crate::property_key::intern_runtime_property_key(
+            ctx.as_context().data(),
+            crate::runtime_string::RuntimeString::from_utf8_str("toString"),
+        ),
+    );
+    define_host_data_property_by_name_id_with_env(
+        ctx,
+        wasm_env,
+        array_proto,
+        key,
+        callable,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    )
+}
+
+fn install_array_native_methods(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
     let array_proto_handle = wasm_env
         .array_proto_handle
         .get(&mut *store)
@@ -277,6 +302,7 @@ fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &Wa
         .resolve_handle(array_proto_handle as u32)
         .is_ok()
     {
+        let _ = install_array_proto_to_string(store, wasm_env, array_proto);
         let access = store.data().heap_access_v2().clone();
         for (name, callable) in [("values", values), ("keys", keys), ("entries", entries)] {
             let key = crate::property_key::encode_runtime_string_name_id(
@@ -286,19 +312,26 @@ fn install_array_iterator_methods(store: &mut Store<RuntimeState>, wasm_env: &Wa
                 ),
             );
             access
-                .set_property(array_proto_handle as u32, key, callable as u64)
+                .define_data_property(
+                    array_proto_handle as u32,
+                    key,
+                    callable as u64,
+                    (constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE) as u32,
+                )
                 .expect("install V2 Array.prototype iterator method");
         }
         access
-            .set_property(
+            .define_data_property(
                 array_proto_handle as u32,
                 crate::property_key::encode_symbol_name_id(wjsm_ir::wk_symbol::ITERATOR),
                 values as u64,
+                (constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE) as u32,
             )
             .expect("install V2 Array.prototype iterator symbol");
         return;
     }
     let method_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;
+    let _ = install_array_proto_to_string(store, wasm_env, array_proto);
     for (name, callable) in [("values", values), ("keys", keys), ("entries", entries)] {
         if let Some(name_id) = find_memory_c_string_with_env(store, wasm_env, name)
             .or_else(|| alloc_heap_c_string_with_env(store, wasm_env, name))
@@ -358,7 +391,7 @@ pub(super) fn initialize_host_post_bootstrap(
         let null_sentinel = alloc_host_object(store, wasm_env, 0);
         ensure_startup_object(store, null_sentinel, "null sentinel")?;
     }
-    install_array_iterator_methods(store, wasm_env);
+    install_array_native_methods(store, wasm_env);
     ensure_no_startup_error(store)?;
 
     let iterator_proto = alloc_host_object(store, wasm_env, 2);
@@ -857,7 +890,7 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
         ensure_no_startup_error(&bundle.store)?;
     }
     run_current_module_function_props(bundle).await?;
-    install_array_iterator_methods(&mut bundle.store, &bundle.wasm_env);
+    install_array_native_methods(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_symbol_prototype_initialized(&mut bundle.store, &bundle.wasm_env);
     crate::runtime_heap::ensure_promise_prototype_initialized(&mut bundle.store, &bundle.wasm_env);

@@ -31,12 +31,7 @@ pub fn private_get<E: ExecContext>(ctx: &mut E, obj: Value, key_name_id: i32) ->
 }
 
 /// `env.private_set`
-pub fn private_set<E: ExecContext>(
-    ctx: &mut E,
-    obj: Value,
-    key_name_id: i32,
-    val: Value,
-) -> Value {
+pub fn private_set<E: ExecContext>(ctx: &mut E, obj: Value, key_name_id: i32, val: Value) -> Value {
     if !value::is_js_object(obj) {
         ctx.set_last_error("TypeError: cannot write private member to non-object".to_string());
         return value::encode_undefined();
@@ -76,9 +71,7 @@ pub fn private_accessor_bind<E: ExecContext>(
     setter: Value,
 ) -> Value {
     if !value::is_js_object(obj) {
-        ctx.set_last_error(
-            "TypeError: cannot define private accessor on non-object".to_string(),
-        );
+        ctx.set_last_error("TypeError: cannot define private accessor on non-object".to_string());
         return value::encode_undefined();
     }
     let Some(key_name_id) = ctx.canonicalize_name_id(key_name_id as u32) else {
@@ -120,7 +113,9 @@ fn invoke_private_accessor_get<E: ExecContext>(ctx: &mut E, getter: Value, obj: 
     match ctx.call_js(getter, obj, &[]) {
         Ok(v) => v,
         Err(error) => {
-            ctx.set_last_error(format!("private accessor getter callback failed: {error:#}"));
+            ctx.set_last_error(format!(
+                "private accessor getter callback failed: {error:#}"
+            ));
             value::encode_undefined()
         }
     }
@@ -133,15 +128,15 @@ fn invoke_private_accessor_set<E: ExecContext>(
     val: Value,
 ) -> Value {
     if value::is_undefined(setter) || value::is_null(setter) {
-        ctx.set_last_error(
-            "TypeError: Cannot write private member without a setter".to_string(),
-        );
+        ctx.set_last_error("TypeError: Cannot write private member without a setter".to_string());
         return value::encode_undefined();
     }
     match ctx.call_js(setter, obj, &[val]) {
         Ok(v) => v,
         Err(error) => {
-            ctx.set_last_error(format!("private accessor setter callback failed: {error:#}"));
+            ctx.set_last_error(format!(
+                "private accessor setter callback failed: {error:#}"
+            ));
             value::encode_undefined()
         }
     }

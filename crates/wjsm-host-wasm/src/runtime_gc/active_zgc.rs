@@ -8,14 +8,14 @@ use std::time::Instant;
 
 use super::api::{CycleKind, GcContext, GcStats, RootProvider};
 use super::control::RootSnapshot;
-use super::heap_access_v2::HeapAccessV2;
+use super::cpu_time;
+use super::HeapAccessV2;
 use super::object_walker;
 use super::roots::RuntimeRoots;
 use super::zgc::director::{DirectorDecision, GcDirector};
 use super::zgc::{OldController, YoungController};
 use crate::WasmEnv;
 use crate::heap::{HandleGeneration, HandleId};
-use super::cpu_time;
 
 /// 按算法名分派 active full collect：仅 `zgc` 走 generational phase machine。
 pub(crate) fn collect_dispatch<C>(ctx: &mut C, env: &WasmEnv, algorithm: &str) -> GcStats

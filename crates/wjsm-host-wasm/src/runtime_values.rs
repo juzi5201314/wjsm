@@ -173,8 +173,8 @@ pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64)
     if a == b {
         return true;
     }
-    let a_type = type_tag(a);
-    let b_type = type_tag(b);
+    let a_type = same_value_zero_type_tag(a);
+    let b_type = same_value_zero_type_tag(b);
     if a_type != b_type {
         return false;
     }
@@ -688,19 +688,6 @@ pub(crate) fn read_object_property_by_name_id(
     Some(val)
 }
 
-pub(crate) fn read_iterator_method(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj_ptr: usize,
-) -> Option<i64> {
-    let method = read_object_property_by_name_id(caller, obj_ptr, encode_symbol_name_id(0))
-        .or_else(|| read_object_property_by_name(caller, obj_ptr, "Symbol.iterator"))?;
-    if value::is_callable(method) {
-        Some(method)
-    } else {
-        None
-    }
-}
-
 pub(crate) fn write_object_property_by_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     _obj_ptr: usize,
@@ -865,13 +852,36 @@ fn to_primitive_hint_string(hint: ToPrimitiveHint) -> String {
     }
 }
 
-fn is_object_like(val: i64) -> bool {
-    value::is_object(val) || value::is_callable(val) || value::is_function(val)
+pub(crate) fn is_object_like(val: i64) -> bool {
+    value::is_js_object(val) || value::is_regexp(val)
 }
 
-fn read_object_method(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str) -> Option<i64> {
-    let ptr = resolve_handle(caller, obj)?;
-    read_object_property_by_name(caller, ptr, name)
+fn get_method_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+    property: i64,
+) -> Result<Option<i64>, i64> {
+    let runtime = tokio::runtime::Handle::current();
+    let method = tokio::task::block_in_place(|| {
+        runtime.block_on(
+            crate::runtime_host_helpers::reflect_get_impl_with_receiver_async(
+                caller, object, property, object,
+            ),
+        )
+    });
+    if value::is_exception(method) {
+        return Err(method);
+    }
+    if value::is_undefined(method) || value::is_null(method) {
+        return Ok(None);
+    }
+    if !is_callable_in_runtime(caller, method) {
+        return Err(make_type_error_exception(
+            caller,
+            "TypeError: primitive conversion method is not callable",
+        ));
+    }
+    Ok(Some(method))
 }
 
 fn invoke_to_primitive_method_sync(
@@ -912,12 +922,12 @@ fn ordinary_to_primitive(
         ToPrimitiveHint::Default => unreachable!(),
     };
     for method_name in [first, second] {
-        let Some(method) = read_object_method(caller, val, method_name) else {
-            continue;
+        let property = store_runtime_string(caller, method_name.to_string());
+        let method = match get_method_sync(caller, val, property) {
+            Ok(Some(method)) => method,
+            Ok(None) => continue,
+            Err(exception) => return exception,
         };
-        if !is_callable_in_runtime(caller, method) {
-            continue;
-        }
         let result = invoke_to_primitive_method_sync(caller, method, val, hint);
         if value::is_exception(result) {
             return result;
@@ -976,150 +986,6 @@ pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> boo
     true
 }
 
-/// ToNumber 抽象操作 (ECMAScript 7.1.4)
-/// 将值转换为 Number 类型
-pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
-    // undefined → NaN
-    if value::is_undefined(val) {
-        return f64::NAN.to_bits() as i64;
-    }
-
-    // null → +0
-    if value::is_null(val) {
-        return 0.0_f64.to_bits() as i64;
-    }
-
-    // bool: true → 1, false → 0
-    if value::is_bool(val) {
-        let b = value::decode_bool(val);
-        return (if b { 1.0_f64 } else { 0.0_f64 }).to_bits() as i64;
-    }
-
-    // f64 → itself
-    if value::is_f64(val) {
-        return val;
-    }
-
-    // string → parseFloat (可能失败 → NaN)
-    if value::is_string(val) {
-        let string_lossy = get_string_utf8_lossy(caller, val);
-        let num = crate::runtime_string_to_number::js_string_content_to_f64(&string_lossy);
-        return num.to_bits() as i64;
-    }
-
-    // BigInt → ToNumber: 抛 TypeError (§7.1.4)
-    if value::is_bigint(val) {
-        *caller
-            .data()
-            .runtime_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            Some("TypeError: Cannot convert a BigInt value to a number".to_string());
-        return f64::NAN.to_bits() as i64;
-    }
-
-    // RegExp → ToNumber: NaN (objects convert to NaN)
-    if value::is_regexp(val) {
-        return f64::NAN.to_bits() as i64;
-    }
-
-    // Symbol → ToNumber: 抛出 TypeError
-    if value::is_symbol(val) {
-        *caller
-            .data()
-            .runtime_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            Some("TypeError: Cannot convert a Symbol value to a number".to_string());
-        return f64::NAN.to_bits() as i64;
-    }
-
-    // object/function → ToPrimitive(hint: Number) → ToNumber
-    if value::is_object(val) || value::is_callable(val) {
-        let prim = to_primitive_with_hint(caller, val, ToPrimitiveHint::Number);
-        if value::is_exception(prim) {
-            return prim;
-        }
-        return to_number(caller, prim);
-    }
-
-    // 其他类型（iterator, enumerator, exception）→ NaN
-    f64::NAN.to_bits() as i64
-}
-
-/// ToNumeric 抽象操作 (ECMAScript §7.1.16)
-/// 对 BigInt 原样返回，否则调用 ToNumber
-pub(crate) fn to_numeric(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
-    if value::is_bigint(val) {
-        return val;
-    }
-    to_number(caller, val)
-}
-
-/// 比较 ℝ(BigInt) < ℝ(Number)  (§7.2.13 step 5m)
-/// bigint_is_left: 调用时 BigInt 是左操作数 (a < b) 还是右操作数 (b < a)
-pub(crate) fn number_less_than_bigint(
-    num_f: f64,
-    bi: &num_bigint::BigInt,
-    bigint_is_left: bool,
-) -> bool {
-    // 将 Number 转换为精确整数（若为整数）后比较
-    let truncated = num_f.trunc();
-    let is_exact_int = num_f == truncated;
-
-    // Try to get exact integer within BigInt range
-    if num_f.is_finite() && (num_f.abs() <= (1i64 << 53) as f64) {
-        // Within safe integer range — representable exactly as f64's integer
-        let int_val = num_f as i64;
-        // Re-check: round-trip must be exact
-        if (num_f - (int_val as f64)).abs() < 1.0 {
-            let num_bi = num_bigint::BigInt::from(int_val);
-            if is_exact_int {
-                return if bigint_is_left {
-                    *bi < num_bi
-                } else {
-                    num_bi < *bi
-                };
-            } else {
-                // 带小数：bi 是整数，小数部分让比较略偏向一侧
-                return if bigint_is_left {
-                    *bi <= num_bi
-                } else {
-                    num_bi <= *bi
-                };
-            }
-        }
-    }
-
-    // Fallback: f64 超出精确整数范围或非整数很大值
-    // 用 BigInt 的 to_f64 近似比较
-    let bi_f64_op = bi.to_f64();
-
-    match bi_f64_op {
-        Some(bi_f64) => {
-            if bigint_is_left {
-                bi_f64 < num_f
-            } else {
-                num_f < bi_f64
-            }
-        }
-        None => {
-            // BigInt 超出 f64 范围（≳ 2^1024）
-            if bi.sign() == num_bigint::Sign::Minus {
-                // 极大负数 < 任何有限数 → true
-                bigint_is_left
-            } else {
-                // 极大正数 < 任何有限数 → false
-                !bigint_is_left
-            }
-        }
-    }
-}
-
-/// ToPrimitive 抽象操作 (ECMAScript §7.1.1)
-pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
-    to_primitive_with_hint(caller, val, ToPrimitiveHint::Default)
-}
 
 pub(crate) fn to_primitive_with_hint(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1141,68 +1007,112 @@ pub(crate) fn to_primitive_with_hint(
         return val;
     }
 
-    if let Some(ptr) = resolve_handle(caller, val) {
-        let exotic = read_object_property_by_name_id(
-            caller,
-            ptr,
-            encode_symbol_name_id(WELL_KNOWN_SYMBOL_TO_PRIMITIVE),
-        )
-        .or_else(|| read_object_property_by_name(caller, ptr, "Symbol.toPrimitive"));
-        if let Some(method) = exotic
-            && is_callable_in_runtime(caller, method)
-        {
-            let result = invoke_to_primitive_method_sync(caller, method, val, hint);
-            if value::is_exception(result) {
-                return result;
-            }
-            if !is_object_like(result) {
-                return result;
-            }
-            return make_type_error_exception(
-                caller,
-                "TypeError: Cannot convert object to primitive value",
-            );
+    let to_primitive_property = crate::property_key::name_id_to_property_key_value(
+        encode_symbol_name_id(WELL_KNOWN_SYMBOL_TO_PRIMITIVE),
+    )
+    .expect("well-known Symbol.toPrimitive property key");
+    let method = match get_method_sync(caller, val, to_primitive_property) {
+        Ok(method) => method,
+        Err(exception) => return exception,
+    };
+    if let Some(method) = method {
+        let result = invoke_to_primitive_method_sync(caller, method, val, hint);
+        if value::is_exception(result) {
+            return result;
         }
+        if !is_object_like(result) {
+            return result;
+        }
+        return make_type_error_exception(
+            caller,
+            "TypeError: Cannot convert object to primitive value",
+        );
     }
 
     ordinary_to_primitive(caller, val, hint)
 }
 
+const PRIMITIVE_WRAPPER_VALUE_KEY: &str = "__wjsm_primitive_value__";
+
+fn primitive_wrapper_key(caller: &Caller<'_, RuntimeState>) -> u32 {
+    crate::property_key::encode_runtime_string_name_id(
+        crate::property_key::intern_runtime_property_key(
+            caller.data(),
+            RuntimeString::from_utf8_str(PRIMITIVE_WRAPPER_VALUE_KEY),
+        ),
+    )
+}
+
+fn set_primitive_wrapper_value(caller: &mut Caller<'_, RuntimeState>, object: i64, value: i64) {
+    let handle = value::decode_object_handle(object);
+    let key = primitive_wrapper_key(caller);
+    let _ = caller.data().heap_access_v2().define_data_property(
+        handle,
+        key,
+        value as u64,
+        wjsm_ir::constants::FLAG_PRIVATE as u32,
+    );
+}
+
+pub(crate) fn primitive_wrapper_value(
+    caller: &Caller<'_, RuntimeState>,
+    object: i64,
+) -> Option<i64> {
+    if !value::is_object(object) {
+        return None;
+    }
+    let handle = value::decode_object_handle(object);
+    let key = primitive_wrapper_key(caller);
+    caller
+        .data()
+        .heap_access_v2()
+        .get_property(handle, key)
+        .ok()
+        .flatten()
+        .map(|value| value as i64)
+}
+
 /// ToObject 抽象操作 (ECMAScript 7.1.13)：原始值包装为对象，已是对象则原样返回。
 pub(crate) fn to_object(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
-    if value::is_js_object(val) {
+    if is_object_like(val) {
         return val;
     }
     if value::is_undefined(val) || value::is_null(val) {
-        return val;
+        return make_type_error_exception(caller, "TypeError: Cannot convert undefined or null to object");
     }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    if value::is_string(val) {
-        let s = get_string_value(caller, val);
-        let len = s.utf16_len();
-        let cap = (len.saturating_add(1)).max(1) as u32;
-        let obj = alloc_host_object(caller, &env, cap);
-        for (i, unit) in s.as_utf16_units().iter().copied().enumerate() {
-            let idx_str = i.to_string();
-            let ch_val = store_runtime_string(caller, RuntimeString::from_utf16_code_unit(unit));
-            let _ = define_host_data_property_from_caller(caller, obj, &idx_str, ch_val);
+    let object = if value::is_string(val) {
+        let string = get_string_value(caller, val);
+        let length = string.utf16_len();
+        let object = alloc_host_object(caller, &env, (length.saturating_add(2)).max(2) as u32);
+        for (index, unit) in string.as_utf16_units().iter().copied().enumerate() {
+            let character = store_runtime_string(caller, RuntimeString::from_utf16_code_unit(unit));
+            let _ = define_host_data_property_from_caller(
+                caller,
+                object,
+                &index.to_string(),
+                character,
+            );
         }
-        let len_val = value::encode_f64(len as f64);
-        let len_name_id = {
-            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-            crate::find_memory_c_string_with_env(caller, &env, "length").unwrap_or(0)
-        };
+        let length_key = crate::property_key::encode_runtime_string_name_id(
+            crate::property_key::intern_runtime_property_key(
+                caller.data(),
+                RuntimeString::from_utf8_str("length"),
+            ),
+        );
         let _ = crate::define_host_data_property_by_name_id_with_flags(
             caller,
-            obj,
-            crate::property_key::encode_string_name_id(len_name_id),
-            len_val,
-            wjsm_ir::constants::FLAG_CONFIGURABLE | wjsm_ir::constants::FLAG_WRITABLE,
+            object,
+            length_key,
+            value::encode_f64(length as f64),
+            0,
         );
-        return obj;
-    }
-    // 其他原始类型：分配空壳对象（Object.assign 等无自有可枚举属性可复制）
-    alloc_host_object(caller, &env, 0)
+        object
+    } else {
+        alloc_host_object(caller, &env, 1)
+    };
+    set_primitive_wrapper_value(caller, object, val);
+    object
 }
 
 pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
@@ -1216,92 +1126,9 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
     utf16_count
 }
 
-/// 严格相等比较 (ECMAScript 7.2.16)
-pub(crate) fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> i64 {
-    // 类型不同 → false
-    let a_type = type_tag(a);
-    let b_type = type_tag(b);
 
-    if a_type != b_type {
-        return value::encode_bool(false);
-    }
-
-    // 同类型比较
-    match a_type {
-        // f64: 注意 NaN !== NaN
-        0 => {
-            let af = value::decode_f64(a);
-            let bf = value::decode_f64(b);
-            if af.is_nan() || bf.is_nan() {
-                return value::encode_bool(false);
-            }
-            value::encode_bool(af == bf)
-        }
-        // string
-        1 => {
-            let a_str = get_string_value(caller, a);
-            let b_str = get_string_value(caller, b);
-            value::encode_bool(a_str == b_str)
-        }
-        // undefined
-        2 => value::encode_bool(true),
-        // null
-        3 => value::encode_bool(true),
-        // bool
-        4 => value::encode_bool(value::decode_bool(a) == value::decode_bool(b)),
-        // BigInt: 值比较
-        6 => {
-            let a_handle = value::decode_bigint_handle(a) as usize;
-            let b_handle = value::decode_bigint_handle(b) as usize;
-            let table = caller
-                .data()
-                .bigint_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let eq = table
-                .get(a_handle)
-                .zip(table.get(b_handle))
-                .map(|(x, y)| x == y)
-                .unwrap_or(false);
-            value::encode_bool(eq)
-        }
-        // Symbol: 引用比较（同一 handle）
-        7 => value::encode_bool(a == b),
-        // object/function/iterator/enumerator/exception: 引用比较
-        _ => {
-            // 快速路径：相同 NaN-boxed 值
-            if a == b {
-                return value::encode_bool(true);
-            }
-            // TAG_FUNCTION vs TAG_CLOSURE 交叉比较：
-            // 闭包的 prototype.constructor 设置为 encode_function_idx(func_idx)（TAG_FUNCTION），
-            // 但用户可见的函数值是 TAG_CLOSURE。两者应视为同一函数（ECMAScript 中无区分）。
-            let a_is_func = value::is_function(a);
-            let b_is_func = value::is_function(b);
-            let a_is_closure = value::is_closure(a);
-            let b_is_closure = value::is_closure(b);
-            if (a_is_func && b_is_closure) || (a_is_closure && b_is_func) {
-                let func_idx = if a_is_func { a as u32 } else { b as u32 };
-                let closure_idx = if a_is_closure { a as u32 } else { b as u32 };
-                let closures = caller
-                    .data()
-                    .closures
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let eq = closures
-                    .get(closure_idx as usize)
-                    .map(|c| c.func_idx == func_idx)
-                    .unwrap_or(false);
-                return value::encode_bool(eq);
-            }
-            value::encode_bool(false)
-        }
-    }
-}
-
-/// 获取类型标签 (用于 strict_eq)
-/// 返回值: 0=f64, 1=string, 2=undefined, 3=null, 4=bool, 5=object/function/其他, 6=bigint, 7=symbol
-pub(crate) fn type_tag(val: i64) -> u64 {
+/// SameValueZero 使用的值类型标签。
+fn same_value_zero_type_tag(val: i64) -> u64 {
     if value::is_f64(val) {
         0
     } else if value::is_string(val) {

@@ -3,11 +3,11 @@
 //! 算法逻辑在 `wjsm-builtins::promise`，本文件仅做 `WasmExecContext::new(caller)`
 //! + 委托调用 + wasmtime `Func::wrap` 注册。
 
+use crate::RuntimeState;
+use crate::exec_context_impl::WasmExecContext;
 use anyhow::Result;
 use wasmtime::{Caller, Func, Linker, Store};
 use wjsm_host::ExecContext;
-use crate::exec_context_impl::WasmExecContext;
-use crate::RuntimeState;
 
 pub(crate) fn define_promise(
     linker: &mut Linker<RuntimeState>,

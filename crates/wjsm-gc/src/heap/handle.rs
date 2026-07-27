@@ -57,8 +57,8 @@ unsafe impl Sync for PlatformHandleRegion {}
 impl PlatformHandleRegion {
     /// 保留一块 [`HANDLE_REGION_BYTES`] 的平台虚拟内存作为 handle region。
     pub fn reserve() -> Result<Self, HandleTableError> {
-        let range = super::platform::reserve(HANDLE_REGION_BYTES as usize)
-            .map_err(reservation_error)?;
+        let range =
+            super::platform::reserve(HANDLE_REGION_BYTES as usize).map_err(reservation_error)?;
         if range.base().is_null() {
             return Err(HandleTableError::VirtualReservation {
                 detail: "platform reserve returned null base".to_owned(),
@@ -234,15 +234,13 @@ impl HandleTableV2 {
     }
 
     pub fn promote(&self, handle: HandleId) -> Result<(), HandleTableError> {
-        let current =
-            ColoredHandleEntry::from_raw(self.region.load_entry(handle));
+        let current = ColoredHandleEntry::from_raw(self.region.load_entry(handle));
         let next = ColoredHandleEntry::new(current.address(), HandleState::StableOld)?;
         self.compare_exchange(handle, HandleState::StableYoung, next)
     }
 
     pub fn begin_relocation(&self, handle: HandleId) -> Result<(), HandleTableError> {
-        let current =
-            ColoredHandleEntry::from_raw(self.region.load_entry(handle));
+        let current = ColoredHandleEntry::from_raw(self.region.load_entry(handle));
         let state = current.state();
         let generation = state
             .generation()
@@ -269,8 +267,7 @@ impl HandleTableV2 {
         address: u64,
     ) -> Result<(), HandleTableError> {
         self.require_object_address(address)?;
-        let current =
-            ColoredHandleEntry::from_raw(self.region.load_entry(handle));
+        let current = ColoredHandleEntry::from_raw(self.region.load_entry(handle));
         let state = current.state();
         let generation = state
             .generation()
@@ -285,8 +282,7 @@ impl HandleTableV2 {
     }
 
     pub fn retire(&self, handle: HandleId) -> Result<(), HandleTableError> {
-        let current =
-            ColoredHandleEntry::from_raw(self.region.load_entry(handle));
+        let current = ColoredHandleEntry::from_raw(self.region.load_entry(handle));
         let state = current.state();
         if !state.is_stable() {
             return Err(HandleTableError::InvalidTransition {
