@@ -352,6 +352,11 @@ fn array_proto_call_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn call_spread_args_fixture_matches_ir_snapshot() {
+    assert_snapshot("call_spread_args");
+}
+
+#[test]
 fn array_proto_filter_fixture_matches_ir_snapshot() {
     assert_snapshot("array_proto_filter");
 }

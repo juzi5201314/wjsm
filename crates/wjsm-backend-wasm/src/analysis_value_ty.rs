@@ -165,7 +165,7 @@ pub fn builtin_returns_scalar(b: &Builtin) -> bool {
         | MathAbs | MathAcos | MathAcosh | MathAsin | MathAsinh | MathAtan | MathAtanh
         | MathAtan2 | MathCbrt | MathCeil | MathClz32 | MathCos | MathCosh | MathExp
         | MathExpm1 | MathFloor | MathFround | MathHypot | MathImul | MathLog | MathLog1p
-        | MathLog10 | MathLog2 | MathMax | MathMin | MathPow | MathRandom | MathRound
+        | MathLog10 | MathLog2 | MathMax | MathMaxArray | MathMin | MathPow | MathRandom | MathRound
         | MathSign | MathSin | MathSinh | MathSqrt | MathTan | MathTanh | MathTrunc
         // ── Number：构造/转换/parse 均返回 number ──
         | NumberConstructor | NumberParseInt | NumberParseFloat

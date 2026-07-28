@@ -3,6 +3,7 @@ use crate::*;
 use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
+use wjsm_host::ExecContext;
 
 pub(crate) fn define_math_number_error(
     linker: &mut Linker<RuntimeState>,
@@ -264,6 +265,36 @@ pub(crate) fn define_math_number_error(
         },
     );
     linker.define(&mut store, "env", "math_max", math_max_fn)?;
+    let math_max_array_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_array: i64| -> i64 {
+            let args = {
+                let mut ctx = WasmExecContext::new(&mut caller);
+                let length = ctx.array_read_length(args_array).unwrap_or(0);
+                (0..length)
+                    .map(|index| {
+                        ctx.array_read_elem(args_array, index)
+                            .unwrap_or_else(value::encode_undefined)
+                    })
+                    .map(|value| i64::from_ne_bytes(value.to_ne_bytes()))
+                    .collect::<Vec<_>>()
+            };
+            let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+            let saved_sp =
+                push_args_to_shadow_stack(&mut caller, &env, &args).expect("shadow stack capacity");
+            let args_count = match i32::try_from(args.len()) {
+                Ok(count) => count,
+                Err(_) => return value::encode_undefined(),
+            };
+            let result = {
+                let mut ctx = WasmExecContext::new(&mut caller);
+                wjsm_builtins::math_number_error::math_max(&mut ctx, saved_sp, args_count)
+            };
+            restore_shadow_sp(&mut caller, &env, saved_sp);
+            result
+        },
+    );
+    linker.define(&mut store, "env", "math_max_array", math_max_array_fn)?;
     let math_min_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
@@ -651,4 +682,3 @@ pub(crate) fn define_math_number_error(
     )?;
     Ok(())
 }
-

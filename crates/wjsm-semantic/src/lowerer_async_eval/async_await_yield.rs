@@ -861,6 +861,25 @@ impl Lowerer {
 
         let mut call_block = block;
         let callee_val = self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
+        if let Some(args) = new_expr.args.as_deref()
+            && Self::call_args_have_spread(args)
+        {
+            let (args_array, end_block) = self.lower_call_args_to_array(args, call_block)?;
+            call_block = end_block;
+            let result = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::CallBuiltin {
+                    dest: Some(result),
+                    builtin: Builtin::ReflectConstruct,
+                    args: vec![callee_val, args_array, callee_val],
+                },
+            );
+            if self.expr_exception_fork_allowed() {
+                call_block = self.lower_value_exception_branch(call_block, result)?;
+            }
+            return Ok((result, call_block));
+        }
 
         // Create new object. Error 构造器需要更大容量以容纳 name/message/__error_brand__/cause/stack。
         let new_obj_capacity = match new_expr.callee.as_ref() {

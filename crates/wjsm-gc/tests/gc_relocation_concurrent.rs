@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use wjsm_gc::{
     ConcurrentRelocator, GrowableHeapMemory, HandleGeneration, HandleTableV2, HeaderLayout,
     ManagedHeapLayout, NativeHeapMemory, RelocationDescriptor,
@@ -37,10 +35,11 @@ fn copy_ownership_assist_and_destination_publish() {
         .unwrap();
 
     assert!(relocator.select_page(source / PAGE));
-    let pause = relocator
+    let access_epoch = relocator.access_epoch();
+    relocator
         .pause_relocate_start(HandleGeneration::Young)
         .unwrap();
-    assert!(pause < Duration::from_millis(1));
+    assert_eq!(relocator.access_epoch(), access_epoch + 1);
 
     let descriptor = relocator.install_descriptor(RelocationDescriptor::new(
         handle,
@@ -131,9 +130,10 @@ fn epoch_reclaim_after_grace_period() {
 #[test]
 fn pause_relocate_start_has_no_copy() {
     let relocator = ConcurrentRelocator::new();
-    let pause = relocator
+    let access_epoch = relocator.access_epoch();
+    relocator
         .pause_relocate_start(HandleGeneration::Old)
         .unwrap();
-    assert!(pause < Duration::from_millis(1));
+    assert_eq!(relocator.access_epoch(), access_epoch + 1);
     assert_eq!(relocator.report().relocated, 0);
 }

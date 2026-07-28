@@ -19,32 +19,202 @@ impl Lowerer {
                 if matches!(callee.as_ref(), swc_ast::Expr::Ident(ident) if ident.sym.as_ref() == "eval")
         ) && self.scopes.lookup("eval").is_err()
     }
+    /// 将调用实参按 ArgumentListEvaluation 收集为数组。
+    /// 普通实参追加一个元素，spread 实参经 iterator 协议追加全部元素。
+    pub(crate) fn lower_call_args_to_array(
+        &mut self,
+        args: &[swc_ast::ExprOrSpread],
+        block: BasicBlockId,
+    ) -> Result<(ValueId, BasicBlockId), LoweringError> {
+        let array = self.alloc_value();
+        let capacity = u32::try_from(args.len().max(4))
+            .expect("call argument count must fit in array capacity");
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewArray {
+                dest: array,
+                capacity,
+            },
+        );
+
+        let mut current = block;
+        for arg in args {
+            let value = self.lower_expr_then_continue(&arg.expr, &mut current)?;
+            let builtin = if arg.spread.is_some() {
+                Builtin::ArrayPushSpread
+            } else {
+                Builtin::ArrayPush
+            };
+            self.current_function.append_instruction(
+                current,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin,
+                    args: vec![array, value],
+                },
+            );
+        }
+        Ok((array, current))
+    }
+
+    pub(crate) fn call_args_have_spread(args: &[swc_ast::ExprOrSpread]) -> bool {
+        args.iter().any(|arg| arg.spread.is_some())
+    }
+    fn lower_call_array_element(
+        &mut self,
+        array: ValueId,
+        index: u32,
+        block: BasicBlockId,
+    ) -> ValueId {
+        let index_val = self.const_val_i64(block, i64::from(index));
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetElem {
+                dest,
+                object: array,
+                index: index_val,
+            },
+        );
+        dest
+    }
+    fn lower_optional_spread_call(
+        &mut self,
+        callee: ValueId,
+        this_val: ValueId,
+        args: &[swc_ast::ExprOrSpread],
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let branch_block = self.resolve_store_block(block);
+        let branch_block = if self.current_function.block(branch_block).is_some_and(|bb| {
+            bb.instructions()
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
+        }) {
+            let next_block = self.current_function.new_block();
+            self.current_function
+                .set_terminator(branch_block, Terminator::Jump { target: next_block });
+            next_block
+        } else {
+            branch_block
+        };
+
+        let is_nullish = self.alloc_value();
+        self.current_function.append_instruction(
+            branch_block,
+            Instruction::Unary {
+                dest: is_nullish,
+                op: UnaryOp::IsNullish,
+                value: callee,
+            },
+        );
+        let nullish_block = self.current_function.new_block();
+        let call_block = self.current_function.new_block();
+        let merge_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            branch_block,
+            Terminator::Branch {
+                condition: is_nullish,
+                true_block: nullish_block,
+                false_block: call_block,
+            },
+        );
+
+        let undefined = self.alloc_value();
+        let undefined_constant = self.module.add_constant(Constant::Undefined);
+        self.current_function.append_instruction(
+            nullish_block,
+            Instruction::Const {
+                dest: undefined,
+                constant: undefined_constant,
+            },
+        );
+        self.current_function.set_terminator(
+            nullish_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+
+        let (args_array, args_end) = self.lower_call_args_to_array(args, call_block)?;
+        let called = self.alloc_value();
+        self.current_function.append_instruction(
+            args_end,
+            Instruction::CallBuiltin {
+                dest: Some(called),
+                builtin: Builtin::FuncApply,
+                args: vec![callee, this_val, args_array],
+            },
+        );
+        self.current_function.set_terminator(
+            args_end,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge_block,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: nullish_block,
+                        value: undefined,
+                    },
+                    PhiSource {
+                        predecessor: args_end,
+                        value: called,
+                    },
+                ],
+            },
+        );
+        self.expr_merge_block = Some(merge_block);
+        Ok(result)
+    }
     fn emit_proto_builtin_call(
         &mut self,
         builtin: Builtin,
-        obj: &swc_ast::Expr,
+        member_expr: &swc_ast::MemberExpr,
         args: &[swc_ast::ExprOrSpread],
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         // 实参求值可能引入控制流（闭包共享环境 phi、三元、new RegExp 异常分叉等），
         // 必须用 lower_expr_then_continue 推进 call_block，否则 CallBuiltin 会发射在
-        // 过时的入口块上、先于实参指令执行——导致使用尚未定义的值（如 array.map(arr, closure)
-        // 在 closure 创建之前调用）。
+        // 过时的入口块上、先于实参指令执行。
         let mut call_block = block;
-        let this_val = self.lower_expr_then_continue(obj, &mut call_block)?;
-        let mut builtin_args = vec![this_val];
-        for arg in args {
-            builtin_args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+        let this_val = self.lower_expr_then_continue(member_expr.obj.as_ref(), &mut call_block)?;
+        let dest;
+        if Self::call_args_have_spread(args) {
+            let callee_val =
+                self.lower_member_expr_from_object(member_expr, this_val, &mut call_block)?;
+            let (args_array, end_block) = self.lower_call_args_to_array(args, call_block)?;
+            call_block = end_block;
+            dest = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin: Builtin::FuncApply,
+                    args: vec![callee_val, this_val, args_array],
+                },
+            );
+        } else {
+            let mut builtin_args = vec![this_val];
+            for arg in args {
+                builtin_args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+            }
+            dest = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin,
+                    args: builtin_args,
+                },
+            );
         }
-        let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            call_block,
-            Instruction::CallBuiltin {
-                dest: Some(dest),
-                builtin,
-                args: builtin_args,
-            },
-        );
         if call_block != block {
             self.expr_merge_block = Some(call_block);
         }
@@ -101,25 +271,39 @@ impl Lowerer {
         );
 
         let mut call_block = block;
-        let mut args = Vec::with_capacity(call.args.len());
-        for arg in &call.args {
-            let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
-            if self.expr_exception_fork_allowed() && self.expr_can_throw(&arg.expr) {
-                call_block = self.lower_value_exception_branch(call_block, arg_val)?;
+        let dest;
+        if Self::call_args_have_spread(&call.args) {
+            let (args_array, end_block) = self.lower_call_args_to_array(&call.args, call_block)?;
+            call_block = end_block;
+            dest = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin: Builtin::FuncApply,
+                    args: vec![resolve_fn, this_val, args_array],
+                },
+            );
+        } else {
+            let mut args = Vec::with_capacity(call.args.len());
+            for arg in &call.args {
+                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(&arg.expr) {
+                    call_block = self.lower_value_exception_branch(call_block, arg_val)?;
+                }
+                args.push(arg_val);
             }
-            args.push(arg_val);
+            dest = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::Call {
+                    dest: Some(dest),
+                    callee: resolve_fn,
+                    this_val,
+                    args,
+                },
+            );
         }
-
-        let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            call_block,
-            Instruction::Call {
-                dest: Some(dest),
-                callee: resolve_fn,
-                this_val,
-                args,
-            },
-        );
         if self.expr_exception_fork_allowed() {
             let continue_block = self.lower_value_exception_branch(call_block, dest)?;
             self.expr_merge_block = Some(continue_block);
@@ -192,22 +376,29 @@ impl Lowerer {
                                 },
                             );
                             let mut args = vec![constructor_val];
-                            for arg in &call.args {
-                                args.push(
-                                    self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
-                                );
-                            }
-                            // 无参数时补 undefined。
-                            if args.len() == 1 {
-                                let undef_val = self.alloc_value();
-                                self.current_function.append_instruction(
-                                    call_block,
-                                    Instruction::Const {
-                                        dest: undef_val,
-                                        constant: undef_const,
-                                    },
-                                );
-                                args.push(undef_val);
+                            if Self::call_args_have_spread(&call.args) {
+                                let (args_array, end_block) =
+                                    self.lower_call_args_to_array(&call.args, call_block)?;
+                                call_block = end_block;
+                                args.push(self.lower_call_array_element(args_array, 0, call_block));
+                            } else {
+                                for arg in &call.args {
+                                    args.push(
+                                        self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
+                                    );
+                                }
+                                // 无参数时补 undefined。
+                                if args.len() == 1 {
+                                    let undef_val = self.alloc_value();
+                                    self.current_function.append_instruction(
+                                        call_block,
+                                        Instruction::Const {
+                                            dest: undef_val,
+                                            constant: undef_const,
+                                        },
+                                    );
+                                    args.push(undef_val);
+                                }
                             }
                             let dest = self.alloc_value();
                             self.current_function.append_instruction(
@@ -237,7 +428,7 @@ impl Lowerer {
                     {
                         return self.emit_proto_builtin_call(
                             ta_builtin,
-                            &member_expr.obj,
+                            member_expr,
                             &call.args,
                             block,
                         );
@@ -253,7 +444,7 @@ impl Lowerer {
                     {
                         return self.emit_proto_builtin_call(
                             sab_builtin,
-                            &member_expr.obj,
+                            member_expr,
                             &call.args,
                             block,
                         );
@@ -268,7 +459,7 @@ impl Lowerer {
                     {
                         return self.emit_proto_builtin_call(
                             dv_builtin,
-                            &member_expr.obj,
+                            member_expr,
                             &call.args,
                             block,
                         );
@@ -283,7 +474,7 @@ impl Lowerer {
                     {
                         return self.emit_proto_builtin_call(
                             array_builtin,
-                            &member_expr.obj,
+                            member_expr,
                             &call.args,
                             block,
                         );
@@ -303,7 +494,7 @@ impl Lowerer {
                         let _ = builtin_call_signature(string_builtin);
                         return self.emit_proto_builtin_call(
                             string_builtin,
-                            &member_expr.obj,
+                            member_expr,
                             &call.args,
                             block,
                         );
@@ -315,15 +506,24 @@ impl Lowerer {
                         && let Some(regexp_builtin) =
                             builtin_from_regexp_proto_method(&prop_ident.sym)
                     {
-                        this_val = self.lower_expr(&member_expr.obj, block)?;
+                        let mut call_block = block;
+                        this_val =
+                            self.lower_expr_then_continue(&member_expr.obj, &mut call_block)?;
                         let mut builtin_args = vec![this_val];
-                        if let Some(arg) = call.args.first() {
-                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                        if Self::call_args_have_spread(&call.args) {
+                            let (args_array, end_block) =
+                                self.lower_call_args_to_array(&call.args, call_block)?;
+                            call_block = end_block;
+                            builtin_args
+                                .push(self.lower_call_array_element(args_array, 0, call_block));
+                        } else if let Some(arg) = call.args.first() {
+                            builtin_args
+                                .push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
                         } else {
                             let undef_const = self.module.add_constant(Constant::Undefined);
                             let undef_val = self.alloc_value();
                             self.current_function.append_instruction(
-                                block,
+                                call_block,
                                 Instruction::Const {
                                     dest: undef_val,
                                     constant: undef_const,
@@ -333,13 +533,16 @@ impl Lowerer {
                         }
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
-                            block,
+                            call_block,
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: regexp_builtin,
                                 args: builtin_args,
                             },
                         );
+                        if call_block != block {
+                            self.expr_merge_block = Some(call_block);
+                        }
                         return Ok(dest);
                     }
 
@@ -352,13 +555,19 @@ impl Lowerer {
                         && let Some(object_proto_builtin) =
                             self.is_object_proto_method_access(&member_expr.obj)
                     {
-                        let this_arg = if let Some(first_arg) = call.args.first() {
-                            self.lower_expr(&first_arg.expr, block)?
+                        let mut call_block = block;
+                        let this_arg = if Self::call_args_have_spread(&call.args) {
+                            let (args_array, end_block) =
+                                self.lower_call_args_to_array(&call.args, call_block)?;
+                            call_block = end_block;
+                            self.lower_call_array_element(args_array, 0, call_block)
+                        } else if let Some(first_arg) = call.args.first() {
+                            self.lower_expr_then_continue(&first_arg.expr, &mut call_block)?
                         } else {
                             let undef_const = self.module.add_constant(Constant::Undefined);
                             let undef_val = self.alloc_value();
                             self.current_function.append_instruction(
-                                block,
+                                call_block,
                                 Instruction::Const {
                                     dest: undef_val,
                                     constant: undef_const,
@@ -368,13 +577,16 @@ impl Lowerer {
                         };
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
-                            block,
+                            call_block,
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: object_proto_builtin,
                                 args: vec![this_arg],
                             },
                         );
+                        if call_block != block {
+                            self.expr_merge_block = Some(call_block);
+                        }
                         return Ok(dest);
                     }
 
@@ -386,7 +598,7 @@ impl Lowerer {
                             // obj.method() → obj 是 this
                             return self.emit_proto_builtin_call(
                                 obj_proto_builtin,
-                                &member_expr.obj,
+                                member_expr,
                                 &call.args,
                                 block,
                             );
@@ -399,27 +611,42 @@ impl Lowerer {
                             this_val =
                                 self.lower_expr_then_continue(&member_expr.obj, &mut call_block)?;
                             let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(
-                                    self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
-                                );
-                            }
-                            let required_args = match promise_proto_builtin {
+                            let required_args: usize = match promise_proto_builtin {
                                 Builtin::PromiseThen => 3,
                                 Builtin::PromiseCatch | Builtin::PromiseFinally => 2,
-                                _ => builtin_args.len(),
+                                _ => 1,
                             };
-                            while builtin_args.len() < required_args {
-                                let undef_const = self.module.add_constant(Constant::Undefined);
-                                let undef_val = self.alloc_value();
-                                self.current_function.append_instruction(
-                                    call_block,
-                                    Instruction::Const {
-                                        dest: undef_val,
-                                        constant: undef_const,
-                                    },
-                                );
-                                builtin_args.push(undef_val);
+                            if Self::call_args_have_spread(&call.args) {
+                                let (args_array, end_block) =
+                                    self.lower_call_args_to_array(&call.args, call_block)?;
+                                call_block = end_block;
+                                for index in 0..required_args.saturating_sub(1) {
+                                    let index = u32::try_from(index)
+                                        .expect("promise argument index fits u32");
+                                    builtin_args.push(
+                                        self.lower_call_array_element(
+                                            args_array, index, call_block,
+                                        ),
+                                    );
+                                }
+                            } else {
+                                for arg in &call.args {
+                                    builtin_args.push(
+                                        self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
+                                    );
+                                }
+                                while builtin_args.len() < required_args {
+                                    let undef_const = self.module.add_constant(Constant::Undefined);
+                                    let undef_val = self.alloc_value();
+                                    self.current_function.append_instruction(
+                                        call_block,
+                                        Instruction::Const {
+                                            dest: undef_val,
+                                            constant: undef_const,
+                                        },
+                                    );
+                                    builtin_args.push(undef_val);
+                                }
                             }
                             let dest = self.alloc_value();
                             self.current_function.append_instruction(
@@ -445,7 +672,7 @@ impl Lowerer {
                         {
                             return self.emit_proto_builtin_call(
                                 number_proto_builtin,
-                                &member_expr.obj,
+                                member_expr,
                                 &call.args,
                                 block,
                             );
@@ -456,7 +683,7 @@ impl Lowerer {
                         {
                             return self.emit_proto_builtin_call(
                                 boolean_proto_builtin,
-                                &member_expr.obj,
+                                member_expr,
                                 &call.args,
                                 block,
                             );
@@ -504,46 +731,73 @@ impl Lowerer {
                     .append_instruction(block, Instruction::GetSuperConstructor { dest: callee });
                 let this_val = self.lower_this(block)?;
                 let mut call_block = self.resolve_store_block(block);
-                let mut args = Vec::with_capacity(call.args.len());
-                for arg in &call.args {
-                    args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
-                }
                 let ctor_result = self.alloc_value();
-                self.current_function.append_instruction(
-                    call_block,
-                    Instruction::SuperCall {
-                        dest: Some(ctor_result),
-                        callee,
-                        this_val,
-                        args,
-                        forward_args: false,
-                    },
-                );
+                if Self::call_args_have_spread(&call.args) {
+                    let (args_array, end_block) =
+                        self.lower_call_args_to_array(&call.args, call_block)?;
+                    call_block = end_block;
+                    self.current_function.append_instruction(
+                        call_block,
+                        Instruction::CallBuiltin {
+                            dest: Some(ctor_result),
+                            builtin: Builtin::SuperApply,
+                            args: vec![callee, this_val, args_array],
+                        },
+                    );
+                } else {
+                    let mut args = Vec::with_capacity(call.args.len());
+                    for arg in &call.args {
+                        args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+                    }
+                    self.current_function.append_instruction(
+                        call_block,
+                        Instruction::SuperCall {
+                            dest: Some(ctor_result),
+                            callee,
+                            this_val,
+                            args,
+                            forward_args: false,
+                        },
+                    );
+                }
                 let (result, _) = self.select_construct_result(call_block, ctor_result, this_val);
                 return Ok(result);
             }
         }
-        // 性能优化：预分配容量避免循环中多次 reallocation
         let mut call_block = self.resolve_store_block(callee_block);
-        let mut args = Vec::with_capacity(call.args.len());
-        for arg in &call.args {
-            let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
-            if self.expr_exception_fork_allowed() && self.is_direct_eval_call_expr(&arg.expr) {
-                call_block = self.lower_value_exception_branch(call_block, arg_val)?;
+        let dest;
+        if Self::call_args_have_spread(&call.args) {
+            let (args_array, end_block) = self.lower_call_args_to_array(&call.args, call_block)?;
+            call_block = end_block;
+            dest = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin: Builtin::FuncApply,
+                    args: vec![callee_val, this_val, args_array],
+                },
+            );
+        } else {
+            let mut args = Vec::with_capacity(call.args.len());
+            for arg in &call.args {
+                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+                if self.expr_exception_fork_allowed() && self.is_direct_eval_call_expr(&arg.expr) {
+                    call_block = self.lower_value_exception_branch(call_block, arg_val)?;
+                }
+                args.push(arg_val);
             }
-            args.push(arg_val);
+            dest = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::Call {
+                    dest: Some(dest),
+                    callee: callee_val,
+                    this_val,
+                    args,
+                },
+            );
         }
-
-        let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            call_block,
-            Instruction::Call {
-                dest: Some(dest),
-                callee: callee_val,
-                this_val,
-                args,
-            },
-        );
         // callee/member receiver 或参数求值引入控制流（如 `new C().m()`、
         // `new RegExp(...)` 的异常分叉、三元、await 等）时，Call 已发射在推进后的
         // 延续块上。必须把该块经 expr_merge_block 上报，否则外层语句会在过时的入口块
@@ -610,6 +864,9 @@ impl Lowerer {
         }
 
         let mut call_block = self.resolve_store_block(callee_block);
+        if Self::call_args_have_spread(&call.args) {
+            return self.lower_optional_spread_call(callee_val, this_val, &call.args, call_block);
+        }
         let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
             args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);

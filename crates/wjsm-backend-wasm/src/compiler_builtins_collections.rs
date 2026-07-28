@@ -250,6 +250,18 @@ impl Compiler {
                 }
                 Ok(BuiltinDispatch::Handled)
             }
+            Builtin::MathMaxArray => {
+                let array = args
+                    .first()
+                    .with_context(|| "Math.max array entry expects one array argument")?;
+                let func_idx = self.builtin_func_idx(builtin)?;
+                self.emit_value_args(std::slice::from_ref(array));
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(BuiltinDispatch::Handled)
+            }
             // ── Math variadic builtins (shadow stack) ──
             Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot => {
                 self.compile_proto_method_call(dest, builtin, args).map(|_| BuiltinDispatch::Handled)

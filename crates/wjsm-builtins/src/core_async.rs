@@ -38,12 +38,6 @@ pub async fn iterator_from<E: ExecContext>(ctx: &mut E, val: Value) -> Value {
         let s = ctx.get_runtime_string(val);
         return ctx.create_string_iterator(s);
     }
-    if value::is_array(val) {
-        return ctx.create_array_iterator(val);
-    }
-    if let Some(it) = ctx.try_create_set_iterator(val) {
-        return it;
-    }
     iterator_from_fallback(ctx, val).await
 }
 

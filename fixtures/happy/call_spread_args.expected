@@ -1,0 +1,17 @@
+exit_code: 0
+--- stdout ---
+plain [2,1,2,null]
+arrow 7
+method 13
+new 11
+builtin 5
+mixed [3,0,1,2]
+multi [3,1,2,3]
+tail [3,7,8,9]
+string [2,"a","b",null]
+set [2,4,5,null]
+generator [2,6,7,null]
+custom [2,8,9,null]
+override [2,10,11,null]
+super 25
+--- stderr ---

@@ -125,6 +125,12 @@ pub(crate) static SPECS_PART2: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "super_apply",
+        type_idx: 16,
+        key: Some(HostImportKey::Builtin(Builtin::SuperApply)),
+        group: None,
+    },
+    HostImportSpec {
         name: "func_bind",
         type_idx: 12,
         key: Some(HostImportKey::Builtin(Builtin::FuncBind)),

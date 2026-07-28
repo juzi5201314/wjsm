@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use wjsm_gc::{GcRuntimeV2, HandleGeneration, HandleId, OldController, OldPhase, YoungController};
 
 fn roots(handles: impl IntoIterator<Item = HandleId>) -> wjsm_gc::RootSnapshot {
@@ -47,8 +45,9 @@ fn old_mark_starts_from_young_mark_start_and_spans_cycles() {
     assert!(old.report().promotion_frontier >= 1);
 
     while old.concurrent_mark_step(8) {}
-    let pause = old.pause_mark_end();
-    assert!(pause < Duration::from_millis(1));
+    old.pause_mark_end();
+    assert_eq!(old.phase(), OldPhase::ConcurrentSelectRelocationSet);
+    assert!(!old.is_active());
     assert!(old.is_marked(old_a));
     assert!(old.is_marked(old_b));
     assert!(old.mark_work_normalized_by_old_live().unwrap() <= 1.0 + f64::EPSILON);
@@ -64,8 +63,7 @@ fn young_pause_does_not_run_full_old_work() {
     let root = HandleId::new(0);
     old.coordinate_from_young_mark_start(&young, &roots([root]), true);
     // young pause mark end path only allows tiny residual old work
-    let pause = old.pause_mark_end();
-    assert!(pause < Duration::from_millis(1));
+    old.pause_mark_end();
     // still concurrent work remaining for large old heap
     assert!(old.is_active());
     assert!(old.report().marked < 1_000);

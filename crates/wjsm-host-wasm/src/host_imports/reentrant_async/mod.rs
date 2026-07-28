@@ -20,12 +20,15 @@ pub(crate) async fn native_call_from_caller_async(
     this_val: i64,
     args_base: i32,
     args_count: i32,
+    preserve_new_target: bool,
 ) -> i64 {
     let new_target_val = caller.data().new_target.load(Ordering::Relaxed);
-    caller
-        .data()
-        .new_target
-        .store(value::encode_undefined(), Ordering::Relaxed);
+    if !preserve_new_target {
+        caller
+            .data()
+            .new_target
+            .store(value::encode_undefined(), Ordering::Relaxed);
+    }
 
     if value::is_proxy(callable) {
         let handle = value::decode_proxy_handle(callable) as usize;
@@ -154,10 +157,14 @@ pub(crate) async fn native_call_from_caller_async(
             call_native_callable_with_args_from_caller_async(caller, callable, this_val, args)
                 .await
                 .unwrap_or_else(value::encode_undefined);
-        caller
-            .data()
-            .new_target
-            .store(value::encode_undefined(), Ordering::Relaxed);
+        caller.data().new_target.store(
+            if preserve_new_target {
+                new_target_val
+            } else {
+                value::encode_undefined()
+            },
+            Ordering::Relaxed,
+        );
         return result;
     }
 
@@ -208,6 +215,7 @@ pub(crate) fn define_misc_async(
                     this_val,
                     args_base,
                     args_count,
+                    false,
                 )
                 .await;
                 if let Some(signal) =
@@ -215,6 +223,56 @@ pub(crate) fn define_misc_async(
                 {
                     return Err(wasmtime::Error::new(signal));
                 }
+                results[0] = Val::I64(result);
+                Ok(())
+            })
+        },
+    )?;
+    linker.func_new_async(
+        "env",
+        "super_apply",
+        FuncType::new(
+            _store.engine(),
+            [ValType::I64, ValType::I64, ValType::I64],
+            [ValType::I64],
+        ),
+        |mut caller: Caller<'_, RuntimeState>, params: &[Val], results: &mut [Val]| {
+            Box::new(async move {
+                let callable = params[0].unwrap_i64();
+                let this_val = params[1].unwrap_i64();
+                let args_array = params[2].unwrap_i64();
+                let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                let array_handle = value::decode_handle(args_array);
+                let args_count = caller
+                    .data()
+                    .heap_access_v2()
+                    .array_length(array_handle)
+                    .unwrap_or(0);
+                let args = (0..args_count)
+                    .filter_map(|index| {
+                        caller
+                            .data()
+                            .heap_access_v2()
+                            .get_element(array_handle, index)
+                            .ok()
+                            .flatten()
+                            .map(|value| i64::from_ne_bytes(value.to_ne_bytes()))
+                    })
+                    .collect::<Vec<_>>();
+                let saved_sp = push_args_to_shadow_stack(&mut caller, &env, &args)
+                    .ok_or_else(|| wasmtime::Error::msg("shadow stack push failed"))?;
+                let args_count = i32::try_from(args.len())
+                    .map_err(|_| wasmtime::Error::msg("too many super arguments"))?;
+                let result = native_call_from_caller_async(
+                    &mut caller,
+                    callable,
+                    this_val,
+                    saved_sp,
+                    args_count,
+                    true,
+                )
+                .await;
+                restore_shadow_sp(&mut caller, &env, saved_sp);
                 results[0] = Val::I64(result);
                 Ok(())
             })

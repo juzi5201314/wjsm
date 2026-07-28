@@ -81,6 +81,12 @@ pub(crate) static SPECS_PART4: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "math_max_array",
+        type_idx: 21,
+        key: Some(HostImportKey::Builtin(Builtin::MathMaxArray)),
+        group: None,
+    },
+    HostImportSpec {
         name: "math_min",
         type_idx: 19,
         key: Some(HostImportKey::Builtin(Builtin::MathMin)),

@@ -76,19 +76,28 @@ impl Lowerer {
             ));
         }
 
-        let mut args = Vec::with_capacity(call.args.len().max(1));
         let mut call_block = block;
-        for arg in &call.args {
-            let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
-            args.push(arg_val);
-        }
+        let (effective_builtin, args) = if builtin == Builtin::MathMax
+            && Self::call_args_have_spread(&call.args)
+        {
+            let (args_array, end_block) = self.lower_call_args_to_array(&call.args, call_block)?;
+            call_block = end_block;
+            (Builtin::MathMaxArray, vec![args_array])
+        } else {
+            let mut args = Vec::with_capacity(call.args.len().max(1));
+            for arg in &call.args {
+                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+                args.push(arg_val);
+            }
+            (builtin, args)
+        };
 
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             call_block,
             Instruction::CallBuiltin {
                 dest: Some(dest),
-                builtin,
+                builtin: effective_builtin,
                 args,
             },
         );

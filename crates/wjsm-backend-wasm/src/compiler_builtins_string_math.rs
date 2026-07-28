@@ -157,7 +157,7 @@ impl Compiler {
                 }
                 Ok(BuiltinDispatch::Handled)
             }
-            Builtin::ObjectRest | Builtin::FuncApply => {
+            Builtin::ObjectRest | Builtin::FuncApply | Builtin::SuperApply => {
                 let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit_value_args(args);
                 self.emit(WasmInstruction::Call(func_idx));

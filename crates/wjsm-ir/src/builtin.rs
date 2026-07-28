@@ -100,6 +100,8 @@ pub enum Builtin {
     // ── 函数原型方法 ──
     FuncCall,
     FuncApply,
+    /// super(...args) 的数组实参调用，保留当前构造上下文。
+    SuperApply,
     FuncBind,
     // ── 对象解构 rest ──
     ObjectRest,
@@ -284,6 +286,8 @@ pub enum Builtin {
     MathLog10,
     MathLog2,
     MathMax,
+    /// Math.max(...args) 的数组实参入口。
+    MathMaxArray,
     MathMin,
     MathPow,
     MathRandom,
@@ -583,9 +587,10 @@ impl Builtin {
             Self::ArrayToSplicedVa => "array.to_spliced_va",
             Self::ArrayWith => "array.with",
 
-            // 函数原型方法 / 对象方法 / Map.groupBy
+            // 函数原型方法 / super 数组调用 / 对象方法 / Map.groupBy
             Self::FuncCall => "func_call",
             Self::FuncApply => "func_apply",
+            Self::SuperApply => "super_apply",
             Self::FuncBind => "func_bind",
             Self::ObjectRest => "object_rest",
             Self::GetPrototypeFromConstructor => "get_prototype_from_constructor",
@@ -761,6 +766,7 @@ impl Builtin {
             Self::MathLog10 => "Math.log10",
             Self::MathLog2 => "Math.log2",
             Self::MathMax => "Math.max",
+            Self::MathMaxArray => "Math.max_array",
             Self::MathMin => "Math.min",
             Self::MathPow => "Math.pow",
             Self::MathRandom => "Math.random",

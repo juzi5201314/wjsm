@@ -38,23 +38,17 @@ impl Lowerer {
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(class_span, msg))?;
 
-        let mut param_ir_names = vec![
-            format!("${env_scope_id}.$env"),
-            format!("${this_scope_id}.$this"),
-        ];
+        let ctor_param_pats: Vec<&swc_ast::Pat> = constructor
+            .into_iter()
+            .flat_map(|ctor| &ctor.params)
+            .filter_map(|param| match param {
+                swc_ast::ParamOrTsParamProp::Param(param) => Some(&param.pat),
+                swc_ast::ParamOrTsParamProp::TsParamProp(_) => None,
+            })
+            .collect();
+        let param_ir_names =
+            self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id)?;
         if let Some(ctor) = constructor {
-            for param in &ctor.params {
-                if let swc_ast::ParamOrTsParamProp::Param(p) = param
-                    && let swc_ast::Pat::Ident(binding_ident) = &p.pat
-                {
-                    let name = binding_ident.id.sym.to_string();
-                    let scope_id = self
-                        .scopes
-                        .declare(&name, VarKind::Let, true)
-                        .map_err(|msg| self.error(class_span, msg))?;
-                    param_ir_names.push(format!("${scope_id}.{name}"));
-                }
-            }
             if class.super_class.is_some()
                 && let Some(body) = &ctor.body
                 && let Some(span) = first_pre_super_this_or_super_span(body)
@@ -71,8 +65,9 @@ impl Lowerer {
 
         let entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(entry);
+        let parameter_block = self.emit_pat_inits_impl(&ctor_param_pats, &param_ir_names, entry)?;
 
-        let mut field_block = entry;
+        let mut field_block = parameter_block;
         if constructor.is_none() && class.super_class.is_some() {
             let callee = self.alloc_value();
             self.current_function.append_instruction(
@@ -114,16 +109,14 @@ impl Lowerer {
         } else {
             StmtFlow::Open(field_block)
         };
-        if let Some(_ctor) = constructor {
-            let ctor_params_len = constructor
-                .map(|c| {
-                    c.params
-                        .iter()
-                        .filter(|p| matches!(p, swc_ast::ParamOrTsParamProp::Param(_)))
-                        .count()
-                })
-                .unwrap_or(0) as u32;
-            self.arguments_param_count = ctor_params_len;
+        if constructor.is_some() {
+            self.arguments_param_count = u32::try_from(
+                ctor_param_pats
+                    .iter()
+                    .take_while(|pat| !matches!(pat, swc_ast::Pat::Rest(_)))
+                    .count(),
+            )
+            .map_err(|_| self.error(class_span, "too many constructor parameters"))?;
             let ctor_refs_args = constructor.is_some_and(Self::ctor_references_arguments);
             let args_block = self.emit_arguments_init(
                 match inner_flow {

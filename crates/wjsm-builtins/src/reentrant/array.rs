@@ -734,38 +734,6 @@ fn extract_array_like_elements<E: ExecContext>(ctx: &mut E, args_array: Value) -
 /// 协议：对同步侧表迭代器（String/Array/…）先判定 done → 读 current → 再 advance，
 /// 与 for-of / `drain_raw_iterator_values` 一致；禁止 advance-first（会丢掉首元素）。
 pub async fn array_push_spread<E: ExecContext>(ctx: &mut E, arr: Value, iterable: Value) -> Value {
-    if value::is_array(iterable) {
-        let len = ctx.array_read_length(iterable).unwrap_or(0);
-        for i in 0..len {
-            let val = array_get_or_undefined(ctx, iterable, i);
-            let _ = ctx.array_push(arr, val);
-        }
-        return arr;
-    }
-    // 字符串快速路径：按 UTF-16 码点展开（与 host 原实现一致）
-    if value::is_string(iterable) {
-        let string = ctx.get_runtime_string(iterable);
-        let mut unit_pos = 0usize;
-        while unit_pos < string.utf16_len() {
-            let Some(unit) = string.code_unit_at(unit_pos) else {
-                break;
-            };
-            let width = if (0xD800..=0xDBFF).contains(&unit)
-                && string
-                    .code_unit_at(unit_pos + 1)
-                    .is_some_and(|next| (0xDC00..=0xDFFF).contains(&next))
-            {
-                2
-            } else {
-                1
-            };
-            let slice = string.slice_units(unit_pos..unit_pos + width);
-            let val = ctx.store_runtime_string(slice);
-            let _ = ctx.array_push(arr, val);
-            unit_pos += width;
-        }
-        return arr;
-    }
     // 通用迭代器路径：GetIterator + next 循环
     let iterator = match crate::core_async::iterator_from(ctx, iterable).await {
         it if !value::is_undefined(it) && !value::is_null(it) => it,
