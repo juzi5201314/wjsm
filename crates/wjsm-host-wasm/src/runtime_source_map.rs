@@ -178,45 +178,38 @@ pub(crate) fn format_backtrace(
     backtrace: &WasmBacktrace,
     source_map: Option<&SourceMapInfo>,
 ) -> String {
+    const REPEATED_SUFFIX: &str = " (repeated)";
+
     let frames = backtrace.frames();
     if frames.is_empty() {
         return String::new();
     }
 
     let mut lines: Vec<String> = Vec::with_capacity(frames.len());
-    let source_file = source_map.and_then(|m| m.source_file.as_deref());
+    let source_file = source_map.and_then(|map| map.source_file.as_deref());
 
     for frame in frames {
-        let func_name = frame.func_name().unwrap_or("<anonymous>");
-        let func_idx = frame.func_index();
-
-        let location = if let Some(sm) = source_map {
-            if let Some((line, col)) = sm.lookup(func_idx) {
-                let file = source_file.unwrap_or("unknown");
-                format!("{file}:{line}:{col}")
-            } else {
-                let func_offset = frame.func_offset().unwrap_or(0);
-                let file = source_file.unwrap_or("unknown");
-                format!("{file}:{func_offset}")
-            }
+        let location = if let Some(source_map) = source_map {
+            // 未映射帧来自模块入口或编译器生成的 WASM helper，没有有效的 JS 位置。
+            let Some((line, col)) = source_map.lookup(frame.func_index()) else {
+                continue;
+            };
+            format!("{}:{line}:{col}", source_file.unwrap_or("unknown"))
         } else {
             let func_offset = frame.func_offset().unwrap_or(0);
             format!("<wasm>:{func_offset}")
         };
-
+        let func_name = frame.func_name().unwrap_or("<anonymous>");
         let entry = format!("    at {func_name} ({location})");
-        // 压缩连续重复帧：相同行合并为 "entry (xN)"。
-        if let Some(last) = lines.last_mut() {
-            if let Some((prefix, count_str)) = last.rsplit_once(" (x") {
-                if prefix == entry {
-                    let count: u32 = count_str.trim_end_matches(')').parse().unwrap_or(1);
-                    *last = format!("{entry} (x{})", count + 1);
-                    continue;
-                }
-            } else if last == &entry {
-                *last = format!("{entry} (x2)");
-                continue;
+
+        // 捕获上限会截断真实递归深度，因此只表达重复事实，不输出误导性的精确次数。
+        if let Some(last) = lines.last_mut()
+            && (last == &entry || last.strip_suffix(REPEATED_SUFFIX) == Some(entry.as_str()))
+        {
+            if last == &entry {
+                last.push_str(REPEATED_SUFFIX);
             }
+            continue;
         }
         lines.push(entry);
     }
