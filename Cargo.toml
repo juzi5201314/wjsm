@@ -33,7 +33,26 @@ clap_complete = "4.6.0"
 swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common", "ecma_visit", "ecma_ast_serde", "ecma_codegen"] }
 thiserror = "2.0.18"
 wasm-encoder = "0.246.2"
-wasmtime = { version = "=43.0.2", features = ["async", "winch", "debug"] }
+# 只启用 wjsm 实际消费的 Wasmtime 能力，避免默认引入 component model、
+# stack switching、profiling、pooling allocator、coredump 与内置 cache。
+wasmtime = { version = "=43.0.2", default-features = false, features = [
+    "addr2line",
+    "anyhow",
+    "async",
+    "backtrace",
+    "cranelift",
+    "debug",
+    "demangle",
+    "gc",
+    "gc-drc",
+    "gc-null",
+    "parallel-compilation",
+    "runtime",
+    "std",
+    "threads",
+    "wat",
+    "winch",
+] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "io-util", "process"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake", "connect"] }
 futures-util = "0.3"
@@ -50,7 +69,14 @@ sha2 = "0.10"
 regress = "0.11"
 regex = "1"
 toml = "0.9.12"
-reqwest = { version = "0.12", features = ["rustls-tls", "stream"] }
+# 保留 Reqwest 的默认 HTTP 行为，只以 rustls 替代重复的 native-tls/OpenSSL。
+reqwest = { version = "0.12", default-features = false, features = [
+    "charset",
+    "http2",
+    "rustls-tls",
+    "stream",
+    "system-proxy",
+] }
 proptest = "1.9.0"
 url = "2"
 encoding_rs = "0.8"
@@ -107,43 +133,7 @@ opt-level = 3
 # 带大量 UB 检查 + 未内联，实测占 bootstrap ~35% 指令；opt 后大幅收缩。
 [profile.dev.package.memchr]
 opt-level = 3
-# 测试 profile：保留文件名与行号，关闭占用大量磁盘的增量缓存，
-# 并复制 dev 的关键 package opt-level（Cargo 不继承 package-specific 设置）。
-[profile.test]
-debug = "line-tables-only"
-incremental = false
-
-[profile.test.package.cranelift-codegen]
-opt-level = 3
-[profile.test.package.wasmtime-internal-cranelift]
-opt-level = 3
-[profile.test.package.cranelift-frontend]
-opt-level = 3
-[profile.test.package.cranelift-codegen-meta]
-opt-level = 3
-[profile.test.package.cranelift-assembler-x64]
-opt-level = 3
-[profile.test.package.wasmtime-internal-core]
-opt-level = 3
-[profile.test.package.wasmtime-environ]
-opt-level = 3
-[profile.test.package.wjsm-runtime]
-opt-level = 3
-[profile.test.package.memchr]
-opt-level = 3
-[profile.test.package.wasmtime]
-opt-level = 3
-[profile.test.package.wasmtime-internal-winch]
-opt-level = 3
-[profile.test.package.winch-codegen]
-opt-level = 3
-[profile.test.package.wjsm-cli]
-opt-level = 3
-[profile.test.package.wjsm-module]
-opt-level = 3
-[profile.test.package.wjsm-backend-wasm]
-opt-level = 3
-# dev 同样补上 wasmtime 本体
+# dev 补上 Wasmtime 本体与 Winch 后端。
 [profile.dev.package.wasmtime]
 opt-level = 3
 [profile.dev.package.wasmtime-internal-winch]
