@@ -12,6 +12,3 @@ edition = "2024"
 build-dir = "book"
 create-missing = false
 
-[output.html]
-default-theme = "rust"
-preferred-dark-theme = "navy"
