@@ -1,0 +1,17 @@
+[book]
+title = "wjsm 手册"
+authors = ["wjsm contributors"]
+description = "wjsm 用户手册与内部开发手册"
+language = "zh-CN"
+src = "src"
+
+[rust]
+edition = "2024"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
