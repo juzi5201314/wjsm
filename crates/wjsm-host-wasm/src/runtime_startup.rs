@@ -33,8 +33,9 @@ pub(super) fn startup_snapshot_debug_enabled() -> bool {
         Ok("1") | Ok("true") | Ok("on")
     )
 }
-/// 解析编译缓存目录。WJSM_CACHE_DIR 优先；未设置时默认 $HOME/.cache/wjsm。
-/// 返回 None 表示缓存禁用（WJSM_CACHE_DIR 为空字符串，或 HOME 未设置）。
+/// 解析编译缓存目录。非空 `WJSM_CACHE_DIR` 优先；为空或未设置时回落到
+/// `$HOME/.cache/wjsm`。返回 `None` 表示缓存禁用，即两个来源都不可用
+/// （`WJSM_CACHE_DIR` 为空或未设置，且 `HOME` 为空或未设置）。
 pub(super) fn module_cache_dir() -> Option<std::path::PathBuf> {
     std::env::var("WJSM_CACHE_DIR")
         .ok()

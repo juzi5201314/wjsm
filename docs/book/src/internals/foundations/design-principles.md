@@ -1,1 +1,38 @@
 # 设计原则与规范来源
+
+这一章说明改动 wjsm 时依据什么判断对错，以及查证顺序。
+
+## 判断顺序
+
+遇到语义问题按这个顺序查，不要跳步：
+
+1. **当前源码**。owner 层的实现是行为的事实，注释和文档都可能过期。
+2. **测试证据**。`fixtures/happy`、`fixtures/errors`、`fixtures/modules`、`fixtures/semantic` 与 crate 测试锁定的是已验证行为。
+3. **生效的 ADR**。`docs/adr/` 记录架构决策，被取代的部分只用于理解历史（如 ADR 0005 已被 0010 取代）。
+4. **官方规范**。ECMAScript、WHATWG、WebAssembly、Wasmtime 文档。
+5. **真实引擎实现**。规范文本仍不足以决断时，看 V8/JSC 的实际行为。
+
+## 核心原则
+
+**单一 owner。** 每个事实只有一个权威定义点。GC 算法解析在 `gc_algorithm_from_env`，影子栈默认值在 `wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE`，缓存目录在 `runtime_startup::module_cache_dir`。其他位置引用，不复制。
+
+**后端边界不可越。** Wasm 与 wasmtime 依赖只允许出现在 `wjsm-backend-wasm` 和 `wjsm-host-wasm`。`wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 保持后端无关（ADR 0011–0013）。
+
+**泛型单态化而非 dyn。** `ExecContext` 的实现通过 `<E: ExecContext>` 泛型传播，编译期内联，无 vtable 开销。`HeapAccessV2<M>` 同理。
+
+**在 owner 层修复。** 症状出现在下游时不打补丁。不通过放宽 fixture、削弱快照或加特例来掩盖失败。
+
+**彻底切换。** 替换实现时迁移所有调用方并删除旧路径。不保留兜底分支和「暂时保留」的兼容层。
+
+## 代码约定
+
+- Rust 2024，默认 rustfmt，零编译警告。
+- 源码注释用中文，API/类型/函数名保留原文。
+- 文件按职责收敛（目标 ≤500 行），函数保持内聚（目标 ≤30 行）。拆分按语义/后端/宿主域切，不新增平行约定。
+- 生成物写 `/tmp`。临时 JS/TS 用 `-e`，不建临时源文件。
+
+## 深入了解
+
+- [ADR 导航与决策状态](../reference/adr-index.md)
+- [核心不变量清单](../reference/invariants.md)
+- [开发工作流与提交前检查](../development/workflow-and-conventions.md)
