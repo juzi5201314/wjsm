@@ -46,6 +46,16 @@ wjsm validate app.wasm
 
 wjsm 产物依赖 507 个宿主 import 和三块由宿主提供的内存，无法独立运行。细节见 [WASM 产物与宿主要求](../output/wasm-artifacts.md)。
 
+> <details><summary>产物在 wazero / wasmtime 默认配置下能跑吗？</summary>
+>
+> 简短回答：不能。
+>
+> wazero 是 WASI 通用运行时，实现的是 WASI 标准接口。wjsm 产物 import 的不是 WASI 接口，是 wjsm 私有的 `env.*` 函数和 `wjsm_support` 模块——wazero 找不到这些 import，会报 `import not found`。
+>
+> wasmtime 同样不行。wasmtime 默认配置提供 WASI 接口、不提供 wjsm 那 500+ 个 import。要让 wjsm 产物跑起来，必须用 wjsm 自己的运行时（`wjsm run` 或 `wjsm-runtime` crate）。
+>
+> </details>
+
 ## 深入了解
 
 - [WASM 编译阶段](../../internals/pipeline/compile.md)

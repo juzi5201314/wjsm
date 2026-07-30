@@ -18,6 +18,16 @@ run_compile_then_execute (CLI)
 1. **fork AOT handoff**：若 argv 中有脚本路径，raw WASM 被写入 `${WJSM_CACHE_DIR}/pipeline/<sha256>.wasm`，并把 `current_entry` 设为该路径。子进程可用隐藏命令 `__run-precompiled` 直接加载，跳过重编译。
 2. **统计输出**：`--stats` 在执行前打印常量数、函数数、基本块数、指令数与 WASM 字节数。
 
+> <details><summary>「fork AOT handoff」是什么？</summary>
+>
+> 是个优化：fork 出的子进程加载同一份 WASM 时，跳过重新编译。
+>
+> 场景是 CI 跑大量 fixture 测试。父进程编一次 WASM，把字节写到 `WJSM_CACHE_DIR/pipeline/<hash>.wasm`；fork 出的子进程看到 `WJSM_CURRENT_ENTRY` 指向这个文件，直接 `Module::deserialize_file` 加载，跳过整套编译流程。
+>
+> 这个机制让「一个项目跑 1000 个 fixture」的耗时从「1000 倍编译时间」降到「1 倍编译时间 + 1000 倍加载时间」。对短 fixture 收益巨大。
+>
+> </details>
+
 ## 退出码来源
 
 `RuntimeOptions` 携带 argv、cwd、env 快照、fs 沙箱根、GC 算法、inspect 配置等。执行结果的错误分三类处理：

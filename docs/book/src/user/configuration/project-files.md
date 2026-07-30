@@ -57,6 +57,17 @@ root = "src"
 
 `--gc`、`--inspect`、`--inspect-brk`、`--shadow-stack-max`、`--wasmtime-memory-reservation` 没有对应的配置键。写进文件不会报错，但完全不生效——只能用命令行或环境变量。
 
+> <details><summary>为什么不把这几个选项也加进配置文件？</summary>
+>
+> 主要是「作用域」问题。这些选项都和执行环境绑定——不同的执行方式（CI 跑测试、本地开发、临时调试）可能需要不同的 GC、不同的 Inspector 端口、不同的影子栈上限。把它们放配置文件里会让「这个项目用什么配置」和「我打算怎么跑」混在一起：
+>
+> - 同一个 `wjsm.toml`，在 CI 上用 `--gc zgc`、本地开发用 `--gc mark-sweep`、调试时用 `--inspect`。
+> - 把 GC 写进 `wjsm.toml` 后，CI 脚本想覆盖就得显式传 `--gc zgc`——这反而是「优先级反转」，应该 CI 不传就沿用项目默认。
+>
+> 设计上把「项目级风格配置」（`stats`、`time` 这类纯观察选项）和「执行环境配置」（`--gc`、`--inspect` 这类影响行为的选项）分开，是为了让配置文件能安全 commit 到 git 而不必担心 CI 行为被本地配置影响。
+>
+> </details>
+
 ## 深入了解
 
 - [配置合并实现与键的单一 owner](../../internals/tooling/cli-and-config.md)

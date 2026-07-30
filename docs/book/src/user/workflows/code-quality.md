@@ -39,6 +39,34 @@ wjsm test tests
 
 三个命令都用退出码表达结果，无需解析输出。
 
+> <details><summary>CI 里 `set -e` 和退出码配合的最佳实践</summary>
+>
+> 三个命令都靠退出码表达成败，CI 流水线就只需要 `set -e` 加一条退出码判断：
+>
+> ```bash
+> set -euo pipefail
+> wjsm check src/main.ts --root .
+> wjsm lint src/main.ts
+> wjsm test tests
+> ```
+>
+> 加 `pipefail` 是为了防止 `wjsm xxx | tee log.txt` 这种管道里某一阶段失败被掩盖。`set -u` 捕获 typo 出来的未定义变量。
+>
+> 失败时不要 `exit 1`——`set -e` 已经做这件事。手工 `exit 1` 会让错误信息不明确。
+>
+> 想知道「是 check 失败还是 lint 失败」？用 `set -e` + 分步检查：
+>
+> ```bash
+> if ! wjsm check ...; then
+>   echo "::error::check failed" >&2
+>   exit 1
+> fi
+> ```
+>
+> GitHub Actions 会把 `::error::` 捕获到 annotation 里，在 PR diff 上直接标红。
+>
+> </details>
+
 ## 深入了解
 
 - [解析阶段如何产生带位置的诊断](../../internals/frontend/diagnostics-and-spans.md)

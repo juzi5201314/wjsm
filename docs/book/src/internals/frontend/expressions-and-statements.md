@@ -29,6 +29,24 @@
 
 这套拦截以调用点为单位。它换来的是省掉一次属性查找和一次间接调用，代价是这些方法不作为可读属性存在——用户可观察的后果记录在[限制与已知差异](../../user/runtime/limitations.md)。
 
+> <details><summary>「Builtin 拦截」省了多少开销？</summary>
+>
+> 「`arr.map(fn)`」如果走通用属性查找路径，运行时需要：
+>
+> 1. 取 `arr.map` 属性
+> 2. 沿原型链查（数组 → Array.prototype → Object.prototype），每一步检查是否有该属性
+> 3. 验证它是函数
+> 4. 把它绑定到 `arr` 作为 `this`
+> 5. 调用函数
+>
+> 拦截后这些都省了：codegen 直接发射「调用 Array.map builtin，参数是 arr、fn、回调数」。运行时只走 builtin 的具体实现。
+>
+> 性能差异在大规模数据处理场景下显著——对热代码路径（如 `arr.map(arr.map)`）影响很大。
+>
+> 代价：被拦截的方法不能作为可读属性（`typeof arr.map === "undefined"`），因为它在 IR 里就不存在「作为属性」这一形态。
+>
+> </details>
+
 ## 表达式分派
 
 表达式入口按域拆分：

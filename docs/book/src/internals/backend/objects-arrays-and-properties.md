@@ -24,6 +24,16 @@ Eval 模式没有 support instance，上述 10 个 helper 改为内联实现。�
 
 语义层把已知形态的属性访问（如 `Math.max`、`arr.map`）编译成 `CallBuiltin`，跳过属性查找。后端只看到 `CallBuiltin`，不需要自己识别这些形态。这是为什么 `typeof "x".slice` 是 `undefined`——属性访问在 IR 层面就不存在，只有调用点才生成代码。
 
+> <details><summary>support helper 是 WASM 函数，调用它有开销吗？</summary>
+>
+> 有，但不大。`call $obj_get` 是直接的函数调用，WASM 编译后是一条调用指令。helper 内部做的是「检查 handle 范围、查属性、走原型链」——这些都在 helper 内部，不在用户函数里。
+>
+> 关键收益：用户函数体保持简短。如果所有属性查找都内联进用户函数，每个属性访问会展开成 10+ 条指令，产物会膨胀。
+>
+> 代价是单次属性查找多一次跨函数调用。但 Cranelift 优化器可能会内联小函数——`obj_get` 在某些情况下会被自动内联到调用点，零开销。
+>
+> </details>
+
 ## 对象布局
 
 对象的内存布局由 `wjsm-gc` 的 `HandleTableV2` 和堆分配器决定，后端不关心。后端只持有一个 `i64` 句柄值，通过 `TAG_OBJECT_HANDLE` 标签区分类型。GC 可以移动对象而不需要更新值里的句柄——句柄是 table index，不是指针。

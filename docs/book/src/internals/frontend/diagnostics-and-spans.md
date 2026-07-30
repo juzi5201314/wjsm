@@ -10,7 +10,7 @@
 
 ```text
 error: Expression expected
- --> input.ts:1:11
+  --> input.ts:1:11
 1 | const x = ;
   |           ^
 ```
@@ -52,6 +52,18 @@ pub struct SourceSpan {
 ```
 
 它随 IR 指令保存，供 inspector 断点和运行时堆栈映射使用。`emit_debug_checks` 为真时，lowering 在语句入口发射 `DebugCheck` 指令并附带 `SourceSpan`；此时必须提供源文本，否则行列无法解析，指令被跳过。
+
+> <details><summary>编译期诊断和运行时错误映射为什么是两套结构？</summary>
+>
+> 编译期诊断（`Diagnostic`）需要 source code 文本才能渲染源码片段。lowering 阶段能拿到源码（用户传进来的），所以它工作良好。
+>
+> 运行时错误（`SourceSpan`）只需要「行:列」两个数字——运行时没有源码文本，也不会去渲染片段。运行时的目的是「把行:列映射回调用方的代码编辑器」。
+>
+> 两者职责不同：编译期诊断是「给正在开发程序的人看的」，运行时映射是「给排查线上问题的人用的」。前者要有上下文，后者只要坐标。
+>
+> 实际传递方式也不同：`Diagnostic` 是 `LoweringError` 的子项，触发即终止；`SourceSpan` 是 IR 指令的元数据，运行时按需读取。
+>
+> </details>
 
 ## 深入了解
 

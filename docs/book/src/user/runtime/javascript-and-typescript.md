@@ -28,6 +28,16 @@ wjsm run -e 'class A { #p = 1; static s = 2; get v() { return this.#p } }
 | 正则 | 命名捕获组、`replaceAll`、具名组回填 |
 | 其他 | 标签模板、`JSON` 往返、`Atomics`、迭代器辅助方法 |
 
+> <details><summary>「实测可用」和「规范支持」之间有差距吗？</summary>
+>
+> 严格说，有。wjsm 通过的方式是「按规范实现 + 跑 fixture/test262 验证」。所以「实测可用」其实隐含了「已经通过对应测试用例」。
+>
+> 但「所有 fixture 都通过」不等于「所有 spec 行为都正确」——规范里有些行为是隐含的、不容易被某个具体测试用例覆盖的。遇到不确定的 corner case，最可靠的办法是写个最小复现用 `wjsm run -e` 跑一下。
+>
+> 列表里没列出来的特性不一定不能用——可能是「没人专门测过」、「fixture 覆盖少」、「依赖某条未实现的路径」。先跑一遍再说。
+>
+> </details>
+
 ## 全局对象
 
 语义层维护一份内置全局名单（`crates/wjsm-semantic/src/builtins.rs` 的 `BUILTIN_GLOBALS`），其中包含 `console`、`process`、`Buffer`、`performance`、`structuredClone`、`queueMicrotask`、`atob`/`btoa`、`TextEncoder`/`TextDecoder`、`Intl`、`Iterator`、`setImmediate`，以及 Fetch/Streams 相关的 `Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController`。

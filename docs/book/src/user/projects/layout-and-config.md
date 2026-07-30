@@ -1,7 +1,6 @@
 # 项目结构与配置文件
 
-wjsm 不强制目录约定。一个项目只需要入口文件；`package.json` 决定 `.js` 的模块格式，
-`wjsm.toml` / `wjsm.json` 提供命令行默认值。
+wjsm 不强制目录约定。一个项目只需要入口文件；`package.json` 决定 `.js` 的模块格式，`wjsm.toml` / `wjsm.json` 提供命令行默认值。
 
 ## 最小项目
 
@@ -46,8 +45,7 @@ wjsm 读取其中四类信息：
 
 ## `wjsm.toml` / `wjsm.json`
 
-在当前工作目录查找，`wjsm.toml` 优先于 `wjsm.json`；`--config <PATH>` 可以指定任意路径。
-两种格式都支持把配置放在顶层或 `cli` 表下：
+在当前工作目录查找，`wjsm.toml` 优先于 `wjsm.json`；`--config <PATH>` 可以指定任意路径。两种格式都支持把配置放在顶层或 `cli` 表下：
 
 ```toml
 root = "."
@@ -58,13 +56,31 @@ stats = true
 { "cli": { "verbose": 1, "root": "." } }
 ```
 
-命令行显式给出的选项优先于配置文件。完整键名、取值和优先级规则见
-[配置来源与优先级](../configuration/sources-and-precedence.md)。
+命令行显式给出的选项优先于配置文件。完整键名、取值和优先级规则见[配置来源与优先级](../configuration/sources-and-precedence.md)。
 
 ## 输出目录
 
-wjsm 不预设 `dist/`，`build -o` 指哪写哪，父目录需要已存在。编译缓存在
-`$HOME/.cache/wjsm`（可用 `WJSM_CACHE_DIR` 改），不落在项目目录里。
+wjsm 不预设 `dist/`，`build -o` 指哪写哪，父目录需要已存在。编译缓存在 `$HOME/.cache/wjsm`（可用 `WJSM_CACHE_DIR` 改），不落在项目目录里。
+
+> <details><summary>为什么 wjsm 不约定项目结构？</summary>
+>
+> 这是有意的「不作为」。npm 生态里项目结构是高度约定的（`src/`、`dist/`、`tests/`），但这种约定是社区形成的，不是某个工具强加的。wjsm 不想重复 npm 已经做过的事——你的项目用什么结构，它就用什么结构。
+>
+> 唯一例外是 wjsm 自己创建的文件：`wjsm init` 生成 `package.json` 和 `main.js`（最小集）；wjsm test 期望 `*.test.{js,ts}` 后缀（这个约定来自主流测试工具）；其余的随你。
+>
+> 一个轻度的「wjsm 推荐」结构：
+>
+> ```text
+> myapp/
+>   package.json
+>   wjsm.toml          # 项目级默认配置
+>   src/main.ts        # 入口
+>   tests/*.test.ts    # 测试
+> ```
+>
+> 仅此而已。
+>
+> </details>
 
 ## 深入了解
 

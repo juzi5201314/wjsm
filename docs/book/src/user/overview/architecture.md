@@ -1,6 +1,6 @@
 # 面向使用者的架构概览
 
-这章的目的只有一个：让你在报错信息、`--time` 输出和手册后文里看到组件名时知道它负责什么。实现层面的依赖方向见内部手册。
+这章的目的只有一个：让你在报错信息、`--time` 输出和手册后文里看到组件名时知道它负责什么。实现层面的依赖方向和 crate 关系见[内部手册](../../internals/foundations/architecture.md)。
 
 ## 数据流
 
@@ -14,7 +14,7 @@ flowchart TD
     host --> out["程序输出"]
 ```
 
-多文件项目会先经过 `wjsm-module` 构建模块图并 bundle 成单个 IR Program，再走同一条编译路径。
+多文件项目会先经过 `wjsm-module` 构建模块图并把整个依赖图 bundle 成单个 IR Program，再走同一条编译路径。
 
 ## 各组件的可观察职责
 
@@ -37,6 +37,16 @@ flowchart TD
 - **影子栈（shadow stack）**：`env.__shadow_memory`，用于传递变长参数和 GC safepoint 溢出。冷启动 64 KiB，按需增长，软上限默认 16 MiB。
 
 两者上限分开配置，调错了会看到不相干的失败，参见[堆、影子栈与内存预留](../configuration/memory.md)。
+
+> <details><summary>为什么「对象堆」和「影子栈」要分开？</summary>
+>
+> 影子栈的存在不是历史遗留——它和对象堆有完全不同的访问模式。影子栈在 GC 触发时（safepoint）要快速被扫描，记录所有还活着的对象句柄；如果把它和对象堆混在一起，每条 GC 指令都要担心越界访问和对象移动带来的指针失效。
+>
+> 分成两块独立内存后，影子栈里的数据只有「句柄」一种语义，扫描时只需要把这些句柄告诉 GC 就行，不需要考虑里面有什么对象布局。代价是多用一块内存、调用约定里多一个 i32 参数（影子栈参数基址），换来的是 GC 实现的简化。
+>
+> 用户的可观察影响：`--max-heap-size` 限制的是对象堆，`--shadow-stack-max` 限制的是影子栈。深递归程序碰到的是影子栈上限（报 `RangeError: Maximum call stack size exceeded`），大对象程序碰到的是堆上限（报 `JavaScript heap budget exhausted`）。
+>
+> </details>
 
 ## 深入了解
 

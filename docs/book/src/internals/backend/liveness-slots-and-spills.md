@@ -24,6 +24,18 @@ Phi 节点通过 `allocate_phi_locals` 分配独立 local，前驱块尾写入�
 
 **GC 正确性红线**：unknown callee 一律保守 may-GC，只对单次赋值的函数声明变量建映射。
 
+> <details><summary>为什么 unknown callee 一定要保守 may-GC？</summary>
+>
+> GC spill 是在「可能触发 GC 的调用点」前后，把活跃的句柄值溢出到影子栈，让 GC 标记阶段能找到。漏掉溢出 = GC 标记不到活跃对象 = 对象被错误回收 = 内存安全 bug。
+>
+> 对于 unknown callee，我们不知道它会不会触发 GC——可能它内部是 `() => 1`（无 GC），也可能它内部有 `new Map()`（有 GC）。如果 codegen 假定它无 GC、跳过 spill，而运行时它实际有 GC，结果是灾难性的 Use-After-Free。
+>
+> 「保守 may-GC」的代价：多写一次 spill 序列，多读一次影子栈。这是性能成本。「激进 may-GC 推断」的成本：偶发的内存安全 bug，调试几周。
+>
+> 显然选前者。这就是为什么 `known_callee_vars` 是 conservative hint，不是 aggressive optimization。
+>
+> </details>
+
 ## Safepoint spill
 
 在可能触发 GC 的调用点，活跃的句柄值需要溢出到影子栈（GC spill）。后端在每个 may-GC 调用前插入 spill 序列：

@@ -27,6 +27,22 @@ support module 是构建期产出的第二个 WASM 模块，提供高频 helper�
 
 运行时通过 `runtime_support::EMBEDDED_*_SUPPORT_CWASM` 静态量访问，`install_embedded_support_cwasm` 把字节装入 `wasmtime::Module`，实例化时与 user wasm 共享 linker。
 
+> <details><summary>为什么要「三种 GC flavor 各一个 support cwasm」？</summary>
+>
+> 不同 GC 算法的 support helper 实现差异很大：
+>
+> - **mark-sweep**：属性分配直接走，回收时不需屏障。
+> - **G1**：SATB 写屏障、region 粒度 remset。
+> - **ZGC**：着色指针读屏障、代际写屏障、并发标记。
+>
+> 如果只产出一个「通用」support cwasm，它必须包含所有 GC 类型的屏障代码，运行时按当前 GC 选择启用——但运行时没办法「关掉」某段 WASM 代码，要么全部执行要么不执行。
+>
+> 物理上分三个 cwasm，每个只包含自己的屏障代码。运行时按 `--gc` 选择加载哪个，体积小且代码路径确定。
+>
+> 代价：构建期要预编译三个 cwasm。运行期只加载一个，影响小。
+>
+> </details>
+
 ## ABI 对齐
 
 support module 的 global 索引与 user wasm 完全对齐（0..26），type section 用 `build_shared_type_section` 生成同一份。这两条对齐让 helper body 移植时无需修改 GlobalGet/GlobalSet 索引和 call_indirect type index。

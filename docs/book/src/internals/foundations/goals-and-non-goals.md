@@ -14,6 +14,18 @@
 
 **启动成本压到构建期。** support cwasm 等工件在 `build.rs` 阶段编译并嵌入二进制（ADR 0004），运行时不做首次捕获，也不依赖用户机器上的磁盘缓存。
 
+> <details><summary>「后端可替换」具体省下了什么？</summary>
+>
+> 这是 wjsm 架构的核心目标之一。代码量上 `wjsm-builtins` + `wjsm-gc` 加起来约 2.8 万行——这部分是「ECMAScript 语义的实现」和「对象堆管理」，任何后端都需要。
+>
+> 新加一个后端（比如 native code、V8 嵌入、JIT 编译器），只需要实现 `HeapMemory` / `GrowableHeapMemory`、`ExecContext`、`JsBackend` 三组 trait。语义代码、GC 算法、对象布局、IR 数据结构全部复用。
+>
+> 反过来想：没有这个边界，每个新后端都要重写一遍 2.8 万行代码，或者把 wasmtime 类型泄漏到每个文件里。前者成本爆炸，后者让代码绑定特定运行时。
+>
+> 现实中也只有 wasmtime 一个真后端——`JitBackend` 是个 stub，证明契约可行。但这个 stub 的存在本身有价值：编译器会强制检查 `JsBackend` trait 的所有方法都被 stub 满足，未来真后端的接入路径是清晰的。
+>
+> </details>
+
 ## 非目标
 
 **不是 Node.js 替代品。** 24 个内置模块是自有 JS 实现的子集，不追求 API 逐位对齐。

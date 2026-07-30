@@ -17,6 +17,16 @@
 
 循环、`if`、逻辑短路、可选链全部由 `Branch` 加 `Jump` 组合而成，IR 层没有专门的循环结构。
 
+> <details><summary>为什么 IR 不直接表达循环？</summary>
+>
+> 高级 IR（rustc MIR、Swift SIL）通常有专门的循环结构——便于数据流分析、循环不变量外提。wjsm IR 没有，循环用「Jump 到自己的前驱块」表示。
+>
+> 原因是 wjsm IR 的下游消费者只有 wasm codegen：codegen 把 IR 的 CFG 还原成 WASM 结构化控制流（`block`/`loop`/`if`），由 codegen 决定什么算循环。后端有充分信息做这个判断——它看 Jump 的方向（前向是 if，后向是 loop）。
+>
+> 好处是 IR 数据结构更简单、lowering 不用为每种循环维护不同的结构。代价是有些分析（数据流、循环不变量外提）wjsm 没法做——但 wjsm 也不做这些优化，Cranelift/Winch 负责。
+>
+> </details>
+
 ## Abrupt completion 的展开
 
 `break`、`continue`、`return` 跨越 `try-finally` 或 `for-of` 时，必须按 ECMAScript 语义先执行清理。`lowerer_branching.rs` 的 `emit_unwind_for_abrupt` 承担这件事：
@@ -37,6 +47,20 @@
 异常是一个 NaN-box 值，标签为 `TAG_EXCEPTION`（`0x5`）。任何可能抛出的操作返回该标签值时，调用方检查并向上传播。`wjsm_ir::value::is_exception` 是判定入口，编码入口是 `encode_exception_handle`。
 
 这个设计把「抛出」变成普通返回值检查，代价是每个可能抛出的调用点都要有检查分支，收益是不依赖 WASM 异常提案。
+
+> <details><summary>为什么不用 WASM 异常处理提案？</summary>
+>
+> WASM 异常处理提案（`exnref`、`try_table` 等）提供原生异常支持，看起来更优雅：异常值是独立的引用类型，`try_table` 直接处理，不用每个调用点手动检查。
+>
+> 但 wjsm 不用的原因是：
+>
+> 1. **跨运行时兼容性差**。不同 wasmtime 版本、Wasm Micro Runtime、wazero 对异常处理提案的支持进度不一。wjsm 产物要在多个宿主上能跑。
+> 2. **后端复杂度**。codegen 要理解异常引用的表示、catch 子句的注册机制——这又是一层 IR 状态。
+> 3. **性能不一定更好**。「每次调用都检查返回值」的开销在多数场景下是常数次的指令，WASM 异常处理也要在调用边界做检查（虽然形式不同）。
+>
+> 实际结果是：wjsm 产物在通用 wasmtime 下能跑，依赖更少，后端实现更简单。
+>
+> </details>
 
 ## 深入了解
 

@@ -45,6 +45,23 @@ child_process execution is disabled for 'echo'; set WJSM_CHILD_PROCESS_ALLOW to 
 
 WebAssembly 的内存隔离防止程序越界访问宿主内存，但不限制通过宿主 import 发起的系统调用。上面几项是实际的能力边界，别把「运行在 Wasm 里」当成完整沙箱。
 
+> <details><summary>「Wasm 沙箱」是个被滥用得厉害的概念</summary>
+>
+> WebAssembly 的「沙箱」只有一层语义：WASM 模块的线性内存和宿主进程是隔离的，模块不能直接读写宿主内存（除了通过 import 显式提供的部分）。
+>
+> 这是**内存安全**层面的隔离，不是**系统调用安全**层面的隔离。一个 WASM 模块可以：
+>
+> - 通过 import 调用 `fetch` 发任意网络请求
+> - 通过 import 调用文件操作读任意文件（如果宿主允许）
+> - 通过 import 派生任意子进程
+> - 占用任意多内存（直到 `--max-heap-size` 限制）
+>
+> 想要「完全沙箱」必须在这些 import 上加更严格的限制：网络黑名单、文件系统 chroot、cgroups 限制、seccomp 系统调用过滤……这些是容器/虚拟化层做的事，不是 WASM 本身。
+>
+> 写代码时记住：「我的 wjsm 程序能跑成功 = 它走完了 wjsm 沙箱允许的路径」——但「走完 wjsm 沙箱」不等于「不会访问你不想让它访问的资源」。
+>
+> </details>
+
 ## 深入了解
 
 - [文件系统与子进程宿主实现](../../internals/runtime-features/fs-process-and-child-process.md)

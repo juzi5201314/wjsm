@@ -46,6 +46,28 @@ fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
 
 `verify.rs` 内部构造 `Predecessors`、`Successors`、`Definitions`、`Dominators` 四张表。非 phi 指令的每个操作数必须在支配当前块的块中定义；phi 的每个来源值必须在对应前驱块中可用。这条规则保证后端可以按块线性发射代码，不需要额外的活跃性修补。
 
+> <details><summary>「支配关系」是什么，为什么校验需要它？</summary>
+>
+> 一个块 B 支配块 X，意思是「从 entry 到 X 的每条路径都经过 B」。例如 entry 块支配所有块，if 的 then-body 块支配「then 块自己」，但不支配 else-body。
+>
+> 校验「值使用前必须已定义」时，光检查「值编号存在」不够——还要看「值的定义位置能不能到达使用位置」。比如：
+>
+> ```text
+> bb0:
+>   %1 = const c0        # %1 在 bb0 定义
+>   br bb1
+> bb1:
+>   %2 = use %1          # OK: bb0 支配 bb1
+> bb2:
+>   %3 = use %1          # FAIL: bb0 不支配 bb2（从 bb0 可以 br 到 bb1 或 bb3）
+> ```
+>
+> 这就是 SSA 的「支配性质」：值的定义支配所有使用。后端按块线性发射时不用修补，后端看到 `use %1` 时知道 `%1` 在前面的块里一定已经赋值。
+>
+> 计算支配关系要遍历 CFG 一次（O(V+E)），所以 `verify()` 不是免费的。这就是为什么默认关闭、改 lowering 时手动打开。
+>
+> </details>
+
 ## 什么时候该开
 
 - 改动 lowering 的控制流构造（新循环形态、新 `try` 展开路径）。

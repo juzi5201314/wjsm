@@ -30,13 +30,23 @@ Ok(swc_ast::Module {
 
 后续阶段因此只需处理一种 AST 形态。差别体现在语义层：module 模式下 `await` 是保留字，script 模式下可作标识符。
 
+> <details><summary>为什么要把 Script 包装成 Module？</summary>
+>
+> SWC 在解析层区分 `Script` 和 `Module` 两个 AST 类型——`Script` 是传统脚本，`Module` 是 ESM。两者区别在顶级语法（`import`/`export` 只能在 Module 出现）。
+>
+> 但 wjsm 整个 lowering 流水线只处理 `Module`。如果让 lowering 阶段同时处理两种 AST，代码量翻倍。
+>
+> 取巧的做法：在 parser 边界把 Script 包装成 Module（`body` 转 `ModuleItem::Stmt`），后续统一处理。代价是 Script 里合法的 `import` 也会被包装进去——但 SWC 本身就不允许 Script 里出现 `import`（因为 `import` 是顶级声明），所以包装是安全的。
+>
+> </details>
+
 ## 诊断格式
 
 `diagnostic.rs` 提供 `format_byte_diagnostic`，把字节偏移转成行列并渲染源码片段与 caret：
 
 ```text
 error: Expression expected
- --> input.ts:1:11
+  --> input.ts:1:11
 1 | const x = ;
   |           ^
 ```

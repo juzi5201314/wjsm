@@ -6,7 +6,7 @@
 
 ```text
 Error: error: Expression expected
- --> input.ts:1:11
+  --> input.ts:1:11
 1 | const x = ;
   |           ^
 ```

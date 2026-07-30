@@ -45,6 +45,24 @@ async fn main() -> anyhow::Result<()> {
 
 默认值不开放文件写入之外的额外权限，沙箱根目录需要显式给出。
 
+> <details><summary>为什么必须用 Tokio？</summary>
+>
+> wjsm 的执行是「异步」是因为它的运行时本身是异步的——Wasmtime 内部依赖 async 来管理 host function 调用、Promise settle、I/O 等待等。`execute_with_options` 返回 `impl Future`，调用方需要驱动它。
+>
+> 选择 Tokio 而不是 `async-std` 或 smol 是 wasmtime 决定的——wasmtime 自身的 async runtime 集成基于 Tokio。如果你的项目不用 Tokio，需要加一个；或者用 `block_on` 包一层（同步用）：
+>
+> ```rust
+> let wasm = wjsm_runtime::compile_source(...)?;
+> let options = wjsm_runtime::RuntimeOptions::default();
+> tokio::runtime::Runtime::new()?.block_on(
+>     wjsm_runtime::execute_with_options(&wasm, options)
+> )?;
+> ```
+>
+> 同步用法在 CLI 工具里没问题；生产服务里建议整个进程用 Tokio，wjsm 是其中一个 task。
+>
+> </details>
+
 ## 捕获输出
 
 `execute_with_options` 把程序输出写到进程的标准输出。需要拿到输出内容时用 `execute_with_writer_with_options`，它接受一个 `Write` 实现并返回该 writer 和诊断字节。

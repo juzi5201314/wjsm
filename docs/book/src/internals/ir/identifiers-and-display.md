@@ -54,6 +54,25 @@ WJSM_UPDATE_SNAPSHOTS=1 cargo nextest run -p wjsm-semantic -- lowering_snapshots
 
 `ValueId` 等 ID 类型的 `Display` 实现（`%N`、`bbN`、`cN`、`modN`）是这个格式的一部分，同样受此约束。
 
+> <details><summary>「快照测试」和「单元测试」的本质区别</summary>
+>
+> 单元测试断言「特定输入产生特定输出」——你写 `assert_eq!(func(x), expected)`，expected 是人工写的。
+>
+> 快照测试断言「输入产生与之前相同的输出」——你写 `assert_snapshot(name)`，expected 是「上次跑出来的结果」。
+>
+> 区别在于「预期」是谁定义的：
+>
+> - 单元测试：开发者基于理解写预期。理解错了，测试跟着错——但只要理解不变，测试也稳定。
+> - 快照测试：开发者基于「现状」接受预期。改任何东西都让快照失灵——但这正是它的价值。
+>
+> 快照测试适合「我不在乎输出长什么样，只在乎它没变」的场景：渲染输出、序列化格式、IR dump、HTML 模板。这类东西人工写 expected 太繁琐、容易漏掉细节。代码一变就更新快照——改动是「我接受这个变化」的明确信号。
+>
+> 不适合：业务逻辑。业务逻辑的预期应该是显式的（`assert_eq!(total, 42)`），而不是「上次跑出来是 42」。
+>
+> wjsm 的 IR 快照是教科书式的快照测试用法：IR 是中间表示，diff 里只有结构变化，没有人眼能直接验证的「正确性」——但「这次结构变了」是真实信号，强制开发者审视。
+>
+> </details>
+
 ## 深入了解
 
 - [语义 IR 快照的完整测试机制](../testing/semantic-snapshots.md)

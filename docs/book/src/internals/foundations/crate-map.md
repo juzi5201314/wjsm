@@ -24,6 +24,21 @@
 | `wjsm-test262` | Test262 runner，子进程与并发预算 | `clap`、`rayon`、`comfy-table` | 5 / 1836 |
 | `wjsm-gc-bench` | GC 基准 runner 与报告 | `wjsm-runtime`、`sysinfo` | 11 / 724 |
 
+> <details><summary>为什么 `wjsm-host-wasm` 占 70% 代码量？</summary>
+>
+> 它同时承担四件不同的事：
+>
+> 1. **Wasmtime 引擎集成**：配置、Engine 池化、模块编译、实例化、Store 管理。
+> 2. **host import 注册**：约 500+ 个 `env.*` 函数，加上它们的 Rust 实现薄包装。
+> 3. **ManagedHeap 接合**：把 wjsm-gc 的 GC 算法接入 wasmtime 的内存模型。
+> 4. **Node 内置模块实现**：24 个 `node:*` 模块的 Rust 实现 + 一些 JS polyfill 的注册。
+>
+> 任何一个单独抽出来都能做个独立 crate（实际上早期版本考虑过），但目前它们耦合度高（host import 的函数经常调用 Node 模块的代码，Node 模块又调用 GC API），分开会让代码更绕。
+>
+> 内部按目录拆分（`host_imports/`、`exec_context_impl/`、`runtime_gc/`、`inspector/`、`runtime_node_*.rs`），单文件保持 500 行以下。规模大但能维护。
+>
+> </details>
+
 ## 重心解读
 
 `wjsm-host-wasm` 占全仓约七成代码量，因为它同时承载 Wasmtime 执行引擎、host import 注册、ManagedHeap 接合与 Node 内置模块实现。它内部按域拆分为子目录（`host_imports/`、`exec_context_impl/`、`runtime_gc/`、`inspector/` 等），单文件保持在可维护范围。

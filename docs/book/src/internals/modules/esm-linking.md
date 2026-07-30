@@ -39,6 +39,18 @@ struct CollectedExports {
 
 `ModuleGraph::topological_order` 返回 `(order, cycles)`。`order` 是依赖优先的求值顺序，bundler 按此顺序把模块喂给 `lower_modules_with_debug`，因此被依赖者的顶层语句先执行。
 
+> <details><summary>为什么 `export_names` 用 `BTreeSet` 而不是 `HashSet`？</summary>
+>
+> 这是快照测试的硬约束。`BTreeSet` 按字典序排序，`HashSet` 按 hash 排序（每次进程可能不同）。
+>
+> `export_names` 参与 IR 生成——比如 namespace 对象会包含所有导出名的列表。如果名字顺序在不同运行里不同，IR dump 也会不同，快照测试就失效。
+>
+> `BTreeSet` 的代价是 O(log n) 的插入（vs `HashSet` 的 O(1)），但模块导出数通常很小（几十个），代价不显著。
+>
+> 类似的考虑在很多地方出现：IR dump 里所有「集合」字段都用 BTree 容器，不是因为性能，是因为顺序稳定性。
+>
+> </details>
+
 ## 深入了解
 
 - [用户视角的 ESM 用法与限制](../../user/projects/esm.md)

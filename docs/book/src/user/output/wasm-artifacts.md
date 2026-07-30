@@ -28,6 +28,18 @@ wjsm disasm /tmp/hello.wasm --skeleton | head -40
 
 `__heap_memory` 是 64 位共享内存，宿主 Engine 必须开启 `memory64`、`threads`、`multi-memory` 和 `bulk-memory`。通用 WASI 运行时不满足这组条件，也无法提供那 507 个 import。
 
+> <details><summary>为什么「500+ 个 import」不能简化？</summary>
+>
+> 这些 import 是「JS 引擎的所有原子操作」——`obj_get`（属性读）、`obj_set`（属性写）、`arr_new`（数组分配）、`string_eq`（字符串比较）、`fetch`（HTTP 请求）、`console_log`……加起来是 JS 运行时的全部能力。
+>
+> wjsm 不能把它们直接编进 WASM 里——那会让产物膨胀到几 MB，而且违反 WASM 的「逻辑分离」原则（计算与宿主 IO 分开）。
+>
+> 替代方案是把这些操作都内联进每个产物——技术上可以，但代价是每个产物都要包含整套 JS 运行时实现，相当于「每个 .wasm 是个独立 JS 引擎」。这显然不实际。
+>
+> 当前的设计：所有产物共享同一套「宿主 import」，由 wjsm 二进制（或基于 `wjsm-runtime` 的 Rust 宿主）提供。换 host 的成本是实现 500+ 个 import 函数。
+>
+> </details>
+
 ## 怎么运行产物
 
 日常执行直接用 `wjsm run <file>`，它在同一进程内完成编译和执行，不需要落盘 `.wasm`。

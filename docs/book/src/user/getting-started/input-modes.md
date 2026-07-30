@@ -1,6 +1,6 @@
 # 文件、内联源码与标准输入
 
-同一段代码有三种交给 wjsm 的方式，它们的模块解析行为和诊断文件名都不同。
+同一段代码有三种交给 wjsm 的方式——它们的模块解析行为和诊断文件名都不同。
 
 | 方式 | 写法 | 模块解析 | 诊断中的文件名 |
 | --- | --- | --- | --- |
@@ -72,10 +72,23 @@ wjsm check -e 'var await = 1' --script # 通过
 
 ```text
 error: `await` cannot be used as an identifier in an async context
- --> input.ts:1:5
+  --> input.ts:1:5
 1 | var await = 1;
   |     ^^^^^
 ```
+
+> <details><summary>模块模式和脚本模式的本质区别</summary>
+>
+> 两者不是「宽松严格」的关系，而是 ECMAScript 规范明确区分的两种语法：
+>
+> - **脚本（Script）**：传统浏览器里 `<script>` 标签里的代码。`await` 不是保留字（因为早期浏览器脚本里没人写 `await`），可以在 `var` 名字里用。
+> - **模块（Module）**：`<script type="module">` 和 ESM 文件里的代码。`await` 是顶层保留字（因为模块语法里 `await` 出现在顶层是合法且常见的——顶层 await），不能用作标识符。
+>
+> wjsm 默认走模块模式，因为现代代码几乎都按 ESM 写。但有些老代码、迁移代码、`-e` 临时表达式会希望脚本语义——`--script` 切过去就行。
+>
+> 切换不影响编译产物格式，只影响解析阶段的语法检查。
+>
+> </details>
 
 ## 传参给脚本
 

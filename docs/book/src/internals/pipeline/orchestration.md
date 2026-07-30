@@ -17,6 +17,19 @@ pub(crate) struct PipelineResult {
 
 `PipelineTimings` 记录四段微秒耗时（`parse_us`、`lower_us`、`compile_us`、`execute_us`）。`--time` 触发 `PipelineTimings::print`：默认按毫秒输出，`-v` 起按微秒输出。`execute_us` 为 0 时不打印执行段。
 
+> <details><summary>为什么 `execute_us` 为 0 时不打印？</summary>
+>
+> 不是 bug，是有意设计。`--stage compile` 不执行用户代码，`execute_us` 没值；`--stage execute` 才跑。
+>
+> 打印时跳过 0 段能避免：
+>
+> - 用户看到 `Timing: parse=6ms, lower=10ms, compile=6ms, execute=0ms` 误以为「execute 跑了但没花时间」。
+> - 看到「0ms」会去找「为什么是 0」，而答案是「根本没跑」。
+>
+> 这种小细节不影响功能，但能减少用户的疑问。生产工具应当「少问为什么」。
+>
+> </details>
+
 ## CompilePlan：单文件还是 bundle
 
 `build_compile_plan` 只有两个结果：

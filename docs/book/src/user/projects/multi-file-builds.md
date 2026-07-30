@@ -1,7 +1,6 @@
 # 多文件构建
 
-多个模块被编译成**一个** WebAssembly 模块。wjsm 从入口出发构建模块图，把所有依赖 bundle 进同一份 IR，
-再一次性生成 Wasm。
+多个模块被编译成**一个** WebAssembly 模块。wjsm 从入口出发构建模块图，把所有依赖 bundle 进同一份 IR，再一次性生成 Wasm。
 
 ```text
 src/
@@ -32,8 +31,7 @@ wjsm build src/main.js --root . -o app.wasm
 
 依赖按深度优先顺序求值：被依赖的模块先执行完，再回到引用它的模块。
 
-循环依赖不会报错，但会暴露「尚未初始化」的绑定。当前实现在这种情况下读到的是绑定的零值，
-而不是按规范抛 `ReferenceError`：
+循环依赖不会报错，但会暴露「尚未初始化」的绑定。当前实现在这种情况下读到的是绑定的零值，而不是按规范抛 `ReferenceError`：
 
 ```js
 // cyc1.js
@@ -65,15 +63,25 @@ deferred a = 1
 
 设计上不要依赖循环依赖中的顶层求值时序。
 
+> <details><summary>为什么 wjsm 不报 `ReferenceError`，而规范要求报？</summary>
+>
+> 这是个有意的工程取舍。规范要求「在 TDZ 里读 `let`/`const` 绑定抛 `ReferenceError`」——但这是在「运行时检查」框架下的。wjsm 的 TDZ 是**编译期静态判定**的（见[两阶段 Lowering](../../internals/frontend/two-phase-lowering.md)），运行时根本没有「TDZ 检查」这一步。
+>
+> 在循环依赖场景下，静态判定器看到的是「a 在 cyc1.js 中定义，在 cyc2.js 中被读取」——它不知道求值时序。它只能假设「读取时 a 一定已经初始化」（因为 a 是 `let`/`const`，按规范应该报 TDZ 错，但 wjsm 不模拟运行时检查）。
+>
+> 实际结果：读到 0（NaN-boxed `undefined` 的整数值）而不是抛错。这和 Node.js 不一样——Node 是真实运行，看到的是规范描述的行为。
+>
+> 怎么规避？把跨模块访问推迟到函数调用时（上面 `cyc4.js` 的写法）。函数体内才执行的逻辑不参与「初始化时序」。
+>
+> </details>
+
 ## 产物体积
 
-bundle 进来的模块只增加 `Code` 和 `Data` 段。上面三文件示例编译出 26174 字节，其中 `Code` 段 2564 字节；
-单个 `console.log(1)` 的产物是 25686 字节。差值就是你的代码，其余是固定的宿主 ABI 声明开销。
+bundle 进来的模块只增加 `Code` 和 `Data` 段。上面三文件示例编译出 26174 字节，其中 `Code` 段 2564 字节；单个 `console.log(1)` 的产物是 25686 字节。差值就是你的代码，其余是固定的宿主 ABI 声明开销。
 
 ## 与 npm 包一起构建
 
-`node_modules` 里的依赖同样被 bundle 进产物，不需要在运行时提供。这意味着一个 `.wasm` 是自包含的
-（除了 wjsm 宿主 import），但也意味着依赖变更后必须重新编译。
+`node_modules` 里的依赖同样被 bundle 进产物，不需要在运行时提供。这意味着一个 `.wasm` 是自包含的（除了 wjsm 宿主 import），但也意味着依赖变更后必须重新编译。
 
 ## 深入了解
 

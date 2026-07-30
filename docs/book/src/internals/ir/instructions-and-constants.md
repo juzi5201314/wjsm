@@ -28,6 +28,18 @@
 
 `CompareOp` 只有 `StrictEq` 和 `StrictNotEq`。**抽象相等不在这里**——`==` 需要完整的 ES 强制转换算法，lowering 成 `CallBuiltin` 走宿主实现。同理，`<`/`>` 等关系比较也走 builtin（`abstract_compare`）。IR 只保留能直接映射到机器指令的严格比较。
 
+> <details><summary>为什么 `==` 不在 IR 里？</summary>
+>
+> ES 规范里 `==` 的语义是「抽象相等比较」：先把两边做 ToPrimitive 类型转换，再比较。比如 `1 == "1"` 为 `true`，因为 `"1"` ToPrimitive 后变成 number `1`。
+>
+> 这种语义没办法直接映射到机器指令——`i64.eq` 是位比较，不会做类型转换。强行让后端实现完整的 ToPrimitive 算法会把这部分语义固化到 IR。
+>
+> 当前的做法：抽象相等 lowering 成 `CallBuiltin(abstract_compare)`，由 builtins 层（Rust 实现）做完整的算法。这种 builtin 调用有「函数调用 + 内存读」开销，但把语义从 IR 抽离出来——后端只需要「调用某个 builtin」，不用理解 `==` 的全部规则。
+>
+> 性能上：纯 `===` 路径仍是 `i64.eq`（机器指令），开销极低。`==` 路径走 builtin 调用，比 `===` 慢几倍。这是「正确性换性能」的取舍，符合 ES 规范的真实成本。
+>
+> </details>
+
 ## Constant
 
 ```rust

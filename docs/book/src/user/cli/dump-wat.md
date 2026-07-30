@@ -39,6 +39,19 @@ WAT 中大量 `i64` 参数是 NaN-boxed JavaScript 值的编码结果：所有 J
 
 `disasm` 对已有 `.wasm` 文件做同样的事，`dump-wat` 则从源码开始编译。
 
+> <details><summary>WAT 里 `i64` 满天飞——这是好事还是坏事？</summary>
+>
+> 是设计选择，不是性能问题。wjsm 用 NaN-boxing 把所有 JS 值塞进一个 64 位整数：int32、对象句柄、字符串、函数引用都是 64 位。所以 WASM 层看到的所有 JS 值都是 `i64`。
+>
+> 实际影响：
+>
+> - **调试 WAT 时**：看到 `i64.const 0x500000000` 之类的数值是 NaN-boxed 值，不是原始 `i64`。
+> - **性能上**：和把每种类型分到不同 WASM 类型相比，NaN-boxing 在跨类型操作时多了一些拆包/装箱指令，但节省了类型转换和栈空间。wjsm 的后端做了值类型推断来减少这些开销——纯数值计算函数几乎不需要拆包。
+>
+> 看不懂 WAT 没关系——这层主要给 wjsm 开发者看，普通用户用 `dump-ir` 就够。
+>
+> </details>
+
 ## 深入了解
 
 - [NaN-boxed 值表示与标签编码](../../internals/backend/value-representation.md)

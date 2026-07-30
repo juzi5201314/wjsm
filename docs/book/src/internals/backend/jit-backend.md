@@ -37,6 +37,18 @@ impl JsBackend for JitBackend {
 
 `artifact_bytes` 返回 `None` 也是有意的：它演示了不可序列化制品的正确处理方式，`build -o` 会因此拿到空字节而不是假装成功。
 
+> <details><summary>为什么 stub 也要走完整 `JsBackend` trait？</summary>
+>
+> 物理上看是个 36 行的「占位」crate，但它让类型系统替我们检查契约：
+>
+> - `JsBackend` 加了新方法？JitBackend 编译失败，提示补实现。
+> - `JsBackend::execute` 改了 Future 形状？JitBackend 必须跟着改。
+> - `JsBackend` 加了关联类型？JitBackend 必须给出占位但有效的定义。
+>
+> 这种「让类型系统检查协议完整性」的技巧在工业代码里很常见。比如 tokio 的「测试 runtime」、Rust 标准库的「Phantom」类型，都是同一个思路。
+>
+> </details>
+
 ## 实现它需要什么
 
 按 `docs/backend-implementation-guide.md` 的六步接入法，一个真实的 JIT 后端需要：

@@ -22,6 +22,22 @@ const slice = "ab".slice;        // undefined
 
 `DataView` 的访问器同样受此影响：`dv.byteLength` 读到 `undefined`，但 `dv.getUint8(0)`、`dv.setUint32(0, x)` 可用。
 
+> <details><summary>为什么 `String.prototype.slice` 不能作为值取出来？</summary>
+>
+> 这是个有意思的取舍。String、TypedArray、DataView 的方法由 wjsm 语义层在「看到调用形态」时直接识别——它检查 `something.slice(...)` 这种结构，识别成内置函数调用，跳过原型链查找。
+>
+> 这样做的好处是性能：每次字符串方法调用省一次属性查找、一次原型链遍历。坏处是这个方法「只存在于调用点」——你 `obj.slice` 取出来的不是函数。
+>
+> 实际遇到的最常见坑：用 `arr.map` 之类的高阶函数。`Array.prototype.map` 是个真实属性，能用；但 `new Uint8Array(2).fill` 这种 TypedArray 实例的 `.fill` 取出来是 `undefined`——必须直接用 `arr.fill(value)`。
+>
+> 写代码时记住一条：**builtin 方法只能直接调用，不要取出当回调**。要包成回调就自己写一个箭头函数：
+>
+> ```js
+> const fillValue = (v) => new Uint8Array(2).fill(v);  // 自己包一层
+> ```
+>
+> </details>
+
 ## 内置构造器的 instanceof
 
 用户定义的类、`Object`、`Array`、`RegExp`、`Promise` 的 `instanceof` 正常。`Map`、`Set`、`WeakMap`、`WeakSet` 上的 `instanceof` 会抛 `TypeError: Function has non-object prototype property`：
@@ -40,7 +56,7 @@ wjsm run -e 'console.log(new Map() instanceof Map)' # TypeError
 - `Number.prototype.toLocaleString`
 - `String.prototype.localeCompare`
 
-`Date.prototype.toLocaleDateString` 可以调用，返回固定的 `YYYY-MM-DD` 形式（示例环境下为 `2026-07-29`），不接受 locale 定制。`String.prototype.normalize` 已实现，`"e\u0301".normalize("NFC").length` 得到 `1`。
+`Date.prototype.toLocaleDateString` 可以调用，返回固定的 `YYYY-MM-DD` 形式（示例环境下为 `2026-07-29`），不接受 locale 定制。`String.prototype.normalize` 已实现，`"é".normalize("NFC").length` 得到 `1`。
 
 ## URL 与 URLSearchParams
 

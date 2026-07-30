@@ -41,6 +41,18 @@ Error: invalid inspect address `notaport` (expected HOST:PORT or PORT)
 
 同时传两个时 `--inspect-brk` 生效，包括它给出的地址。
 
+> <details><summary>为什么 Inspector 必须用 Cranelift？</summary>
+>
+> 调试器要工作，需要在每行源码处能映射回指令地址、变量名、当前函数栈帧。这要求编译器在生成机器码时保留这些映射信息——Wasmtime 把这叫做「guest debug」。
+>
+> Cranelift 完整支持 guest debug（输出 DWARF 调试信息、保留行号表、保留变量名）。Winch 是「基线编译器」——只生成能跑的代码，不生成调试信息。Winch 跑得快是因为它跳过这些。
+>
+> 启用 inspector 时，wjsm 强制忽略 `WJSM_COMPILER=winch`，回退到 Cranelift。`--inspect` 不能用 Winch 跑。
+>
+> 反过来，**不**开 inspector 时 Winch 完全可以胜任——只要你不调试它。
+>
+> </details>
+
 ## 安全边界
 
 Inspector 端口没有认证。连接上来的客户端可以读取程序状态并控制执行。默认地址 `127.0.0.1` 只接受本机连接；改成 `0.0.0.0` 会把调试通道暴露给网络上的任何人，仅在可信网络中这样做。

@@ -33,6 +33,18 @@ pub struct BasicBlock {
 
 `Instruction::Phi { dest, sources: Vec<PhiSource> }`，`PhiSource { predecessor, value }` 显式记录每个前驱贡献的值。IR 不是严格 SSA——变量通过 `StoreVar`/`LoadVar` 走作用域槽——但控制流汇合处的表达式值用 Phi 合并。
 
+> <details><summary>「Phi 节点」存在的意义</summary>
+>
+> 严格 SSA 里，每个变量只有一个定义点。控制流汇合处（如 if-else）需要根据从哪条路径来选不同的值。
+>
+> IR 是「几乎 SSA」：`ValueId` 唯一一次定义（函数内），但变量通过 `StoreVar`/`LoadVar` 走作用域槽（不是 SSA）。这种半 SSA 模式的优势是 lowering 简单——不用为每条控制流路径维护单独的变量版本。
+>
+> Phi 节点专门处理「需要根据前驱选值」的场景。常见的是「try 块的完成值」：try 体执行成功返回一个值，catch 也返回一个值，块外要根据是正常完成还是异常完成选不同的值。这种「选值」用 Phi 表达。
+>
+> 物理上 Phi 由后端在 codegen 阶段展开为「前驱块尾写入、目标块头读取」——见[控制流代码生成](../backend/control-flow-codegen.md)。
+>
+> </details>
+
 ## CFG 形状约束
 
 `verify()`（`crates/wjsm-ir/src/verify.rs`）计算前驱、后继与支配集合，检查：

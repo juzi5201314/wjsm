@@ -38,9 +38,19 @@ wjsm --inspect-brk=9229 run app.ts
 
 支持的能力是运行时已实现的那部分 CDP，不等同于完整的 Node.js inspector。
 
-## `debugger` 语句
-
-`debugger` 在 wjsm 中是编译期空操作，不会触发断点，`wjsm lint` 会就此给出 `debugger-noop` 提示。请在 DevTools 里设置断点，而不是依赖 `debugger` 语句。
+> <details><summary>`debugger` 语句真的没用吗？</summary>
+>
+> 在 wjsm 里——是的，至少目前是这样。`debugger` 是 ECMAScript 规范里的语句，预期效果是「触发一个调试断点」。但 wjsm 的实现是「编译期空操作」——它在 IR 里被直接丢掉。
+>
+> 这不是 wjsm 故意偷懒，而是个有意的权衡：
+>
+> - 真正的 `debugger` 行为需要运行时拦截、调用 CDP 域实现——增加复杂度。
+> - 实际调试时没人依赖 `debugger` 设置断点；DevTools 里点行号设的断点比 `debugger` 语句更灵活。
+> - 如果代码里写了 `debugger`，多半是写完忘了删——`wjsm lint` 报 `debugger-noop` 警告正好帮上忙。
+>
+> 替代方案：在 DevTools 里设条件断点，或在代码里 `console.log` + `--inspect` 加 watcher。
+>
+> </details>
 
 ## 深入了解
 

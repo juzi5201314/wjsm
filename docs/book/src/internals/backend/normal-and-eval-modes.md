@@ -31,6 +31,16 @@ __good_color           __barrier_buf_ptr      __barrier_buf_end
 
 Normal 模式把它们作为 mutable `env` import 再 re-export；Eval 模式按同样的类型和 mutability 导入。**两侧的 mutability 必须完全一致**，否则 wasmtime 拒绝实例化，编译 eval 会退回解释器路径。
 
+> <details><summary>为什么 mutability 必须完全一致？</summary>
+>
+> WASM 的 `import`/`global` 声明是「可变性」敏感的。如果父模块声明 `global $__heap_ptr: i32 = ...`（不可变），子模块 import 写 `global $__heap_ptr: i32`（可变），wasmtime 拒绝实例化——`import` 的 mutability 必须和实际定义匹配。
+>
+> 两侧都用 `mut`，意味着父模块的 global 一定能写。这看似限制——「为什么不能父模块定义一个 const 给我读？」——但 wjsm 内部确实要写这些 global（GC 改 `__alloc_ptr`、ZGC 改 `__good_color`），所以必须可写。
+>
+> 一致性是物理层面的硬约束，不只是「约定」。任何一侧改了 mutability 都会让 eval 在 wasmtime 上跑不起来。
+>
+> </details>
+
 ## 内存导入形状
 
 Eval 模式导入的三块内存必须与父模块声明一致：
@@ -45,7 +55,7 @@ Eval 模式导入的三块内存必须与父模块声明一致：
 
 ## helper 归属
 
-Normal 模式下 10 个 helper（`obj_new`、`obj_get`、`obj_set`、`obj_delete`、`arr_new`、`elem_get`、`elem_set`、`string_eq`、`to_int32`、`get_proto_from_ctor`）从 `wjsm_support` 导入，换取 Wasmtime 编译量的下降。Eval 模式没有独立 support 实例，仍走内联 helper 路径。这一取舍记录在 ADR 0004。
+Normal 模式下 10 个 helper（`obj_new`、`obj_get`、`obj_set`、`obj_delete`、`arr_new`、`elem_get`、`elem_set`、`string_eq`、`to_int32`、`get_proto_from_ctor`）从 `wjsm_support` 导入，换取 Wasmtime 编译量的下降。Eval 模式没有独立 support instance，仍走内联 helper 路径。这一取舍记录在 ADR 0004。
 
 ## 深入了解
 

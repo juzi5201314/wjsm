@@ -45,6 +45,35 @@ wjsm --browser --condition development run app.mjs  # → browser.js
 
 `--browser` 同时启用 `package.json` 的 `browser` 字段。该字段有两种形式：字符串表示替换包入口，对象表示按路径重映射，值为 `false` 时该模块解析为空模块。不传 `--browser` 时字段被完全忽略。
 
+> <details><summary>`browser` 字段的两种形式具体怎么用？</summary>
+>
+> 字符串形式（替换入口）：
+>
+> ```json
+> {
+>   "browser": "./browser/index.js"
+> }
+> ```
+>
+> 整个包被替换为 `./browser/index.js`。常用于「这个包有 Node-only 实现，要换成浏览器实现」的情况。
+>
+> 对象形式（按路径重映射）：
+>
+> ```json
+> {
+>   "browser": {
+>     "./fs.js": "./browser-fs.js",
+>     "./crypto.js": false
+>   }
+> }
+> ```
+>
+> 包内具体的某个文件被替换为另一个文件，或被屏蔽（`false`）。常用于「包内有少量 Node API 调用，那些文件在浏览器下不可用」的情况。
+>
+> 两种形式可以混用。`--browser` 同时开启两种，`node` 行为下则完全忽略这个字段。
+>
+> </details>
+
 ## 配置文件
 
 两项都能写进 `wjsm.toml`：

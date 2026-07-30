@@ -1,10 +1,10 @@
 # 用户手册
 
-这本手册讲怎么用 wjsm：安装、运行代码、编译成 WebAssembly、配置运行时、排查问题。
+这本手册讲怎么把 wjsm 装上、跑起来、让它干活——安装、运行代码、编译成 WebAssembly、调配置、查命令参数、定位报错。
 
-wjsm 把 JavaScript/TypeScript 提前编译成 WebAssembly，再由内置的 Wasmtime 宿主执行，整条链路不含 V8。当前版本 `0.1.0`，ECMAScript 与 Node.js 兼容层都还是子集，具体覆盖范围以 fixture 与 Test262 结果为准。
+wjsm 把 JavaScript/TypeScript 提前编译成 WebAssembly，再由内置的 Wasmtime 宿主执行，整条链路里没有 V8 参与。当前版本 `0.1.0`，ECMAScript 和 Node.js 兼容层都还只是子集——具体支持到什么程度以 `fixtures/` 目录里的 1300+ 行为用例和 Test262 的实际通过情况为准。
 
-## 从哪里开始
+## 怎么用这本手册
 
 | 你的目标 | 去哪一章 |
 | --- | --- |
@@ -19,8 +19,8 @@ wjsm 把 JavaScript/TypeScript 提前编译成 WebAssembly，再由内置的 Was
 | 有报错要定位 | [故障排查](troubleshooting/index.html) |
 | 查表 | [用户参考](reference/index.html) |
 
-## 阅读约定
+## 几个贯穿全书的约定
 
-- 命令示例统一写成 `wjsm ...`。如果你还没把二进制放进 `PATH`，把它换成 `./target/debug/wjsm` 或 `cargo run --`。
-- 标注「未实现」的能力不要在生产路径上依赖，例如 `--target jit`。
-- 章末的「深入了解」指向[内部手册](../internals/index.html)，讲的是实现机制。使用 wjsm 不需要读那一半。
+- 命令示例统一写成 `wjsm ...`。如果你还没把二进制放进 `PATH`，把它换成 `./target/debug/wjsm` 或 `cargo run --` 就行。
+- 标注「未实现」的能力不要在生产路径上依赖——比如 `--target jit` 传了会直接报错退出。
+- 章末的「深入了解」链到[内部手册](../internals/index.html)，讲的是实现机制。用 wjsm 不需要读那一半；想了解「为什么这样设计」再去翻。

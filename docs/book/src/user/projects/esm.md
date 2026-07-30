@@ -40,6 +40,19 @@ const mod = await import("./a.mjs");
 console.log(mod.v);
 ```
 
+> <details><summary>动态 `import()` 为什么是返回 Promise 的「异步」？</summary>
+>
+> ESM 规范里 `import()` 故意设计成返回 Promise，目的是把模块加载的异步性暴露给调用方。考虑：
+>
+> - **网络模块**：跨网络加载的模块一定有网络延迟，Promise 是统一的「我稍后才能给结果」抽象。
+> - **本地模块**：本地模块虽然快，但「不阻塞调用方代码」这件事仍然是好的——允许主流程继续执行、不在加载时卡死 UI。
+>
+> 这个设计在浏览器里是必须的（fetch 模块天然异步），在 Node.js 里是历史包袱（CJS 的 `require` 是同步的），在 wjsm 里是「选择了 ESM 就要接受这个语义」。
+>
+> 实际影响：你的代码里 `await import(...)` 是同步逻辑——`await` 会等 Promise resolve，所以读起来像同步，但底层是异步的。把它和 `require` 混用会出错。
+>
+> </details>
+
 ## 何时按 ESM 处理
 
 格式判定的顺序是扩展名优先，然后看最近的 `package.json`：
@@ -54,13 +67,11 @@ console.log(mod.v);
 | `.js` + 无 `package.json`，无 CJS 语法 | ESM |
 | `.ts` / `.tsx` / `.jsx` | 无 CJS 语法时为 ESM |
 
-包目录里的 `.js` 文件按该包的 `type` 判定。给一个没有 `"type"` 字段的包写 `import`/`export` 会报
-`Cannot use import/export syntax in CommonJS module`——这是格式判定的结果，不是语法错误。
+包目录里的 `.js` 文件按该包的 `type` 判定。给一个没有 `"type"` 字段的包写 `import`/`export` 会报 `Cannot use import/export syntax in CommonJS module`——这是格式判定的结果，不是语法错误。
 
 ## 解析规则
 
-相对路径的扩展名可以省略，按 `js`、`ts`、`mjs`、`cjs`、`jsx`、`tsx` 顺序尝试；指向目录时找该目录下的
-`index.<ext>`，顺序相同。裸包名走 `node_modules` 查找，见[包解析与条件导出](package-resolution.md)。
+相对路径的扩展名可以省略，按 `js`、`ts`、`mjs`、`cjs`、`jsx`、`tsx` 顺序尝试；指向目录时找该目录下的 `index.<ext>`，顺序相同。裸包名走 `node_modules` 查找，见[包解析与条件导出](package-resolution.md)。
 
 ## 内置模块
 

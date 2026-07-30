@@ -33,8 +33,22 @@ lib 1 2
 | `require.resolve(spec)` | 可用，返回解析后的路径字符串 |
 | `require.cache` | 可用，实时反映已加载模块 |
 
-模块只在首次 `require` 时求值，后续拿到同一个 `module.exports`。上面的例子里 `bump()` 两次返回 1 和 2，
-说明 `n` 是模块级共享状态。
+模块只在首次 `require` 时求值，后续拿到同一个 `module.exports`。上面的例子里 `bump()` 两次返回 1 和 2，说明 `n` 是模块级共享状态。
+
+> <details><summary>「CommonJS 转换」到底做了什么？</summary>
+>
+> 严格说 wjsm 没有 CJS 运行时——它把 CJS 在编译期「重写」成 ESM 风格：
+>
+> - 顶层的 `const x = require('./p')` → 改写成 `import x from './p'`（直接用用户给的变量名）。
+> - 控制流里的 `require(...)`（如函数体内的）保留为运行时调用——这部分不能静态改写。
+> - `module.exports = obj` → 改写成 `export default obj`。
+> - `module.exports.x = v` → 改写成 `let __cjs_x = v`，同时记入命名导出。
+>
+> 这样原本写 CJS 的代码在 wjsm 里的运行时路径和 ESM 完全一致——一套语义、一套模块图、一套 bundle 流程。代价是某些 CJS 极端用法（动态改 `module.exports`、运行时确定导出名）不支持。
+>
+> 这套机制的好处是：用户写 CJS，但 wjsm 内部只需要维护 ESM 一条路。坏处是：用户偶尔会写出「CJS 转换不识别」的代码，原样保留在产物里——这种情况下报错信息可能是「`module` is not defined」之类的，调试时要意识到「这是 wjsm 跳过了 CJS 转换」。
+>
+> </details>
 
 ## 从 ESM 导入 CommonJS
 
@@ -44,8 +58,7 @@ import lib from "./lib.cjs";
 console.log(lib.name, lib.bump());
 ```
 
-`module.exports` 作为默认导出。CommonJS 模块没有静态导出记录，因此不要指望具名导入
-（`import { bump } from "./lib.cjs"`）能被静态分析出来。
+`module.exports` 作为默认导出。CommonJS 模块没有静态导出记录，因此不要指望具名导入（`import { bump } from "./lib.cjs"`）能被静态分析出来。
 
 ## Node.js 内置模块
 
@@ -56,9 +69,7 @@ import path from "node:path";
 import { EventEmitter } from "events";
 ```
 
-可用清单：`path`、`util`、`events`、`assert`、`url`、`querystring`、`os`、`fs`、`fs/promises`、
-`crypto`、`stream`、`http`、`net`、`https`、`zlib`、`child_process`、`dgram`、`tls`、
-`worker_threads`、`inspector`、`cluster`、`vm`、`async_hooks`、`perf_hooks`。
+可用清单：`path`、`util`、`events`、`assert`、`url`、`querystring`、`os`、`fs`、`fs/promises`、`crypto`、`stream`、`http`、`net`、`https`、`zlib`、`child_process`、`dgram`、`tls`、`worker_threads`、`inspector`、`cluster`、`vm`、`async_hooks`、`perf_hooks`。
 
 带 `node:` 前缀导入清单外的名字会在构建模块图时就失败：
 
@@ -68,8 +79,7 @@ Failed to build module graph: Unknown built-in module 'node:not_real'
 
 不带前缀的未知名字会按普通包名去 `node_modules` 查找，报的是「找不到模块」。
 
-每个内置模块实现的是常用子集，不是完整 Node API。逐模块状态见
-[Node.js 兼容能力](../runtime/node-compatibility.md)。
+每个内置模块实现的是常用子集，不是完整 Node API。逐模块状态见 [Node.js 兼容能力](../runtime/node-compatibility.md)。
 
 ## 深入了解
 

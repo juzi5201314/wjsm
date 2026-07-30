@@ -23,12 +23,27 @@ pub(crate) struct Scope {
 - `initialised`：`false` 表示处于 TDZ。
 - `implicit_arguments`：仅对 `emit_arguments_init` 创建的隐式 `arguments` 为 true，用于区分显式声明的 `arguments`。
 
+
+<details>
+<summary>为什么用 <code>usize</code> 索引而不是 <code>Rc&lt;Scope&gt;</code>？</summary>
+
+<code>Rc&lt;Scope&gt;</code> 看起来更「现代」——自动管理生命周期、可变引用计数。但 lowering 阶段会反复修改作用域（添加绑定、移出 TDZ、嵌套进入退出），<code>Rc</code> 每次都涉及引用计数更新。
+
+用 `usize` 索引（arena 模式）的代价是手动管理生命周期：删除作用域要手动从 arena 移除，引用了已删除 id 的代码要小心。好处：
+
+- 没有引用计数开销，纯整数比较。
+- 父链遍历是 <code>Vec&lt;Option&lt;usize&gt;&gt;</code> 的索引跳转，缓存友好。
+- 调试时可以打印出整个作用域树（arena 是个普通 Vec）。
+
+这是经典的「用裸数据结构换性能」取舍。lowering 阶段对作用域访问频繁（每次 `lookup` 都走父链），值得为它优化。
+</details>
+
 ## 登记规则
 
 `declare` 按声明种类选择目标作用域：
 
 - `let` / `const` 进当前（最内层）作用域。
-- `var` 沿父链上溯到最近的 `Function` 作用域，由 `function_scope_for_scope` 定位。
+- `var` 沿父链上溯到最近的 `ScopeKind::Function`，由 `function_scope_for_scope` 定位。
 
 同一作用域内重复声明会报 `cannot redeclare identifier ... in the same scope`。唯一例外是 `var` 重复声明 `var`，这与 ECMAScript 一致，直接返回已有作用域 id。
 

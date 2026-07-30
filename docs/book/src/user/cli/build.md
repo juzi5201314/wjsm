@@ -58,6 +58,18 @@ wjsm build app.ts -o /tmp/app.wasm --stats --time
 
 生成的模块依赖 wjsm 的宿主 import 和 support 模块，不是能丢给任意 WASI 运行时直接跑的独立程序。要执行它，用 wjsm 自身，或在 Rust 里通过 `wjsm-host-wasm` 提供宿主能力。
 
+> <details><summary>为什么 `wjsm build` 不产出独立可执行文件？</summary>
+>
+> 这是一个被反复问的问题，简短回答是：因为 wjsm 的设计就是「JS 逻辑」+「wjsm 宿主」两个东西分离。
+>
+> 长一点的解释：JS 程序用到的东西里，有相当一部分（属性查找、对象分配、字符串处理、Promise 各种方法……）需要跨语言调用——你不能让 WASM 模块自己实现「`Array.prototype.map` 的全部行为」，那是一个完整的 ECMAScript 语义实现。
+>
+> wjsm 的拆分是：编译产物只关心「JS 怎么写」和「用户代码本身的控制流」，把这些编成 WASM；所有「JS 怎么执行」（属性查找走原型链、对象分配走堆、Promise 链注册 reaction……）放在宿主侧实现。
+>
+> 这意味着产物离开 wjsm 宿主就跑不起来。如果想要独立 WASM 产物，需要把这套宿主能力也编进 WASM 模块里——技术上可以，但会大幅膨胀产物体积，并且把 WASM 当 CPU 用的好处（沙箱、跨平台）会被「自带一个 JS 引擎」这件事抵消。
+>
+> </details>
+
 ## 深入了解
 
 - [WASM Import、Export 与主模块 ABI](../../internals/backend/imports-exports-and-abi.md)

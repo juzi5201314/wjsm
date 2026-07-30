@@ -39,6 +39,14 @@ stderr 只承载 wjsm 自己的诊断：
 
 `wjsm run -e 'process.exit(5)'` 退出码为 5。缺少输入参数（既无文件也无 `-e`）属于编译阶段错误，退出码为 1；子命令拼写错误由 Clap 拒绝，退出码为 3。
 
+> <details><summary>为什么「编译错误」和「运行时错误」要分开？</summary>
+>
+> 同样的答案出现在不同地方，所以只强调核心：CI 流水线靠退出码判断失败类型。代码合到主分支后跑 `wjsm test` 失败 = 退出码 1，是代码 bug；服务跑着跑着崩了 = 退出码 2，是运行时问题。两种失败的处理方式不同：前者阻塞 PR，后者该发报警。
+>
+> 这也影响 debug 工具的设计：trace、log、错误信息都按这个分类组织。看到 `Runtime error:` 你知道是运行时问题；看到 `Error: error: ...` 你知道是代码里有语法或语义 bug。
+>
+> </details>
+
 ## 深入了解
 
 - [标准流与退出码在 host 侧的 owner](../../internals/host-runtime/instantiation-and-lifecycle.md)

@@ -29,6 +29,23 @@ Runtime error: JavaScript heap budget exhausted: requested 144 bytes with 838860
 
 这是预算耗尽，不是 GC 失效。要判断是真的需要更多内存还是存在对象泄漏，配合 `WJSM_GC_LOG=1` 观察回收后存活量的走势。
 
+> <details><summary>「堆预算耗尽」和「GC 失效」怎么区分？</summary>
+>
+> 两者都表现为「程序占用内存涨上去下不来」，但原因不同：
+>
+> - **堆预算耗尽**：分配量达到 `--max-heap-size` 设置的上限，程序以错误退出。日志里会出现 `JavaScript heap budget exhausted: requested X with Y/Y bytes used`。
+> - **GC 失效**：分配量没到上限，但 GC 回收后存活量一直涨（没有下降趋势）。通常是对象泄漏或意外的全局引用。
+>
+> 调试方法：
+>
+> 1. 先用 `WJSM_GC_LOG=1` 看 GC 周期。回收前后存活量的差是「真在用」，差很小是「泄漏了」。
+> 2. 如果存活量稳定（差值在某个范围内波动），不是泄漏，是真的需要更多内存——加大 `--max-heap-size`。
+> 3. 如果存活量单调增长，确实是泄漏——加 leak 检测或审查全局变量。
+>
+> 「堆预算耗尽」本质是硬性 OOM（out-of-memory），是有意为之的程序终止信号，不是 GC bug。
+>
+> </details>
+
 ## 影子栈
 
 影子栈是与对象堆分离的一块线性内存，承载变长参数传递和函数调用期间需要保留的值。它冷启动只占 64 KiB，按需增长，触到软上限时抛出 `RangeError`。

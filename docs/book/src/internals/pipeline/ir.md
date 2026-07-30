@@ -14,6 +14,18 @@ pub type Program = Module;
 
 `Module` 持有四项状态：常量池 `Vec<Constant>`、函数表 `Vec<Function>`、`script_mode` 标记、可选的 `source_file`（供运行时错误堆栈映射）。
 
+> <details><summary>「零依赖」crate 有什么好处？</summary>
+>
+> `wjsm-ir` 只依赖 Rust 标准库。没有 `swc_core`、没有 `wasmtime`、没有 `serde`。这意味着：
+>
+> - 编译速度快（无外部 crate 编译）。
+> - 任何层都可以引用它，不引入工具链负担。
+> - 「IR 是后端无关的」这一性质在物理层面得到保证——不可能出现「IR 里藏着 wasmtime 类型」的情况。
+>
+> 反过来，新加 IR 指令时要手工写序列化、Display 实现，没有现成的 `#[derive(Serialize)]` 帮上忙。这是「零依赖」的代价，可以接受。
+>
+> </details>
+
 ## 阶段间契约
 
 | 方向 | 内容 |

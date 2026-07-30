@@ -21,6 +21,19 @@ wjsm size dist/app.wasm
 
 生成的模块不是独立程序：它 import 数百个宿主函数、三块内存（含 shared memory64 对象堆）和一张函数表。分发时必须同时说明由 wjsm 或基于 `wjsm-host-wasm` 的宿主来实例化。详见[WASM 产物与宿主要求](../output/wasm-artifacts.md)。
 
+> <details><summary>「产物能分发」实际意味着什么？</summary>
+>
+> wjsm 产物的「可分发」和 Node 二进制的「可分发」是两种不同的东西：
+>
+> - **Node 二进制**：自包含可执行文件，双击能跑。
+> - **wjsm 产物**：WASM 字节码 + 需要 wjsm 宿主（或 wjsm 自身）来运行。
+>
+> 这意味着分发的「最小集」至少是 `app.wasm` + `wjsm` 二进制（让用户运行）。如果你的程序要访问外部 npm 包，那些包的代码已经被 bundle 进 `.wasm`——所以再次强调，**改依赖要重新编译**。
+>
+> 对于「嵌入到 Rust 宿主」的场景：你的程序是 Rust 进程的一部分，Rust 进程用 `wjsm-runtime` crate 把 `.wasm` 加载进来，宿主提供那 500+ 个 import 函数。
+>
+> </details>
+
 ## 边构建边执行
 
 ```bash

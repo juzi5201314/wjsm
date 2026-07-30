@@ -34,6 +34,19 @@ WJSM_STARTUP_SNAPSHOT_DEBUG=1 wjsm run app.js
 
 快照与预编译 support 模块带 ABI 指纹，版本不匹配时运行时会自行回退到冷启动路径，不会加载过期字节。若怀疑残留，清一次缓存重跑。
 
+> <details><summary>ABI 失配后到底是「拒绝加载」还是「静默回退」？</summary>
+>
+> 两种情况都存在，要看具体是哪层失配：
+>
+> - **启动快照失配**：`embedded_startup_snapshot_view` 返回 `None`，wjsm 走 cold bootstrap。这一步是「静默回退」——你不一定能从行为上看出区别，只是启动时间变长。
+> - **运行时宿主 ABI 失配**（比如加载了别的 wjsm 版本编译的 `.wasm`）：直接报错拒绝加载，进程以非零退出。
+>
+> 区分两者的简单方法：开 `WJSM_STARTUP_SNAPSHOT_DEBUG=1`，快照失配会在 stderr 打印 `embedded snapshot abi hash mismatch; falling back to cold startup`。运行时失配不会用这个变量。
+>
+> 实际工作里「静默回退」是好事——重启旧版本的 wjsm 不会因为新版本的二进制不认老快照而直接崩溃。代价是失去一些性能，但启动仍然能完成。
+>
+> </details>
+
 ## 深入了解
 
 - [启动快照边界](../../internals/startup/startup-snapshot.md)

@@ -40,6 +40,18 @@ wjsm dump-ir -e 'function outer(){ let a = 1; return () => a }'
 
 `async` 箭头走 `lower_async_arrow_expr`，转入 async 降级路径。
 
+> <details><summary>箭头函数的 this 为什么是「词法 this」？</summary>
+>
+> 这是 ECMAScript 规范明确的行为：箭头函数不绑定自己的 `this`，而是捕获外层词法 this。如果外层是函数方法，this 就是调用者；如果是普通函数或模块，this 是 `undefined`（严格模式）。
+>
+> 实现上的难点是：WASM 调用约定要求函数接受 env 和 this 作为参数。如果箭头函数用「词法 this」，它需要从 env 里读，而不是从 this 形参读。
+>
+> wjsm 的做法：箭头函数仍然声明 `$this` 形参（满足调用约定），但函数体内不读这个形参——它通过 `env.$this` 字段读取捕获的词法 this。
+>
+> 性能上看，每次调用箭头函数都要走 env 查 this，比普通函数的「直接传 this 形参」多一次读。但词法 this 是规范要求，没法绕开。
+>
+> </details>
+
 ## 类
 
 类降级位于 `lowerer_classes_ts/`（`mod.rs` 约 914 行，`class_body.rs` 约 716 行）。要点：

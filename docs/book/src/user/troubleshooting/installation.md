@@ -24,6 +24,22 @@ Error: Failed to read '/tmp/nope-xyz.js': No such file or directory (os error 2)
 
 `run` 在文件不存在时还会检查 `package.json` 的 `scripts`，若存在同名脚本则改为执行该脚本。因此拼错文件名有时表现为「执行了别的东西」，而不是报错。
 
+> <details><summary>「执行了别的东西」为什么不报错？</summary>
+>
+> 这是个有意的设计：`wjsm run start` 这样的命令应该执行 `package.json` 里的 `start` 脚本，而不是要求用户必须先 `npm run start`。
+>
+> 实现方式是：先把 `<name>` 当文件路径解析，找不到再降级到 npm script。这个降级是无声的，因为：
+>
+> - 大多数情况下这是用户期望的行为（命令名而不是文件路径）。
+> - 如果每次都报错「文件不存在」会很烦，scripts 模式就废了。
+>
+> 代价是真正的「拼错文件名」也被静默吞掉。怀疑这种情况时：
+>
+> 1. 加 `--` 显式分隔：`wjsm run -- start` 不会触发降级。
+> 2. 看输出——scripts 通常是 `wjsm run main.js` 之类，文件不存在是直接 `Error: Failed to read ...`。
+>
+> </details>
+
 ## 命令行参数被拒绝
 
 参数错误由 Clap 报出并以退出码 `3` 结束。两个常见原因：

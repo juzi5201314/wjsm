@@ -37,12 +37,22 @@
 
 ```text
 error: Expression expected
- --> input.ts:1:11
+  --> input.ts:1:11
 1 | const x = ;
   |           ^
 ```
 
 `format_byte_diagnostic` 是公开的，语义层复用它输出同样格式的诊断，因此前端两个阶段的错误在用户看来是一致的。
+
+> <details><summary>为什么不直接用 SWC 的错误格式？</summary>
+>
+> SWC 自带的错误格式是「`error: parse failed: <message> at <line>:<col>`」——和 rustc 风格有差异，没有源码片段。
+>
+> wjsm 想用 rustc 风格：清晰的「`-->`」分隔符、单行源码摘录、caret 标记位置。这是用户在其他 Rust 工具里习惯的格式。
+>
+> 所以 parser 自己写了一个 `format_byte_diagnostic`：接受 SWC 错误，从 `SourceMap` 查行列，重新渲染成 rustc 风格。
+>
+> </details>
 
 ## 不做的事
 

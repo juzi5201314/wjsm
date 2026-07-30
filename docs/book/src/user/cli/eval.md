@@ -20,7 +20,7 @@ wjsm eval 'const x = 1; x + 1'
 
 ```text
 Error: error: Expression expected
- --> input.ts:1:14
+  --> input.ts:1:14
 1 | console.log((const x=1; x+1))
   |              ^^^^^
 ```
@@ -34,6 +34,17 @@ wjsm run -e 'const x = 1; console.log(x + 1)'
 ```
 
 因为结果由 `console.log` 打印，输出格式与 `console.log` 一致：字符串不带引号，对象按 `console.log` 的渲染规则展开。
+
+> <details><summary>`eval` 子命令 vs `run -e` 的本质区别</summary>
+>
+> 两个子命令在外观上很像——都是「传一行代码让 wjsm 跑」，但它们的执行路径完全不同：
+>
+> - **`eval`** 走 IR 的「单表达式编译模式」，生成专门用于求值的轻量 WASM，没有完整的函数入口，没有完整的 bootstrap。代价是只能跑一个表达式。
+> - **`run -e`** 走完整的「主模块编译模式」——和 `wjsm run app.js` 用同一条流水线。代价是每次都要做完整的启动 + 执行流程。
+>
+> 日常调试哪个值是多少，用 `eval`；写多行脚本验证逻辑，用 `run -e`。前者更快但能力受限，后者更慢但什么都能做。
+>
+> </details>
 
 ## 深入了解
 

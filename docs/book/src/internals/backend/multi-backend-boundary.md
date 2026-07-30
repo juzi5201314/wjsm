@@ -52,6 +52,21 @@ match target {
 
 真正要实现的是 `ExecContext`（builtins 完整能力集）和 `JsBackend`（编译执行入口）。完整六步接入路径见 `docs/backend-implementation-guide.md`。
 
+> <details><summary>「六步接入法」具体是哪六步？</summary>
+>
+> 1. **实现 `HeapMemory` + `GrowableHeapMemory`**：提供堆内存读写和增长能力。
+> 2. **实现 `ExecContext`**：把 builtins 需要的约 330 个方法接到自己的运行时。
+> 3. **实现 `JsBackend::compile`**：从 IR 编译到目标格式（native code、WASM、字节码……）。
+> 4. **实现 `JsBackend::execute`**：驱动生成的代码并收集输出。
+> 5. **引擎集成**：让后端能被 wasmtime 风格的「engine 池 + module + store + linker」流程调度。
+> 6. **测试验证**：跑 fixture 和 test262，确保语义兼容。
+>
+> 步骤 1-2 是「实现内存和上下文」，是 90% 的工作量；步骤 3-4 是「实现编译执行」，因后端形态而异；步骤 5-6 是「接进 wjsm 体系」。
+>
+> 当前只有一个真后端（wasmtime + WASM）和一个 stub（`JitBackend`），证明契约可以工作。
+>
+> </details>
+
 ## 深入了解
 
 - [JIT 后端 stub 的当前状态](jit-backend.md)

@@ -45,12 +45,28 @@ module {
 | `--root <DIR>` | 多文件入口先 bundling 再 dump |
 | `--script` | 按 script 而不是 module 解析 |
 
-`--func` 匹配的是 IR 中的函数名。找不到时报 `function 'nope' not found`，退出码 1。
-函数名可以先用不带 `--func` 的输出确认，例如 `fn @foo [needs_prototype] ...`。
+`--func` 匹配的是 IR 中的函数名。找不到时报 `function 'nope' not found`，退出码 1。函数名可以先用不带 `--func` 的输出确认，例如 `fn @foo [needs_prototype] ...`。
 
 终端有颜色时输出会着色，`--no-color` 或重定向到文件时是纯文本。
 
 同样的 IR 也可以用 `wjsm build --stage lower` 得到。
+
+> <details><summary>怎么把 IR 输出 diff 用作回归检测？</summary>
+>
+> 仓库里有 `fixtures/semantic/*.ir`——123 个 lowering 快照。每次改 lowering 逻辑，这些快照都会和实际输出对比。失败时你看到的不是 fixture 失败，而是「IR 形状变了」这件事本身。
+>
+> 想自己项目也这么做：
+>
+> ```bash
+> wjsm dump-ir app.ts > /tmp/expected.ir
+> # 改代码
+> wjsm dump-ir app.ts > /tmp/actual.ir
+> diff /tmp/expected.ir /tmp/actual.ir
+> ```
+>
+> 局限：`dump-ir` 输出依赖常量池顺序、指令编号等，这些是 lowering 内部决定的细节。即使语义没变，编号顺序变了也会产生 diff。需要更稳定的对比时直接看 WAT 或 fixture 输出。
+>
+> </details>
 
 ## 深入了解
 

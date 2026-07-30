@@ -20,6 +20,16 @@ WASM `table` 是 `funcref` 类型，初始大小在 Pass 1 按函数数量确定
 
 用户函数统一用 Type 12：`(i64, i64, i32, i32) -> i64`，四个参数是 env 对象、this 值、影子栈参数基址、参数个数。这让任意元数的 JS 函数共用一个 type index。
 
+> <details><summary>为什么所有用户函数用同一个 type index？</summary>
+>
+> WASM 的 `call_indirect` 在调用时检查 table 中函数的 type 是否匹配指定 type index。如果每个函数有不同 type，table 里就要存「type 不同的函数」，调用时再校验——开销大且复杂。
+>
+> 用同一个 type index 12 让所有 JS 函数「形状一致」：四个参数，返回 i64。具体的参数语义由函数体自行从影子栈读，不通过 WASM 形参表达。
+>
+> 副作用：函数调用是固定开销的（4 个参数 + 影子栈读参数），不能像 C 那样「参数少就快」。但这种开销是常数的，不随调用规模增长。
+>
+> </details>
+
 ## 闭包 env 布局
 
 语义层的逃逸分析算出 `captured_names`，后端据此布局 env 对象：

@@ -38,6 +38,18 @@ pub struct ModuleBundler {
 
 `RuntimeEntryBundle` 额外携带 `entry_module_id` 和 `module_id_span`：运行时把新 bundle 的 module id 偏移到已有区间之后，避免与已加载模块冲突。偏移由 `wjsm_ir::offset_module_id` 完成，溢出返回 `ModuleIdOffsetError` 而非 panic。
 
+> <details><summary>为什么 module id 需要偏移？</summary>
+>
+> 运行时场景下，进程里可能同时存在多个 bundle（eval、动态 import 加载的新模块）。每个 bundle 都有自己的 module id 编号。
+>
+> 如果不偏移，两个 bundle 的 module id 0 可能指不同模块，运行时查找会冲突。
+>
+> 偏移的做法是：第二个 bundle 的所有 module id 加一个基数（base），保证不同 bundle 编号不重叠。基数由前一个 bundle 的 `module_id_span`（id 范围）决定。
+>
+> 这就是为什么 `offset_module_id` 是 `checked_add`——理论上一个进程可以加载无数模块，溢出是真实风险，返回 `ModuleIdOffsetError` 让调用方决定怎么办。
+>
+> </details>
+
 ## 与单文件路径的关系
 
 CLI 的 `build_compile_plan` 决定走 bundle 还是单文件：只有含 `import` / `export` / CJS 标记，或显式传 `--root` 时才进入本章路径。纯脚本直接 `parse → lower_module`，不建图。

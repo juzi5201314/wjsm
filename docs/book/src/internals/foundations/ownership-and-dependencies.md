@@ -51,6 +51,20 @@ ADR 0011–0013 确立了三条硬边界：
 
 反过来，如果语义算法直接持有 `Caller<RuntimeState>`，它们就永久绑定 Wasmtime——这正是 ADR 0012 之前的状态，也是拆出 `wjsm-builtins` 的原因。
 
+> <details><summary>这些边界如何用代码检查保证？</summary>
+>
+> 物理上没有自动化检查（不像 `cargo test` 那样跑过就放心）。但有几条「手工 grep」的检查可以快速验证：
+>
+> - `grep -r "wasmtime" crates/wjsm-builtins/` 应该没结果。
+> - `grep -r "wasmtime" crates/wjsm-semantic/` 应该没结果。
+> - `grep -r "wasm-encoder" crates/wjsm-ir/` 应该没结果。
+>
+> 这些是「一致性」检查，不是「正确性」检查——通过不证明绝对没问题，但不通过一定有问题。
+>
+> 实际工作里 PR review 时看到「在 `wjsm-builtins` 里 import wasmtime 类型」会被立刻打回。这条边界靠社区维护，不靠工具。
+>
+> </details>
+
 ## 单一事实来源
 
 同一事实只允许有一个 owner，其他位置引用而不复制：

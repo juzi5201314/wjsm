@@ -31,6 +31,18 @@
 
 时间统计上，bundle 分支把整段耗时记入 `parse_us`/`lower_us`/`compile_us` 中对应目标阶段的一格，`--time` 输出因此在 bundle 与单文件之间形态一致。
 
+> <details><summary>为什么 bundle 输出和单文件输出是同一类型？</summary>
+>
+> 设计选择，后端代码因此简单。
+>
+> 替代方案是「bundle 阶段产出一个 `BundleProgram` 类型，包含多个模块；后端要能处理这种类型」。这样后端要专门写「处理多模块」的代码——比如函数表要重新编号，ModuleId 全部偏移，等等。
+>
+> 当前做法：bundle 阶段把所有模块的 IR 合并成一个 `Program`，每个模块的函数、常量都按全局顺序排好。后端拿到 `Program` 时根本不知道「这是 bundle 来的还是单文件」——它就是个普通的 `Program`。
+>
+> 代价：合并要做 ModuleId 偏移、变量名加作用域前缀等额外工作；好处是后端代码路径只有一条。
+>
+> </details>
+
 ## 深入了解
 
 - [模块图构建与解析器实现](../modules/graph-and-resolution.md)

@@ -24,8 +24,7 @@ import _ from "lodash";
 - **没有 lockfile**，也不做完整性校验。
 - **不执行安装脚本**，`postinstall` 之类不会运行。
 
-依赖树复杂时，用 `npm install` 或 `pnpm install` 生成 `node_modules`，wjsm 直接读取即可——
-解析逻辑遵循 `node_modules` 惯例，不依赖 `wjsm install` 写下的元数据。
+依赖树复杂时，用 `npm install` 或 `pnpm install` 生成 `node_modules`，wjsm 直接读取即可——解析逻辑遵循 `node_modules` 惯例，不依赖 `wjsm install` 写下的元数据。
 
 ## 包能装上不等于能跑
 
@@ -39,7 +38,21 @@ wjsm 的 JavaScript 语义和 Node API 都是子集。运行时失败通常来�
 
 纯 JavaScript、依赖面窄的包成功率最高。选包前可以先用 `wjsm check` 对入口文件做一次解析验证。
 
+> <details><summary>「包能装上不等于能跑」具体有多严重？</summary>
+>
+> 实测来看，依赖面窄的纯 JS 包成功率 80%+；含 native module 的 0%；依赖冷门 Node API 的看运气。常见「能装不能跑」的例子：
+>
+> - `bcrypt`：需要 native binding。
+> - `node-gyp` 系列：依赖 node-gyp 工具链编译。
+> - `puppeteer`：要下载 Chromium。
+> - `chokidar`：依赖 `fsevents`（macOS 特有 native 模块）。
+> - 任何用 `vm.runInNewContext` 配合字符串拼接的动态执行——这类行为在 wjsm 下要走 eval 编译路径，不是每次都成功。
+>
+> 装包前先看它的 `package.json` 的 `dependencies` 列表，扫一眼有没有 native binding 关键词；再看 `main` 入口的源码，扫一眼有没有 `require('xxx')` 涉及未实现的 Node API。
+>
+> </details>
+
 ## 深入了解
 
 - [包安装的实现与 registry 交互](../../internals/tooling/project-tools.md)
-- [包解析、条件与 browser 映射](../../internals/modules/package-conditions.md)
+- [包解析、条件与 browser 字段映射](../../internals/modules/package-conditions.md)

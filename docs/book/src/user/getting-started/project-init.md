@@ -62,6 +62,19 @@ wjsm run start
 - `--` 之后的参数追加到脚本命令末尾，含特殊字符时会加引号。
 - 脚本模式不支持 `--watch`。
 
+> <details><summary>「脚本模式不支持 --watch」——如果想在脚本里监听文件改动怎么办？</summary>
+>
+> `wjsm run --watch` 的实现是 fork 一个子进程监听文件、改了之后重新走编译+执行。`package.json scripts` 模式下 wjsm 自身就是子进程，再 fork 一次就要在 `pre<name>` 之类的脚本钩子里管理生命周期，复杂度太高。
+>
+> 想要这个能力的两种 workaround：
+>
+> 1. **直接 `wjsm run --watch main.js`**，绕开 `npm scripts`。你失去了 `node_modules/.bin` 自动加到 `PATH` 的便利，但拿回了 `--watch`。
+> 2. **用外部 watcher 工具**（`watchexec`、`entr`、`nodemon`）调用 `wjsm run main.js`，本质上等同于手动实现 wjsm 那一段 fork 逻辑。
+>
+> 短期看 wjsm 不太会做「脚本模式 + watch」的组合——这两者的语义有冲突，强行合并会引入难以解释的边界。
+>
+> </details>
+
 ## 深入了解
 
 - [项目初始化、包安装与 Shell 补全的实现](../../internals/tooling/project-tools.md)

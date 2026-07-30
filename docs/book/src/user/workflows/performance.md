@@ -27,6 +27,23 @@ WJSM_OPT_LEVEL=none wjsm run app.ts   # 关闭优化，进一步缩短编译时�
 
 Winch 适合频繁改代码、每次只跑一遍的场景；长时间运行的程序用默认的 Cranelift。启用 inspector 时会强制 Cranelift，Winch 设置被忽略。
 
+> <details><summary>Winch vs Cranelift：怎么选？</summary>
+>
+> 两者都是 wasmtime 的编译器，但定位不同：
+>
+> - **Winch**（基线编译器）：编译快、生成代码质量一般。类似解释执行的 V8（baseline JIT）。
+> - **Cranelift**：编译慢、生成代码经过优化。类似 V8 的 TurboFan（优化 JIT）。
+>
+> 决策树：
+>
+> - 程序启动频繁、跑得快（脚本、CI 任务）→ 用 Winch，省下启动开销。
+> - 程序跑得久（long-running service、批处理）→ 用 Cranelift，省下的是执行时的 CPU。
+> - 需要 inspector 调试 → 必须 Cranelift，Winch 没调试信息。
+>
+> 经验数据：Cranelift 比 Winch 慢 30-100%（编译时间），但执行速度快 10-30%。拐点大概在「程序执行时间 / 启动时间 > 5」时 Cranelift 占优。
+>
+> </details>
+
 ## 执行侧
 
 垃圾回收器选择直接影响暂停时间和吞吐：

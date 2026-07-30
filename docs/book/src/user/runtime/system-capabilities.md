@@ -36,6 +36,19 @@ WJSM_FS_ALLOW_READ=/etc wjsm run fs-demo.mjs
 WJSM_FS_ALLOW_WRITE=1 wjsm run fs-demo.mjs
 ```
 
+> <details><summary>「沙箱」到底是什么层级？</summary>
+>
+> wjsm 的文件系统沙箱**不是**基于 OS 级别的强制隔离（如 chroot、容器）。它是 wjsm 宿主里的一段 Rust 代码，在 `fs.writeFileSync` 之类的函数被调用时做路径前缀检查：
+>
+> - 拒绝访问：抛 JS 错误，进程继续。
+> - 允许访问：调用对应的 Rust std::fs 函数。
+>
+> 这意味着如果 wjsm 宿主有 bug 跳过检查，或者代码用其他机制（直接 syscall、原生模块）绕过，**沙箱就失效了**。WebAssembly 提供的内存隔离只保护「不越界访问线性内存」，不保护「不走 host import 自己想办法」。
+>
+> 在多租户、不可信代码场景下，应该用容器或 OS 级别的隔离（namespaces、cgroups），不要依赖 wjsm 自己的沙箱。wjsm 的沙箱是「让普通代码不能轻易乱写文件」，不是「让恶意代码没法搞破坏」。
+>
+> </details>
+
 ## 网络
 
 `fetch` 可直接调用，支持 `data:` URL 和真实 HTTP 请求：

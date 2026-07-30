@@ -52,6 +52,14 @@ WJSM_GC=bogus wjsm run app.js
 
 `NO_COLOR` 非空关闭颜色，`CLICOLOR_FORCE` 非空且不为 `0` 强制开启，后者优先。`--color` / `--no-color` 优先于两者。
 
+> <details><summary>为什么每个变量的取值判定都写得很死？</summary>
+>
+> 简单的字符串 `true`/`on`/`1`、`0`/`off`/`false` 这类判断看起来啰嗦，但能让用户**预测行为**：看到 `WJSM_GC_LOG=1` 就知道开启、`=0` 知道关闭、`=true` 也能猜对（多数 Unix 工具的惯例）。
+>
+> 反面例子是「任何非空字符串都视为 true」——这种宽松解析对用户友好，但对脚本不友好：`WJSM_GC_LOG=$SOME_VALUE` 在 `SOME_VALUE` 是空字符串时和「未设置」的行为一样，但用户可能想「明确设成空」表示「关闭」。wjsm 的设计偏向「明确值明确语义」，代价是每条规则要写清楚。
+>
+> </details>
+
 ## 深入了解
 
 - [运行时配置与环境变量的解析 owner 索引](../../internals/reference/runtime-configuration-index.md)

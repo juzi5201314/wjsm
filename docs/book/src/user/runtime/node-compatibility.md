@@ -46,6 +46,16 @@ const os = require("node:os");      // CommonJS 入口内可用
 
 裸名与 `node:` 前缀解析到同一实现。若 `node_modules` 中存在同名包，内置模块优先。
 
+> <details><summary>内置模块 vs `node_modules` 同名包——优先级谁更高？</summary>
+>
+> 内置模块永远优先。逻辑链是：解析 specifier 时先查「是否在 `node:` 内置表里」，命中就直接返回内置实现；不命中才走 `node_modules`。
+>
+> 这意味着：如果你装了 `node_modules/path`（一个 npm 包叫 path），但 wjsm 代码里写 `import x from "path"`，拿到的是 wjsm 的内置实现，不是那个 npm 包。
+>
+> 为什么这样设计：保证 `import "node:path"` 在所有项目里行为一致——不需要担心某个依赖装上之后 `path` 突然变了一个包。Node.js 早期也踩过这个坑，所以后来加了 `node:` 前缀的明确语义。
+>
+> </details>
+
 ## 默认禁用的能力
 
 `child_process` 默认拒绝执行任何命令：

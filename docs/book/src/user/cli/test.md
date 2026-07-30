@@ -41,6 +41,16 @@ test result: 3 passed; 0 failed
 
 只要有一个文件失败，整体退出码为 1。
 
+> <details><summary>为什么 wjsm 的 `test` 不内置断言库？</summary>
+>
+> 设计取舍：wjsm 的定位是「可执行 ECMAScript 规范子集」，断言库和测试框架属于「怎么写测试」这一层——每个人的偏好不同（Mocha、Vitest、Jest、自写），强行内置会让一部分用户觉得多余，另一部分觉得不够。
+>
+> 当前的「进程退出码 0 = 通过」约定在 Node.js 生态里是事实标准：CI 系统（GitHub Actions、GitLab CI）都靠退出码判断成败。这种约定的好处是 zero-dep，坏处是写起来没有 `expect(x).toBe(y)` 那么顺手。
+>
+> 实际项目里常见的做法是：wjsm test 跑 happy-path 测试（不需要 mock、不需要 fake timer），复杂的集成测试用 Vitest 在 Node 里跑，wjsm 只负责跑 build 和 lint。
+>
+> </details>
+
 ## 相关选项
 
 `--root`、`--script` 与 `run` 同义。`-v` 会额外打印每个文件开始和通过的记录。

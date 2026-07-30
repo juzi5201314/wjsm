@@ -30,6 +30,21 @@ Normal 模式 `data_base = 0`。Eval 模式 `data_base` 由调用方传入，让
 
 `f64` 直接 `to_bits()` 编码，不经过数据段。`int32` 走 `TAG_INT32` 标签加 32 位负载。这两种值在编译期就内联为 `i64.const` 指令，不需要数据段访问。
 
+> <details><summary>为什么 `f64` 不走数据段？</summary>
+>
+> 任何 8 字节 double 都可以直接编码进一条 `i64.const` 指令。这是 WASM 的基本能力，编译时确定，没有运行时读内存的开销。
+>
+> 字符串则不行——长度不定，必须放在线性内存里。运行时用 `i64.const <指针>` + 内存读两条指令访问。
+>
+> 所以「常量进数据段 vs 走指令」是按「指令能不能直接表达」划分的：
+>
+> - 8 字节定长的（f64、int32、handle、tagged 组合）→ 进指令
+> - 不定长（字符串）→ 进数据段
+>
+> 这样产物在 WASM 层只保留「必要」的内存引用。
+>
+> </details>
+
 ## BigInt 与 RegExp
 
 BigInt 和 RegExp 不在常量池编码时处理，而是在指令编译阶段特殊处理（`encode_constant` 对它们 `bail!` 提示走专用路径）。BigInt 存十进制字符串，RegExp 存 pattern + flags，两者在运行时由宿主解析。

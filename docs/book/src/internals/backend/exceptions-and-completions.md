@@ -33,6 +33,22 @@ catch handler 接收异常值（`local.get $result`），绑定到 catch 参数�
 
 异常传播到模块入口 `$module_main` 仍未被 catch 时，返回值带 `TAG_EXCEPTION`。宿主侧的 `execute_with_options` 检查入口返回值，如果是异常则打印 `Uncaught exception:` 并设置退出码 2。
 
+> <details><summary>为什么异常值用 NaN-boxing？</summary>
+>
+> 异常在 wjsm 里是个 NaN-box 值（`TAG_EXCEPTION` 标签），可以走和普通值一样的传递通道：
+>
+> - 函数返回值可以是异常值。
+> - 局部变量可以存异常值。
+> - 函数形参可以传异常值。
+>
+> 这让「异常」和「普通值」在 IR 层是同一个东西——「带 `TAG_EXCEPTION` 标签的 i64」。后端不用为异常单独维护一套类型系统。
+>
+> 代价：每个可能抛出的调用都要检查返回值标签。性能上不免费，但代码上统一。
+>
+> 替代方案是用 WASM 原生异常（exnref、try_table）——独立类型、独立控制流。优势是后端不写检查代码，劣势是绑定特定 WASM 提案、跨宿主兼容性差。
+>
+> </details>
+
 ## 深入了解
 
 - [语义层如何构造异常传播路径与清理序列](../frontend/control-flow-and-exceptions.md)

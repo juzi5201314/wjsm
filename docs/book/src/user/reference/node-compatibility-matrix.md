@@ -31,6 +31,20 @@ wjsm 内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。
 
 未列出的模块（如 `readline`、`repl`、`v8`、`module`）没有内置封装，导入 `node:` 前缀形式会报 `Unknown built-in module`。
 
+> <details><summary>「导出项数量」够用吗？</summary>
+>
+> 不一定够。表里的数字是「裸 specifier 静态导入能拿到的命名导出个数」——比如 `import * as path from "node:path"` 能拿到 14 个键。但每个键下面有什么 API、行为是否与 Node 一致，是另一回事。
+>
+> 经验上：
+>
+> - 数字 < 5：核心 API 覆盖（`events`、`dgram` 这种就是几个核心 export）。
+> - 数字 5-15：常用 API 覆盖（`http`、`net`、`tls` 之类），能跑大多数用例。
+> - 数字 > 15：实现较全（`path`、`os`、`cluster`），但仍要按需验证。
+>
+> 想确认某个具体 API：直接跑 `wjsm run -e 'import { ... } from "node:xxx"; ...'`。看错误信息比查表快。
+>
+> </details>
+
 ## 全局对象
 
 `process` 可用，`process.versions` 报告 `node: 22.0.0` 与 `wjsm: 0.1.0`，`process.platform`、`process.arch`、`process.argv`、`process.env`、`process.nextTick`、`process.exit` 都可用。

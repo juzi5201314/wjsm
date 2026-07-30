@@ -12,13 +12,33 @@ wjsm 不维护静态的兼容性 Roadmap 表。实际支持范围由三类可执
 | 模块 fixture | `fixtures/modules`（71 项） | 已验证的模块加载与包解析行为 |
 | Test262 | `wjsm-test262` runner + `test262` 子模块 | ECMAScript 一致性覆盖情况 |
 
-没有被这三者覆盖的语义，应当视为未受支持，即使它看起来「应该能工作」。
+没有被这三者覆盖的语义，应当视为未受支持——即使它看起来「应该能工作」。
 
 ## 源码语言
 
 按扩展名选择解析模式：`.js`、`.mjs`、`.cjs`、`.jsx`、`.ts`、`.tsx`。
 
 TypeScript 语法参与解析和降级，类型注解被擦除。wjsm **不是类型检查器**：类型错误不会被报告，`tsc` 该报的错这里不报。想要类型检查请单独跑 `tsc --noEmit`。
+
+> <details><summary>「wjsm 不做类型检查」具体意味着什么？</summary>
+>
+> ```ts
+> const x: number = "hello"  // tsc 会报错；wjsm 不会
+> const y: string = 42       // 同样
+> ```
+>
+> `wjsm check` 对这两条都返回成功（退出码 0），因为它们语法合法、TypeScript 类型擦除后剩下的 JavaScript 也是合法的。wjsm 只关心代码「能不能跑」，不关心类型「匹不匹配」。
+>
+> 生产项目里正确的做法是同时跑：
+>
+> ```bash
+> wjsm check src/ --root .   # 检查语法和语义
+> tsc --noEmit              # 检查类型
+> ```
+>
+> 两个工具各管一摊，不要假设 wjsm 帮你抓了类型错。
+>
+> </details>
 
 ## 执行后端
 

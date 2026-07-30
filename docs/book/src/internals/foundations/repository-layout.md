@@ -29,6 +29,21 @@ wjsm/
 | 测试超时与分组 | `.config/nextest.toml` |
 | 依赖版本与 profile | 根 `Cargo.toml` |
 
+> <details><summary>fixtures 三个套件有什么区别？</summary>
+>
+> 它们测的「行为类型」不同：
+>
+> - **`fixtures/happy`**：跑应该成功的程序，验证输出与 `.expected` 文件一致。约 1357 项。
+> - **`fixtures/errors`**：跑会失败的程序，验证错误信息与位置。约 158 项。
+> - **`fixtures/modules`**：多文件项目，验证模块图、bundling、require 缓存等。约 71 项。
+> - **`fixtures/semantic`**：IR 文本快照，验证 lowering 结果。123 项左右，由 `lowering_snapshots` 测试使用。
+>
+> `build.rs` 扫描前三个目录，把每个 `.js + .expected` 对变成一个 Rust 测试函数，所以新增 fixture 不需要手写测试代码——放好文件就行。
+>
+> 四个套件覆盖不同关注点，但加一个新功能时通常要从 `happy` 开始（最基本的功能验证），再到 `errors`（错误路径），最后才到 `semantic`（如果改动涉及 IR）。
+>
+> </details>
+
 ## fixtures 三个套件
 
 `build.rs` 扫描 `happy`、`errors`、`modules` 三个套件并生成测试用例列表，所以新增 fixture 不需要手写测试函数，放好 `.js` 与 `.expected` 即可。

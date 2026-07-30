@@ -27,6 +27,16 @@ warning[eqeq]: use `===` instead of `==` to avoid implicit coercion
 
 `lint` 只做规则匹配，不做类型检查，也不判断代码能否成功编译。要确认能否编译，用 [`check`](check.md)。
 
+> <details><summary>wjsm 的 lint 故意做得很小</summary>
+>
+> 三个规则加不到二十行配置，看起来很寒酸。这是设计选择，不是疏忽。
+>
+> 完整的 lint 生态（ESLint、Biome、Oxlint）有几百条规则、配置系统、插件机制——但 wjsm 不打算做这些。原因是：lint 是「个人风格」层面的工具，每条规则的「对错」都和团队约定相关；wjsm 的「`==` vs `===`」「`debugger` 是否真有效」这种规则覆盖面太窄，不值得花精力扩。
+>
+> 生产项目里用 `wjsm lint` 抓的是「这段代码在 wjsm 里跑起来没意义」——`debugger` 不会触发断点这件事，wjsm 比通用 ESLint 更清楚，所以这条规则由 wjsm 自己提供。其他风格类 lint 用 ESLint 或 Biome 单独跑。
+>
+> </details>
+
 ## 深入了解
 
 - [Lint 规则的实现位置与扩展方式](../../internals/tooling/cli-and-config.md)

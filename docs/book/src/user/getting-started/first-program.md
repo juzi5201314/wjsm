@@ -59,7 +59,7 @@ wjsm check -e 'const x = ;'
 
 ```text
 Error: error: Expression expected
- --> input.ts:1:11
+  --> input.ts:1:11
 1 | const x = ;
   |           ^
 ```
@@ -89,6 +89,23 @@ wjsm run -e 'process.exit(7)'; echo $?
 ```text
 7
 ```
+
+> <details><summary>「编译期错误」和「运行时错误」退出码为什么要分开？</summary>
+>
+> 把它们混在一起，CI 脚本就要靠 grep stderr 区分。wjsm 区分 `1` 和 `2` 是为了让 shell 流水线可以靠退出码判断错误类型——比如「编译失败不重试，运行时失败重试一次」这类规则可以写成：
+>
+> ```bash
+> wjsm run app.js
+> case $? in
+>   0)   echo "ok" ;;
+>   1)   echo "fix code" ;;
+>   2)   echo "transient, retry" ;;
+> esac
+> ```
+>
+> 这比解析 `Uncaught exception:` 之类的字符串可靠得多。
+>
+> </details>
 
 ## 深入了解
 

@@ -49,6 +49,20 @@ enum BrowserField {
 
 包没有 `exports` 时走 legacy 路径：`module` → `main` → 目录 `index.*`。扩展名候选顺序由 `MODULE_EXTENSIONS` 固定为 `js`、`ts`、`mjs`、`cjs`、`jsx`、`tsx`。
 
+> <details><summary>为什么 wjsm 自己也实现一份 `exports` 解析，不复用 Node？</summary>
+>
+> Node 的条件导出算法在 `@pkgjs/resolve` 或 Node 自身里有完整实现，看上去「直接 import 过来用」更省事。
+>
+> 但 wjsm 没这么做：
+>
+> 1. **Node 实现是 JS**。wjsm 想要 native code 路径，直接 import JS 包意味着要绑 node 或 deno_core——和「WJSM 摆脱 Node 依赖」的目标冲突。
+> 2. **Node 实现的依赖很多**。`@pkgjs/resolve` 拉来一堆 npm 依赖，wjsm 的 workspace 没设计 `Cargo.toml` 之外的依赖。
+> 3. **需要改条件顺序**。wjsm 在 Node 顺序上额外插了 `wjsm` 条件，Node 算法不允许改顺序。
+>
+> 重新实现一份的好处是：完全控制条件顺序、零外部依赖、可以和 wjsm 的 lowering 路径直接对接。代价是「Node 升级 `@pkgjs/resolve` 时加新功能，wjsm 要手动同步」——目前 wjsm 支持到 Node 22 那一套，不算落后。
+>
+> </details>
+
 ## 深入了解
 
 - [用户视角的条件与包解析规则](../../user/projects/package-resolution.md)

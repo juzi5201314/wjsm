@@ -26,7 +26,7 @@ $ echo $?
 ```text
 $ wjsm check -e 'const x = ;'
 Error: error: Expression expected
- --> input.ts:1:11
+  --> input.ts:1:11
 1 | const x = ;
   |           ^
 ```
@@ -38,6 +38,23 @@ TypeScript 的类型标注会被解析并丢弃，`check` 不做类型推导或�
 ## 相关选项
 
 `--root` 让入口按模块图检查（会连带解析依赖）；`--script` 用脚本模式解析。`-v` 打印阶段进度。
+
+> <details><summary>什么时候用 `check`，什么时候用 `tsc`？</summary>
+>
+> 两者查的不是一回事：
+>
+> - **`check`** 查「JavaScript 层面的合法性」——语法对不对、声明重不重名、TDZ 会不会触发、模块解析找不找得到。wjsm 会拒绝跑的代码，check 一定能抓到。
+> - **`tsc`** 查「TypeScript 层面的正确性」——类型匹不匹配、泛型推断对不对、接口实现齐不齐全。check 不会拒的代码，tsc 可能会拒。
+>
+> 两者查的内容**没有重叠**：check 不查类型，tsc 不查 ECMAScript 早期错误（TDZ 之外的部分）。所以正确的用法是**两个都跑**：
+>
+> ```bash
+> wjsm check src/ --root . && tsc --noEmit
+> ```
+>
+> 在 CI 里把它们作为两道独立的关卡：tsc 失败意味着类型有 bug，check 失败意味着运行时一定会炸。
+>
+> </details>
 
 ## 深入了解
 

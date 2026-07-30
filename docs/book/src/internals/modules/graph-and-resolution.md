@@ -27,6 +27,18 @@ const MODULE_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "jsx", "tsx"];
 
 解析顺序：路径本身 → 逐个补扩展名 → 目录 `index.<ext>`。目录内找不到 index 时报 `No index file in directory`。包解析缓存在 `package_cache`（`RefCell<HashMap>`），同一个 `package.json` 只读一次。
 
+> <details><summary>「自动补扩展名」省了用户什么事？</summary>
+>
+> ESM 规范要求 import 必须带完整文件名（`./a.js` 不能省成 `./a`）。这是为了和 CommonJS 兼容（CJS 历史上支持省略）。
+>
+> wjsm 的「自动补」是个 ergonomics 改进：用户写 `import x from "./a"`，底层会依次尝试 `./a.js`、`./a.ts` 等等。匹配到就停。
+>
+> 代价是「绝对路径不能省略扩展名」的边界更模糊——同样写 `./a`，可能指 `./a.js` 也可能指 `./a.json`（如果存在）。错误信息里会列出实际尝试过的候选（`Tried: [...]`），便于诊断。
+>
+> 选这套顺序（`js` 优先于 `ts`）的原因是大多数项目里源码是 TS，构建产物是 JS。当两个同名不同扩展都存在时，`.js` 优先——这是 Node 解析模块的默认行为。
+>
+> </details>
+
 ## 内置模块前置
 
 `builtin_modules::lookup` 在文件系统解析之前介入。它返回三态：
