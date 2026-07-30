@@ -1,12 +1,17 @@
 # Memory64 与共享内存模型
 
-这一章说明对象堆为什么用 shared memory64，以及它带来的约束与收益。
+对象堆使用 shared memory64，因为 32 位地址空间（4 GiB）对 JavaScript 程序不够用。
 
-## 为什么 memory64
+## 内存常量
 
-对象堆需要容纳大量对象，32 位地址空间（4 GiB）不够。memory64 把地址空间扩展到 64 位，wjsm 默认 min 524288 页（32 GiB）、max 4294967296 页（256 TiB）。
+| 常量 | 值 | 定义位置 |
+| --- | --- | --- |
+| `HEAP_MEMORY_MIN_PAGES` | 524288 | `wjsm-ir` |
+| `HEAP_MEMORY_MAX_PAGES` | 4294967296 | `wjsm-ir` |
+| 最小地址空间 | 32 GiB | min_pages × 64 KiB |
+| 最大地址空间 | 256 TiB | max_pages × 64 KiB |
 
-常量 `HEAP_MEMORY_MIN_PAGES` / `HEAP_MEMORY_MAX_PAGES` 定义在 `wjsm-ir`，是 user wasm 与 host 的唯一对齐来源。
+这些常量是 user wasm 与 host 的唯一对齐来源，修改后需要同步更新两者。
 
 ## 为什么 shared
 

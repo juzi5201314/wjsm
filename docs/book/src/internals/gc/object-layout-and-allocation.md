@@ -18,29 +18,48 @@
 | `epoch.rs` | 分配 epoch（ZGC 着色指针） |
 | `word.rs` | 字长常量 |
 
-## 分配路径
-
-1. **fast path**：bump pointer，`alloc_ptr` 前进。绝大多数分配走这条路径。
-2. **slow path**：bump 到页边界时调用 `gc_alloc_slow` host 函数，触发 GC 或扩展内存。
-
-`__alloc_ptr` 和 `__alloc_end` 是 env global，后端直接读写。fast path 完全在 WASM 内完成，不跨宿主调用。
-
 ## 对象布局
+
+```mermaid
+flowchart LR
+    subgraph Obj[堆中对象]
+        H[HeapType 标记<br/>Object / Array / Promise / ...] --> I[内部槽<br/>InternalSlot 1..N]
+        I --> P[属性存储<br/>内联槽 或 外部属性表]
+        P --> E[元素区<br/>数组元素 / 其他数据]
+    end
+```
 
 每个对象在堆中的布局：
 
-- 类型标记（HeapType）：Object、Array、Promise、Continuation、Map、Set 等。
-- 属性存储：内联槽或外部属性表。
-- 内部槽：`[[InternalSlot]]` 存为固定 offset 的内联字段，GC 追踪。
+- **类型标记**（HeapType）：Object、Array、Promise、Continuation、Map、Set 等。决定 GC 如何扫描对象内部引用。
+- **内部槽**：`[[InternalSlot]]` 存为固定 offset 的内联字段，GC 追踪。
+- **属性存储**：内联槽或外部属性表。
+- **元素区**：数组元素或其他数据。
 
-类型标记决定 GC 如何扫描对象内部引用。例如 Array 对象的元素区可能包含句柄，需要逐个扫描。
+类型标记决定 GC 如何扫描对象内部引用。Array 对象的元素区可能包含句柄，需要逐个扫描；内部槽中的引用也需要更新。
+
+## 分配路径
+
+1. **fast path**：bump pointer，`alloc_ptr` 前进。绝大多数分配走这条路径，完全在 WASM 内完成，不跨宿主调用。
+2. **slow path**：bump 到页边界时调用 `gc_alloc_slow` host 函数，触发 GC 或扩展内存。
+
+`__alloc_ptr` 和 `__alloc_end` 是 env global，后端直接读写。
 
 ## 碎片治理
 
-`GcStats` 记录碎片指标：`free_block_count`、`total_free_bytes`、`largest_free_block`、`external_fragmentation`。G1 回收器按分区回收治理碎片，mark-sweep 通过空闲列表合并相邻块。
+`GcStats` 记录碎片指标：
+
+| 指标 | 含义 | 正常值 |
+| --- | --- | --- |
+| `free_block_count` | 空闲块总数 | 越小越好 |
+| `total_free_bytes` | 总空闲字节 | 接近预算 |
+| `largest_free_block` | 最大连续空闲块 | 接近 total_free_bytes |
+| `external_fragmentation` | 外部碎片率 | 越低越好 |
+
+G1 回收器按 region 回收治理碎片，mark-sweep 通过空闲列表合并相邻块。
 
 ## 深入了解
 
-- [G1 的分区与回收集选择](g1.md)
+- [G1 的 region 与回收集选择](g1.md)
 - [Mark-Sweep 的标记与清除阶段](mark-sweep.md)
 - [GC 统计与碎片指标](configuration-and-invariants.md)
