@@ -29,14 +29,16 @@ impl Lowerer {
         self.scopes
             .mark_initialised(&class_name)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
-        let body_ir_name = format!("${class_body_name_scope_id}.{class_name}");
-        self.current_function.append_instruction(
+        // 收尾存储须同步进共享 env：方法闭包在类求值期间 materialize（此时类名尚未存储），
+        // 运行时方法体读到的是 env 中的类名值。
+        let class_binding = CapturedBinding::new(&class_name, class_body_name_scope_id);
+        let outer_block = self.store_binding_value(
             outer_block,
-            Instruction::StoreVar {
-                name: body_ir_name,
-                value: ctor_dest,
-            },
-        );
+            &class_binding,
+            ctor_dest,
+            class_decl.span(),
+            true,
+        )?;
         self.scopes.pop_scope();
 
         // 初始化外围作用域绑定（来自 predeclare）。

@@ -255,7 +255,7 @@ pub(crate) enum NativeCallable {
     NumberPrimitiveMethod {
         method: u8,
     },
-    /// string primitive 上 String.prototype 方法；`method`: 0=includes, 1=startsWith, 2=indexOf
+    /// string primitive 上 String.prototype 方法；`method`: 0=includes, 1=startsWith, 2=indexOf, 3=slice, 4=concat
     StringPrimitiveMethod {
         method: u8,
     },

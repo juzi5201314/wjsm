@@ -162,6 +162,24 @@ impl ScopeTree {
         }
     }
 
+    /// 按 scope id 精确设置绑定初始化状态（退出/恢复 TDZ）。
+    /// 用于类名这类「延迟执行的函数体可见、立即执行的类求值代码仍为 TDZ」的绑定；
+    /// 必须按 scope_id 定位，避免嵌套同名绑定遮蔽时误改。
+    pub(crate) fn set_initialised(
+        &mut self,
+        scope_id: usize,
+        name: &str,
+        initialised: bool,
+    ) -> Result<(), String> {
+        let info = self
+            .arenas
+            .get_mut(scope_id)
+            .and_then(|scope| scope.variables.get_mut(name))
+            .ok_or_else(|| format!("undeclared identifier `{name}`"))?;
+        info.initialised = initialised;
+        Ok(())
+    }
+
     /// Look up a variable by name. Returns `(scope_id, VarKind)` if found.
     pub(crate) fn lookup(&self, name: &str) -> Result<(usize, VarKind), String> {
         let mut cursor = self.current;

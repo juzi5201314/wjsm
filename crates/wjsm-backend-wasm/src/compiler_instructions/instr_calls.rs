@@ -113,7 +113,7 @@ impl Compiler {
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64)); // TAG_CLOSURE
         self.emit(WasmInstruction::I64Eq);
-        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
         self.emit(WasmInstruction::Call(
@@ -126,14 +126,6 @@ impl Compiler {
             self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
         ));
         self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-        self.emit(WasmInstruction::Else);
-        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-        self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
-        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-        self.emit(WasmInstruction::End);
-
         self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
@@ -143,6 +135,41 @@ impl Compiler {
             type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        // 仅 TAG_FUNCTION 直接走函数表；其余非函数值交 native_call 宿主校验，
+        // 抛 "TypeError: value is not callable" 而非 wasm trap。
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
+            table_index: 0,
+        });
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::End); // tag==FUNCTION if
+        self.emit(WasmInstruction::End); // close closure if/else
         self.emit(WasmInstruction::End); // close proxy if/else
         self.emit(WasmInstruction::End); // close bound if/else
         self.emit(WasmInstruction::End); // close native callable if/else
@@ -277,7 +304,7 @@ impl Compiler {
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
         self.emit(WasmInstruction::I64Eq);
-        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
         self.emit(WasmInstruction::Call(
@@ -290,14 +317,6 @@ impl Compiler {
             self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
         ));
         self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-        self.emit(WasmInstruction::Else);
-        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-        self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
-        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-        self.emit(WasmInstruction::End);
-
         self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
@@ -311,6 +330,49 @@ impl Compiler {
             type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        // 仅 TAG_FUNCTION 直接走函数表；其余非函数值交 native_call 宿主校验，
+        // 抛 "TypeError: value is not callable" 而非 wasm trap。
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        if forward_args {
+            self.emit(WasmInstruction::LocalGet(3));
+        } else {
+            self.emit(WasmInstruction::I32Const(args.len() as i32));
+        }
+        self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
+            table_index: 0,
+        });
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        if forward_args {
+            self.emit(WasmInstruction::LocalGet(3));
+        } else {
+            self.emit(WasmInstruction::I32Const(args.len() as i32));
+        }
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::End); // tag==FUNCTION if
+        self.emit(WasmInstruction::End); // close closure if/else
         self.emit(WasmInstruction::End); // close proxy
         self.emit(WasmInstruction::End); // close bound
         self.emit(WasmInstruction::End); // close native
@@ -757,7 +819,7 @@ impl Compiler {
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
         self.emit(WasmInstruction::I64Eq);
-        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
         self.emit(WasmInstruction::Call(
@@ -770,14 +832,6 @@ impl Compiler {
             self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
         ));
         self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-        self.emit(WasmInstruction::Else);
-        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-        self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
-        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-        self.emit(WasmInstruction::End);
-
         self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
@@ -787,7 +841,42 @@ impl Compiler {
             type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
-        // 关闭 bound / proxy / native 三层 if（closure 分支已在上方 End）
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        // 仅 TAG_FUNCTION 直接走函数表；其余非函数值交 native_call 宿主校验，
+        // 抛 "TypeError: value is not callable" 而非 wasm trap。
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
+            table_index: 0,
+        });
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::End); // tag==FUNCTION if
+        self.emit(WasmInstruction::End); // close closure
+        // 关闭 bound / proxy / native 三层 if
         self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::End);

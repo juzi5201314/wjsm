@@ -644,6 +644,14 @@ impl Lowerer {
                 format!("{}.{}", class_name, pm.key.name)
             };
 
+            // 私有方法体延迟到类求值完成后才执行，期间类名已初始化（方法体可引用类名）；
+            // 函数体 lowering 期间临时退出 TDZ，结束后恢复。
+            let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
+            if let Some(sid) = class_scope_id {
+                self.scopes
+                    .set_initialised(sid, class_name, true)
+                    .map_err(|msg| self.error(pm.span, msg))?;
+            }
             self.push_function_context(&fn_name, BasicBlockId(0));
             self.is_method = true;
             self.super_allowed = true;
@@ -717,6 +725,9 @@ impl Lowerer {
             }
             let m_function_id = self.module.push_function(m_ir_function);
             self.pop_function_context();
+            if let Some(sid) = class_scope_id {
+                let _ = self.scopes.set_initialised(sid, class_name, false);
+            }
             let instance_binding = if is_static {
                 None
             } else {

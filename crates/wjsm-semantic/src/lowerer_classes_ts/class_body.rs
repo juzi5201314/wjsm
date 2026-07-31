@@ -22,7 +22,15 @@ impl Lowerer {
         let mut private_members = self.collect_class_private_members(class_name, &class.body)?;
 
         // ── 构造器 IR 函数 ──
+        // 构造器体延迟到类求值完成后才执行，期间类名已初始化（构造器体/实例字段初始化器可引用类名）；
+        // 函数体 lowering 期间临时退出 TDZ，结束后恢复（类求值期间仍为 TDZ）。
         let ctor_name = format!("{}.constructor", class_name);
+        let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
+        if let Some(sid) = class_scope_id {
+            self.scopes
+                .set_initialised(sid, class_name, true)
+                .map_err(|msg| self.error(class_span, msg))?;
+        }
         self.push_function_context(&ctor_name, BasicBlockId(0));
         self.is_method = true;
         self.super_allowed = true;
@@ -200,6 +208,9 @@ impl Lowerer {
         self.patch_pending_ctor_home_object_references(ctor_function_id);
         self.patch_private_member_home_objects(ctor_function_id, &private_members);
         self.pop_function_context();
+        if let Some(sid) = class_scope_id {
+            let _ = self.scopes.set_initialised(sid, class_name, false);
+        }
 
         // ── 物化构造器 + 创建原型 ──
         let block = self.materialize_private_member_values(block, &mut private_members)?;
@@ -376,8 +387,18 @@ impl Lowerer {
         match method.kind {
             swc_ast::MethodKind::Method => {
                 if method.function.is_generator {
-                    let function =
-                        self.lower_method_prop_to_fn(&method.key, &method.function, Some(target))?;
+                    // 生成器方法体延迟到类求值完成后才执行，期间类名已初始化。
+                    let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
+                    if let Some(sid) = class_scope_id {
+                        self.scopes
+                            .set_initialised(sid, class_name, true)
+                            .map_err(|msg| self.error(method.span, msg))?;
+                    }
+                    let function = self
+                        .lower_method_prop_to_fn(&method.key, &method.function, Some(target))?;
+                    if let Some(sid) = class_scope_id {
+                        let _ = self.scopes.set_initialised(sid, class_name, false);
+                    }
                     let (continuation, mut method_value) = self.materialize_method_function_value(
                         block,
                         &function,
@@ -409,8 +430,9 @@ impl Lowerer {
                     return Ok(block);
                 }
 
-                let fn_name = format!("{}.{}", class_name, method_name);
+                let fn_name = format!("{class_name}.{method_name}");
                 let function = self.lower_class_method_fn(
+                    class_name,
                     &fn_name,
                     &method.function,
                     method.span,
@@ -449,8 +471,9 @@ impl Lowerer {
                 } else {
                     "set"
                 };
-                let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
+                let fn_name = format!("{class_name}.{accessor}_{method_name}");
                 let function = self.lower_class_method_fn(
+                    class_name,
                     &fn_name,
                     &method.function,
                     method.span,
@@ -526,12 +549,21 @@ impl Lowerer {
     /// 为类方法/访问器创建 IR 函数并返回其函数标识及捕获集合。
     fn lower_class_method_fn(
         &mut self,
+        class_name: &str,
         fn_name: &str,
         function: &swc_ast::Function,
         method_span: Span,
         ctor_function_id: FunctionId,
         is_static: bool,
     ) -> Result<LoweredClassFunction, LoweringError> {
+        // 方法体延迟到类求值完成后才执行，期间类名已初始化（方法体可引用类名）；
+        // 函数体 lowering 期间临时退出 TDZ，结束后恢复。
+        let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
+        if let Some(sid) = class_scope_id {
+            self.scopes
+                .set_initialised(sid, class_name, true)
+                .map_err(|msg| self.error(method_span, msg))?;
+        }
         self.push_function_context(fn_name, BasicBlockId(0));
         self.is_method = true;
         self.super_allowed = true;
@@ -596,6 +628,9 @@ impl Lowerer {
         let function =
             self.finalize_class_method_function(fn_name, method_span, param_ir_names, home_object);
         self.pop_function_context();
+        if let Some(sid) = class_scope_id {
+            let _ = self.scopes.set_initialised(sid, class_name, false);
+        }
         Ok(function)
     }
 

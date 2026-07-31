@@ -1,8 +1,0 @@
-exit_code: 1
---- stdout ---
---- stderr ---
-Error: error: cannot access `Config` before initialisation
- --> errors/class_static_field.js:6:12
-6 |     return Config.version;
-  |            ^^^^^^
-

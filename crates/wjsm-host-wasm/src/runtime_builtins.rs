@@ -39,6 +39,35 @@ fn invoke_string_primitive_method(
             .find_units(&search, position)
             .map(|index| value::encode_f64(index as f64))
             .unwrap_or_else(|| value::encode_f64(-1.0)),
+        3 => {
+            let mut ctx = WasmExecContext::new(caller);
+            wjsm_builtins::string_methods::string_slice(
+                &mut ctx,
+                this_val,
+                args.first().copied().unwrap_or_else(value::encode_undefined),
+                args.get(1)
+                    .copied()
+                    .unwrap_or_else(value::encode_undefined),
+            )
+        }
+        4 => {
+            // concat 为可变参：args 写回影子栈后复用 string_proto_concat 既有实现。
+            let Some(env) = WasmEnv::from_caller(caller) else {
+                return value::encode_undefined();
+            };
+            let Some(saved_sp) = push_args_to_shadow_stack(caller, &env, args) else {
+                return value::encode_undefined();
+            };
+            let mut ctx = WasmExecContext::new(caller);
+            let result = wjsm_builtins::string_methods::string_proto_concat(
+                &mut ctx,
+                this_val,
+                saved_sp,
+                args.len() as i32,
+            );
+            restore_shadow_sp(caller, &env, saved_sp);
+            result
+        }
         _ => value::encode_undefined(),
     }
 }

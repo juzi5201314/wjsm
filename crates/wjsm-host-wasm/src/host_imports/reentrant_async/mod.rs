@@ -143,6 +143,11 @@ pub(crate) async fn native_call_from_caller_async(
         return resolve_and_call_async(caller, callable, this_val, args_base, args_count).await;
     }
 
+    // 异常值调用：wjsm 为值级异常传播模型，异常值在表达式流中传播直到被检查点
+    // 重新抛出；对异常值执行调用应原样传播（返回原异常值），而非抛 TypeError。
+    if value::is_exception(callable) {
+        return callable;
+    }
     if value::is_native_callable(callable) {
         if !value::is_undefined(new_target_val) {
             caller

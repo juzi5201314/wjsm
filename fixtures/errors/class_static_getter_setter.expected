@@ -1,8 +1,0 @@
-exit_code: 1
---- stdout ---
---- stderr ---
-Error: error: cannot access `Settings` before initialisation
- --> errors/class_static_getter_setter.js:6:12
-6 |     return Settings.#mode;
-  |            ^^^^^^^^
-

@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+caught: TypeError
+caught 2: TypeError
+--- stderr ---

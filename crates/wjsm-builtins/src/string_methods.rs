@@ -259,6 +259,10 @@ pub fn primitive_string_get_property<E: ExecContext>(
         1
     } else if ctx.name_id_matches(name_id, "indexOf") {
         2
+    } else if ctx.name_id_matches(name_id, "slice") {
+        3
+    } else if ctx.name_id_matches(name_id, "concat") {
+        4
     } else {
         return value::encode_undefined();
     };

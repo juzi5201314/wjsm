@@ -44,14 +44,16 @@ impl Lowerer {
             self.scopes
                 .mark_initialised(name)
                 .map_err(|msg| self.error(class_expr.span(), msg))?;
-            let ir_name = format!("${scope_id}.{name}");
-            self.current_function.append_instruction(
+            // 收尾存储须同步进共享 env：方法闭包在类求值期间 materialize（此时类名尚未存储），
+            // 运行时方法体读到的是 env 中的类名值。
+            let class_binding = CapturedBinding::new(name, *scope_id);
+            self.store_binding_value(
                 block,
-                Instruction::StoreVar {
-                    name: ir_name,
-                    value: ctor_dest,
-                },
-            );
+                &class_binding,
+                ctor_dest,
+                class_expr.span(),
+                true,
+            )?;
             self.scopes.pop_scope();
         }
 

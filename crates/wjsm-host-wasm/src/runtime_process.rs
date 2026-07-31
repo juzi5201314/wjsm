@@ -192,7 +192,7 @@ pub(crate) fn install_process_global_from_caller(
     let _ = caller.data().push_host_temp_roots([exec_argv]);
     let _ = define_host_data_property_from_caller(caller, process_obj, "execArgv", exec_argv);
 
-    // process.send / disconnect / on：IPC 子进程侧必须由 host 安装（process 为 host 对象，JS 赋值无效）
+    // process.send / disconnect：仅 IPC 子进程侧需要（process 为 host 对象，JS 赋值无效）。
     let connected = caller.data().process_ipc.is_some();
     let _ = define_host_data_property_from_caller(
         caller,
@@ -208,14 +208,16 @@ pub(crate) fn install_process_global_from_caller(
             "disconnect",
             NativeCallable::ProcessDisconnect,
         );
-        define_native_method(caller, process_obj, "on", NativeCallable::ProcessOn);
-        define_native_method(
-            caller,
-            process_obj,
-            "addListener",
-            NativeCallable::ProcessOn,
-        );
     }
+    // process.on / addListener：主进程与 IPC 子进程都必须可调用（IPC 事件 message/disconnect
+    // 由 call_process_on 按 process_ipc 状态分派，其余事件为 no-op）。
+    define_native_method(caller, process_obj, "on", NativeCallable::ProcessOn);
+    define_native_method(
+        caller,
+        process_obj,
+        "addListener",
+        NativeCallable::ProcessOn,
+    );
 
     define_native_method(caller, process_obj, "cwd", NativeCallable::ProcessCwd);
     define_native_method(caller, process_obj, "exit", NativeCallable::ProcessExit);
