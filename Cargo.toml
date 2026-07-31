@@ -15,6 +15,7 @@ members = [
     "crates/wjsm-test262",
     "crates/wjsm-module",
     "crates/wjsm-gc-bench",
+    "crates/wjsm-bench",
     "crates/wjsm-snapshot-format",
     "crates/wjsm-host",
     "crates/wjsm-host-wasm",
