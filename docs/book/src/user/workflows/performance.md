@@ -69,9 +69,21 @@ wjsm --shadow-stack-max 32M run app.ts
 
 启动快照默认开启，它把 builtin 初始化后的堆状态直接恢复，省掉每次启动的 bootstrap。除排查快照本身的问题外，不要用 `WJSM_STARTUP_SNAPSHOT=0` 关闭它。
 
+## 与 Node.js 对比
+
+想量化 wjsm 与 Node.js 在同机上的性能差距，用 `wjsm-bench`（hyperfine 驱动，同源码场景双跑）：
+
+```bash
+cargo build --release -p wjsm-bench -p wjsm-cli
+WJSM=target/release/wjsm-cli target/release/wjsm-bench --quick
+```
+
+`WJSM` / `NODE` 环境变量可覆盖对比的二进制（默认 PATH 中的 `wjsm` / `node`）。输出 JSON 报告与终端对比表（wall median / ns_per_op / RSS）。方法论与报告字段见[跨运行时基准](../../internals/testing/cross-runtime-benchmarks.md)。
+
 ## 深入了解
 
 - [并发阶段、工作线程与 GC Pacing 如何决定暂停时间](../../internals/gc/concurrency-and-pacing.md)
 - [启动快照边界：哪些状态能被固化](../../internals/startup/startup-snapshot.md)
 - [编译缓存的键设计与落盘格式](../../internals/tooling/cache.md)
 - [性能分析方法与回归证据要求](../../internals/testing/performance.md)
+- [跨运行时基准](../../internals/testing/cross-runtime-benchmarks.md)

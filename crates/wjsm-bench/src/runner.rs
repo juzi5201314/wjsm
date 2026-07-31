@@ -202,6 +202,10 @@ fn measure_wall(
     let json_path = work_dir()
         .join(regime_name(cold))
         .join(format!("{scenario}.json"));
+    if let Some(parent) = json_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("创建 hyperfine 输出目录 {}", parent.display()))?;
+    }
 
     let mut args = vec![
         "--warmup".to_owned(),

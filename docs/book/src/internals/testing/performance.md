@@ -38,5 +38,6 @@
 ## 深入了解
 
 - [GC Benchmark](gc-benchmarks.md)
+- [跨运行时基准](cross-runtime-benchmarks.md)
 - [Engine 配置与池化](../startup/engine-pool.md)
 - [用户侧的性能与内存调优](../../user/workflows/performance.md)

@@ -210,6 +210,7 @@
     - [分层调试流程](internals/testing/debugging-workflow.md)
     - [GC Benchmark](internals/testing/gc-benchmarks.md)
     - [性能分析与回归证据](internals/testing/performance.md)
+    - [跨运行时基准](internals/testing/cross-runtime-benchmarks.md)
   - [构建、工件与发布](internals/build-release/README.md)
     - [Cargo Workspace 与依赖图](internals/build-release/workspace-and-dependencies.md)
     - [Cargo Feature 与 Profile](internals/build-release/features-and-profiles.md)
