@@ -346,6 +346,8 @@ pub enum Builtin {
     /// `new Date(...)` lowering：编译时设置 new.target，与 DateConstructor 共用宿主实现。
     DateConstructorNew,
     DateNow,
+    /// `performance.now()`：宿主毫秒时间戳（f64），确定性纯（不抛、不分配）。
+    PerformanceNow,
     DateParse,
     DateUTC,
     // ── WeakMap built-in ──────────────────────────────────────────────
@@ -821,6 +823,7 @@ impl Builtin {
             Self::DateConstructor => "Date",
             Self::DateConstructorNew => "new Date",
             Self::DateNow => "Date.now",
+            Self::PerformanceNow => "performance.now",
             Self::DateParse => "Date.parse",
             Self::DateUTC => "Date.UTC",
 

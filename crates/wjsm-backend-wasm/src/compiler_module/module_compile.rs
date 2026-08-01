@@ -44,11 +44,14 @@ impl Compiler {
         let mut module = module.clone();
         let f64_for_hoist = crate::analysis_f64::F64Analysis::analyze(&module);
         let gc_for_hoist = GcAnalysis::analyze(&module, &f64_for_hoist);
-        crate::compiler_licm::hoist_loop_invariant_pure_calls(
+        // LICM：泛化到所有函数，返回每个函数被插入的提升 preheader 块索引
+        // （供 structured 编译在循环头前提前发射其指令）。
+        let hoisted = crate::compiler_licm::hoist_loop_invariant_pure_calls(
             &mut module,
             &f64_for_hoist,
             &gc_for_hoist,
         );
+        self.hoisted_preheader_blocks = hoisted.into_iter().collect();
         // Pass 0: f64 值类型传播分析（Step 1）——须在 GC 分析之前（2a 消费其结果）。
         let f64_analysis = crate::analysis_f64::F64Analysis::analyze(&module);
         self.f64_analysis = Some(f64_analysis.clone());
@@ -461,6 +464,8 @@ impl Compiler {
                 self.string_data.clone(),
             );
         }
+        // 编译结束，清理 LICM preheader 记录（块索引仅对本次编译有效）。
+        self.hoisted_preheader_blocks.clear();
         Ok(())
     }
 

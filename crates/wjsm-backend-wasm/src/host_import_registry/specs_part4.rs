@@ -381,6 +381,12 @@ pub(crate) static SPECS_PART4: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "performance_now",
+        type_idx: 4,
+        key: Some(HostImportKey::Builtin(Builtin::PerformanceNow)),
+        group: None,
+    },
+    HostImportSpec {
         name: "date_parse",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::DateParse)),

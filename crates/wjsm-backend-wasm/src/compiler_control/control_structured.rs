@@ -1,6 +1,33 @@
 use super::control_switch::SwitchCaseContext;
 use super::*;
 
+/// 判断 preheader 块 `start` 的 Jump 链是否最终汇入 `header`（链只经过
+/// hoisted 集合内的块——LICM 变换把旧 preheader 重定向到新 preheader，
+/// 形成 `外部 → 新 → … → 旧 → header` 的链，仅链尾直接 Jump(header)）。
+fn preheader_chain_reaches(
+    blocks: &[BasicBlock],
+    hoisted: &std::collections::HashSet<usize>,
+    start: usize,
+    header: usize,
+) -> bool {
+    let mut current = start;
+    loop {
+        match blocks[current].terminator() {
+            Terminator::Jump { target } => {
+                let t = target.0 as usize;
+                if t == header {
+                    return true;
+                }
+                if !hoisted.contains(&t) {
+                    return false;
+                }
+                current = t;
+            }
+            _ => return false,
+        }
+    }
+}
+
 impl Compiler {
     pub(crate) fn compile_structured(
         &mut self,
@@ -49,6 +76,39 @@ impl Compiler {
             }
 
             if let Some(loop_info) = loops.iter().find(|l| l.header_idx == idx) {
+                // C2：循环头编译前，先发射汇入该 header 的提升 preheader 指令。
+                // LICM 把循环不变量纯调用移到循环前执行一次；preheader 位于
+                // blocks 末尾，这里在 `Block + Loop` 之前顺序发射其指令（不发射
+                // Jump(header) terminator，fall-through 进入紧随的循环头）。
+                if let Some(func_id) = self.current_function_id
+                    && let Some(preheaders) =
+                        self.hoisted_preheader_blocks.get(&func_id).cloned()
+                {
+                    let mut chain: Vec<usize> = preheaders
+                        .iter()
+                        .copied()
+                        .filter(|&p| {
+                            // 顺序遍历可能已把 preheader 当作普通块编译过
+                            // （retarget 后外部前驱前向 Jump 到 preheader）；
+                            // 已编译的跳过，避免重复发射。
+                            !self.compiled_blocks.contains(&p)
+                                && preheader_chain_reaches(blocks, &preheaders, p, idx)
+                        })
+                        .collect();
+                    // 链上各 preheader 指令互相独立（无 phi、无副作用），任意序
+                    // 发射均可；按 idx 降序（链执行方向：新 preheader → 旧）。
+                    chain.sort_by(|a, b| b.cmp(a));
+                    for p in chain {
+                        self.compiled_blocks.insert(p);
+                        for (pi, ins) in blocks[p].instructions().iter().enumerate() {
+                            self.set_emit_cursor(p, pi);
+                            if self.compile_instruction(module, ins)? {
+                                // preheader 指令理论上不会 suspend；若发生，跳出。
+                                break;
+                            }
+                        }
+                    }
+                }
                 self.emit(WasmInstruction::Block(BlockType::Empty));
                 self.emit(WasmInstruction::Loop(BlockType::Empty));
                 self.loop_stack.push(loop_info.clone());

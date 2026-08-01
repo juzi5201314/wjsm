@@ -624,6 +624,14 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "date_now", date_now_fn)?;
 
+    let performance_now_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>| -> i64 {
+            crate::runtime_node_globals::call_performance_now(&mut caller)
+        },
+    );
+    linker.define(&mut store, "env", "performance_now", performance_now_fn)?;
+
     let date_parse_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, argument: i64| -> i64 {

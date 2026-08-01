@@ -268,9 +268,10 @@ impl Compiler {
                 }
                 Ok(BuiltinDispatch::Handled)
             }
-            // ── Math.random: () -> i64 ──
+            // ── Math.random / Date.now / performance.now: () -> i64 ──
             Builtin::MathRandom
             | Builtin::DateNow
+            | Builtin::PerformanceNow
             | Builtin::AtomicsPause => {
                 let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));

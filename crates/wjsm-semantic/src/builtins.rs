@@ -156,6 +156,10 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
             "trace" => Some(Builtin::ConsoleTrace),
             _ => None,
         },
+        "performance" => match property {
+            "now" => Some(Builtin::PerformanceNow),
+            _ => None,
+        },
         "Array" => match property {
             "isArray" => Some(Builtin::ArrayIsArray),
             "from" => Some(Builtin::ArrayFrom),
@@ -767,6 +771,7 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::DateConstructor => ("Date", 0),
         Builtin::DateConstructorNew => ("new Date", 0),
         Builtin::DateNow => ("Date.now", 0),
+        Builtin::PerformanceNow => ("performance.now", 0),
         Builtin::DateParse => ("Date.parse", 1),
         Builtin::DateUTC => ("Date.UTC", 1),
         // ── Arguments Exotic Object ──

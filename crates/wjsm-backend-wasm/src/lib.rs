@@ -13,8 +13,8 @@ use wasm_encoder::{
     NameSection, RefType, TableSection, TableType, TypeSection, ValType,
 };
 use wjsm_ir::{
-    BasicBlock, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction, HomeObject,
-    Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants,
+    BasicBlock, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction, FunctionId,
+    HomeObject, Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants,
     is_module_entry_ir_function, value,
 };
 
@@ -142,6 +142,9 @@ struct Compiler {
     phi_locals: HashMap<u32, u32>,
     /// Set of block indices already compiled (for dedup in structured compilation).
     compiled_blocks: std::collections::HashSet<usize>,
+    /// LICM 提升的 preheader 块索引（按函数分组）。structured 编译在循环头前
+    /// 提前发射其指令；compile_module 末尾清理。
+    hoisted_preheader_blocks: std::collections::HashMap<FunctionId, std::collections::HashSet<usize>>,
     /// Blocks whose code was already emitted by common_direct_jump optimization
     /// inside compile_branch_body_with_context. Prevents duplicate emission without
     /// affecting compile_structured's main loop break behavior.

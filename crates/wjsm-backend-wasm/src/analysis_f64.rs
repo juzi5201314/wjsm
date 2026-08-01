@@ -494,8 +494,13 @@ fn analyze_inner(module: &Module) -> F64Analysis {
         //    - never_exception：!can_throw(callee) 的精确调用结果。
         //    - constant_false：is_exception 且操作数必非异常。
         //    - dead_exception_blocks：constant_false 分支的异常目标块。
-        let next_never_exception =
-            compute_never_exception(module, &infos, &var_store_count, &next_can_throw);
+        let next_never_exception = compute_never_exception(
+            module,
+            &infos,
+            &var_store_count,
+            &next_known_f64,
+            &next_can_throw,
+        );
         let next_constant_false = compute_constant_false(module, &next_never_exception);
         let next_dead_blocks = compute_dead_exception_blocks(module, &next_constant_false);
 
@@ -526,7 +531,7 @@ fn analyze_inner(module: &Module) -> F64Analysis {
     // 迭代上限（非单调振荡保护）：以最后状态返回（保守：派生表随最后 can_throw）。
     let truthiness_only = compute_truthiness_only(module, &known_bool);
     let never_exception =
-        compute_never_exception(module, &infos, &var_store_count, &can_throw);
+        compute_never_exception(module, &infos, &var_store_count, &known_f64, &can_throw);
     F64Analysis {
         known_f64,
         known_bool,
@@ -561,6 +566,19 @@ fn compute_known_f64(
             && let Some(Constant::Number(_)) = constants.get(constant.0 as usize)
         {
             known.insert(*dest);
+        }
+    }
+
+    // 种子：CallBuiltin(PerformanceNow)——宿主毫秒时间戳，规范必为 f64，
+    // 循环头的 `sub(now, t0)`/`abstract_compare` 走已知 f64 直出路径。
+    for (_, ins) in &info.defs {
+        if let Instruction::CallBuiltin {
+            dest: Some(d),
+            builtin: Builtin::PerformanceNow,
+            ..
+        } = ins
+        {
+            known.insert(*d);
         }
     }
 
@@ -665,6 +683,8 @@ fn builtin_may_throw(
         | Builtin::ExceptionValue
         | Builtin::CreateException
         | Builtin::NewTarget => false,
+        // 宿主时间戳（不抛异常；返回值随时间变化不影响 can_throw 判定）。
+        Builtin::PerformanceNow => false,
         // 双已知 f64 → 编译期直出纯 f64 运算（无 ToNumeric/ToPrimitive）。
         Builtin::AbstractCompare if all_f64(2) => false,
         Builtin::F64Mod | Builtin::F64Exp if all_f64(2) => false,
@@ -816,15 +836,31 @@ fn compute_returns_f64(module: &Module, known_f64: &[HashSet<ValueId>]) -> Vec<b
     returns
 }
 
-/// 计算调用结果必非异常的 ValueId（精确 callee 且 !can_throw）。
+/// 计算调用结果必非异常的 ValueId（精确 callee 且 !can_throw，或
+/// `builtin_may_throw=false` 的 CallBuiltin 结果）。
 fn compute_never_exception(
     module: &Module,
     infos: &[FnInfo],
     var_store_count: &HashMap<&str, u32>,
+    known_f64: &[HashSet<ValueId>],
     can_throw: &[bool],
 ) -> Vec<HashSet<ValueId>> {
     let mut out: Vec<HashSet<ValueId>> = vec![HashSet::new(); infos.len()];
     for (fidx, info) in infos.iter().enumerate() {
+        // CallBuiltin：builtin_may_throw=false 的结果规范必非异常
+        // （如 performance.now 宿主时间戳——循环头的 is_exception 折叠）。
+        for (_, ins) in &info.defs {
+            if let Instruction::CallBuiltin {
+                dest: Some(d),
+                builtin,
+                args,
+                ..
+            } = ins
+                && !builtin_may_throw(*builtin, &known_f64[fidx], args)
+            {
+                out[fidx].insert(*d);
+            }
+        }
         for (dest, callee) in &info.calls {
             if let Some(g) = resolve_callee(module, info, var_store_count, *callee)
                 && !can_throw[g.0 as usize]

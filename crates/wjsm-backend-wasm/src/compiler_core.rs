@@ -322,6 +322,7 @@ impl Compiler {
             next_var_local: 0,
             phi_locals: HashMap::new(),
             compiled_blocks: std::collections::HashSet::new(),
+            hoisted_preheader_blocks: std::collections::HashMap::new(),
             branch_inline_compiled: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,

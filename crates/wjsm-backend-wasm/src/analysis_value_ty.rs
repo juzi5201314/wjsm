@@ -190,7 +190,7 @@ pub fn builtin_returns_scalar(b: &Builtin) -> bool {
         // 审计：has/delete 返回 bool；size 返回 number。
         | MapSetHas | MapSetDelete | MapSetGetSize
         // ── Date 静态方法（返回 number）──
-        | DateNow | DateParse | DateUTC
+        | DateNow | PerformanceNow | DateParse | DateUTC
         // ── TypedArray 长度/索引查询（返回 number）──
         | TypedArrayProtoLength | TypedArrayProtoByteLength | TypedArrayProtoByteOffset
         | TypedArrayProtoIndexOf | TypedArrayProtoLastIndexOf | TypedArrayProtoIncludes

@@ -22,10 +22,9 @@
 
 use crate::analysis_f64::F64Analysis;
 use crate::compiler_gc_analysis::GcAnalysis;
-use crate::is_module_entry_ir_function;
 use std::cmp::Reverse;
 use std::collections::HashSet;
-use wjsm_ir::{BasicBlock, BasicBlockId, FunctionId, Instruction, Module, Terminator, ValueId};
+use wjsm_ir::{BasicBlock, BasicBlockId, Builtin, FunctionId, Instruction, Module, Terminator, ValueId};
 
 /// 指令的 dest（与 wjsm-ir verify 的 instruction_dest 相同的完整匹配）。
 fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
@@ -257,21 +256,221 @@ struct HoistPlan {
     body: HashSet<usize>,
 }
 
+/// builtin 是否为「确定纯」：不写持久状态、结果确定、不依赖时钟/RNG。
+///
+/// 白名单与 `builtin_may_throw` 的 f64 特例条件一致：仅已知 f64 实参的算术
+/// builtin 可确定纯（无 ToNumeric/ToPrimitive/reentrant）。其余 builtin
+/// （MathRandom/DateNow/ConsoleLog 等）一律视为非纯——若未来新增确定纯
+/// builtin，需同步两处。
+fn deterministic_pure_builtin(
+    builtin: Builtin,
+    f64: &F64Analysis,
+    func_id: FunctionId,
+    args: &[ValueId],
+) -> bool {
+    let all_f64 = |need: usize| {
+        args.len() >= need
+            && args
+                .iter()
+                .take(need)
+                .all(|a| f64.value_known_f64(func_id, *a))
+    };
+    match builtin {
+        Builtin::AbstractCompare if all_f64(2) => true,
+        Builtin::F64Mod | Builtin::F64Exp if all_f64(2) => true,
+        _ => false,
+    }
+}
+
+/// 计算「可能写持久状态」函数表（false→true 单调不动点，上限 64 轮）。
+///
+/// 命中即 true：`StoreVar`（写变量）、非确定纯的 `CallBuiltin`、已知 callee
+/// 传递其表值、unknown callee / `SuperCall` / 属性写 / 对象构造 / `Suspend`
+/// （can_throw 已拒这些路径，此处为提升 gate 的双保险）。死异常块跳过
+/// （与 `compute_can_throw` 同模式——折叠路径不构成真实状态写）。
+fn compute_may_write_state(
+    module: &Module,
+    f64: &F64Analysis,
+    gc: &GcAnalysis,
+) -> Vec<bool> {
+    let n = module.functions().len();
+    let mut may_write = vec![false; n];
+    for _ in 0..64 {
+        let mut changed = false;
+        for (fidx, f) in module.functions().iter().enumerate() {
+            if may_write[fidx] {
+                continue;
+            }
+            let func_id = FunctionId(fidx as u32);
+            let mut writes = false;
+            for (bidx, bb) in f.blocks().iter().enumerate() {
+                if f64.is_dead_exception_block(func_id, bidx) {
+                    continue;
+                }
+                for ins in bb.instructions() {
+                    match ins {
+                        Instruction::StoreVar { .. } => {
+                            writes = true;
+                            break;
+                        }
+                        Instruction::CallBuiltin { builtin, args, .. } => {
+                            if !deterministic_pure_builtin(*builtin, f64, func_id, args) {
+                                writes = true;
+                                break;
+                            }
+                        }
+                        Instruction::Call { callee, .. }
+                        | Instruction::ConstructCall { callee, .. }
+                        | Instruction::OptionalCall { callee, .. } => {
+                            match gc.direct_call_target(func_id, *callee) {
+                                Some(g) => {
+                                    if may_write[g.0 as usize] {
+                                        writes = true;
+                                        break;
+                                    }
+                                }
+                                // Unknown callee：可能写状态。
+                                None => {
+                                    writes = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Instruction::SuperCall { .. }
+                        | Instruction::SetProp { .. }
+                        | Instruction::SetElem { .. }
+                        | Instruction::SetProto { .. }
+                        | Instruction::DeleteProp { .. }
+                        | Instruction::NewObject { .. }
+                        | Instruction::NewArray { .. }
+                        | Instruction::Suspend { .. }
+                        | Instruction::GeneratorSuspend { .. } => {
+                            writes = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if writes {
+                    break;
+                }
+            }
+            if writes {
+                may_write[fidx] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    may_write
+}
+
+/// 计算「可能读持久状态」函数表（false→true 单调不动点，上限 64 轮）。
+///
+/// 命中即 true：`LoadVar` 读模块/闭包变量（非形参、非 `$env`/`$this`/
+/// `xxx.$env`）、`GetProp`/`GetElem` 系、已知 callee 传递其表值、unknown
+/// callee / `SuperCall`。死异常块跳过。
+fn compute_may_read_global(module: &Module, f64: &F64Analysis, gc: &GcAnalysis) -> Vec<bool> {
+    let n = module.functions().len();
+    let mut may_read = vec![false; n];
+    for _ in 0..64 {
+        let mut changed = false;
+        for (fidx, f) in module.functions().iter().enumerate() {
+            if may_read[fidx] {
+                continue;
+            }
+            let func_id = FunctionId(fidx as u32);
+            let params: Vec<&str> = f.params().iter().map(|s| s.as_str()).collect();
+            let mut reads = false;
+            for (bidx, bb) in f.blocks().iter().enumerate() {
+                if f64.is_dead_exception_block(func_id, bidx) {
+                    continue;
+                }
+                for ins in bb.instructions() {
+                    match ins {
+                        Instruction::LoadVar { name, .. } => {
+                            let s = name.as_str();
+                            // 形参与环境/this 句柄不构成持久状态读。
+                            if !params.contains(&s)
+                                && s != "$env"
+                                && s != "$this"
+                                && !s.ends_with(".$env")
+                            {
+                                reads = true;
+                                break;
+                            }
+                        }
+                        Instruction::GetProp { .. }
+                        | Instruction::GetElem { .. }
+                        | Instruction::OptionalGetProp { .. }
+                        | Instruction::OptionalGetElem { .. } => {
+                            reads = true;
+                            break;
+                        }
+                        Instruction::Call { callee, .. }
+                        | Instruction::ConstructCall { callee, .. }
+                        | Instruction::OptionalCall { callee, .. } => {
+                            match gc.direct_call_target(func_id, *callee) {
+                                Some(g) => {
+                                    if may_read[g.0 as usize] {
+                                        reads = true;
+                                        break;
+                                    }
+                                }
+                                // Unknown callee：可能读全局状态。
+                                None => {
+                                    reads = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Instruction::SuperCall { .. } => {
+                            reads = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if reads {
+                    break;
+                }
+            }
+            if reads {
+                may_read[fidx] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    may_read
+}
+
 /// 循环不变量纯调用提升主入口。
 ///
-/// 只处理模块入口函数（其 while 循环走 cfg_dispatch 编译路径）。调用方须在
-/// 变换前先跑 F64Analysis/GcAnalysis（本 pass 的 gate 消费其结果）；变换后
-/// 应重新分析（preheader 的调用结果可能被循环内的 is_exception 消费）。
+/// 遍历所有函数（模块入口与 JS 函数）的自然循环，提升循环体内满足
+/// `!may_gc ∧ !can_throw ∧ 两表均 false ∧ 参数循环不变` 的直接调用。调用方
+/// 须在变换前先跑 F64Analysis/GcAnalysis（本 pass 的 gate 消费其结果）；变换
+/// 后应重新分析（preheader 的调用结果可能被循环内的 is_exception 消费）。
+///
+/// 返回每个函数被插入的 preheader 块索引（供 structured 编译在循环头前
+/// 提前发射其指令）；无提升的函数不在返回中。
 pub(crate) fn hoist_loop_invariant_pure_calls(
     module: &mut Module,
     f64: &F64Analysis,
     gc: &GcAnalysis,
-) {
+) -> Vec<(FunctionId, HashSet<usize>)> {
+    // A1：模块级「可能写/读持久状态」表（false→true 单调不动点）。
+    let may_write_state = compute_may_write_state(module, f64, gc);
+    let may_read_global = compute_may_read_global(module, f64, gc);
+
+    let mut hoisted: Vec<(FunctionId, HashSet<usize>)> = Vec::new();
     for func_idx in 0..module.functions().len() {
         let func_id = FunctionId(func_idx as u32);
-        if !is_module_entry_ir_function(module.functions()[func_idx].name()) {
-            continue;
-        }
+        let mut preheaders: HashSet<usize> = HashSet::new();
 
         // 收集阶段（只读快照）。
         let mut plans: Vec<HoistPlan> = Vec::new();
@@ -279,6 +478,15 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
             let function = &module.functions()[func_idx];
             let blocks = function.blocks();
             for (latch, header) in find_back_edges(blocks) {
+                // C1：循环头含 Phi → 跳过该循环（phi 边在 preheader 重定向后
+                // 需额外的值更新逻辑，泛化阶段不做）。模块入口循环头无 Phi。
+                if blocks[header]
+                    .instructions()
+                    .iter()
+                    .any(|ins| matches!(ins, Instruction::Phi { .. }))
+                {
+                    continue;
+                }
                 let body = compute_loop_body(blocks, header, latch);
                 for &b in &body {
                     let block = &blocks[b];
@@ -293,6 +501,13 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                             continue;
                         };
                         if gc.function_may_gc(callee_fn) || f64.function_can_throw(callee_fn) {
+                            continue;
+                        }
+                        // A2：拒绝可能写/读持久状态的 callee——提升会改变其执行
+                        // 次数（从每迭代一次变为每入口一次），破坏 ECMAScript 语义。
+                        if may_write_state[callee_fn.0 as usize]
+                            || may_read_global[callee_fn.0 as usize]
+                        {
                             continue;
                         }
                         if !all_loop_invariant(
@@ -391,6 +606,12 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                 preheader_id,
             );
             function.push_block(preheader);
+            // 记录新 preheader 的块索引（append 后即 blocks 末位）。
+            preheaders.insert(function.blocks().len() - 1);
+        }
+        if !preheaders.is_empty() {
+            hoisted.push((func_id, preheaders));
         }
     }
+    hoisted
 }
