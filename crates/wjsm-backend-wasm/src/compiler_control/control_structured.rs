@@ -196,10 +196,24 @@ impl Compiler {
                             Terminator::Throw { .. } | Terminator::Unreachable
                         )
                     {
-                        // 异常路径死代码：直接顺序编译正常路径（主循环会自行
-                        // compiled_blocks.insert + 编译，此处不可提前标记）。
-                        idx = false_idx;
-                        continue;
+                        // 折叠安全判据：`idx = false_idx` 会跳过 (idx+1..false_idx)
+                        // 的中间块，顺序推进不会再回头。若 false_idx 是循环回边块
+                        // （Jump 到活跃循环头），回边 br 后主循环走到函数尾，位于
+                        // 回边之前的循环出口块（循环头 branch 的 false 分支）会
+                        // 永久丢失——此时放弃折叠，走通用 branch 编译（保留死
+                        // 异常路径，语义正确）。非回边折叠（如 fib30 的 i++ 跳板）
+                        // 后续顺序遍历可补回出口块，仍可折叠。
+                        let false_is_backedge = matches!(
+                            blocks[false_idx].terminator(),
+                            Terminator::Jump { target }
+                                if self.loop_continue_depth(target.0 as usize).is_some()
+                        );
+                        if !false_is_backedge {
+                            // 异常路径死代码：直接顺序编译正常路径（主循环会自行
+                            // compiled_blocks.insert + 编译，此处不可提前标记）。
+                            idx = false_idx;
+                            continue;
+                        }
                     }
 
                     // 循环头条件（while/for 模式）：
