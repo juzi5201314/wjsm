@@ -111,6 +111,7 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     // 算术：两操作数均为 BigInt 时走 bigint_* host（除法截断 toward zero）
+                    // Step 2c：双已知 f64 → 直接 f64 运算（无 BigInt 分派、无 ToNumber、无类型检查）。
                     BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                         let lhs_l = self.local_idx(lhs.0);
                         let rhs_l = self.local_idx(rhs.0);
@@ -120,7 +121,16 @@ impl Compiler {
                             BinaryOp::Div => (Builtin::BigIntDiv, WasmInstruction::F64Div),
                             _ => unreachable!(),
                         };
-                        self.emit_bigint_or_f64_binary(lhs_l, rhs_l, bigint_builtin, f64_op)?;
+                        if self.value_known_f64(*lhs) && self.value_known_f64(*rhs) {
+                            self.emit(WasmInstruction::LocalGet(lhs_l));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(WasmInstruction::LocalGet(rhs_l));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(f64_op);
+                            self.emit(WasmInstruction::I64ReinterpretF64);
+                        } else {
+                            self.emit_bigint_or_f64_binary(lhs_l, rhs_l, bigint_builtin, f64_op)?;
+                        }
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     // 位运算：BigInt 无限精度补码；Number 走 ToInt32
@@ -156,12 +166,24 @@ impl Compiler {
                             BinaryOp::Exp => (Builtin::BigIntPow, Builtin::F64Exp),
                             _ => unreachable!(),
                         };
-                        self.emit_bigint_or_f64_host_binary(
-                            lhs_l,
-                            rhs_l,
-                            bigint_builtin,
-                            f64_builtin,
-                        )?;
+                        if self.value_known_f64(*lhs) && self.value_known_f64(*rhs) {
+                            // Step 2c：双已知 f64 → 直接 host f64 运算（无 BigInt/混合类型分派）。
+                            self.emit(WasmInstruction::LocalGet(lhs_l));
+                            self.emit(WasmInstruction::LocalGet(rhs_l));
+                            let f64_idx = self
+                                .builtin_func_indices
+                                .get(&f64_builtin)
+                                .copied()
+                                .with_context(|| format!("no WASM func index for {f64_builtin}"))?;
+                            self.emit(WasmInstruction::Call(f64_idx));
+                        } else {
+                            self.emit_bigint_or_f64_host_binary(
+                                lhs_l,
+                                rhs_l,
+                                bigint_builtin,
+                                f64_builtin,
+                            )?;
+                        }
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                 }
@@ -170,7 +192,7 @@ impl Compiler {
             Instruction::Unary { dest, op, value } => {
                 match op {
                     UnaryOp::Not => {
-                        self.emit_to_bool_i32(value.0);
+                        self.emit_condition_to_bool_i32(*value);
                         self.emit(WasmInstruction::I32Const(1));
                         self.emit(WasmInstruction::I32Xor);
                         self.emit(WasmInstruction::I64ExtendI32U);
@@ -255,6 +277,26 @@ impl Compiler {
                 builtin,
                 args,
             } => {
+                // Step 2d：AbstractCompare 双已知 f64 → 编译期直出 f64.lt
+                // （无 host call、无 GC 风险）→ 免 spill。
+                let known_f64_compare = *builtin == Builtin::AbstractCompare
+                    && args.len() >= 2
+                    && self.value_known_f64(args[0])
+                    && self.value_known_f64(args[1]);
+                if known_f64_compare {
+                    self.compile_builtin_call(*dest, builtin, args)?;
+                    return Ok(false);
+                }
+                // Step 3：比较类 builtin（AbstractCompare/StrictEq/AbstractEq）的 spill
+                // 移入 slow path（fast path 双 f64 检查通过后无 host call/GC）——
+                // 外层不再无条件 spill。
+                if matches!(
+                    builtin,
+                    Builtin::AbstractCompare | Builtin::StrictEq | Builtin::AbstractEq
+                ) {
+                    self.compile_builtin_call(*dest, builtin, args)?;
+                    return Ok(false);
+                }
                 // GC safepoint（P2）：spill live handles 再调 builtin。
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);

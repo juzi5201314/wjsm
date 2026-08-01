@@ -49,11 +49,13 @@ impl Compiler {
     /// 返回当前 emit 位置（紧邻当前指令执行前）需 spill 的 local idx 列表。
     /// = live ValueId ∩ Handle 类型（保守：ValueTy 缺失当 Handle）→ local_idx。
     /// 结果已 sort + dedup。
-    pub(super) fn current_spill_locals(&self) -> Vec<u32> {
+    pub(crate) fn current_spill_locals(&self) -> Vec<u32> {
         let block_id = wjsm_ir::BasicBlockId(self.current_emit_block_idx as u32);
         let mut spill: Vec<u32> = Vec::new();
 
         // ── SSA 值 spill：存活且 Handle 类型的 ValueId → local（ValueTy 缺失保守当 Handle）──
+        // Step 2b：known_f64 / known_bool 的值规范不持 GC handle（plain double 位模式 /
+        // boxed bool 低 32 位仅 payload bit），一律跳过 spill。
         if let Some(liveness) = &self.current_fn_liveness
             && let Some(live) = liveness
                 .get(&block_id)
@@ -63,9 +65,11 @@ impl Compiler {
             spill.extend(
                 live.iter()
                     .filter(|v| {
-                        value_ty
-                            .and_then(|m| m.get(v))
-                            .is_none_or(|t| *t == ValueTy::Handle)
+                        !self.value_known_f64(**v)
+                            && !self.value_known_bool(**v)
+                            && value_ty
+                                .and_then(|m| m.get(v))
+                                .is_none_or(|t| *t == ValueTy::Handle)
                     })
                     .map(|v| self.local_idx(v.0)),
             );
@@ -559,7 +563,7 @@ impl Compiler {
     /// 改用 immediate offset：先把 shadow_sp 存为 spill_base，N 个值全部写到
     /// `base + i*8`（每值 3 条），最后一次性把 shadow_sp 推进 N*8 让 GC 扫到 spilled 值。
     /// 总指令：2（存 base）+ 3N（写 N 值）+ 4（推进 sp）= 3N+6（vs 原 7N+2），N=35 时 111 vs 247。
-    pub(super) fn emit_safepoint_spill_prologue(&mut self, spill: &[u32]) {
+    pub(crate) fn emit_safepoint_spill_prologue(&mut self, spill: &[u32]) {
         if spill.is_empty() {
             return;
         }
@@ -582,7 +586,7 @@ impl Compiler {
     }
 
     /// Safepoint spill epilogue：恢复 shadow_sp 到 prologue 保存的值（non-moving 无需 reload local）。
-    pub(super) fn emit_safepoint_spill_epilogue(&mut self, spill_count: usize) {
+    pub(crate) fn emit_safepoint_spill_epilogue(&mut self, spill_count: usize) {
         if spill_count == 0 {
             return;
         }

@@ -141,7 +141,7 @@ impl Compiler {
                                     if false_block.0 as usize == l.exit_idx
                             )
                     }) {
-                        self.emit_to_bool_i32(condition.0);
+                        self.emit_condition_to_bool_i32(*condition);
                         self.emit(WasmInstruction::I32Eqz);
                         let break_depth = self.loop_break_depth(false_idx).unwrap_or(1);
                         let adj = if false_idx >= *case_start {
@@ -156,7 +156,7 @@ impl Compiler {
 
                     // do-while 条件（true 目标是循环头）
                     if let Some(depth) = self.loop_continue_depth(true_idx) {
-                        self.emit_to_bool_i32(condition.0);
+                        self.emit_condition_to_bool_i32(*condition);
                         let adj = if true_idx >= *case_start {
                             depth
                         } else {
@@ -174,7 +174,7 @@ impl Compiler {
                         self.emit(WasmInstruction::Block(BlockType::Empty));
                         self.emit(WasmInstruction::Loop(BlockType::Empty));
 
-                        self.emit_to_bool_i32(condition.0);
+                        self.emit_condition_to_bool_i32(*condition);
                         self.emit(WasmInstruction::If(BlockType::Empty));
 
                         // true 分支
@@ -214,7 +214,7 @@ impl Compiler {
                     }
 
                     // 普通 if/else
-                    self.emit_to_bool_i32(condition.0);
+                    self.emit_condition_to_bool_i32(*condition);
                     self.if_depth += 1;
                     self.emit(WasmInstruction::If(BlockType::Empty));
 

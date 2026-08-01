@@ -1,9 +1,49 @@
 use super::*;
+use super::module_bootstrap::PrologueKind;
+
+/// 判定函数是否可获得 direct_call fast 入口；返回声明形参数（排除 $env/$this）。
+///
+/// 条件：direct_callable（不依赖 env/this/new.target、无 eval）且函数体不引用
+/// `arguments`/rest 参数（fast 入口无 args_base/args_count，无法构造 arguments 对象）。
+/// 形参数超过 `MAX_FAST_PARAMS` 时回退 slow 入口。
+fn fast_entry_param_count(function: &IrFunction) -> Option<u32> {
+    if !function.direct_callable() {
+        return None;
+    }
+    let n = function
+        .params()
+        .iter()
+        .filter(|p| {
+            let s = p.as_str();
+            s != "$env" && s != "$this" && !s.ends_with(".$env") && !s.ends_with(".$this")
+        })
+        .count() as u32;
+    if n > MAX_FAST_PARAMS {
+        return None;
+    }
+    for bb in function.blocks() {
+        for ins in bb.instructions() {
+            match ins {
+                Instruction::CollectRestArgs { .. } => return None,
+                Instruction::LoadVar { name, .. }
+                    if name == "arguments" || name.ends_with(".arguments") =>
+                {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+    }
+    Some(n)
+}
 
 impl Compiler {
     pub(crate) fn compile_module(&mut self, module: &IrModule) -> Result<()> {
+        // Pass 0: f64 值类型传播分析（Step 1）——须在 GC 分析之前（2a 消费其结果）。
+        let f64_analysis = crate::analysis_f64::F64Analysis::analyze(module);
+        self.f64_analysis = Some(f64_analysis.clone());
         // Pass 0: 模块级 GC 分析（Layer 3c）
-        self.gc_analysis = Some(GcAnalysis::analyze(module));
+        self.gc_analysis = Some(GcAnalysis::analyze(module, &f64_analysis));
         // 收集源文件路径和函数源码位置映射（供运行时错误堆栈映射）。
         self.source_file = module.source_file().map(|s| s.to_string());
 
@@ -48,6 +88,29 @@ impl Compiler {
                     .push((wasm_idx, span.line, span.col));
             }
             self._next_import_func += 1;
+
+            // Step 4a：direct_callable 且不引用 arguments/rest 的函数注册 fast 入口
+            // （参数寄存器直传，不入函数表——仅直接 call 引用）。模块入口（main/eval
+            // entry）走 compile_function，不注册 fast 入口。
+            if !is_module_entry_ir_function(function.name())
+                && let Some(n) = fast_entry_param_count(function)
+            {
+                let fast_idx = self._next_import_func;
+                self.functions
+                    .function(FAST_ENTRY_TYPE_BASE + n);
+                self._next_import_func += 1;
+                if let Some(span) = function.source_span() {
+                    self.source_map_entries
+                        .push((fast_idx, span.line, span.col));
+                }
+                self.function_fast_entries.insert(
+                    i as u32,
+                    FastEntry {
+                        param_count: n,
+                        wasm_idx: fast_idx,
+                    },
+                );
+            }
         }
 
         // Add main export (must be known now).
@@ -240,7 +303,21 @@ impl Compiler {
                     module,
                     function,
                     wjsm_ir::FunctionId(function_id as u32),
+                    PrologueKind::Shadow,
                 )?;
+                // Step 4a：fast 入口体紧随 slow 入口体发射，
+                // 与 Pass 1 的函数段注册顺序（slow → fast）保持一致。
+                if let Some(&FastEntry { param_count, .. }) = self
+                    .function_fast_entries
+                    .get(&(function_id as u32))
+                {
+                    self.compile_js_function(
+                        module,
+                        function,
+                        wjsm_ir::FunctionId(function_id as u32),
+                        PrologueKind::Direct(param_count),
+                    )?;
+                }
             }
         }
 

@@ -34,6 +34,23 @@ const ENV_GLOBAL_EXPORT_NAMES: &[&str] = &[
 ];
 
 impl Compiler {
+    /// 当前函数内某 ValueId 是否规范必为 f64（Step 1 分析）。
+    /// module entry / eval 入口（未设 current_function_id）→ 保守 false。
+    pub(crate) fn value_known_f64(&self, value_id: wjsm_ir::ValueId) -> bool {
+        match (self.current_function_id, self.f64_analysis.as_ref()) {
+            (Some(fid), Some(a)) => a.value_known_f64(fid, value_id),
+            _ => false,
+        }
+    }
+
+    /// 当前函数内某 ValueId 是否规范必为 boxed bool（Step 1 分析）。
+    pub(crate) fn value_known_bool(&self, value_id: wjsm_ir::ValueId) -> bool {
+        match (self.current_function_id, self.f64_analysis.as_ref()) {
+            (Some(fid), Some(a)) => a.value_known_bool(fid, value_id),
+            _ => false,
+        }
+    }
+
     pub(crate) fn push_func_table(&mut self, wasm_idx: u32) {
         let table_pos = self.table_base + self.function_table.len() as u32;
         self.function_table_reverse.insert(wasm_idx, table_pos);
@@ -350,6 +367,7 @@ impl Compiler {
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             function_id_to_wasm_idx: HashMap::new(),
+            function_fast_entries: HashMap::new(),
             object_proto_handle_global_idx: 9,
             bootstrap_done_global_idx: 12,
             function_props_done_global_idx: 13,
@@ -377,6 +395,7 @@ impl Compiler {
             current_emit_block_idx: 0,
             current_emit_instr_idx: 0,
             gc_analysis: None,
+            f64_analysis: None,
             normal_init_values: None,
             source_file: None,
             source_map_entries: Vec::new(),

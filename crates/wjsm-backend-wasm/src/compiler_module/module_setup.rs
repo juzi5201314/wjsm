@@ -18,10 +18,10 @@ impl Compiler {
     /// 编译期静态计算；运行期只发一个比较。
     pub(super) fn emit_safepoint_capacity_check(
         &mut self,
-        _module: &IrModule,
+        module: &IrModule,
         function: &IrFunction,
     ) {
-        let spill_upper_bound = self.compute_max_spill_bytes(function);
+        let spill_upper_bound = self.compute_max_spill_bytes(module, function);
         if spill_upper_bound == 0 {
             return;
         }
@@ -33,7 +33,7 @@ impl Compiler {
     }
 
     /// 计算本函数所有 safepoint 处 live handle local 数的最大值 × 8（字节）。
-    pub(super) fn compute_max_spill_bytes(&self, function: &IrFunction) -> usize {
+    pub(super) fn compute_max_spill_bytes(&self, module: &IrModule, function: &IrFunction) -> usize {
         let Some(liveness) = &self.current_fn_liveness else {
             return 0;
         };
@@ -51,14 +51,54 @@ impl Compiler {
                 if !Self::is_safepoint(ins) {
                     continue;
                 }
+                // 该指令处代码生成是否**实际** spill（与 instr_main 的 spill 决策镜像）：
+                // - Call：仅当 call_may_trigger_gc（may_gc=false 的已知 callee 不 spill）；
+                // - CallBuiltin(AbstractCompare) 双已知 f64：编译期直出 f64.lt，无 spill；
+                // - 其余 is_safepoint 指令：一律 spill（保守）。
+                // 上界只需覆盖实际 spill，跳过不 spill 的 safepoint 才能让
+                // 纯数值热函数（如 fib）免除容量检查。
+                let actually_spills = match ins {
+                    Instruction::Call { callee, .. } => {
+                        !self.current_function_id.is_some_and(|fid| {
+                            self.gc_analysis
+                                .as_ref()
+                                .is_some_and(|a| !a.call_may_trigger_gc(fid, *callee))
+                        })
+                    }
+                    Instruction::CallBuiltin {
+                        builtin: Builtin::AbstractCompare,
+                        args,
+                        ..
+                    } => {
+                        !(args.len() >= 2
+                            && self.value_known_f64(args[0])
+                            && self.value_known_f64(args[1]))
+                    }
+                    // 仅 BigInt/RegExp 字面量经 host 分配（instr_main Const 分支）→ spill；
+                    // 普通 Const（Number/Bool/String-in-data/FunctionRef/Undefined/Null）不 spill。
+                    Instruction::Const { constant, .. } => {
+                        matches!(
+                            module.constants().get(constant.0 as usize),
+                            Some(Constant::BigInt(_)) | Some(Constant::RegExp { .. })
+                        )
+                    }
+                    _ => true,
+                };
+                if !actually_spills {
+                    continue;
+                }
                 let mut cnt = 0usize;
                 if let Some(live) = instr_map.get(&i) {
                     cnt += live
                         .iter()
                         .filter(|v| {
-                            value_ty
-                                .and_then(|m| m.get(v))
-                                .is_none_or(|t| *t == ValueTy::Handle)
+                            // 与 current_spill_locals 的过滤一致：known_f64/known_bool
+                            // （规范不持 GC handle）与 Scalar 一律不算 spill 上界。
+                            !self.value_known_f64(**v)
+                                && !self.value_known_bool(**v)
+                                && value_ty
+                                    .and_then(|m| m.get(v))
+                                    .is_none_or(|t| *t == ValueTy::Handle)
                         })
                         .count();
                 }

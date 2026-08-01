@@ -307,7 +307,7 @@ impl Compiler {
                     && !block_has_suspend(&blocks[true_idx])
                     && !block_has_suspend(&blocks[false_idx])
                 {
-                    self.emit_to_bool_i32(condition.0);
+                    self.emit_condition_to_bool_i32(*condition);
                     self.if_depth += 1;
                     self.emit(WasmInstruction::If(BlockType::Empty));
 
@@ -347,7 +347,7 @@ impl Compiler {
                     );
                 }
 
-                self.emit_to_bool_i32(condition.0);
+                self.emit_condition_to_bool_i32(*condition);
                 self.if_depth += 1;
                 self.emit(WasmInstruction::If(BlockType::Empty));
 

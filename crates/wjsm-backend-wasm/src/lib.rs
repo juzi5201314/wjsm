@@ -2,6 +2,8 @@
 // decision directly via `GcAnalysis::call_may_trigger_gc` — see
 // tests/compiler_gc_analysis_spill.rs for why the WAT-level signal is ambiguous.
 pub use crate::compiler_gc_analysis::GcAnalysis;
+// Step 1 f64 值类型传播分析结果，供集成测试直接断言形参/值类型判定。
+pub use crate::analysis_f64::F64Analysis;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use wasm_encoder::{
@@ -164,6 +166,8 @@ struct Compiler {
     function_name_to_wasm_idx: HashMap<String, u32>,
     /// IR function ID → WASM function index (bridge for FunctionRef → table position).
     function_id_to_wasm_idx: HashMap<u32, u32>,
+    /// IR function ID → direct_call fast 入口（Step 4，参数寄存器直传）。
+    function_fast_entries: HashMap<u32, FastEntry>,
     /// WASM index of $obj_new helper.
     obj_new_func_idx: u32,
     /// WASM index of $obj_get helper.
@@ -308,6 +312,10 @@ struct Compiler {
     // ── Layer 3: callee no-GC 分析 ──
     /// 模块级 GC 分析结果。compile_module 入口计算一次，用于 Call safepoint 省略判断。
     gc_analysis: Option<GcAnalysis>,
+    // ── f64 值类型传播分析（Step 1）──
+    /// 模块级 f64/bool 类型分析结果。compile_module 入口计算一次，供无检查的
+    /// f64 运算/比较/ToBoolean 代码生成与 spill 过滤。
+    f64_analysis: Option<analysis_f64::F64Analysis>,
     /// P2.2: Normal mode 下 globals 的编译期初始值，用于 main prologue 的 global.set 初始化。
     /// Eval mode 下为 None（globals 由父模块初始化）。
     normal_init_values: Option<NormalGlobalsInit>,
@@ -330,6 +338,15 @@ struct Compiler {
     debug_local_entries: Vec<(u32, u32, String)>,
     /// debugger 语句 PC：(func_wasm_idx, wasm_pc)
     debug_debugger_pcs: Vec<(u32, u32)>,
+}
+
+/// direct_call fast 入口信息（Step 4）：参数寄存器直传，无 shadow 传参。
+#[derive(Debug, Clone, Copy)]
+struct FastEntry {
+    /// 声明形参数（= fast 入口 wasm 参数数 − 2：env/this）。
+    param_count: u32,
+    /// fast 入口的 wasm 函数索引（不入函数表，仅直接 call 引用）。
+    wasm_idx: u32,
 }
 
 /// Normal mode 下需要初始化的 globals 编译期值。
@@ -427,6 +444,7 @@ fn import_support_helpers(imports: &mut ImportSection) {
 pub mod analysis_liveness;
 pub mod analysis_value_ty;
 pub use analysis_value_ty::{ValueTy, builtin_returns_scalar};
+mod analysis_f64;
 mod compiler_builtins;
 mod compiler_builtins_async_proxy;
 mod compiler_builtins_collections;

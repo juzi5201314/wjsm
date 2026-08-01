@@ -58,8 +58,13 @@ pub struct GcAnalysis {
 impl GcAnalysis {
     /// 执行模块级 GC 分析。
     ///
+    /// `f64_analysis` 供 Layer 2 的 f64 值类型传播（Step 1）消费：
+    /// `AbstractCompare` 若实参均为已知 f64，编译期直出 `f64.lt`（fast path 必走，
+    /// 无 ToPrimitive/reentrant）→ 不算 GC 指令，从而让纯数值函数 `may_gc=false`，
+    /// 递归调用点省 spill。
+    ///
     /// 返回 `GcAnalysis { may_gc: Vec<bool> }`，每个函数一个 bool。
-    pub fn analyze(module: &Module) -> Self {
+    pub fn analyze(module: &Module, f64_analysis: &crate::analysis_f64::F64Analysis) -> Self {
         let num_functions = module.functions().len();
         if num_functions == 0 {
             return Self {
@@ -115,6 +120,20 @@ impl GcAnalysis {
                         }
 
                         // ── CallBuiltin：按白名单反面判定 ──
+                        // AbstractCompare 双已知 f64 → 编译期直出 f64.lt，不算 GC 指令。
+                        Instruction::CallBuiltin {
+                            builtin: Builtin::AbstractCompare,
+                            args,
+                            ..
+                        } => {
+                            let both_known_f64 = args.len() >= 2
+                                && f64_analysis.value_known_f64(func_id, args[0])
+                                && f64_analysis.value_known_f64(func_id, args[1]);
+                            if !both_known_f64 {
+                                // AbstractCompare 不在标量白名单，slow path 可能触发 GC。
+                                direct_may_gc[func_idx] = true;
+                            }
+                        }
                         Instruction::CallBuiltin { builtin, .. } => {
                             if builtin_may_trigger_gc(builtin) {
                                 direct_may_gc[func_idx] = true;

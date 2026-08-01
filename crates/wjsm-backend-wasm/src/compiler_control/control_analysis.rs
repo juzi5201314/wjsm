@@ -180,7 +180,7 @@ impl Compiler {
                 true_block,
                 false_block,
             } => {
-                self.emit_to_bool_i32(condition.0);
+                self.emit_condition_to_bool_i32(*condition);
                 self.emit(WasmInstruction::If(BlockType::Empty));
                 self.emit_dispatch_jump(blocks, idx, true_block.0 as usize, pc, 2);
                 self.emit(WasmInstruction::Else);

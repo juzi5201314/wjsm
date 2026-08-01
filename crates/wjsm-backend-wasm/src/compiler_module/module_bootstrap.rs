@@ -1,5 +1,27 @@
 use super::*;
 
+/// JS 函数 prologue 种类（Step 4）。
+///
+/// - `Shadow`：现有 Type 12 入口 `(env, this, args_base, args_count) -> i64`，
+///   形参从 shadow stack 读取（argc 检查 + 越界补 undefined）。
+/// - `Direct(n)`：fast 入口 `(env, this, p0..p{n-1}) -> i64`，形参即 wasm 参数
+///   （寄存器直传），无 args_base/args_count、无 argc 分支、无 shadow 读。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrologueKind {
+    Shadow,
+    Direct(u32),
+}
+
+impl PrologueKind {
+    /// wasm 参数个数（前几个 local 由类型签名提供，不入 Function::new locals）。
+    fn wasm_param_count(self) -> u32 {
+        match self {
+            PrologueKind::Shadow => 4,
+            PrologueKind::Direct(n) => 2 + n,
+        }
+    }
+}
+
 impl Compiler {
     fn emit_startup_phase_call(&mut self, func_idx: u32) {
         self.emit(WasmInstruction::Call(func_idx));
@@ -350,13 +372,16 @@ impl Compiler {
         module: &IrModule,
         function: &IrFunction,
         function_id: wjsm_ir::FunctionId,
+        prologue_kind: PrologueKind,
     ) -> Result<()> {
         self.current_func_returns_value = true;
         self.current_home_object = function.home_object;
         self.current_function_id = Some(function_id);
         self.begin_function_debug(function.name());
-        // WASM params: local 0 = env_obj (i64), local 1 = this_val (i64),
+        // WASM params（Shadow）: local 0 = env_obj (i64), local 1 = this_val (i64),
         //              local 2 = args_base_ptr (i32), local 3 = args_count (i32)
+        // WASM params（Direct）: local 0 = env (i64), local 1 = this (i64),
+        //              local 2+i = 第 i 个声明形参 (i64)
         self.assign_eval_var_memory(function);
 
         // Map $env/$this to WASM params (both bare and scoped names)
@@ -374,16 +399,30 @@ impl Compiler {
             })
             .collect();
 
-        // Allocate locals for declared params starting at local 4 (after env, this, args_base, args_count)
-        // These will be loaded from shadow stack in the prologue
-        let mut param_local_idx = 4;
-        for param_name in &declared_params {
-            if self.is_eval_memory_var(param_name) {
-                continue;
+        // 形参 local 分配：
+        // - Shadow：local 4 起（env/this/args_base/args_count 之后），prologue 从 shadow 读。
+        // - Direct(n)：形参即 wasm 参数 local 2+i（env/this 之后），寄存器直传。
+        let mut param_local_idx = match prologue_kind {
+            PrologueKind::Shadow => 4,
+            PrologueKind::Direct(n) => 2 + n,
+        };
+        match prologue_kind {
+            PrologueKind::Shadow => {
+                for param_name in &declared_params {
+                    if self.is_eval_memory_var(param_name) {
+                        continue;
+                    }
+                    self.var_locals
+                        .insert((*param_name).clone(), param_local_idx);
+                    param_local_idx += 1;
+                }
             }
-            self.var_locals
-                .insert((*param_name).clone(), param_local_idx);
-            param_local_idx += 1;
+            PrologueKind::Direct(_) => {
+                for (i, param_name) in declared_params.iter().enumerate() {
+                    self.var_locals
+                        .insert((*param_name).clone(), 2 + i as u32);
+                }
+            }
         }
         // Map scoped $env/$this param names to the same locals as bare names
         for p in function.params() {
@@ -469,7 +508,8 @@ impl Compiler {
         self.computed_idx_scratch_idx = total_locals + 5;
         self.eval_var_base_local_idx = total_locals + 6;
         // call_func_idx = shadow_sp + 1 (i32), computed by call_func_idx_scratch()
-        let total_i64_locals = total_locals.saturating_sub(4) + 2; // string_concat + call_env_obj
+        let wasm_param_count = prologue_kind.wasm_param_count();
+        let total_i64_locals = total_locals.saturating_sub(wasm_param_count) + 2; // string_concat + call_env_obj
         let total_i32_locals = 4 + u32::from(!self.var_memory_offsets.is_empty());
 
         let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
@@ -486,30 +526,33 @@ impl Compiler {
         // ── GC safepoint 容量检查（P2 T2.3，spec IMPL-13/R2）──
         self.emit_safepoint_capacity_check(module, function);
 
-        // ── Prologue: Load declared params from shadow stack ──
+        // ── Prologue: Load declared params from shadow stack（仅 Shadow 入口）──
         // args_base_ptr is at local 2, args_count is at local 3
-        for (i, param_name) in declared_params.iter().enumerate() {
-            let param_memory_offset = self.var_memory_offsets.get(*param_name).copied();
-            let param_local = self.var_locals.get(*param_name).copied();
+        // Direct 入口的形参即 wasm 参数（寄存器直传），无 shadow 读、无 argc 分支。
+        if prologue_kind == PrologueKind::Shadow {
+            for (i, param_name) in declared_params.iter().enumerate() {
+                let param_memory_offset = self.var_memory_offsets.get(*param_name).copied();
+                let param_local = self.var_locals.get(*param_name).copied();
 
-            // if i < args_count: load from shadow stack
-            // else: set to undefined
-            self.emit(WasmInstruction::I32Const(i as i32)); // i
-            self.emit(WasmInstruction::LocalGet(3)); // args_count
-            self.emit(WasmInstruction::I32LtU); // i < args_count (unsigned)
+                // if i < args_count: load from shadow stack
+                // else: set to undefined
+                self.emit(WasmInstruction::I32Const(i as i32)); // i
+                self.emit(WasmInstruction::LocalGet(3)); // args_count
+                self.emit(WasmInstruction::I32LtU); // i < args_count (unsigned)
 
-            self.emit(WasmInstruction::If(BlockType::Empty));
-            // Load from shadow stack: shadow_memory[args_base_ptr + i*8]
-            self.emit(WasmInstruction::LocalGet(2)); // args_base_ptr
-            self.emit(WasmInstruction::I32Const((i * 8) as i32));
-            self.emit(WasmInstruction::I32Add);
-            self.emit(WasmInstruction::I64Load(crate::shadow_mem_arg(0)));
-            self.emit_store_stacked_binding(param_memory_offset, param_local);
-            self.emit(WasmInstruction::Else);
-            // Out of bounds: set to undefined
-            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-            self.emit_store_stacked_binding(param_memory_offset, param_local);
-            self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::If(BlockType::Empty));
+                // Load from shadow stack: shadow_memory[args_base_ptr + i*8]
+                self.emit(WasmInstruction::LocalGet(2)); // args_base_ptr
+                self.emit(WasmInstruction::I32Const((i * 8) as i32));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::I64Load(crate::shadow_mem_arg(0)));
+                self.emit_store_stacked_binding(param_memory_offset, param_local);
+                self.emit(WasmInstruction::Else);
+                // Out of bounds: set to undefined
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit_store_stacked_binding(param_memory_offset, param_local);
+                self.emit(WasmInstruction::End);
+            }
         }
 
         self.emit_init_module_global_for_js_function(function);

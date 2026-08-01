@@ -68,24 +68,27 @@ impl Compiler {
             }
             Builtin::AbstractEq => {
                 // abstract_eq(a, b) -> bool
+                // Step 3：fast path 双 plain f64 → 原生 f64.eq（== 对两个 number 即数值相等）；
+                // slow path 内 spill（可能 ToPrimitive/分配）→ host abstract_eq。
                 let lhs = args.first().context("AbstractEq expects 2 args")?;
                 let rhs = args.get(1).context("AbstractEq expects 2 args")?;
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                let func_idx = self.builtin_func_idx(builtin)?;
-                self.emit(WasmInstruction::Call(func_idx));
+                let lhs_l = self.local_idx(lhs.0);
+                let rhs_l = self.local_idx(rhs.0);
+                self.emit_compare_fast_slow(lhs_l, rhs_l, WasmInstruction::F64Eq, Builtin::AbstractEq)?;
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
                 Ok(BuiltinDispatch::Handled)
             }
             Builtin::StrictEq => {
+                // strict_eq(a, b) -> bool
+                // Step 3：fast path 双 plain f64 → 原生 f64.eq（0 === -0 true、NaN false）；
+                // slow path 内 spill → host strict_eq。
                 let lhs = args.first().context("StrictEq expects 2 args")?;
                 let rhs = args.get(1).context("StrictEq expects 2 args")?;
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                let func_idx = self.builtin_func_idx(builtin)?;
-                self.emit(WasmInstruction::Call(func_idx));
+                let lhs_l = self.local_idx(lhs.0);
+                let rhs_l = self.local_idx(rhs.0);
+                self.emit_compare_fast_slow(lhs_l, rhs_l, WasmInstruction::F64Eq, Builtin::StrictEq)?;
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
@@ -98,37 +101,28 @@ impl Compiler {
                 let rhs = args.get(1).context("AbstractCompare expects 2 args")?;
                 let lhs_l = self.local_idx(lhs.0);
                 let rhs_l = self.local_idx(rhs.0);
-                let box_base = value::BOX_BASE as i64;
-                // is_f64(lhs) && is_f64(rhs)
-                self.emit(WasmInstruction::LocalGet(lhs_l));
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64Ne);
-                self.emit(WasmInstruction::LocalGet(rhs_l));
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64Ne);
-                self.emit(WasmInstruction::I32And);
-                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                // 双 f64：原生比较，结果包装为 encode_bool（i64）
-                self.emit(WasmInstruction::LocalGet(lhs_l));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::LocalGet(rhs_l));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::F64Lt);
-                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                self.emit(WasmInstruction::I64Const(value::encode_bool(true)));
-                self.emit(WasmInstruction::Else);
-                self.emit(WasmInstruction::I64Const(value::encode_bool(false)));
-                self.emit(WasmInstruction::End);
-                self.emit(WasmInstruction::Else);
-                self.emit(WasmInstruction::LocalGet(lhs_l));
-                self.emit(WasmInstruction::LocalGet(rhs_l));
-                let func_idx = self.builtin_func_idx(builtin)?;
-                self.emit(WasmInstruction::Call(func_idx));
-                self.emit(WasmInstruction::End);
+                // Step 2d：双已知 f64 → 直接 f64.lt + bool box（无类型检查、无 host 调用、无 GC）。
+                if self.value_known_f64(*lhs) && self.value_known_f64(*rhs) {
+                    self.emit(WasmInstruction::LocalGet(lhs_l));
+                    self.emit(WasmInstruction::F64ReinterpretI64);
+                    self.emit(WasmInstruction::LocalGet(rhs_l));
+                    self.emit(WasmInstruction::F64ReinterpretI64);
+                    self.emit(WasmInstruction::F64Lt);
+                    self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                    self.emit(WasmInstruction::I64Const(value::encode_bool(true)));
+                    self.emit(WasmInstruction::Else);
+                    self.emit(WasmInstruction::I64Const(value::encode_bool(false)));
+                    self.emit(WasmInstruction::End);
+                } else {
+                    // Step 3：类型未知 → fast/slow 分离——fast path 双 f64 无 host call/GC
+                    // 不 spill；slow path（可能 ToPrimitive）内 spill 后 host 调用。
+                    self.emit_compare_fast_slow(
+                        lhs_l,
+                        rhs_l,
+                        WasmInstruction::F64Lt,
+                        Builtin::AbstractCompare,
+                    )?;
+                }
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
@@ -501,5 +495,56 @@ impl Compiler {
             // ── Atomics 4-arg builtins (compareExchange, wait, waitAsync) ──
             _ => Ok(BuiltinDispatch::NotHandled),
         }
+    }
+
+    /// Step 3：比较类 builtin（AbstractCompare/StrictEq/AbstractEq）的 fast/slow 分派。
+    /// 结果（encode_bool i64）留在栈上。
+    ///
+    /// - fast path：双 plain f64 → 原生 f64 比较 + bool box——无 host call、无 GC → 不 spill。
+    /// - slow path：可能 ToPrimitive/分配（字符串/对象比较）→ 在 slow path 内
+    ///   spill live handles（同一指令位置的 liveness，静态不变）后 host 调用。
+    fn emit_compare_fast_slow(
+        &mut self,
+        lhs_l: u32,
+        rhs_l: u32,
+        f64_op: WasmInstruction,
+        host_builtin: Builtin,
+    ) -> Result<()> {
+        let box_base = value::BOX_BASE as i64;
+        // is_f64(lhs) && is_f64(rhs)
+        self.emit(WasmInstruction::LocalGet(lhs_l));
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64Ne);
+        self.emit(WasmInstruction::LocalGet(rhs_l));
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64Ne);
+        self.emit(WasmInstruction::I32And);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        // 双 f64：原生比较，结果包装为 encode_bool（i64）
+        self.emit(WasmInstruction::LocalGet(lhs_l));
+        self.emit(WasmInstruction::F64ReinterpretI64);
+        self.emit(WasmInstruction::LocalGet(rhs_l));
+        self.emit(WasmInstruction::F64ReinterpretI64);
+        self.emit(f64_op);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::I64Const(value::encode_bool(true)));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::I64Const(value::encode_bool(false)));
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::Else);
+        // slow path：spill → host call → 恢复 spill。
+        let spill = self.current_spill_locals();
+        self.emit_safepoint_spill_prologue(&spill);
+        self.emit(WasmInstruction::LocalGet(lhs_l));
+        self.emit(WasmInstruction::LocalGet(rhs_l));
+        let func_idx = self.builtin_func_idx(&host_builtin)?;
+        self.emit(WasmInstruction::Call(func_idx));
+        self.emit_safepoint_spill_epilogue(spill.len());
+        self.emit(WasmInstruction::End);
+        Ok(())
     }
 }

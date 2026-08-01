@@ -305,6 +305,29 @@ impl Compiler {
         self.emit(WasmInstruction::End); // end NaN-boxed check
     }
 
+    // ── Step 2e：known_bool 的 truthiness 简化 ──────────────────────────────
+
+    /// 已知 boxed bool 的 truthiness 简化：直接取 payload bit。
+    /// boxed bool = BOX_BASE | (TAG_BOOL << 32) | (0/1)，truthiness 即低 1 bit，
+    /// 取代完整 ToBoolean 分派（约 40 条指令 → 4 条）。
+    pub(crate) fn emit_to_bool_i32_known_bool(&mut self, val_id: u32) {
+        let val_local = self.local_idx(val_id);
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(1));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I32WrapI64);
+    }
+
+    /// 条件求值统一入口：条件 ValueId 已知必为 boxed bool → payload bit 直取；
+    /// 否则走完整 ToBoolean 分派（sound：known_bool 由规范保证，与操作数类型无关）。
+    pub(crate) fn emit_condition_to_bool_i32(&mut self, val_id: wjsm_ir::ValueId) {
+        if self.value_known_bool(val_id) {
+            self.emit_to_bool_i32_known_bool(val_id.0);
+        } else {
+            self.emit_to_bool_i32(val_id.0);
+        }
+    }
+
     // ── Local management ────────────────────────────────────────────────────
 
     pub(crate) fn required_local_count(&self, function: &IrFunction) -> u32 {
@@ -407,6 +430,10 @@ impl Compiler {
             for (i, name) in self.function_names.iter().enumerate() {
                 if let Some(&idx) = self.function_id_to_wasm_idx.get(&(i as u32)) {
                     func_names.append(idx, name);
+                }
+                // Step 4a：fast 入口同名（回溯/调试显示函数名）。
+                if let Some(fe) = self.function_fast_entries.get(&(i as u32)) {
+                    func_names.append(fe.wasm_idx, name);
                 }
             }
             let mut names = NameSection::new();

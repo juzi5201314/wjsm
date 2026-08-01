@@ -29,7 +29,7 @@
 // these tests double as a regression check that the optimization fires on real code.
 
 use anyhow::Result;
-use wjsm_backend_wasm::GcAnalysis;
+use wjsm_backend_wasm::{F64Analysis, GcAnalysis};
 use wjsm_ir::{FunctionId, Instruction, Program, ValueId};
 use wjsm_parser::parse_module;
 use wjsm_semantic::lower_module;
@@ -95,7 +95,7 @@ console.log(outer(1));
 "#,
     )?;
     let (outer, callee) = sole_outer_call(&program);
-    let analysis = GcAnalysis::analyze(&program);
+    let analysis = GcAnalysis::analyze(&program, &F64Analysis::analyze(&program));
     let inc = function_id(&program, "inc").expect("`inc` declaration");
 
     assert!(
@@ -130,7 +130,7 @@ console.log(outer(1));
 "#,
     )?;
     let (outer, callee) = sole_outer_call(&program);
-    let analysis = GcAnalysis::analyze(&program);
+    let analysis = GcAnalysis::analyze(&program, &F64Analysis::analyze(&program));
 
     assert!(
         program.functions()[outer.0 as usize]
@@ -175,7 +175,7 @@ console.log(outer(1));
 "#,
     )?;
     let (outer, callee) = sole_outer_call(&program);
-    let analysis = GcAnalysis::analyze(&program);
+    let analysis = GcAnalysis::analyze(&program, &F64Analysis::analyze(&program));
     let inner = function_id(&program, "inner").expect("`inner` declaration");
 
     assert!(

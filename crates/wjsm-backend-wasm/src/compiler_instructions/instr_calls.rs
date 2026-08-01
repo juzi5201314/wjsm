@@ -218,6 +218,27 @@ impl Compiler {
         this_val: ValueId,
         args: &[ValueId],
     ) -> Result<()> {
+        // Step 4b：目标有 fast 入口且调用点实参数 == 声明形参数 → 寄存器直传。
+        // 不写 shadow、不推进/恢复 sp、无溢出检查（fast 入口 prologue 的容量检查保留）。
+        if let Some(&FastEntry { param_count, wasm_idx }) = self
+            .function_fast_entries
+            .get(&fn_id.0)
+            && args.len() == param_count as usize
+        {
+            self.emit(WasmInstruction::I64Const(value::encode_undefined())); // env
+            self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0))); // this
+            for arg in args {
+                self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+            }
+            self.emit(WasmInstruction::Call(wasm_idx));
+            if let Some(d) = dest {
+                self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+            } else {
+                self.emit(WasmInstruction::Drop);
+            }
+            return Ok(());
+        }
+
         let result_scratch = self.call_env_obj_scratch();
 
         // Step 1: 保存 shadow_sp 到 scratch local
@@ -491,45 +512,57 @@ impl Compiler {
                 //   - null === null → true ✓
                 // 混合类型（一个 f64 一个 NaN-boxed）→ false ✓
 
-                // 检查 lhs 是否为 plain f64：(lhs & BOX_BASE) != BOX_BASE
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64Ne); // 1 if lhs is plain f64
+                // Step 2d：双已知 f64 → 直接 f64.eq（无类型检查、无 host 调用）。
+                let both_known_f64 =
+                    self.value_known_f64(lhs) && self.value_known_f64(rhs);
+                if !both_known_f64 {
+                    // 检查 lhs 是否为 plain f64：(lhs & BOX_BASE) != BOX_BASE
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                    self.emit(WasmInstruction::I64Const(box_base));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(box_base));
+                    self.emit(WasmInstruction::I64Ne); // 1 if lhs is plain f64
 
-                // 检查 rhs 是否为 plain f64
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64Ne); // 1 if rhs is plain f64
+                    // 检查 rhs 是否为 plain f64
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                    self.emit(WasmInstruction::I64Const(box_base));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(box_base));
+                    self.emit(WasmInstruction::I64Ne); // 1 if rhs is plain f64
 
-                // both_f64 = lhs_is_f64 && rhs_is_f64
-                self.emit(WasmInstruction::I32And);
+                    // both_f64 = lhs_is_f64 && rhs_is_f64
+                    self.emit(WasmInstruction::I32And);
 
-                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
-                // 两者都是 plain f64：使用 f64.eq
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::F64Eq);
-                self.emit(WasmInstruction::Else);
-                // 至少一个是 NaN-boxed：调用 strict_eq 宿主函数进行值比较（正确处理字符串、BigInt 等）
-                let strict_eq_idx = self
-                    .builtin_func_indices
-                    .get(&Builtin::StrictEq)
-                    .copied()
-                    .context("no WASM func index for StrictEq")?;
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::Call(strict_eq_idx));
-                // strict_eq 返回 NaN-boxed bool (i64)，提取 payload bit → i32
-                self.emit(WasmInstruction::I64Const(1));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::End);
+                    self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                    // 两者都是 plain f64：使用 f64.eq
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                    self.emit(WasmInstruction::F64ReinterpretI64);
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                    self.emit(WasmInstruction::F64ReinterpretI64);
+                    self.emit(WasmInstruction::F64Eq);
+                    self.emit(WasmInstruction::Else);
+                    // 至少一个是 NaN-boxed：调用 strict_eq 宿主函数进行值比较（正确处理字符串、BigInt 等）
+                    let strict_eq_idx = self
+                        .builtin_func_indices
+                        .get(&Builtin::StrictEq)
+                        .copied()
+                        .context("no WASM func index for StrictEq")?;
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                    self.emit(WasmInstruction::Call(strict_eq_idx));
+                    // strict_eq 返回 NaN-boxed bool (i64)，提取 payload bit → i32
+                    self.emit(WasmInstruction::I64Const(1));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I32WrapI64);
+                    self.emit(WasmInstruction::End);
+                } else {
+                    // 双已知 f64：直接 f64.eq
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                    self.emit(WasmInstruction::F64ReinterpretI64);
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                    self.emit(WasmInstruction::F64ReinterpretI64);
+                    self.emit(WasmInstruction::F64Eq);
+                }
 
                 if matches!(op, CompareOp::StrictNotEq) {
                     self.emit(WasmInstruction::I32Const(1));
