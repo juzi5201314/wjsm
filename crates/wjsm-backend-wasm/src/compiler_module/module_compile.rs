@@ -39,11 +39,21 @@ fn fast_entry_param_count(function: &IrFunction) -> Option<u32> {
 
 impl Compiler {
     pub(crate) fn compile_module(&mut self, module: &IrModule) -> Result<()> {
+        // LICM：克隆模块，先分析（gate）再提升循环不变量纯调用，随后重分析
+        // （preheader 的调用结果可能被循环内的 is_exception 消费）。
+        let mut module = module.clone();
+        let f64_for_hoist = crate::analysis_f64::F64Analysis::analyze(&module);
+        let gc_for_hoist = GcAnalysis::analyze(&module, &f64_for_hoist);
+        crate::compiler_licm::hoist_loop_invariant_pure_calls(
+            &mut module,
+            &f64_for_hoist,
+            &gc_for_hoist,
+        );
         // Pass 0: f64 值类型传播分析（Step 1）——须在 GC 分析之前（2a 消费其结果）。
-        let f64_analysis = crate::analysis_f64::F64Analysis::analyze(module);
+        let f64_analysis = crate::analysis_f64::F64Analysis::analyze(&module);
         self.f64_analysis = Some(f64_analysis.clone());
         // Pass 0: 模块级 GC 分析（Layer 3c）
-        self.gc_analysis = Some(GcAnalysis::analyze(module, &f64_analysis));
+        self.gc_analysis = Some(GcAnalysis::analyze(&module, &f64_analysis));
         // 收集源文件路径和函数源码位置映射（供运行时错误堆栈映射）。
         self.source_file = module.source_file().map(|s| s.to_string());
 
@@ -298,13 +308,13 @@ impl Compiler {
         for (function_id, function) in module.functions().iter().enumerate() {
             if is_module_entry_ir_function(function.name()) {
                 self.compile_function(
-                    module,
+                    &module,
                     function,
                     wjsm_ir::FunctionId(function_id as u32),
                 )?;
             } else {
                 self.compile_js_function(
-                    module,
+                    &module,
                     function,
                     wjsm_ir::FunctionId(function_id as u32),
                     PrologueKind::Shadow,
@@ -316,7 +326,7 @@ impl Compiler {
                     .get(&(function_id as u32))
                 {
                     self.compile_js_function(
-                        module,
+                        &module,
                         function,
                         wjsm_ir::FunctionId(function_id as u32),
                         PrologueKind::Direct(param_count),

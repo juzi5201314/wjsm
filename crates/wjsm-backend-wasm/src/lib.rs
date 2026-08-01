@@ -457,6 +457,7 @@ mod compiler_data;
 mod compiler_gc_analysis;
 mod compiler_helpers;
 mod compiler_instructions;
+mod compiler_licm;
 mod compiler_module;
 mod compiler_number_proto;
 
