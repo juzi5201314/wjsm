@@ -170,7 +170,7 @@ module {
     bb14:
       unreachable
 
-  fn @gen [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @gen [needs_prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c44
@@ -179,7 +179,7 @@ module {
       store var $3.arguments, %2
       %4 = load var $env
       %5 = const c46
-      %6 = get_prop %4, %5
+      %6 = const c53
       %7 = const c47
       set_prop %2, %7, %6
       %8 = const c48
@@ -225,7 +225,7 @@ module {
       %15 = const c53
       store var $1.gen, %15
       %16 = const c54
-      %17 = load var $1.gen
+      %17 = const c53
       %18 = call %17, this=%16
       %19 = call builtin.async_iterator.from(%18)
       store var $1.$for_await_iter.0, %19
@@ -318,7 +318,7 @@ module {
     bb19:
       unreachable
 
-  fn @run [needs_prototype] [params: $5.$env, $5.$this] [entry=bb0]:
+  fn @run [needs_prototype] [direct_callable] [params: $5.$env, $5.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c65
@@ -327,7 +327,7 @@ module {
       store var $5.arguments, %2
       %4 = load var $env
       %5 = const c67
-      %6 = get_prop %4, %5
+      %6 = const c77
       %7 = const c68
       set_prop %2, %7, %6
       %8 = new_promise
@@ -345,7 +345,7 @@ module {
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -392,7 +392,7 @@ module {
       %21 = const c77
       store var $0.run, %21
       %22 = const c78
-      %23 = load var $0.run
+      %23 = const c77
       %24 = call %23, this=%22
       %25 = is_exception %24
       branch %25, bb2, bb1

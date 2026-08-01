@@ -59,33 +59,54 @@ impl Compiler {
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
                 match op {
-                    // 加法：先尝试字符串连接，失败再做数值/BigInt 加法
+                    // 加法：双 f64 → 原生 f64.add（fast path）；双 BigInt → host；
+                    // 其余（字符串拼接、BigInt/Number 混合 TypeError、ToNumeric 等）→ host string_concat
                     BinaryOp::Add => {
                         let lhs_l = self.local_idx(lhs.0);
                         let rhs_l = self.local_idx(rhs.0);
-                        // 调用 string_concat(lhs, rhs)
+                        let box_base = value::BOX_BASE as i64;
+                        // is_f64(lhs) && is_f64(rhs): (val & BOX_BASE) != BOX_BASE
+                        self.emit(WasmInstruction::LocalGet(lhs_l));
+                        self.emit(WasmInstruction::I64Const(box_base));
+                        self.emit(WasmInstruction::I64And);
+                        self.emit(WasmInstruction::I64Const(box_base));
+                        self.emit(WasmInstruction::I64Ne);
+                        self.emit(WasmInstruction::LocalGet(rhs_l));
+                        self.emit(WasmInstruction::I64Const(box_base));
+                        self.emit(WasmInstruction::I64And);
+                        self.emit(WasmInstruction::I64Const(box_base));
+                        self.emit(WasmInstruction::I64Ne);
+                        self.emit(WasmInstruction::I32And);
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        // 双 f64：原生加法
+                        self.emit(WasmInstruction::LocalGet(lhs_l));
+                        self.emit(WasmInstruction::F64ReinterpretI64);
+                        self.emit(WasmInstruction::LocalGet(rhs_l));
+                        self.emit(WasmInstruction::F64ReinterpretI64);
+                        self.emit(WasmInstruction::F64Add);
+                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit(WasmInstruction::Else);
+                        // 双 BigInt → host bigint_add
+                        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+                        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+                        self.emit(WasmInstruction::I32And);
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        self.emit(WasmInstruction::LocalGet(lhs_l));
+                        self.emit(WasmInstruction::LocalGet(rhs_l));
+                        let bigint_idx = self
+                            .builtin_func_indices
+                            .get(&Builtin::BigIntAdd)
+                            .copied()
+                            .expect("BigIntAdd import must be registered");
+                        self.emit(WasmInstruction::Call(bigint_idx));
+                        self.emit(WasmInstruction::Else);
+                        // 其余语义（字符串拼接、BigInt/Number 混合 TypeError、ToNumeric）→ host
                         self.emit(WasmInstruction::LocalGet(lhs_l));
                         self.emit(WasmInstruction::LocalGet(rhs_l));
                         self.emit(WasmInstruction::Call(
                             self.special_host_import_indices[&SpecialHostImport::StringConcat],
                         ));
-                        // 存到 scratch
-                        self.emit(WasmInstruction::LocalSet(self.string_concat_scratch_idx));
-                        // 检查结果是否为 undefined（哨兵值：表示无字符串操作数）
-                        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
-                        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-                        self.emit(WasmInstruction::I64Eq);
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        // 结果是 undefined → 走 BigInt 检查
-                        self.emit_bigint_or_f64_binary(
-                            lhs_l,
-                            rhs_l,
-                            Builtin::BigIntAdd,
-                            WasmInstruction::F64Add,
-                        )?;
-                        self.emit(WasmInstruction::Else);
-                        // 结果是字符串 → 直接使用
-                        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+                        self.emit(WasmInstruction::End);
                         self.emit(WasmInstruction::End);
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }

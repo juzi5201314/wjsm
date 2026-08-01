@@ -26,7 +26,7 @@ module {
     c23 = number(42)
     c24 = string("value")
 
-  fn @makeResource [needs_prototype] [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
+  fn @makeResource [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:
       %0 = new_object(capacity=4)
       %1 = load var $1.value
@@ -34,7 +34,7 @@ module {
       set_prop %0, %2, %1
       return %0
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -81,7 +81,7 @@ module {
       %21 = const c21
       store var $0.makeResource, %21
       %22 = const c22
-      %23 = load var $0.makeResource
+      %23 = const c21
       %24 = const c23
       %25 = call %23, this=%22, args=[%24]
       store var $0.x, %25

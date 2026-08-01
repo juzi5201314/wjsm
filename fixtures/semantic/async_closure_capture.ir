@@ -192,19 +192,19 @@ module {
       %8 = call builtin.create_closure(%2, %4)
       return %8
 
-  fn @arrow_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+  fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = load var $4.v
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_4 [params: $5.$env, $5.$this, $5.v] [entry=bb0]:
+  fn @arrow_4 [direct_callable] [params: $5.$env, $5.$this, $5.v] [entry=bb0]:
     bb0:
       %0 = load var $5.v
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_5 [params: $6.$env, $6.$this, $6.v] [entry=bb0]:
+  fn @arrow_5 [direct_callable] [params: $6.$env, $6.$this, $6.v] [entry=bb0]:
     bb0:
       %0 = load var $6.v
       %1 = call builtin.console.log(%0)

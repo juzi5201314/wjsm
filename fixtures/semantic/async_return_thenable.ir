@@ -49,7 +49,7 @@ module {
     c46 = functionref(@3)
     c47 = undefined
 
-  fn @anon_0 [needs_prototype] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
       %0 = const c27
       %1 = load var $2.resolve
@@ -101,7 +101,7 @@ module {
       promise_resolve %20, %15
       return
 
-  fn @foo [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @foo [needs_prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c32
@@ -110,7 +110,7 @@ module {
       store var $3.arguments, %2
       %4 = load var $env
       %5 = const c34
-      %6 = get_prop %4, %5
+      %6 = const c44
       %7 = const c35
       set_prop %2, %7, %6
       %8 = new_promise
@@ -128,13 +128,13 @@ module {
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
-  fn @arrow_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+  fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = load var $4.v
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -181,7 +181,7 @@ module {
       %21 = const c44
       store var $0.foo, %21
       %22 = const c45
-      %23 = load var $0.foo
+      %23 = const c44
       %24 = call %23, this=%22
       %25 = const c46
       %26 = const c47

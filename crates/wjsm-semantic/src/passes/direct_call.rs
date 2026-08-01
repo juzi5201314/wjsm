@@ -1,0 +1,437 @@
+//! direct_call pass：标记可直接调用的函数并原地替换绑定读取为 `Const(FunctionRef)`。
+//!
+//! 背景：每次 JS 函数调用默认被编译为全动态语义（callee 求值、类型分派、闭包解包、
+//! new.target 保存等，伴随多次 wasm→host 往返）。本 pass 识别「不可变函数声明绑定」
+//! 与「函数体不依赖 env/this/new.target」的函数：
+//!
+//! - 把 `LoadVar("$N.fib")` 与 `GetProp(env, "$N.fib")` 原地替换为 `Const(FunctionRef)`，
+//!   使后端 callee 静态解析直接命中；
+//! - 给函数写回 `direct_callable` 标记，后端据此对调用点发射直接 `call`。
+//!
+//! 安全性：函数声明 hoisted 且语义不可重赋（`fn_decls` 中唯一一次 `StoreVar` + 无 eval），
+//! 其绑定值恒等于初始 `FunctionRef`；替换后动态调用路径（TAG_FUNCTION，env=undefined）
+//! 对 env 全可解析的函数同样安全。
+//!
+//! 注意：ValueId 在每个函数内从 0 重新编号（`push_function_context` 重置 `next_value`），
+//! 因此 def 表、const 字符串表与 env GetProp 记录都必须按函数维度隔离。
+
+use std::collections::{HashMap, HashSet};
+
+use wjsm_ir::{
+    Constant, ConstantId, Function, FunctionId, Instruction, Module, Terminator, ValueId,
+};
+
+/// 是否为 env 变量 IR 名（`$env` 或 `${scope}.$env`）。
+fn is_env_name(name: &str) -> bool {
+    name == "$env" || name.ends_with(".$env")
+}
+
+/// 是否为 this 变量 IR 名（`$this` 或 `${scope}.$this`）。
+fn is_this_name(name: &str) -> bool {
+    name == "$this" || name.ends_with(".$this")
+}
+
+/// 指令的 ValueId 操作数（uses）。与后端 `analysis_liveness` 的收集规则一致。
+fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
+    use Instruction::*;
+    match ins {
+        Binary { lhs, rhs, .. } | Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
+        Unary { value, .. } => vec![*value],
+        StringConcatVa { parts, .. } => parts.clone(),
+        GetProp { object, key, .. } => vec![*object, *key],
+        SetProp { object, key, value } => vec![*object, *key, *value],
+        SetProto { object, value } => vec![*object, *value],
+        GetElem { object, index, .. } => vec![*object, *index],
+        SetElem {
+            object,
+            index,
+            value,
+        } => vec![*object, *index, *value],
+        OptionalGetProp { object, key, .. } | OptionalGetElem { object, key, .. } => {
+            vec![*object, *key]
+        }
+        OptionalCall {
+            callee,
+            this_val,
+            args,
+            ..
+        }
+        | Call {
+            callee,
+            this_val,
+            args,
+            ..
+        }
+        | SuperCall {
+            callee,
+            this_val,
+            args,
+            ..
+        } => {
+            let mut v = vec![*callee, *this_val];
+            v.extend(args.iter().copied());
+            v
+        }
+        ConstructCall {
+            callee,
+            this_val,
+            args,
+            ..
+        } => {
+            let mut v = vec![*callee, *this_val];
+            v.extend(args.iter().copied());
+            v
+        }
+        CallBuiltin { args, .. } => args.clone(),
+        DeleteProp { object, key, .. } => vec![*object, *key],
+        PromiseResolve { promise, value }
+        | PromiseReject {
+            promise,
+            reason: value,
+        } => vec![*promise, *value],
+        Suspend { promise, .. } => vec![*promise],
+        GeneratorSuspend { result, .. } => vec![*result],
+        IsException { value, .. }
+        | EncodeException { value, .. }
+        | ExceptionToObject { value, .. } => vec![*value],
+        ObjectSpread { source, .. } => vec![*source],
+        StoreVar { value, .. } => vec![*value],
+        // 无操作数
+        Const { .. }
+        | LoadVar { .. }
+        | NewObject { .. }
+        | NewArray { .. }
+        | GetSuperBase { .. }
+        | GetSuperConstructor { .. }
+        | NewPromise { .. }
+        | CollectRestArgs { .. }
+        | DebugCheck { .. }
+        | Phi { .. } => vec![],
+    }
+}
+
+/// 终止器的 ValueId 操作数（uses）。
+fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
+    match terminator {
+        Terminator::Return { value: Some(v) } => vec![*v],
+        Terminator::Branch { condition, .. } => vec![*condition],
+        Terminator::Switch { value, .. } => vec![*value],
+        Terminator::Throw { value } => vec![*value],
+        Terminator::Return { value: None }
+        | Terminator::Jump { .. }
+        | Terminator::Unreachable => vec![],
+    }
+}
+
+/// 收集 `target` 在本函数中的全部 use 指令（含 Phi source）。
+fn collect_uses(function: &Function, target: ValueId) -> Vec<&Instruction> {
+    let mut uses = Vec::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            let mut used = instr_uses(instruction);
+            if let Instruction::Phi { sources, .. } = instruction {
+                used.extend(sources.iter().map(|s| s.value));
+            }
+            if used.contains(&target) {
+                uses.push(instruction);
+            }
+        }
+    }
+    uses
+}
+
+/// 取 producing 指令的 dest（def）。非 producing 返回 None。
+fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
+    use Instruction::*;
+    Some(match ins {
+        Const { dest, .. }
+        | Binary { dest, .. }
+        | Unary { dest, .. }
+        | Compare { dest, .. }
+        | Phi { dest, .. }
+        | StringConcatVa { dest, .. }
+        | LoadVar { dest, .. }
+        | NewObject { dest, .. }
+        | GetProp { dest, .. }
+        | DeleteProp { dest, .. }
+        | NewArray { dest, .. }
+        | GetElem { dest, .. }
+        | OptionalGetProp { dest, .. }
+        | OptionalGetElem { dest, .. }
+        | OptionalCall { dest, .. }
+        | ObjectSpread { dest, .. }
+        | GetSuperBase { dest }
+        | GetSuperConstructor { dest }
+        | NewPromise { dest }
+        | CollectRestArgs { dest, .. }
+        | IsException { dest, .. }
+        | EncodeException { dest, .. }
+        | ExceptionToObject { dest, .. } => *dest,
+        Call { dest, .. }
+        | CallBuiltin { dest, .. }
+        | SuperCall { dest, .. }
+        | ConstructCall { dest, .. } => (*dest)?,
+        // 非 producing
+        StoreVar { .. }
+        | SetProp { .. }
+        | SetProto { .. }
+        | SetElem { .. }
+        | PromiseResolve { .. }
+        | PromiseReject { .. }
+        | Suspend { .. }
+        | GeneratorSuspend { .. }
+        | DebugCheck { .. } => return None,
+    })
+}
+
+/// 运行 direct_call pass。任一函数含 eval 时全局禁用（eval 可动态改写绑定）。
+pub fn run(module: &mut Module) {
+    // 1. 全局守卫：eval 可动态改写绑定，保守禁用整个 pass。
+    if module.functions().iter().any(|f| f.has_eval()) {
+        return;
+    }
+
+    // 2. 不可变绑定集合：known_callee_vars 中 store 恰一次的函数声明名。
+    //    唯一一次 store 即函数声明初始 store（fn_decls 的 record_known_callee + StoreVar 路径）。
+    let mut store_count: HashMap<&str, u32> = HashMap::new();
+    for function in module.functions() {
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Instruction::StoreVar { name, .. } = instruction {
+                    *store_count.entry(name.as_str()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut immutable: HashMap<String, FunctionId> = HashMap::new();
+    for function in module.functions() {
+        for (name, function_id) in function.known_callee_vars() {
+            if store_count.get(name.as_str()) == Some(&1) {
+                immutable.insert(name.clone(), *function_id);
+            }
+        }
+    }
+    if immutable.is_empty() {
+        return;
+    }
+
+    // 3. per 函数判定：env_required / this_required / has_new_target / resolvable_env_gets。
+    let mut env_required: HashSet<FunctionId> = HashSet::new();
+    let mut this_required: HashSet<FunctionId> = HashSet::new();
+    let mut has_new_target: HashSet<FunctionId> = HashSet::new();
+    // resolvable_env_gets：函数 → {(env LoadVar dest, 属性名)}，该 env 读取的 GetProp 可解析。
+    let mut resolvable_env_gets: HashMap<FunctionId, HashSet<(ValueId, String)>> = HashMap::new();
+
+    for (func_idx, function) in module.functions().iter().enumerate() {
+        let func_id = FunctionId(func_idx as u32);
+
+        // 本函数 def 表与 Const(String) 常量名映射（ValueId 每函数独立编号）。
+        let mut defs: HashMap<ValueId, &Instruction> = HashMap::new();
+        let mut const_strings: HashMap<ValueId, String> = HashMap::new();
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                match instruction {
+                    Instruction::Const { dest, constant } => {
+                        defs.insert(*dest, instruction);
+                        if let Some(Constant::String(s)) =
+                            module.constants().get(constant.0 as usize)
+                        {
+                            const_strings.insert(*dest, s.clone());
+                        }
+                    }
+                    _ => {
+                        if let Some(dest) = instruction_dest(instruction) {
+                            defs.insert(dest, instruction);
+                        }
+                    }
+                }
+            }
+        }
+
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Instruction::CallBuiltin {
+                    builtin: wjsm_ir::Builtin::NewTarget,
+                    ..
+                } = instruction
+                {
+                    has_new_target.insert(func_id);
+                }
+            }
+        }
+
+        // env / this LoadVar dest 收集。
+        let mut env_load_dests: Vec<ValueId> = Vec::new();
+        let mut this_load_dests: Vec<ValueId> = Vec::new();
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Instruction::LoadVar { dest, name } = instruction {
+                    if is_env_name(name) {
+                        env_load_dests.push(*dest);
+                    } else if is_this_name(name) {
+                        this_load_dests.push(*dest);
+                    }
+                }
+            }
+        }
+
+        // env dest 的 use 分析：全部是 `GetProp(env, immutable 常量)` 才可解析。
+        for env_dest in env_load_dests {
+            let mut all_resolvable = true;
+            let mut resolved_keys: Vec<String> = Vec::new();
+            // terminator 使用 env dest（如 return env）→ 不可解析。
+            for block in function.blocks() {
+                if terminator_uses(block.terminator()).contains(&env_dest) {
+                    all_resolvable = false;
+                    break;
+                }
+            }
+            for use_instr in collect_uses(function, env_dest) {
+                if !all_resolvable {
+                    break;
+                }
+                match use_instr {
+                    Instruction::GetProp { object, key, .. } if *object == env_dest => {
+                        match defs.get(key) {
+                            Some(Instruction::Const { constant, .. }) => {
+                                if let Some(Constant::String(s)) =
+                                    module.constants().get(constant.0 as usize)
+                                    && immutable.contains_key(s)
+                                {
+                                    resolved_keys.push(s.clone());
+                                    continue;
+                                }
+                                all_resolvable = false;
+                            }
+                            _ => all_resolvable = false,
+                        }
+                    }
+                    _ => all_resolvable = false,
+                }
+            }
+            if all_resolvable {
+                let entry = resolvable_env_gets.entry(func_id).or_default();
+                for key in resolved_keys {
+                    entry.insert((env_dest, key));
+                }
+            } else {
+                env_required.insert(func_id);
+            }
+        }
+
+        // this LoadVar dest：有 use（含 terminator）即 this_required。
+        for this_dest in this_load_dests {
+            let mut has_use = !collect_uses(function, this_dest).is_empty();
+            if !has_use {
+                for block in function.blocks() {
+                    if terminator_uses(block.terminator()).contains(&this_dest) {
+                        has_use = true;
+                        break;
+                    }
+                }
+            }
+            if has_use {
+                this_required.insert(func_id);
+            }
+        }
+    }
+
+    // 4. 写回 direct_callable（函数体不依赖 env/this/new.target，且无 eval）。
+    let mut direct_callables: Vec<(FunctionId, bool)> = Vec::new();
+    for (func_idx, function) in module.functions().iter().enumerate() {
+        let func_id = FunctionId(func_idx as u32);
+        let direct_callable = !env_required.contains(&func_id)
+            && !this_required.contains(&func_id)
+            && !has_new_target.contains(&func_id)
+            && !function.has_eval();
+        direct_callables.push((func_id, direct_callable));
+    }
+    for (func_id, direct_callable) in direct_callables {
+        if direct_callable
+            && let Some(f) = module.function_mut(func_id)
+        {
+            f.set_direct_callable(true);
+        }
+    }
+
+    // 5. 替换集合：immutable 中目标函数 !env_required（替换后其 env 用途全被解析）。
+    let mut replaceable: HashMap<String, FunctionId> = HashMap::new();
+    for (name, function_id) in &immutable {
+        if !env_required.contains(function_id) {
+            replaceable.insert(name.clone(), *function_id);
+        }
+    }
+    if replaceable.is_empty() {
+        return;
+    }
+
+    // 6. 执行替换：LoadVar(name ∈ replaceable) / GetProp(env, key ∈ replaceable) → Const(FunctionRef)。
+    //    先确保所有需要的 FunctionRef 常量存在，避免替换循环内借用冲突。
+    let mut functionref_consts: HashMap<FunctionId, ConstantId> = HashMap::new();
+    for (idx, constant) in module.constants().iter().enumerate() {
+        if let Constant::FunctionRef(id) = constant {
+            functionref_consts.entry(*id).or_insert(ConstantId(idx as u32));
+        }
+    }
+    for fn_id in replaceable.values() {
+        if !functionref_consts.contains_key(fn_id) {
+            let cid = module.add_constant(Constant::FunctionRef(*fn_id));
+            functionref_consts.insert(*fn_id, cid);
+        }
+    }
+
+    // per 函数 Const(String) 表（替换阶段查 key 的常量字符串）。
+    let mut per_fn_const_strings: Vec<HashMap<ValueId, String>> = Vec::new();
+    for function in module.functions() {
+        let mut strings = HashMap::new();
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Instruction::Const { dest, constant } = instruction
+                    && let Some(Constant::String(s)) = module.constants().get(constant.0 as usize)
+                {
+                    strings.insert(*dest, s.clone());
+                }
+            }
+        }
+        per_fn_const_strings.push(strings);
+    }
+
+    // 替换循环必须按索引访问（function_mut 需可变借用，不能与 iter() 共存）。
+    #[allow(clippy::needless_range_loop)]
+    for func_idx in 0..module.functions().len() {
+        let func_id = FunctionId(func_idx as u32);
+        let resolvable = resolvable_env_gets.get(&func_id);
+        let const_strings = &per_fn_const_strings[func_idx];
+        let function = module.function_mut(func_id).unwrap();
+        for block in function.blocks_mut() {
+            for instruction in block.instructions_mut() {
+                match instruction {
+                    Instruction::LoadVar { dest, name } => {
+                        if let Some(fn_id) = replaceable.get(name) {
+                            let constant = functionref_consts[fn_id];
+                            *instruction = Instruction::Const {
+                                dest: *dest,
+                                constant,
+                            };
+                        }
+                    }
+                    Instruction::GetProp { dest, object, key } => {
+                        // key 的 def 是 Const(String) 且 (object, key_str) 可解析、key_str 可替换。
+                        if let (Some(resolvable), Some(key_str)) =
+                            (resolvable, const_strings.get(key))
+                            && resolvable.contains(&(*object, key_str.clone()))
+                            && let Some(fn_id) = replaceable.get(key_str)
+                        {
+                            let constant = functionref_consts[fn_id];
+                            *instruction = Instruction::Const {
+                                dest: *dest,
+                                constant,
+                            };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}

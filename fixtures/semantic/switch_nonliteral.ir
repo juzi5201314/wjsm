@@ -45,12 +45,12 @@ module {
     c42 = string("computed match")
     c43 = string("default computed")
 
-  fn @getValue [needs_prototype] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @getValue [needs_prototype] [direct_callable] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       return %0
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.SOME_CONST, %0
@@ -126,7 +126,7 @@ module {
       branch %44, bb14, bb13
     bb5:
       %26 = const c25
-      %27 = load var $0.getValue
+      %27 = const c22
       %28 = call %27, this=%26
       %29 = is_exception %28
       branch %29, bb8, bb7
@@ -181,7 +181,7 @@ module {
       branch %48, bb16, bb20
     bb20:
       %49 = const c30
-      %50 = load var $0.getValue
+      %50 = const c22
       %51 = call %50, this=%49
       %52 = is_exception %51
       branch %52, bb22, bb21

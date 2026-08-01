@@ -186,7 +186,7 @@ module {
     c183 = number(13)
     c184 = string("sum")
 
-  fn @collect [needs_prototype] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @collect [needs_prototype] [direct_callable] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c20
@@ -195,7 +195,7 @@ module {
       store var $1.arguments, %2
       %4 = load var $env
       %5 = const c22
-      %6 = get_prop %4, %5
+      %6 = const c28
       %7 = const c23
       set_prop %2, %7, %6
       %8 = new_array(capacity=4)
@@ -218,7 +218,7 @@ module {
       %21 = call builtin.JSON.stringify(%8)
       return %21
 
-  fn @arrow_1 [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
+  fn @arrow_1 [direct_callable] [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
     bb0:
       %0 = load var $2.a
       %1 = load var $2.b
@@ -359,7 +359,7 @@ module {
       store var $7.arguments, %2
       %4 = load var $env
       %5 = const c103
-      %6 = get_prop %4, %5
+      %6 = const c111
       %7 = const c104
       set_prop %2, %7, %6
       %8 = const c105
@@ -552,7 +552,7 @@ module {
       store var $11.arguments, %2
       %4 = load var $env
       %5 = const c161
-      %6 = get_prop %4, %5
+      %6 = const c169
       %7 = const c162
       set_prop %2, %7, %6
       %8 = const c163
@@ -616,7 +616,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -664,7 +664,7 @@ module {
       store var $0.collect, %21
       %22 = const c29
       %23 = const c30
-      %24 = load var $0.collect
+      %24 = const c28
       %25 = new_array(capacity=4)
       %26 = new_array(capacity=4)
       %27 = const c31
@@ -775,7 +775,7 @@ module {
     bb11:
       %89 = const c61
       %90 = const c62
-      %91 = load var $0.collect
+      %91 = const c28
       %92 = new_array(capacity=4)
       %93 = const c63
       call builtin.array.push(%92, %93)
@@ -795,7 +795,7 @@ module {
     bb13:
       %101 = const c66
       %102 = const c67
-      %103 = load var $0.collect
+      %103 = const c28
       %104 = new_array(capacity=4)
       %105 = new_array(capacity=4)
       %106 = const c68
@@ -817,7 +817,7 @@ module {
     bb15:
       %114 = const c71
       %115 = const c72
-      %116 = load var $0.collect
+      %116 = const c28
       %117 = new_array(capacity=4)
       %118 = new_array(capacity=4)
       %119 = const c73
@@ -837,7 +837,7 @@ module {
     bb17:
       %126 = const c76
       %127 = const c77
-      %128 = load var $0.collect
+      %128 = const c28
       %129 = new_array(capacity=4)
       %130 = const c78
       call builtin.array.push_spread(%129, %130)
@@ -851,7 +851,7 @@ module {
     bb19:
       %135 = const c79
       %136 = const c80
-      %137 = load var $0.collect
+      %137 = const c28
       %138 = new_array(capacity=4)
       %139 = new_array(capacity=4)
       %140 = const c81
@@ -872,10 +872,10 @@ module {
       store var $0.values, %147
       %148 = const c112
       %149 = const c113
-      %150 = load var $0.collect
+      %150 = const c28
       %151 = new_array(capacity=4)
       %152 = const c114
-      %153 = load var $0.values
+      %153 = const c111
       %154 = call %153, this=%152
       call builtin.array.push_spread(%151, %154)
       %155 = call builtin.func_apply(%150, %149, %151)
@@ -894,7 +894,7 @@ module {
       store var $0.iterable, %159
       %163 = const c136
       %164 = const c137
-      %165 = load var $0.collect
+      %165 = const c28
       %166 = new_array(capacity=4)
       %167 = load var $0.iterable
       call builtin.array.push_spread(%166, %167)
@@ -917,7 +917,7 @@ module {
       %177 = call builtin.symbol.well_known(%176)
       %178 = const c169
       store var $0.$__wjsm_gen_expr_8, %178
-      %179 = load var $0.$__wjsm_gen_expr_8
+      %179 = const c169
       set_elem %175, %177, %179
       %180 = is_exception %179
       branch %180, bb28, bb27
@@ -927,7 +927,7 @@ module {
     bb27:
       %182 = const c170
       %183 = const c171
-      %184 = load var $0.collect
+      %184 = const c28
       %185 = new_array(capacity=4)
       %186 = load var $0.overridden
       call builtin.array.push_spread(%185, %186)

@@ -33,7 +33,7 @@ module {
     c30 = number(6)
     c31 = string("after")
 
-  fn @anon_0 [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       %1 = call builtin.console.log(%0)
@@ -45,7 +45,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @makeDisposable [needs_prototype] [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
+  fn @makeDisposable [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
     bb0:
       %0 = new_object(capacity=4)
       %1 = load var $1.name
@@ -59,7 +59,7 @@ module {
       set_prop %0, %7, %5
       return %0
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -106,7 +106,7 @@ module {
       %21 = const c25
       store var $0.makeDisposable, %21
       %22 = const c26
-      %23 = load var $0.makeDisposable
+      %23 = const c25
       %24 = const c27
       %25 = call %23, this=%22, args=[%24]
       store var $3.a, %25

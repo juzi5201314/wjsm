@@ -264,6 +264,9 @@ pub struct Function {
     /// 函数声明的 JS 源码位置（1-indexed line:col）。
     /// 语义层从 SWC span 填入，后端编码到 WASM custom section 供运行时错误映射。
     source_span: Option<SourceSpan>,
+    /// 该函数是否可直接调用（函数体不依赖 env/this/new.target，且无 eval）。
+    /// 由语义层 direct_call pass 计算，后端据此对调用点发射直接 `call`（跳过动态分派）。
+    direct_callable: bool,
 }
 impl Function {
     pub fn new(name: impl Into<String>, entry: BasicBlockId) -> Self {
@@ -278,6 +281,7 @@ impl Function {
             home_object: None,
             needs_prototype: false,
             source_span: None,
+            direct_callable: false,
         }
     }
 
@@ -323,6 +327,15 @@ impl Function {
 
     pub fn set_needs_prototype(&mut self, v: bool) {
         self.needs_prototype = v;
+    }
+
+    /// 该函数是否可直接调用（由 semantic direct_call pass 计算）。
+    pub fn direct_callable(&self) -> bool {
+        self.direct_callable
+    }
+
+    pub fn set_direct_callable(&mut self, v: bool) {
+        self.direct_callable = v;
     }
 
     /// 返回该函数调用的"已知函数声明"变量名→FunctionId 映射（Layer 3 callee 分析）。
@@ -387,6 +400,9 @@ impl Function {
         }
         if self.needs_prototype {
             let _ = write!(out, " [needs_prototype]");
+        }
+        if self.direct_callable {
+            let _ = write!(out, " [direct_callable]");
         }
         if !self.captured_names.is_empty() {
             let _ = write!(out, " [captures: ");

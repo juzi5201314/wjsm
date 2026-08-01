@@ -12,7 +12,16 @@
 //! **GC 正确性红线**：unknown callee 一律保守 may-GC；只对单次赋值的函数声明变量建映射。
 
 use std::collections::HashMap;
-use wjsm_ir::{Builtin, FunctionId, Instruction, Module, ValueId};
+use wjsm_ir::{Builtin, Constant, FunctionId, Instruction, Module, ValueId};
+
+/// callee 的静态来源（ValueId 的 def 判别）。
+#[derive(Debug, Clone)]
+enum CalleeSource {
+    /// `LoadVar(name)`：绑定读取，需经 known_callee_vars 解析。
+    LoadVar(String),
+    /// `Const(FunctionRef(id))`：direct_call pass 替换后的函数引用，可精确解析。
+    FunctionRef(FunctionId),
+}
 
 /// 该 builtin 是否**可能**触发 GC（分配堆对象或 reentrant 回用户 JS）。
 ///
@@ -37,9 +46,13 @@ pub struct GcAnalysis {
     may_gc: Vec<bool>,
 
     /// Per-Call no-GC 信息：`(function_id, call_callee_value_id) → callee_FunctionId`。
-    /// 仅记录可追溯到已知函数声明（known_callee_vars）的 Call。
+    /// 仅记录可追溯到已知函数声明（known_callee_vars / Const FunctionRef）的 Call。
     /// 如果 callee 函数 may_gc == false，该 Call 可省 safepoint spill。
     call_targets: HashMap<(FunctionId, ValueId), FunctionId>,
+
+    /// 可发射直接调用的目标：`(调用函数, callee ValueId) → callee FunctionId`。
+    /// 仅当 callee 的 def 是 `Const(FunctionRef)` 且目标函数 `direct_callable`（Phase 3）。
+    direct_call_targets: HashMap<(FunctionId, ValueId), FunctionId>,
 }
 
 impl GcAnalysis {
@@ -52,6 +65,7 @@ impl GcAnalysis {
             return Self {
                 may_gc: Vec::new(),
                 call_targets: HashMap::new(),
+                direct_call_targets: HashMap::new(),
             };
         }
 
@@ -60,19 +74,31 @@ impl GcAnalysis {
         let mut call_edges: Vec<Vec<FunctionId>> = vec![Vec::new(); num_functions];
         let mut unknown_callee = vec![false; num_functions];
         let mut call_targets: HashMap<(FunctionId, ValueId), FunctionId> = HashMap::new();
+        let mut direct_call_targets: HashMap<(FunctionId, ValueId), FunctionId> = HashMap::new();
 
         for (func_idx, function) in module.functions().iter().enumerate() {
             let func_id = FunctionId(func_idx as u32);
             let known_callees = function.known_callee_vars();
 
-            // 构建该函数体内 ValueId → LoadVar name 的映射（用于追溯 Call 的 callee 来源）
-            let mut loadvar_map: HashMap<ValueId, String> = HashMap::new();
+            // 构建该函数体内 ValueId → def 来源的映射（用于追溯 Call 的 callee）
+            let mut callee_sources: HashMap<ValueId, CalleeSource> = HashMap::new();
 
             for bb in function.blocks() {
                 for ins in bb.instructions() {
-                    // 记录所有 LoadVar 的 dest → name
-                    if let Instruction::LoadVar { dest, name } = ins {
-                        loadvar_map.insert(*dest, name.clone());
+                    // 记录 def：LoadVar → name；Const(FunctionRef) → 直接函数引用。
+                    match ins {
+                        Instruction::LoadVar { dest, name } => {
+                            callee_sources.insert(*dest, CalleeSource::LoadVar(name.clone()));
+                        }
+                        Instruction::Const { dest, constant } => {
+                            if let Some(Constant::FunctionRef(id)) =
+                                module.constants().get(constant.0 as usize)
+                            {
+                                callee_sources
+                                    .insert(*dest, CalleeSource::FunctionRef(*id));
+                            }
+                        }
+                        _ => {}
                     }
 
                     match ins {
@@ -97,20 +123,38 @@ impl GcAnalysis {
 
                         // ── Call：追溯 callee ──
                         Instruction::Call { callee, .. } => {
-                            // 检查 callee ValueId 是否来自 LoadVar，且 name 在 known_callee_vars 中
-                            if let Some(var_name) = loadvar_map.get(callee) {
-                                if let Some(&callee_fn_id) = known_callees.get(var_name) {
-                                    // 精确追溯：callee 是已知函数声明
+                            match callee_sources.get(callee) {
+                                // callee 是 direct_call pass 替换后的 Const(FunctionRef)
+                                Some(CalleeSource::FunctionRef(callee_fn_id)) => {
+                                    let callee_fn_id = *callee_fn_id;
                                     call_edges[func_idx].push(callee_fn_id);
                                     call_targets.insert((func_id, *callee), callee_fn_id);
-                                } else {
-                                    // LoadVar 但不在 known_callee_vars → unknown callee
+                                    // 目标函数 direct_callable → 调用点可发射直接 call。
+                                    if module
+                                        .functions()
+                                        .get(callee_fn_id.0 as usize)
+                                        .is_some_and(|f| f.direct_callable())
+                                    {
+                                        direct_call_targets
+                                            .insert((func_id, *callee), callee_fn_id);
+                                    }
+                                }
+                                // callee 来自 LoadVar：经 known_callee_vars 解析（原有逻辑）
+                                Some(CalleeSource::LoadVar(var_name)) => {
+                                    if let Some(&callee_fn_id) = known_callees.get(var_name) {
+                                        // 精确追溯：callee 是已知函数声明
+                                        call_edges[func_idx].push(callee_fn_id);
+                                        call_targets.insert((func_id, *callee), callee_fn_id);
+                                    } else {
+                                        // LoadVar 但不在 known_callee_vars → unknown callee
+                                        unknown_callee[func_idx] = true;
+                                    }
+                                }
+                                // callee 不来自 LoadVar/FunctionRef → unknown callee
+                                // (可能来自 GetProp/GetElem/Phi/Call result 等)
+                                None => {
                                     unknown_callee[func_idx] = true;
                                 }
-                            } else {
-                                // callee 不来自 LoadVar → unknown callee
-                                // (可能来自 GetProp/GetElem/Phi/Call result 等)
-                                unknown_callee[func_idx] = true;
                             }
                         }
 
@@ -158,6 +202,7 @@ impl GcAnalysis {
         Self {
             may_gc,
             call_targets,
+            direct_call_targets,
         }
     }
 
@@ -191,6 +236,19 @@ impl GcAnalysis {
             // 无法追溯 → 保守 may-GC
             true
         }
+    }
+
+    /// 查询调用点是否可发射直接调用（Phase 3）。
+    ///
+    /// 仅当 callee 的 def 是 `Const(FunctionRef)` 且目标函数 `direct_callable` 时返回 Some。
+    pub fn direct_call_target(
+        &self,
+        caller_func_id: FunctionId,
+        callee_value_id: ValueId,
+    ) -> Option<FunctionId> {
+        self.direct_call_targets
+            .get(&(caller_func_id, callee_value_id))
+            .copied()
     }
 }
 

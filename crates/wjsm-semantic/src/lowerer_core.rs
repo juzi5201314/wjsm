@@ -1039,11 +1039,16 @@ impl Lowerer {
             self.finalize_async_main()?;
         } else {
             let has_eval = self.current_function.has_eval();
+            // 转移 known_callee_vars（Layer 3 callee 分析），与 lower_modules 路径一致。
+            let known_callees = self.current_function.take_known_callee_vars();
             let blocks = self.current_function.into_blocks();
             let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
             function.set_has_eval(has_eval);
             if self.eval_mode {
                 function.set_params(vec![EVAL_SCOPE_ENV_PARAM.to_string()]);
+            }
+            for (ir_name, fn_id) in known_callees {
+                function.record_known_callee(ir_name, fn_id);
             }
             for block in blocks {
                 function.push_block(block);
@@ -1054,6 +1059,8 @@ impl Lowerer {
         if !self.diagnostic_filename.is_empty() {
             self.module.set_source_file(&self.diagnostic_filename);
         }
+        // direct_call pass：标记可直接调用的函数并替换绑定读取为 FunctionRef。
+        crate::passes::direct_call::run(&mut self.module);
         Ok(self.module)
     }
 }

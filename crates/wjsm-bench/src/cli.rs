@@ -76,10 +76,10 @@ fn which(cmd: &str) -> Option<String> {
 
 /// 解析 wjsm 可执行文件：`WJSM` env 优先，否则 PATH 中的 `wjsm`。
 pub fn resolve_wjsm() -> Result<String> {
-    if let Ok(value) = std::env::var("WJSM") {
-        if !value.trim().is_empty() {
-            return Ok(value);
-        }
+    if let Ok(value) = std::env::var("WJSM")
+        && !value.trim().is_empty()
+    {
+        return Ok(value);
     }
     if let Some(found) = which("wjsm") {
         return Ok(found);
@@ -91,10 +91,10 @@ pub fn resolve_wjsm() -> Result<String> {
 
 /// 解析 node 可执行文件：`NODE` env 优先，否则 PATH 中的 `node`。
 pub fn resolve_node() -> Result<String> {
-    if let Ok(value) = std::env::var("NODE") {
-        if !value.trim().is_empty() {
-            return Ok(value);
-        }
+    if let Ok(value) = std::env::var("NODE")
+        && !value.trim().is_empty()
+    {
+        return Ok(value);
     }
     if let Some(found) = which("node") {
         return Ok(found);

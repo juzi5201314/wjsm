@@ -119,7 +119,7 @@ module {
     bb10:
       unreachable
 
-  fn @recover [needs_prototype] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @recover [needs_prototype] [direct_callable] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c35
@@ -128,7 +128,7 @@ module {
       store var $6.arguments, %2
       %4 = load var $env
       %5 = const c37
-      %6 = get_prop %4, %5
+      %6 = const c47
       %7 = const c38
       set_prop %2, %7, %6
       %8 = new_promise
@@ -146,13 +146,13 @@ module {
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
-  fn @arrow_2 [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
     bb0:
       %0 = load var $7.v
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -199,7 +199,7 @@ module {
       %21 = const c47
       store var $0.recover, %21
       %22 = const c48
-      %23 = load var $0.recover
+      %23 = const c47
       %24 = call %23, this=%22
       %25 = const c49
       %26 = const c50

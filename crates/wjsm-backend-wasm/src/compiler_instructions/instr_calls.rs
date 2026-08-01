@@ -9,6 +9,15 @@ impl Compiler {
         args: &[ValueId],
         new_target: Option<ValueId>,
     ) -> Result<()> {
+        // Phase 3 直接调用：callee 是 direct_callable 的 Const(FunctionRef)
+        // → 跳过 new_target_set、callee 求值、类型分派、闭包解包与 call_indirect。
+        if let Some(fn_id) = self.gc_analysis.as_ref().and_then(|a| {
+            self.current_function_id
+                .and_then(|f| a.direct_call_target(f, callee))
+        }) {
+            return self.emit_direct_call(dest, fn_id, this_val, args);
+        }
+
         // Type 12 签名: (i64 env_obj, i64 this_val, i32 args_base, i32 args_count) -> i64。
         // new.target 是调用上下文，普通调用压入 undefined，构造调用压入构造目标。
         let saved_new_target = self.string_concat_scratch_idx;
@@ -182,6 +191,68 @@ impl Compiler {
             self.special_host_import_indices[&SpecialHostImport::NewTargetSet],
         ));
         self.emit(WasmInstruction::Drop);
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+
+        // Step 5: 处理返回值
+        self.emit(WasmInstruction::LocalGet(result_scratch));
+        if let Some(d) = dest {
+            self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+        } else {
+            self.emit(WasmInstruction::Drop);
+        }
+
+        Ok(())
+    }
+
+    /// 直接调用 direct_callable 函数（Phase 3）：跳过 new_target_set、callee 求值、
+    /// 类型分派、闭包解包与 call_indirect，只做 shadow stack 传参后 `call` slow 入口。
+    ///
+    /// 不发射 new_target_set 保存/恢复：direct_callable 函数体不读 new.target；
+    /// 不发射 callee 求值：调用点已由 direct_call pass 静态解析为 Const(FunctionRef)。
+    /// GC safepoint：外层 Call 分支已按 `call_may_trigger_gc` 决定 spill prologue/epilogue。
+    fn emit_direct_call(
+        &mut self,
+        dest: &Option<ValueId>,
+        fn_id: wjsm_ir::FunctionId,
+        this_val: ValueId,
+        args: &[ValueId],
+    ) -> Result<()> {
+        let result_scratch = self.call_env_obj_scratch();
+
+        // Step 1: 保存 shadow_sp 到 scratch local
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+
+        // Step 1b: 影子栈边界检查
+        self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+
+        // Step 2: 将所有参数写入影子栈
+        for arg in args {
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+            self.emit(WasmInstruction::I64Store(crate::shadow_mem_arg(0)));
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::I32Const(8));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        }
+
+        // Step 3: 直接调用 slow 入口（Type 12: env, this, args_base, args_count）。
+        // direct_callable 函数体不读 env → 压入 undefined。
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        let wasm_idx = self
+            .function_id_to_wasm_idx
+            .get(&fn_id.0)
+            .copied()
+            .with_context(|| format!("no WASM func index for direct call target @{}", fn_id.0))?;
+        self.emit(WasmInstruction::Call(wasm_idx));
+        self.emit(WasmInstruction::LocalSet(result_scratch));
+
+        // Step 4: 恢复 shadow_sp
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
 

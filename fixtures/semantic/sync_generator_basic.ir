@@ -122,7 +122,7 @@ module {
       store var $2.arguments, %2
       %4 = load var $env
       %5 = const c36
-      %6 = get_prop %4, %5
+      %6 = const c44
       %7 = const c37
       set_prop %2, %7, %6
       %8 = const c38
@@ -139,7 +139,7 @@ module {
       call builtin.continuation.save_var(%11, %16, %13)
       return %12
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

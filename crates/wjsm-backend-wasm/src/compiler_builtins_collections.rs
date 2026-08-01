@@ -93,12 +93,42 @@ impl Compiler {
             }
             Builtin::AbstractCompare => {
                 // abstract_compare(a, b) -> bool (a < b)
+                // 双 f64 → 原生 f64.lt（NaN → false，符合 ECMAScript 关系比较）；否则走 host。
                 let lhs = args.first().context("AbstractCompare expects 2 args")?;
                 let rhs = args.get(1).context("AbstractCompare expects 2 args")?;
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                let lhs_l = self.local_idx(lhs.0);
+                let rhs_l = self.local_idx(rhs.0);
+                let box_base = value::BOX_BASE as i64;
+                // is_f64(lhs) && is_f64(rhs)
+                self.emit(WasmInstruction::LocalGet(lhs_l));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Ne);
+                self.emit(WasmInstruction::LocalGet(rhs_l));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Ne);
+                self.emit(WasmInstruction::I32And);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                // 双 f64：原生比较，结果包装为 encode_bool（i64）
+                self.emit(WasmInstruction::LocalGet(lhs_l));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::LocalGet(rhs_l));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::F64Lt);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                self.emit(WasmInstruction::I64Const(value::encode_bool(true)));
+                self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::I64Const(value::encode_bool(false)));
+                self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::LocalGet(lhs_l));
+                self.emit(WasmInstruction::LocalGet(rhs_l));
                 let func_idx = self.builtin_func_idx(builtin)?;
                 self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::End);
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }

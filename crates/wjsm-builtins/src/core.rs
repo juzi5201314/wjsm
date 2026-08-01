@@ -188,15 +188,57 @@ fn array_to_string_bytes<E: ExecContext>(ctx: &mut E, array: Value) -> Vec<u8> {
     }
     result
 }
-/// ECMAScript `+` 字符串拼接（非 Proxy 路径）。
+/// ECMAScript `+` 完整语义（非 Proxy 路径）。
+///
+/// 双 f64 与双 BigInt 由后端提前内联/直调；这里覆盖慢路径：
+/// - 任一操作数（ToPrimitive 后）为字符串 → 字符串拼接；
+/// - 其余 → ToNumeric 相加（BigInt/Number 混合 → TypeError）。
 #[inline]
 pub fn string_concat<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
     if !value::is_string(a) && !value::is_string(b) {
-        return value::encode_undefined();
+        // 无原始字符串操作数：ToPrimitive 后仍可能产生字符串（String 对象、数组等）。
+        let pa = ctx.to_primitive_hinted(a, ToPrimitiveHintKind::Number);
+        if value::is_exception(pa) {
+            return pa;
+        }
+        let pb = ctx.to_primitive_hinted(b, ToPrimitiveHintKind::Number);
+        if value::is_exception(pb) {
+            return pb;
+        }
+        if value::is_string(pa) || value::is_string(pb) {
+            let mut bytes = concat_operand_bytes(ctx, pa);
+            bytes.extend(concat_operand_bytes(ctx, pb));
+            return ctx.store_string_owned(String::from_utf8(bytes).unwrap_or_default());
+        }
+        // ToNumeric 相加：BigInt/Number 混合 → TypeError。
+        let a_big = value::is_bigint(pa);
+        let b_big = value::is_bigint(pb);
+        if a_big != b_big {
+            return ctx.make_type_error("Cannot mix BigInt and other types, use explicit conversions");
+        }
+        if a_big {
+            match (ctx.read_bigint(pa), ctx.read_bigint(pb)) {
+                (Some(x), Some(y)) => ctx.store_bigint(x + y),
+                _ => value::encode_undefined(),
+            }
+        } else {
+            let na = ctx.to_number(pa);
+            if value::is_exception(na) {
+                return na;
+            }
+            let nb = ctx.to_number(pb);
+            if value::is_exception(nb) {
+                return nb;
+            }
+            let sum = value::decode_f64(na) + value::decode_f64(nb);
+            value::encode_f64(sum)
+        }
+    } else {
+        // 任一操作数是原始字符串：直接拼接。
+        let mut bytes = concat_operand_bytes(ctx, a);
+        bytes.extend(concat_operand_bytes(ctx, b));
+        ctx.store_string_owned(String::from_utf8(bytes).unwrap_or_default())
     }
-    let mut bytes = concat_operand_bytes(ctx, a);
-    bytes.extend(concat_operand_bytes(ctx, b));
-    ctx.store_string_owned(String::from_utf8(bytes).unwrap_or_default())
 }
 
 pub fn string_concat_va<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Value {

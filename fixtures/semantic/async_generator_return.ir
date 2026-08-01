@@ -121,7 +121,7 @@ module {
     bb9:
       unreachable
 
-  fn @gen [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @gen [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c33
@@ -130,7 +130,7 @@ module {
       store var $2.arguments, %2
       %4 = load var $env
       %5 = const c35
-      %6 = get_prop %4, %5
+      %6 = const c42
       %7 = const c36
       set_prop %2, %7, %6
       %8 = const c37
@@ -144,7 +144,7 @@ module {
       call builtin.continuation.save_var(%11, %14, %10)
       return %12
 
-  fn @arrow_2 [params: $3.$env, $3.$this, $3.result] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.result] [entry=bb0]:
     bb0:
       %0 = load var $3.result
       %1 = const c45
@@ -152,7 +152,7 @@ module {
       %3 = call builtin.console.log(%2)
       return %3
 
-  fn @arrow_3 [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
+  fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
     bb0:
       %0 = load var $4.result
       %1 = const c49
@@ -160,7 +160,7 @@ module {
       %3 = call builtin.console.log(%2)
       return %3
 
-  fn @arrow_4 [params: $5.$env, $5.$this, $5.result] [entry=bb0]:
+  fn @arrow_4 [direct_callable] [params: $5.$env, $5.$this, $5.result] [entry=bb0]:
     bb0:
       %0 = load var $5.result
       %1 = const c53
@@ -168,7 +168,7 @@ module {
       %3 = call builtin.console.log(%2)
       return %3
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -215,7 +215,7 @@ module {
       %21 = const c42
       store var $0.gen, %21
       %22 = const c43
-      %23 = load var $0.gen
+      %23 = const c42
       %24 = call %23, this=%22
       %25 = is_exception %24
       branch %25, bb2, bb1

@@ -98,6 +98,7 @@ mod lowerer_jsx_objects;
 mod lowerer_predeclare;
 mod lowerer_stmt;
 mod lowerer_ts;
+mod passes;
 
 // ── Error types ─────────────────────────────────────────────────────────
 

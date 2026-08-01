@@ -174,7 +174,7 @@ module {
     bb21:
       unreachable
 
-  fn @run [needs_prototype] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @run [needs_prototype] [direct_callable] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c39
@@ -183,7 +183,7 @@ module {
       store var $9.arguments, %2
       %4 = load var $env
       %5 = const c41
-      %6 = get_prop %4, %5
+      %6 = const c51
       %7 = const c42
       set_prop %2, %7, %6
       %8 = new_promise
@@ -201,13 +201,13 @@ module {
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
-  fn @arrow_2 [params: $10.$env, $10.$this, $10.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [params: $10.$env, $10.$this, $10.v] [entry=bb0]:
     bb0:
       %0 = load var $10.v
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -254,7 +254,7 @@ module {
       %21 = const c51
       store var $0.run, %21
       %22 = const c52
-      %23 = load var $0.run
+      %23 = const c51
       %24 = call %23, this=%22
       %25 = const c53
       %26 = const c54

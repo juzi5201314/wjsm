@@ -423,9 +423,10 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
         self.emit_bigint_mixed_type_error_value()?;
         self.emit(WasmInstruction::Else);
-        self.emit(WasmInstruction::LocalGet(lhs_l));
+        // 非 BigInt 路径：先 ToNumber 再 f64 运算（修复 "5"-1 等非 number 操作数缺 ToNumber 的语义 bug）
+        self.emit_to_number(lhs_l)?;
         self.emit(WasmInstruction::F64ReinterpretI64);
-        self.emit(WasmInstruction::LocalGet(rhs_l));
+        self.emit_to_number(rhs_l)?;
         self.emit(WasmInstruction::F64ReinterpretI64);
         self.emit(f64_op);
         self.emit(WasmInstruction::I64ReinterpretF64);

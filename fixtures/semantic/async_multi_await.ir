@@ -162,7 +162,7 @@ module {
     bb14:
       unreachable
 
-  fn @multi [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @multi [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c41
@@ -171,7 +171,7 @@ module {
       store var $2.arguments, %2
       %4 = load var $env
       %5 = const c43
-      %6 = get_prop %4, %5
+      %6 = const c53
       %7 = const c44
       set_prop %2, %7, %6
       %8 = new_promise
@@ -189,7 +189,7 @@ module {
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
@@ -236,7 +236,7 @@ module {
       %21 = const c53
       store var $0.multi, %21
       %22 = const c54
-      %23 = load var $0.multi
+      %23 = const c53
       %24 = call %23, this=%22
       %25 = is_exception %24
       branch %25, bb2, bb1
