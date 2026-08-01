@@ -59,55 +59,66 @@ impl Compiler {
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
                 match op {
-                    // 加法：双 f64 → 原生 f64.add（fast path）；双 BigInt → host；
-                    // 其余（字符串拼接、BigInt/Number 混合 TypeError、ToNumeric 等）→ host string_concat
+                    // 加法：双已知 f64 → 原生 f64.add（无字符串拼接语义）；
+                    // 否则走通用路径：双 f64 检查 → 原生；双 BigInt → host；其余 → string_concat
                     BinaryOp::Add => {
                         let lhs_l = self.local_idx(lhs.0);
                         let rhs_l = self.local_idx(rhs.0);
-                        let box_base = value::BOX_BASE as i64;
-                        // is_f64(lhs) && is_f64(rhs): (val & BOX_BASE) != BOX_BASE
-                        self.emit(WasmInstruction::LocalGet(lhs_l));
-                        self.emit(WasmInstruction::I64Const(box_base));
-                        self.emit(WasmInstruction::I64And);
-                        self.emit(WasmInstruction::I64Const(box_base));
-                        self.emit(WasmInstruction::I64Ne);
-                        self.emit(WasmInstruction::LocalGet(rhs_l));
-                        self.emit(WasmInstruction::I64Const(box_base));
-                        self.emit(WasmInstruction::I64And);
-                        self.emit(WasmInstruction::I64Const(box_base));
-                        self.emit(WasmInstruction::I64Ne);
-                        self.emit(WasmInstruction::I32And);
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        // 双 f64：原生加法
-                        self.emit(WasmInstruction::LocalGet(lhs_l));
-                        self.emit(WasmInstruction::F64ReinterpretI64);
-                        self.emit(WasmInstruction::LocalGet(rhs_l));
-                        self.emit(WasmInstruction::F64ReinterpretI64);
-                        self.emit(WasmInstruction::F64Add);
-                        self.emit(WasmInstruction::I64ReinterpretF64);
-                        self.emit(WasmInstruction::Else);
-                        // 双 BigInt → host bigint_add
-                        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
-                        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
-                        self.emit(WasmInstruction::I32And);
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        self.emit(WasmInstruction::LocalGet(lhs_l));
-                        self.emit(WasmInstruction::LocalGet(rhs_l));
-                        let bigint_idx = self
-                            .builtin_func_indices
-                            .get(&Builtin::BigIntAdd)
-                            .copied()
-                            .expect("BigIntAdd import must be registered");
-                        self.emit(WasmInstruction::Call(bigint_idx));
-                        self.emit(WasmInstruction::Else);
-                        // 其余语义（字符串拼接、BigInt/Number 混合 TypeError、ToNumeric）→ host
-                        self.emit(WasmInstruction::LocalGet(lhs_l));
-                        self.emit(WasmInstruction::LocalGet(rhs_l));
-                        self.emit(WasmInstruction::Call(
-                            self.special_host_import_indices[&SpecialHostImport::StringConcat],
-                        ));
-                        self.emit(WasmInstruction::End);
-                        self.emit(WasmInstruction::End);
+                        if self.value_known_f64(*lhs) && self.value_known_f64(*rhs) {
+                            // 双已知 f64：f64+f64 必为 f64（无 ToNumeric/字符串拼接），
+                            // 与 Sub/Mul/Div 的 known-f64 直出保持一致。
+                            self.emit(WasmInstruction::LocalGet(lhs_l));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(WasmInstruction::LocalGet(rhs_l));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(WasmInstruction::F64Add);
+                            self.emit(WasmInstruction::I64ReinterpretF64);
+                        } else {
+                            let box_base = value::BOX_BASE as i64;
+                            // is_f64(lhs) && is_f64(rhs): (val & BOX_BASE) != BOX_BASE
+                            self.emit(WasmInstruction::LocalGet(lhs_l));
+                            self.emit(WasmInstruction::I64Const(box_base));
+                            self.emit(WasmInstruction::I64And);
+                            self.emit(WasmInstruction::I64Const(box_base));
+                            self.emit(WasmInstruction::I64Ne);
+                            self.emit(WasmInstruction::LocalGet(rhs_l));
+                            self.emit(WasmInstruction::I64Const(box_base));
+                            self.emit(WasmInstruction::I64And);
+                            self.emit(WasmInstruction::I64Const(box_base));
+                            self.emit(WasmInstruction::I64Ne);
+                            self.emit(WasmInstruction::I32And);
+                            self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                            // 双 f64：原生加法
+                            self.emit(WasmInstruction::LocalGet(lhs_l));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(WasmInstruction::LocalGet(rhs_l));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(WasmInstruction::F64Add);
+                            self.emit(WasmInstruction::I64ReinterpretF64);
+                            self.emit(WasmInstruction::Else);
+                            // 双 BigInt → host bigint_add
+                            self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+                            self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+                            self.emit(WasmInstruction::I32And);
+                            self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                            self.emit(WasmInstruction::LocalGet(lhs_l));
+                            self.emit(WasmInstruction::LocalGet(rhs_l));
+                            let bigint_idx = self
+                                .builtin_func_indices
+                                .get(&Builtin::BigIntAdd)
+                                .copied()
+                                .expect("BigIntAdd import must be registered");
+                            self.emit(WasmInstruction::Call(bigint_idx));
+                            self.emit(WasmInstruction::Else);
+                            // 其余语义（字符串拼接、BigInt/Number 混合 TypeError、ToNumeric）→ host
+                            self.emit(WasmInstruction::LocalGet(lhs_l));
+                            self.emit(WasmInstruction::LocalGet(rhs_l));
+                            self.emit(WasmInstruction::Call(
+                                self.special_host_import_indices[&SpecialHostImport::StringConcat],
+                            ));
+                            self.emit(WasmInstruction::End);
+                            self.emit(WasmInstruction::End);
+                        }
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     // 算术：两操作数均为 BigInt 时走 bigint_* host（除法截断 toward zero）
@@ -782,6 +793,17 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::IsException { dest, value } => {
+                // 调用结果必非异常（callee 已知且 !can_throw）→ is_exception 恒 false：
+                // 直出 boxed false，省去 BOX_BASE/tag 检查。
+                if self.current_function_id.is_some_and(|f| {
+                    self.f64_analysis
+                        .as_ref()
+                        .is_some_and(|a| a.value_never_exception(f, *value))
+                }) {
+                    self.emit(WasmInstruction::I64Const(value::encode_bool(false)));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                    return Ok(false);
+                }
                 let box_base = value::BOX_BASE as i64;
                 let tag_exception = value::TAG_EXCEPTION as i64;
                 let tag_mask = value::TAG_MASK as i64;

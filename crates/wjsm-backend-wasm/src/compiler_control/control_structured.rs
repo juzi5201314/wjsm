@@ -37,6 +37,17 @@ impl Compiler {
                 break;
             }
 
+            // 死异常块（is_exception 恒 false 分支的异常目标）不生成代码。
+            // 其 terminator 必为 Throw/Unreachable（折叠条件），无后继，直接跳过。
+            if self.current_function_id.is_some_and(|f| {
+                self.f64_analysis
+                    .as_ref()
+                    .is_some_and(|a| a.is_dead_exception_block(f, idx))
+            }) {
+                idx += 1;
+                continue;
+            }
+
             if let Some(loop_info) = loops.iter().find(|l| l.header_idx == idx) {
                 self.emit(WasmInstruction::Block(BlockType::Empty));
                 self.emit(WasmInstruction::Loop(BlockType::Empty));
@@ -104,6 +115,32 @@ impl Compiler {
                 } => {
                     let true_idx = true_block.0 as usize;
                     let false_idx = false_block.0 as usize;
+
+                    // ── 常量折叠：条件恒 false（is_exception 且操作数必非异常）──
+                    // 异常路径（true_block）是死代码：直接顺序编译正常路径。
+                    // 仅折叠 true_block 以 Throw/Unreachable 终止且 false_block 无 Phi
+                    // （无需 phi_moves）的安全形态。
+                    let false_has_phi = blocks[false_idx]
+                        .instructions()
+                        .iter()
+                        .any(|ins| matches!(ins, Instruction::Phi { .. }));
+                    let condition_constant_false = self.current_function_id.is_some_and(|f| {
+                        self.f64_analysis.as_ref().is_some_and(|a| {
+                            a.condition_constant_false(f, *condition)
+                        })
+                    });
+                    if condition_constant_false
+                        && !false_has_phi
+                        && matches!(
+                            blocks[true_idx].terminator(),
+                            Terminator::Throw { .. } | Terminator::Unreachable
+                        )
+                    {
+                        // 异常路径死代码：直接顺序编译正常路径（主循环会自行
+                        // compiled_blocks.insert + 编译，此处不可提前标记）。
+                        idx = false_idx;
+                        continue;
+                    }
 
                     // 循环头条件（while/for 模式）：
                     // true → body, false → exit

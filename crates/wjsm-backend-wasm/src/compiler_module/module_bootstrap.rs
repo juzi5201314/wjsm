@@ -261,10 +261,16 @@ impl Compiler {
         &mut self,
         module: &IrModule,
         function: &IrFunction,
+        function_id: wjsm_ir::FunctionId,
     ) -> Result<()> {
         self.current_func_is_main = is_module_entry_ir_function(function.name());
         self.current_func_returns_value =
             self.mode == CompileMode::Eval || self.current_func_is_main;
+        // 与 compile_js_function 对齐：模块入口也需要 current_function_id，
+        // 否则 GcAnalysis::direct_call_target 恒不命中，入口对函数声明的调用
+        // 会全部退化为通用调用路径（tag 分派 + call_indirect）。
+        self.current_home_object = function.home_object;
+        self.current_function_id = Some(function_id);
         self.ssa_local_base = if self.mode == CompileMode::Eval {
             function.params().len() as u32
         } else {
@@ -363,6 +369,8 @@ impl Compiler {
         self.current_fn_value_ty = None;
         self.current_fn_var_liveness = None;
         self.current_fn_var_ty = None;
+        self.current_home_object = None;
+        self.current_function_id = None;
 
         Ok(())
     }

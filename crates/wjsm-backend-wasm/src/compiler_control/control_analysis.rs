@@ -123,6 +123,14 @@ impl Compiler {
         self.emit(WasmInstruction::Loop(BlockType::Empty));
 
         for (idx, block) in blocks.iter().enumerate() {
+            // 死异常块（is_exception 恒 false 分支的异常目标）不生成 dispatch case。
+            if self.current_function_id.is_some_and(|f| {
+                self.f64_analysis
+                    .as_ref()
+                    .is_some_and(|a| a.is_dead_exception_block(f, idx))
+            }) {
+                continue;
+            }
             self.emit(WasmInstruction::LocalGet(pc));
             self.emit(WasmInstruction::I32Const(idx as i32));
             self.emit(WasmInstruction::I32Eq);
@@ -180,6 +188,21 @@ impl Compiler {
                 true_block,
                 false_block,
             } => {
+                // 恒 false（is_exception 且操作数必非异常）→ 异常目标（true）是
+                // 死代码：直接跳正常路径，不发射条件求值与 if/else。
+                let condition_constant_false = self.current_function_id.is_some_and(|f| {
+                    self.f64_analysis.as_ref().is_some_and(|a| {
+                        a.condition_constant_false(f, *condition)
+                    })
+                });
+                let true_terminates = matches!(
+                    blocks[true_block.0 as usize].terminator(),
+                    Terminator::Throw { .. } | Terminator::Unreachable
+                );
+                if condition_constant_false && true_terminates {
+                    self.emit_dispatch_jump(blocks, idx, false_block.0 as usize, pc, 1);
+                    return Ok(());
+                }
                 self.emit_condition_to_bool_i32(*condition);
                 self.emit(WasmInstruction::If(BlockType::Empty));
                 self.emit_dispatch_jump(blocks, idx, true_block.0 as usize, pc, 2);

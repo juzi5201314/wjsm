@@ -47,7 +47,7 @@
 //! 非 direct_callable 函数（module entry、eval）不参与形参分析（无 param_is_f64
 //! 条目），但其函数内 known_f64/known_bool 照常计算（作为调用方约束其他函数）。
 use std::collections::{HashMap, HashSet};
-use wjsm_ir::{BinaryOp, Builtin, Constant, FunctionId, Instruction, Module, UnaryOp, ValueId};
+use wjsm_ir::{BinaryOp, Builtin, Constant, FunctionId, Instruction, Module, Terminator, UnaryOp, ValueId};
 
 /// f64 值类型传播分析结果。
 #[derive(Debug, Clone, Default)]
@@ -59,6 +59,22 @@ pub struct F64Analysis {
     /// direct_callable 函数声明形参（排除 $env/$this）是否必为 f64。
     /// 索引 = FunctionId.0 → Vec<bool>（顺序 = 声明形参顺序）。
     param_is_f64: Vec<Vec<bool>>,
+    /// 函数是否可能以异常状态返回（含 Terminator::Throw 与可能抛异常的调用）。
+    /// 不动点：false→true 单调。消费方：调用结果标 f64（需 !can_throw(callee)）、
+    /// is_exception 省略（需 !can_throw(callee)）。索引 = FunctionId.0。
+    can_throw: Vec<bool>,
+    /// 函数所有 return 值（含 None=undefined）是否必为 f64。乐观起点 true 单调收紧。
+    /// 仅对 direct_callable 函数有效（非 direct_callable → false）。索引 = FunctionId.0。
+    returns_f64: Vec<bool>,
+    /// 调用结果必非异常（callee 已知且 !can_throw）的 ValueId。索引 = FunctionId.0。
+    never_exception: Vec<HashSet<ValueId>>,
+    /// IsException dest 且操作数 ∈ never_exception → 恒为 false。索引 = FunctionId.0。
+    constant_false: Vec<HashSet<ValueId>>,
+    /// 死异常块（constant_false 分支的异常目标块索引）。索引 = FunctionId.0。
+    dead_exception_blocks: Vec<HashSet<usize>>,
+    /// known_bool 且所有消费均为 branch 条件（truthiness-only）的 ValueId：
+    /// 比较可直出 i32（0/1）跳过 boxed 构造与解包。索引 = FunctionId.0。
+    truthiness_only: Vec<HashSet<ValueId>>,
 }
 
 impl F64Analysis {
@@ -83,6 +99,51 @@ impl F64Analysis {
             .and_then(|v| v.get(param_idx))
             .copied()
             .unwrap_or(false)
+    }
+
+    /// 查询函数是否可能以异常状态返回（含显式 throw 与可能抛异常的调用）。
+    pub fn function_can_throw(&self, func_id: FunctionId) -> bool {
+        self.can_throw
+            .get(func_id.0 as usize)
+            .copied()
+            .unwrap_or(true)
+    }
+
+    /// 查询函数的所有 return 值是否必为 f64（非 direct_callable → false）。
+    pub fn function_returns_f64(&self, func_id: FunctionId) -> bool {
+        self.returns_f64
+            .get(func_id.0 as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// 查询某 ValueId 是否必非异常（来自 !can_throw(callee) 的精确调用结果）。
+    pub fn value_never_exception(&self, func_id: FunctionId, value_id: ValueId) -> bool {
+        self.never_exception
+            .get(func_id.0 as usize)
+            .is_some_and(|s| s.contains(&value_id))
+    }
+
+    /// 查询某 ValueId 是否编译期恒为 false（is_exception 且操作数必非异常）。
+    pub fn condition_constant_false(&self, func_id: FunctionId, value_id: ValueId) -> bool {
+        self.constant_false
+            .get(func_id.0 as usize)
+            .is_some_and(|s| s.contains(&value_id))
+    }
+
+    /// 查询某块是否死异常块（constant_false 分支的异常目标，不生成代码）。
+    pub fn is_dead_exception_block(&self, func_id: FunctionId, block_idx: usize) -> bool {
+        self.dead_exception_blocks
+            .get(func_id.0 as usize)
+            .is_some_and(|s| s.contains(&block_idx))
+    }
+
+    /// 查询某 ValueId 是否已知 boxed bool 且仅被 branch 条件消费
+    /// （比较可直出 i32 0/1，跳过 boxed 构造与解包）。
+    pub fn value_truthiness_only(&self, func_id: FunctionId, value_id: ValueId) -> bool {
+        self.truthiness_only
+            .get(func_id.0 as usize)
+            .is_some_and(|s| s.contains(&value_id))
     }
 
     /// 供单测/调试：完整形参表。
@@ -182,6 +243,8 @@ struct FnInfo<'a> {
     binaries: Vec<(ValueId, BinaryOp, ValueId, ValueId)>,
     /// Unary 的 (dest, op, 操作数)。
     unaries: Vec<(ValueId, UnaryOp, ValueId)>,
+    /// Call 的 (dest, callee)（调用结果 f64 传播用；dest None 不收集）。
+    calls: Vec<(ValueId, ValueId)>,
     /// ValueId → def 指令（callee 解析用）。
     defs: HashMap<ValueId, &'a Instruction>,
     /// known_callee_vars（函数声明绑定 → FunctionId）。
@@ -234,6 +297,7 @@ fn analyze_inner(module: &Module) -> F64Analysis {
                 phis: Vec::new(),
                 binaries: Vec::new(),
                 unaries: Vec::new(),
+                calls: Vec::new(),
                 defs: HashMap::new(),
                 known_callees: f.known_callee_vars(),
             };
@@ -255,6 +319,9 @@ fn analyze_inner(module: &Module) -> F64Analysis {
                         }
                         Instruction::Unary { dest, op, value } => {
                             info.unaries.push((*dest, *op, *value));
+                        }
+                        Instruction::Call { dest: Some(dest), callee, .. } => {
+                            info.calls.push((*dest, *callee));
                         }
                         _ => {}
                     }
@@ -346,51 +413,145 @@ fn analyze_inner(module: &Module) -> F64Analysis {
             }
         })
         .collect();
+    // can_throw：乐观 false 起点，false→true 单调传播（仅可能抛异常才翻 true）。
+    let mut can_throw = vec![false; num_functions];
+    // returns_f64：乐观 true 起点（仅 direct_callable 参与；非 direct_callable 无返回
+    // 值契约，恒 false）。随 known_f64 收缩单调收紧。
+    let mut returns_f64: Vec<bool> = module
+        .functions()
+        .iter()
+        .map(|f| f.direct_callable())
+        .collect();
 
-    loop {
-        // 1. 用当前形参假设重算 known_f64（形参收缩 → 集合单调收缩）。
-        let known_f64: Vec<HashSet<ValueId>> = (0..num_functions)
-            .map(|i| compute_known_f64(module, &infos[i], &param_is_f64[i]))
+    // 联合不动点：can_throw（死块感知，死块集单调增）∧ known_f64（单调缩）∧
+    // returns_f64（单调缩）∧ param_is_f64（单调缩）∧ 派生表（never_exception/
+    // constant_false/dead_blocks 单调增）。can_throw 依赖 known_f64（builtin f64 特例）
+    // 与 dead_blocks（死路径不计）；派生表依赖 can_throw——同轮内按依赖顺序计算。
+    // 收敛判据覆盖全部表；迭代上限防非单调振荡（dead 跳过 vs known_f64 收缩方向
+    // 相反），超限以最后状态返回（保守）。
+    // 首轮 known_f64 基于乐观形参假设（全 true）预计算，供 can_throw 首轮判定。
+    let mut dead_blocks: Vec<HashSet<usize>> = vec![HashSet::new(); num_functions];
+    let mut known_f64: Vec<HashSet<ValueId>> = (0..num_functions)
+        .map(|i| {
+            compute_known_f64(
+                module,
+                &infos[i],
+                &param_is_f64[i],
+                &var_store_count,
+                &can_throw,
+                &returns_f64,
+            )
+        })
+        .collect();
+    for _ in 0..64 {
+        // 1. can_throw：用上一轮 known_f64/dead_blocks 判定（每轮乐观起点重算）。
+        let next_can_throw = compute_can_throw(
+            module,
+            &infos,
+            &var_store_count,
+            &known_f64,
+            &dead_blocks,
+        );
+
+        // 2. known_f64：用新 can_throw/returns_f64 重算（形参收缩 → 集合单调收缩）。
+        let next_known_f64: Vec<HashSet<ValueId>> = (0..num_functions)
+            .map(|i| {
+                compute_known_f64(
+                    module,
+                    &infos[i],
+                    &param_is_f64[i],
+                    &var_store_count,
+                    &next_can_throw,
+                    &returns_f64,
+                )
+            })
             .collect();
 
-        // 2. 用调用点 AND 修正形参。
+        // 3. returns_f64：用新 known_f64 收紧。
+        let next_returns = compute_returns_f64(module, &next_known_f64);
+
+        // 4. 调用点 AND 修正形参。
         let mut next_params = param_is_f64.clone();
-        let mut changed = false;
         for g_idx in 0..num_functions {
             if next_params[g_idx].is_empty() {
                 continue;
             }
             for i in 0..next_params[g_idx].len() {
-                let v = compute_param_is_f64(
+                next_params[g_idx][i] = compute_param_is_f64(
                     module,
                     &call_sites,
                     &infos,
                     &var_store_count,
                     &dynamically_reachable,
-                    &known_f64,
+                    &next_known_f64,
                     g_idx,
                     i,
                 );
-                if v != next_params[g_idx][i] {
-                    next_params[g_idx][i] = v;
-                    changed = true;
-                }
             }
         }
-        if !changed {
-            // 收敛：known_f64 基于收敛后的形参假设计算（next_params == param_is_f64）。
+
+        // 5. 派生表（依赖 can_throw，随死块集单调扩展）：
+        //    - never_exception：!can_throw(callee) 的精确调用结果。
+        //    - constant_false：is_exception 且操作数必非异常。
+        //    - dead_exception_blocks：constant_false 分支的异常目标块。
+        let next_never_exception =
+            compute_never_exception(module, &infos, &var_store_count, &next_can_throw);
+        let next_constant_false = compute_constant_false(module, &next_never_exception);
+        let next_dead_blocks = compute_dead_exception_blocks(module, &next_constant_false);
+
+        if next_can_throw == can_throw
+            && next_returns == returns_f64
+            && next_params == param_is_f64
+            && next_dead_blocks == dead_blocks
+        {
+            let truthiness_only = compute_truthiness_only(module, &known_bool);
             return F64Analysis {
-                known_f64,
+                known_f64: next_known_f64,
                 known_bool,
                 param_is_f64,
+                can_throw: next_can_throw,
+                returns_f64: next_returns,
+                never_exception: next_never_exception,
+                constant_false: next_constant_false,
+                dead_exception_blocks: next_dead_blocks,
+                truthiness_only,
             };
         }
+        can_throw = next_can_throw;
+        returns_f64 = next_returns;
         param_is_f64 = next_params;
+        known_f64 = next_known_f64;
+        dead_blocks = next_dead_blocks;
+    }
+    // 迭代上限（非单调振荡保护）：以最后状态返回（保守：派生表随最后 can_throw）。
+    let truthiness_only = compute_truthiness_only(module, &known_bool);
+    let never_exception =
+        compute_never_exception(module, &infos, &var_store_count, &can_throw);
+    F64Analysis {
+        known_f64,
+        known_bool,
+        param_is_f64,
+        can_throw,
+        returns_f64,
+        never_exception: never_exception.clone(),
+        constant_false: compute_constant_false(module, &never_exception),
+        dead_exception_blocks: dead_blocks,
+        truthiness_only,
     }
 }
 
 /// 计算函数内 known_f64（给定形参假设的固定点）。
-fn compute_known_f64(module: &Module, info: &FnInfo, param_flags: &[bool]) -> HashSet<ValueId> {
+///
+/// `can_throw`/`returns_f64` 供调用结果 f64 传播：精确 callee 且
+/// `!can_throw(callee) ∧ returns_f64(callee)` → 调用结果标 f64（排除 TAG_EXCEPTION）。
+fn compute_known_f64(
+    module: &Module,
+    info: &FnInfo,
+    param_flags: &[bool],
+    var_store_count: &HashMap<&str, u32>,
+    can_throw: &[bool],
+    returns_f64: &[bool],
+) -> HashSet<ValueId> {
     let constants = module.constants();
     let mut known: HashSet<ValueId> = HashSet::new();
 
@@ -403,14 +564,13 @@ fn compute_known_f64(module: &Module, info: &FnInfo, param_flags: &[bool]) -> Ha
         }
     }
 
-    // 固定点迭代：Binary/Unary/Phi/LoadVar 逐轮传播直至不动点。
+    // 固定点迭代：Binary/Unary/Phi/LoadVar/Call 逐轮传播直至不动点。
     loop {
         let mut changed = false;
 
-        // Binary（Add 除外——字符串拼接语义）。
-        for (dest, op, lhs, rhs) in &info.binaries {
-            if *op != BinaryOp::Add
-                && !known.contains(dest)
+        // Binary：lhs ∧ rhs 均 f64 → f64。Add 亦含（双 f64 无字符串拼接语义）。
+        for (dest, _, lhs, rhs) in &info.binaries {
+            if !known.contains(dest)
                 && known.contains(lhs)
                 && known.contains(rhs)
             {
@@ -466,12 +626,323 @@ fn compute_known_f64(module: &Module, info: &FnInfo, param_flags: &[bool]) -> Ha
             }
         }
 
+        // Call 结果：精确 callee 且 !can_throw ∧ returns_f64 → f64
+        // （TAG_EXCEPTION handle 不可能出现，调用结果规范必为 f64 返回）。
+        for (dest, callee) in &info.calls {
+            if !known.contains(dest)
+                && let Some(g) =
+                    resolve_callee(module, info, var_store_count, *callee)
+                && !can_throw[g.0 as usize]
+                && returns_f64[g.0 as usize]
+            {
+                known.insert(*dest);
+                changed = true;
+            }
+        }
+
         if !changed {
             break;
         }
     }
 
     known
+}
+
+/// 判断 builtin 是否可能抛 JS 异常（或返回 exception handle）。
+///
+/// 白名单仅含确定纯的 builtin；已知 f64 实参的算术 builtin 走 f64 特例（无
+/// ToNumeric/ToPrimitive/reentrant）。其余一律保守 true。
+fn builtin_may_throw(
+    builtin: Builtin,
+    known: &HashSet<ValueId>,
+    args: &[ValueId],
+) -> bool {
+    let all_f64 = |need: usize| args.len() >= need && args.iter().take(need).all(|a| known.contains(a));
+    match builtin {
+        // 纯 builtin：构造/检查/读取，不抛 JS 异常。
+        Builtin::CreateClosure
+        | Builtin::IsException
+        | Builtin::ExceptionValue
+        | Builtin::CreateException
+        | Builtin::NewTarget => false,
+        // 双已知 f64 → 编译期直出纯 f64 运算（无 ToNumeric/ToPrimitive）。
+        Builtin::AbstractCompare if all_f64(2) => false,
+        Builtin::F64Mod | Builtin::F64Exp if all_f64(2) => false,
+        _ => true,
+    }
+}
+
+/// 计算函数级 can_throw（false→true 单调不动点）。
+///
+/// 判定规则（任一命中即 may-throw）：
+/// - `Terminator::Throw`；
+/// - 可能抛异常的 `CallBuiltin`（`builtin_may_throw`）；
+/// - `Call`/`ConstructCall`/`OptionalCall`/`SuperCall`：未知 callee 保守 true，
+///   已知 callee 按目标函数 can_throw 传播；
+/// - 可能产生 exception handle 的 IR 指令（GetProp/NewObject/数组操作等 host
+///   路径——getter/proxy/分配失败都会以 exception handle 形态传播）。
+///
+/// 纯指令（Binary/Unary/Compare/Const/Phi/LoadVar/StoreVar/IsException/ExceptionValue
+/// 等）不贡献。can_throw=false 的充要保证：函数绝不返回/抛出 exception handle。
+///
+/// `dead_blocks`（上一轮派生）：死异常块中的 Throw/调用不计——该路径编译期
+/// 已被折叠，不构成真实抛异常路径（死块判定依赖 can_throw，见 analyze_inner
+/// 联合不动点）。
+fn compute_can_throw(
+    module: &Module,
+    infos: &[FnInfo],
+    var_store_count: &HashMap<&str, u32>,
+    known_f64: &[HashSet<ValueId>],
+    dead_blocks: &[HashSet<usize>],
+) -> Vec<bool> {
+    // 每轮从乐观起点重算（不含 prev 记忆）：外层死块集单调增 → can_throw 随之
+    // 单调降（true→false 可能发生，如 work 的异常路径被折叠后不再抛）。
+    let mut can_throw = vec![false; module.functions().len()];
+    loop {
+        let mut changed = false;
+        for (fidx, f) in module.functions().iter().enumerate() {
+            if can_throw[fidx] {
+                continue;
+            }
+            let info = &infos[fidx];
+            let mut throws = false;
+            for (bidx, bb) in f.blocks().iter().enumerate() {
+                if dead_blocks[fidx].contains(&bidx) {
+                    continue;
+                }
+                if let Terminator::Throw { .. } = bb.terminator() {
+                    throws = true;
+                    break;
+                }
+                for ins in bb.instructions() {
+                    use Instruction::*;
+                    match ins {
+                        CallBuiltin { builtin, args, .. } => {
+                            if builtin_may_throw(*builtin, &known_f64[fidx], args) {
+                                throws = true;
+                                break;
+                            }
+                        }
+                        Call { callee, .. }
+                        | ConstructCall { callee, .. }
+                        | OptionalCall { callee, .. } => {
+                            match resolve_callee(module, info, var_store_count, *callee) {
+                                Some(g) => {
+                                    if can_throw[g.0 as usize] {
+                                        throws = true;
+                                        break;
+                                    }
+                                }
+                                // Unknown callee：可能抛。
+                                None => {
+                                    throws = true;
+                                    break;
+                                }
+                            }
+                        }
+                        // 可能产生 exception handle 的 host 路径（保守）。
+                        SuperCall { .. }
+                        | GetProp { .. }
+                        | GetElem { .. }
+                        | SetProp { .. }
+                        | SetElem { .. }
+                        | SetProto { .. }
+                        | DeleteProp { .. }
+                        | NewObject { .. }
+                        | NewArray { .. }
+                        | OptionalGetProp { .. }
+                        | OptionalGetElem { .. }
+                        | ObjectSpread { .. }
+                        | CollectRestArgs { .. }
+                        | GetSuperBase { .. }
+                        | GetSuperConstructor { .. }
+                        | NewPromise { .. }
+                        | PromiseResolve { .. }
+                        | PromiseReject { .. }
+                        | StringConcatVa { .. }
+                        | Suspend { .. }
+                        | GeneratorSuspend { .. } => {
+                            throws = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if throws {
+                    break;
+                }
+            }
+            if throws {
+                can_throw[fidx] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    can_throw
+}
+
+/// 计算函数级 returns_f64（乐观起点 true，逐 return 收紧）。
+///
+/// 仅 direct_callable 参与（非 direct_callable 无返回值契约，恒 false）。
+/// 任一 `Return { value: Some(v) }` 的 v ∉ known_f64，或 `Return { value: None }`
+/// （显式 return undefined）→ false。Throw/Unreachable 终止路径不贡献返回值。
+fn compute_returns_f64(module: &Module, known_f64: &[HashSet<ValueId>]) -> Vec<bool> {
+    let mut returns = vec![false; module.functions().len()];
+    for (fidx, f) in module.functions().iter().enumerate() {
+        if !f.direct_callable() {
+            continue;
+        }
+        let mut all_f64 = true;
+        for bb in f.blocks() {
+            match bb.terminator() {
+                Terminator::Return { value: Some(v) } => {
+                    if !known_f64[fidx].contains(v) {
+                        all_f64 = false;
+                        break;
+                    }
+                }
+                Terminator::Return { value: None } => {
+                    all_f64 = false;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        returns[fidx] = all_f64;
+    }
+    returns
+}
+
+/// 计算调用结果必非异常的 ValueId（精确 callee 且 !can_throw）。
+fn compute_never_exception(
+    module: &Module,
+    infos: &[FnInfo],
+    var_store_count: &HashMap<&str, u32>,
+    can_throw: &[bool],
+) -> Vec<HashSet<ValueId>> {
+    let mut out: Vec<HashSet<ValueId>> = vec![HashSet::new(); infos.len()];
+    for (fidx, info) in infos.iter().enumerate() {
+        for (dest, callee) in &info.calls {
+            if let Some(g) = resolve_callee(module, info, var_store_count, *callee)
+                && !can_throw[g.0 as usize]
+            {
+                out[fidx].insert(*dest);
+            }
+        }
+    }
+    out
+}
+
+/// 计算恒 false 的 IsException 结果（操作数 ∈ never_exception）。
+fn compute_constant_false(
+    module: &Module,
+    never_exception: &[HashSet<ValueId>],
+) -> Vec<HashSet<ValueId>> {
+    let mut out: Vec<HashSet<ValueId>> = vec![HashSet::new(); module.functions().len()];
+    for (fidx, f) in module.functions().iter().enumerate() {
+        for bb in f.blocks() {
+            for ins in bb.instructions() {
+                match ins {
+                    // 独立指令（新 IR 形态）：`%d = is_exception %v`。
+                    Instruction::IsException { dest, value } => {
+                        if never_exception[fidx].contains(value) {
+                            out[fidx].insert(*dest);
+                        }
+                    }
+                    // 旧 CallBuiltin 形态（兼容路径）。
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::IsException,
+                        args,
+                        ..
+                    } => {
+                        if let Some(v) = args.first()
+                            && never_exception[fidx].contains(v)
+                        {
+                            out[fidx].insert(*dest);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 计算死异常块（constant_false 分支的异常目标块索引）。
+fn compute_dead_exception_blocks(
+    module: &Module,
+    constant_false: &[HashSet<ValueId>],
+) -> Vec<HashSet<usize>> {
+    let mut out: Vec<HashSet<usize>> = vec![HashSet::new(); module.functions().len()];
+    for (fidx, f) in module.functions().iter().enumerate() {
+        for (_, bb) in f.blocks().iter().enumerate() {
+            if let Terminator::Branch {
+                condition,
+                true_block,
+                ..
+            } = bb.terminator()
+            {
+                if constant_false[fidx].contains(condition) {
+                    out[fidx].insert(true_block.0 as usize);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 计算 truthiness-only 的 known_bool 值（仅被 branch 条件消费）。
+///
+/// 任何非 `Terminator::Branch { condition }` 的消费（指令实参、Return/Throw/Switch
+/// 值、Phi 源等）都会排除——这些位置需要完整 boxed bool 语义。保守：任一不确定 →
+/// 不标。
+fn compute_truthiness_only(
+    module: &Module,
+    known_bool: &[HashSet<ValueId>],
+) -> Vec<HashSet<ValueId>> {
+    let mut out: Vec<HashSet<ValueId>> = vec![HashSet::new(); module.functions().len()];
+    for (fidx, f) in module.functions().iter().enumerate() {
+        for &v in &known_bool[fidx] {
+            let mut only = true;
+            for bb in f.blocks() {
+                for ins in bb.instructions() {
+                    if instruction_uses_value(ins, v) {
+                        only = false;
+                        break;
+                    }
+                }
+                if !only {
+                    break;
+                }
+                match bb.terminator() {
+                    Terminator::Return {
+                        value: Some(rv),
+                    } if *rv == v => {
+                        only = false;
+                    }
+                    Terminator::Throw { value: tv } if *tv == v => {
+                        only = false;
+                    }
+                    Terminator::Switch { value: sv, .. } if *sv == v => {
+                        only = false;
+                    }
+                    _ => {}
+                }
+                if !only {
+                    break;
+                }
+            }
+            if only {
+                out[fidx].insert(v);
+            }
+        }
+    }
+    out
 }
 
 /// 计算 direct_callable 函数 g 的形参 i 是否必为 f64。

@@ -309,6 +309,19 @@ impl Compiler {
             Builtin::IsException => {
                 let value = args.first().context("is_exception expects value arg")?;
                 let value_local = self.local_idx(value.0);
+                // 调用结果必非异常（callee 已知且 !can_throw）→ is_exception 恒 false。
+                // 直接发射 boxed false（BOX_BASE | TAG_BOOL<<32），省去 tag 检查。
+                if self.current_function_id.is_some_and(|f| {
+                    self.f64_analysis
+                        .as_ref()
+                        .is_some_and(|a| a.value_never_exception(f, *value))
+                }) {
+                    let box_base = value::BOX_BASE as i64;
+                    let bool_tag_shifted = (value::TAG_BOOL as i64) << 32;
+                    self.emit(WasmInstruction::I64Const(box_base | bool_tag_shifted));
+                    self.store_or_drop_call_result(dest);
+                    return Ok(BuiltinDispatch::Handled);
+                }
                 // Check if value is TAG_EXCEPTION
                 self.emit(WasmInstruction::LocalGet(value_local));
                 self.emit(WasmInstruction::I64Const(32));

@@ -51,6 +51,15 @@ impl Compiler {
         }
     }
 
+    /// 当前函数内某 ValueId 是否已知 boxed bool 且仅被 branch 条件消费
+    /// （比较可直出 i32 0/1，跳过 boxed 构造与解包）。
+    pub(crate) fn value_truthiness_only(&self, value_id: wjsm_ir::ValueId) -> bool {
+        match (self.current_function_id, self.f64_analysis.as_ref()) {
+            (Some(fid), Some(a)) => a.value_truthiness_only(fid, value_id),
+            _ => false,
+        }
+    }
+
     pub(crate) fn push_func_table(&mut self, wasm_idx: u32) {
         let table_pos = self.table_base + self.function_table.len() as u32;
         self.function_table_reverse.insert(wasm_idx, table_pos);

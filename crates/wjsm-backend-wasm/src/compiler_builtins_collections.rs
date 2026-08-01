@@ -108,11 +108,16 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalGet(rhs_l));
                     self.emit(WasmInstruction::F64ReinterpretI64);
                     self.emit(WasmInstruction::F64Lt);
-                    self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                    self.emit(WasmInstruction::I64Const(value::encode_bool(true)));
-                    self.emit(WasmInstruction::Else);
-                    self.emit(WasmInstruction::I64Const(value::encode_bool(false)));
-                    self.emit(WasmInstruction::End);
+                    self.emit(WasmInstruction::I64ExtendI32U);
+                    // truthiness-only（仅 branch 条件消费）：值存裸 0/1（i64），
+                    // 消费端 emit_condition_to_bool_i32 直接 wrap——省去 box 构造。
+                    // 否则 or 上 boxed bool 前缀（encode_bool，对所有消费者 sound）。
+                    if dest.is_none_or(|d| !self.value_truthiness_only(d)) {
+                        let box_base = value::BOX_BASE as i64;
+                        let bool_tag_shifted = (value::TAG_BOOL as i64) << 32;
+                        self.emit(WasmInstruction::I64Const(box_base | bool_tag_shifted));
+                        self.emit(WasmInstruction::I64Or);
+                    }
                 } else {
                     // Step 3：类型未知 → fast/slow 分离——fast path 双 f64 无 host call/GC
                     // 不 spill；slow path（可能 ToPrimitive）内 spill 后 host 调用。

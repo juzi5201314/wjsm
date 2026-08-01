@@ -285,6 +285,36 @@ impl Compiler {
                 let true_idx = true_block.0 as usize;
                 let false_idx = false_block.0 as usize;
 
+                // ── 常量折叠：条件恒 false（is_exception 且操作数必非异常）──
+                // 异常路径（true_block）是死代码：跳过其编译，直接顺序编译正常路径。
+                // 仅折叠 true_block 以 Throw/Unreachable 终止（死异常路径的典型形态）
+                // 且 false_block 无 Phi（无需 phi_moves）的安全形态。
+                let false_has_phi = blocks[false_idx]
+                    .instructions()
+                    .iter()
+                    .any(|ins| matches!(ins, Instruction::Phi { .. }));
+                let condition_constant_false = self.current_function_id.is_some_and(|f| {
+                    self.f64_analysis.as_ref().is_some_and(|a| {
+                        a.condition_constant_false(f, *condition)
+                    })
+                });
+                if condition_constant_false
+                    && !false_has_phi
+                    && matches!(
+                        blocks[true_idx].terminator(),
+                        Terminator::Throw { .. } | Terminator::Unreachable
+                    )
+                {
+                    self.compiled_blocks.insert(false_idx);
+                    return self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        false_idx,
+                        case_start,
+                        extra_depth,
+                    );
+                }
+
                 let common_direct_jump = match (blocks.get(true_idx), blocks.get(false_idx)) {
                     (Some(true_block), Some(false_block)) => {
                         match (true_block.terminator(), false_block.terminator()) {

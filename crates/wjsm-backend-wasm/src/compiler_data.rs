@@ -318,10 +318,23 @@ impl Compiler {
         self.emit(WasmInstruction::I32WrapI64);
     }
 
-    /// 条件求值统一入口：条件 ValueId 已知必为 boxed bool → payload bit 直取；
-    /// 否则走完整 ToBoolean 分派（sound：known_bool 由规范保证，与操作数类型无关）。
+    /// 条件求值统一入口：truthiness-only（裸 0/1）→ 直接 wrap；已知 boxed bool →
+    /// payload bit 直取；否则走完整 ToBoolean 分派（sound：known_bool 由规范保证，
+    /// 与操作数类型无关）。
     pub(crate) fn emit_condition_to_bool_i32(&mut self, val_id: wjsm_ir::ValueId) {
-        if self.value_known_bool(val_id) {
+        if self.current_function_id.is_some_and(|f| {
+            self.f64_analysis
+                .as_ref()
+                .is_some_and(|a| a.condition_constant_false(f, val_id))
+        }) {
+            // is_exception 恒 false：条件求值直出 0（省 ToBoolean 分派）。
+            self.emit(WasmInstruction::I32Const(0));
+        } else if self.value_truthiness_only(val_id) {
+            // 值已是裸 0/1（i64 扩展）：直接 wrap，跳过 boxed 解包。
+            let val_local = self.local_idx(val_id.0);
+            self.emit(WasmInstruction::LocalGet(val_local));
+            self.emit(WasmInstruction::I32WrapI64);
+        } else if self.value_known_bool(val_id) {
             self.emit_to_bool_i32_known_bool(val_id.0);
         } else {
             self.emit_to_bool_i32(val_id.0);

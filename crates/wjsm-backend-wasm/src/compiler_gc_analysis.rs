@@ -88,7 +88,13 @@ impl GcAnalysis {
             // 构建该函数体内 ValueId → def 来源的映射（用于追溯 Call 的 callee）
             let mut callee_sources: HashMap<ValueId, CalleeSource> = HashMap::new();
 
-            for bb in function.blocks() {
+            for (bb_index, bb) in function.blocks().iter().enumerate() {
+                // 死异常块（is_exception 恒 false 分支的异常目标）不可达：
+                // 其 host 调用（exception_value/throw 等）不贡献 may-GC，
+                // 使纯化后的 work 类函数（无真正异常路径）判定为 no-GC。
+                if f64_analysis.is_dead_exception_block(func_id, bb_index) {
+                    continue;
+                }
                 for ins in bb.instructions() {
                     // 记录 def：LoadVar → name；Const(FunctionRef) → 直接函数引用。
                     match ins {

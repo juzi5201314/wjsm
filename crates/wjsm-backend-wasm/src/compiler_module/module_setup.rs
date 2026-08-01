@@ -42,6 +42,15 @@ impl Compiler {
         let var_ty = self.current_fn_var_ty.as_ref();
         let mut max = 0usize;
         for (bid, instr_map) in liveness {
+            // 死异常块（is_exception 恒 false 分支的异常目标）不生成代码：
+            // 其 safepoint（exception_value/throw 等）不计入 spill 上界。
+            if self.current_function_id.is_some_and(|f| {
+                self.f64_analysis
+                    .as_ref()
+                    .is_some_and(|a| a.is_dead_exception_block(f, bid.0 as usize))
+            }) {
+                continue;
+            }
             let block = match function.block_by_id(*bid) {
                 Some(b) => b,
                 None => continue,
