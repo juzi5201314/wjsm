@@ -441,7 +441,12 @@ fn measure_rss(
 /// 从 GNU time -v 的 stderr 提取最大驻留集。
 pub fn parse_max_rss(stderr: &str) -> Option<u64> {
     for line in stderr.lines() {
-        if let Some(rest) = line.strip_prefix("Maximum resident set size (kbytes): ") {
+        // GNU time 1.10 的 -v 输出每行以 `\t` 开头（od 验证过），先 trim 行首
+        // 空白再 strip_prefix，否则匹配永远失败 → max_rss_kb 全 null。
+        if let Some(rest) = line
+            .trim_start()
+            .strip_prefix("Maximum resident set size (kbytes): ")
+        {
             return rest.trim().parse().ok();
         }
     }
@@ -525,4 +530,28 @@ fn fmt_f64(value: Option<f64>, precision: usize) -> String {
 
 fn fmt_u64(value: Option<u64>) -> String {
     value.map_or_else(|| "-".into(), |value| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_max_rss_matches_gnu_time_tab_prefix() {
+        // GNU time 1.10 的 -v 输出每行以 `\t` 开头，旧实现直接 strip_prefix 会失配。
+        let stderr = "\tCommand being timed: \"wjsm run fib30.js\"\n\tMaximum resident set size (kbytes): 12345\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.12\n";
+        assert_eq!(parse_max_rss(stderr), Some(12345));
+    }
+
+    #[test]
+    fn parse_max_rss_matches_plain_prefix() {
+        // 无行首空白也应匹配（兼容其它 GNU time 版本）。
+        let stderr = "Maximum resident set size (kbytes): 6789\n";
+        assert_eq!(parse_max_rss(stderr), Some(6789));
+    }
+
+    #[test]
+    fn parse_max_rss_missing_returns_none() {
+        assert_eq!(parse_max_rss("no such line\n"), None);
+    }
 }
