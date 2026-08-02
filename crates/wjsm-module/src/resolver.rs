@@ -87,6 +87,18 @@ impl ModuleResolver {
     }
 
     pub(crate) fn with_options(root_path: &Path, options: ResolutionOptions) -> Self {
+        Self::with_options_and_id_base(root_path, options, 0)
+    }
+
+    /// 同 [`ModuleResolver::with_options`]，但模块 ID 从 `base` 起分配。
+    ///
+    /// 用于 builtin 段缓存（issue #344）：builtin 闭包已用 canonical 图 lower 成独立段
+    /// （ModuleId 0..B），用户图重建时从 B 起分配，保证两段 ID 不重叠。
+    pub(crate) fn with_options_and_id_base(
+        root_path: &Path,
+        options: ResolutionOptions,
+        base: u32,
+    ) -> Self {
         let root_path = root_path
             .canonicalize()
             .unwrap_or_else(|_| root_path.to_path_buf());
@@ -94,9 +106,27 @@ impl ModuleResolver {
             root_path,
             options,
             package_cache: RefCell::new(HashMap::new()),
-            next_id: 0,
+            next_id: base,
             visited: HashMap::new(),
             modules: HashMap::new(),
+        }
+    }
+
+    /// 预置 builtin canonical 模块的虚拟路径 → canonical ModuleId 映射。
+    ///
+    /// 之后 [`ModuleResolver::load_builtin_module`] 命中 `visited` 直接返回 canonical id，
+    /// 不再重新解析/分配新 id；节点数据由 [`ModuleResolver::seed_shared_modules`] 另行注入。
+    pub(crate) fn seed_builtin_ids(&mut self, map: HashMap<PathBuf, ModuleId>) {
+        self.visited.extend(map);
+    }
+
+    /// 预置共享的 builtin 模块节点（canonical 图构建后克隆进用户 resolver）。
+    ///
+    /// 与 [`ModuleResolver::seed_builtin_ids`] 配套：`visited` 决定 id 归属，`modules`
+    /// 提供图构建所需的 source/ast/imports/exports 节点数据。
+    pub(crate) fn seed_shared_modules(&mut self, modules: Vec<ResolvedModule>) {
+        for module in modules {
+            self.modules.insert(module.id, module);
         }
     }
 

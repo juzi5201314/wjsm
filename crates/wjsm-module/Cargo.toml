@@ -5,8 +5,11 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-swc_core = { workspace = true }
+bincode = { version = "2", features = ["serde"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+swc_core = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 wjsm-parser = { path = "../wjsm-parser" }
@@ -14,3 +17,4 @@ wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-ir = { path = "../wjsm-ir" }
 
 [dev-dependencies]
+parking_lot = "0.12"

@@ -1,12 +1,13 @@
 // 模块依赖图：依赖图构建、循环检测、拓扑排序
 
-use anyhow::Result;
-use std::collections::{HashMap, HashSet, VecDeque};
+use anyhow::{Context, Result};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
 
+use super::builtin_modules;
 use super::resolution_options::{ResolutionKind, ResolutionOptions};
 pub use super::resolver::ModuleId;
-use super::resolver::{ExportEntry, ImportEntry, ModuleResolver};
+use super::resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
 
 /// 模块依赖图
 pub struct ModuleGraph {
@@ -63,12 +64,105 @@ impl ModuleGraph {
         Self::build_from_resolver(resolver, entry_id)
     }
 
-    fn build_from_resolver(mut resolver: ModuleResolver, entry_id: ModuleId) -> Result<Self> {
+    /// 构建 builtin 依赖闭包图（issue #344）：以 `frontier` 全部元素为入口，BFS 覆盖
+    /// 其传递依赖，产出 canonical builtin 图（ModuleId 0..B）。
+    ///
+    /// `frontier` 为 builtin canonical 名集合（可带 `node:` 前缀）；按排序后的迭代序
+    /// 逐个解析入口，保证 ModuleId 分配与调用顺序无关、确定可复现（builtin 闭包图是
+    /// builtin 段缓存 lower 的输入，id 布局必须稳定）。
+    pub(crate) fn build_builtin_closure(
+        frontier: &BTreeSet<String>,
+        root: &Path,
+        options: ResolutionOptions,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            !frontier.is_empty(),
+            "builtin 闭包 frontier 不能为空"
+        );
+        let mut resolver = ModuleResolver::with_options(root, options);
+        let mut roots = Vec::with_capacity(frontier.len());
+        for specifier in frontier {
+            let id = resolver
+                .resolve_builtin_entry(specifier)
+                .with_context(|| format!("resolve builtin closure entry {specifier:?}"))?;
+            roots.push(id);
+        }
+        Self::build_from_resolver_with_roots(resolver, roots)
+    }
+
+    /// 构建用户图，并共享 builtin canonical 图（`closure`）的节点。
+    ///
+    /// 用户 resolver 的 ModuleId 从 `closure` 模块数（B）起分配；builtin 虚拟路径 →
+    /// canonical id 预置进 `visited`，canonical 图节点数据（source/ast/imports/exports）
+    /// 克隆进 `modules`——用户模块 import builtin 时命中 canonical id，图构建与
+    /// `analyze_module_links` 直接复用 canonical 节点，builtin 与用户模块 id 不重叠。
+    pub(crate) fn build_user_with_builtin_closure(
+        entry: &Path,
+        root: &Path,
+        options: ResolutionOptions,
+        closure: &ModuleGraph,
+    ) -> Result<Self> {
+        let base = closure
+            .all_module_ids()
+            .map(|id| id.0)
+            .max()
+            .map_or(0, |max| max + 1);
+        let mut resolver = ModuleResolver::with_options_and_id_base(root, options, base);
+
+        let mut visited = HashMap::new();
+        let mut shared = Vec::new();
+        for id in closure.all_module_ids() {
+            let node = closure
+                .get_module(id)
+                .with_context(|| format!("builtin 闭包图缺少模块 {id:?}"))?;
+            debug_assert!(builtin_modules::is_builtin_virtual_path(&node.path));
+            visited.insert(node.path.clone(), id);
+            shared.push(ResolvedModule {
+                id,
+                source: node.source.clone(),
+                path: node.path.clone(),
+                ast: node.ast.clone(),
+                imports: node.imports.iter().map(|(_, import)| import.clone()).collect(),
+                exports: node.exports.clone(),
+                dynamic_imports: node
+                    .dynamic_imports
+                    .iter()
+                    .map(|(specifier, _)| specifier.clone())
+                    .collect(),
+                is_cjs: node.is_cjs,
+            });
+        }
+        resolver.seed_builtin_ids(visited);
+        resolver.seed_shared_modules(shared);
+
+        let entry_path = if entry.is_absolute() {
+            entry.to_path_buf()
+        } else {
+            root.join(entry)
+        };
+        let entry_id = resolver.resolve_entry_path(&entry_path)?;
+        Self::build_from_resolver(resolver, entry_id)
+    }
+
+    fn build_from_resolver(resolver: ModuleResolver, entry_id: ModuleId) -> Result<Self> {
+        Self::build_from_resolver_with_roots(resolver, vec![entry_id])
+    }
+
+    /// BFS 构建：从 `roots` 全部入口出发发现依赖（多入口 builtin 闭包与单入口用户图共用）。
+    fn build_from_resolver_with_roots(
+        mut resolver: ModuleResolver,
+        roots: Vec<ModuleId>,
+    ) -> Result<Self> {
+        let entry_id = *roots
+            .first()
+            .context("build_from_resolver_with_roots: roots 不能为空")?;
         // BFS 遍历所有依赖
         let mut queue = VecDeque::new();
         let mut discovered = HashSet::new();
-        queue.push_back(entry_id);
-        discovered.insert(entry_id);
+        for root in roots {
+            queue.push_back(root);
+            discovered.insert(root);
+        }
 
         while let Some(module_id) = queue.pop_front() {
             let module = resolver.get_module(module_id).unwrap();

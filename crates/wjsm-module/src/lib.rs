@@ -1,6 +1,7 @@
 // wjsm-module: ES Module / CommonJS bundling support
 // 将多个模块编译为单一 WASM 二进制
 
+mod builtin_cache;
 mod builtin_modules;
 mod bundler;
 mod cjs_require_analysis;
@@ -52,6 +53,34 @@ pub fn lower_bundle_with_debug(
     let bundler = ModuleBundler::with_resolution_options(root_path, options)?
         .with_emit_debug_checks(emit_debug_checks);
     bundler.lower_bundle(entry)
+}
+
+/// 同 [`lower_bundle_with_debug`]，但 builtin 依赖闭包走独立 lower + 磁盘缓存
+/// （`${WJSM_CACHE_DIR}/builtin_ir`，issue #344）。`WJSM_CACHE_DIR` 未设置时构建段但不落盘；
+/// `WJSM_NO_BUILTIN_CACHE` 非空时整体退化为 [`lower_bundle_with_debug`]。
+pub fn lower_bundle_cached(entry: &Path, root_path: &Path) -> Result<wjsm_ir::Program> {
+    lower_bundle_cached_with_options(entry, root_path, ResolutionOptions::default())
+}
+
+/// Lowers an entry module with builtin segment caching and explicit resolution options.
+pub fn lower_bundle_cached_with_options(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+) -> Result<wjsm_ir::Program> {
+    lower_bundle_cached_with_debug(entry, root_path, options, false)
+}
+
+/// 同 [`lower_bundle_cached_with_options`]，可开启语句级 debug 插桩。
+pub fn lower_bundle_cached_with_debug(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<wjsm_ir::Program> {
+    let bundler = ModuleBundler::with_resolution_options(root_path, options)?
+        .with_emit_debug_checks(emit_debug_checks);
+    bundler.lower_bundle_cached(entry)
 }
 
 /// Lowers a runtime-loaded entry module and creates a namespace for that entry.

@@ -1,10 +1,11 @@
 // IR 基础类型：ID 类型、运算符枚举、控制流终止器
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 // ── ID 类型 ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ConstantId(pub u32);
 
 impl fmt::Display for ConstantId {
@@ -13,7 +14,7 @@ impl fmt::Display for ConstantId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FunctionId(pub u32);
 
 impl fmt::Display for FunctionId {
@@ -22,7 +23,7 @@ impl fmt::Display for FunctionId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BasicBlockId(pub u32);
 
 impl fmt::Display for BasicBlockId {
@@ -31,7 +32,7 @@ impl fmt::Display for BasicBlockId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ValueId(pub u32);
 
 impl fmt::Display for ValueId {
@@ -40,7 +41,7 @@ impl fmt::Display for ValueId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModuleId(pub u32);
 
 impl fmt::Display for ModuleId {
@@ -51,7 +52,7 @@ impl fmt::Display for ModuleId {
 
 // ── 运算符枚举 ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -87,7 +88,7 @@ impl fmt::Display for BinaryOp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnaryOp {
     Not,
     Neg,
@@ -112,7 +113,7 @@ impl fmt::Display for UnaryOp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompareOp {
     StrictEq,
     StrictNotEq,
@@ -129,7 +130,7 @@ impl fmt::Display for CompareOp {
 
 // ── 控制流终止器 ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Terminator {
     Return {
         value: Option<ValueId>,
@@ -188,7 +189,7 @@ impl fmt::Display for Terminator {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SwitchCaseTarget {
     pub constant: ConstantId,
     pub target: BasicBlockId,
@@ -200,7 +201,7 @@ impl fmt::Display for SwitchCaseTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhiSource {
     pub predecessor: BasicBlockId,
     pub value: ValueId,
@@ -215,7 +216,7 @@ impl fmt::Display for PhiSource {
 // ── 源码位置 ──────────────────────────────────────────────────────────
 
 /// JS 源码位置（1-indexed line 和 column）。用于运行时错误映射。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct SourceSpan {
     /// 1-indexed 行号。
     pub line: u32,

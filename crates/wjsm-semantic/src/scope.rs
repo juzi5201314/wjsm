@@ -58,6 +58,30 @@ impl ScopeTree {
         Self { arenas, current: 0 }
     }
 
+    /// 以 `count` 个作用域为基址创建作用域树（builtin 段 hydration 用）。
+    ///
+    /// id 0 是真实根作用域；id 1..count 是占位作用域（parent=0、空变量表），
+    /// 仅用于保持作用域 id 连续性——builtin 段 lower 时的作用域 id 必须与合并后
+    /// 用户 lowerer 的作用域 id 一致（IR 变量名 `${scope_id}.{name}` 是跨函数协议）。
+    /// 之后 `push_scope` 从 `count` 开始分配新作用域。
+    pub(crate) fn with_base_scope_count(count: usize) -> Self {
+        let mut tree = Self::new();
+        for _ in 1..count {
+            tree.arenas.push(Scope {
+                parent: Some(0),
+                kind: ScopeKind::Module,
+                id: tree.arenas.len(),
+                variables: std::collections::HashMap::new(),
+            });
+        }
+        tree
+    }
+
+    /// 当前作用域总数（含 root；builtin 段缓存用，作为用户 lowerer 的 scope 基址）。
+    pub(crate) fn scope_count(&self) -> usize {
+        self.arenas.len()
+    }
+
     /// Push a new child scope and enter it.
     pub(crate) fn push_scope(&mut self, kind: ScopeKind) {
         let idx = self.arenas.len();

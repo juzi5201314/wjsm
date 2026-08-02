@@ -1,7 +1,9 @@
 use swc_core::ecma::ast as swc_ast;
 
-/// 检测模块体是否包含 top-level `await`（不递归进入函数/类体边界）
-pub(crate) fn has_top_level_await(module: &swc_ast::Module) -> bool {
+/// 检测模块体是否包含 top-level `await`（不递归进入函数/类体边界）。
+/// `pub` 供 wjsm-module 判断用户程序是否 TLA（TLA 程序禁用 builtin 段缓存，见
+/// bundler::lower_bundle_cached）。
+pub fn has_top_level_await(module: &swc_ast::Module) -> bool {
     fn expr_has_await(expr: &swc_ast::Expr) -> bool {
         match expr {
             swc_ast::Expr::Await(_) => true,

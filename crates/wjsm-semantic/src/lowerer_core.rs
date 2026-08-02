@@ -153,6 +153,48 @@ impl Lowerer {
         }
     }
 
+    /// 以预置作用域基址创建 lowerer（builtin 段 hydration 用）：
+    /// ScopeTree 预置 `base_scope_count` 个作用域（含 root），使后续 `push_scope`
+    /// 的 id 从 `base_scope_count` 继续，与 builtin 段 lower 时的作用域编号一致
+    /// （IR 变量名 `${scope_id}.{name}` 是跨函数字符串协议）。
+    pub(crate) fn with_base_scope_count(base_scope_count: usize) -> Self {
+        let mut lowerer = Self::new();
+        lowerer.scopes = ScopeTree::with_base_scope_count(base_scope_count);
+        // ScopeTree 重建后重新预注册 ECMAScript 全局内置标识符。
+        let _ = lowerer.scopes.declare("undefined", VarKind::Var, true);
+        let _ = lowerer.scopes.declare("NaN", VarKind::Var, true);
+        let _ = lowerer.scopes.declare("Infinity", VarKind::Var, true);
+        lowerer
+    }
+
+    /// 将 builtin 段的 Program 与布局元数据预装进本 lowerer（hydration 种子）：
+    ///
+    /// - `builtin.program` 的函数/常量按段内顺序追加到 `self.module`（段函数在前、
+    ///   用户函数在后；段内 `Constant::FunctionRef` 引用在合并后依然有效）；
+    /// - `export_map` / `module_export_names` / `module_scopes` 注入，使 builtin 导出
+    ///   对用户模块的 import 解析（`resolve_export_ir`）与命名空间 getter 安装可见。
+    ///
+    /// 调用时机：Lowerer 创建（`with_base_scope_count`）后、任何用户模块 lower 之前。
+    pub(crate) fn hydrate_builtin_segment(&mut self, builtin: &BuiltinSegment) {
+        debug_assert!(
+            matches!(usize::try_from(builtin.entry_function_id.0), Ok(idx)
+                if idx < builtin.program.functions().len()),
+            "builtin 段入口函数 id 越界"
+        );
+        self.module.append_builtin(&builtin.program);
+        self.export_map.extend(builtin.export_map.clone());
+        self.module_export_names
+            .extend(builtin.module_export_names.clone());
+        for (module_id, scope_id) in &builtin.module_scopes {
+            debug_assert!(
+                matches!(usize::try_from(builtin.scope_count), Ok(count)
+                    if *scope_id < count),
+                "builtin 模块 {module_id:?} 的顶层作用域 id {scope_id} 超出段 scope 数"
+            );
+            self.module_scopes.insert(*module_id, *scope_id);
+        }
+    }
+
     pub(crate) fn capture_async_context(&self) -> AsyncContextState {
         AsyncContextState {
             is_async_fn: self.is_async_fn,

@@ -1,8 +1,8 @@
 use super::*;
 use swc_core::ecma::ast as swc_ast;
 use wjsm_ir::{
-    BasicBlockId, Builtin, Constant, Function, Instruction, MODULE_ENTRY_IR_NAME, Program,
-    Terminator,
+    BasicBlockId, Builtin, Constant, Function, FunctionId, Instruction, MODULE_ENTRY_IR_NAME,
+    ModuleId, Program, Terminator,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +26,42 @@ pub struct ModuleMetadata {
 pub enum ModuleKind {
     Esm,
     CommonJs,
+}
+
+/// 多模块 lowering 的布局元数据（builtin 段缓存 / hydration 用）。
+///
+/// 这是 lowerer 内部状态（`Lowerer::export_map` / `Lowerer::module_scopes` 与
+/// `ScopeTree` 作用域总数）的最终快照；`lower_modules_with_debug` 只返回 `Program`，
+/// 不包含这些布局信息。builtin 段缓存需要它们重建 [`BuiltinSegment`]。
+#[derive(Debug, Clone)]
+pub struct LoweringMetadata {
+    /// 模块导出名 → IR 变量名（`export_map` 最终快照）。
+    pub export_map: std::collections::HashMap<(ModuleId, String), String>,
+    /// 每模块顶层作用域 id（`module_scopes` 最终快照）。
+    pub module_scopes: std::collections::HashMap<ModuleId, usize>,
+    /// 本段 lower 结束时 ScopeTree 总作用域数（含 root）；供用户段做 scope 基址。
+    pub scope_count: usize,
+}
+
+/// builtin 段（hydration 输入；由独立 lowerer 缓存为完整 Program 的 builtin 依赖闭包
+/// 及其布局元数据）。用户 lowerer 以它为种子启动：预装函数/常量（段函数在前）、
+/// 预置占位作用域（scope 基址）、注入 export_map/module_export_names/module_scopes，
+/// 最后在用户 `$module_main` 入口块首条发射对段入口的调用。
+#[derive(Debug, Clone)]
+pub struct BuiltinSegment {
+    /// builtin 段完整 Program（函数+常量），入口函数名为 `$builtin_main`。
+    pub program: Program,
+    /// builtin 段 lower 时的总 scope 数（含 root）→ 用户 lowerer 的 scope 基址。
+    pub scope_count: u32,
+    /// 段内入口函数（= 段内最后一个函数，由 finalize 最后 push 的 `$builtin_main`）。
+    pub entry_function_id: FunctionId,
+    /// 模块导出名 → IR 变量名。
+    pub export_map: std::collections::HashMap<(ModuleId, String), String>,
+    /// 每模块导出名集合。
+    pub module_export_names:
+        std::collections::HashMap<ModuleId, std::collections::BTreeSet<String>>,
+    /// builtin 每模块顶层 scope id（值均 < `scope_count`）。
+    pub module_scopes: std::collections::HashMap<ModuleId, usize>,
 }
 
 /// 将多个模块编译为单一的 IR Program（模块 bundling）
@@ -71,6 +107,35 @@ pub fn lower_modules_with_debug(
     re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
     emit_debug_checks: bool,
 ) -> Result<Program, LoweringError> {
+    lower_modules_with_debug_meta(
+        modules,
+        import_map,
+        dynamic_import_targets,
+        export_names,
+        dynamic_import_specifiers,
+        re_export_map,
+        emit_debug_checks,
+    )
+    .map(|(program, _)| program)
+}
+
+/// 与 [`lower_modules_with_debug`] 相同，但额外返回 [`LoweringMetadata`]
+/// （export_map / module_scopes / scope_count 最终快照）。
+///
+/// builtin 段缓存用：缓存的段程序需要这些布局信息才能在用户 lowerer 中重建
+/// [`BuiltinSegment`]（scope 基址 + 导出解析）。
+pub fn lower_modules_with_debug_meta(
+    modules: Vec<ModuleLoweringInput>,
+    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
+    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
+    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
+    dynamic_import_specifiers: &std::collections::HashMap<
+        wjsm_ir::ModuleId,
+        Vec<(String, wjsm_ir::ModuleId)>,
+    >,
+    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    emit_debug_checks: bool,
+) -> Result<(Program, LoweringMetadata), LoweringError> {
     // 多模块编译路径
     // 早错误：对每个模块运行私有名静态校验（与单模块路径一致）。
     for module in &modules {
@@ -88,6 +153,7 @@ pub fn lower_modules_with_debug(
         export_names,
         dynamic_import_specifiers,
         re_export_map,
+        0,
     )?;
     lowerer.emit_debug_checks = emit_debug_checks;
 
@@ -109,7 +175,218 @@ pub fn lower_modules_with_debug(
 
     finalize_multi_module(&mut lowerer, flow, has_tla)?;
 
+    let metadata = LoweringMetadata {
+        export_map: lowerer.export_map.clone(),
+        module_scopes: lowerer.module_scopes.clone(),
+        scope_count: lowerer.scopes.scope_count(),
+    };
+    Ok((lowerer.module, metadata))
+}
+
+/// 以 builtin 段为种子 lower 用户模块（hydration 入口）。
+///
+/// 与 [`lower_modules_with_debug_meta`] 流程一致，但：
+/// - ScopeTree 以 `builtin.scope_count` 为基址（占位作用域 id 0..scope_count，
+///   `push_scope` 从 scope_count 继续），保证 builtin 段 IR 变量名
+///   `${scope_id}.{name}` 在合并程序中依然成立；
+/// - builtin 段 Program 预装（段函数在前、用户函数在后）+ export_map /
+///   module_export_names / module_scopes 注入；
+/// - **段入口函数体 inline 进用户 `$module_main` 入口块**（builtin 顶层先于所有
+///   用户模块初始化执行，与 plain 路径拓扑序一致）。不采用跨函数 entry Call：
+///   LoadVar/StoreVar 在后端 Normal 模式编译为每函数 wasm local，builtin 段函数的
+///   store 与用户函数的 load 无法共享；inline 后 builtin 的模块作用域变量写入与用户
+///   的读取落在同一函数（同一批 local），语义与 plain 路径完全一致（含异常：builtin
+///   顶层未捕获 throw 自然传播为 `$module_main` 的异常返回）。
+///
+/// `modules` 只含用户模块；`builtin` 段必须无 TLA（builtin 段构建时保证）。
+pub fn lower_modules_with_builtin_seed(
+    modules: Vec<ModuleLoweringInput>,
+    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
+    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
+    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
+    dynamic_import_specifiers: &std::collections::HashMap<
+        wjsm_ir::ModuleId,
+        Vec<(String, wjsm_ir::ModuleId)>,
+    >,
+    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    builtin: BuiltinSegment,
+    emit_debug_checks: bool,
+) -> Result<Program, LoweringError> {
+    // 早错误：对每个模块运行私有名静态校验（与多模块路径一致）。
+    for module in &modules {
+        lowerer_classes_ts::validate_private_names(&module.ast)?;
+    }
+
+    let module_metadata = modules
+        .iter()
+        .map(|module| (module.id, module.metadata.clone()))
+        .collect();
+    let mut lowerer = setup_multi_module_lowerer(
+        module_metadata,
+        import_map,
+        dynamic_import_targets,
+        export_names,
+        dynamic_import_specifiers,
+        re_export_map,
+        usize::try_from(builtin.scope_count).expect("u32 scope_count 总能转为 usize"),
+    )?;
+    lowerer.emit_debug_checks = emit_debug_checks;
+    lowerer.hydrate_builtin_segment(&builtin);
+
+    predeclare_module_exports(&mut lowerer, &modules)?;
+
+    let has_tla = modules
+        .iter()
+        .any(|module| has_top_level_await(&module.ast));
+    let entry = init_entry_block(&mut lowerer, has_tla, &modules)?;
+
+    lowerer.emit_hoisted_var_initializers(entry);
+    emit_global_constants(&mut lowerer, entry);
+    create_namespace_objects(&mut lowerer, entry);
+
+    apply_re_export_map(&mut lowerer)?;
+    let _flow = process_import_aliases(&mut lowerer, &modules, StmtFlow::Open(entry))?;
+
+    let flow = lower_module_bodies(&mut lowerer, &modules)?;
+
+    // builtin 顶层先执行：把段入口函数体 inline 进用户 $module_main 入口块。
+    let flow = inline_builtin_entry(&mut lowerer, &builtin, flow)?;
+
+    finalize_multi_module(&mut lowerer, flow, has_tla)?;
+
     Ok(lowerer.module)
+}
+
+/// 将 builtin 段入口函数体 inline 进用户 `$module_main` 入口块（hydration 的
+/// "builtin 顶层先于用户模块初始化执行"步骤）。
+///
+/// 不做跨函数 entry Call：后端 Normal 模式下 LoadVar/StoreVar 编译为每函数
+/// wasm local，段函数对模块作用域变量（`$N.x`）的 store 对用户函数不可见；
+/// inline 后两者落在同一函数（同一批 local），与 plain 路径语义完全一致。
+///
+/// 拼接手术：
+/// - 用户入口块原有内容整体搬入新 `cont_block`（builtin 顶层完成后接续）；
+/// - 段入口函数的 ValueId 整体加 `next_value` 偏移，块 id 重映射
+///   （段块 0 → 用户入口块；段块 i>0 → 追加块 `block_base + i`）；
+/// - 段入口块（块 0）指令拼进用户入口块首部，其终止器（已重映射）成为入口块终止器；
+///   其余段块按序追加为新区块；
+/// - 段入口函数的所有 `Return` 终止器改写为 `Jump(cont_block)`（模块顶层正常完成
+///   返回 undefined，直接落入用户初始化）；未捕获 `Throw` 保留原样——在 $module_main
+///   内自然传播为异常返回（与 plain 路径一致）；
+/// - 合并 `has_eval` / `known_callee_vars`（变量名作用域前缀互斥，无冲突）；
+///   `next_value` 推进到段函数最大 ValueId 之后。
+///
+/// 变量名（`${scope_id}.{name}`）零改动：builtin scope id < scope_count ≤ 用户
+/// scope id，天然不相交。入口块为 TLA 时的 async main body entry，否则为 bb0。
+/// `flow` 若 Open 在原入口块（典型无控制流场景）则改指 `cont_block`，避免
+/// finalize 覆盖其终止器。
+fn inline_builtin_entry(
+    lowerer: &mut Lowerer,
+    builtin: &BuiltinSegment,
+    flow: StmtFlow,
+) -> Result<StmtFlow, LoweringError> {
+    let entry_block = lowerer.async_main_body_entry.unwrap_or(BasicBlockId(0));
+    let entry_block_idx =
+        usize::try_from(entry_block.0).expect("BasicBlockId 索引在 usize 内");
+    let entry_fn_idx = usize::try_from(builtin.entry_function_id.0)
+        .expect("builtin 段入口函数 id 索引在 usize 内");
+    let entry_fn = &builtin.program.functions()[entry_fn_idx];
+
+    // ── 基线：用户 main 当前的 ValueId / 块计数 ──
+    let value_base = lowerer.next_value;
+    let block_base = u32::try_from(lowerer.current_function.blocks.len())
+        .expect("用户 main 块数在 u32 内");
+
+    // 取走用户入口块原有指令与终止器（内容整体搬进新 cont_block）。
+    let original_instructions =
+        std::mem::take(lowerer.current_function.blocks[entry_block_idx].instructions_mut());
+    let original_terminator =
+        lowerer.current_function.blocks[entry_block_idx].terminator().clone();
+    let cont_block = lowerer.current_function.new_block();
+    for instruction in original_instructions {
+        lowerer
+            .current_function
+            .append_instruction(cont_block, instruction);
+    }
+    lowerer
+        .current_function
+        .set_terminator(cont_block, original_terminator);
+
+    // ── 重映射闭包：ValueId 加偏移；段块 0 → 用户入口块，段块 i>0 → 追加块 ──
+    let mut builtin_max_value: u32 = 0;
+    let mut remap_value = |value: wjsm_ir::ValueId| {
+        builtin_max_value = builtin_max_value.max(value.0);
+        wjsm_ir::ValueId(value.0 + value_base)
+    };
+    let mut remap_block = |block: BasicBlockId| {
+        if block.0 == 0 {
+            entry_block
+        } else {
+            BasicBlockId(block_base + block.0)
+        }
+    };
+
+    // ── 逐块拼接段入口函数 ──
+    for (block_index, block) in entry_fn.blocks().iter().enumerate() {
+        let rewritten_instructions: Vec<Instruction> = block
+            .instructions()
+            .iter()
+            .map(|instruction| {
+                let mut instruction = instruction.clone();
+                instruction.remap_values(&mut remap_value);
+                instruction.remap_blocks(&mut remap_block);
+                instruction
+            })
+            .collect();
+        // 模块顶层正常完成（Return）→ 落入用户初始化（cont_block）；
+        // 未捕获 Throw 原样保留（在 $module_main 内自然传播）。
+        let terminator = if matches!(block.terminator(), Terminator::Return { .. }) {
+            Terminator::Jump { target: cont_block }
+        } else {
+            let mut terminator = block.terminator().clone();
+            terminator.remap_values(&mut remap_value);
+            terminator.remap_blocks(&mut remap_block);
+            terminator
+        };
+
+        if block_index == 0 {
+            // 段入口块：指令拼进用户入口块首部，终止器成为入口块终止器。
+            for instruction in rewritten_instructions {
+                lowerer
+                    .current_function
+                    .append_instruction(entry_block, instruction);
+            }
+            lowerer.current_function.set_terminator(entry_block, terminator);
+        } else {
+            let new_block = lowerer.current_function.new_block();
+            for instruction in rewritten_instructions {
+                lowerer
+                    .current_function
+                    .append_instruction(new_block, instruction);
+            }
+            lowerer.current_function.set_terminator(new_block, terminator);
+        }
+    }
+
+    // ── 推进 ValueId 计数，避免与段函数数值冲突 ──
+    lowerer.next_value = value_base + builtin_max_value + 1;
+
+    // ── 合并函数元数据（段入口若有 eval / known callee）──
+    if entry_fn.has_eval() {
+        lowerer.current_function.mark_has_eval();
+    }
+    for (ir_name, function_id) in entry_fn.known_callee_vars() {
+        lowerer
+            .current_function
+            .record_known_callee(ir_name.clone(), *function_id);
+    }
+
+    // ── 修正 flow：若原本 Open 在入口块，改指 cont_block ──
+    let flow = match flow {
+        StmtFlow::Open(block) if block == entry_block => StmtFlow::Open(cont_block),
+        other => other,
+    };
+    Ok(flow)
 }
 
 /// 设置多模块 lowerer 的初始状态
@@ -123,8 +400,9 @@ fn setup_multi_module_lowerer(
         Vec<(String, wjsm_ir::ModuleId)>,
     >,
     re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    base_scope_count: usize,
 ) -> Result<Lowerer, LoweringError> {
-    let mut lowerer = Lowerer::new();
+    let mut lowerer = Lowerer::with_base_scope_count(base_scope_count);
     lowerer.import_bindings = import_map.clone();
     lowerer.dynamic_import_targets = dynamic_import_targets.clone();
     lowerer.module_export_names = export_names.clone();

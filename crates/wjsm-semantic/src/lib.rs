@@ -24,10 +24,18 @@ mod scope;
 mod wk_symbol_map;
 pub(crate) use function_builder::*;
 pub use lowerer_modules::{
-    ModuleKind, ModuleLoweringInput, ModuleMetadata, lower_modules, lower_modules_with_debug,
+    BuiltinSegment, LoweringMetadata, ModuleKind, ModuleLoweringInput, ModuleMetadata,
+    lower_modules, lower_modules_with_builtin_seed, lower_modules_with_debug,
+    lower_modules_with_debug_meta,
 };
 pub(crate) use lowerer_types::*;
 pub(crate) use scan_await::has_top_level_await;
+
+/// 检测模块体是否包含 top-level `await`（不递归进入函数/类体边界）。
+/// 供 wjsm-module 判断用户程序是否 TLA（TLA 程序禁用 builtin 段缓存，见
+/// bundler::lower_bundle_cached——builtin 顶层代码 inline 进 async 状态机后
+/// 无法触发 ContinuationSaveVar 生成，跨 await 的模块变量会丢失）。
+pub use scan_await::has_top_level_await as program_has_top_level_await;
 pub(crate) use scope::*;
 
 // ── Public API ──────────────────────────────────────────────────────────

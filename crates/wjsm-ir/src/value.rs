@@ -2,6 +2,7 @@ use crate::constants::{
     TYPEOF_BIGINT_OFFSET, TYPEOF_BOOLEAN_OFFSET, TYPEOF_FUNCTION_OFFSET, TYPEOF_NUMBER_OFFSET,
     TYPEOF_OBJECT_OFFSET, TYPEOF_STRING_OFFSET, TYPEOF_SYMBOL_OFFSET, TYPEOF_UNDEFINED_OFFSET,
 };
+use serde::{Deserialize, Serialize};
 
 pub const MASK_SIGN: u64 = 0x8000_0000_0000_0000;
 pub const MASK_EXPONENT: u64 = 0x7FF0_0000_0000_0000;
@@ -165,7 +166,7 @@ pub const REMEMBERED_COLOR_MASK: u64 =
     ((1_u64 << REMEMBERED_COLOR_BITS) - 1) << REMEMBERED_COLOR_SHIFT;
 
 /// 当前 generation 的 mark/remembered color 快照（仅 2 bit 字段）。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GcColorMask {
     pub young_mark: u8,
     pub old_mark: u8,

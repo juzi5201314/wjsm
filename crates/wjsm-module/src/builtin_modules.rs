@@ -137,12 +137,30 @@ pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {
     BuiltinLookup::NotBuiltin
 }
 
+/// 按 canonical 名取 builtin 模块源码（不存在时返回 `None`）。
+///
+/// canonical 可带或不带 `node:` 前缀，与 [`lookup`] 的归一化规则一致。
+/// 供 builtin 段缓存键计算与模块布局记录使用。
+pub(crate) fn source_for_canonical(canonical: &str) -> Option<&'static str> {
+    match lookup(canonical) {
+        BuiltinLookup::Found(module) => Some(module.source),
+        BuiltinLookup::UnknownNodeBuiltin(_) | BuiltinLookup::NotBuiltin => None,
+    }
+}
+
 pub(crate) fn virtual_path(canonical: &str) -> PathBuf {
     PathBuf::from(format!("/__wjsm_builtin__/node/{canonical}.mjs"))
 }
 
 pub(crate) fn is_builtin_virtual_path(path: &Path) -> bool {
     path.starts_with("/__wjsm_builtin__/node")
+}
+
+/// 从 builtin 虚拟路径 `/__wjsm_builtin__/node/<canonical>.mjs` 提取 canonical。
+pub(crate) fn canonical_from_virtual_path(path: &Path) -> Option<&str> {
+    let text = path.to_str()?;
+    const PREFIX: &str = "/__wjsm_builtin__/node/";
+    text.strip_prefix(PREFIX)?.strip_suffix(".mjs")
 }
 
 #[cfg(test)]

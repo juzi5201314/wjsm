@@ -5,6 +5,7 @@ pub mod value;
 mod verify;
 
 pub use builtin::Builtin;
+use serde::{Deserialize, Serialize};
 use std::fmt::{self, Write};
 pub use types::*;
 pub use verify::IrVerificationError;
@@ -41,7 +42,7 @@ pub fn offset_module_id(module_id: ModuleId, offset: u32) -> Result<ModuleId, Mo
         .ok_or_else(|| ModuleIdOffsetError::new(module_id, offset))
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Module {
     constants: Vec<Constant>,
     functions: Vec<Function>,
@@ -75,6 +76,16 @@ impl Module {
 
     pub fn functions(&self) -> &[Function] {
         &self.functions
+    }
+
+    /// 将另一个 Program 的全部常量与函数按原顺序追加到本 Module 末尾
+    /// （builtin 段 hydration 用）。
+    ///
+    /// 追加后本模块的常量/函数索引保持对方段内偏移不变（段函数在前、用户函数在后），
+    /// 因此段内 `Constant::FunctionRef` 引用在合并后的模块中依然有效。
+    pub fn append_builtin(&mut self, other: &Program) {
+        self.constants.extend(other.constants.iter().cloned());
+        self.functions.extend(other.functions.iter().cloned());
     }
 
     pub fn function_mut(&mut self, id: FunctionId) -> Option<&mut Function> {
@@ -142,7 +153,7 @@ impl Module {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Constant {
     Number(f64),
     String(String),
@@ -229,9 +240,126 @@ mod tests {
             ]
         );
     }
+
+    /// 序列化 → 反序列化 → 相等：验证 Program 可作为磁盘缓存的载体。
+    #[test]
+    fn program_serde_roundtrip() {
+        let mut module = Module::new();
+        module.set_source_file("test.js");
+
+        let num = module.add_constant(Constant::Number(1.5));
+        let text = module.add_constant(Constant::String("hello".to_string()));
+        let flag = module.add_constant(Constant::Bool(true));
+        let regex = module.add_constant(Constant::RegExp {
+            pattern: "^a+$".to_string(),
+            flags: "gi".to_string(),
+        });
+        let bigint = module.add_constant(Constant::BigInt("12345678901234567890".to_string()));
+        let module_id = module.add_constant(Constant::ModuleId(ModuleId(7)));
+
+        let mut function = Function::new("main".to_string(), BasicBlockId(0));
+        let mut entry = BasicBlock::new(BasicBlockId(0));
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: num,
+        });
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: text,
+        });
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(2),
+            constant: regex,
+        });
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(3),
+            constant: bigint,
+        });
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(4),
+            constant: module_id,
+        });
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(13),
+            constant: flag,
+        });
+        entry.push_instruction(Instruction::Binary {
+            dest: ValueId(5),
+            op: BinaryOp::Add,
+            lhs: ValueId(0),
+            rhs: ValueId(0),
+        });
+        entry.push_instruction(Instruction::Unary {
+            dest: ValueId(6),
+            op: UnaryOp::Not,
+            value: ValueId(4),
+        });
+        entry.push_instruction(Instruction::Compare {
+            dest: ValueId(7),
+            op: CompareOp::StrictEq,
+            lhs: ValueId(0),
+            rhs: ValueId(5),
+        });
+        entry.push_instruction(Instruction::Phi {
+            dest: ValueId(8),
+            sources: vec![PhiSource {
+                predecessor: BasicBlockId(0),
+                value: ValueId(5),
+            }],
+        });
+        entry.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(9)),
+            builtin: Builtin::ConsoleLog,
+            args: vec![ValueId(1)],
+        });
+        entry.push_instruction(Instruction::StringConcatVa {
+            dest: ValueId(10),
+            parts: vec![ValueId(1), ValueId(1)],
+        });
+        entry.push_instruction(Instruction::LoadVar {
+            dest: ValueId(11),
+            name: "x".to_string(),
+        });
+        entry.push_instruction(Instruction::StoreVar {
+            name: "y".to_string(),
+            value: ValueId(11),
+        });
+        entry.push_instruction(Instruction::GetProp {
+            dest: ValueId(12),
+            object: ValueId(1),
+            key: ValueId(1),
+        });
+        entry.push_instruction(Instruction::SetElem {
+            object: ValueId(12),
+            index: ValueId(0),
+            value: ValueId(11),
+        });
+        entry.push_instruction(Instruction::SetProto {
+            object: ValueId(12),
+            value: ValueId(4),
+        });
+        entry.push_instruction(Instruction::DebugCheck { line: 3, col: 7 });
+        entry.set_terminator(Terminator::Branch {
+            condition: ValueId(8),
+            true_block: BasicBlockId(0),
+            false_block: BasicBlockId(1),
+        });
+        function.push_block(entry);
+
+        let mut exit = BasicBlock::new(BasicBlockId(1));
+        exit.set_terminator(Terminator::Return {
+            value: Some(ValueId(0)),
+        });
+        function.push_block(exit);
+        module.push_function(function);
+
+        let json = serde_json::to_string(&module).expect("module 应可序列化为 JSON");
+        let restored: Program = serde_json::from_str(&json).expect("JSON 应可反序列化为 Program");
+        assert_eq!(module, restored);
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HomeObject {
     /// 实例方法/构造器的 [[HomeObject]] 是构造器的 prototype 对象。
     Prototype(FunctionId),
@@ -239,7 +367,7 @@ pub enum HomeObject {
     Constructor(FunctionId),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Function {
     name: String,
     params: Vec<String>,
@@ -287,6 +415,12 @@ impl Function {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// 重命名函数（builtin 段缓存用：把段内 `$module_main` 改名为 `$builtin_main`，
+    /// 避免与用户入口 `$module_main` 在后端 entry 识别时冲突）。
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
     }
 
     pub fn params(&self) -> &[String] {
@@ -446,7 +580,7 @@ impl Function {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BasicBlock {
     id: BasicBlockId,
     instructions: Vec<Instruction>,
@@ -499,7 +633,7 @@ impl BasicBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Instruction {
     Const {
         dest: ValueId,
@@ -909,6 +1043,241 @@ impl fmt::Display for Instruction {
     }
 }
 
+impl Instruction {
+    /// 重映射指令内全部 ValueId 操作数（含 Phi source 值）。
+    ///
+    /// builtin 段入口函数 inline 进用户 `$module_main` 时用：两段各自的 ValueId
+    /// 都从 0 编号，拼接前必须把段内 ValueId 加上用户函数的偏移。
+    pub fn remap_values(&mut self, f: &mut impl FnMut(ValueId) -> ValueId) {
+        match self {
+            Self::Const { dest, .. } => *dest = f(*dest),
+            Self::Binary { dest, lhs, rhs, .. } => {
+                *dest = f(*dest);
+                *lhs = f(*lhs);
+                *rhs = f(*rhs);
+            }
+            Self::Unary { dest, value, .. } => {
+                *dest = f(*dest);
+                *value = f(*value);
+            }
+            Self::Compare { dest, lhs, rhs, .. } => {
+                *dest = f(*dest);
+                *lhs = f(*lhs);
+                *rhs = f(*rhs);
+            }
+            Self::Phi { dest, sources } => {
+                *dest = f(*dest);
+                for source in sources {
+                    source.value = f(source.value);
+                }
+            }
+            Self::CallBuiltin { dest, args, .. } => {
+                if let Some(dest) = dest {
+                    *dest = f(*dest);
+                }
+                for arg in args {
+                    *arg = f(*arg);
+                }
+            }
+            Self::StringConcatVa { dest, parts } => {
+                *dest = f(*dest);
+                for part in parts {
+                    *part = f(*part);
+                }
+            }
+            Self::LoadVar { dest, .. } => *dest = f(*dest),
+            Self::StoreVar { value, .. } => *value = f(*value),
+            Self::Call {
+                dest,
+                callee,
+                this_val,
+                args,
+                ..
+            } => {
+                if let Some(dest) = dest {
+                    *dest = f(*dest);
+                }
+                *callee = f(*callee);
+                *this_val = f(*this_val);
+                for arg in args {
+                    *arg = f(*arg);
+                }
+            }
+            Self::SuperCall {
+                dest,
+                callee,
+                this_val,
+                args,
+                ..
+            } => {
+                if let Some(dest) = dest {
+                    *dest = f(*dest);
+                }
+                *callee = f(*callee);
+                *this_val = f(*this_val);
+                for arg in args {
+                    *arg = f(*arg);
+                }
+            }
+            Self::ConstructCall {
+                dest,
+                callee,
+                this_val,
+                args,
+                ..
+            } => {
+                if let Some(dest) = dest {
+                    *dest = f(*dest);
+                }
+                *callee = f(*callee);
+                *this_val = f(*this_val);
+                for arg in args {
+                    *arg = f(*arg);
+                }
+            }
+            Self::NewObject { dest, .. } | Self::NewArray { dest, .. } => *dest = f(*dest),
+            Self::GetProp { dest, object, key } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *key = f(*key);
+            }
+            Self::SetProp { object, key, value } => {
+                *object = f(*object);
+                *key = f(*key);
+                *value = f(*value);
+            }
+            Self::DeleteProp { dest, object, key } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *key = f(*key);
+            }
+            Self::SetProto { object, value } => {
+                *object = f(*object);
+                *value = f(*value);
+            }
+            Self::GetElem { dest, object, index } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *index = f(*index);
+            }
+            Self::SetElem { object, index, value } => {
+                *object = f(*object);
+                *index = f(*index);
+                *value = f(*value);
+            }
+            Self::OptionalGetProp { dest, object, key } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *key = f(*key);
+            }
+            Self::OptionalGetElem { dest, object, key } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *key = f(*key);
+            }
+            Self::OptionalCall {
+                dest,
+                callee,
+                this_val,
+                args,
+            } => {
+                *dest = f(*dest);
+                *callee = f(*callee);
+                *this_val = f(*this_val);
+                for arg in args {
+                    *arg = f(*arg);
+                }
+            }
+            Self::ObjectSpread { dest, source } => {
+                *dest = f(*dest);
+                *source = f(*source);
+            }
+            Self::GetSuperBase { dest } | Self::GetSuperConstructor { dest } => {
+                *dest = f(*dest);
+            }
+            Self::NewPromise { dest } => *dest = f(*dest),
+            Self::PromiseResolve { promise, value } => {
+                *promise = f(*promise);
+                *value = f(*value);
+            }
+            Self::PromiseReject { promise, reason } => {
+                *promise = f(*promise);
+                *reason = f(*reason);
+            }
+            Self::Suspend { promise, .. } => *promise = f(*promise),
+            Self::GeneratorSuspend { result, .. } => *result = f(*result),
+            Self::CollectRestArgs { dest, .. } => *dest = f(*dest),
+            Self::IsException { dest, value } => {
+                *dest = f(*dest);
+                *value = f(*value);
+            }
+            Self::EncodeException { dest, value } => {
+                *dest = f(*dest);
+                *value = f(*value);
+            }
+            Self::ExceptionToObject { dest, value } => {
+                *dest = f(*dest);
+                *value = f(*value);
+            }
+            Self::DebugCheck { .. } => {}
+        }
+    }
+
+    /// 重映射指令内全部 BasicBlockId 引用（Phi source 前驱块）。
+    pub fn remap_blocks(&mut self, f: &mut impl FnMut(BasicBlockId) -> BasicBlockId) {
+        if let Self::Phi { sources, .. } = self {
+            for source in sources {
+                source.predecessor = f(source.predecessor);
+            }
+        }
+    }
+}
+
+impl Terminator {
+    /// 重映射终止器内全部 ValueId 操作数（Return/Branch/Switch/Throw 值）。
+    pub fn remap_values(&mut self, f: &mut impl FnMut(ValueId) -> ValueId) {
+        match self {
+            Self::Return { value } => {
+                if let Some(value) = value {
+                    *value = f(*value);
+                }
+            }
+            Self::Branch { condition, .. } => *condition = f(*condition),
+            Self::Switch { value, .. } => *value = f(*value),
+            Self::Throw { value } => *value = f(*value),
+            Self::Jump { .. } | Self::Unreachable => {}
+        }
+    }
+
+    /// 重映射终止器内全部 BasicBlockId 目标。
+    pub fn remap_blocks(&mut self, f: &mut impl FnMut(BasicBlockId) -> BasicBlockId) {
+        match self {
+            Self::Jump { target } => *target = f(*target),
+            Self::Branch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                *true_block = f(*true_block);
+                *false_block = f(*false_block);
+            }
+            Self::Switch {
+                cases,
+                default_block,
+                exit_block,
+                ..
+            } => {
+                for case in cases {
+                    case.target = f(case.target);
+                }
+                *default_block = f(*default_block);
+                *exit_block = f(*exit_block);
+            }
+            Self::Return { .. } | Self::Throw { .. } | Self::Unreachable => {}
+        }
+    }
+}
+
 // BinaryOp, UnaryOp, CompareOp → types.rs
 
 // Terminator, SwitchCaseTarget, PhiSource → types.rs
@@ -924,7 +1293,7 @@ pub fn is_module_entry_ir_function(name: &str) -> bool {
 }
 
 /// Import 绑定信息（用于模块系统）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportBinding {
     /// 源模块 ID
     pub source_module: ModuleId,
@@ -938,7 +1307,7 @@ pub struct ImportBinding {
     pub specifier: String,
 }
 /// 模块重导出说明（`export … from`），供 lower 阶段填充 `export_map`。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReExportBinding {
     /// 被重导出的源模块 ID
     pub source_module: ModuleId,
