@@ -478,16 +478,31 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         // init
-        if let Some(init) = &for_stmt.init {
+        let block = if let Some(init) = &for_stmt.init {
             match init {
                 swc_ast::VarDeclOrExpr::VarDecl(var_decl) => {
-                    self.lower_var_decl(var_decl, StmtFlow::Open(block))?;
+                    // 必须使用 lower_var_decl 返回的继续块：can_throw 初始化器会插入
+                    // 异常分叉（lower_value_exception_branch），store 落在分叉的
+                    // continue 块上；若沿用 init 前的旧块，后面的
+                    // set_terminator(Jump{header}) 会覆盖异常分叉的 Branch，
+                    // 使 store 孤立、循环头读到未初始化的变量（issue #346）。
+                    match self.lower_var_decl(var_decl, StmtFlow::Open(block))? {
+                        StmtFlow::Open(cont) => cont,
+                        // lower_var_decl 无 return/throw 路径，必然 Open；防御性兜底：
+                        // 若未来引入 Terminated，init 不可达则整个 for 循环不可达。
+                        StmtFlow::Terminated => return Ok(StmtFlow::Terminated),
+                    }
                 }
                 swc_ast::VarDeclOrExpr::Expr(expr) => {
                     let _ = self.lower_expr(expr, block)?;
+                    // 表达式 init 的异常分叉在 lower_expr 内部（经 continuation 机制），
+                    // 继续块由下方 resolve_store_block 解析，沿用原 block 即可。
+                    block
                 }
             }
-        }
+        } else {
+            block
+        };
 
         let init_end = self.resolve_store_block(block);
         let header = self.current_function.new_block();
