@@ -4,6 +4,74 @@ use wjsm_ir::value;
 
 use crate::RuntimeState;
 
+/// `gc_obj_get_data`/`gc_obj_set_data` 快路径的「需走慢路径」哨兵。
+///
+/// tag 0x1E 不在运行时任何编码路径中产生（有效 tag 为 0x0..=0x12），因此该值
+/// 不可能成为真实属性值；support 层 obj_get/obj_set 仅用它做内部协议判断，
+/// 命中后回退 async `gc_obj_get`/`gc_obj_set` 完整语义（accessor getter/setter、
+/// proxy trap、非普通对象、未命中/创建等）。
+const FAST_PATH_MISS: i64 = (value::BOX_BASE as i64) | (0x1E_i64 << 32);
+
+/// 同步数据槽读取快路径：仅当 `object` 是普通对象（TAG_OBJECT）且属性在原型链上
+/// 以**数据槽**形态存在时直接返回槽值（闭包 env 变量读取的典型形态），否则返回
+/// `FAST_PATH_MISS`。语义与 `get_by_name_id` 的 `lookup_property_on_proto` 分支
+/// 完全一致：同一 canonicalize + `get_property_slot_on_proto_chain`，仅省去 async
+/// 调用机制与 accessor 派发。
+fn gc_obj_get_data_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, key: i32) -> i64 {
+    if !value::is_object(object) {
+        return FAST_PATH_MISS;
+    }
+    let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, key as u32) else {
+        return FAST_PATH_MISS;
+    };
+    // 已确认 is_object：handle 即低 32 位（handle_index_of 对普通对象直接取低 32 位）。
+    let handle = (object as u64 & 0xFFFF_FFFF) as u32;
+    let access = caller.data().heap_access_v2().clone();
+    match access.get_property_slot_on_proto_chain(handle, key) {
+        Ok(Some(slot)) if slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 == 0 => {
+            // 槽值按位解释为 JS 值（NaN-boxed i64）。
+            slot.value as i64
+        }
+        _ => FAST_PATH_MISS,
+    }
+}
+
+/// 同步数据槽写入快路径：仅处理「receiver 自身已存在可写数据槽」的就地写
+/// （闭包 env 变量更新的典型形态：wasm 侧链查找已定位 owner，receiver == owner，
+/// 槽必然在 receiver 自身上）。其余情况（槽在原型链上 / accessor / 非可写 /
+/// 未命中需创建）一律回退慢路径，由 async `ordinary_set_by_name_id` 完整处理。
+fn gc_obj_set_data_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+    key: i32,
+    value: i64,
+) -> i64 {
+    if !value::is_object(object) {
+        return FAST_PATH_MISS;
+    }
+    let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, key as u32) else {
+        return FAST_PATH_MISS;
+    };
+    // 已确认 is_object：handle 即低 32 位（handle_index_of 对普通对象直接取低 32 位）。
+    let handle = (object as u64 & 0xFFFF_FFFF) as u32;
+    let access = caller.data().heap_access_v2().clone();
+    match access.get_property_slot(handle, key) {
+        Ok(Some(slot)) => {
+            if slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0
+                || slot.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0
+            {
+                return FAST_PATH_MISS;
+            }
+            match access.set_property(handle, key, value as u64) {
+                // value 按位解释为槽值（NaN-boxed i64 → u64）。
+                Ok(()) => value::encode_undefined(),
+                Err(_) => FAST_PATH_MISS,
+            }
+        }
+        _ => FAST_PATH_MISS,
+    }
+}
+
 pub(crate) fn allocate_v2_array_handle(
     caller: &mut Caller<'_, RuntimeState>,
     capacity: u32,
@@ -34,6 +102,22 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
             let bytes = u64::try_from(bytes).map_err(host_error)?;
             let (start, _) = crate::allocate_v2_object_bytes(&mut caller, bytes)?;
             Ok(start as i64)
+        },
+    )?;
+    // 同步数据槽读写快路径（support 模块 obj_get/obj_set 优先调用；
+    // 命中 FAST_PATH_MISS 哨兵时回退下方 async 版本）。
+    linker.func_wrap(
+        "env",
+        "gc_obj_get_data",
+        |mut caller: Caller<'_, RuntimeState>, object: i64, key: i32| -> i64 {
+            gc_obj_get_data_impl(&mut caller, object, key)
+        },
+    )?;
+    linker.func_wrap(
+        "env",
+        "gc_obj_set_data",
+        |mut caller: Caller<'_, RuntimeState>, object: i64, key: i32, new_value: i64| -> i64 {
+            gc_obj_set_data_impl(&mut caller, object, key, new_value)
         },
     )?;
     linker.func_wrap_async(

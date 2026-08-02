@@ -1137,6 +1137,7 @@ impl Clone for RuntimeState {
             runtime_strings: self.runtime_strings.clone(),
             runtime_property_keys: self.runtime_property_keys.clone(),
             memory_string_cache: self.memory_string_cache.clone(),
+            memory_name_id_cache: self.memory_name_id_cache.clone(),
             diagnostics: self.diagnostics.clone(),
             runtime_error: self.runtime_error.clone(),
             max_heap_size: self.max_heap_size,
@@ -1333,6 +1334,10 @@ struct RuntimeState {
     runtime_property_keys: crate::property_key::SharedPropertyKeyTable,
     /// 线性内存 c-string 偏移缓存：避免 find_memory_c_string 反复全堆 memmem。
     memory_string_cache: Arc<Mutex<HashMap<String, u32>>>,
+    /// 内存 c-string 键 → 规范 name_id 缓存：热路径（闭包 env 变量访问等）每次
+    /// 属性访问都经 canonicalize_v2_name_id_with_env，常量键内容写入后不再变更，
+    /// 命中缓存可跳过读内存 + UTF-8 转换 + intern + 哈希，只做一次 HashMap 查询。
+    memory_name_id_cache: Arc<Mutex<HashMap<u32, u32>>>,
     /// 进程内可捕获的诊断输出（如 unhandled rejection 警告）；真实 CLI 由 execute 刷到 stderr。
     diagnostics: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
@@ -1963,6 +1968,7 @@ impl RuntimeState {
                 crate::property_key::PropertyKeyTable::new(),
             )),
             memory_string_cache: Arc::new(Mutex::new(HashMap::new())),
+            memory_name_id_cache: Arc::new(Mutex::new(HashMap::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
             host_temp_roots: Arc::new(Mutex::new(Vec::new())),

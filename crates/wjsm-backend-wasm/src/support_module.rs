@@ -71,7 +71,10 @@ const HOST_GC_OBJ_DELETE: u32 = 5;
 const HOST_GC_ARR_NEW: u32 = 6;
 const HOST_GC_ELEM_GET: u32 = 7;
 const HOST_GC_ELEM_SET: u32 = 8;
-const NUM_HOST_IMPORTS: u32 = 9;
+// 同步数据槽快路径（obj_get/obj_set 优先调用，命中哨兵回退 async 版本）
+const HOST_GC_OBJ_GET_DATA: u32 = 9;
+const HOST_GC_OBJ_SET_DATA: u32 = 10;
+const NUM_HOST_IMPORTS: u32 = 11;
 
 // ── Global indices（与 user wasm 对齐；仅列出 V2 support body 实际引用的）──
 const G_OBJ_TABLE_COUNT: u32 = 3;
@@ -239,6 +242,10 @@ pub fn emit_support_module(flavor: GcFlavor) -> Result<Vec<u8>> {
         ("gc_arr_new", 7),
         ("gc_elem_get", 8),
         ("gc_elem_set", 9),
+        // 同步数据槽快路径：gc_obj_get_data 为 (i64, i32) -> i64（Type 8），
+        // gc_obj_set_data 为 (i64, i32, i64) -> i64（Type 32）。
+        ("gc_obj_get_data", 8),
+        ("gc_obj_set_data", 32),
     ] {
         imports.import("env", name, EntityType::Function(type_index));
     }
@@ -461,14 +468,76 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
     func
 }
 
+/// `gc_obj_get_data`/`gc_obj_set_data` 快路径的「需走慢路径」哨兵（tag 0x1E）。
+/// 与 host 侧 `gc.rs::FAST_PATH_MISS` 保持一致；运行时任何编码路径都不产生该值，
+/// 不可能与真实属性值冲突。
+const FAST_PATH_MISS_I64: i64 = (value::BOX_BASE as i64) | (0x1E_i64 << 32);
+
+/// obj_get (param $obj i64) (param $name_id i32) (result i64)
+///
+/// 快路径：先调同步 `gc_obj_get_data`——普通对象原型链上的数据槽读取（闭包 env
+/// 变量访问的典型形态），避开 async 调用机制。返回 `FAST_PATH_MISS_I64` 哨兵时
+/// 回退 async `gc_obj_get` 完整语义（accessor getter / proxy trap / 非普通对象 /
+/// 未命中）。
 fn emit_obj_get_v2() -> Function {
-    // dispatch（function/closure/bound/proxy/native callable/object）由 host 侧
-    // `gc_obj_get` 统一完成；support 层只做透传。
-    emit_v2_binary_host_helper(HOST_GC_OBJ_GET)
+    // local 2 = 保存的 obj，local 3 = 保存的 name_id，local 4 = 快路径结果。
+    let mut func = Function::new(vec![(1, ValType::I64), (1, ValType::I32), (1, ValType::I64)]);
+    // 保存原始参数：快路径调用会消耗栈上参数，慢路径回退需要重放。
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalSet(2));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalSet(3));
+    // 快路径：同步数据槽读取。
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_GET_DATA));
+    func.instruction(&WasmInstruction::LocalSet(4));
+    func.instruction(&WasmInstruction::LocalGet(4));
+    func.instruction(&WasmInstruction::I64Const(FAST_PATH_MISS_I64));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
+    // 慢路径：完整 async 语义。
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_GET));
+    func.instruction(&WasmInstruction::Else);
+    func.instruction(&WasmInstruction::LocalGet(4));
+    func.instruction(&WasmInstruction::End); // 关闭 if
+    func.instruction(&WasmInstruction::End); // 关闭函数体
+    func
 }
 
+/// obj_set (param $obj i64) (param $name_id i32) (param $val i64) -> ()
+///
+/// 与 obj_get 同理：先尝试同步 `gc_obj_set_data`（普通对象链上的可写数据槽就地写），
+/// 哨兵回退 async `gc_obj_set`。
 fn emit_obj_set_v2() -> Function {
-    emit_v2_ternary_host_helper(HOST_GC_OBJ_SET)
+    // local 3 = obj，local 4 = name_id，local 5 = val，local 6 = 快路径状态。
+    let mut func = Function::new(vec![(1, ValType::I64), (1, ValType::I32), (2, ValType::I64)]);
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalSet(3));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalSet(4));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::LocalSet(5));
+    // 快路径：同步数据槽写入。
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::LocalGet(2));
+    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_SET_DATA));
+    func.instruction(&WasmInstruction::LocalSet(6));
+    func.instruction(&WasmInstruction::LocalGet(6));
+    func.instruction(&WasmInstruction::I64Const(FAST_PATH_MISS_I64));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    // 慢路径：完整 async 语义。
+    func.instruction(&WasmInstruction::LocalGet(3));
+    func.instruction(&WasmInstruction::LocalGet(4));
+    func.instruction(&WasmInstruction::LocalGet(5));
+    func.instruction(&WasmInstruction::Call(HOST_GC_OBJ_SET));
+    func.instruction(&WasmInstruction::End); // 关闭 if
+    func.instruction(&WasmInstruction::End); // 关闭函数体
+    func
 }
 
 fn emit_obj_delete_v2() -> Function {

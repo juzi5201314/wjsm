@@ -97,10 +97,39 @@ pub(crate) fn canonicalize_v2_name_id_with_env<C: AsContext<Data = RuntimeState>
 ) -> Option<u32> {
     match decode_name_id(name_id) {
         DecodedNameId::MemoryString(index) => {
+            // 内存 c-string 键一经写入（data segment / bump 分配）内容不再变更，
+            // 故可按 (memory index → 规范 name_id) 缓存。闭包 env 变量访问等热循环
+            // 每次属性访问都 canonicalize 同一常量键，命中缓存跳过读内存、UTF-8
+            // 转换、intern 哈希与临时分配。
+            if let Some(&cached) = ctx
+                .as_context()
+                .data()
+                .memory_name_id_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&index)
+            {
+                return Some(cached);
+            }
             let bytes = crate::runtime_render::read_string_bytes_mem(ctx, &env.memory, index);
             let key = RuntimeString::from_utf8_lossy(&bytes);
-            let index = intern_runtime_property_key(ctx.as_context().data(), key);
-            Some(encode_runtime_string_name_id(index))
+            let canonical = intern_runtime_property_key(ctx.as_context().data(), key);
+            let encoded = encode_runtime_string_name_id(canonical);
+            {
+                let mut cache = ctx
+                    .as_context()
+                    .data()
+                    .memory_name_id_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                // 上限保护：运行期动态字符串键可能大量增长；缓存可安全清空
+                // （canonicalize 幂等，intern 表只增），防止内存无界膨胀。
+                if cache.len() >= 4096 {
+                    cache.clear();
+                }
+                cache.insert(index, encoded);
+            }
+            Some(encoded)
         }
         DecodedNameId::RuntimeString(_) | DecodedNameId::Symbol(_) => Some(name_id),
     }
