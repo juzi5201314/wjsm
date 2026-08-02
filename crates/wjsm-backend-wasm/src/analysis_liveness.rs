@@ -346,6 +346,16 @@ pub fn compute_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<
 /// 契约键与 `compute_var_liveness` 相同，供 `current_spill_locals` 查询。
 pub fn compute_var_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<String>> {
     let succ = successors(f);
+    // 反向前驱表：preds[target] = 所有能跳转到 target 的块。
+    // 原先不动点循环内对每个块用 `f.blocks().iter().filter_map(..)` 全量扫所有块
+    // 找前驱，整体 O(V²×轮数)；改为由 successors 反建一次 O(V+E) 的表，
+    // 不动点内每块仅 O(出边) 查前驱，降至 O((V+E)×轮数)。
+    let mut preds: HashMap<BasicBlockId, Vec<BasicBlockId>> = HashMap::new();
+    for (&from, targets) in &succ {
+        for &to in targets {
+            preds.entry(to).or_default().push(from);
+        }
+    }
 
     // 函数参数和模块全局槽在函数体执行前已经占用 wasm local；即使从未 StoreVar，
     // safepoint 也必须把这些预置 local 里的 handle 暴露给 GC。
@@ -392,18 +402,12 @@ pub fn compute_var_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), Hash
             } else {
                 HashSet::new()
             };
-            let preds: Vec<BasicBlockId> = f
-                .blocks()
-                .iter()
-                .filter_map(|b| {
-                    let bid = b.id();
-                    succ.get(&bid)
-                        .map(|ss| ss.as_slice())
-                        .and_then(|ss| ss.contains(&id).then_some(bid))
-                })
-                .collect();
-            for p in &preds {
-                in_set.extend(occupied_out.get(p).cloned().unwrap_or_default());
+            // 由预建反向前驱表直接取前驱；仅借出 out 集逐元素扩展，
+            // 不再克隆整个前驱 out 集（原先 per-pred 一次 HashSet 分配）。
+            for p in preds.get(&id).into_iter().flatten() {
+                if let Some(out) = occupied_out.get(p) {
+                    in_set.extend(out.iter().cloned());
+                }
             }
 
             let mut out_set = in_set.clone();

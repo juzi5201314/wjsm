@@ -516,71 +516,46 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
         }
     }
 
-    // 简单 CFG 可达性检查：从 start 出发，沿所有 CFG 边走，能否到达 target。
-    fn can_reach(blocks: &[BasicBlock], start: usize, target: usize) -> bool {
+    // 前向可达性单次判定（O(V+E)）：从 start 出发做一次 DFS，任一谓词命中即提前
+    // 返回 true。原先实现对每条回边源、循环出口、外部逃逸目标各做一次全图 DFS，
+    // 整体 O(回边数×(V+E))；合并为一次遍历后每 header 仅 O(V+E)。
+    fn reach_hits_any(
+        blocks: &[BasicBlock],
+        start: usize,
+        back_sources: &std::collections::HashSet<usize>,
+        exit_idx: usize,
+        limit: usize,
+    ) -> bool {
         let mut visited = std::collections::HashSet::new();
         let mut stack = vec![start];
         while let Some(current) = stack.pop() {
-            if current == target {
+            if !visited.insert(current) {
+                continue;
+            }
+            // 谓词1（某回边源可达，即循环体成立）与谓词2（出口可达）合一判定。
+            if current == exit_idx || back_sources.contains(&current) {
                 return true;
-            }
-            if !visited.insert(current) {
-                continue;
-            }
-            if let Some(block) = blocks.get(current) {
-                match block.terminator() {
-                    Terminator::Jump { target: t } => stack.push(t.0 as usize),
-                    Terminator::Branch {
-                        true_block,
-                        false_block,
-                        ..
-                    } => {
-                        stack.push(false_block.0 as usize);
-                        stack.push(true_block.0 as usize);
-                    }
-                    Terminator::Switch {
-                        cases,
-                        default_block,
-                        exit_block,
-                        ..
-                    } => {
-                        stack.extend(cases.iter().map(|case| case.target.0 as usize));
-                        stack.push(default_block.0 as usize);
-                        stack.push(exit_block.0 as usize);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        false
-    }
-
-    fn can_reach_before(blocks: &[BasicBlock], start: usize, limit: usize) -> bool {
-        let mut visited = std::collections::HashSet::new();
-        let mut stack = vec![start];
-        while let Some(current) = stack.pop() {
-            if !visited.insert(current) {
-                continue;
             }
             if let Some(block) = blocks.get(current) {
                 match block.terminator() {
                     Terminator::Jump { target } => {
-                        let target_idx = target.0 as usize;
-                        if target_idx < limit {
+                        let t = target.0 as usize;
+                        // 谓词3：存在边指向 header 之前的块（逃逸外层目标）。
+                        if t < limit {
                             return true;
                         }
-                        stack.push(target_idx);
+                        stack.push(t);
                     }
                     Terminator::Branch {
                         true_block,
                         false_block,
                         ..
                     } => {
-                        for target_idx in [true_block.0 as usize, false_block.0 as usize] {
-                            if target_idx < limit {
+                        for t in [true_block.0 as usize, false_block.0 as usize] {
+                            if t < limit {
                                 return true;
                             }
-                            stack.push(target_idx);
+                            stack.push(t);
                         }
                     }
                     Terminator::Switch {
@@ -589,15 +564,15 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
                         exit_block,
                         ..
                     } => {
-                        for target_idx in cases
+                        for t in cases
                             .iter()
                             .map(|case| case.target.0 as usize)
                             .chain([default_block.0 as usize, exit_block.0 as usize])
                         {
-                            if target_idx < limit {
+                            if t < limit {
                                 return true;
                             }
-                            stack.push(target_idx);
+                            stack.push(t);
                         }
                     }
                     _ => {}
@@ -625,12 +600,17 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
                     Terminator::Branch { true_block, .. } if true_block.0 as usize == h
                 )
             });
-            let reaches_backedge = sources
-                .iter()
-                .any(|&source_idx| can_reach(blocks, true_idx, source_idx));
-            let reaches_exit = can_reach(blocks, true_idx, false_idx);
-            let reaches_outer_target = can_reach_before(blocks, true_idx, h);
-            if !(has_do_while_source || reaches_backedge || reaches_exit || reaches_outer_target) {
+            // 原实现对每条回边源 + 循环出口 + 外部逃逸目标各做一次全图 DFS，
+            // 整体 O(回边数×(V+E))；改为从 true_idx 一次前向 DFS 合并判定三个
+            // 谓词（任一命中即提前返回），每 header 仅 O(V+E)，语义完全一致。
+            let reaches_any = if has_do_while_source {
+                true
+            } else {
+                let source_set: std::collections::HashSet<usize> =
+                    sources.iter().copied().collect();
+                reach_hits_any(blocks, true_idx, &source_set, false_idx, h)
+            };
+            if !reaches_any {
                 continue;
             }
         }
