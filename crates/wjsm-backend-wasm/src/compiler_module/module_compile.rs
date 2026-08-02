@@ -37,31 +37,60 @@ fn fast_entry_param_count(function: &IrFunction) -> Option<u32> {
     Some(n)
 }
 
+/// WJSM_DISABLE_LICM 是否生效：值非空即禁用（与 WJSM_STARTUP_SNAPSHOT 的读取
+/// 风格一致：除显式 0/false/off（及空值）外均视为生效），支持 1/true/on 等
+/// 常见写法。
+///
+/// bench 需要测"真实性能"：循环内的纯 work() 不应被提升出循环（否则 fib30
+/// 会被优化成空转），bench runner 在 default 档给 wjsm 子进程设 WJSM_DISABLE_LICM=1。
+fn licm_disabled_by_env() -> bool {
+    !matches!(
+        std::env::var("WJSM_DISABLE_LICM").as_deref(),
+        Err(_) | Ok("") | Ok("0") | Ok("false") | Ok("off")
+    )
+}
+
 impl Compiler {
     pub(crate) fn compile_module(&mut self, module: &IrModule) -> Result<()> {
         // LICM：克隆模块，先分析（gate）再提升循环不变量纯调用。
+        //
+        // WJSM_DISABLE_LICM 生效时整体跳过 LICM（不做 f64/gc 预分析、不调用
+        // hoist_loop_invariant_pure_calls、不设置 hoisted_preheader_blocks）：
+        // bench 需要测"真实性能"，循环内的纯 work() 调用不应被提升出循环
+        // （否则 fib(30) 会被优化成空转，测不到真实开销）。
+        // 克隆模块供 LICM 原地变换；编译阶段统一使用该克隆，保证提升后的
+        // preheader 块（含被移出循环的调用）进入 structured/cfg 编译。
         let mut module = module.clone();
-        let f64_for_hoist = crate::analysis_f64::F64Analysis::analyze(&module);
-        let gc_for_hoist = GcAnalysis::analyze(&module, &f64_for_hoist);
-        // LICM：泛化到所有函数，返回每个函数被插入的提升 preheader 块索引
-        // （供 structured 编译在循环头前提前发射其指令）。
-        let hoisted = crate::compiler_licm::hoist_loop_invariant_pure_calls(
-            &mut module,
-            &f64_for_hoist,
-            &gc_for_hoist,
-        );
-        self.hoisted_preheader_blocks = hoisted.into_iter().collect();
-        // Pass 0: f64 值类型传播分析 + 模块级 GC 分析（Step 1 / Layer 3c）。
-        // LICM 无提升时 module 未被修改，复用变换前的分析结果（省一轮
-        // F64+Gc 重分析，见 issue #345）；有提升才重分析——preheader 的调用
-        // 结果可能被循环内的 is_exception 消费，必须用变换后的 IR 重新分析。
-        if self.hoisted_preheader_blocks.is_empty() {
-            self.f64_analysis = Some(f64_for_hoist);
-            self.gc_analysis = Some(gc_for_hoist);
-        } else {
+        if licm_disabled_by_env() {
+            // 禁用 LICM：直接以模块自身做一轮 F64+Gc 分析（与"无提升复用路径"
+            // 等价，不依赖任何 LICM 预分析结果）；hoisted_preheader_blocks
+            // 保持默认空（无提升块）。
             let f64_analysis = crate::analysis_f64::F64Analysis::analyze(&module);
             self.f64_analysis = Some(f64_analysis.clone());
             self.gc_analysis = Some(GcAnalysis::analyze(&module, &f64_analysis));
+        } else {
+            let f64_for_hoist = crate::analysis_f64::F64Analysis::analyze(&module);
+            let gc_for_hoist = GcAnalysis::analyze(&module, &f64_for_hoist);
+            // LICM：泛化到所有函数，返回每个函数被插入的提升 preheader 块索引
+            // （供 structured 编译在循环头前提前发射其指令）。
+            let hoisted = crate::compiler_licm::hoist_loop_invariant_pure_calls(
+                &mut module,
+                &f64_for_hoist,
+                &gc_for_hoist,
+            );
+            self.hoisted_preheader_blocks = hoisted.into_iter().collect();
+            // Pass 0: f64 值类型传播分析 + 模块级 GC 分析（Step 1 / Layer 3c）。
+            // LICM 无提升时 module 未被修改，复用变换前的分析结果（省一轮
+            // F64+Gc 重分析，见 issue #345）；有提升才重分析——preheader 的调用
+            // 结果可能被循环内的 is_exception 消费，必须用变换后的 IR 重新分析。
+            if self.hoisted_preheader_blocks.is_empty() {
+                self.f64_analysis = Some(f64_for_hoist);
+                self.gc_analysis = Some(gc_for_hoist);
+            } else {
+                let f64_analysis = crate::analysis_f64::F64Analysis::analyze(&module);
+                self.f64_analysis = Some(f64_analysis.clone());
+                self.gc_analysis = Some(GcAnalysis::analyze(&module, &f64_analysis));
+            }
         }
         // 收集源文件路径和函数源码位置映射（供运行时错误堆栈映射）。
         self.source_file = module.source_file().map(|s| s.to_string());

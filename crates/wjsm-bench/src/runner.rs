@@ -244,6 +244,11 @@ fn measure_wall(
 
     let mut process = Command::new("hyperfine");
     process.args(&args).current_dir(repo_root());
+    // bench 保持真实性能：禁用 IR 层 LICM，避免循环内纯 work() 被提升出循环
+    // （fib30 场景提升后 ns_per_op 只剩空转开销）。hyperfine 命令行里的
+    // `wjsm run ...` 是 shell 命令，环境变量设在 hyperfine 进程上即可透传；
+    // node 忽略 WJSM_* 变量，无副作用。
+    process.env("WJSM_DISABLE_LICM", "1");
     if cold {
         process.env("WJSM_STARTUP_SNAPSHOT", "0");
         process.env("WJSM_CACHE_DIR", COLD_CACHE_DIR);
@@ -337,6 +342,10 @@ fn measure_ns_per_op(
     let (bin, args) = runtime_argv(rt, node_bin, wjsm_bin, scenario);
     let mut process = Command::new(bin);
     process.args(&args).current_dir(repo_root());
+    // bench 保持真实性能：禁用 IR 层 LICM，避免循环内纯 work() 被提升出循环。
+    if rt == RuntimeKind::Wjsm {
+        process.env("WJSM_DISABLE_LICM", "1");
+    }
     apply_scenario_env(&mut process, effective);
     let output = process.output().with_context(|| {
         format!("执行 {}（场景 {scenario}，ns_per_op）失败", rt.as_str())
