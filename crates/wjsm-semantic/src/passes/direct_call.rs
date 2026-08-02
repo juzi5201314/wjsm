@@ -219,6 +219,10 @@ pub fn run(module: &mut Module) {
     let mut env_required: HashSet<FunctionId> = HashSet::new();
     let mut this_required: HashSet<FunctionId> = HashSet::new();
     let mut has_new_target: HashSet<FunctionId> = HashSet::new();
+    // env_deps：函数 → 其 env 读取（`GetProp(env, immutable 函数声明)`）依赖的目标
+    // 函数。目标函数 env_required 时该读取不会被替换为 FunctionRef，env 仍然必需，
+    // 经不动点传播后本函数同样 env_required。
+    let mut env_deps: HashMap<FunctionId, Vec<FunctionId>> = HashMap::new();
     // resolvable_env_gets：函数 → {(env LoadVar dest, 属性名)}，该 env 读取的 GetProp 可解析。
     let mut resolvable_env_gets: HashMap<FunctionId, HashSet<(ValueId, String)>> = HashMap::new();
 
@@ -276,9 +280,12 @@ pub fn run(module: &mut Module) {
         }
 
         // env dest 的 use 分析：全部是 `GetProp(env, immutable 常量)` 才可解析。
+        // 可解析仅表示 key 是函数声明名；若目标函数自身 env_required（其 env 读取
+        // 不可全解析），该 GetProp 不会在替换阶段变成 FunctionRef，env 仍然必需，
+        // 经不动点（见下）传播为本函数 env_required。
         for env_dest in env_load_dests {
             let mut all_resolvable = true;
-            let mut resolved_keys: Vec<String> = Vec::new();
+            let mut resolved_keys: Vec<(String, FunctionId)> = Vec::new();
             // terminator 使用 env dest（如 return env）→ 不可解析。
             for block in function.blocks() {
                 if terminator_uses(block.terminator()).contains(&env_dest) {
@@ -296,9 +303,9 @@ pub fn run(module: &mut Module) {
                             Some(Instruction::Const { constant, .. }) => {
                                 if let Some(Constant::String(s)) =
                                     module.constants().get(constant.0 as usize)
-                                    && immutable.contains_key(s)
+                                    && let Some(target) = immutable.get(s)
                                 {
-                                    resolved_keys.push(s.clone());
+                                    resolved_keys.push((s.clone(), *target));
                                     continue;
                                 }
                                 all_resolvable = false;
@@ -311,8 +318,9 @@ pub fn run(module: &mut Module) {
             }
             if all_resolvable {
                 let entry = resolvable_env_gets.entry(func_id).or_default();
-                for key in resolved_keys {
+                for (key, target) in resolved_keys {
                     entry.insert((env_dest, key));
+                    env_deps.entry(func_id).or_default().push(target);
                 }
             } else {
                 env_required.insert(func_id);
@@ -334,6 +342,32 @@ pub fn run(module: &mut Module) {
                 this_required.insert(func_id);
             }
         }
+    }
+
+    // env_required 不动点：函数直接不可解析（非 `GetProp(env, immutable)` use）或经
+    // `GetProp(env, immutable)` 依赖某个 env_required 的目标函数（该读取不会替换为
+    // FunctionRef，env 仍然必需）。
+    loop {
+        let mut changed = false;
+        for (f, targets) in &env_deps {
+            if !env_required.contains(f)
+                && targets.iter().any(|t| env_required.contains(t))
+            {
+                env_required.insert(*f);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // resolvable_env_gets 过滤：目标函数 env_required 的 key 不会真正替换，剔除。
+    for entry in resolvable_env_gets.values_mut() {
+        entry.retain(|(_, key)| {
+            immutable
+                .get(key)
+                .is_some_and(|target| !env_required.contains(target))
+        });
     }
 
     // 4. 写回 direct_callable（函数体不依赖 env/this/new.target，且无 eval）。
