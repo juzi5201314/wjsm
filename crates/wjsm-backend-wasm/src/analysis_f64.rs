@@ -235,6 +235,11 @@ struct FnInfo<'a> {
     param_index: HashMap<&'a str, usize>,
     /// 变量名 → 全部 StoreVar 源 ValueId。
     var_stores: HashMap<&'a str, Vec<ValueId>>,
+    /// 在 entry 块（bb0）内有 StoreVar 的变量名（循环携带变量候选种子）。
+    var_bb0_stores: HashSet<&'a str>,
+    /// 在 entry 块（bb0）内有 LoadVar 的变量名（防御：bb0 内 load 先于 seed store
+    /// 的读取不可证 f64，此类变量不参与循环携带标记）。
+    bb0_loads: HashSet<&'a str>,
     /// LoadVar 的 (dest, 变量名)。
     loads: Vec<(ValueId, &'a str)>,
     /// Phi 的 (dest, 源 ValueId 列表)。
@@ -293,6 +298,8 @@ fn analyze_inner(module: &Module) -> F64Analysis {
                 function: f,
                 param_index,
                 var_stores: HashMap::new(),
+                var_bb0_stores: HashSet::new(),
+                bb0_loads: HashSet::new(),
                 loads: Vec::new(),
                 phis: Vec::new(),
                 binaries: Vec::new(),
@@ -301,13 +308,20 @@ fn analyze_inner(module: &Module) -> F64Analysis {
                 defs: HashMap::new(),
                 known_callees: f.known_callee_vars(),
             };
-            for bb in f.blocks() {
+            for (bb_idx, bb) in f.blocks().iter().enumerate() {
+                let is_bb0 = bb_idx == 0;
                 for ins in bb.instructions() {
                     match ins {
                         Instruction::StoreVar { name, value } => {
+                            if is_bb0 {
+                                info.var_bb0_stores.insert(name.as_str());
+                            }
                             info.var_stores.entry(name.as_str()).or_default().push(*value);
                         }
                         Instruction::LoadVar { dest, name } => {
+                            if is_bb0 {
+                                info.bb0_loads.insert(name.as_str());
+                            }
                             info.loads.push((*dest, name.as_str()));
                         }
                         Instruction::Phi { dest, sources } => {
@@ -557,6 +571,74 @@ fn compute_known_f64(
     can_throw: &[bool],
     returns_f64: &[bool],
 ) -> HashSet<ValueId> {
+    // 1. 最小不动点（无循环携带假设）：见 least_fixed_point。
+    let known = least_fixed_point(
+        module,
+        info,
+        param_flags,
+        var_store_count,
+        can_throw,
+        returns_f64,
+        &HashSet::new(),
+    );
+
+    // 2. 循环携带变量（loop-carried）优化。
+    //
+    // 问题：`for (let i = 0; …; i++)` 中 LoadVar i 的 f64 性依赖 store
+    // `i = i + 1`，后者又依赖 LoadVar i——自循环约束使最小不动点无法打破，
+    // i/s 永远不被标记 f64，导致每次迭代全套 NaN-box 标签检查。
+    //
+    // 解法（最大不动点子集，归纳论证保证 sound）：候选 = entry 块（bb0）有
+    // store 且至少一个 store 源在最小不动点中已为 f64（无条件 f64 种子）的变量。
+    // bb0 支配所有块，种子值必先于任何后续 load 执行；迭代收缩：假设候选变量
+    // 全部 load 为 f64 时，若某变量的**全部** store 源亦为 f64（自洽），保留，
+    // 否则剔除。收敛后按执行步归纳：第 k 步 store 的源值均 f64（种子或上一步
+    // 的 f64 值经纯 f64 运算），故任意路径上 load 恒为 f64。
+    let mut carried: HashSet<&str> = info
+        .var_stores
+        .keys()
+        .filter(|v| {
+            info.var_bb0_stores.contains(*v)
+                && !info.bb0_loads.contains(*v) // bb0 内 load 先于 seed 不可证
+                && info.var_stores[*v].iter().any(|s| known.contains(s))
+        })
+        .cloned()
+        .collect();
+    loop {
+        let seeded = least_fixed_point(
+            module,
+            info,
+            param_flags,
+            var_store_count,
+            can_throw,
+            returns_f64,
+            &carried,
+        );
+        let bad: Vec<&str> = carried
+            .iter()
+            .filter(|v| !info.var_stores[**v].iter().all(|s| seeded.contains(s)))
+            .copied()
+            .collect();
+        if bad.is_empty() {
+            return seeded;
+        }
+        for v in bad {
+            carried.remove(v);
+        }
+    }
+}
+
+/// 计算函数内 known_f64 的最小不动点。`carried` 中的变量（循环携带候选）
+/// 其全部 LoadVar 直接视为 f64（种子），供自洽性检验。
+fn least_fixed_point(
+    module: &Module,
+    info: &FnInfo,
+    param_flags: &[bool],
+    var_store_count: &HashMap<&str, u32>,
+    can_throw: &[bool],
+    returns_f64: &[bool],
+    carried: &HashSet<&str>,
+) -> HashSet<ValueId> {
     let constants = module.constants();
     let mut known: HashSet<ValueId> = HashSet::new();
 
@@ -620,10 +702,16 @@ fn compute_known_f64(
         }
 
         // LoadVar：
+        // - carried 候选（循环携带）：直接种子为 f64（自洽性由外层迭代保证）。
         // - 有 StoreVar：形参（若为形参）与全部源均 f64 才可（重赋值路径）。
         // - 无 StoreVar：仅当是声明形参且 param_is_f64（捕获变量保守 false）。
         for (dest, name) in &info.loads {
             if known.contains(dest) {
+                continue;
+            }
+            if carried.contains(name) {
+                known.insert(*dest);
+                changed = true;
                 continue;
             }
             let param_ok = info
@@ -859,6 +947,21 @@ fn compute_never_exception(
                 && !builtin_may_throw(*builtin, &known_f64[fidx], args)
             {
                 out[fidx].insert(*d);
+            }
+        }
+        // Binary：双已知 f64 → 发射端直出纯 f64 运算（instr_main known-f64 路径），
+        // 无 ToNumeric/ToPrimitive/字符串拼接，结果必非异常。
+        for (dest, _, lhs, rhs) in &info.binaries {
+            if known_f64[fidx].contains(lhs) && known_f64[fidx].contains(rhs) {
+                out[fidx].insert(*dest);
+            }
+        }
+        // Unary：Neg/Pos 已知 f64 操作数 → 纯 f64 运算，必非异常（BitNot 保守不标）。
+        for (dest, op, value) in &info.unaries {
+            if matches!(op, UnaryOp::Neg | UnaryOp::Pos)
+                && known_f64[fidx].contains(value)
+            {
+                out[fidx].insert(*dest);
             }
         }
         for (dest, callee) in &info.calls {

@@ -214,32 +214,47 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::Neg => {
-                        let bigint_neg_idx = self
-                            .builtin_func_indices
-                            .get(&Builtin::BigIntNeg)
-                            .copied()
-                            .context("no WASM func index for BigIntNeg")?;
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                        self.emit(WasmInstruction::I64Const(32));
-                        self.emit(WasmInstruction::I64ShrU);
-                        self.emit(WasmInstruction::I64Const(0x1F));
-                        self.emit(WasmInstruction::I64And);
-                        self.emit(WasmInstruction::I64Const(value::TAG_BIGINT as i64));
-                        self.emit(WasmInstruction::I64Eq);
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                        self.emit(WasmInstruction::Call(bigint_neg_idx));
-                        self.emit(WasmInstruction::Else);
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                        self.emit(WasmInstruction::F64ReinterpretI64);
-                        self.emit(WasmInstruction::F64Neg);
-                        self.emit(WasmInstruction::I64ReinterpretF64);
-                        self.emit(WasmInstruction::End);
-                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                        // 已知 f64：直接 f64.neg（无 BigInt 分派、无标签检查）。
+                        if self.value_known_f64(*value) {
+                            self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(WasmInstruction::F64Neg);
+                            self.emit(WasmInstruction::I64ReinterpretF64);
+                            self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                        } else {
+                            let bigint_neg_idx = self
+                                .builtin_func_indices
+                                .get(&Builtin::BigIntNeg)
+                                .copied()
+                                .context("no WASM func index for BigIntNeg")?;
+                            self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                            self.emit(WasmInstruction::I64Const(32));
+                            self.emit(WasmInstruction::I64ShrU);
+                            self.emit(WasmInstruction::I64Const(0x1F));
+                            self.emit(WasmInstruction::I64And);
+                            self.emit(WasmInstruction::I64Const(value::TAG_BIGINT as i64));
+                            self.emit(WasmInstruction::I64Eq);
+                            self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                            self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                            self.emit(WasmInstruction::Call(bigint_neg_idx));
+                            self.emit(WasmInstruction::Else);
+                            self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                            self.emit(WasmInstruction::F64ReinterpretI64);
+                            self.emit(WasmInstruction::F64Neg);
+                            self.emit(WasmInstruction::I64ReinterpretF64);
+                            self.emit(WasmInstruction::End);
+                            self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                        }
                     }
                     UnaryOp::Pos => {
-                        self.emit_to_number(self.local_idx(value.0))?;
-                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                        // 已知 f64：ToNumber 是恒等操作，raw 位即数值，直接拷贝。
+                        if self.value_known_f64(*value) {
+                            self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                            self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                        } else {
+                            self.emit_to_number(self.local_idx(value.0))?;
+                            self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                        }
                     }
                     UnaryOp::BitNot => {
                         self.emit_bigint_or_i32_bitnot_unary(self.local_idx(value.0))?;
