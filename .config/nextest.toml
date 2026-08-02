@@ -36,10 +36,13 @@ test-group = 'runtime-cache-delete'
 
 # perf_hooks fixture 会重复编译完整 builtin 模块；每例独占执行槽，避免同型任务
 # 竞争并越过 3s 硬门禁。100k async_hooks 负载同样独占执行槽。
+# api_semantics 是最大的 perf_hooks fixture（331 行，debug AOT 编译约 2.4s、运行仅
+# 约 0.3s），3s 门禁余量不足，全量跑时 CPU 竞争会偶发越线；放宽到 6s 才判死。
 [[profile.default.overrides]]
 filter = 'test(/happy__node_builtin_perf_hooks_/)'
 test-group = 'perf-hooks-runtime'
 threads-required = "num-cpus"
+slow-timeout = { period = "3s", terminate-after = 2 }
 
 [[profile.default.overrides]]
 filter = 'test(happy__async_hooks_load_100k)'
