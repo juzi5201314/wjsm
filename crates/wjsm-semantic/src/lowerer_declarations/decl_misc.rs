@@ -73,7 +73,13 @@ impl Lowerer {
                     if is_dataview_constructor_expr(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
-                        self.dataview_bindings.insert((scope_id, name));
+                        self.dataview_bindings.insert((scope_id, name.clone()));
+                    }
+                    // const + 字面量初始化 → 记录为可折叠常量（捕获读取直接内联）。
+                    // 仅限简单 ident 绑定（非解构）与纯字面量（Num/Str/Bool/Null），
+                    // 保证折叠值恒定且无副作用；TDZ 安全见 load_captured_binding 注释。
+                    if matches!(kind, VarKind::Const) {
+                        self.record_const_literal_binding(&name, init);
                     }
                 }
             } else {
@@ -107,6 +113,29 @@ impl Lowerer {
         }
 
         Ok(StmtFlow::Open(block))
+    }
+
+    /// 记录 `const X = <字面量>` 绑定（IR 名 → 常量池 id），供闭包捕获读取折叠。
+    ///
+    /// 仅接受纯字面量（Num/Str/Bool/Null）：值恒定、无副作用，折叠后语义不变。
+    /// 键为 `$<scope_id>.<name>`（与 `CapturedBinding::var_ir_name` 同构），
+    /// 不同作用域同名绑定互不干扰。
+    fn record_const_literal_binding(&mut self, name: &str, init: &swc_ast::Expr) {
+        let literal = match init {
+            swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) => Constant::Number(num.value),
+            swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) => {
+                Constant::String(string.value.to_string_lossy().into_owned())
+            }
+            swc_ast::Expr::Lit(swc_ast::Lit::Bool(b)) => Constant::Bool(b.value),
+            swc_ast::Expr::Lit(swc_ast::Lit::Null(_)) => Constant::Null,
+            _ => return,
+        };
+        // 绑定刚声明（destructure 已 mark_initialised）；resolve_scope_id 不做 TDZ 检查。
+        let Ok(scope_id) = self.scopes.resolve_scope_id(name) else {
+            return;
+        };
+        self.module_const_literals
+            .insert(format!("${scope_id}.{name}"), literal);
     }
 
     // ── Destructuring pattern lowering ──────────────────────────────────────

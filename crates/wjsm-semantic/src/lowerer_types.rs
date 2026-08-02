@@ -60,6 +60,16 @@ pub(crate) struct Lowerer {
     /// 词法上可继承的 [[HomeObject]]（类方法体内嵌套箭头函数使用）。
     pub(crate) lexical_home_object: Option<HomeObject>,
     pub(crate) function_lexical_home_object_stack: Vec<Option<HomeObject>>,
+    /// 模块/外层作用域 `const X = <字面量>` 绑定 → 字面量常量（IR 变量名
+    /// `$<scope_id>.<name>` 为键）。闭包捕获读取时若命中则直接折叠为常量，
+    /// 避免每次读取都经 env `obj_get` host 调用（基准：算术循环读模块 const
+    /// 上限每迭代 2 次 host 调用，折叠后 19x）。仅在折叠命中时
+    /// `add_constant`，未使用的记录不污染常量池。
+    ///
+    /// 语义安全：const 不可重赋值，值恒定；且仅当捕获函数体在声明语句之后
+    /// 降级（此时记录已存在）才折叠——函数值只能在其 create_closure（声明语句
+    /// 处）之后被调用，故读取必在初始化之后，无 TDZ 风险。
+    pub(crate) module_const_literals: std::collections::HashMap<String, wjsm_ir::Constant>,
     /// 每层函数的共享 env 对象（ValueId + 已注册捕获变量集合 + 最后写入的 block + 是否 dominate 全部后续 block）。
     pub(crate) shared_env_stack: Vec<Option<SharedEnvFrame>>,
     // ── 模块系统相关 ────────────────────────────────────────────────────────

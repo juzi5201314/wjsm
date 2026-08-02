@@ -143,6 +143,7 @@ impl Lowerer {
             typedarray_bindings: std::collections::HashSet::new(),
             sab_bindings: std::collections::HashSet::new(),
             dataview_bindings: std::collections::HashSet::new(),
+            module_const_literals: std::collections::HashMap::new(),
             eval_continue_block: None,
             new_expr_continue_block: None,
             await_continue_block: None,
@@ -668,6 +669,26 @@ impl Lowerer {
             return Ok(result);
         }
 
+        // 模块/外层作用域 const 字面量捕获：直接折叠为常量，跳过 env obj_get
+        // host 调用（每次读取两次 host 往返 → 零）与捕获登记。TDZ 安全：仅当
+        // 本函数体在该 const 声明语句之后降级（记录已存在）才命中；函数值只能
+        // 在其 create_closure（声明语句处）之后被调用，故读取必在初始化之后。
+        if let Some(constant) = self
+            .module_const_literals
+            .get(&binding.var_ir_name())
+            .cloned()
+        {
+            let constant = self.module.add_constant(constant);
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest,
+                    constant,
+                },
+            );
+            return Ok(dest);
+        }
         self.record_capture(binding.clone());
         let env_val = self.load_env_object(block);
         let key_val = self.append_env_key_const(block, binding);
