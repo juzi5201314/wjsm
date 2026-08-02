@@ -96,8 +96,67 @@ fn find_back_edges(blocks: &[BasicBlock]) -> Vec<(usize, usize)> {
     edges
 }
 
+/// 预构建前驱表：`preds[b]` = 所有跳转到 `b` 的块索引（O(V+E) 一次构建）。
+/// 反向可达（谁可到达某块）沿此表遍历即 O(V+E)，替代每轮全模块扫描的 O(V²)。
+fn build_preds(blocks: &[BasicBlock]) -> Vec<Vec<usize>> {
+    let mut preds = vec![Vec::new(); blocks.len()];
+    for (i, block) in blocks.iter().enumerate() {
+        let mut targets = Vec::new();
+        match block.terminator() {
+            Terminator::Jump { target } => targets.push(target.0 as usize),
+            Terminator::Branch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                targets.push(true_block.0 as usize);
+                targets.push(false_block.0 as usize);
+            }
+            Terminator::Switch {
+                cases,
+                default_block,
+                exit_block,
+                ..
+            } => {
+                targets.extend(cases.iter().map(|case| case.target.0 as usize));
+                targets.push(default_block.0 as usize);
+                targets.push(exit_block.0 as usize);
+            }
+            _ => {}
+        }
+        for t in targets {
+            if let Some(p) = preds.get_mut(t) {
+                p.push(i);
+            }
+        }
+    }
+    preds
+}
+
+/// 预构建 `ValueId → (块, 指令)` 定义位置索引（SSA：每个 value 恰有一个定义）。
+/// 供 `all_loop_invariant` 与变换阶段 O(1) 查定义，替代全模块线性扫描。
+fn build_value_defs(blocks: &[BasicBlock]) -> std::collections::HashMap<ValueId, (usize, usize)> {
+    let mut defs = std::collections::HashMap::with_capacity(
+        blocks.iter().map(|b| b.instructions().len()).sum(),
+    );
+    for (bi, block) in blocks.iter().enumerate() {
+        for (ii, ins) in block.instructions().iter().enumerate() {
+            if let Some(dest) = instruction_dest(ins) {
+                defs.insert(dest, (bi, ii));
+            }
+        }
+    }
+    defs
+}
+
 /// 计算自然循环体：从 header 正向可达 ∧ 反向可达 latch 的块（含 header/latch）。
-fn compute_loop_body(blocks: &[BasicBlock], header: usize, latch: usize) -> HashSet<usize> {
+/// `preds` 为预构建前驱表（见 [`build_preds`]），反向可达沿表遍历保持 O(V+E)。
+fn compute_loop_body(
+    blocks: &[BasicBlock],
+    preds: &[Vec<usize>],
+    header: usize,
+    latch: usize,
+) -> HashSet<usize> {
     // 正向可达（从 header 出发，沿所有 CFG 边）。
     let mut reachable = HashSet::new();
     let mut stack = vec![header];
@@ -128,66 +187,43 @@ fn compute_loop_body(blocks: &[BasicBlock], header: usize, latch: usize) -> Hash
             _ => {}
         }
     }
-    // 反向可达（谁能到达 latch）。
+    // 反向可达（谁能到达 latch）：沿前驱表遍历，O(V+E)。
     let mut can_reach_latch = HashSet::new();
     let mut stack = vec![latch];
     while let Some(b) = stack.pop() {
         if !can_reach_latch.insert(b) {
             continue;
         }
-        for (p, block) in blocks.iter().enumerate() {
-            let targets_here = match block.terminator() {
-                Terminator::Jump { target } => vec![target.0 as usize],
-                Terminator::Branch {
-                    true_block,
-                    false_block,
-                    ..
-                } => vec![true_block.0 as usize, false_block.0 as usize],
-                Terminator::Switch {
-                    cases,
-                    default_block,
-                    exit_block,
-                    ..
-                } => {
-                    let mut t: Vec<usize> =
-                        cases.iter().map(|case| case.target.0 as usize).collect();
-                    t.push(default_block.0 as usize);
-                    t.push(exit_block.0 as usize);
-                    t
-                }
-                _ => Vec::new(),
-            };
-            if targets_here.contains(&b) {
-                stack.push(p);
-            }
-        }
+        stack.extend(preds[b].iter().copied());
     }
     reachable.intersection(&can_reach_latch).copied().collect()
 }
 
 /// 参数是否循环不变：存在定义且 def 是 `Const`（常量值不随迭代变化，可随 call
 /// 移动），或 def 块不在循环体内（循环外定义，preheader 可引用）。
+/// `defs` 为预构建的 `ValueId → (块, 指令)` 定义位置索引（见 [`build_value_defs`]），
+/// 将原本的全模块线性扫描降为 O(1) 查表。
 fn all_loop_invariant(
     blocks: &[BasicBlock],
     body: &HashSet<usize>,
+    defs: &std::collections::HashMap<ValueId, (usize, usize)>,
     values: impl Iterator<Item = ValueId>,
 ) -> bool {
     for v in values {
-        let def = blocks.iter().enumerate().find_map(|(b, block)| {
-            block
-                .instructions()
-                .iter()
-                .find(|ins| instruction_dest(ins) == Some(v))
-                .map(|ins| (b, ins))
-        });
+        let def = defs.get(&v);
         match def {
             None => return false, // 无定义（外来值）→ 保守不提升。
-            Some((b, ins)) => {
-                if matches!(ins, Instruction::Const { .. }) {
-                    continue; // 常量不变。
-                }
-                if !body.contains(&b) {
+            Some((b, i)) => {
+                if !body.contains(b) {
                     continue; // 循环外定义不变。
+                }
+                // 循环内定义：仅 `Const` 不变（常量值不随迭代变化）。
+                let def_is_const = blocks
+                    .get(*b)
+                    .and_then(|bb| bb.instructions().get(*i))
+                    .is_some_and(|ins| matches!(ins, Instruction::Const { .. }));
+                if def_is_const {
+                    continue;
                 }
                 return false; // 循环内非 Const → 参数随迭代变化。
             }
@@ -477,6 +513,10 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
         {
             let function = &module.functions()[func_idx];
             let blocks = function.blocks();
+            // 预构建前驱表与定义索引：把循环体计算与循环不变判定从 O(V²)/
+            // 线性扫描降为 O(V+E)/O(1)（见 issue #342）。
+            let preds = build_preds(blocks);
+            let defs = build_value_defs(blocks);
             for (latch, header) in find_back_edges(blocks) {
                 // C1：循环头含 Phi → 跳过该循环（phi 边在 preheader 重定向后
                 // 需额外的值更新逻辑，泛化阶段不做）。模块入口循环头无 Phi。
@@ -487,7 +527,7 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                 {
                     continue;
                 }
-                let body = compute_loop_body(blocks, header, latch);
+                let body = compute_loop_body(blocks, &preds, header, latch);
                 for &b in &body {
                     let block = &blocks[b];
                     for (i, ins) in block.instructions().iter().enumerate() {
@@ -513,6 +553,7 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                         if !all_loop_invariant(
                             blocks,
                             &body,
+                            &defs,
                             std::iter::once(*callee)
                                 .chain(std::iter::once(*this_val))
                                 .chain(args.iter().copied()),
@@ -574,17 +615,18 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                     if moved.contains(&v) {
                         continue;
                     }
-                    for (bi, b) in function.blocks_mut().iter_mut().enumerate() {
-                        if let Some(pos) = b.instructions_mut().iter().position(|ins| {
-                            matches!(ins, Instruction::Const { dest, .. } if *dest == v)
-                        }) {
-                            // 只在循环体内的 Const 定义随 call 移动；循环外的
-                            // （或已被前一个候选移到 preheader 的）保持原位。
-                            if plan.body.contains(&bi) {
-                                let def = b.instructions_mut().remove(pos);
-                                moved.insert(v);
-                                to_move.push(def);
-                            }
+                    // 只在循环体内查找 Const 定义（SSA 唯一性：定义要么在循环体内
+                    // 要么在循环外；循环外定义保持原位，无需扫描全模块——与原实现
+                    // 全模块扫描后 `!plan.body.contains` 即 break 的语义完全等价）。
+                    for &bi in &plan.body {
+                        if let Some(b) = function.blocks_mut().get_mut(bi)
+                            && let Some(pos) = b.instructions_mut().iter().position(|ins| {
+                                matches!(ins, Instruction::Const { dest, .. } if *dest == v)
+                            })
+                        {
+                            let def = b.instructions_mut().remove(pos);
+                            moved.insert(v);
+                            to_move.push(def);
                             break;
                         }
                     }

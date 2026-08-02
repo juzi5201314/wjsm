@@ -39,8 +39,7 @@ fn fast_entry_param_count(function: &IrFunction) -> Option<u32> {
 
 impl Compiler {
     pub(crate) fn compile_module(&mut self, module: &IrModule) -> Result<()> {
-        // LICM：克隆模块，先分析（gate）再提升循环不变量纯调用，随后重分析
-        // （preheader 的调用结果可能被循环内的 is_exception 消费）。
+        // LICM：克隆模块，先分析（gate）再提升循环不变量纯调用。
         let mut module = module.clone();
         let f64_for_hoist = crate::analysis_f64::F64Analysis::analyze(&module);
         let gc_for_hoist = GcAnalysis::analyze(&module, &f64_for_hoist);
@@ -52,11 +51,18 @@ impl Compiler {
             &gc_for_hoist,
         );
         self.hoisted_preheader_blocks = hoisted.into_iter().collect();
-        // Pass 0: f64 值类型传播分析（Step 1）——须在 GC 分析之前（2a 消费其结果）。
-        let f64_analysis = crate::analysis_f64::F64Analysis::analyze(&module);
-        self.f64_analysis = Some(f64_analysis.clone());
-        // Pass 0: 模块级 GC 分析（Layer 3c）
-        self.gc_analysis = Some(GcAnalysis::analyze(&module, &f64_analysis));
+        // Pass 0: f64 值类型传播分析 + 模块级 GC 分析（Step 1 / Layer 3c）。
+        // LICM 无提升时 module 未被修改，复用变换前的分析结果（省一轮
+        // F64+Gc 重分析，见 issue #345）；有提升才重分析——preheader 的调用
+        // 结果可能被循环内的 is_exception 消费，必须用变换后的 IR 重新分析。
+        if self.hoisted_preheader_blocks.is_empty() {
+            self.f64_analysis = Some(f64_for_hoist);
+            self.gc_analysis = Some(gc_for_hoist);
+        } else {
+            let f64_analysis = crate::analysis_f64::F64Analysis::analyze(&module);
+            self.f64_analysis = Some(f64_analysis.clone());
+            self.gc_analysis = Some(GcAnalysis::analyze(&module, &f64_analysis));
+        }
         // 收集源文件路径和函数源码位置映射（供运行时错误堆栈映射）。
         self.source_file = module.source_file().map(|s| s.to_string());
 
