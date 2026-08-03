@@ -254,14 +254,17 @@ pub(crate) fn define_misc_async(
                     .array_length(array_handle)
                     .unwrap_or(0);
                 let args = (0..args_count)
-                    .filter_map(|index| {
-                        caller
+                    .map(|index| {
+                        let element = caller
                             .data()
                             .heap_access_v2()
                             .get_element(array_handle, index)
                             .ok()
                             .flatten()
                             .map(|value| i64::from_ne_bytes(value.to_ne_bytes()))
+                            // hole 视为缺失属性，归一为 undefined（Get 语义）
+                            .filter(|value| !value::is_array_hole(*value));
+                        element.unwrap_or_else(value::encode_undefined)
                     })
                     .collect::<Vec<_>>();
                 let saved_sp = push_args_to_shadow_stack(&mut caller, &env, &args)

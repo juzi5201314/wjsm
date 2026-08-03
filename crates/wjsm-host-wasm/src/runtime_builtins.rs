@@ -670,6 +670,8 @@ fn advance_array_like_iterator(
                 .ok()
                 .flatten()
                 .map(|element| element as i64)
+                // hole 视为缺失属性，归一为 undefined；否则洞哨兵会作为 NaN 泄漏给迭代消费方
+                .filter(|element| !value::is_array_hole(*element))
                 .unwrap_or_else(value::encode_undefined)
         }
     } else {

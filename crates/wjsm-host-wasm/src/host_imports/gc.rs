@@ -270,10 +270,13 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                     && access.object_type(handle).ok()
                         == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
                 {
-                    return Ok(access
+                    // hole 视为缺失属性，归一为 undefined；否则洞哨兵会作为 NaN 泄漏给调用方
+                    let element = access
                         .get_element(handle, index as u32)?
-                        .unwrap_or(value::encode_undefined() as u64)
-                        as i64);
+                        .map(|raw| raw as i64)
+                        .filter(|raw| !value::is_array_hole(*raw))
+                        .unwrap_or_else(value::encode_undefined);
+                    return Ok(element);
                 }
                 let name_id = v2_index_property_key(&caller, index);
                 Ok(wjsm_builtins::property::get_by_name_id(

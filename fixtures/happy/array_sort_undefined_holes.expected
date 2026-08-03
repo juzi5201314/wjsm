@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-1 2 3 undefined NaN
+1 2 3 undefined undefined
 true true true true false
-10 5 NaN true true false
+10 5 undefined true true false
 --- stderr ---
