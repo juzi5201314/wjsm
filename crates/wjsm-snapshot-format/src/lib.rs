@@ -177,6 +177,8 @@ pub enum SnapshotNativeCallable {
     VmMethod = 86,
     PerfHooksMethod = 87,
     ArrayProtoToString = 88,
+    GlobalIsNaN = 89,
+    GlobalIsFinite = 90,
 }
 
 impl SnapshotNativeCallable {
@@ -271,6 +273,8 @@ impl SnapshotNativeCallable {
             86 => Some(Self::VmMethod),
             87 => Some(Self::PerfHooksMethod),
             88 => Some(Self::ArrayProtoToString),
+            89 => Some(Self::GlobalIsNaN),
+            90 => Some(Self::GlobalIsFinite),
             _ => None,
         }
     }

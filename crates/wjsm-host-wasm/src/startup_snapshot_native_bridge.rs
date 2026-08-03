@@ -112,6 +112,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::StructuredClone => NativeCallable::StructuredClone,
             Self::Atob => NativeCallable::Atob,
             Self::Btoa => NativeCallable::Btoa,
+            Self::GlobalIsNaN => NativeCallable::GlobalIsNaN,
+            Self::GlobalIsFinite => NativeCallable::GlobalIsFinite,
             Self::QueueMicrotask => NativeCallable::QueueMicrotask,
             Self::PerformanceNow => NativeCallable::PerformanceNow,
             Self::PerfHooksMethod => NativeCallable::PerfHooksMethod {
@@ -237,6 +239,8 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::StructuredClone => Self::StructuredClone,
             NativeCallable::Atob => Self::Atob,
             NativeCallable::Btoa => Self::Btoa,
+            NativeCallable::GlobalIsNaN => Self::GlobalIsNaN,
+            NativeCallable::GlobalIsFinite => Self::GlobalIsFinite,
             NativeCallable::QueueMicrotask => Self::QueueMicrotask,
             NativeCallable::PerformanceNow => Self::PerformanceNow,
             NativeCallable::PerfHooksMethod { kind: _ } => Self::PerfHooksMethod,

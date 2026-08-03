@@ -60,6 +60,13 @@ pub(crate) fn install_node_web_globals_from_caller(
     );
     install_native(caller, global_obj, "atob", NativeCallable::Atob);
     install_native(caller, global_obj, "btoa", NativeCallable::Btoa);
+    install_native(caller, global_obj, "isNaN", NativeCallable::GlobalIsNaN);
+    install_native(
+        caller,
+        global_obj,
+        "isFinite",
+        NativeCallable::GlobalIsFinite,
+    );
 
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let temp_root_len = caller.data().push_host_temp_roots([global_obj]);

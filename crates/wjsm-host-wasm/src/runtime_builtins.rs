@@ -1022,6 +1022,14 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         )),
         NativeCallable::Atob => Some(crate::runtime_node_globals::call_atob(caller, &args)),
         NativeCallable::Btoa => Some(crate::runtime_node_globals::call_btoa(caller, &args)),
+        NativeCallable::GlobalIsNaN => Some(wjsm_builtins::math_number_error::global_is_nan(
+            &mut WasmExecContext::new(caller),
+            argument,
+        )),
+        NativeCallable::GlobalIsFinite => Some(wjsm_builtins::math_number_error::global_is_finite(
+            &mut WasmExecContext::new(caller),
+            argument,
+        )),
         NativeCallable::QueueMicrotask => Some(crate::runtime_node_globals::call_queue_microtask(
             caller, &args,
         )),

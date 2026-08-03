@@ -455,6 +455,10 @@ pub(crate) enum NativeCallable {
     StructuredClone,
     Atob,
     Btoa,
+    /// 全局 `isNaN`（§19.2.3）：ToNumber 强转后判 NaN，区别于 `Number.isNaN`。
+    GlobalIsNaN,
+    /// 全局 `isFinite`（§19.2.2）：ToNumber 强转后判有限，区别于 `Number.isFinite`。
+    GlobalIsFinite,
     QueueMicrotask,
     PerformanceNow,
     PerfHooksMethod {

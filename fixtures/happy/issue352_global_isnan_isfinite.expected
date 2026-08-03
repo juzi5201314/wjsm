@@ -1,0 +1,27 @@
+exit_code: 0
+--- stdout ---
+true
+false
+true
+false
+true
+false
+false
+true
+true
+true
+false
+false
+false
+false
+false
+true
+true
+false
+false
+function
+function
+true
+true
+Cannot convert a Symbol value to a number
+--- stderr ---

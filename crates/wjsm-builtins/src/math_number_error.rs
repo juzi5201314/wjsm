@@ -484,6 +484,24 @@ pub fn number_is_finite<E: ExecContext>(_ctx: &mut E, arg: Value) -> Value {
     }
 }
 
+/// 全局 `isNaN`（§19.2.3）：先 ToNumber 再判 NaN，与 `Number.isNaN` 的无强转语义区分。
+pub fn global_is_nan<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
+    let num = number_constructor(ctx, arg);
+    if value::is_exception(num) {
+        return num;
+    }
+    value::encode_bool(value::decode_f64(num).is_nan())
+}
+
+/// 全局 `isFinite`（§19.2.2）：先 ToNumber 再判有限，与 `Number.isFinite` 的无强转语义区分。
+pub fn global_is_finite<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
+    let num = number_constructor(ctx, arg);
+    if value::is_exception(num) {
+        return num;
+    }
+    value::encode_bool(value::decode_f64(num).is_finite())
+}
+
 pub fn number_is_integer<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
     if value::is_f64(arg) {
         let x = match math_decode_f64_arg(ctx, arg) {
