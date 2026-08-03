@@ -433,6 +433,49 @@ impl Lowerer {
         self.binding_owner_function_scope(binding) == self.current_function_scope_id()
     }
 
+    /// 判断外层捕获 binding 的 owner env 是否就是当前函数的 `$env`（深度 0 捕获）。
+    ///
+    /// 条件：binding 的声明函数 == 当前函数的直接父函数（或模块）。此时闭包创建时
+    /// 传入的 `$env` 即持有该变量的 env，语义层 emit 的链查找（has_own + get_proto_of
+    /// 循环，两次 host 往返）整体冗余：host 侧 [[Get]]/[[Set]] 本来就沿原型链查找，
+    /// 且深度 0 时 owner == receiver，普通赋值/复合赋值写 `$env` 与写 owner 完全一致。
+    /// 返回 false 时保持原有动态链查找（深度 >0 的写需定位 owner 避免 shadow）。
+    pub(crate) fn captured_binding_at_env_depth_zero(&self, binding: &CapturedBinding) -> bool {
+        let Some(binding_scope) = binding.scope_id else {
+            // lexical_this / new_target 特殊绑定不走快路径
+            return false;
+        };
+        let current_fn_scope = self.current_function_scope_id();
+        let Some(parent_scope) = self.scopes.arenas.get(current_fn_scope).and_then(|s| s.parent)
+        else {
+            return false;
+        };
+        // 当前函数的 $env 属于：parent_scope 的最近 Function/Module 祖先。
+        let owner_env_scope = self.nearest_function_module_scope(parent_scope);
+        // binding 的 owner env 属于：binding_scope 的最近 Function/Module 祖先。
+        let binding_env_scope = self.nearest_function_module_scope(binding_scope);
+        binding_env_scope == owner_env_scope
+    }
+
+    /// 沿作用域树向上找最近的 Function/Module 作用域（env 的持有者）。
+    fn nearest_function_module_scope(&self, mut scope_id: usize) -> usize {
+        loop {
+            let Some(scope) = self.scopes.arenas.get(scope_id) else {
+                return scope_id;
+            };
+            if matches!(
+                scope.kind,
+                crate::scope::ScopeKind::Function | crate::scope::ScopeKind::Module
+            ) {
+                return scope_id;
+            }
+            match scope.parent {
+                Some(parent) => scope_id = parent,
+                None => return scope_id,
+            }
+        }
+    }
+
     pub(crate) fn record_capture(&mut self, binding: CapturedBinding) {
         if let Some(captured) = self.captured_names_stack.last_mut()
             && !captured.contains(&binding)

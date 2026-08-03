@@ -723,7 +723,12 @@ impl Lowerer {
                     self.record_capture(binding.clone());
                     let start_env = self.load_env_object(block);
                     let (owner_block, owner_env) =
-                        self.resolve_env_binding_owner(block, start_env, &binding);
+                        if self.captured_binding_at_env_depth_zero(&binding) {
+                            // 深度 0 捕获：owner 就是 $env，跳过 has_own + get_proto_of 链查找
+                            (block, start_env)
+                        } else {
+                            self.resolve_env_binding_owner(block, start_env, &binding)
+                        };
                     block = owner_block;
                     let key_val = self.append_env_key_const(block, &binding);
                     Target::Captured(owner_env, key_val)

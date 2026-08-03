@@ -60,8 +60,12 @@ impl Lowerer {
         } else {
             self.record_capture(binding.clone());
             let start_env = self.load_env_object(current_block);
-            let (owner_block, owner_env) =
-                self.resolve_env_binding_owner(current_block, start_env, binding);
+            let (owner_block, owner_env) = if self.captured_binding_at_env_depth_zero(&binding) {
+                // 深度 0 捕获：owner 就是 $env，跳过 has_own + get_proto_of 链查找
+                (current_block, start_env)
+            } else {
+                self.resolve_env_binding_owner(current_block, start_env, binding)
+            };
             current_block = owner_block;
             owner_env
         };
