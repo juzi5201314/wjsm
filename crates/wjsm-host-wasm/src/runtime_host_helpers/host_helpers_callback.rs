@@ -536,3 +536,40 @@ pub(crate) async fn call_wasm_callback_async(
     )
     .await
 }
+
+/// 预解析快路径：直接用函数表索引调用 wasm 函数，跳过每次的 target 解析
+/// （closure 表 Mutex 加锁、类型分派、Proxy apply 链遍历）。
+///
+/// 仅用于 `prepare_callback` 已解析出的直接 wasm 目标；`env_obj` 为闭包 env
+/// （普通函数为 undefined）。语义与 `call_wasm_callback_async` 的 Wasm 分支一致。
+pub(crate) async fn call_direct_wasm_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_idx: u32,
+    env_obj: i64,
+    this_val: i64,
+    args: &[i64],
+) -> anyhow::Result<i64> {
+    let env = WasmEnv::from_caller(caller).ok_or_else(|| anyhow::anyhow!("WasmEnv"))?;
+    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(caller, &env, args)?;
+    let (func, previous_new_target) = lookup_callback_wasm_func_with_env(caller, &env, func_idx)?;
+    let mut results = [Val::I64(0)];
+    let call_result = func
+        .call_async(
+            &mut *caller,
+            &[
+                Val::I64(env_obj),
+                Val::I64(this_val),
+                Val::I32(shadow_sp),
+                Val::I32(args.len() as i32),
+            ],
+            &mut results,
+        )
+        .await;
+    caller
+        .data()
+        .new_target
+        .store(previous_new_target, Ordering::Relaxed);
+    let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+    call_result?;
+    Ok(results[0].unwrap_i64())
+}

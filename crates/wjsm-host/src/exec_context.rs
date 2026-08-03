@@ -17,9 +17,69 @@ use crate::{
     WritableStreamDefaultControllerMethodKind, WritableStreamDefaultWriterMethodKind,
     WritableStreamMethodKind,
 };
+use wjsm_ir::value;
 
 /// 异步回调返回类型（BoxFuture）。默认产出 `anyhow::Result<Value>`。
 pub type ExecFuture<'a, T = anyhow::Result<Value>> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// 预解析的回调调用目标：跨多次调用复用，跳过每次调用时的目标解析
+/// （closure/function 表查找、Proxy apply 链遍历、Mutex 加锁）。
+///
+/// 快路径仅覆盖直接 wasm 函数（closure / 普通函数）；其余类型（Proxy trap、
+/// bound、native callable）回退到 `call_js_async` 原路径，语义不变。
+#[derive(Clone, Copy)]
+pub struct PreparedCallback {
+    /// 原始函数值（回退路径使用）。
+    func: Value,
+    /// 快路径：直接函数表索引。
+    func_idx: u32,
+    /// 快路径：闭包 env（普通函数为 undefined）。
+    env_obj: Value,
+    /// 是否为可直接表调用的 wasm 函数。
+    direct: bool,
+}
+
+impl PreparedCallback {
+    /// 快路径：直接经函数表索引调用 wasm 函数。
+    pub fn direct(func: Value, func_idx: u32, env_obj: Value) -> Self {
+        Self {
+            func,
+            func_idx,
+            env_obj,
+            direct: true,
+        }
+    }
+
+    /// 回退路径：按原始函数值走通用调用。
+    pub fn generic(func: Value) -> Self {
+        Self {
+            func,
+            func_idx: 0,
+            env_obj: value::encode_undefined(),
+            direct: false,
+        }
+    }
+
+    /// 原始函数值。
+    pub fn func(&self) -> Value {
+        self.func
+    }
+
+    /// 是否走快路径（直接函数表调用）。
+    pub fn is_direct(&self) -> bool {
+        self.direct
+    }
+
+    /// 快路径：函数表索引。
+    pub fn func_idx(&self) -> u32 {
+        self.func_idx
+    }
+
+    /// 快路径：闭包 env。
+    pub fn env_obj(&self) -> Value {
+        self.env_obj
+    }
+}
 
 // ── 共享类型（后端无关）──
 
@@ -299,6 +359,25 @@ pub trait ExecContext: HeapContext {
     ) -> ExecFuture<'a>;
     /// 判断值是否可调用（含 Proxy apply trap 链）。
     fn is_callable(&mut self, val: Value) -> bool;
+
+    /// 预解析可调用目标（closure/普通函数走直接函数表快路径；
+    /// Proxy trap/bound/native 回退到通用路径）。不可调用返回 None。
+    ///
+    /// 结果可跨多次 `call_prepared_async` 复用，避免每次调用重复解析
+    /// （closure 表 Mutex 加锁 + 类型分派 + Proxy apply 链遍历）。
+    fn prepare_callback(&mut self, func: Value) -> Option<PreparedCallback> {
+        self.is_callable(func).then(|| PreparedCallback::generic(func))
+    }
+    /// 用预解析目标调用 JS 函数；语义等同 `call_js_async`。
+    /// `prepared` 必须来自 `prepare_callback`（或 None 对应值本身可调用）。
+    fn call_prepared_async<'a>(
+        &'a mut self,
+        prepared: &'a PreparedCallback,
+        this: Value,
+        args: &'a [Value],
+    ) -> ExecFuture<'a> {
+        self.call_js_async(prepared.func(), this, args)
+    }
 
     // ═══ 状态表访问 ═══
 

@@ -130,6 +130,48 @@ macro_rules! exec_ctx_call {
         };
         crate::runtime_host_helpers::is_callable_with_env(self.caller, &env, val)
     }
+    fn prepare_callback(&mut self, func: Value) -> Option<wjsm_host::PreparedCallback> {
+        let env = self.env()?;
+        let target = crate::runtime_host_helpers::resolve_callback_target_with_env(
+            self.caller,
+            &env,
+            func,
+        )
+        .ok()?;
+        match target {
+            crate::runtime_host_helpers::CallbackTarget::Wasm { func_idx, env_obj } => Some(
+                wjsm_host::PreparedCallback::direct(func, func_idx, env_obj),
+            ),
+            _ => Some(wjsm_host::PreparedCallback::generic(func)),
+        }
+    }
+    fn call_prepared_async<'c>(
+        &'c mut self,
+        prepared: &'c wjsm_host::PreparedCallback,
+        this: Value,
+        args: &'c [Value],
+    ) -> ExecFuture<'c> {
+        Box::pin(async move {
+            if prepared.is_direct() {
+                crate::runtime_host_helpers::call_direct_wasm_async(
+                    self.caller,
+                    prepared.func_idx(),
+                    prepared.env_obj(),
+                    this,
+                    args,
+                )
+                .await
+            } else {
+                crate::runtime_host_helpers::call_wasm_callback_async(
+                    self.caller,
+                    prepared.func(),
+                    this,
+                    args,
+                )
+                .await
+            }
+        })
+    }
     fn proxy_entry(&mut self, proxy: Handle) -> Option<ProxyEntry> {
         let table = self
             .caller

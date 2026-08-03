@@ -47,10 +47,10 @@ pub use async_host::AsyncHost;
 pub use console_host::ConsoleHost;
 pub use exec_context::{
     AtomicsRmwOp, BoundEntry, CapturedScope, ClosureEntry, ExecContext, ExecFuture,
-    IteratorNextStep, NativeCallableRef, PromiseCombinatorReactionKind, PromiseEntry,
-    PromiseReaction, PromiseResolvingKind, PromiseSettlement, PromiseState, PropertyLookup,
-    ProxyEntry, QueuingStrategySizeKind, ReactionType, RegExpMatchInfo, ToPrimitiveHintKind,
-    TransformStreamFlushParams, TypedArrayView,
+    IteratorNextStep, NativeCallableRef, PreparedCallback, PromiseCombinatorReactionKind,
+    PromiseEntry, PromiseReaction, PromiseResolvingKind, PromiseSettlement, PromiseState,
+    PropertyLookup, ProxyEntry, QueuingStrategySizeKind, ReactionType, RegExpMatchInfo,
+    ToPrimitiveHintKind, TransformStreamFlushParams, TypedArrayView,
 };
 pub use fetch_types::{
     AbortSignalEntry, FetchRequestEntry, FetchResourceTimingState, FetchResponseEntry,

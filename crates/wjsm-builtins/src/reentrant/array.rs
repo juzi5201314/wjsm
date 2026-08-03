@@ -2,17 +2,31 @@
 //!
 //! 回调经 `call_js_async`；ArraySpeciesCreate 经 ExecContext 原语。
 
-use wjsm_host::{ExecContext, Value};
+use wjsm_host::{ExecContext, PreparedCallback, Value};
 use wjsm_ir::value;
+
+/// 按预解析目标调用回调；未预解析（Proxy trap/bound/native）回退到通用路径。
+async fn call_cb_async<E: ExecContext>(
+    ctx: &mut E,
+    cb: Value,
+    prepared: Option<PreparedCallback>,
+    this: Value,
+    args: &[Value],
+) -> anyhow::Result<Value> {
+    match prepared {
+        Some(p) => ctx.call_prepared_async(&p, this, args).await,
+        None => ctx.call_js_async(cb, this, args).await,
+    }
+}
 
 async fn sort_compare_async<E: ExecContext>(
     ctx: &mut E,
     cmp: Value,
+    prepared: Option<PreparedCallback>,
     a: Value,
     b: Value,
 ) -> std::cmp::Ordering {
-    let result = ctx
-        .call_js_async(cmp, value::encode_undefined(), &[a, b])
+    let result = call_cb_async(ctx, cmp, prepared, value::encode_undefined(), &[a, b])
         .await
         .unwrap_or_else(|_| value::encode_f64(0.0));
     let v = value::decode_f64(result);
@@ -26,9 +40,62 @@ async fn sort_compare_async<E: ExecContext>(
 }
 
 /// SortCompareList 条目：仅包含参与排序的已定义且非 undefined 元素。
+#[derive(Clone, Copy)]
 struct SortableElem {
     value: Value,
     original_index: u32,
+}
+
+/// 自底向上归并排序（稳定），比较器经 `sort_compare_async` 逐个异步调用。
+///
+/// 复杂度 O(n log n)：1000 元素时比较器调用次数从 O(n²) 选择排序的 ~50 万
+/// 降到 ~1 万。相等时取左半元素，与 ECMAScript 要求的稳定性一致。
+async fn merge_sort_async<E: ExecContext>(
+    ctx: &mut E,
+    cmp: Value,
+    prepared: Option<PreparedCallback>,
+    sort_list: &mut [SortableElem],
+) {
+    let n = sort_list.len();
+    if n <= 1 {
+        return;
+    }
+    let mut scratch: Vec<SortableElem> = Vec::with_capacity(n);
+    let mut width = 1usize;
+    while width < n {
+        scratch.clear();
+        let mut start = 0usize;
+        while start < n {
+            let mid = (start + width).min(n);
+            let end = (start + 2 * width).min(n);
+            let (mut i, mut j) = (start, mid);
+            while i < mid && j < end {
+                let a = sort_list[i].value;
+                let b = sort_list[j].value;
+                let ord = sort_compare_async(ctx, cmp, prepared, a, b).await;
+                // 相等取左半，保持稳定。
+                if ord != std::cmp::Ordering::Greater {
+                    scratch.push(sort_list[i]);
+                    i += 1;
+                } else {
+                    scratch.push(sort_list[j]);
+                    j += 1;
+                }
+            }
+            while i < mid {
+                scratch.push(sort_list[i]);
+                i += 1;
+            }
+            while j < end {
+                scratch.push(sort_list[j]);
+                j += 1;
+            }
+            start = end;
+        }
+        // 每轮归并覆盖全部元素，scratch 长度恒为 n。
+        sort_list.copy_from_slice(&scratch);
+        width *= 2;
+    }
 }
 
 fn array_get_or_undefined<E: ExecContext>(ctx: &mut E, arr: Value, i: u32) -> Value {
@@ -99,15 +166,8 @@ pub async fn arr_proto_sort<E: ExecContext>(
         };
         if has_cmp {
             let cmp = ctx.read_shadow_arg(args_base, 0);
-            for i in 0..sort_list.len() {
-                for j in i + 1..sort_list.len() {
-                    if sort_compare_async(ctx, cmp, sort_list[i].value, sort_list[j].value).await
-                        == std::cmp::Ordering::Greater
-                    {
-                        sort_list.swap(i, j);
-                    }
-                }
-            }
+            let prepared = ctx.prepare_callback(cmp);
+            merge_sort_async(ctx, cmp, prepared, &mut sort_list).await;
         } else {
             let mut keys = Vec::with_capacity(sort_list.len());
             for e in &sort_list {
@@ -161,6 +221,7 @@ pub async fn arr_proto_for_each<E: ExecContext>(
     let Some((cb, this_arg)) = read_cb_and_this(ctx, args_base, args_count) else {
         return value::encode_undefined();
     };
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -171,8 +232,7 @@ pub async fn arr_proto_for_each<E: ExecContext>(
         }
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        if ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
+        if call_cb_async(ctx, cb, prepared, this_arg, &[elem, idx_val, this_val])
             .await
             .is_err()
         {
@@ -192,6 +252,7 @@ pub async fn arr_proto_map<E: ExecContext>(
     let Some((cb, this_arg)) = read_cb_and_this(ctx, args_base, args_count) else {
         return value::encode_undefined();
     };
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -214,8 +275,7 @@ pub async fn arr_proto_map<E: ExecContext>(
         }
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        let result = ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
+        let result = call_cb_async(ctx, cb, prepared, this_arg, &[elem, idx_val, this_val])
             .await
             .unwrap_or_else(|_| value::encode_undefined());
         if ctx.resolve_array(new_arr) {
@@ -240,6 +300,7 @@ pub async fn arr_proto_filter<E: ExecContext>(
     let Some((cb, this_arg)) = read_cb_and_this(ctx, args_base, args_count) else {
         return value::encode_undefined();
     };
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -251,9 +312,7 @@ pub async fn arr_proto_filter<E: ExecContext>(
         }
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        let ok = match ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        let ok = match call_cb_async(ctx, cb, prepared, this_arg, &[elem, idx_val, this_val]).await
         {
             Ok(r) => value::is_truthy(r),
             Err(_) => false,
@@ -286,6 +345,7 @@ pub async fn arr_proto_reduce<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_undefined();
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -310,13 +370,14 @@ pub async fn arr_proto_reduce<E: ExecContext>(
     for i in start_idx..len {
         let elem = array_get_or_undefined(ctx, this_val, i as u32);
         let idx_val = value::encode_f64(i as f64);
-        match ctx
-            .call_js_async(
-                cb,
-                value::encode_undefined(),
-                &[acc, elem, idx_val, this_val],
-            )
-            .await
+        match call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[acc, elem, idx_val, this_val],
+        )
+        .await
         {
             Ok(r) => acc = r,
             Err(_) => return value::encode_undefined(),
@@ -336,6 +397,7 @@ pub async fn arr_proto_reduce_right<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_undefined();
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -360,13 +422,14 @@ pub async fn arr_proto_reduce_right<E: ExecContext>(
     for i in (0..=start_idx as usize).rev() {
         let elem = array_get_or_undefined(ctx, this_val, i as u32);
         let idx_val = value::encode_f64(i as f64);
-        match ctx
-            .call_js_async(
-                cb,
-                value::encode_undefined(),
-                &[acc, elem, idx_val, this_val],
-            )
-            .await
+        match call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[acc, elem, idx_val, this_val],
+        )
+        .await
         {
             Ok(r) => acc = r,
             Err(_) => return value::encode_undefined(),
@@ -386,6 +449,7 @@ pub async fn arr_proto_find<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_undefined();
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -393,9 +457,14 @@ pub async fn arr_proto_find<E: ExecContext>(
     for i in 0..len {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, value::encode_undefined(), &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
             && value::is_truthy(r)
         {
             return elem;
@@ -415,6 +484,7 @@ pub async fn arr_proto_find_index<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_f64(-1.0);
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_f64(-1.0);
     }
@@ -422,9 +492,14 @@ pub async fn arr_proto_find_index<E: ExecContext>(
     for i in 0..len {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, value::encode_undefined(), &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
             && value::is_truthy(r)
         {
             return value::encode_f64(i as f64);
@@ -444,6 +519,7 @@ pub async fn arr_proto_some<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_bool(false);
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_bool(false);
     }
@@ -451,9 +527,14 @@ pub async fn arr_proto_some<E: ExecContext>(
     for i in 0..len {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, value::encode_undefined(), &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
             && value::is_truthy(r)
         {
             return value::encode_bool(true);
@@ -473,6 +554,7 @@ pub async fn arr_proto_every<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_bool(false);
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_bool(false);
     }
@@ -480,9 +562,14 @@ pub async fn arr_proto_every<E: ExecContext>(
     for i in 0..len {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        match ctx
-            .call_js_async(cb, value::encode_undefined(), &[elem, idx_val, this_val])
-            .await
+        match call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
         {
             Ok(r) => {
                 if !value::is_truthy(r) {
@@ -505,6 +592,7 @@ pub async fn arr_proto_flat_map<E: ExecContext>(
     let Some((cb, this_arg)) = read_cb_and_this(ctx, args_base, args_count) else {
         return value::encode_undefined();
     };
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -513,9 +601,14 @@ pub async fn arr_proto_flat_map<E: ExecContext>(
     for i in 0..len {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        let mapped = match ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        let mapped = match call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            this_arg,
+            &[elem, idx_val, this_val],
+        )
+        .await
         {
             Ok(r) => r,
             Err(_) => continue,
@@ -555,6 +648,7 @@ pub async fn arr_proto_find_last<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_undefined();
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_undefined();
     }
@@ -562,9 +656,14 @@ pub async fn arr_proto_find_last<E: ExecContext>(
     for i in (0..len).rev() {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, value::encode_undefined(), &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
             && value::is_truthy(r)
         {
             return elem;
@@ -584,6 +683,7 @@ pub async fn arr_proto_find_last_index<E: ExecContext>(
     if !ctx.is_callable(cb) {
         return value::encode_f64(-1.0);
     }
+    let prepared = ctx.prepare_callback(cb);
     if !ctx.resolve_array(this_val) {
         return value::encode_f64(-1.0);
     }
@@ -591,9 +691,14 @@ pub async fn arr_proto_find_last_index<E: ExecContext>(
     for i in (0..len).rev() {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, value::encode_undefined(), &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = call_cb_async(
+            ctx,
+            cb,
+            prepared,
+            value::encode_undefined(),
+            &[elem, idx_val, this_val],
+        )
+        .await
             && value::is_truthy(r)
         {
             return value::encode_f64(i as f64);
@@ -626,43 +731,54 @@ pub async fn arr_proto_to_sorted<E: ExecContext>(
         return new_arr;
     }
 
-    let mut sort_list: Vec<Value> = Vec::new();
+    let mut sort_list: Vec<SortableElem> = Vec::new();
     let mut undefined_count: u32 = 0;
     for i in 0..len {
         let elem = array_get_or_undefined(ctx, this_val, i);
         if value::is_undefined(elem) {
             undefined_count += 1;
         } else {
-            sort_list.push(elem);
+            sort_list.push(SortableElem {
+                value: elem,
+                original_index: i,
+            });
         }
     }
 
     if sort_list.len() > 1 {
         if has_comparator {
             let cmp = ctx.read_shadow_arg(args_base, 0);
-            for i in 0..sort_list.len() {
-                for j in i + 1..sort_list.len() {
-                    if sort_compare_async(ctx, cmp, sort_list[i], sort_list[j]).await
-                        == std::cmp::Ordering::Greater
-                    {
-                        sort_list.swap(i, j);
-                    }
-                }
-            }
+            let prepared = ctx.prepare_callback(cmp);
+            merge_sort_async(ctx, cmp, prepared, &mut sort_list).await;
         } else {
             let mut keys = Vec::with_capacity(sort_list.len());
-            for &e in &sort_list {
-                keys.push(ctx.render_value(e));
+            for e in &sort_list {
+                keys.push(ctx.render_value(e.value));
             }
             let mut order: Vec<usize> = (0..sort_list.len()).collect();
-            order.sort_by(|&ia, &ib| keys[ia].cmp(&keys[ib]));
-            sort_list = order.into_iter().map(|i| sort_list[i]).collect();
+            order.sort_by(|&ia, &ib| {
+                let ord = keys[ia].cmp(&keys[ib]);
+                if ord == std::cmp::Ordering::Equal {
+                    sort_list[ia]
+                        .original_index
+                        .cmp(&sort_list[ib].original_index)
+                } else {
+                    ord
+                }
+            });
+            sort_list = order
+                .into_iter()
+                .map(|i| SortableElem {
+                    value: sort_list[i].value,
+                    original_index: sort_list[i].original_index,
+                })
+                .collect();
         }
     }
 
     let mut write_idx: u32 = 0;
-    for &v in &sort_list {
-        ctx.array_write_elem(new_arr, write_idx, v);
+    for item in &sort_list {
+        ctx.array_write_elem(new_arr, write_idx, item.value);
         write_idx += 1;
     }
     for _ in 0..undefined_count {
