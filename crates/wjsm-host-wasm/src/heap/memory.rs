@@ -1,18 +1,37 @@
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use wasmtime::SharedMemory;
 use wjsm_gc::heap::{GrowableHeapMemory, HeapAddress, HeapMemory, HeapMemoryError};
+
+/// 缓存的共享内存基址/长度。
+///
+/// wasmtime 保证 SharedMemory 基址在生命周期内稳定（grow 只改长度且单调增长），
+/// 热路径 word 访问（闭包 env 槽位读写等）因此无需每次调用 `SharedMemory::data()`
+/// （profile 自时间 ~11%）；命中缓存长度即一次原子读。越界时重新取 `data()` 刷新
+/// 缓存后复检，以区分真实的越界错误。
+#[derive(Debug)]
+struct CachedRange {
+    base: AtomicPtr<u8>,
+    len: AtomicUsize,
+}
 
 /// 对 Wasmtime shared memory64 的 Store-free 包装。
 #[derive(Clone)]
 pub struct SharedHeapMemory {
     memory: SharedMemory,
+    cached: Arc<CachedRange>,
 }
 
 impl SharedHeapMemory {
     pub fn new(memory: SharedMemory) -> Self {
-        Self { memory }
+        let data = memory.data();
+        let cached = Arc::new(CachedRange {
+            base: AtomicPtr::new(data.as_ptr().cast::<u8>().cast_mut()),
+            len: AtomicUsize::new(data.len()),
+        });
+        Self { memory, cached }
     }
 
     pub fn byte_len(&self) -> u64 {
@@ -87,25 +106,57 @@ impl SharedHeapMemory {
         })
     }
 
+    /// 刷新缓存的基址/长度（grow 后长度单调增长；基址不变）。
+    fn refresh_cached(&self) {
+        let data = self.memory.data();
+        self.cached
+            .base
+            .store(data.as_ptr().cast::<u8>().cast_mut(), Ordering::Relaxed);
+        self.cached.len.store(data.len(), Ordering::Relaxed);
+    }
+
+    /// 快速索引检查：命中缓存长度即返回；越界时刷新后复检（区分真实越界）。
+    fn checked_index_cached(
+        &self,
+        address: HeapAddress,
+        length: u64,
+    ) -> Result<usize, HeapMemoryError> {
+        let end = address
+            .get()
+            .checked_add(length)
+            .ok_or(HeapMemoryError::OutOfBounds {
+                address: address.get(),
+                length,
+                memory_len: self.cached.len.load(Ordering::Relaxed) as u64,
+            })?;
+        if end > self.cached.len.load(Ordering::Relaxed) as u64 {
+            self.refresh_cached();
+            let memory_len = self.cached.len.load(Ordering::Relaxed) as u64;
+            if end > memory_len {
+                return Err(HeapMemoryError::OutOfBounds {
+                    address: address.get(),
+                    length,
+                    memory_len,
+                });
+            }
+        }
+        usize::try_from(address.get()).map_err(|_| HeapMemoryError::AddressTooLarge {
+            address: address.get(),
+        })
+    }
+
     fn word_ptr(&self, address: HeapAddress) -> Result<*mut u64, HeapMemoryError> {
         if !address.get().is_multiple_of(8) {
             return Err(HeapMemoryError::UnalignedWord {
                 address: address.get(),
             });
         }
-        let index = self.checked_index(address, 8)?;
-        let bytes = self.memory.data();
-        // SAFETY: `checked_index` proves the whole u64 lies within the current shared-memory
-        // slice; the caller checked 8-byte alignment. Wasmtime guarantees a stable base pointer
-        // for the lifetime of SharedMemory. All concurrent word access below uses AtomicU64.
-        Ok(unsafe {
-            bytes
-                .as_ptr()
-                .cast::<u8>()
-                .add(index)
-                .cast_mut()
-                .cast::<u64>()
-        })
+        let index = self.checked_index_cached(address, 8)?;
+        let base = self.cached.base.load(Ordering::Relaxed);
+        // SAFETY: `checked_index_cached` 证明整个 u64 位于当前共享内存范围内
+        // （越界时已刷新缓存并复检）；调用方已检查 8 字节对齐。wasmtime 保证
+        // SharedMemory 基址在生命周期内稳定。后续并发 word 访问一律用 AtomicU64。
+        Ok(unsafe { base.add(index).cast::<u64>() })
     }
 }
 
