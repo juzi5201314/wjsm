@@ -403,9 +403,13 @@ impl Compiler {
                         found
                     };
                     let false_terminates = if false_is_merge || true_reaches_false {
-                        if !false_is_merge {
-                            self.emit_phi_moves(blocks, idx, false_idx);
-                        }
+                        // false 路径落入合并块（false_is_merge：false 目标即 merge；
+                        // true_reaches_false：false 分支体不编译、两分支在 false_idx
+                        // 汇合）：merge 在 if/else 之后续编，phi_local 必须由本路径写值。
+                        // 注意不能仅在 !false_is_merge 时发射——false_is_merge 时
+                        // false 路径是 fall-through，同样需要 idx→false_idx 的 phi move
+                        // （否则 merge 读到 true 路径写入的陈旧值，见 a&&b 错码）。
+                        self.emit_phi_moves(blocks, idx, false_idx);
                         false
                     } else {
                         self.compiled_blocks.insert(false_idx);

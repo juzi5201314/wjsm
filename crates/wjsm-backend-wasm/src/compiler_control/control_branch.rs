@@ -607,7 +607,12 @@ impl Compiler {
             visited: &mut std::collections::HashSet<usize>,
         ) -> Option<usize> {
             if !visited.insert(idx) {
-                return Some(idx);
+                // 重访 = 图中存在环路（循环回边或菱形两路汇合）。环路点本身不是
+                // 续体：循环回边的"续体"是循环头（由 find_merge 的 loop 相关
+                // 处理决定），菱形第二路的汇合块续体由第一路的结果决定。返回
+                // None 让上层用另一路的结果，避免把环路块误当 merge
+                // （否则 find_merge 解析出死块/跳板，循环出口代码丢失）。
+                return None;
             }
 
             let block = blocks.get(idx)?;
