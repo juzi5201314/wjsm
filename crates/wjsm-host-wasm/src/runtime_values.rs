@@ -128,13 +128,11 @@ fn runtime_string_matches_static(
     runtime_value: i64,
     static_value: i64,
 ) -> bool {
-    let runtime_handle = value::decode_runtime_string_handle(runtime_value) as usize;
-    let strings = caller
+    let Some(runtime_string) = caller
         .data()
         .runtime_strings
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let Some(runtime_string) = strings.get(runtime_handle) else {
+        .get(value::decode_runtime_string_handle(runtime_value))
+    else {
         return false;
     };
     let Some(env) = caller.data().cached_wasm_env.as_ref() else {
@@ -195,17 +193,15 @@ pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64)
             value::is_runtime_string_handle(b),
         ) {
             (true, true) => {
-                let ha = value::decode_runtime_string_handle(a) as usize;
-                let hb = value::decode_runtime_string_handle(b) as usize;
-                let strings = caller
+                let left = caller
                     .data()
                     .runtime_strings
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                strings
-                    .get(ha)
-                    .zip(strings.get(hb))
-                    .is_some_and(|(x, y)| x == y)
+                    .get(value::decode_runtime_string_handle(a));
+                let right = caller
+                    .data()
+                    .runtime_strings
+                    .get(value::decode_runtime_string_handle(b));
+                left.zip(right).is_some_and(|(left, right)| left == right)
             }
             (true, false) => runtime_string_matches_static(caller, a, b),
             (false, true) => runtime_string_matches_static(caller, b, a),
@@ -254,19 +250,16 @@ pub(crate) fn same_value_zero_stable_hash<C: AsContext<Data = RuntimeState>>(
     if value::is_string(val) || value::is_runtime_string_handle(val) {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64 偏移基
         if value::is_runtime_string_handle(val) {
-            let handle = value::decode_runtime_string_handle(val) as usize;
-            let strings = ctx
-                .as_context()
+            let handle = value::decode_runtime_string_handle(val);
+            ctx.as_context()
                 .data()
                 .runtime_strings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(rs) = strings.get(handle) {
-                for unit in rs.as_utf16_units() {
-                    hash ^= *unit as u64;
-                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-                }
-            }
+                .with(handle, |string| {
+                    for unit in string.as_utf16_units() {
+                        hash ^= u64::from(*unit);
+                        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                    }
+                });
         } else if let Some(env) = ctx.as_context().data().cached_wasm_env.as_ref() {
             let data = env.memory.data(ctx);
             if let Some(bytes) = nul_terminated_string_bytes(data, value::decode_string_ptr(val))
@@ -1011,13 +1004,13 @@ pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> boo
     }
     if value::is_string(val) {
         if value::is_runtime_string_handle(val) {
-            let handle = value::decode_runtime_string_handle(val) as usize;
-            let strings = caller
+            return caller
                 .data()
                 .runtime_strings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            return !strings.get(handle).map(|s| s.is_empty()).unwrap_or(true);
+                .with(value::decode_runtime_string_handle(val), |string| {
+                    !string.is_empty()
+                })
+                .unwrap_or(false);
         }
         let ptr = value::decode_string_ptr(val);
         if let Some(Extern::Memory(memory)) = caller.get_export("memory") {
@@ -1041,7 +1034,6 @@ pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> boo
     // 对象、函数、Symbol、RegExp 等 → truthy
     true
 }
-
 
 pub(crate) fn to_primitive_with_hint(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1134,7 +1126,10 @@ pub(crate) fn to_object(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
         return val;
     }
     if value::is_undefined(val) || value::is_null(val) {
-        return make_type_error_exception(caller, "TypeError: Cannot convert undefined or null to object");
+        return make_type_error_exception(
+            caller,
+            "TypeError: Cannot convert undefined or null to object",
+        );
     }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let object = if value::is_string(val) {
@@ -1182,7 +1177,6 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
     utf16_count
 }
 
-
 /// SameValueZero 使用的值类型标签。
 fn same_value_zero_type_tag(val: i64) -> u64 {
     if value::is_f64(val) {
@@ -1207,13 +1201,11 @@ fn same_value_zero_type_tag(val: i64) -> u64 {
 /// 获取 ECMAScript 字符串值，保留 UTF-16 code units。
 pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> RuntimeString {
     if value::is_runtime_string_handle(val) {
-        let handle = value::decode_runtime_string_handle(val) as usize;
-        let strings = caller
+        caller
             .data()
             .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        strings.get(handle).cloned().unwrap_or_default()
+            .get(value::decode_runtime_string_handle(val))
+            .unwrap_or_default()
     } else if value::is_string(val) {
         RuntimeString::from_utf8_lossy(&read_string_bytes(caller, value::decode_string_ptr(val)))
     } else {
@@ -1223,16 +1215,14 @@ pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) 
 
 pub(crate) fn get_string_utf8_lossy(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
     if value::is_runtime_string_handle(val) {
-        // 运行时字符串表（UTF-16）：持锁直接转换，避免克隆整个 RuntimeString。
-        let handle = value::decode_runtime_string_handle(val) as usize;
-        let strings = caller
+        caller
             .data()
             .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        strings
-            .get(handle)
-            .map_or_else(String::new, |s| s.to_utf8_lossy())
+            .with(
+                value::decode_runtime_string_handle(val),
+                RuntimeString::to_utf8_lossy,
+            )
+            .unwrap_or_default()
     } else if value::is_string(val) {
         // 内联 wasm data-segment 字符串：本身已是 UTF-8 字节。
         // 编译期常量串必然合法 UTF-8 → from_utf8 零拷贝；非法字节回退 lossy。

@@ -33,7 +33,11 @@ impl Compiler {
     }
 
     /// 计算本函数所有 safepoint 处 live handle local 数的最大值 × 8（字节）。
-    pub(super) fn compute_max_spill_bytes(&self, module: &IrModule, function: &IrFunction) -> usize {
+    pub(super) fn compute_max_spill_bytes(
+        &self,
+        module: &IrModule,
+        function: &IrFunction,
+    ) -> usize {
         let Some(liveness) = &self.current_fn_liveness else {
             return 0;
         };
@@ -74,6 +78,12 @@ impl Compiler {
                                 .is_some_and(|a| !a.call_may_trigger_gc(fid, *callee))
                         })
                     }
+                    Instruction::Binary {
+                        op: BinaryOp::Add,
+                        lhs,
+                        rhs,
+                        ..
+                    } => !(self.value_known_f64(*lhs) && self.value_known_f64(*rhs)),
                     Instruction::CallBuiltin {
                         builtin: Builtin::AbstractCompare,
                         args,

@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+local-root
+object-root
+array-root
+closure-root
+bound-root
+exception-root
+finally-root
+--- stderr ---

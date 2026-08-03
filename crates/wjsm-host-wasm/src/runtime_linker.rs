@@ -359,7 +359,7 @@ pub(crate) fn native_callable_get_property_impl(
                 return value::encode_f64(length as f64);
             }
             if prop_name == "name" {
-                return store_runtime_string(&*caller, name.to_string());
+                return store_runtime_string(caller, name.to_string());
             }
         }
         // Object / Promise 静态方法：可获取函数值（typeof === "function"）
@@ -478,7 +478,7 @@ pub(crate) fn native_callable_get_property_impl(
                 return value::encode_f64(func.params.len() as f64);
             }
             if prop_name == "name" {
-                return store_runtime_string(&*caller, String::new());
+                return store_runtime_string(caller, String::new());
             }
         }
         return value::encode_undefined();

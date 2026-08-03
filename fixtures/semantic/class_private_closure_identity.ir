@@ -23,149 +23,194 @@ module {
     c20 = number(1)
     c21 = string("$0.privateValue")
     c22 = string("$0.privateValue")
-    c23 = number(1)
-    c24 = string("$0.privateValue")
+    c23 = string("$0.privateValue")
+    c24 = number(1)
     c25 = string("$0.privateValue")
     c26 = string("$0.privateValue")
     c27 = string("$0.privateValue")
     c28 = string("$0.privateValue")
-    c29 = string("$1.$private_function#1_0")
-    c30 = string("#captured@0")
-    c31 = string("$1.$private_function#1_1")
-    c32 = string("#empty@0")
-    c33 = string("$1.$private_function#1_2")
-    c34 = string("$1.$private_function#1_3")
-    c35 = string("#shared@0")
-    c36 = undefined
-    c37 = functionref(@0)
-    c38 = undefined
-    c39 = string("$0.privateValue")
-    c40 = functionref(@1)
-    c41 = functionref(@2)
-    c42 = functionref(@3)
-    c43 = functionref(@4)
-    c44 = functionref(@5)
-    c45 = functionref(@6)
-    c46 = functionref(@7)
-    c47 = string("$1.$private_function#1_0")
-    c48 = string("$1.$private_function#1_1")
-    c49 = string("$1.$private_function#1_2")
-    c50 = string("$1.$private_function#1_3")
-    c51 = string("constructor")
-    c52 = string("capturedMethod")
-    c53 = string("#captured@0")
-    c54 = functionref(@8)
-    c55 = string("emptyMethod")
-    c56 = string("#empty@0")
-    c57 = functionref(@9)
-    c58 = string("read")
-    c59 = string("#shared@0")
-    c60 = functionref(@10)
-    c61 = string("write")
+    c29 = string("$0.privateValue")
+    c30 = string("$0.privateValue")
+    c31 = string("$0.privateValue")
+    c32 = string("$1.$private_function#1_0")
+    c33 = string("#captured@0")
+    c34 = string("$1.$private_function#1_1")
+    c35 = string("#empty@0")
+    c36 = string("$1.$private_function#1_2")
+    c37 = string("$1.$private_function#1_3")
+    c38 = string("#shared@0")
+    c39 = undefined
+    c40 = functionref(@0)
+    c41 = undefined
+    c42 = string("$0.privateValue")
+    c43 = functionref(@1)
+    c44 = functionref(@2)
+    c45 = functionref(@3)
+    c46 = functionref(@4)
+    c47 = functionref(@5)
+    c48 = functionref(@6)
+    c49 = functionref(@7)
+    c50 = string("$1.$private_function#1_0")
+    c51 = string("$1.$private_function#1_1")
+    c52 = string("$1.$private_function#1_2")
+    c53 = string("$1.$private_function#1_3")
+    c54 = string("constructor")
+    c55 = string("capturedMethod")
+    c56 = string("#captured@0")
+    c57 = functionref(@8)
+    c58 = string("emptyMethod")
+    c59 = string("#empty@0")
+    c60 = functionref(@9)
+    c61 = string("read")
     c62 = string("#shared@0")
-    c63 = functionref(@11)
-    c64 = string("read")
-    c65 = string("#read@0")
-    c66 = functionref(@12)
-    c67 = string("readStatic")
-    c68 = string("#staticShared@0")
-    c69 = functionref(@13)
-    c70 = string("writeStatic")
+    c63 = functionref(@10)
+    c64 = string("write")
+    c65 = string("#shared@0")
+    c66 = functionref(@11)
+    c67 = string("read")
+    c68 = string("#read@0")
+    c69 = functionref(@12)
+    c70 = string("readStatic")
     c71 = string("#staticShared@0")
-    c72 = functionref(@14)
-    c73 = string("#staticShared@0")
-    c74 = undefined
-    c75 = string("#read@0")
-    c76 = string("prototype")
-    c77 = string("capturedMethod")
-    c78 = string("capturedMethod")
-    c79 = string("emptyMethod")
-    c80 = string("emptyMethod")
-    c81 = string("write")
-    c82 = number(2)
-    c83 = string("read")
-    c84 = number(2)
-    c85 = string("capturedMethod")
-    c86 = undefined
-    c87 = number(3)
-    c88 = number(3)
-    c89 = string("read")
+    c72 = functionref(@13)
+    c73 = string("writeStatic")
+    c74 = string("#staticShared@0")
+    c75 = functionref(@14)
+    c76 = string("#staticShared@0")
+    c77 = undefined
+    c78 = string("#read@0")
+    c79 = string("prototype")
+    c80 = string("capturedMethod")
+    c81 = string("capturedMethod")
+    c82 = string("emptyMethod")
+    c83 = string("emptyMethod")
+    c84 = string("write")
+    c85 = number(2)
+    c86 = string("read")
+    c87 = number(2)
+    c88 = string("capturedMethod")
+    c89 = undefined
     c90 = number(3)
-    c91 = string("writeStatic")
-    c92 = number(4)
-    c93 = string("readStatic")
-    c94 = number(4)
-    c95 = string("read")
-    c96 = number(4)
+    c91 = number(3)
+    c92 = string("read")
+    c93 = number(3)
+    c94 = string("writeStatic")
+    c95 = number(4)
+    c96 = string("readStatic")
+    c97 = number(4)
+    c98 = string("read")
+    c99 = number(4)
 
   fn @PrivateClosure.captured [home_object=@7.prototype] [captures: $0.privateValue] [params: $2.$env, $2.$this, $2.next] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c21
-      %2 = load var $2.next
-      set_prop %0, %1, %2
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      jump bb1
     bb1:
-      %5 = load var $env
-      %6 = const c22
-      %7 = get_prop %5, %6
-      return %7
+      %2 = phi [(bb0, %0), (bb3, %4)]
+      %3 = call builtin.object.has_own(%2, %1)
+      branch %3, bb2, bb3
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      jump bb4
+    bb3:
+      %4 = call builtin.object.get_prototype_of(%2)
+      %5 = is_nullish %4
+      branch %5, bb2, bb1
+    bb4:
+      %6 = phi [(bb2, %2)]
+      %7 = const c22
+      %8 = load var $2.next
+      set_prop %6, %7, %8
+      %9 = is_exception %8
+      branch %9, bb6, bb5
+    bb5:
+      %11 = load var $env
+      %12 = const c23
+      %13 = get_prop %11, %12
+      return %13
+    bb6:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @PrivateClosure.empty [home_object=@7.prototype] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
-      %0 = const c23
+      %0 = const c24
       return %0
 
   fn @PrivateClosure.get_shared [home_object=@7.prototype] [captures: $0.privateValue] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c24
+      %1 = const c25
       %2 = get_prop %0, %1
       return %2
 
   fn @PrivateClosure.set_shared [home_object=@7.prototype] [captures: $0.privateValue] [params: $5.$env, $5.$this, $5.next] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c25
-      %2 = load var $5.next
-      set_prop %0, %1, %2
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c26
+      jump bb1
     bb1:
-      return
+      %2 = phi [(bb0, %0), (bb3, %4)]
+      %3 = call builtin.object.has_own(%2, %1)
+      branch %3, bb2, bb3
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      jump bb4
+    bb3:
+      %4 = call builtin.object.get_prototype_of(%2)
+      %5 = is_nullish %4
+      branch %5, bb2, bb1
+    bb4:
+      %6 = phi [(bb2, %2)]
+      %7 = const c27
+      %8 = load var $5.next
+      set_prop %6, %7, %8
+      %9 = is_exception %8
+      branch %9, bb6, bb5
+    bb5:
+      return
+    bb6:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @PrivateClosure.static_get_staticShared [home_object=@7] [captures: $0.privateValue] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c26
+      %1 = const c28
       %2 = get_prop %0, %1
       return %2
 
   fn @PrivateClosure.static_set_staticShared [home_object=@7] [captures: $0.privateValue] [params: $7.$env, $7.$this, $7.next] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c27
-      %2 = load var $7.next
-      set_prop %0, %1, %2
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c29
+      jump bb1
     bb1:
-      return
+      %2 = phi [(bb0, %0), (bb3, %4)]
+      %3 = call builtin.object.has_own(%2, %1)
+      branch %3, bb2, bb3
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      jump bb4
+    bb3:
+      %4 = call builtin.object.get_prototype_of(%2)
+      %5 = is_nullish %4
+      branch %5, bb2, bb1
+    bb4:
+      %6 = phi [(bb2, %2)]
+      %7 = const c30
+      %8 = load var $7.next
+      set_prop %6, %7, %8
+      %9 = is_exception %8
+      branch %9, bb6, bb5
+    bb5:
+      return
+    bb6:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @PrivateClosure.static_read [home_object=@7] [captures: $0.privateValue] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c28
+      %1 = const c31
       %2 = get_prop %0, %1
       return %2
 
@@ -173,52 +218,52 @@ module {
     bb0:
       %0 = load var $9.$this
       %1 = load var $env
-      %2 = const c29
+      %2 = const c32
       %3 = get_prop %1, %2
-      %4 = const c30
+      %4 = const c33
       call builtin.private_set(%0, %4, %3)
       %5 = load var $9.$this
       %6 = load var $env
-      %7 = const c31
+      %7 = const c34
       %8 = get_prop %6, %7
-      %9 = const c32
+      %9 = const c35
       call builtin.private_set(%5, %9, %8)
       %10 = load var $9.$this
       %11 = load var $env
-      %12 = const c33
+      %12 = const c36
       %13 = get_prop %11, %12
       %14 = load var $env
-      %15 = const c34
+      %15 = const c37
       %16 = get_prop %14, %15
-      %17 = const c35
+      %17 = const c38
       call builtin.private_accessor_bind(%10, %17, %13, %16)
       return
 
   fn @PrivateClosure.capturedMethod [home_object=@7.prototype] [params: $10.$env, $10.$this] [entry=bb0]:
     bb0:
       %0 = load var $10.$this
-      %1 = const c53
+      %1 = const c56
       %2 = call builtin.private_get(%0, %1)
       return %2
 
   fn @PrivateClosure.emptyMethod [home_object=@7.prototype] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = load var $11.$this
-      %1 = const c56
+      %1 = const c59
       %2 = call builtin.private_get(%0, %1)
       return %2
 
   fn @PrivateClosure.read [home_object=@7.prototype] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = load var $12.$this
-      %1 = const c59
+      %1 = const c62
       %2 = call builtin.private_get(%0, %1)
       return %2
 
   fn @PrivateClosure.write [home_object=@7.prototype] [params: $13.$env, $13.$this, $13.next] [entry=bb0]:
     bb0:
       %0 = load var $13.$this
-      %1 = const c62
+      %1 = const c65
       %2 = load var $13.next
       %3 = call builtin.private_set(%0, %1, %2)
       %4 = is_exception %2
@@ -232,7 +277,7 @@ module {
   fn @PrivateClosure.read [home_object=@7] [params: $14.$env, $14.$this] [entry=bb0]:
     bb0:
       %0 = load var $14.$this
-      %1 = const c65
+      %1 = const c68
       %2 = call builtin.private_get(%0, %1)
       %3 = call %2, this=%0
       return %3
@@ -240,14 +285,14 @@ module {
   fn @PrivateClosure.readStatic [home_object=@7] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       %0 = load var $15.$this
-      %1 = const c68
+      %1 = const c71
       %2 = call builtin.private_get(%0, %1)
       return %2
 
   fn @PrivateClosure.writeStatic [home_object=@7] [params: $16.$env, $16.$this, $16.next] [entry=bb0]:
     bb0:
       %0 = load var $16.$this
-      %1 = const c71
+      %1 = const c74
       %2 = load var $16.next
       %3 = call builtin.private_set(%0, %1, %2)
       %4 = is_exception %2
@@ -304,75 +349,75 @@ module {
       store var $this, %20
       %21 = const c20
       store var $0.privateValue, %21
-      %22 = const c37
-      %23 = const c38
+      %22 = const c40
+      %23 = const c41
       store var $0.$shared_env, %23
       %24 = new_object(capacity=1)
       %25 = load var $env
       set_proto %24, %25
       store var $0.$shared_env, %24
       %26 = load var $0.privateValue
-      %27 = const c39
+      %27 = const c42
       set_prop %24, %27, %26
       %28 = call builtin.create_closure(%22, %24)
       store var $1.$private_function#1_0, %28
-      %29 = const c40
+      %29 = const c43
       store var $1.$private_function#1_1, %29
-      %30 = const c41
+      %30 = const c44
       %31 = call builtin.create_closure(%30, %24)
       store var $1.$private_function#1_2, %31
-      %32 = const c42
+      %32 = const c45
       %33 = call builtin.create_closure(%32, %24)
       store var $1.$private_function#1_3, %33
-      %34 = const c43
+      %34 = const c46
       %35 = call builtin.create_closure(%34, %24)
-      %36 = const c44
+      %36 = const c47
       %37 = call builtin.create_closure(%36, %24)
-      %38 = const c45
+      %38 = const c48
       %39 = call builtin.create_closure(%38, %24)
-      %40 = const c46
+      %40 = const c49
       %41 = load var $1.$private_function#1_0
-      %42 = const c47
+      %42 = const c50
       set_prop %24, %42, %41
       %43 = load var $1.$private_function#1_1
-      %44 = const c48
+      %44 = const c51
       set_prop %24, %44, %43
       %45 = load var $1.$private_function#1_2
-      %46 = const c49
+      %46 = const c52
       set_prop %24, %46, %45
       %47 = load var $1.$private_function#1_3
-      %48 = const c50
+      %48 = const c53
       set_prop %24, %48, %47
       %49 = call builtin.create_closure(%40, %24)
       %50 = new_object(capacity=7)
-      %51 = const c51
+      %51 = const c54
       set_prop %50, %51, %49
-      %52 = const c52
-      %53 = const c54
+      %52 = const c55
+      %53 = const c57
       set_prop %50, %52, %53
-      %54 = const c55
-      %55 = const c57
+      %54 = const c58
+      %55 = const c60
       set_prop %50, %54, %55
-      %56 = const c58
-      %57 = const c60
+      %56 = const c61
+      %57 = const c63
       set_prop %50, %56, %57
-      %58 = const c61
-      %59 = const c63
+      %58 = const c64
+      %59 = const c66
       set_prop %50, %58, %59
-      %60 = const c64
-      %61 = const c66
+      %60 = const c67
+      %61 = const c69
       set_prop %49, %60, %61
-      %62 = const c67
-      %63 = const c69
+      %62 = const c70
+      %63 = const c72
       set_prop %49, %62, %63
-      %64 = const c70
-      %65 = const c72
+      %64 = const c73
+      %65 = const c75
       set_prop %49, %64, %65
-      %66 = const c73
+      %66 = const c76
       call builtin.private_accessor_bind(%49, %66, %35, %37)
-      %67 = const c75
+      %67 = const c78
       call builtin.private_set(%49, %67, %39)
-      %68 = const c76
+      %68 = const c79
       set_prop %49, %68, %50
       store var $1.PrivateClosure, %49
       store var $0.PrivateClosure, %49
@@ -436,11 +481,11 @@ module {
     bb17:
       store var $0.second, %86
       %91 = load var $0.first
-      %92 = const c77
+      %92 = const c80
       %93 = get_prop %91, %92
       %94 = call %93, this=%91
       %95 = load var $0.second
-      %96 = const c78
+      %96 = const c81
       %97 = get_prop %95, %96
       %98 = call %97, this=%95
       %99 = call builtin.strict_eq(%94, %98)
@@ -452,11 +497,11 @@ module {
       throw %90
     bb19:
       %103 = load var $0.first
-      %104 = const c79
+      %104 = const c82
       %105 = get_prop %103, %104
       %106 = call %105, this=%103
       %107 = load var $0.second
-      %108 = const c80
+      %108 = const c83
       %109 = get_prop %107, %108
       %110 = call %109, this=%107
       %111 = call builtin.strict_eq(%106, %110)
@@ -468,9 +513,9 @@ module {
       throw %102
     bb21:
       %115 = load var $0.first
-      %116 = const c81
+      %116 = const c84
       %117 = get_prop %115, %116
-      %118 = const c82
+      %118 = const c85
       %119 = call %117, this=%115, args=[%118]
       %120 = is_exception %119
       branch %120, bb24, bb23
@@ -479,10 +524,10 @@ module {
       throw %114
     bb23:
       %122 = load var $0.second
-      %123 = const c83
+      %123 = const c86
       %124 = get_prop %122, %123
       %125 = call %124, this=%122
-      %126 = const c84
+      %126 = const c87
       %127 = call builtin.strict_eq(%125, %126)
       %128 = call builtin.console.log(%127)
       %129 = is_exception %128
@@ -492,7 +537,7 @@ module {
       throw %121
     bb25:
       %131 = load var $0.first
-      %132 = const c85
+      %132 = const c88
       %133 = get_prop %131, %132
       %134 = call %133, this=%131
       %135 = is_exception %134
@@ -502,11 +547,11 @@ module {
       throw %130
     bb27:
       store var $0.captured, %134
-      %137 = const c86
+      %137 = const c89
       %138 = load var $0.captured
-      %139 = const c87
+      %139 = const c90
       %140 = call %138, this=%137, args=[%139]
-      %141 = const c88
+      %141 = const c91
       %142 = call builtin.strict_eq(%140, %141)
       branch %142, bb29, bb30
     bb28:
@@ -514,10 +559,10 @@ module {
       throw %136
     bb29:
       %143 = load var $0.second
-      %144 = const c89
+      %144 = const c92
       %145 = get_prop %143, %144
       %146 = call %145, this=%143
-      %147 = const c90
+      %147 = const c93
       %148 = call builtin.strict_eq(%146, %147)
       jump bb30
     bb30:
@@ -527,9 +572,9 @@ module {
       branch %151, bb32, bb31
     bb31:
       %153 = load var $0.PrivateClosure
-      %154 = const c91
+      %154 = const c94
       %155 = get_prop %153, %154
-      %156 = const c92
+      %156 = const c95
       %157 = call %155, this=%153, args=[%156]
       %158 = is_exception %157
       branch %158, bb34, bb33
@@ -538,10 +583,10 @@ module {
       throw %152
     bb33:
       %160 = load var $0.PrivateClosure
-      %161 = const c93
+      %161 = const c96
       %162 = get_prop %160, %161
       %163 = call %162, this=%160
-      %164 = const c94
+      %164 = const c97
       %165 = call builtin.strict_eq(%163, %164)
       branch %165, bb35, bb36
     bb34:
@@ -549,10 +594,10 @@ module {
       throw %159
     bb35:
       %166 = load var $0.PrivateClosure
-      %167 = const c95
+      %167 = const c98
       %168 = get_prop %166, %167
       %169 = call %168, this=%166
-      %170 = const c96
+      %170 = const c99
       %171 = call builtin.strict_eq(%169, %170)
       jump bb36
     bb36:

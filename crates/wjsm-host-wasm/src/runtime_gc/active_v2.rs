@@ -1,9 +1,7 @@
-use std::collections::HashSet;
 use std::time::Instant;
 
-use super::api::{CycleKind, GcContext, GcStats, RootProvider};
-use super::object_walker;
-use super::roots::RuntimeRoots;
+use super::api::{CycleKind, GcContext, GcStats};
+use super::roots::collect_reachable_object_handles;
 use crate::WasmEnv;
 
 /// 对 active shared-memory64 heap 执行一次非移动完整回收。
@@ -20,37 +18,7 @@ where
     let handle_count = gc_ctx.obj_table_count();
     let access = gc_ctx.with_state(|state| state.heap_access_v2().clone());
 
-    let mut live = collect_direct_roots(&mut gc_ctx);
-    let mut pending = live.iter().copied().collect::<Vec<_>>();
-    loop {
-        while let Some(handle) = pending.pop() {
-            let Ok(references) = access.object_references(handle) else {
-                continue;
-            };
-            for raw in references {
-                let mut children = Vec::new();
-                object_walker::visit_value_handles(&mut gc_ctx, raw, handle_count, &mut |child| {
-                    children.push(child)
-                });
-                for child in children {
-                    if access.resolve_handle(child).is_ok() && live.insert(child) {
-                        pending.push(child);
-                    }
-                }
-            }
-        }
-
-        let mut added = false;
-        for root in collect_host_table_roots(&mut gc_ctx, &live) {
-            if access.resolve_handle(root).is_ok() && live.insert(root) {
-                pending.push(root);
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-    }
+    let live = collect_reachable_object_handles(&mut gc_ctx);
 
     let dead = access
         .live_handles(handle_count as u32)
@@ -101,28 +69,4 @@ where
     stats.free_bytes_reusable = stats.total_free_bytes;
     stats.ensure_pause_from_elapsed();
     stats
-}
-
-fn collect_direct_roots(ctx: &mut GcContext<'_>) -> HashSet<u32> {
-    let mut provider = RuntimeRoots;
-    let mut roots = HashSet::new();
-    provider.for_each_shadow_stack_root(ctx, &mut |handle| {
-        roots.insert(handle);
-    });
-    provider.for_each_wasm_local_root(ctx, &mut |handle| {
-        roots.insert(handle);
-    });
-    roots.retain(|handle| {
-        ctx.with_state(|state| state.heap_access_v2().resolve_handle(*handle).is_ok())
-    });
-    roots
-}
-
-fn collect_host_table_roots(ctx: &mut GcContext<'_>, live: &HashSet<u32>) -> Vec<u32> {
-    let mut provider = RuntimeRoots;
-    let mut roots = Vec::new();
-    provider.for_each_host_table_root(ctx, &mut |handle| live.contains(&handle), &mut |handle| {
-        roots.push(handle)
-    });
-    roots
 }

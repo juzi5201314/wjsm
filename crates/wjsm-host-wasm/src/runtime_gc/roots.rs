@@ -72,6 +72,8 @@
 //! - **陈旧 handle**：指向已回收的对象，GC 会将其标记为 dead，不会访问
 //!
 //! 这允许编译器采用保守策略（宁可多 spill，也不漏 spill）。
+use std::collections::HashSet;
+
 use crate::runtime_gc::GcContext;
 use crate::runtime_gc::api::{Handle, RootProvider};
 use crate::runtime_gc::object_walker::{self, ObjectWalker};
@@ -246,6 +248,59 @@ impl RootProvider for RuntimeRoots {
     }
 }
 
+/// 计算 shadow stack、真实堆边与条件 host 根共同收敛后的可达对象 handle 集。
+pub(crate) fn collect_reachable_object_handles(ctx: &mut GcContext<'_>) -> HashSet<Handle> {
+    let count = ctx.obj_table_count();
+    let access = ctx.with_state(|state| state.heap_access_v2().clone());
+    let mut provider = RuntimeRoots;
+    let mut live = HashSet::new();
+    provider.for_each_shadow_stack_root(ctx, &mut |handle| {
+        live.insert(handle);
+    });
+    provider.for_each_wasm_local_root(ctx, &mut |handle| {
+        live.insert(handle);
+    });
+    live.retain(|handle| access.resolve_handle(*handle).is_ok());
+
+    let mut pending: Vec<Handle> = live.iter().copied().collect();
+    loop {
+        while let Some(handle) = pending.pop() {
+            let Ok(references) = access.object_references(handle) else {
+                continue;
+            };
+            for raw in references {
+                let mut children = Vec::new();
+                object_walker::visit_value_handles(ctx, raw, count, &mut |child| {
+                    children.push(child);
+                });
+                for child in children {
+                    if access.resolve_handle(child).is_ok() && live.insert(child) {
+                        pending.push(child);
+                    }
+                }
+            }
+        }
+
+        let mut roots = Vec::new();
+        provider.for_each_host_table_root(
+            ctx,
+            &mut |handle| live.contains(&handle),
+            &mut |handle| roots.push(handle),
+        );
+        let mut added = false;
+        for root in roots {
+            if access.resolve_handle(root).is_ok() && live.insert(root) {
+                pending.push(root);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    live
+}
+
 /// 从 NaN-box 值提取 obj_table handle（object/array）；非对象返回 None。
 fn nanbox_obj_handle(val: i64) -> Option<Handle> {
     if crate::value::is_object(val) || crate::value::is_array(val) {
@@ -394,7 +449,10 @@ fn collect_stream_controller_handle_values(
 
 /// #331：补齐由 host side table 或 side-table-backed heap object 持有的 JS 引用。
 /// 扫描 host 侧表并把其中引用的 raw 值收集到 out（供 GC 根 / 字符串表清扫复用）。
-pub(crate) fn collect_side_table_backed_host_values(st: &mut crate::RuntimeState, out: &mut Vec<i64>) {
+pub(crate) fn collect_side_table_backed_host_values(
+    st: &mut crate::RuntimeState,
+    out: &mut Vec<i64>,
+) {
     let mut http_response_handles = Vec::new();
     let mut fetch_response_handles = Vec::new();
     let mut fetch_request_handles = Vec::new();

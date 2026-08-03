@@ -418,6 +418,9 @@ pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: Pro
 pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
     let target_handle = raw_promise_handle(promise);
     let source_handle = raw_promise_handle(source);
+    let target_promise = value::encode_object_handle(
+        u32::try_from(target_handle).expect("promise handle must fit u32"),
+    );
     let mut queued = None;
     {
         let mut table = state
@@ -433,12 +436,12 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
             PromiseState::Pending => {
                 source_entry.fulfill_reactions.push(PromiseReaction::new(
                     value::encode_undefined(),
-                    target_handle as i64,
+                    target_promise,
                     ReactionType::Fulfill,
                 ));
                 source_entry.reject_reactions.push(PromiseReaction::new(
                     value::encode_undefined(),
-                    target_handle as i64,
+                    target_promise,
                     ReactionType::Reject,
                 ));
             }
@@ -456,7 +459,7 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         queue.push_back(Microtask::PromiseReaction {
-            promise: target_handle as i64,
+            promise: target_promise,
             reaction_type,
             handler: value::encode_undefined(),
             argument,
@@ -562,8 +565,9 @@ pub(crate) fn alloc_promise_with_env<C: AsContextMut<Data = RuntimeState> + Runt
             .unwrap_or_else(|e| e.into_inner())
             .promise_type_value();
         let type_value = cached_type.unwrap_or_else(|| {
-            let value = crate::runtime_render::store_runtime_string_in_state(
-                ctx.state_mut(),
+            let value = crate::runtime_render::store_runtime_string_with_env(
+                ctx,
+                env,
                 "PROMISE".to_string(),
             );
             ctx.state_mut()
@@ -646,6 +650,9 @@ pub(crate) fn settle_finally_reaction<C: AsContextMut<Data = RuntimeState> + Run
             finally_is_reject,
         },
     );
+    // `resolve_promise` 可同步调用 thenable；其内部显式 GC 时，inner 与 handler 仍只在
+    // host 当前栈帧中，必须在关系写入 side table 前作为临时根保活。
+    let temp_root_len = ctx.state_mut().push_host_temp_roots([inner, handler]);
     {
         let inner_handle = raw_promise_handle(inner);
         let mut table = ctx
@@ -668,6 +675,7 @@ pub(crate) fn settle_finally_reaction<C: AsContextMut<Data = RuntimeState> + Run
         }
     }
     resolve_promise(ctx, env, inner, result);
+    ctx.state_mut().truncate_host_temp_roots(temp_root_len);
 }
 
 /// 拦截 `PromiseFinallyAwait` 反应（在 drain loop 中先于通用 callable 派发）。
@@ -733,13 +741,7 @@ pub(crate) fn passive_reaction_settlement(
 }
 
 pub(crate) fn runtime_error_value(state: &RuntimeState, message: String) -> i64 {
-    let mut table = state
-        .runtime_strings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let handle = table.len() as u32;
-    table.push(message.into());
-    value::encode_runtime_string_handle(handle)
+    crate::runtime_render::store_runtime_string_state_only(state, message)
 }
 
 pub(crate) fn set_runtime_error(state: &RuntimeState, message: String) {

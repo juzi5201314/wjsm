@@ -104,18 +104,14 @@ pub(crate) fn capture_startup_snapshot(
     }
     let _ = (heap_start, heap_ptr, obj_table_base);
 
-    // 保存 runtime_strings
-    let runtime_strings: Vec<SnapshotRuntimeString> = {
-        let strings = store
-            .data()
-            .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        strings
-            .iter()
-            .map(|s| s.as_utf16_units().to_vec())
-            .collect()
-    };
+    // startup snapshot 只允许捕获尚未清扫的稠密 bootstrap 字符串表。
+    let runtime_strings = store
+        .data()
+        .runtime_strings
+        .snapshot_dense()?
+        .into_iter()
+        .map(|string| string.as_utf16_units().to_vec())
+        .collect();
 
     // 保存 native_callables
     let (native_callables, native_callable_methods): (Vec<SnapshotNativeCallable>, Vec<u8>) = {
@@ -235,26 +231,7 @@ pub(crate) fn reset_primordial_heap_before_restore(
     let _ = env.object_proto_handle.set(&mut *store, Val::I32(-1));
 
     let state = store.data_mut();
-    state
-        .runtime_strings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
-    // 表被清空/重建后，旧的空槽索引全部失效，必须同步清空。
-    state
-        .string_free_slots
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
-    state
-        .runtime_string_approx_bytes
-        .store(0, std::sync::atomic::Ordering::Relaxed);
-    state
-        .runtime_string_next_sweep
-        .store(
-            crate::runtime_strings_gc::SWEEP_THRESHOLD_BYTES,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+    state.runtime_strings.clear();
     state
         .native_callables
         .lock()
@@ -636,30 +613,13 @@ pub(crate) fn restore_startup_snapshot(
     // 重建 RuntimeState
     {
         let state = store.data_mut();
-        *state
-            .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = snapshot
-            .runtime_strings
-            .iter()
-            .cloned()
-            .map(RuntimeString::from_utf16_units)
-            .collect();
-        // 表被整体替换，旧空槽索引失效：清空 free list 并重置清扫阈值。
-        state
-            .string_free_slots
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        state
-            .runtime_string_approx_bytes
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        state
-            .runtime_string_next_sweep
-            .store(
-                crate::runtime_strings_gc::SWEEP_THRESHOLD_BYTES,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+        state.runtime_strings.restore_dense(
+            snapshot
+                .runtime_strings
+                .iter()
+                .cloned()
+                .map(RuntimeString::from_utf16_units),
+        );
         let mut ncs = state
             .native_callables
             .lock()

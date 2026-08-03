@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
@@ -76,6 +76,7 @@ mod heap;
 #[allow(dead_code)]
 mod heap_context_impl;
 
+mod backend_impl;
 mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
@@ -86,7 +87,6 @@ mod runtime_builtins;
 mod runtime_collection_gc;
 mod runtime_collections;
 mod runtime_combinators;
-mod backend_impl;
 pub use backend_impl::WasmBackend;
 
 mod runtime_core_ops;
@@ -174,10 +174,10 @@ mod runtime_regexp;
 mod runtime_source_map;
 
 mod runtime_startup;
+mod runtime_streams;
 mod runtime_string;
 mod runtime_strings_gc;
 mod runtime_structured_clone;
-mod runtime_streams;
 mod runtime_typedarray;
 mod runtime_value_adapter;
 mod shared_buffer;
@@ -231,6 +231,7 @@ pub use inspector::InspectConfig;
 use property_key::*;
 pub(crate) use wasm_env::WasmEnv;
 
+use exec_context_impl::to_number;
 use runtime_arguments::*;
 use runtime_async_fn::*;
 use runtime_builtins::*;
@@ -249,7 +250,6 @@ use runtime_regexp::*;
 use runtime_render::*;
 use runtime_typedarray::*;
 use runtime_values::*;
-use exec_context_impl::to_number;
 use types::*;
 
 /// 预编译入口 handoff：同入口 fork 时子进程直接加载 raw WASM，跳过再编译。
@@ -1136,9 +1136,6 @@ impl Clone for RuntimeState {
             iterators: self.iterators.clone(),
             enumerators: self.enumerators.clone(),
             runtime_strings: self.runtime_strings.clone(),
-            string_free_slots: self.string_free_slots.clone(),
-            runtime_string_approx_bytes: self.runtime_string_approx_bytes.clone(),
-            runtime_string_next_sweep: self.runtime_string_next_sweep.clone(),
             runtime_property_keys: self.runtime_property_keys.clone(),
             memory_string_cache: self.memory_string_cache.clone(),
             memory_name_id_cache: self.memory_name_id_cache.clone(),
@@ -1335,13 +1332,7 @@ struct RuntimeState {
         Arc<HostSideTable<runtime_node_perf_hooks_histogram::HistogramWrapperEntry>>,
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
-    runtime_strings: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
-    /// 字符串表清扫回收的空槽（handle 稳定复用：存字符串时优先 pop）。
-    string_free_slots: Arc<Mutex<Vec<u32>>>,
-    /// 字符串表估算字节（UTF-16 2B/unit + 每项 64B 开销），清扫阈值判断用。
-    runtime_string_approx_bytes: Arc<AtomicUsize>,
-    /// 下次触发清扫的估算字节阈值（清扫后按存活量翻倍，避免合法大活集反复清扫）。
-    runtime_string_next_sweep: Arc<AtomicUsize>,
+    runtime_strings: Arc<runtime_strings_gc::RuntimeStringTable>,
     runtime_property_keys: crate::property_key::SharedPropertyKeyTable,
     /// 线性内存 c-string 偏移缓存：避免 find_memory_c_string 反复全堆 memmem。
     memory_string_cache: Arc<Mutex<HashMap<String, u32>>>,
@@ -1977,12 +1968,7 @@ impl RuntimeState {
             output: Arc::new(Mutex::new(Vec::new())),
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
-            runtime_strings: Arc::new(Mutex::new(Vec::new())),
-            string_free_slots: Arc::new(Mutex::new(Vec::new())),
-            runtime_string_approx_bytes: Arc::new(AtomicUsize::new(0)),
-            runtime_string_next_sweep: Arc::new(AtomicUsize::new(
-                crate::runtime_strings_gc::SWEEP_THRESHOLD_BYTES,
-            )),
+            runtime_strings: Arc::new(runtime_strings_gc::RuntimeStringTable::new()),
             runtime_property_keys: Arc::new(Mutex::new(
                 crate::property_key::PropertyKeyTable::new(),
             )),

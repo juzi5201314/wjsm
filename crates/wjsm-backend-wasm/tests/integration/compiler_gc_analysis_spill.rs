@@ -30,7 +30,9 @@
 
 use anyhow::Result;
 use wjsm_backend_wasm::{F64Analysis, GcAnalysis};
-use wjsm_ir::{FunctionId, Instruction, Program, ValueId};
+use wjsm_ir::{
+    BasicBlock, BasicBlockId, Builtin, Function, FunctionId, Instruction, Program, ValueId,
+};
 use wjsm_parser::parse_module;
 use wjsm_semantic::lower_module;
 
@@ -191,4 +193,64 @@ console.log(outer(1));
         "known but transitively-allocating callee must still spill"
     );
     Ok(())
+}
+
+#[test]
+fn binary_string_add_marks_function_may_gc() -> Result<()> {
+    let program = lower(
+        r#"
+function outer(value) {
+  function concat(input) { return input + "-suffix"; }
+  return concat(value);
+}
+console.log(outer("prefix"));
+"#,
+    )?;
+    let concat = function_id(&program, "concat").expect("`concat` declaration");
+    let (outer, callee) = sole_outer_call(&program);
+    let analysis = GcAnalysis::analyze(&program, &F64Analysis::analyze(&program));
+
+    assert!(analysis.function_may_gc(concat));
+    assert!(analysis.call_may_trigger_gc(outer, callee));
+    Ok(())
+}
+
+#[test]
+fn string_producing_builtins_may_trigger_gc() {
+    let builtins = [
+        Builtin::StringConcatVa,
+        Builtin::StringSlice,
+        Builtin::StringRepeat,
+        Builtin::StringFromCharCode,
+        Builtin::StringFromCodePoint,
+    ];
+    for builtin in builtins {
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(0)),
+            builtin,
+            args: vec![ValueId(1)],
+        });
+        let mut function = Function::new("producer", BasicBlockId(0));
+        function.push_block(block);
+        let mut program = Program::new();
+        let function_id = program.push_function(function);
+        let analysis = GcAnalysis::analyze(&program, &F64Analysis::analyze(&program));
+        assert!(
+            analysis.function_may_gc(function_id),
+            "string-producing builtin must be may-GC: {builtin:?}"
+        );
+    }
+
+    let mut block = BasicBlock::new(BasicBlockId(0));
+    block.push_instruction(Instruction::StringConcatVa {
+        dest: ValueId(0),
+        parts: vec![ValueId(1), ValueId(2)],
+    });
+    let mut function = Function::new("concat", BasicBlockId(0));
+    function.push_block(block);
+    let mut program = Program::new();
+    let function_id = program.push_function(function);
+    let analysis = GcAnalysis::analyze(&program, &F64Analysis::analyze(&program));
+    assert!(analysis.function_may_gc(function_id));
 }

@@ -224,8 +224,9 @@ fn recv(caller: &mut Caller<'_, RuntimeState>, args: &[i64]) -> i64 {
                 );
                 let obj = alloc_host_object(store, env, 3);
                 let _ = define_host_data_property_with_env(store, env, obj, "data", data_val);
-                let addr_val = crate::runtime_render::store_runtime_string_in_state(
-                    store.data(),
+                let addr_val = crate::runtime_render::store_runtime_string_with_env(
+                    store,
+                    env,
                     packet.remote_addr.ip().to_string(),
                 );
                 let _ = define_host_data_property_with_env(store, env, obj, "address", addr_val);

@@ -658,7 +658,7 @@ pub(crate) fn ensure_error_prototypes_initialized<C: AsContextMut<Data = Runtime
     let mut make_subclass = |name: &str, parent_proto: i64| -> i64 {
         let proto = alloc_host_object(ctx, env, 1);
         set_object_proto_header(ctx, env, proto, parent_proto);
-        let name_val = store_runtime_string_in_state(ctx.as_context().data(), name.to_string());
+        let name_val = store_runtime_string_with_env(ctx, env, name.to_string());
         let _ = define_host_data_property_with_env(ctx, env, proto, "name", name_val);
         proto
     };
@@ -694,19 +694,16 @@ pub(crate) fn symbol_proto_description_getter_impl(
             "TypeError: Symbol.prototype.description getter called on incompatible receiver",
         );
     }
-    let handle = value::decode_symbol_handle(this_val) as usize;
-    let table = caller
+    let description = caller
         .data()
         .symbol_table
         .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let Some(entry) = table.get(handle) else {
-        return value::encode_undefined();
-    };
-    match &entry.description {
-        Some(desc) => store_runtime_string(caller, desc.clone()),
-        None => value::encode_undefined(),
-    }
+        .unwrap_or_else(|e| e.into_inner())
+        .get(value::decode_symbol_handle(this_val) as usize)
+        .and_then(|entry| entry.description.clone());
+    description.map_or_else(value::encode_undefined, |description| {
+        store_runtime_string(caller, description)
+    })
 }
 
 /// ECMAScript §20.4.3.4 Symbol.prototype.toString
@@ -720,22 +717,18 @@ pub(crate) fn symbol_proto_to_string_impl(
             "TypeError: Symbol.prototype.toString called on incompatible receiver",
         );
     }
-    let handle = value::decode_symbol_handle(this_val) as usize;
-    let table = caller
+    let description = caller
         .data()
         .symbol_table
         .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let s = if let Some(entry) = table.get(handle) {
-        if let Some(desc) = &entry.description {
-            format!("Symbol({desc})")
-        } else {
-            "Symbol()".to_string()
-        }
-    } else {
-        "Symbol()".to_string()
-    };
-    store_runtime_string(caller, s)
+        .unwrap_or_else(|e| e.into_inner())
+        .get(value::decode_symbol_handle(this_val) as usize)
+        .and_then(|entry| entry.description.clone());
+    let string = description.map_or_else(
+        || "Symbol()".to_string(),
+        |description| format!("Symbol({description})"),
+    );
+    store_runtime_string(caller, string)
 }
 
 /// ECMAScript §20.4.3.5 Symbol.prototype.valueOf
@@ -771,7 +764,7 @@ pub(crate) fn primitive_symbol_get_property_impl(
         return create_native_callable(caller.data(), NativeCallable::SymbolProtoToPrimitive);
     }
     if name_id == encode_symbol_name_id(2) {
-        return store_runtime_string_in_state(caller.data(), "Symbol".to_string());
+        return store_runtime_string(caller, "Symbol".to_string());
     }
 
     let key = read_string_bytes(caller, name_id);
@@ -839,7 +832,7 @@ pub(crate) fn ensure_symbol_prototype_initialized<C: AsContextMut<Data = Runtime
         to_primitive,
         constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
     );
-    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Symbol".to_string());
+    let tag = store_runtime_string_with_env(ctx, env, "Symbol".to_string());
     let _ = define_host_data_property_by_name_id_with_env(
         ctx,
         env,
@@ -875,7 +868,7 @@ pub(crate) fn ensure_promise_prototype_initialized<C: AsContextMut<Data = Runtim
     let ctor = create_native_callable(ctx.as_context().data(), NativeCallable::PromiseConstructor);
     let _ = define_host_data_property_with_env(ctx, env, promise_proto, "constructor", ctor);
 
-    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Promise".to_string());
+    let tag = store_runtime_string_with_env(ctx, env, "Promise".to_string());
     let _ = define_host_data_property_by_name_id_with_env(
         ctx,
         env,
@@ -914,7 +907,7 @@ pub(crate) fn ensure_function_prototype_initialized<C: AsContextMut<Data = Runti
     let _ = define_host_data_property_with_env(ctx, env, function_proto, "apply", apply);
     let _ = define_host_data_property_with_env(ctx, env, function_proto, "bind", bind);
 
-    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Function".to_string());
+    let tag = store_runtime_string_with_env(ctx, env, "Function".to_string());
     let _ = define_host_data_property_by_name_id_with_env(
         ctx,
         env,
@@ -1038,7 +1031,7 @@ pub(crate) fn ensure_regexp_prototype_initialized<C: AsContextMut<Data = Runtime
     let ctor = create_native_callable(ctx.as_context().data(), NativeCallable::RegExpConstructor);
     let _ = define_host_data_property_with_env(ctx, env, regexp_proto, "constructor", ctor);
 
-    let tag = store_runtime_string_in_state(ctx.as_context().data(), "RegExp".to_string());
+    let tag = store_runtime_string_with_env(ctx, env, "RegExp".to_string());
     let _ = define_host_data_property_by_name_id_with_env(
         ctx,
         env,
@@ -1090,7 +1083,7 @@ pub(crate) fn ensure_date_prototype_initialized<C: AsContextMut<Data = RuntimeSt
         NativeCallable::DateConstructorGlobal,
     );
     let _ = define_host_data_property_with_env(ctx, env, date_proto, "constructor", constructor);
-    let tag = store_runtime_string_in_state(ctx.as_context().data(), "Date".to_string());
+    let tag = store_runtime_string_with_env(ctx, env, "Date".to_string());
     let _ = define_host_data_property_by_name_id_with_env(
         ctx,
         env,
@@ -1172,7 +1165,7 @@ pub(crate) fn ensure_typedarray_prototype_initialized<C: AsContextMut<Data = Run
         NativeCallable::TypedArrayConstructor(kind),
     );
     let _ = define_host_data_property_with_env(ctx, env, proto, "constructor", ctor);
-    let tag = store_runtime_string_in_state(ctx.as_context().data(), kind.name().to_string());
+    let tag = store_runtime_string_with_env(ctx, env, kind.name().to_string());
     let _ = define_host_data_property_by_name_id_with_env(
         ctx,
         env,
@@ -1650,14 +1643,8 @@ fn define_error_properties_with_env<C: AsContextMut<Data = RuntimeState>>(
     cause: Option<i64>,
     stack: String,
 ) {
-    let name_val = {
-        let state = ctx.as_context().data();
-        store_runtime_string_in_state(state, error_name.to_string())
-    };
-    let message_val = {
-        let state = ctx.as_context().data();
-        store_runtime_string_in_state(state, message)
-    };
+    let name_val = store_runtime_string_with_env(ctx, env, error_name.to_string());
+    let message_val = store_runtime_string_with_env(ctx, env, message);
     let non_enum_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;
     // name: { writable, non-enumerable, configurable }
     let name_name_id = find_memory_c_string_with_env(ctx, env, "name")
@@ -1711,10 +1698,7 @@ fn define_error_properties_with_env<C: AsContextMut<Data = RuntimeState>>(
         );
     }
     // stack: { writable, non-enumerable, configurable } — V8 约定
-    let stack_val = {
-        let state = ctx.as_context().data();
-        store_runtime_string_in_state(state, stack)
-    };
+    let stack_val = store_runtime_string_with_env(ctx, env, stack);
     let stack_name_id = find_memory_c_string_with_env(ctx, env, "stack")
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "stack"))
         .unwrap();
@@ -2023,8 +2007,7 @@ pub(crate) fn alloc_all_settled_result<C: AsContextMut<Data = RuntimeState>>(
     val: i64,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
-    let status_value =
-        store_runtime_string_in_state(ctx.as_context_mut().data_mut(), status.to_string());
+    let status_value = store_runtime_string_with_env(ctx, env, status.to_string());
     let _ = define_host_data_property_with_env(ctx, env, obj, "status", status_value);
     let _ = define_host_data_property_with_env(ctx, env, obj, value_name, val);
     obj
@@ -2037,14 +2020,8 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     // 容量：name + message + errors + __error_brand__ + stack = 5
     let obj = alloc_host_object(ctx, env, 5);
-    let name = store_runtime_string_in_state(
-        ctx.as_context_mut().data_mut(),
-        "AggregateError".to_string(),
-    );
-    let message = store_runtime_string_in_state(
-        ctx.as_context_mut().data_mut(),
-        "All promises were rejected".to_string(),
-    );
+    let name = store_runtime_string_with_env(ctx, env, "AggregateError".to_string());
+    let message = store_runtime_string_with_env(ctx, env, "All promises were rejected".to_string());
     let non_enum_flags = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;
     let name_name_id = find_memory_c_string_with_env(ctx, env, "name")
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "name"))
@@ -2084,7 +2061,7 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
     );
     // stack 属性
     let stack = capture_stack_trace(ctx, "AggregateError", "All promises were rejected");
-    let stack_val = store_runtime_string_in_state(ctx.as_context().data(), stack);
+    let stack_val = store_runtime_string_with_env(ctx, env, stack);
     let stack_name_id = find_memory_c_string_with_env(ctx, env, "stack")
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, "stack"))
         .unwrap();

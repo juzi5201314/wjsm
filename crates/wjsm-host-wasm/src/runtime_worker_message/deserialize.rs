@@ -7,7 +7,7 @@ use num_bigint::BigInt;
 use wasmtime::{AsContext, AsContextMut};
 
 use crate::runtime_buffer::create_buffer_from_bytes_with_env;
-use crate::runtime_render::store_runtime_string_in_state;
+use crate::runtime_render::store_runtime_string_with_env;
 use crate::runtime_worker_message::{MESSAGE_PORT_ID_PROP, SAB_HANDLE_PROP, SerializedValue};
 use crate::*;
 
@@ -71,9 +71,7 @@ fn deserialize_one<C: AsContextMut<Data = RuntimeState>>(
         SerializedValue::Null => value::encode_null(),
         SerializedValue::Bool(b) => value::encode_bool(*b),
         SerializedValue::Number(n) => value::encode_f64(*n),
-        SerializedValue::String(s) => {
-            store_runtime_string_in_state(ctx.as_context().data(), s.clone())
-        }
+        SerializedValue::String(s) => store_runtime_string_with_env(ctx, env, s.clone()),
         SerializedValue::BigInt(s) => deserialize_bigint(ctx, s),
         SerializedValue::Ref(id) => cx
             .memo
@@ -298,8 +296,8 @@ fn create_regexp_plain_with_env<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
     cx.remember(ctx, id, obj);
-    let source_v = store_runtime_string_in_state(ctx.as_context().data(), source.to_string());
-    let flags_v = store_runtime_string_in_state(ctx.as_context().data(), flags.to_string());
+    let source_v = store_runtime_string_with_env(ctx, env, source.to_string());
+    let flags_v = store_runtime_string_with_env(ctx, env, flags.to_string());
     let _ = define_host_data_property_with_env(ctx, env, obj, "source", source_v);
     let _ = define_host_data_property_with_env(ctx, env, obj, "flags", flags_v);
     obj

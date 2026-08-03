@@ -114,7 +114,7 @@ pub(crate) fn atomic_compare_exchange(
     })
 }
 
-fn status(caller: &Caller<'_, RuntimeState>, value: &str) -> Value {
+fn status(caller: &mut Caller<'_, RuntimeState>, value: &str) -> Value {
     crate::runtime_render::store_runtime_string(caller, value.to_string())
 }
 
@@ -221,9 +221,10 @@ pub(crate) fn wait_async_op(
             );
             let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
                 promise,
-                materialize: Box::new(move |store, _env| {
-                    let timed_out = crate::runtime_render::store_runtime_string_in_state(
-                        store.data(),
+                materialize: Box::new(move |store, env| {
+                    let timed_out = crate::runtime_render::store_runtime_string_with_env(
+                        store,
+                        env,
                         "timed-out".to_string(),
                     );
                     PromiseSettlement::Fulfill(timed_out)

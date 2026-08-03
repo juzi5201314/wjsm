@@ -43,6 +43,11 @@ pub(crate) fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: us
         | NativeCallable::AsyncGeneratorIdentity { generator }
         | NativeCallable::GeneratorMethod { generator, .. }
         | NativeCallable::GeneratorIdentity { generator } => vec![generator],
+        NativeCallable::PromiseFinallyAwait {
+            target_promise,
+            original_value,
+            ..
+        } => vec![target_promise, original_value],
         NativeCallable::EvalFunction(function) => function.scope_env.into_iter().collect(),
         NativeCallable::ArrayLikeIteratorNext { target, .. } => vec![target],
         NativeCallable::RawIteratorNext { iterator } => vec![iterator],
@@ -65,5 +70,34 @@ pub(crate) fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: us
         // 不直接持 obj_table 引用：handle 是 side-table 索引，由对应 side-table 的
         // fixed-point root 路径覆盖。新增 variant 需评估是否持有 JS 值。
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_string_roots_include_promise_finally_original_value() {
+        let mut state = crate::RuntimeState::new();
+        let target = value::encode_object_handle(7);
+        let original = value::encode_runtime_string_handle(11);
+        let index = {
+            let mut callables = state
+                .native_callables
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let index = callables.len();
+            callables.push(NativeCallable::PromiseFinallyAwait {
+                target_promise: target,
+                original_value: original,
+                finally_is_reject: false,
+            });
+            index
+        };
+
+        let references = collect_native_callable_refs(&mut state, index);
+
+        assert_eq!(references, vec![target, original]);
     }
 }

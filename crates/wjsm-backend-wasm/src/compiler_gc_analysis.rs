@@ -105,8 +105,7 @@ impl GcAnalysis {
                             if let Some(Constant::FunctionRef(id)) =
                                 module.constants().get(constant.0 as usize)
                             {
-                                callee_sources
-                                    .insert(*dest, CalleeSource::FunctionRef(*id));
+                                callee_sources.insert(*dest, CalleeSource::FunctionRef(*id));
                             }
                         }
                         _ => {}

@@ -447,8 +447,17 @@ impl Lowerer {
             // lexical_this / new_target 特殊绑定不走快路径
             return false;
         };
+        // 含 `super` 的方法会在共享 env 外再包一层持有 `home` 的对象；即使声明函数
+        // 是直接父级，当前 `$env` 也不是 binding owner，写入必须沿原型链定位 owner。
+        if self.super_allowed {
+            return false;
+        }
         let current_fn_scope = self.current_function_scope_id();
-        let Some(parent_scope) = self.scopes.arenas.get(current_fn_scope).and_then(|s| s.parent)
+        let Some(parent_scope) = self
+            .scopes
+            .arenas
+            .get(current_fn_scope)
+            .and_then(|s| s.parent)
         else {
             return false;
         };
@@ -725,13 +734,8 @@ impl Lowerer {
         {
             let constant = self.module.add_constant(constant);
             let dest = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::Const {
-                    dest,
-                    constant,
-                },
-            );
+            self.current_function
+                .append_instruction(block, Instruction::Const { dest, constant });
             return Ok(dest);
         }
         self.record_capture(binding.clone());

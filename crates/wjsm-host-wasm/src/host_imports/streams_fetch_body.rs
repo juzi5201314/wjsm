@@ -320,9 +320,8 @@ pub(crate) fn consume_fetch_body_to_bytes(
                         match kind {
                             ResponseMethodKind::Text => {
                                 let text = String::from_utf8_lossy(&bytes).to_string();
-                                let handle = crate::runtime_render::store_runtime_string_in_state(
-                                    store.data(),
-                                    text,
+                                let handle = crate::runtime_render::store_runtime_string_with_env(
+                                    store, env, text,
                                 );
                                 PromiseSettlement::Fulfill(handle)
                             }

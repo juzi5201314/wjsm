@@ -144,6 +144,16 @@ impl InspectorInner {
         }
     }
 
+    pub(crate) fn held_values(&self) -> Vec<i64> {
+        let mut values: Vec<i64> = self.remote_objects.raw_values().collect();
+        values.extend(
+            self.frame_locals
+                .values()
+                .flat_map(|locals| locals.iter().map(|(_, value)| *value)),
+        );
+        values
+    }
+
     /// 判定是否应在 `(line, col, flags, frame_depth)` 处暂停。
     ///
     /// `line`/`col` 为 **1-based**；`frame_depth` 为 0=最内层。
@@ -326,5 +336,21 @@ mod tests {
         i.apply_resume_action(ResumeAction::StepOver);
         let hit = i.should_pause(10, 1, 1, 5);
         assert!(matches!(hit, Some((PauseReason::DebugCommand, _))));
+    }
+
+    #[test]
+    fn runtime_string_roots_include_inspector_remote_objects_and_frame_locals() {
+        let mut inspector = inner();
+        let remote = wjsm_ir::value::encode_runtime_string_handle(3);
+        let local = wjsm_ir::value::encode_runtime_string_handle(5);
+        inspector.remote_objects.alloc(remote);
+        inspector
+            .frame_locals
+            .insert("frame-0".to_string(), vec![("value".to_string(), local)]);
+
+        let held = inspector.held_values();
+
+        assert!(held.contains(&remote));
+        assert!(held.contains(&local));
     }
 }

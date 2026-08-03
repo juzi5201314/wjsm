@@ -238,7 +238,11 @@ fn run_worker_thread(
     wasm_bytes: Vec<u8>,
     options: RuntimeOptions,
 ) {
-    let rt = match tokio::runtime::Builder::new_current_thread()
+    // JS host builtin 会通过 `block_in_place` 同步桥接可重入异步回调；Tokio 的
+    // current-thread runtime 不支持该契约。每个 Worker 使用单执行线程的
+    // multi-thread runtime，既保持 agent 隔离，也允许同步 host API 安全重入。
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
     {

@@ -4,7 +4,7 @@ use wasmtime::Caller;
 
 /// 返回当前 `unit_pos` 处完整 UTF-16 码点对应的运行时字符串值（不推进位置）。
 pub(crate) fn string_iter_current_value(
-    caller: &Caller<'_, RuntimeState>,
+    caller: &mut Caller<'_, RuntimeState>,
     string: &RuntimeString,
     unit_pos: usize,
 ) -> i64 {
@@ -38,11 +38,13 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
     if let Some(iter) = iters.get_mut(handle_idx) {
         match iter {
             IteratorState::StringIter { string, unit_pos } => {
-                if *unit_pos < string.utf16_len() {
-                    string_iter_current_value(caller, string, *unit_pos)
-                } else {
-                    value::encode_undefined()
-                }
+                let current = (*unit_pos < string.utf16_len())
+                    .then(|| (string.clone(), *unit_pos));
+                drop(iters);
+                current.map_or_else(
+                    || value::encode_undefined(),
+                    |(string, pos)| string_iter_current_value(caller, &string, pos),
+                )
             }
             IteratorState::ArrayIter { ptr, index, length } => {
                 if *index < *length {

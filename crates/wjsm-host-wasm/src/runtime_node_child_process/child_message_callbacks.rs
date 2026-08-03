@@ -11,7 +11,7 @@ use super::spawn_async::handle_arg;
 pub(super) fn ipc_payload_to_js(store: &mut Store<RuntimeState>, env: &WasmEnv, text: &str) -> i64 {
     match crate::runtime_json::parse_json_text(text) {
         Ok(jv) => crate::runtime_json::build_wasm_value_with_env(store, env, &jv),
-        Err(_) => store_runtime_string_in_state(store.data(), text.to_string()),
+        Err(_) => store_runtime_string_with_env(store, env, text.to_string()),
     }
 }
 

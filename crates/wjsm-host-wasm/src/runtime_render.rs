@@ -119,13 +119,11 @@ pub(crate) fn read_runtime_string(
     val: i64,
 ) -> RuntimeString {
     if value::is_runtime_string_handle(val) {
-        let handle = value::decode_runtime_string_handle(val) as usize;
-        let strings = caller
+        caller
             .data()
             .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        strings.get(handle).cloned().unwrap_or_default()
+            .get(value::decode_runtime_string_handle(val))
+            .unwrap_or_default()
     } else if value::is_string(val) {
         RuntimeString::from_utf8_lossy(&read_string_bytes(caller, value::decode_string_ptr(val)))
     } else {
@@ -146,15 +144,13 @@ fn read_runtime_string_with_env_lossy<C: AsContextMut<Data = RuntimeState> + Run
     val: i64,
 ) -> String {
     if value::is_runtime_string_handle(val) {
-        let handle = value::decode_runtime_string_handle(val) as usize;
-        let strings = ctx
+        return ctx
             .state_mut()
             .runtime_strings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        return strings
-            .get(handle)
-            .map(RuntimeString::to_utf8_lossy)
+            .with(
+                value::decode_runtime_string_handle(val),
+                RuntimeString::to_utf8_lossy,
+            )
             .unwrap_or_default();
     }
     if value::is_string(val) {
@@ -201,14 +197,10 @@ pub(crate) fn concat_utf16_va(
     let mut units: Vec<u16> = Vec::new();
     for &part in parts {
         if value::is_runtime_string_handle(part) {
-            let handle = value::decode_runtime_string_handle(part) as usize;
-            let strings = caller
-                .data()
-                .runtime_strings
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let rs = strings.get(handle)?;
-            units.extend_from_slice(rs.as_utf16_units());
+            let handle = value::decode_runtime_string_handle(part);
+            caller.data().runtime_strings.with(handle, |string| {
+                units.extend_from_slice(string.as_utf16_units())
+            })?;
         } else if value::is_string(part) {
             let bytes = read_string_bytes(caller, value::decode_string_ptr(part));
             match std::str::from_utf8(&bytes) {
@@ -321,102 +313,57 @@ pub(crate) fn read_eval_var_map(caller: &mut Caller<'_, RuntimeState>) -> Vec<Ev
     entries
 }
 
-pub(crate) fn store_runtime_string<S>(caller: &Caller<'_, RuntimeState>, string: S) -> i64
+pub(crate) fn store_runtime_string<S>(caller: &mut Caller<'_, RuntimeState>, string: S) -> i64
 where
     S: Into<RuntimeString>,
 {
-    let s = string.into();
-    // 估算字节：UTF-16 2B/unit + 每项固定开销（清扫阈值判断用）。
-    caller.data().runtime_string_approx_bytes.fetch_add(
-        s.utf16_len() * 2 + crate::runtime_strings_gc::PER_ENTRY_OVERHEAD,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    let mut strings = caller
-        .data()
-        .runtime_strings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    // 优先复用被清扫回收的空槽（handle 索引稳定）。
-    if let Some(slot) = caller
-        .data()
-        .string_free_slots
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .pop()
-    {
-        strings[slot as usize] = s;
-        return value::encode_runtime_string_handle(slot);
+    if let Some(env) = WasmEnv::from_caller(caller) {
+        crate::runtime_strings_gc::maybe_sweep_runtime_strings(caller, &env);
     }
-    let handle = strings.len() as u32;
-    strings.push(s);
+    let handle = caller.data().runtime_strings.alloc(string.into());
     value::encode_runtime_string_handle(handle)
 }
 
-/// 批量存储多个字符串：单次锁获取（runtime_strings + string_free_slots），
-/// 比逐个 [`store_runtime_string`] 少 O(n) 次锁往返。返回与输入顺序对应的 handle。
-pub(crate) fn store_runtime_strings<'a, I>(caller: &Caller<'_, RuntimeState>, strings: I) -> Vec<i64>
+pub(crate) fn store_runtime_string_with_env<C, S>(ctx: &mut C, env: &WasmEnv, string: S) -> i64
+where
+    C: AsContextMut<Data = RuntimeState>,
+    S: Into<RuntimeString>,
+{
+    crate::runtime_strings_gc::maybe_sweep_runtime_strings(ctx, env);
+    let handle = ctx
+        .as_context_mut()
+        .data()
+        .runtime_strings
+        .alloc(string.into());
+    value::encode_runtime_string_handle(handle)
+}
+
+/// 批量存储多个字符串，并保持输入顺序对应的 handle 顺序。
+pub(crate) fn store_runtime_strings<'a, I>(
+    caller: &mut Caller<'_, RuntimeState>,
+    strings: I,
+) -> Vec<i64>
 where
     I: IntoIterator<Item = &'a str>,
 {
-    let items: Vec<RuntimeString> = strings.into_iter().map(RuntimeString::from).collect();
-    let approx: usize = items
-        .iter()
-        .map(|s| s.utf16_len() * 2 + crate::runtime_strings_gc::PER_ENTRY_OVERHEAD)
-        .sum();
-    caller.data().runtime_string_approx_bytes.fetch_add(
-        approx,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    let mut strings = caller
+    if let Some(env) = WasmEnv::from_caller(caller) {
+        crate::runtime_strings_gc::maybe_sweep_runtime_strings(caller, &env);
+    }
+    caller
         .data()
         .runtime_strings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let mut free_slots = caller
-        .data()
-        .string_free_slots
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    items
+        .alloc_many(strings.into_iter().map(RuntimeString::from))
         .into_iter()
-        .map(|s| {
-            // 优先复用被清扫回收的空槽（handle 索引稳定）。
-            if let Some(slot) = free_slots.pop() {
-                strings[slot as usize] = s;
-                value::encode_runtime_string_handle(slot)
-            } else {
-                let handle = strings.len() as u32;
-                strings.push(s);
-                value::encode_runtime_string_handle(handle)
-            }
-        })
+        .map(value::encode_runtime_string_handle)
         .collect()
 }
 
-pub(crate) fn store_runtime_string_in_state<S>(state: &RuntimeState, string: S) -> i64
+/// 无 `WasmEnv` 上下文时使用的 state-only 分配入口；不得在此触发清扫。
+pub(crate) fn store_runtime_string_state_only<S>(state: &RuntimeState, string: S) -> i64
 where
     S: Into<RuntimeString>,
 {
-    let s = string.into();
-    state.runtime_string_approx_bytes.fetch_add(
-        s.utf16_len() * 2 + crate::runtime_strings_gc::PER_ENTRY_OVERHEAD,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    let mut strings = state
-        .runtime_strings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Some(slot) = state
-        .string_free_slots
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .pop()
-    {
-        strings[slot as usize] = s;
-        return value::encode_runtime_string_handle(slot);
-    }
-    let handle = strings.len() as u32;
-    strings.push(s);
+    let handle = state.runtime_strings.alloc(string.into());
     value::encode_runtime_string_handle(handle)
 }
 

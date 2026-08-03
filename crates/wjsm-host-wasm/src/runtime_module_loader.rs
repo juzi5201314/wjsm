@@ -4,9 +4,9 @@ use std::pin::Pin;
 
 use wasmtime::{AsContext, Caller, Linker, Module, Ref, Val};
 pub use wjsm_host::{
-    RuntimeInstantiatedModule, RuntimeInstantiationEnv, RuntimeModuleFormat, RuntimeModuleLoadError,
-    RuntimeModuleLoadErrorCode, RuntimeModuleReferrer, RuntimeModuleResolutionKind,
-    RuntimeResolvedModule,
+    RuntimeInstantiatedModule, RuntimeInstantiationEnv, RuntimeModuleFormat,
+    RuntimeModuleLoadError, RuntimeModuleLoadErrorCode, RuntimeModuleReferrer,
+    RuntimeModuleResolutionKind, RuntimeResolvedModule,
 };
 
 use crate::runtime_host_helpers::{
@@ -14,13 +14,11 @@ use crate::runtime_host_helpers::{
     make_type_error_exception, reflect_get_impl_with_receiver_async,
 };
 use crate::runtime_module_registry::RuntimeModuleRequireResult;
-use crate::runtime_render::{render_value, store_runtime_string, store_runtime_string_in_state};
+use crate::runtime_render::{render_value, store_runtime_string};
 use crate::runtime_values::{resolve_handle, write_object_property_by_name_id};
 use crate::{
     RuntimeState, WasmEnv, alloc_host_object, define_host_data_property_from_caller, value,
 };
-
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeModulePlacement {
@@ -261,8 +259,8 @@ where
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| resolved.url.clone());
-        let id_value = store_runtime_string(&*self.caller, module_id.clone());
-        let filename_value = store_runtime_string(&*self.caller, module_id);
+        let id_value = store_runtime_string(self.caller, module_id.clone());
+        let filename_value = store_runtime_string(self.caller, module_id);
         let _ = define_host_data_property_from_caller(self.caller, module_object, "id", id_value);
         let _ = define_host_data_property_from_caller(
             self.caller,
@@ -486,7 +484,7 @@ async fn default_export_from_namespace(
             .unwrap_or_else(|e| e.into_inner());
         registry.get_namespace_by_module_id(module_id)
     }?;
-    let key = store_runtime_string_in_state(caller.data(), "default".to_string());
+    let key = store_runtime_string(caller, "default".to_string());
     let value = reflect_get_impl_with_receiver_async(caller, namespace, key, namespace).await;
     (!value::is_undefined(value)).then_some(value)
 }

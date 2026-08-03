@@ -318,7 +318,7 @@ pub(crate) fn compiled_eval_import(
                         let mut result = a_s;
                         result.extend(b_s);
                         let s = String::from_utf8(result).unwrap_or_default();
-                        store_runtime_string(&caller, s)
+                        store_runtime_string(&mut caller, s)
                     } else {
                         value::encode_undefined()
                     }
@@ -1465,7 +1465,7 @@ pub(crate) async fn eval_expr_async(
 }
 
 pub(crate) fn eval_lit(
-    caller: &Caller<'_, RuntimeState>,
+    caller: &mut Caller<'_, RuntimeState>,
     lit: &swc_ast::Lit,
 ) -> Result<i64, String> {
     match lit {

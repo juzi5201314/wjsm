@@ -2,12 +2,9 @@
 macro_rules! exec_ctx_strings {
     () => {
     fn store_string(&mut self, s: &str) -> Value {
-        // 阈值检查在 push 前：新字符串尚未入表，天然属于存活集。
-        crate::runtime_strings_gc::maybe_sweep_runtime_strings(self.caller);
         crate::runtime_render::store_runtime_string(self.caller, s.to_string())
     }
     fn store_string_owned(&mut self, s: String) -> Value {
-        crate::runtime_strings_gc::maybe_sweep_runtime_strings(self.caller);
         crate::runtime_render::store_runtime_string(self.caller, s)
     }
     fn read_string_bytes(&mut self, val: Value) -> Option<Vec<u8>> {
@@ -119,8 +116,6 @@ macro_rules! exec_ctx_strings {
         crate::runtime_render::concat_utf16_va(self.caller, parts)
     }
     fn store_runtime_string(&mut self, s: wjsm_host::RuntimeString) -> Value {
-        // 阈值检查在 push 前：新字符串尚未入表，天然属于存活集（拼接快路径主入口）。
-        crate::runtime_strings_gc::maybe_sweep_runtime_strings(self.caller);
         crate::runtime_render::store_runtime_string(self.caller, s)
     }
     fn create_symbol(&mut self, description: Option<String>, global_key: Option<String>) -> Value {

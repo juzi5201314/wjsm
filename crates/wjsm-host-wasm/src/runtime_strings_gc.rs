@@ -1,153 +1,338 @@
-//! 运行时字符串表（`runtime_strings`）的保守清扫。
+//! Host 侧运行时字符串稳定 handle 表与清扫。
 //!
-//! 背景：字符串 handle 是 host 表索引（NaN-boxed `TAG_STRING | STRING_RUNTIME_HANDLE_FLAG`），
-//! 被 wasm 线性内存中的值引用；字符串不参与 wasm 对象图，`wjsm-gc` 只回收堆对象，
-//! 因此 `runtime_strings` 原本只增不减——字符串密集负载（拼接/模板串/split/slice）RSS 线性爆炸。
-//!
-//! 本模块在字符串表估算字节超过阈值时，从以下来源**保守**收集存活字符串 handle：
-//! 1. shadow stack `[0, sp)`（编译器在 string_concat / StringConcatVa 等产字符串的
-//!    host 调用前 safepoint spill 所有存活 handle，见 `compiler_gc_analysis.rs` 与
-//!    `instr_main.rs` 的 Add 分支——这是清扫正确性的前提）；
-//! 2. V2 堆全部存活对象的槽位值（原型 + 数组元素 + 属性槽，经 `HeapAccessV2`；
-//!    与 zgc 构图同源，闭包 env 等对象才能被覆盖）；
-//! 3. host 侧表（microtask/promise/回调/Map-Set/数组命名属性等）与 side-table-backed 值
-//!    （`is_marked` 恒 true → 保守）。
-//!
-//! 然后把未命中的表项替换为空串（释放 UTF-16 数据），并把空槽推进 free list，
-//! `store_runtime_string` 优先复用空槽（handle 索引稳定，无需重写内存中的值）。
-//!
-//! **安全论证**：清扫只可能多留（把死字符串当活），不可能误释放活字符串——
-//! 三个来源覆盖了所有活字符串 handle 可能存在的位置；wasm 在 host 调用内暂停，
-//! 影子栈/堆/表均静止。阈值检查发生在 push 之前，刚创建的新字符串不在表内，天然存活。
+//! runtime string handle 是表索引，不属于 `ManagedHeap` 对象图。表项不移动；清扫仅将
+//! 已证明不可达的占用槽改为 `None`，后续分配才可复用该索引。
 
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 
-use wjsm_ir::value;
-use wasmtime::Caller;
+use anyhow::{Result, bail};
 
-use crate::runtime_gc::roots::{collect_host_table_values, collect_side_table_backed_host_values};
-use crate::runtime_gc::GcContext;
-use crate::runtime_string::RuntimeString;
 use crate::RuntimeState;
+use crate::runtime_gc::GcContext;
+use crate::runtime_gc::object_walker::visit_value_references;
+use crate::runtime_gc::roots::{collect_host_table_values, collect_reachable_object_handles};
+use crate::runtime_string::RuntimeString;
 
-/// 字符串表清扫阈值（估算字节）。首次触发后按存活量翻倍，避免合法大活集反复清扫。
+/// 字符串表清扫阈值（估算字节）。
 pub(crate) const SWEEP_THRESHOLD_BYTES: usize = 16 * 1024 * 1024;
 
 /// 每项固定开销估算（Vec header + 分配器元数据）。
-pub(crate) const PER_ENTRY_OVERHEAD: usize = 64;
+const PER_ENTRY_OVERHEAD: usize = 64;
 
-/// 若字符串表估算字节达到下次清扫阈值，执行保守清扫。
-///
-/// 必须在**存字符串之前**调用：新字符串尚未入表，天然属于存活集。
-pub(crate) fn maybe_sweep_runtime_strings(caller: &mut Caller<'_, RuntimeState>) {
-    let approx = caller
-        .data()
-        .runtime_string_approx_bytes
-        .load(Ordering::Relaxed);
-    let next = caller
-        .data()
-        .runtime_string_next_sweep
-        .load(Ordering::Relaxed);
-    if approx < next {
-        return;
-    }
-    let Some(env) = crate::wasm_env::WasmEnv::from_caller(caller) else {
-        return;
-    };
-    sweep_runtime_strings(caller, &env);
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeStringSweepStats {
+    pub(crate) reclaimed_entries: usize,
+    pub(crate) live_entries: usize,
+    pub(crate) live_bytes: usize,
 }
 
-fn collect_string_handle(val: i64, live: &mut HashSet<u32>) {
-    if value::is_runtime_string_handle(val) {
-        live.insert(value::decode_runtime_string_handle(val));
-    }
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeStringSweepOutcome {
+    Deferred,
+    Swept(RuntimeStringSweepStats),
 }
 
-/// 保守清扫：见模块文档。
-fn sweep_runtime_strings(caller: &mut Caller<'_, RuntimeState>, env: &crate::wasm_env::WasmEnv) {
-    let mut gc_ctx = GcContext::new(caller, env, "string-sweep");
-    let obj_table_count = gc_ctx.obj_table_count();
-    let mut live: HashSet<u32> = HashSet::new();
+struct RuntimeStringTableInner {
+    entries: Vec<Option<RuntimeString>>,
+    free_slots: Vec<u32>,
+    allocated_bytes: usize,
+    next_sweep_bytes: usize,
+}
 
-    // 1. shadow stack [0, sp)：编译器在产字符串的 host 调用前 spill 存活 handle。
-    let sp = gc_ctx.shadow_sp();
-    let shadow_vals: Vec<i64> = gc_ctx.with_shadow_memory(|data| {
-        let mut out = Vec::new();
-        let mut addr = 0usize;
-        let limit = sp.min(data.len());
-        while addr + 8 <= limit {
-            out.push(i64::from_le_bytes([
-                data[addr],
-                data[addr + 1],
-                data[addr + 2],
-                data[addr + 3],
-                data[addr + 4],
-                data[addr + 5],
-                data[addr + 6],
-                data[addr + 7],
-            ]));
-            addr += 8;
+impl Default for RuntimeStringTableInner {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            free_slots: Vec::new(),
+            allocated_bytes: 0,
+            next_sweep_bytes: SWEEP_THRESHOLD_BYTES,
         }
-        out
-    });
-    for v in shadow_vals {
-        collect_string_handle(v, &mut live);
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct RuntimeStringTable {
+    inner: Mutex<RuntimeStringTableInner>,
+}
+
+impl RuntimeStringTable {
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
-    let access = gc_ctx.with_state(|st| st.heap_access_v2().clone());
-    // 2. V2 堆所有存活对象的槽位值（原型 + 数组元素 + 属性槽 value/getter/setter）。
-    //    与 zgc 构图一致：`HeapAccessV2::live_handles` + `object_references`（旧 obj_table
-    //    遍历读不到 memory64 V2 堆，闭包 env 等对象会漏 → 捕获字符串被误回收）。
-    for handle in access.live_handles(obj_table_count as u32) {
+    pub(crate) fn alloc(&self, string: RuntimeString) -> u32 {
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner.allocated_bytes = inner.allocated_bytes.saturating_add(entry_bytes(&string));
+        if let Some(slot) = inner.free_slots.pop() {
+            let entry = inner
+                .entries
+                .get_mut(usize::try_from(slot).expect("u32 fits usize"))
+                .expect("runtime string free slot must exist");
+            assert!(entry.is_none(), "runtime string free slot must be vacant");
+            *entry = Some(string);
+            return slot;
+        }
+        let handle = u32::try_from(inner.entries.len()).expect("runtime string handle overflow");
+        inner.entries.push(Some(string));
+        handle
+    }
+
+    pub(crate) fn alloc_many<I>(&self, strings: I) -> Vec<u32>
+    where
+        I: IntoIterator<Item = RuntimeString>,
+    {
+        strings
+            .into_iter()
+            .map(|string| self.alloc(string))
+            .collect()
+    }
+
+    pub(crate) fn get(&self, handle: u32) -> Option<RuntimeString> {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner
+            .entries
+            .get(usize::try_from(handle).expect("u32 fits usize"))?
+            .clone()
+    }
+
+    pub(crate) fn with<R>(&self, handle: u32, read: impl FnOnce(&RuntimeString) -> R) -> Option<R> {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner
+            .entries
+            .get(usize::try_from(handle).expect("u32 fits usize"))?
+            .as_ref()
+            .map(read)
+    }
+
+    pub(crate) fn needs_sweep(&self) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner.allocated_bytes >= inner.next_sweep_bytes
+    }
+
+    pub(crate) fn sweep(&self, live_handles: &HashSet<u32>) -> RuntimeStringSweepStats {
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stats = RuntimeStringSweepStats::default();
+        let mut reclaimed = Vec::new();
+        for (index, entry) in inner.entries.iter_mut().enumerate() {
+            let Some(string) = entry.as_ref() else {
+                continue;
+            };
+            let handle = u32::try_from(index).expect("runtime string handle overflow");
+            if live_handles.contains(&handle) {
+                stats.live_entries += 1;
+                stats.live_bytes = stats.live_bytes.saturating_add(entry_bytes(string));
+            } else {
+                entry.take();
+                reclaimed.push(handle);
+                stats.reclaimed_entries += 1;
+            }
+        }
+        inner.free_slots.extend(reclaimed);
+        inner.allocated_bytes = stats.live_bytes;
+        inner.next_sweep_bytes = stats
+            .live_bytes
+            .saturating_mul(2)
+            .max(SWEEP_THRESHOLD_BYTES);
+        stats
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.inner.lock().unwrap_or_else(|error| error.into_inner()) =
+            RuntimeStringTableInner::default();
+    }
+
+    pub(crate) fn snapshot_dense(&self) -> Result<Vec<RuntimeString>> {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let mut strings = Vec::with_capacity(inner.entries.len());
+        for (index, entry) in inner.entries.iter().enumerate() {
+            let Some(string) = entry else {
+                bail!("runtime string snapshot contains vacant slot {index}");
+            };
+            strings.push(string.clone());
+        }
+        Ok(strings)
+    }
+
+    pub(crate) fn restore_dense<I>(&self, strings: I)
+    where
+        I: IntoIterator<Item = RuntimeString>,
+    {
+        let entries: Vec<Option<RuntimeString>> = strings.into_iter().map(Some).collect();
+        let allocated_bytes = entries.iter().fold(0usize, |total, entry| {
+            total.saturating_add(entry.as_ref().map_or(0, entry_bytes))
+        });
+        let next_sweep_bytes = allocated_bytes.saturating_mul(2).max(SWEEP_THRESHOLD_BYTES);
+        *self.inner.lock().unwrap_or_else(|error| error.into_inner()) = RuntimeStringTableInner {
+            entries,
+            free_slots: Vec::new(),
+            allocated_bytes,
+            next_sweep_bytes,
+        };
+    }
+}
+
+fn entry_bytes(string: &RuntimeString) -> usize {
+    string
+        .utf16_len()
+        .saturating_mul(2)
+        .saturating_add(PER_ENTRY_OVERHEAD)
+}
+
+pub(crate) fn maybe_sweep_runtime_strings<C>(
+    ctx: &mut C,
+    env: &crate::wasm_env::WasmEnv,
+) -> RuntimeStringSweepOutcome
+where
+    C: wasmtime::AsContextMut<Data = RuntimeState>,
+{
+    if ctx.as_context_mut().data().runtime_strings.needs_sweep() {
+        sweep_runtime_strings(ctx, env)
+    } else {
+        RuntimeStringSweepOutcome::Swept(RuntimeStringSweepStats::default())
+    }
+}
+
+pub(crate) fn force_sweep_runtime_strings<C>(
+    ctx: &mut C,
+    env: &crate::wasm_env::WasmEnv,
+) -> RuntimeStringSweepOutcome
+where
+    C: wasmtime::AsContextMut<Data = RuntimeState>,
+{
+    sweep_runtime_strings(ctx, env)
+}
+
+fn collect_runtime_string_references(
+    gc_ctx: &mut GcContext<'_>,
+    value: i64,
+    obj_table_count: usize,
+    live: &mut HashSet<u32>,
+) {
+    visit_value_references(gc_ctx, value, obj_table_count, &mut |_| {}, &mut |handle| {
+        live.insert(handle);
+    });
+}
+
+fn sweep_runtime_strings<C>(
+    ctx: &mut C,
+    env: &crate::wasm_env::WasmEnv,
+) -> RuntimeStringSweepOutcome
+where
+    C: wasmtime::AsContextMut<Data = RuntimeState>,
+{
+    let mut gc_ctx = GcContext::new(ctx, env, "string-sweep");
+    let inspector_values = gc_ctx.with_state(|state| match state.inspector.as_ref() {
+        Some(inspector) => inspector.try_held_values(),
+        None => Some(Vec::new()),
+    });
+    let Some(inspector_values) = inspector_values else {
+        return RuntimeStringSweepOutcome::Deferred;
+    };
+
+    let obj_table_count = gc_ctx.obj_table_count();
+    let mut live = HashSet::new();
+    let sp = gc_ctx.shadow_sp();
+    let shadow_values = gc_ctx.with_shadow_memory(|data| {
+        data[..sp.min(data.len())]
+            .chunks_exact(8)
+            .map(|bytes| i64::from_le_bytes(bytes.try_into().expect("eight-byte chunk")))
+            .collect::<Vec<_>>()
+    });
+    for value in shadow_values {
+        collect_runtime_string_references(&mut gc_ctx, value, obj_table_count, &mut live);
+    }
+
+    let reachable_objects = collect_reachable_object_handles(&mut gc_ctx);
+    let access = gc_ctx.with_state(|state| state.heap_access_v2().clone());
+    for handle in reachable_objects {
         if let Ok(references) = access.object_references(handle) {
-            for raw in references {
-                collect_string_handle(raw, &mut live);
+            for value in references {
+                collect_runtime_string_references(&mut gc_ctx, value, obj_table_count, &mut live);
             }
         }
     }
 
-    // 3. host 侧表 raw 值（is_marked 恒 true → 保守覆盖全部表项）。
-    let host_vals = collect_host_table_values(&mut gc_ctx, &mut |_| true);
-    for v in host_vals {
-        collect_string_handle(v, &mut live);
-    }
-    let mut side_vals = Vec::new();
-    gc_ctx.with_state(|st| collect_side_table_backed_host_values(st, &mut side_vals));
-    for v in side_vals {
-        collect_string_handle(v, &mut live);
+    let mut host_values = collect_host_table_values(&mut gc_ctx, &mut |_| true);
+    host_values.extend(inspector_values);
+    for value in host_values {
+        collect_runtime_string_references(&mut gc_ctx, value, obj_table_count, &mut live);
     }
 
-    // 4. 清扫：未命中 → 空串（释放 UTF-16 数据）+ 空槽回收；命中 → 统计存活字节。
-    let mut strings = caller
-        .data()
-        .runtime_strings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let mut free = caller
-        .data()
-        .string_free_slots
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let mut live_bytes = 0usize;
-    for (idx, s) in strings.iter_mut().enumerate() {
-        if live.contains(&(idx as u32)) {
-            live_bytes += s.utf16_len() * 2 + PER_ENTRY_OVERHEAD;
-        } else if !s.is_empty() {
-            *s = RuntimeString::empty();
-            free.push(idx as u32);
-        }
-    }
-    drop(free);
+    let stats = gc_ctx.with_state(|state| state.runtime_strings.sweep(&live));
+    RuntimeStringSweepOutcome::Swept(stats)
+}
 
-    caller
-        .data()
-        .runtime_string_approx_bytes
-        .store(live_bytes, Ordering::Relaxed);
-    // 下次阈值 = max(16MB, 存活量×2)：合法大活集按翻倍频率清扫，避免反复空扫。
-    let next_sweep = live_bytes.saturating_mul(2).max(SWEEP_THRESHOLD_BYTES);
-    caller
-        .data()
-        .runtime_string_next_sweep
-        .store(next_sweep, Ordering::Relaxed);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn string(value: &str) -> RuntimeString {
+        RuntimeString::from_utf8_str(value)
+    }
+
+    #[test]
+    fn runtime_string_table_reclaims_empty_and_non_empty_slots_once() {
+        let table = RuntimeStringTable::new();
+        let empty = table.alloc(string(""));
+        let text = table.alloc(string("text"));
+
+        let first = table.sweep(&HashSet::new());
+        let second = table.sweep(&HashSet::new());
+
+        assert_eq!(first.reclaimed_entries, 2);
+        assert_eq!(second.reclaimed_entries, 0);
+        assert_eq!(table.get(empty), None);
+        assert_eq!(table.get(text), None);
+        let inner = table
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(inner.free_slots.len(), 2);
+    }
+
+    #[test]
+    fn runtime_string_table_reuses_only_vacant_stable_indices() {
+        let table = RuntimeStringTable::new();
+        let live = table.alloc(string("live"));
+        let dead = table.alloc(string("dead"));
+        table.sweep(&HashSet::from([live]));
+
+        let reused = table.alloc(string("replacement"));
+
+        assert_eq!(reused, dead);
+        assert_eq!(table.get(live), Some(string("live")));
+        assert_eq!(table.get(reused), Some(string("replacement")));
+    }
+
+    #[test]
+    fn runtime_string_table_snapshot_rejects_vacant_slots() {
+        let table = RuntimeStringTable::new();
+        table.alloc(string("dead"));
+        table.sweep(&HashSet::new());
+
+        let error = table
+            .snapshot_dense()
+            .expect_err("vacant table must not be snapshotted");
+
+        assert!(error.to_string().contains("vacant slot 0"));
+    }
+
+    #[test]
+    fn runtime_string_table_restore_rebuilds_bytes_and_threshold() {
+        let table = RuntimeStringTable::new();
+        table.restore_dense([string(""), string("abc")]);
+
+        let inner = table
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let expected = entry_bytes(&string("")) + entry_bytes(&string("abc"));
+        assert_eq!(inner.allocated_bytes, expected);
+        assert_eq!(
+            inner.next_sweep_bytes,
+            expected.saturating_mul(2).max(SWEEP_THRESHOLD_BYTES)
+        );
+        assert!(inner.free_slots.is_empty());
+    }
 }

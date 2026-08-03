@@ -34,6 +34,10 @@ impl RemoteObjectTable {
         self.values.get(object_id).copied()
     }
 
+    pub(crate) fn raw_values(&self) -> impl Iterator<Item = i64> + '_ {
+        self.values.values().copied()
+    }
+
     /// 将 NaN-box 值描述为 CDP RemoteObject（无需 Store 访问即可处理原始类型）。
     pub(crate) fn describe(&mut self, raw: i64) -> serde_json::Value {
         describe_value(raw, Some(self))

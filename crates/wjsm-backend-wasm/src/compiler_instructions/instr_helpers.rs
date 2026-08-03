@@ -17,6 +17,10 @@ impl Compiler {
                 | Instruction::NewArray { .. }
                 | Instruction::Call { .. }
                 | Instruction::CallBuiltin { .. }
+                | Instruction::Binary {
+                    op: BinaryOp::Add,
+                    ..
+                }
                 | Instruction::SuperCall { .. }
                 | Instruction::ConstructCall { .. }
                 // P4-b4 补全：下列指令也分配（host alloc 或 arr_new/obj_new）
@@ -592,5 +596,58 @@ impl Compiler {
         }
         self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_producers_are_safepoints() {
+        let producers = [
+            Instruction::Binary {
+                dest: ValueId(0),
+                op: BinaryOp::Add,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            },
+            Instruction::StringConcatVa {
+                dest: ValueId(0),
+                parts: vec![ValueId(1), ValueId(2)],
+            },
+            Instruction::CallBuiltin {
+                dest: Some(ValueId(0)),
+                builtin: Builtin::StringConcatVa,
+                args: vec![ValueId(1), ValueId(2)],
+            },
+            Instruction::CallBuiltin {
+                dest: Some(ValueId(0)),
+                builtin: Builtin::StringSlice,
+                args: vec![ValueId(1)],
+            },
+            Instruction::CallBuiltin {
+                dest: Some(ValueId(0)),
+                builtin: Builtin::StringRepeat,
+                args: vec![ValueId(1)],
+            },
+            Instruction::CallBuiltin {
+                dest: Some(ValueId(0)),
+                builtin: Builtin::StringFromCharCode,
+                args: vec![ValueId(1)],
+            },
+            Instruction::CallBuiltin {
+                dest: Some(ValueId(0)),
+                builtin: Builtin::StringFromCodePoint,
+                args: vec![ValueId(1)],
+            },
+        ];
+
+        for producer in producers {
+            assert!(
+                Compiler::is_safepoint(&producer),
+                "missing safepoint: {producer:?}"
+            );
+        }
     }
 }

@@ -181,7 +181,10 @@ fn build_match_result_from_parts(
     // 捕获组子串批量入库（单次锁获取），未匹配组为 undefined。
     let handles = store_runtime_strings(
         caller,
-        info.captures.iter().filter_map(|c| c.clone()).map(|range| &s[range]),
+        info.captures
+            .iter()
+            .filter_map(|c| c.clone())
+            .map(|range| &s[range]),
     );
     let mut handle_iter = handles.into_iter();
     for (i, capture) in info.captures.iter().enumerate() {
@@ -329,10 +332,12 @@ fn advance_string_index(s: &str, index: usize) -> usize {
 
 /// intern 一个宿主命名属性键（runtime string name_id）。
 fn host_property_name_id(caller: &Caller<'_, RuntimeState>, name: &str) -> u32 {
-    crate::property_key::encode_runtime_string_name_id(crate::property_key::intern_runtime_property_key(
-        caller.data(),
-        crate::runtime_string::RuntimeString::from_utf8_str(name),
-    ))
+    crate::property_key::encode_runtime_string_name_id(
+        crate::property_key::intern_runtime_property_key(
+            caller.data(),
+            crate::runtime_string::RuntimeString::from_utf8_str(name),
+        ),
+    )
 }
 
 /// exec 结果数组命名属性（index/input/groups）的规范 name_id：
@@ -464,13 +469,9 @@ pub(crate) fn regexp_exec_impl(
         }
     };
     match info {
-        Some(info) => build_match_result_from_parts(
-            caller,
-            &subject_lossy,
-            has_d_flag,
-            Some(str_val),
-            &info,
-        ),
+        Some(info) => {
+            build_match_result_from_parts(caller, &subject_lossy, has_d_flag, Some(str_val), &info)
+        }
         None => value::encode_null(),
     }
 }
@@ -487,7 +488,13 @@ pub(crate) fn regexp_string_match_default(
             Ok(compiled) => match compiled.find(&subject_lossy) {
                 Some(m) => {
                     let info = match_info_from_match(&m);
-                    build_match_result_from_parts(caller, &subject_lossy, false, Some(receiver), &info)
+                    build_match_result_from_parts(
+                        caller,
+                        &subject_lossy,
+                        false,
+                        Some(receiver),
+                        &info,
+                    )
                 }
                 None => value::encode_null(),
             },
@@ -629,8 +636,6 @@ pub(crate) fn regexp_string_split_default(
     sep: i64,
     limit: i64,
 ) -> i64 {
-    // 字符串表清扫触发点（split 产生子串 churn；入口处尚无新建字符串，安全）。
-    crate::runtime_strings_gc::maybe_sweep_runtime_strings(caller);
     let s = get_string_value(caller, receiver);
     let subject_lossy = s.to_utf8_lossy();
     let limit_val = if value::is_undefined(limit) {

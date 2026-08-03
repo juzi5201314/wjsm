@@ -20,10 +20,7 @@ pub(crate) fn build_wasm_value_with_env<C: AsContextMut<Data = RuntimeState>>(
         JsonValue::Null => value::encode_null(),
         JsonValue::Bool(b) => value::encode_bool(*b),
         JsonValue::Number(n) => value::encode_f64(*n),
-        JsonValue::String(s) => {
-            let state = ctx.as_context().data();
-            store_runtime_string_in_state(state, s.clone())
-        }
+        JsonValue::String(s) => store_runtime_string_with_env(ctx, env, s.clone()),
         JsonValue::Array(elements) => {
             let arr = alloc_array_with_env(ctx, env, elements.len() as u32);
             if let Some(ptr) = resolve_array_ptr_with_env(ctx, env, arr) {
@@ -65,4 +62,3 @@ pub async fn json_parse_to_wasm_async(
     let mut ctx = WasmExecContext::new(caller);
     wjsm_builtins::json::json_parse_impl(&mut ctx, text, reviver).await
 }
-

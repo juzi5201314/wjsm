@@ -262,10 +262,8 @@ pub(crate) fn install_array_proto_to_string<C: AsContextMut<Data = RuntimeState>
     wasm_env: &WasmEnv,
     array_proto: i64,
 ) -> Option<()> {
-    let callable = create_native_callable(
-        ctx.as_context().data(),
-        NativeCallable::ArrayProtoToString,
-    );
+    let callable =
+        create_native_callable(ctx.as_context().data(), NativeCallable::ArrayProtoToString);
     let key = crate::property_key::encode_runtime_string_name_id(
         crate::property_key::intern_runtime_property_key(
             ctx.as_context().data(),
@@ -406,7 +404,7 @@ pub(super) fn initialize_host_post_bootstrap(
         iterator_symbol_iterator,
         constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
     );
-    let iterator_tag = store_runtime_string_in_state(store.data(), "Iterator".to_string());
+    let iterator_tag = store_runtime_string_with_env(store, wasm_env, "Iterator".to_string());
     let _ = define_host_data_property_with_env(
         store,
         wasm_env,
@@ -425,7 +423,7 @@ pub(super) fn initialize_host_post_bootstrap(
         .heap_access_v2()
         .set_prototype(generator_handle, iterator_handle)
         .map_err(|error| anyhow::anyhow!("V2 GeneratorPrototype prototype: {error}"))?;
-    let generator_tag = store_runtime_string_in_state(store.data(), "Generator".to_string());
+    let generator_tag = store_runtime_string_with_env(store, wasm_env, "Generator".to_string());
     let _ = define_host_data_property_with_env(
         store,
         wasm_env,
@@ -450,7 +448,7 @@ pub(super) fn initialize_host_post_bootstrap(
         constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
     );
     let async_iterator_tag =
-        store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
+        store_runtime_string_with_env(store, wasm_env, "AsyncIterator".to_string());
     let _ = define_host_data_property_with_env(
         store,
         wasm_env,
@@ -469,7 +467,8 @@ pub(super) fn initialize_host_post_bootstrap(
         .heap_access_v2()
         .set_prototype(async_gen_handle, async_iterator_handle)
         .map_err(|error| anyhow::anyhow!("V2 AsyncGeneratorPrototype prototype: {error}"))?;
-    let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
+    let async_gen_tag =
+        store_runtime_string_with_env(store, wasm_env, "AsyncGenerator".to_string());
     let _ = define_host_data_property_with_env(
         store,
         wasm_env,

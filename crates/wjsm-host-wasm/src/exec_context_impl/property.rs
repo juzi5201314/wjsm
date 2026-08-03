@@ -229,7 +229,7 @@ macro_rules! exec_ctx_property {
         }
     }
     fn read_property_by_string_key(&mut self, obj: Value, key: &str) -> Value {
-        let key = crate::store_runtime_string(&*self.caller, key.to_string());
+        let key = crate::store_runtime_string(self.caller, key.to_string());
         crate::host_imports::read_property_by_string_key_raw(self.caller, obj, key)
     }
     fn get_by_name_id_on_proto_chain(

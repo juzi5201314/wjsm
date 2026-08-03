@@ -204,84 +204,87 @@ pub(crate) fn visit_value_handles(
     obj_table_count: usize,
     visit: &mut dyn FnMut(Handle),
 ) {
+    visit_value_references(ctx, val, obj_table_count, visit, &mut |_| {});
+}
+
+pub(crate) fn visit_value_references(
+    ctx: &mut GcContext<'_>,
+    val: Value,
+    obj_table_count: usize,
+    visit_object: &mut dyn FnMut(Handle),
+    visit_runtime_string: &mut dyn FnMut(u32),
+) {
+    if value::is_runtime_string_handle(val) {
+        visit_runtime_string(value::decode_runtime_string_handle(val));
+        return;
+    }
     if !value::tag_needs_root(val) {
         return;
     }
     if value::is_object(val) || value::is_array(val) {
-        let h = value::decode_object_handle(val);
-        if (h as usize) < obj_table_count {
-            visit(h);
+        let handle = value::decode_object_handle(val);
+        if usize::try_from(handle).is_ok_and(|handle| handle < obj_table_count) {
+            visit_object(handle);
         }
         return;
     }
     if value::is_function(val) {
-        let function_idx = val as u32 as usize;
+        let function_idx = usize::try_from(val as u32).expect("u32 fits usize");
         if function_idx < ctx.num_ir_functions() {
-            let h = function_idx.saturating_add(ctx.function_props_base()) as Handle;
-            if (h as usize) < obj_table_count {
-                visit(h);
+            let handle = function_idx.saturating_add(ctx.function_props_base());
+            if handle < obj_table_count {
+                visit_object(u32::try_from(handle).expect("object handle fits u32"));
             }
         }
         return;
     }
-    if value::is_closure(val) {
-        let closure_idx = value::decode_closure_idx(val) as usize;
-        let env_obj = ctx.with_state(|st| {
-            st.closures
+    let references = if value::is_closure(val) {
+        let index = usize::try_from(value::decode_closure_idx(val)).expect("u32 fits usize");
+        ctx.with_state(|state| {
+            state
+                .closures
                 .lock()
                 .ok()
-                .and_then(|g| g.get(closure_idx).map(|e| e.env_obj))
-        });
-        if let Some(env) = env_obj {
-            visit_value_handles(ctx, env, obj_table_count, visit);
-        }
-        return;
-    }
-    if value::is_native_callable(val) {
-        let idx = value::decode_native_callable_idx(val) as usize;
-        let refs = ctx.with_state(|st| {
-            crate::runtime_gc::native_callable_refs::collect_native_callable_refs(st, idx)
-        });
-        for r in refs {
-            visit_value_handles(ctx, r, obj_table_count, visit);
-        }
-        return;
-    }
-    if value::is_bound(val) {
-        let idx = value::decode_bound_idx(val) as usize;
-        let refs =
-            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_bound_refs(st, idx));
-        for r in refs {
-            visit_value_handles(ctx, r, obj_table_count, visit);
-        }
-        return;
-    }
-    if value::is_proxy(val) {
-        let idx = value::decode_proxy_handle(val) as usize;
-        let refs =
-            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_proxy_refs(st, idx));
-        for r in refs {
-            visit_value_handles(ctx, r, obj_table_count, visit);
-        }
-        return;
-    }
-    if value::is_iterator(val) {
-        let idx = value::decode_handle(val) as usize;
-        let refs =
-            ctx.with_state(|st| crate::runtime_gc::side_table_refs::collect_iterator_refs(st, idx));
-        for r in refs {
-            visit_value_handles(ctx, r, obj_table_count, visit);
-        }
-        return;
-    }
-    if value::is_scope_record(val) {
+                .and_then(|entries| entries.get(index).map(|entry| vec![entry.env_obj]))
+                .unwrap_or_default()
+        })
+    } else if value::is_native_callable(val) {
+        let index =
+            usize::try_from(value::decode_native_callable_idx(val)).expect("u32 fits usize");
+        ctx.with_state(|state| {
+            crate::runtime_gc::native_callable_refs::collect_native_callable_refs(state, index)
+        })
+    } else if value::is_bound(val) {
+        let index = usize::try_from(value::decode_bound_idx(val)).expect("u32 fits usize");
+        ctx.with_state(|state| crate::runtime_gc::side_table_refs::collect_bound_refs(state, index))
+    } else if value::is_proxy(val) {
+        let index = usize::try_from(value::decode_proxy_handle(val)).expect("u32 fits usize");
+        ctx.with_state(|state| crate::runtime_gc::side_table_refs::collect_proxy_refs(state, index))
+    } else if value::is_iterator(val) {
+        let index = usize::try_from(value::decode_handle(val)).expect("u32 fits usize");
+        ctx.with_state(|state| {
+            crate::runtime_gc::side_table_refs::collect_iterator_refs(state, index)
+        })
+    } else if value::is_scope_record(val) {
         let handle = value::decode_scope_record_handle(val);
-        let refs = ctx.with_state(|st| {
-            crate::runtime_gc::side_table_refs::collect_scope_record_refs(st, handle)
-        });
-        for r in refs {
-            visit_value_handles(ctx, r, obj_table_count, visit);
-        }
+        ctx.with_state(|state| {
+            crate::runtime_gc::side_table_refs::collect_scope_record_refs(state, handle)
+        })
+    } else if value::is_exception(val) {
+        vec![ctx.with_state(|state| {
+            crate::runtime_host_helpers::exception_reason_from_state(state, val)
+        })]
+    } else {
+        Vec::new()
+    };
+    for reference in references {
+        visit_value_references(
+            ctx,
+            reference,
+            obj_table_count,
+            visit_object,
+            visit_runtime_string,
+        );
     }
 }
 

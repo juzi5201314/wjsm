@@ -74,6 +74,11 @@ pub(crate) struct InspectorHandle {
 }
 
 impl InspectorHandle {
+
+    /// 尝试快照 Inspector 暂存的原始值；CDP 正在持锁时由调用者延期整次字符串清扫。
+    pub(crate) fn try_held_values(&self) -> Option<Vec<i64>> {
+        self.inner.try_lock().ok().map(|inner| inner.held_values())
+    }
     /// 解析 debug info、绑定 TCP、spawn accept 循环，返回可放入 `RuntimeState` 的句柄。
     pub(crate) async fn start(config: &InspectConfig, debug_info: DebugInfo) -> Result<Self> {
         let session_id = uuid::Uuid::new_v4().to_string();

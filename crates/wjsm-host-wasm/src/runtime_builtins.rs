@@ -44,10 +44,10 @@ fn invoke_string_primitive_method(
             wjsm_builtins::string_methods::string_slice(
                 &mut ctx,
                 this_val,
-                args.first().copied().unwrap_or_else(value::encode_undefined),
-                args.get(1)
+                args.first()
                     .copied()
                     .unwrap_or_else(value::encode_undefined),
+                args.get(1).copied().unwrap_or_else(value::encode_undefined),
             )
         }
         4 => {
@@ -284,20 +284,21 @@ fn invoke_bigint_primitive_method(
             } else {
                 10
             };
-            let table = caller
+            let string = caller
                 .data()
                 .bigint_table
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let Some(bi) = table.get(handle) else {
-                return store_runtime_string(caller, "0".to_string());
-            };
-            let s = if radix == 10 {
-                bi.to_string()
-            } else {
-                bi.to_str_radix(radix as u32)
-            };
-            store_runtime_string(caller, s)
+                .unwrap_or_else(|e| e.into_inner())
+                .get(handle)
+                .map(|bigint| {
+                    if radix == 10 {
+                        bigint.to_string()
+                    } else {
+                        bigint.to_str_radix(radix as u32)
+                    }
+                })
+                .unwrap_or_else(|| "0".to_string());
+            store_runtime_string(caller, string)
         }
         1 => this_val,
         _ => value::encode_undefined(),
@@ -517,7 +518,7 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
     match iter {
         IteratorState::StringIter { string, unit_pos } => *unit_pos >= string.utf16_len(),
         IteratorState::ArrayIter { index, length, .. } => *index >= *length,
-        | IteratorState::MapKeyIter {
+        IteratorState::MapKeyIter {
             index, map_handle, ..
         }
         | IteratorState::MapValueIter {
@@ -801,34 +802,34 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             referrer,
             &args,
         )),
-        NativeCallable::CjsRequireResolve { referrer } => Some(
-            wjsm_builtins::modules::call_cjs_require_resolve(
+        NativeCallable::CjsRequireResolve { referrer } => {
+            Some(wjsm_builtins::modules::call_cjs_require_resolve(
                 &mut WasmExecContext::new(caller),
                 referrer,
                 &args,
-            ),
-        ),
-        NativeCallable::CjsRequireResolvePaths { referrer } => Some(
-            wjsm_builtins::modules::call_cjs_require_resolve_paths(
+            ))
+        }
+        NativeCallable::CjsRequireResolvePaths { referrer } => {
+            Some(wjsm_builtins::modules::call_cjs_require_resolve_paths(
                 &mut WasmExecContext::new(caller),
                 referrer,
                 &args,
-            ),
-        ),
-        NativeCallable::ImportMetaResolve { referrer } => Some(
-            wjsm_builtins::modules::call_import_meta_resolve(
+            ))
+        }
+        NativeCallable::ImportMetaResolve { referrer } => {
+            Some(wjsm_builtins::modules::call_import_meta_resolve(
                 &mut WasmExecContext::new(caller),
                 referrer,
                 &args,
-            ),
-        ),
-        NativeCallable::CjsRequireCacheTrap { kind } => Some(
-            wjsm_builtins::modules::call_cjs_require_cache_trap(
+            ))
+        }
+        NativeCallable::CjsRequireCacheTrap { kind } => {
+            Some(wjsm_builtins::modules::call_cjs_require_cache_trap(
                 &mut WasmExecContext::new(caller),
                 kind,
                 &args,
-            ),
-        ),
+            ))
+        }
         NativeCallable::PromiseResolvingFunction {
             promise,
             already_resolved,
@@ -1405,31 +1406,15 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::HeadersMethod { handle, kind } => {
             let mut context = WasmExecContext::new(caller);
-            wjsm_builtins::fetch::call_headers_method(
-                &mut context,
-                this_val,
-                handle,
-                kind,
-                &args,
-            )
+            wjsm_builtins::fetch::call_headers_method(&mut context, this_val, handle, kind, &args)
         }
         NativeCallable::ResponseMethod { handle, kind } => {
             let mut context = WasmExecContext::new(caller);
-            wjsm_builtins::fetch::call_response_method(
-                &mut context,
-                this_val,
-                handle,
-                kind,
-            )
+            wjsm_builtins::fetch::call_response_method(&mut context, this_val, handle, kind)
         }
         NativeCallable::RequestMethod { handle, kind } => {
             let mut context = WasmExecContext::new(caller);
-            wjsm_builtins::fetch::call_request_method(
-                &mut context,
-                this_val,
-                handle,
-                kind,
-            )
+            wjsm_builtins::fetch::call_request_method(&mut context, this_val, handle, kind)
         }
         NativeCallable::HeadersConstructor => {
             let mut context = WasmExecContext::new(caller);
@@ -1464,11 +1449,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::AbortControllerAbort { signal_handle } => {
             let mut context = WasmExecContext::new(caller);
-            wjsm_builtins::fetch::abort_controller_abort(
-                &mut context,
-                signal_handle,
-                &args,
-            )
+            wjsm_builtins::fetch::abort_controller_abort(&mut context, signal_handle, &args)
         }
         // ── ReadableStream (WHATWG Streams Phase 1) ──
         // ReadableStreamConstructor is async-only: routed through the host-import
@@ -1539,10 +1520,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::ReadableStreamAsyncIteratorReturn { reader_handle } => {
             let mut context = WasmExecContext::new(caller);
-            Some(wjsm_builtins::streams::readable_pipe::async_iterator_return(
-                &mut context,
-                reader_handle,
-            ))
+            Some(
+                wjsm_builtins::streams::readable_pipe::async_iterator_return(
+                    &mut context,
+                    reader_handle,
+                ),
+            )
         }
         // ── WritableStream (WHATWG Streams Phase 4) ──
         // WritableStreamConstructor is async-only: routed through the host-import

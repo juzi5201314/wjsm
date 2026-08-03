@@ -316,8 +316,8 @@ fn spawn_unix(
                 }
                 if let Some(tx) = wake_tx {
                     let _ = tx.send(AsyncHostCompletion::HostTask {
-                        run: Box::new(move |store, _env| {
-                            deliver_exit(store, handle, code, signal);
+                        run: Box::new(move |store, env| {
+                            deliver_exit(store, env, handle, code, signal);
                         }),
                         scope: completion_scope,
                     });
@@ -340,6 +340,7 @@ fn spawn_unix(
 
 fn deliver_exit(
     store: &mut Store<RuntimeState>,
+    env: &WasmEnv,
     handle: u32,
     code: Option<i32>,
     signal: Option<String>,
@@ -375,7 +376,7 @@ fn deliver_exit(
             .map(|c| value::encode_f64(c as f64))
             .unwrap_or_else(value::encode_null);
         let signal_val = match signal {
-            Some(s) => store_runtime_string_in_state(store.data(), s),
+            Some(s) => store_runtime_string_with_env(store, env, s),
             None => value::encode_null(),
         };
         store
