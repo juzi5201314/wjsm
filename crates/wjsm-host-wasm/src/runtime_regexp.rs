@@ -168,7 +168,8 @@ pub(crate) fn regexp_constructor_impl(
 fn build_match_result_from_parts(
     caller: &mut Caller<'_, RuntimeState>,
     s: &str,
-    flags: &str,
+    has_d_flag: bool,
+    input_val: Option<i64>,
     info: &RegExpStringMatchInfo,
 ) -> i64 {
     let group_count = info.captures.len() as u32;
@@ -177,9 +178,15 @@ fn build_match_result_from_parts(
         return value::encode_null();
     };
 
+    // 捕获组子串批量入库（单次锁获取），未匹配组为 undefined。
+    let handles = store_runtime_strings(
+        caller,
+        info.captures.iter().filter_map(|c| c.clone()).map(|range| &s[range]),
+    );
+    let mut handle_iter = handles.into_iter();
     for (i, capture) in info.captures.iter().enumerate() {
         let elem = match capture {
-            Some(range) => store_runtime_string(caller, s[range.clone()].to_string()),
+            Some(_) => handle_iter.next().unwrap_or_else(value::encode_undefined),
             None => value::encode_undefined(),
         };
         write_array_elem(caller, arr_ptr, i as u32, elem);
@@ -187,13 +194,14 @@ fn build_match_result_from_parts(
     write_array_length(caller, arr_ptr, group_count);
 
     let index_val = value::encode_f64(byte_offset_to_utf16_index(s, info.start) as f64);
-    let _ = define_host_data_property_from_caller(caller, arr, "index", index_val);
-    let input_val = store_runtime_string(caller, s.to_string());
-    let _ = define_host_data_property_from_caller(caller, arr, "input", input_val);
-
-    if info.named.is_empty() {
-        let _ =
-            define_host_data_property_from_caller(caller, arr, "groups", value::encode_undefined());
+    // input 优先复用调用方已有的字符串值（避免整串重复入库）；非字符串回退旧路径。
+    let input_val = match input_val {
+        Some(v) if value::is_string(v) || value::is_runtime_string_handle(v) => v,
+        _ => store_runtime_string(caller, s.to_string()),
+    };
+    // index/input/groups 三个命名属性批量写入（单次锁获取）。
+    let groups_val = if info.named.is_empty() {
+        value::encode_undefined()
     } else {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
         let groups = alloc_host_null_proto_object(caller, &env, info.named.len() as u32);
@@ -204,10 +212,20 @@ fn build_match_result_from_parts(
             };
             let _ = define_host_data_property_from_caller(caller, groups, name, val);
         }
-        let _ = define_host_data_property_from_caller(caller, arr, "groups", groups);
-    }
+        groups
+    };
+    let [index_id, input_id, groups_id] = regexp_result_prop_name_ids(caller);
+    crate::array_named_props::ArrayNamedPropsStore::set_many(
+        caller,
+        arr,
+        &[
+            (index_id, index_val),
+            (input_id, input_val),
+            (groups_id, groups_val),
+        ],
+    );
 
-    if flags.contains('d') {
+    if has_d_flag {
         let indices_arr = alloc_array(caller, group_count);
         let Some(indices_ptr) = resolve_array_ptr(caller, indices_arr) else {
             return value::encode_null();
@@ -309,6 +327,29 @@ fn advance_string_index(s: &str, index: usize) -> usize {
         .unwrap_or(index.saturating_add(1))
 }
 
+/// intern 一个宿主命名属性键（runtime string name_id）。
+fn host_property_name_id(caller: &Caller<'_, RuntimeState>, name: &str) -> u32 {
+    crate::property_key::encode_runtime_string_name_id(crate::property_key::intern_runtime_property_key(
+        caller.data(),
+        crate::runtime_string::RuntimeString::from_utf8_str(name),
+    ))
+}
+
+/// exec 结果数组命名属性（index/input/groups）的规范 name_id：
+/// 首次调用时 intern 一次并缓存到 state，避免每结果数组重复 intern + 分配。
+fn regexp_result_prop_name_ids(caller: &mut Caller<'_, RuntimeState>) -> [u32; 3] {
+    if let Some(ids) = caller.data().regexp_result_prop_name_ids.get() {
+        return *ids;
+    }
+    let ids = [
+        host_property_name_id(caller, "index"),
+        host_property_name_id(caller, "input"),
+        host_property_name_id(caller, "groups"),
+    ];
+    let _ = caller.data().regexp_result_prop_name_ids.set(ids);
+    ids
+}
+
 pub(crate) fn regexp_test_impl(
     caller: &mut Caller<'_, RuntimeState>,
     regex_val: i64,
@@ -318,57 +359,47 @@ pub(crate) fn regexp_test_impl(
         return value::encode_bool(false);
     }
     let handle = value::decode_regexp_handle(regex_val);
-    let subject_lossy = get_string_utf8_lossy(caller, str_val);
-    let (entry, is_global, is_sticky, start_pos) = {
-        let table = caller
-            .data()
-            .regex_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        match table.get(handle as usize) {
-            Some(e) => {
-                let is_global = e.flags.contains('g');
-                let is_sticky = e.flags.contains('y');
-                let start_pos = if is_global || is_sticky {
-                    e.last_index as usize
-                } else {
-                    0
-                };
-                (e.clone(), is_global, is_sticky, start_pos)
-            }
-            None => return value::encode_bool(false),
-        }
-    };
-
-    let match_result = if is_global || is_sticky {
-        entry.compiled.find_from(&subject_lossy, start_pos).next()
-    } else {
-        entry.compiled.find(&subject_lossy)
-    };
-    let (found, match_end) = match &match_result {
-        Some(m) if is_sticky && m.start() != start_pos => (false, None),
-        Some(m) => (true, Some(m.end())),
-        None => (false, None),
-    };
-
-    if is_global || is_sticky {
+    let subject_lossy = js_to_string(caller, str_val);
+    // 持锁完成匹配 + lastIndex 更新，避免每次调用克隆整个 RegexEntry（含编译后程序）。
+    let found = {
         let mut table = caller
             .data()
             .regex_table
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(e) = table.get_mut(handle as usize) {
+        let Some(entry) = table.get_mut(handle as usize) else {
+            return value::encode_bool(false);
+        };
+        let is_global = entry.flags.contains('g');
+        let is_sticky = entry.flags.contains('y');
+        let start_pos = if is_global || is_sticky {
+            entry.last_index as usize
+        } else {
+            0
+        };
+        let match_result = if is_global || is_sticky {
+            entry.compiled.find_from(&subject_lossy, start_pos).next()
+        } else {
+            entry.compiled.find(&subject_lossy)
+        };
+        let (found, match_end) = match &match_result {
+            Some(m) if is_sticky && m.start() != start_pos => (false, None),
+            Some(m) => (true, Some(m.end())),
+            None => (false, None),
+        };
+        if is_global || is_sticky {
             if let Some(end) = match_end {
                 let mut new_index = end as i64;
                 if end == start_pos && start_pos < subject_lossy.len() {
                     new_index = advance_string_index(&subject_lossy, start_pos) as i64;
                 }
-                e.last_index = new_index;
+                entry.last_index = new_index;
             } else {
-                e.last_index = 0;
+                entry.last_index = 0;
             }
         }
-    }
+        found
+    };
 
     value::encode_bool(found)
 }
@@ -382,74 +413,65 @@ pub(crate) fn regexp_exec_impl(
         return value::encode_null();
     }
     let handle = value::decode_regexp_handle(regex_val);
-    let subject_lossy = get_string_utf8_lossy(caller, str_val);
-    let (entry, is_global, is_sticky, start_pos) = {
-        let table = caller
+    let subject_lossy = js_to_string(caller, str_val);
+    // 持锁完成匹配 + lastIndex 更新（match info 为全自有数据，锁外构造结果数组）。
+    let (info, has_d_flag) = {
+        let mut table = caller
             .data()
             .regex_table
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        match table.get(handle as usize) {
-            Some(e) => {
-                let is_global = e.flags.contains('g');
-                let is_sticky = e.flags.contains('y');
-                let start_pos = if is_global || is_sticky {
-                    e.last_index as usize
-                } else {
-                    0
-                };
-                (e.clone(), is_global, is_sticky, start_pos)
-            }
-            None => return value::encode_null(),
-        }
-    };
-
-    match entry.compiled.find_from(&subject_lossy, start_pos).next() {
-        Some(m) if is_sticky && m.start() != start_pos => {
-            if is_global || is_sticky {
-                let mut table = caller
-                    .data()
-                    .regex_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(e) = table.get_mut(handle as usize) {
-                    e.last_index = 0;
+        let Some(entry) = table.get_mut(handle as usize) else {
+            return value::encode_null();
+        };
+        let is_global = entry.flags.contains('g');
+        let is_sticky = entry.flags.contains('y');
+        let has_d_flag = entry.flags.contains('d');
+        let start_pos = if is_global || is_sticky {
+            entry.last_index as usize
+        } else {
+            0
+        };
+        let match_result = if is_global || is_sticky {
+            entry.compiled.find_from(&subject_lossy, start_pos).next()
+        } else {
+            entry.compiled.find(&subject_lossy)
+        };
+        match match_result {
+            Some(m) if is_sticky && m.start() != start_pos => {
+                if is_global || is_sticky {
+                    entry.last_index = 0;
                 }
+                (None, has_d_flag)
             }
-            value::encode_null()
-        }
-        Some(m) => {
-            if is_global || is_sticky {
-                let mut table = caller
-                    .data()
-                    .regex_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(e) = table.get_mut(handle as usize) {
+            Some(m) => {
+                if is_global || is_sticky {
                     let end = m.end();
                     let mut new_index = end as i64;
                     if end == start_pos && start_pos < subject_lossy.len() {
                         new_index = advance_string_index(&subject_lossy, start_pos) as i64;
                     }
-                    e.last_index = new_index;
+                    entry.last_index = new_index;
                 }
+                (Some(match_info_from_match(&m)), has_d_flag)
             }
-            let info = match_info_from_match(&m);
-            build_match_result_from_parts(caller, &subject_lossy, &entry.flags, &info)
-        }
-        None => {
-            if is_global || is_sticky {
-                let mut table = caller
-                    .data()
-                    .regex_table
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(e) = table.get_mut(handle as usize) {
-                    e.last_index = 0;
+            None => {
+                if is_global || is_sticky {
+                    entry.last_index = 0;
                 }
+                (None, has_d_flag)
             }
-            value::encode_null()
         }
+    };
+    match info {
+        Some(info) => build_match_result_from_parts(
+            caller,
+            &subject_lossy,
+            has_d_flag,
+            Some(str_val),
+            &info,
+        ),
+        None => value::encode_null(),
     }
 }
 
@@ -458,14 +480,14 @@ pub(crate) fn regexp_string_match_default(
     receiver: i64,
     regexp: i64,
 ) -> i64 {
-    let subject_lossy = get_string_utf8_lossy(caller, receiver);
+    let subject_lossy = js_to_string(caller, receiver);
     if !value::is_regexp(regexp) {
         let pattern = js_to_string(caller, regexp);
         return match regress::Regex::with_flags(&pattern, "") {
             Ok(compiled) => match compiled.find(&subject_lossy) {
                 Some(m) => {
                     let info = match_info_from_match(&m);
-                    build_match_result_from_parts(caller, &subject_lossy, "", &info)
+                    build_match_result_from_parts(caller, &subject_lossy, false, Some(receiver), &info)
                 }
                 None => value::encode_null(),
             },
@@ -529,7 +551,13 @@ pub(crate) fn regexp_string_match_default(
         match match_result {
             Some(m) if !is_sticky || m.start() == last_idx => {
                 let info = match_info_from_match(&m);
-                build_match_result_from_parts(caller, &subject_lossy, &entry.flags, &info)
+                build_match_result_from_parts(
+                    caller,
+                    &subject_lossy,
+                    entry.flags.contains('d'),
+                    Some(receiver),
+                    &info,
+                )
             }
             _ => value::encode_null(),
         }
@@ -541,7 +569,7 @@ pub(crate) fn regexp_string_search_default(
     receiver: i64,
     regexp: i64,
 ) -> i64 {
-    let subject_lossy = get_string_utf8_lossy(caller, receiver);
+    let subject_lossy = js_to_string(caller, receiver);
     if !value::is_regexp(regexp) {
         let pattern = js_to_string(caller, regexp);
         return match regress::Regex::with_flags(&pattern, "") {
@@ -755,7 +783,7 @@ pub(crate) fn regexp_match_all_default(
         }
     }
 
-    let subject_lossy = get_string_utf8_lossy(caller, receiver);
+    let subject_lossy = js_to_string(caller, receiver);
     let entry = match regexp_entry(caller, regexp) {
         Some(e) => e,
         None => return value::encode_undefined(),
@@ -888,7 +916,7 @@ pub(crate) fn regexp_string_iter_value(
         };
         (entry.flags.clone(), string.clone(), info)
     };
-    build_match_result_from_parts(caller, &string, &entry_flags, &current)
+    build_match_result_from_parts(caller, &string, entry_flags.contains('d'), None, &current)
 }
 
 pub(crate) fn regexp_string_iter_next(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) {

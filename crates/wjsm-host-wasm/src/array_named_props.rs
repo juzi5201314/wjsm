@@ -181,6 +181,57 @@ impl ArrayNamedPropsStore {
         }
     }
 
+    /// 批量设置多个命名数据属性（默认 flags）：单次锁获取，替代逐个 [`Self::set`]。
+    /// 语义与 [`Self::set`] 一致——若存在 accessor 槽则回退逐属性路径以触发 setter。
+    pub(crate) fn set_many(
+        caller: &mut Caller<'_, RuntimeState>,
+        boxed: i64,
+        props: &[(u32, i64)],
+    ) {
+        let Some(handle) = Self::handle_of(caller, boxed) else {
+            return;
+        };
+        {
+            let mut table = caller
+                .data()
+                .array_named_props
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let slots = table.entry(handle).or_default();
+            // 防御性检查：本调用方（exec 结果数组）恒为新建数组、无 accessor 槽；
+            // 万一存在则回退逐属性 set 以触发 setter 回调。
+            let has_accessor = props.iter().any(|(name_id, _)| {
+                slots.iter().any(|slot| {
+                    slot.name_id == *name_id && slot.flags & constants::FLAG_IS_ACCESSOR != 0
+                })
+            });
+            if has_accessor {
+                drop(table);
+                for (name_id, val) in props {
+                    Self::set(caller, boxed, *name_id, *val);
+                }
+                return;
+            }
+            for (name_id, val) in props {
+                if let Some(slot) = slots.iter_mut().find(|slot| slot.name_id == *name_id) {
+                    slot.value = *val;
+                    slot.getter = value::encode_undefined();
+                    slot.setter = value::encode_undefined();
+                    slot.flags = default_data_property_flags();
+                } else {
+                    slots.push(ArrayNamedPropSlot {
+                        name_id: *name_id,
+                        value: *val,
+                        flags: default_data_property_flags(),
+                        getter: value::encode_undefined(),
+                        setter: value::encode_undefined(),
+                    });
+                }
+            }
+        }
+    }
+
     /// `delete arr.<named>`：configurable=false → `Some(false)`；删除成功 →
     /// `Some(true)`；属性不存在 → `None`（调用方按规范返回 true）。
     /// V1 编译端 obj_delete 无数组分支，仅 V2 host 路由调用。

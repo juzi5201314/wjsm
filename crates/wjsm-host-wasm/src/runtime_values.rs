@@ -1222,7 +1222,28 @@ pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) 
 }
 
 pub(crate) fn get_string_utf8_lossy(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
-    get_string_value(caller, val).to_utf8_lossy()
+    if value::is_runtime_string_handle(val) {
+        // 运行时字符串表（UTF-16）：持锁直接转换，避免克隆整个 RuntimeString。
+        let handle = value::decode_runtime_string_handle(val) as usize;
+        let strings = caller
+            .data()
+            .runtime_strings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        strings
+            .get(handle)
+            .map_or_else(String::new, |s| s.to_utf8_lossy())
+    } else if value::is_string(val) {
+        // 内联 wasm data-segment 字符串：本身已是 UTF-8 字节。
+        // 编译期常量串必然合法 UTF-8 → from_utf8 零拷贝；非法字节回退 lossy。
+        let bytes = read_string_bytes(caller, value::decode_string_ptr(val));
+        match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
+        }
+    } else {
+        String::new()
+    }
 }
 
 pub(crate) async fn resolve_and_call_async(

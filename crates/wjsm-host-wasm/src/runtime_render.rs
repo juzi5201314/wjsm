@@ -302,6 +302,47 @@ where
     value::encode_runtime_string_handle(handle)
 }
 
+/// 批量存储多个字符串：单次锁获取（runtime_strings + string_free_slots），
+/// 比逐个 [`store_runtime_string`] 少 O(n) 次锁往返。返回与输入顺序对应的 handle。
+pub(crate) fn store_runtime_strings<'a, I>(caller: &Caller<'_, RuntimeState>, strings: I) -> Vec<i64>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let items: Vec<RuntimeString> = strings.into_iter().map(RuntimeString::from).collect();
+    let approx: usize = items
+        .iter()
+        .map(|s| s.utf16_len() * 2 + crate::runtime_strings_gc::PER_ENTRY_OVERHEAD)
+        .sum();
+    caller.data().runtime_string_approx_bytes.fetch_add(
+        approx,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let mut strings = caller
+        .data()
+        .runtime_strings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut free_slots = caller
+        .data()
+        .string_free_slots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    items
+        .into_iter()
+        .map(|s| {
+            // 优先复用被清扫回收的空槽（handle 索引稳定）。
+            if let Some(slot) = free_slots.pop() {
+                strings[slot as usize] = s;
+                value::encode_runtime_string_handle(slot)
+            } else {
+                let handle = strings.len() as u32;
+                strings.push(s);
+                value::encode_runtime_string_handle(handle)
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn store_runtime_string_in_state<S>(state: &RuntimeState, string: S) -> i64
 where
     S: Into<RuntimeString>,

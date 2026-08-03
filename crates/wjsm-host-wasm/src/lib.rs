@@ -1185,6 +1185,7 @@ impl Clone for RuntimeState {
             symbol_table: self.symbol_table.clone(),
             symbol_constructor_static_props: self.symbol_constructor_static_props.clone(),
             regex_table: self.regex_table.clone(),
+            regexp_result_prop_name_ids: OnceLock::new(),
             promise_table: self.promise_table.clone(),
             pending_unhandled_rejections: self.pending_unhandled_rejections.clone(),
             microtask_queue: self.microtask_queue.clone(),
@@ -1443,6 +1444,9 @@ struct RuntimeState {
     symbol_constructor_static_props: symbol_well_known::SymbolConstructorStaticProps,
     /// RegExp 侧表：存储编译后的正则表达式和元数据
     regex_table: Arc<Mutex<Vec<RegexEntry>>>,
+    /// RegExp exec 结果数组命名属性（index/input/groups）的规范 name_id 缓存
+    /// （首次 exec 时惰性 intern 一次，避免每结果数组重复 intern + 分配）。
+    regexp_result_prop_name_ids: OnceLock<[u32; 3]>,
     /// Promise 侧表：object handle → Promise 内部槽；非 Promise object handle 使用空占位。
     promise_table: Arc<Mutex<Vec<PromiseEntry>>>,
     /// 已 reject 且尚未 handled 的 promise 索引，用于 drain 时避免全表扫描。
@@ -2093,6 +2097,7 @@ impl RuntimeState {
             symbol_constructor_static_props: symbol_well_known::new_symbol_constructor_static_props(
             ),
             regex_table: Arc::new(Mutex::new(Vec::new())),
+            regexp_result_prop_name_ids: OnceLock::new(),
             promise_table: Arc::new(Mutex::new(Vec::new())),
             pending_unhandled_rejections: Arc::new(Mutex::new(VecDeque::new())),
             microtask_queue: Arc::new(Mutex::new(VecDeque::new())),
