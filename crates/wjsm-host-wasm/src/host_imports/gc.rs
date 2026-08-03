@@ -1,5 +1,6 @@
 use anyhow::Result;
 use wasmtime::{Caller, Linker, Val};
+use wjsm_host::ExecContext;
 use wjsm_ir::value;
 
 use crate::RuntimeState;
@@ -15,25 +16,45 @@ const FAST_PATH_MISS: i64 = (value::BOX_BASE as i64) | (0x1E_i64 << 32);
 /// 快路径链查找的最大深度：超出即回退慢路径（防御异常原型链环）。
 const FAST_PATH_MAX_DEPTH: u32 = 32;
 
-/// 同步数据槽读取快路径：仅当 `object` 是普通对象（TAG_OBJECT）且属性在原型链上
-/// 以**数据槽**形态存在时直接返回槽值（闭包 env 变量读取的典型形态），否则返回
-/// `FAST_PATH_MISS`。语义与 `get_by_name_id` 的 `lookup_property_on_proto` 分支
-/// 完全一致：同一 canonicalize + `get_property_slot_on_proto_chain`，仅省去 async
-/// 调用机制与 accessor 派发。
+/// 同步属性读取快路径：原型链上命中**数据槽**时直接返回槽值（闭包 env 变量、普通
+/// 对象属性、函数/闭包实例属性（含类构造器的 prototype）读取的典型形态）；命中
+/// **访问器槽**且 getter 可同步调用时直接经 `call_js` 重入调用（类 getter 的典型
+/// 形态，绕过 async 调用机制）；其余情况（proxy / 数组 / 非普通对象 / 未命中）返回
+/// `FAST_PATH_MISS`。语义与 `get_by_name_id` 的 `lookup_property_on_proto` +
+/// `read_property` 分支完全一致。
 fn gc_obj_get_data_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, key: i32) -> i64 {
-    if !value::is_object(object) {
+    if !value::is_object(object)
+        && !value::is_function(object)
+        && !value::is_closure(object)
+        && !value::is_bound(object)
+    {
         return FAST_PATH_MISS;
     }
     let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, key as u32) else {
         return FAST_PATH_MISS;
     };
-    // 已确认 is_object：handle 即低 32 位（handle_index_of 对普通对象直接取低 32 位）。
-    let handle = (object as u64 & 0xFFFF_FFFF) as u32;
+    // 函数/闭包/绑定函数的属性对象 handle 从 __function_props_base 起算，
+    // handle_index_of 统一处理偏移；无 V2 存储时 resolve 失败 → 回退慢路径。
+    let handle = crate::runtime_values::handle_index_of(caller, object) as u32;
     let access = caller.data().heap_access_v2().clone();
     match access.get_property_slot_on_proto_chain(handle, key) {
         Ok(Some(slot)) if slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 == 0 => {
             // 槽值按位解释为 JS 值（NaN-boxed i64）。
             slot.value as i64
+        }
+        Ok(Some(slot)) => {
+            // 访问器槽：与 async `read_property` 一致——getter 为 null/undefined 返回
+            // undefined，否则以 receiver 同步调用（`call_js` 与 async 路径共用
+            // `call_wasm_callback_async`，wasm 函数 / native callable / bound / proxy
+            // 全部支持；在 sync host 函数内经 block_on 直跑，省去外层 wasmtime async
+            // 调用机制的固定开销）。
+            let getter = slot.getter as i64;
+            if value::is_undefined(getter) || value::is_null(getter) {
+                return value::encode_undefined();
+            }
+            let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
+            ctx.call_js(getter, object, &[])
+                .unwrap_or_else(|_| value::encode_undefined())
         }
         _ => FAST_PATH_MISS,
     }
