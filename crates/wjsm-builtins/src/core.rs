@@ -8,7 +8,8 @@ mod instanceof;
 pub use equality::{abstract_compare_impl, abstract_eq_impl, strict_eq_impl};
 pub use instanceof::op_instanceof;
 
-use wjsm_host::{ExecContext, ToPrimitiveHintKind, Value};
+use crate::number_format::format_number_js;
+use wjsm_host::{ExecContext, RuntimeString, ToPrimitiveHintKind, Value};
 use wjsm_ir::value;
 
 /// JavaScript remainder（与原 WASM import 的 raw f64 bits 契约一致）。
@@ -154,6 +155,57 @@ pub fn typeof_impl<E: ExecContext>(ctx: &mut E, val: Value) -> Value {
     }
 }
 
+/// 数字 → UTF-16 code units（ECMA-262 §7.1.12.1 ToString 语义）。
+///
+/// 注意与 `f64::to_string()` 的三处差异：`-0` → `"0"`、`Infinity` → `"Infinity"`
+/// （Rust 输出 `"inf"`）、`abs >= 1e21` / `abs < 1e-6` 用科学计数法。
+#[inline]
+fn number_to_utf16_units(x: f64) -> Vec<u16> {
+    if x.is_nan() {
+        return "NaN".encode_utf16().collect();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 {
+            "Infinity".encode_utf16().collect()
+        } else {
+            "-Infinity".encode_utf16().collect()
+        };
+    }
+    format_number_js(x).encode_utf16().collect()
+}
+
+/// 拼接快路径：把操作数转成 UTF-16 code units。
+///
+/// 仅覆盖可廉价转换的原始值（string / f64 / bool / undefined / null），
+/// 语义与 `concat_operand_bytes` 的 render 结果一致（且修正 -0 / 1e21 的
+/// ToString 输出）；对象 / 数组 / bigint / symbol 返回 `None` → 回退通用慢路径。
+fn concat_operand_units<E: ExecContext>(ctx: &mut E, val: Value) -> Option<Vec<u16>> {
+    if value::is_string(val) {
+        return Some(ctx.get_runtime_string(val).into_utf16_units());
+    }
+    if value::is_f64(val) {
+        return Some(number_to_utf16_units(value::decode_f64(val)));
+    }
+    if value::is_undefined(val) {
+        return Some("undefined".encode_utf16().collect());
+    }
+    if value::is_null(val) {
+        return Some("null".encode_utf16().collect());
+    }
+    if value::is_bool(val) {
+        return Some(
+            if value::decode_bool(val) {
+                "true"
+            } else {
+                "false"
+            }
+            .encode_utf16()
+            .collect(),
+        );
+    }
+    None
+}
+
 fn concat_operand_bytes<E: ExecContext>(ctx: &mut E, val: Value) -> Vec<u8> {
     if value::is_string(val) {
         return ctx.get_runtime_string(val).to_utf8_lossy_bytes();
@@ -195,6 +247,18 @@ fn array_to_string_bytes<E: ExecContext>(ctx: &mut E, array: Value) -> Vec<u8> {
 /// - 其余 → ToNumeric 相加（BigInt/Number 混合 → TypeError）。
 #[inline]
 pub fn string_concat<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
+    // 快路径：任一操作数是原始字符串且两者都能廉价转 UTF-16 时，
+    // 直接在 UTF-16 空间单次分配拼接——避免 concat_operand_bytes 的
+    // UTF-8 往返 + 多次分配（`s += x` 累积拼接的 O(n²) 常量因子）。
+    if value::is_string(a) || value::is_string(b) {
+        if let Some(mut units_a) = concat_operand_units(ctx, a)
+            && let Some(units_b) = concat_operand_units(ctx, b)
+        {
+            units_a.reserve(units_b.len());
+            units_a.extend_from_slice(&units_b);
+            return ctx.store_runtime_string(RuntimeString::from_utf16_units(units_a));
+        }
+    }
     if !value::is_string(a) && !value::is_string(b) {
         // 无原始字符串操作数：ToPrimitive 后仍可能产生字符串（String 对象、数组等）。
         let pa = ctx.to_primitive_hinted(a, ToPrimitiveHintKind::Number);
@@ -242,6 +306,22 @@ pub fn string_concat<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
 }
 
 pub fn string_concat_va<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Value {
+    // 快路径：全部实参都能廉价转 UTF-16 → 单次分配拼接（模板字符串主路径）。
+    let mut units: Option<Vec<u16>> = Some(Vec::new());
+    for index in 0..args_count as u32 {
+        let arg = ctx.read_shadow_arg(args_base, index);
+        match (&mut units, concat_operand_units(ctx, arg)) {
+            (Some(buf), Some(part)) => buf.extend_from_slice(&part),
+            _ => {
+                units = None;
+                break;
+            }
+        }
+    }
+    if let Some(units) = units {
+        return ctx.store_runtime_string(RuntimeString::from_utf16_units(units));
+    }
+    // 慢路径：任意操作数需 ToPrimitive 等 → UTF-8 字节拼接（原逻辑）。
     let mut bytes = Vec::new();
     for index in 0..args_count as u32 {
         let arg = ctx.read_shadow_arg(args_base, index);
