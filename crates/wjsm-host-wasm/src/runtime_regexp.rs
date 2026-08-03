@@ -601,6 +601,8 @@ pub(crate) fn regexp_string_split_default(
     sep: i64,
     limit: i64,
 ) -> i64 {
+    // 字符串表清扫触发点（split 产生子串 churn；入口处尚无新建字符串，安全）。
+    crate::runtime_strings_gc::maybe_sweep_runtime_strings(caller);
     let s = get_string_value(caller, receiver);
     let subject_lossy = s.to_utf8_lossy();
     let limit_val = if value::is_undefined(limit) {

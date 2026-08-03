@@ -240,6 +240,21 @@ pub(crate) fn reset_primordial_heap_before_restore(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
+    // 表被清空/重建后，旧的空槽索引全部失效，必须同步清空。
+    state
+        .string_free_slots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+    state
+        .runtime_string_approx_bytes
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    state
+        .runtime_string_next_sweep
+        .store(
+            crate::runtime_strings_gc::SWEEP_THRESHOLD_BYTES,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     state
         .native_callables
         .lock()
@@ -630,6 +645,21 @@ pub(crate) fn restore_startup_snapshot(
             .cloned()
             .map(RuntimeString::from_utf16_units)
             .collect();
+        // 表被整体替换，旧空槽索引失效：清空 free list 并重置清扫阈值。
+        state
+            .string_free_slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        state
+            .runtime_string_approx_bytes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        state
+            .runtime_string_next_sweep
+            .store(
+                crate::runtime_strings_gc::SWEEP_THRESHOLD_BYTES,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         let mut ncs = state
             .native_callables
             .lock()

@@ -393,7 +393,8 @@ fn collect_stream_controller_handle_values(
 }
 
 /// #331：补齐由 host side table 或 side-table-backed heap object 持有的 JS 引用。
-fn collect_side_table_backed_host_values(st: &mut crate::RuntimeState, out: &mut Vec<i64>) {
+/// 扫描 host 侧表并把其中引用的 raw 值收集到 out（供 GC 根 / 字符串表清扫复用）。
+pub(crate) fn collect_side_table_backed_host_values(st: &mut crate::RuntimeState, out: &mut Vec<i64>) {
     let mut http_response_handles = Vec::new();
     let mut fetch_response_handles = Vec::new();
     let mut fetch_request_handles = Vec::new();
@@ -515,7 +516,9 @@ fn collect_collection_values_for_marked_owners(
 /// 这里只复制 raw i64 引用值；侧表本体在锁内按引用迭代，避免 fixed-point 每轮深克隆。
 /// 返回 raw i64 列表，由调用方经 push_value_roots 解析为 handle。
 /// owner-backed 侧表只扫描当前 mark bitmap 已标记 owner 的内部引用。
-fn collect_host_table_values(
+/// 收集 host 侧表持有的全部 raw 值（microtask、promise、回调等）。
+/// `is_marked` 用于 realm ≥1 的条件 root（字符串表清扫传恒 true → 保守）。
+pub(crate) fn collect_host_table_values(
     ctx: &mut GcContext,
     is_marked: &mut dyn FnMut(Handle) -> bool,
 ) -> Vec<i64> {

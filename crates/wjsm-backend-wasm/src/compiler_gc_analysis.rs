@@ -12,7 +12,7 @@
 //! **GC 正确性红线**：unknown callee 一律保守 may-GC；只对单次赋值的函数声明变量建映射。
 
 use std::collections::HashMap;
-use wjsm_ir::{Builtin, Constant, FunctionId, Instruction, Module, ValueId};
+use wjsm_ir::{BinaryOp, Builtin, Constant, FunctionId, Instruction, Module, ValueId};
 
 /// callee 的静态来源（ValueId 的 def 判别）。
 #[derive(Debug, Clone)]
@@ -142,6 +142,23 @@ impl GcAnalysis {
                         }
                         Instruction::CallBuiltin { builtin, .. } => {
                             if builtin_may_trigger_gc(builtin) {
+                                direct_may_gc[func_idx] = true;
+                            }
+                        }
+
+                        // ── Binary：加法可能触发字符串拼接（host string_concat 产 runtime string handle）──
+                        // 双已知 f64 的 add 编译期直出 f64.add（无字符串语义）→ 不算 GC 指令；
+                        // 其余 add 运行期可能落 string_concat（host 字符串表分配，可能触发
+                        // 字符串清扫/GC）→ 保守 may-GC（与 AbstractCompare 同款判定）。
+                        Instruction::Binary {
+                            op: BinaryOp::Add,
+                            lhs,
+                            rhs,
+                            ..
+                        } => {
+                            let both_known_f64 = f64_analysis.value_known_f64(func_id, *lhs)
+                                && f64_analysis.value_known_f64(func_id, *rhs);
+                            if !both_known_f64 {
                                 direct_may_gc[func_idx] = true;
                             }
                         }

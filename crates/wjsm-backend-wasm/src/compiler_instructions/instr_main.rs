@@ -111,11 +111,16 @@ impl Compiler {
                             self.emit(WasmInstruction::Call(bigint_idx));
                             self.emit(WasmInstruction::Else);
                             // 其余语义（字符串拼接、BigInt/Number 混合 TypeError、ToNumeric）→ host
+                            // GC safepoint：string_concat 在 host 字符串表中分配（可能触发字符串
+                            // 清扫/GC），与 bigint_from_literal 同款 spill live handles。
+                            let spill = self.current_spill_locals();
+                            self.emit_safepoint_spill_prologue(&spill);
                             self.emit(WasmInstruction::LocalGet(lhs_l));
                             self.emit(WasmInstruction::LocalGet(rhs_l));
                             self.emit(WasmInstruction::Call(
                                 self.special_host_import_indices[&SpecialHostImport::StringConcat],
                             ));
+                            self.emit_safepoint_spill_epilogue(spill.len());
                             self.emit(WasmInstruction::End);
                             self.emit(WasmInstruction::End);
                         }

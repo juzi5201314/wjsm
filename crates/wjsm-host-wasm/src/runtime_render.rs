@@ -275,13 +275,30 @@ pub(crate) fn store_runtime_string<S>(caller: &Caller<'_, RuntimeState>, string:
 where
     S: Into<RuntimeString>,
 {
+    let s = string.into();
+    // 估算字节：UTF-16 2B/unit + 每项固定开销（清扫阈值判断用）。
+    caller.data().runtime_string_approx_bytes.fetch_add(
+        s.utf16_len() * 2 + crate::runtime_strings_gc::PER_ENTRY_OVERHEAD,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut strings = caller
         .data()
         .runtime_strings
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    // 优先复用被清扫回收的空槽（handle 索引稳定）。
+    if let Some(slot) = caller
+        .data()
+        .string_free_slots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pop()
+    {
+        strings[slot as usize] = s;
+        return value::encode_runtime_string_handle(slot);
+    }
     let handle = strings.len() as u32;
-    strings.push(string.into());
+    strings.push(s);
     value::encode_runtime_string_handle(handle)
 }
 
@@ -289,12 +306,26 @@ pub(crate) fn store_runtime_string_in_state<S>(state: &RuntimeState, string: S) 
 where
     S: Into<RuntimeString>,
 {
+    let s = string.into();
+    state.runtime_string_approx_bytes.fetch_add(
+        s.utf16_len() * 2 + crate::runtime_strings_gc::PER_ENTRY_OVERHEAD,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut strings = state
         .runtime_strings
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    if let Some(slot) = state
+        .string_free_slots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pop()
+    {
+        strings[slot as usize] = s;
+        return value::encode_runtime_string_handle(slot);
+    }
     let handle = strings.len() as u32;
-    strings.push(string.into());
+    strings.push(s);
     value::encode_runtime_string_handle(handle)
 }
 
