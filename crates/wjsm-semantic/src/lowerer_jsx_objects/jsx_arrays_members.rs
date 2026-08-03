@@ -144,6 +144,39 @@ impl Lowerer {
         }
 
         let mut current_block = block;
+        // Map/Set 绑定 + `keys().next().value`（最旧键淘汰惯用法）→ 直连 first-key 内建，
+        // 免迭代器对象创建、.next 属性读取与原生调用分派链。仅匹配无实参、
+        // 中间结果不落变量的精确形态（迭代器对象不可观察，语义等价）。
+        if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
+            && prop_ident.sym == "value"
+            && let swc_ast::Expr::Call(next_call) = member.obj.as_ref()
+            && next_call.args.is_empty()
+            && let swc_ast::Callee::Expr(next_callee) = &next_call.callee
+            && let swc_ast::Expr::Member(next_member) = next_callee.as_ref()
+            && let swc_ast::MemberProp::Ident(next_prop) = &next_member.prop
+            && next_prop.sym == "next"
+            && let swc_ast::Expr::Call(keys_call) = next_member.obj.as_ref()
+            && keys_call.args.is_empty()
+            && let swc_ast::Callee::Expr(keys_callee) = &keys_call.callee
+            && let swc_ast::Expr::Member(keys_member) = keys_callee.as_ref()
+            && let swc_ast::MemberProp::Ident(keys_prop) = &keys_member.prop
+            && (keys_prop.sym == "keys" || keys_prop.sym == "values")
+            && let swc_ast::Expr::Ident(receiver_ident) = keys_member.obj.as_ref()
+            && (self.is_map_binding(receiver_ident) || self.is_set_binding(receiver_ident))
+        {
+            let obj_val = self.lower_expr_then_continue(&keys_member.obj, &mut current_block)?;
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin: Builtin::MapSetFirstKey,
+                    args: vec![obj_val],
+                },
+            );
+            self.expr_merge_block = Some(current_block);
+            return Ok(dest);
+        }
         let obj_val = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
         // 命名空间对象（`import * as ns`）的导出属性已作为 live getter 预装在对象上，
         // 普通 GetProp 即可触发 getter 取最新值，无需快照填充（#45）。
@@ -205,6 +238,23 @@ impl Lowerer {
             // Ident（命名属性）→ GetProp（走原型链，或读取 length 等内置属性）
             // Ident（命名属性）→ 检查是否为 Symbol 的静态属性（如 Symbol.dispose）
             swc_ast::MemberProp::Ident(ident) => {
+                // Map/Set 绑定 + `size` 访问器 → 直连 size 内建（免通用
+                // Get + accessor getter 调用链）。
+                if ident.sym == "size"
+                    && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+                    && (self.is_map_binding(obj_ident) || self.is_set_binding(obj_ident))
+                {
+                    self.current_function.append_instruction(
+                        *block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::MapSetGetSize,
+                            args: vec![obj_val],
+                        },
+                    );
+                    self.expr_merge_block = Some(*block);
+                    return Ok(dest);
+                }
                 // 检查对象是否为 Symbol（编译时已知的 well-known symbol 访问）
                 if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
                     && obj_ident.sym == "Symbol"

@@ -394,6 +394,7 @@ impl Compiler {
             current_function_has_eval: false,
             current_home_object: None,
             current_function_id: None,
+            const_string_ptrs: HashMap::new(),
             mode,
             function_param_counts: Vec::new(),
             function_names: Vec::new(),

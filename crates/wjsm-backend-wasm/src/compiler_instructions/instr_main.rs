@@ -52,6 +52,12 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 } else {
                     let encoded = self.encode_constant(constant, module)?;
+                    // 常量字符串键：记录 dest → 数据段偏移，供 GetProp/SetProp/DeleteProp
+                    // 编译期 name_id 直传（免 symbol_property_key 运行时调用）。
+                    if let Constant::String(_) = constant {
+                        let ptr = value::decode_string_ptr(encoded);
+                        self.const_string_ptrs.insert(dest.0, ptr);
+                    }
                     self.emit(WasmInstruction::I64Const(encoded));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 }
@@ -444,11 +450,15 @@ impl Compiler {
                 self.emit_safepoint_spill_prologue(&spill);
                 // Pass full boxed i64 value — helper resolves tag internally.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-                // Key: lower 32 bits (string pointer or name_id).
-                self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(
-                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
-                ));
+                // Key：常量字符串键直接内联 name_id（数据段偏移），免 symbol_property_key。
+                if let Some(&ptr) = self.const_string_ptrs.get(&key.0) {
+                    self.emit(WasmInstruction::I32Const(ptr as i32));
+                } else {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
+                    self.emit(WasmInstruction::Call(
+                        self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                    ));
+                }
                 // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit_safepoint_spill_epilogue(spill.len());
@@ -461,11 +471,15 @@ impl Compiler {
                 self.emit_safepoint_spill_prologue(&spill);
                 // Pass full boxed i64 value — helper resolves tag internally.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-                // Key.
-                self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(
-                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
-                ));
+                // Key：常量字符串键直接内联 name_id（数据段偏移），免 symbol_property_key。
+                if let Some(&ptr) = self.const_string_ptrs.get(&key.0) {
+                    self.emit(WasmInstruction::I32Const(ptr as i32));
+                } else {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
+                    self.emit(WasmInstruction::Call(
+                        self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                    ));
+                }
                 // Value (i64 NaN-boxed).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
@@ -479,11 +493,15 @@ impl Compiler {
                 self.emit_safepoint_spill_prologue(&spill);
                 // delete obj.prop -> bool (成功删除返回 true)
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-                // Key: lower 32 bits.
-                self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(
-                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
-                ));
+                // Key：常量字符串键直接内联 name_id（数据段偏移），免 symbol_property_key。
+                if let Some(&ptr) = self.const_string_ptrs.get(&key.0) {
+                    self.emit(WasmInstruction::I32Const(ptr as i32));
+                } else {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
+                    self.emit(WasmInstruction::Call(
+                        self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                    ));
+                }
                 // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
                 self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
                 self.emit_safepoint_spill_epilogue(spill.len());

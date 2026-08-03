@@ -31,6 +31,9 @@ macro_rules! exec_ctx_collections {
     fn map_set_entries_snapshot(&mut self, handle: u32, is_set: bool) -> Vec<(Value, Value)> {
         crate::runtime_collections::map_set_entries_snapshot_impl(self.caller, handle, is_set)
     }
+    fn map_set_first_key(&mut self, handle: u32, is_set: bool) -> Option<Value> {
+        crate::runtime_collections::map_set_first_key_impl(self.caller, handle, is_set)
+    }
     fn create_map_set_iterator(&mut self, handle: u32, is_set: bool, kind: u8) -> Value {
         use crate::types::MapSetMethodKind;
         let method_kind = match kind {

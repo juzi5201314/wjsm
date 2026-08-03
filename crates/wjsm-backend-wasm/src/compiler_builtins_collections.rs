@@ -384,6 +384,7 @@ impl Compiler {
             | Builtin::MapSetKeys
             | Builtin::MapSetValues
             | Builtin::MapSetEntries
+            | Builtin::MapSetFirstKey
             // ── Set single-arg builtins ──
             | Builtin::SetConstructor
             // ── WeakMap single-arg builtins ──

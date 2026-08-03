@@ -58,6 +58,8 @@ pub(crate) struct MapEntry {
     pub(crate) live_count: u32,
     /// 已删除槽位数（触发压缩阈值）。
     pub(crate) deleted_count: u32,
+    /// 第一个存活槽位（keys()/values() 迭代器起点；删除推进，O(1) 取最旧元素）。
+    pub(crate) first_live: u32,
 }
 
 impl MapEntry {
@@ -70,6 +72,7 @@ impl MapEntry {
             deleted: Vec::new(),
             live_count: 0,
             deleted_count: 0,
+            first_live: 0,
         }
     }
 
@@ -81,6 +84,7 @@ impl MapEntry {
         self.deleted.clear();
         self.live_count = 0;
         self.deleted_count = 0;
+        self.first_live = 0;
     }
 }
 
@@ -95,6 +99,8 @@ pub(crate) struct SetEntry {
     pub(crate) live_count: u32,
     /// 已删除槽位数（触发压缩阈值）。
     pub(crate) deleted_count: u32,
+    /// 第一个存活槽位（迭代器起点；删除推进）。
+    pub(crate) first_live: u32,
 }
 
 impl SetEntry {
@@ -106,6 +112,7 @@ impl SetEntry {
             deleted: Vec::new(),
             live_count: 0,
             deleted_count: 0,
+            first_live: 0,
         }
     }
 
@@ -116,6 +123,7 @@ impl SetEntry {
         self.deleted.clear();
         self.live_count = 0;
         self.deleted_count = 0;
+        self.first_live = 0;
     }
 }
 

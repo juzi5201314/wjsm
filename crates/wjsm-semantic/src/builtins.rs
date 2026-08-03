@@ -699,6 +699,7 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::MapSetValues => ("Map.prototype.values", 1),
         Builtin::MapSetEntries => ("Map.prototype.entries", 1),
         Builtin::MapSetGetSize => ("Map.prototype.size", 1),
+        Builtin::MapSetFirstKey => ("MapSet.first_key", 1),
         // ── Set builtins ──
         Builtin::SetConstructor => ("Set", 0),
         Builtin::SetProtoAdd => ("Set.prototype.add", 2),

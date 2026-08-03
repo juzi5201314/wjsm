@@ -344,6 +344,8 @@ pub enum Builtin {
     MapSetKeys,
     MapSetValues,
     MapSetEntries,
+    /// `map.keys().next().value` 直连（免迭代器对象与 next 调用链）。
+    MapSetFirstKey,
     // ── Date built-in ─────────────────────────────────────────────────
     DateConstructor,
     /// `new Date(...)` lowering：编译时设置 new.target，与 DateConstructor 共用宿主实现。
@@ -825,6 +827,7 @@ impl Builtin {
             Self::MapSetKeys => "MapSet.keys",
             Self::MapSetValues => "MapSet.values",
             Self::MapSetEntries => "MapSet.entries",
+            Self::MapSetFirstKey => "MapSet.first_key",
             Self::DateConstructor => "Date",
             Self::DateConstructorNew => "new Date",
             Self::DateNow => "Date.now",

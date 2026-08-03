@@ -809,6 +809,15 @@ pub trait ExecContext: HeapContext {
     /// 存储 RuntimeString，返回 NaN-boxed 值。
     fn store_runtime_string(&mut self, s: crate::RuntimeString) -> Value;
 
+    /// 单缓冲 UTF-16 拼接：parts 全部为可廉价转 UTF-16 的原始值
+    /// （string / f64 / undefined / null / bool）时，一次分配直接拼接，
+    /// 免逐段中间 Vec 与多次拷贝（模板字符串主路径）。
+    /// 含不支持类型时返回 None，调用方回退通用慢路径。
+    /// 默认实现直接回退；wasm 后端覆盖为单缓冲实现。
+    fn concat_utf16_va(&mut self, _parts: &[Value]) -> Option<crate::RuntimeString> {
+        None
+    }
+
     // ═══ 私有字段 / 属性槽 ═══
 
     /// Own 属性槽：(value, flags, getter, setter)；不存在返回 None。
@@ -912,6 +921,10 @@ pub trait ExecContext: HeapContext {
     fn set_add(&mut self, handle: u32, key: Value);
     /// Map/Set 条目快照：Map → (key,value)；Set → (value,value)。
     fn map_set_entries_snapshot(&mut self, handle: u32, is_set: bool) -> Vec<(Value, Value)>;
+    /// Map/Set 首个存活键（`keys().next().value` 直连；空表返回 None）。
+    fn map_set_first_key(&mut self, _handle: u32, _is_set: bool) -> Option<Value> {
+        None
+    }
     /// 创建 Map/Set 迭代器（kind: 0=keys, 1=values, 2=entries）。
     fn create_map_set_iterator(&mut self, handle: u32, is_set: bool, kind: u8) -> Value;
 

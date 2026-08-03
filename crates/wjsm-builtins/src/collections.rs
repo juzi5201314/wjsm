@@ -237,6 +237,21 @@ pub fn map_set_clear<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value {
     value::encode_undefined()
 }
 
+pub fn map_set_first_key<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value {
+    // `map.keys().next().value` 直连：免迭代器对象创建与 next 调用链。
+    if let Some(h) = collection_handle(ctx, this_val, "__map_handle__") {
+        return ctx
+            .map_set_first_key(h, false)
+            .unwrap_or_else(value::encode_undefined);
+    }
+    if let Some(h) = collection_handle(ctx, this_val, "__set_handle__") {
+        return ctx
+            .map_set_first_key(h, true)
+            .unwrap_or_else(value::encode_undefined);
+    }
+    value::encode_undefined()
+}
+
 pub fn map_set_get_size<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value {
     if let Some(h) = collection_handle(ctx, this_val, "__map_handle__") {
         return value::encode_f64(ctx.map_set_size(h, false) as f64);

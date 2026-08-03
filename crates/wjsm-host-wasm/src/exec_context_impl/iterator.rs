@@ -149,7 +149,7 @@ macro_rules! exec_ctx_iterator {
         let ptr = crate::resolve_handle(self.caller, val)?;
         let sh = crate::read_object_property_by_name(self.caller, ptr, "__set_handle__")?;
         let set_handle_u32 = value::decode_f64(sh) as u32;
-        {
+        let first_live = {
             let table = self
                 .caller
                 .data()
@@ -159,7 +159,8 @@ macro_rules! exec_ctx_iterator {
             if (set_handle_u32 as usize) >= table.len() {
                 return None;
             }
-        }
+            table[set_handle_u32 as usize].first_live
+        };
         let mut iters = self
             .caller
             .data()
@@ -170,7 +171,7 @@ macro_rules! exec_ctx_iterator {
         iters.push(crate::IteratorState::SetValueIter {
             set_handle: set_handle_u32,
             owner: val,
-            index: 0,
+            index: first_live,
         });
         Some(value::encode_handle(value::TAG_ITERATOR, handle))
     }

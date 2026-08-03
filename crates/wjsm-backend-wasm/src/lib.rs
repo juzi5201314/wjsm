@@ -290,6 +290,9 @@ struct Compiler {
     current_home_object: Option<HomeObject>,
     /// 当前正在编译的 JS 函数 ID，用于派生构造器 super() 解析。
     current_function_id: Option<wjsm_ir::FunctionId>,
+    /// 当前函数内常量字符串键（ValueId → 数据段偏移）：GetProp/SetProp/DeleteProp
+    /// 的编译期 name_id 直传（免 symbol_property_key 运行时调用）。按函数清空。
+    const_string_ptrs: HashMap<u32, u32>,
     mode: CompileMode,
     function_param_counts: Vec<u32>,
     function_names: Vec<String>,

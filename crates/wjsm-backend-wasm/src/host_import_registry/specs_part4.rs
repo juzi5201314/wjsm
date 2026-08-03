@@ -357,6 +357,12 @@ pub(crate) static SPECS_PART4: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "map_set_first_key",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::MapSetFirstKey)),
+        group: None,
+    },
+    HostImportSpec {
         name: "map_set_for_each",
         type_idx: 12,
         key: Some(HostImportKey::Builtin(Builtin::MapSetForEach)),

@@ -271,6 +271,7 @@ impl Compiler {
         // 会全部退化为通用调用路径（tag 分派 + call_indirect）。
         self.current_home_object = function.home_object;
         self.current_function_id = Some(function_id);
+        self.const_string_ptrs.clear();
         self.ssa_local_base = if self.mode == CompileMode::Eval {
             function.params().len() as u32
         } else {
@@ -385,6 +386,7 @@ impl Compiler {
         self.current_func_returns_value = true;
         self.current_home_object = function.home_object;
         self.current_function_id = Some(function_id);
+        self.const_string_ptrs.clear();
         self.begin_function_debug(function.name());
         // WASM params（Shadow）: local 0 = env_obj (i64), local 1 = this_val (i64),
         //              local 2 = args_base_ptr (i32), local 3 = args_count (i32)

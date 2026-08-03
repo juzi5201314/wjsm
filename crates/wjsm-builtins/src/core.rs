@@ -306,25 +306,30 @@ pub fn string_concat<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
 }
 
 pub fn string_concat_va<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Value {
-    // 快路径：全部实参都能廉价转 UTF-16 → 单次分配拼接（模板字符串主路径）。
-    let mut units: Option<Vec<u16>> = Some(Vec::new());
+    // 快路径：全部实参都能廉价转 UTF-16 → 宿主单缓冲拼接（模板字符串主路径），
+    // 免逐段中间 Vec 与多次拷贝。
+    let mut parts: Vec<Value> = Vec::with_capacity(args_count as usize);
+    let mut all_cheap = true;
     for index in 0..args_count as u32 {
         let arg = ctx.read_shadow_arg(args_base, index);
-        match (&mut units, concat_operand_units(ctx, arg)) {
-            (Some(buf), Some(part)) => buf.extend_from_slice(&part),
-            _ => {
-                units = None;
-                break;
-            }
+        if !(value::is_string(arg)
+            || value::is_f64(arg)
+            || value::is_undefined(arg)
+            || value::is_null(arg)
+            || value::is_bool(arg))
+        {
+            all_cheap = false;
         }
+        parts.push(arg);
     }
-    if let Some(units) = units {
-        return ctx.store_runtime_string(RuntimeString::from_utf16_units(units));
+    if all_cheap
+        && let Some(units) = ctx.concat_utf16_va(&parts)
+    {
+        return ctx.store_runtime_string(units);
     }
     // 慢路径：任意操作数需 ToPrimitive 等 → UTF-8 字节拼接（原逻辑）。
     let mut bytes = Vec::new();
-    for index in 0..args_count as u32 {
-        let arg = ctx.read_shadow_arg(args_base, index);
+    for arg in parts {
         bytes.extend(concat_operand_bytes(ctx, arg));
     }
     ctx.store_string_owned(String::from_utf8(bytes).unwrap_or_default())

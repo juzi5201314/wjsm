@@ -95,6 +95,7 @@ pub(crate) fn define_collections_buffers(
         },
     )?;
     wrap1!("map_set_keys", wjsm_builtins::collections::map_set_keys);
+    wrap1!("map_set_first_key", wjsm_builtins::collections::map_set_first_key);
     wrap1!("map_set_values", wjsm_builtins::collections::map_set_values);
     wrap1!(
         "map_set_entries",

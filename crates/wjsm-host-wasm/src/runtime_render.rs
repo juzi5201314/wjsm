@@ -185,6 +185,56 @@ pub(crate) fn read_string_bytes(caller: &mut Caller<'_, RuntimeState>, ptr: u32)
     read_string_bytes_mem(caller, &memory, ptr)
 }
 
+/// 单缓冲 UTF-16 拼接（模板字符串 / 字符串拼接主路径）。
+///
+/// parts 全部为可廉价转 UTF-16 的原始值时，一次分配直接写入，免逐段中间 Vec：
+/// - 运行时表字符串：持锁借用 UTF-16 单元直接 extend（零拷贝）；
+/// - wasm 内存静态字符串：读 UTF-8 字节解码后写入；
+/// - f64：format_number_js 格式化后写入；
+/// - undefined/null/bool：字面量写入。
+///
+/// 含不支持类型返回 None，调用方回退通用慢路径。
+pub(crate) fn concat_utf16_va(
+    caller: &mut Caller<'_, RuntimeState>,
+    parts: &[i64],
+) -> Option<RuntimeString> {
+    let mut units: Vec<u16> = Vec::new();
+    for &part in parts {
+        if value::is_runtime_string_handle(part) {
+            let handle = value::decode_runtime_string_handle(part) as usize;
+            let strings = caller
+                .data()
+                .runtime_strings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let rs = strings.get(handle)?;
+            units.extend_from_slice(rs.as_utf16_units());
+        } else if value::is_string(part) {
+            let bytes = read_string_bytes(caller, value::decode_string_ptr(part));
+            match std::str::from_utf8(&bytes) {
+                Ok(text) => units.extend(text.encode_utf16()),
+                Err(_) => units.extend(String::from_utf8_lossy(&bytes).encode_utf16()),
+            }
+        } else if value::is_f64(part) {
+            let text = format_number_js(value::decode_f64(part));
+            units.extend(text.encode_utf16());
+        } else if value::is_undefined(part) {
+            units.extend_from_slice(&[0x75, 0x6e, 0x64, 0x65, 0x66, 0x69, 0x6e, 0x65, 0x64]); // "undefined"
+        } else if value::is_null(part) {
+            units.extend_from_slice(&[0x6e, 0x75, 0x6c, 0x6c]); // "null"
+        } else if value::is_bool(part) {
+            if value::decode_bool(part) {
+                units.extend_from_slice(&[0x74, 0x72, 0x75, 0x65]); // "true"
+            } else {
+                units.extend_from_slice(&[0x66, 0x61, 0x6c, 0x73, 0x65]); // "false"
+            }
+        } else {
+            return None;
+        }
+    }
+    Some(RuntimeString::from_utf16_units(units))
+}
+
 pub(crate) fn read_value_string_utf8_lossy_bytes(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,

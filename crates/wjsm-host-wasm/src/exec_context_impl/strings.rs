@@ -115,6 +115,9 @@ macro_rules! exec_ctx_strings {
     fn get_runtime_string(&mut self, val: Value) -> wjsm_host::RuntimeString {
         crate::get_string_value(self.caller, val)
     }
+    fn concat_utf16_va(&mut self, parts: &[Value]) -> Option<wjsm_host::RuntimeString> {
+        crate::runtime_render::concat_utf16_va(self.caller, parts)
+    }
     fn store_runtime_string(&mut self, s: wjsm_host::RuntimeString) -> Value {
         // 阈值检查在 push 前：新字符串尚未入表，天然属于存活集（拼接快路径主入口）。
         crate::runtime_strings_gc::maybe_sweep_runtime_strings(self.caller);

@@ -91,6 +91,7 @@ fn map_compact(caller: &Caller<'_, RuntimeState>, entry: &mut crate::MapEntry) {
     }
     entry.keys = keys;
     entry.values = values;
+    entry.first_live = 0;
     map_entry_reindex(caller, entry);
 }
 
@@ -104,6 +105,7 @@ fn set_compact(caller: &Caller<'_, RuntimeState>, entry: &mut crate::SetEntry) {
         }
     }
     entry.values = values;
+    entry.first_live = 0;
     set_entry_reindex(caller, entry);
 }
 
@@ -117,6 +119,7 @@ pub(crate) fn map_entry_reindex<C: AsContext<Data = RuntimeState>>(
     entry.deleted.resize(entry.keys.len(), false);
     entry.live_count = entry.keys.len() as u32;
     entry.deleted_count = 0;
+    entry.first_live = 0;
     for (pos, &key) in entry.keys.iter().enumerate() {
         entry
             .index
@@ -134,6 +137,7 @@ pub(crate) fn set_entry_reindex<C: AsContext<Data = RuntimeState>>(
     entry.deleted.resize(entry.values.len(), false);
     entry.live_count = entry.values.len() as u32;
     entry.deleted_count = 0;
+    entry.first_live = 0;
     for (pos, &value) in entry.values.iter().enumerate() {
         entry
             .index
@@ -156,12 +160,17 @@ pub(crate) fn map_set_impl(caller: &mut Caller<'_, RuntimeState>, handle: u32, k
         entry.values[pos as usize] = val;
         return;
     }
+    let was_empty = entry.live_count == 0;
     let pos = entry.keys.len() as u32;
     entry.keys.push(key);
     entry.values.push(val);
     entry.deleted.push(false);
     entry.index.insert(hash, pos);
     entry.live_count += 1;
+    // 空表追加（或全部旧槽已删除）时，新槽即第一个存活槽位。
+    if was_empty {
+        entry.first_live = pos;
+    }
 }
 
 /// Map.prototype.get 实现。
@@ -195,11 +204,15 @@ pub(crate) fn set_add_impl(caller: &mut Caller<'_, RuntimeState>, handle: u32, v
     if set_find_slot(caller, entry, value, hash).is_some() {
         return;
     }
+    let was_empty = entry.live_count == 0;
     let pos = entry.values.len() as u32;
     entry.values.push(value);
     entry.deleted.push(false);
     entry.index.insert(hash, pos);
     entry.live_count += 1;
+    if was_empty {
+        entry.first_live = pos;
+    }
 }
 
 /// Map/Set.prototype.has 实现。
@@ -258,7 +271,18 @@ pub(crate) fn map_set_delete_impl(
         entry.deleted_count += 1;
         entry.live_count -= 1;
         entry.index.remove(&hash);
-        if entry.deleted_count > 64 && entry.deleted_count >= entry.live_count {
+        // 删除的是第一个存活槽位时，推进 first_live（keys().next() O(1) 取最旧）。
+        if pos == entry.first_live {
+            while entry.first_live < entry.values.len() as u32
+                && entry.deleted[entry.first_live as usize]
+            {
+                entry.first_live += 1;
+            }
+        }
+        if entry.deleted_count > 64
+            && (entry.deleted_count >= entry.live_count
+                || entry.deleted_count * 4 >= entry.values.len() as u32)
+        {
             set_compact(caller, entry);
         }
         true
@@ -279,7 +303,18 @@ pub(crate) fn map_set_delete_impl(
         entry.deleted_count += 1;
         entry.live_count -= 1;
         entry.index.remove(&hash);
-        if entry.deleted_count > 64 && entry.deleted_count >= entry.live_count {
+        // 删除的是第一个存活槽位时，推进 first_live（keys().next() O(1) 取最旧）。
+        if pos == entry.first_live {
+            while entry.first_live < entry.keys.len() as u32
+                && entry.deleted[entry.first_live as usize]
+            {
+                entry.first_live += 1;
+            }
+        }
+        if entry.deleted_count > 64
+            && (entry.deleted_count >= entry.live_count
+                || entry.deleted_count * 4 >= entry.keys.len() as u32)
+        {
             map_compact(caller, entry);
         }
         true
@@ -417,6 +452,11 @@ pub(crate) fn map_set_create_iterator(
                     .map_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
+                let first_live = if (map_handle_u32 as usize) < table.len() {
+                    table[map_handle_u32 as usize].first_live
+                } else {
+                    0
+                };
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller
@@ -428,7 +468,7 @@ pub(crate) fn map_set_create_iterator(
                     iters.push(IteratorState::MapKeyIter {
                         map_handle: map_handle_u32,
                         owner: this_val,
-                        index: 0,
+                        index: first_live,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
                     drop(iters);
@@ -442,6 +482,11 @@ pub(crate) fn map_set_create_iterator(
                     .set_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
+                let first_live = if (set_handle_u32 as usize) < table.len() {
+                    table[set_handle_u32 as usize].first_live
+                } else {
+                    0
+                };
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller
@@ -453,7 +498,7 @@ pub(crate) fn map_set_create_iterator(
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
                         owner: this_val,
-                        index: 0,
+                        index: first_live,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
                     drop(iters);
@@ -470,6 +515,11 @@ pub(crate) fn map_set_create_iterator(
                     .map_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
+                let first_live = if (map_handle_u32 as usize) < table.len() {
+                    table[map_handle_u32 as usize].first_live
+                } else {
+                    0
+                };
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller
@@ -481,7 +531,7 @@ pub(crate) fn map_set_create_iterator(
                     iters.push(IteratorState::MapValueIter {
                         map_handle: map_handle_u32,
                         owner: this_val,
-                        index: 0,
+                        index: first_live,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
                     drop(iters);
@@ -495,6 +545,11 @@ pub(crate) fn map_set_create_iterator(
                     .set_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
+                let first_live = if (set_handle_u32 as usize) < table.len() {
+                    table[set_handle_u32 as usize].first_live
+                } else {
+                    0
+                };
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller
@@ -506,7 +561,7 @@ pub(crate) fn map_set_create_iterator(
                     iters.push(IteratorState::SetValueIter {
                         set_handle: set_handle_u32,
                         owner: this_val,
-                        index: 0,
+                        index: first_live,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
                     drop(iters);
@@ -523,6 +578,11 @@ pub(crate) fn map_set_create_iterator(
                     .map_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
+                let first_live = if (map_handle_u32 as usize) < table.len() {
+                    table[map_handle_u32 as usize].first_live
+                } else {
+                    0
+                };
                 if (map_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller
@@ -534,7 +594,7 @@ pub(crate) fn map_set_create_iterator(
                     iters.push(IteratorState::MapEntryIter {
                         map_handle: map_handle_u32,
                         owner: this_val,
-                        index: 0,
+                        index: first_live,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
                     drop(iters);
@@ -548,6 +608,11 @@ pub(crate) fn map_set_create_iterator(
                     .set_table
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
+                let first_live = if (set_handle_u32 as usize) < table.len() {
+                    table[set_handle_u32 as usize].first_live
+                } else {
+                    0
+                };
                 if (set_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller
@@ -559,7 +624,7 @@ pub(crate) fn map_set_create_iterator(
                     iters.push(IteratorState::SetEntryIter {
                         set_handle: set_handle_u32,
                         owner: this_val,
-                        index: 0,
+                        index: first_live,
                     });
                     let iterator = value::encode_handle(value::TAG_ITERATOR, iter_handle);
                     drop(iters);
@@ -593,6 +658,33 @@ async fn invoke_collection_callback_async(
                 None
             }
         };
+    }
+}
+
+/// Map/Set 首个存活键（keys()/values().next().value 的直连实现；O(1)）。
+pub(crate) fn map_set_first_key_impl(
+    caller: &Caller<'_, RuntimeState>,
+    handle: u32,
+    is_set: bool,
+) -> Option<i64> {
+    if is_set {
+        let table = caller
+            .data()
+            .set_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let entry = table.get(handle as usize)?;
+        let idx = entry.first_live as usize;
+        (idx < entry.values.len()).then(|| entry.values[idx])
+    } else {
+        let table = caller
+            .data()
+            .map_table
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let entry = table.get(handle as usize)?;
+        let idx = entry.first_live as usize;
+        (idx < entry.keys.len()).then(|| entry.keys[idx])
     }
 }
 
