@@ -61,6 +61,12 @@ impl Compiler {
         // 克隆模块供 LICM 原地变换；编译阶段统一使用该克隆，保证提升后的
         // preheader 块（含被移出循环的调用）进入 structured/cfg 编译。
         let mut module = module.clone();
+        // 空跳转块消除（CFG 清洗）：语句级 is_exception 分叉的正常路径常落到一个
+        // 空 continue 跳板（无指令、无 phi、仅无条件 Jump），它对循环更新块产生
+        // 非循环头后向边，needs_cfg_dispatch 会把整个函数降级为 cfg 状态机
+        // （每迭代多次分派，循环性能约 2 倍损失）。在 f64/gc 分析与 LICM 之前
+        // 原地消除，保证后续分析/编译基于清洗后的 CFG。
+        crate::compiler_control::eliminate_empty_jump_blocks(&mut module);
         if licm_disabled_by_env() {
             // 禁用 LICM：直接以模块自身做一轮 F64+Gc 分析（与"无提升复用路径"
             // 等价，不依赖任何 LICM 预分析结果）；hoisted_preheader_blocks
