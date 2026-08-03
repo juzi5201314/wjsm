@@ -8,7 +8,8 @@
 //!
 //! ## 为什么
 //!
-//! 启用 `Store::epoch_deadline_async_yield_and_update` 之后（docs/async-scheduler.md），
+//! 启用 `Store::epoch_deadline_async_yield_and_update` 之后
+//! （docs/book/src/internals/runtime-features/async-scheduler.md），
 //! 任何经该 Store 的 Wasm 实例化或调用都必须走 async API；否则 epoch 抢占无法 yield，
 //! 轻则丢微任务调度公平性，重则在重入路径上死锁/panic。本测试是这条架构契约的硬卡点。
 //!
@@ -31,9 +32,9 @@
 //!    避免与重入助手混淆。
 //!
 //! 3. **架构演进废弃本测试**：Wasmtime 模型变更或 epoch yielding 被替换。这种情况下
-//!    *删除*本测试连同 docs/async-scheduler.md 一并更新，**而不是**给某条 pattern 加白名单
-//!    或加 `#[ignore]`。曾经的临时白名单（`STRICT_AUDIT` + `allow_alive_sync`）已在
-//!    Task 16 完工时删除——不要重新引入。
+//!    *删除*本测试连同 docs/book/src/internals/runtime-features/async-scheduler.md 一并更新，
+//!    **而不是**给某条 pattern 加白名单或加 `#[ignore]`。曾经的临时白名单（`STRICT_AUDIT`
+//!    + `allow_alive_sync`）已在 Task 16 完工时删除——不要重新引入。
 //!
 //! 出现「我先 `#[ignore]` 跑通别的再说」的冲动时，先翻 `git log` 看上一个迁移
 //! commit 是怎么做的；再决定是否真的要绕。

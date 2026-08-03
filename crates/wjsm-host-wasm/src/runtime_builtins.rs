@@ -788,7 +788,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(value::encode_undefined())
         }
         NativeCallable::EvalIndirect | NativeCallable::EvalFunction(_) => {
-            // sync 路径已退役（参见 docs/async-scheduler.md / async_reentry_audit）；
+            // sync 路径已退役（参见 async_reentry_audit 测试与
+            // docs/book/src/internals/runtime-features/async-scheduler.md）；
             // 唯一进入点是 sync eval 解释器内嵌套 eval，本身已改为错误返回。
             set_runtime_error(
                 caller.data(),
