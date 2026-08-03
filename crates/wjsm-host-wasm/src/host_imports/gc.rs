@@ -12,6 +12,9 @@ use crate::RuntimeState;
 /// proxy trap、非普通对象、未命中/创建等）。
 const FAST_PATH_MISS: i64 = (value::BOX_BASE as i64) | (0x1E_i64 << 32);
 
+/// 快路径链查找的最大深度：超出即回退慢路径（防御异常原型链环）。
+const FAST_PATH_MAX_DEPTH: u32 = 32;
+
 /// 同步数据槽读取快路径：仅当 `object` 是普通对象（TAG_OBJECT）且属性在原型链上
 /// 以**数据槽**形态存在时直接返回槽值（闭包 env 变量读取的典型形态），否则返回
 /// `FAST_PATH_MISS`。语义与 `get_by_name_id` 的 `lookup_property_on_proto` 分支
@@ -36,10 +39,13 @@ fn gc_obj_get_data_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, key:
     }
 }
 
-/// 同步数据槽写入快路径：仅处理「receiver 自身已存在可写数据槽」的就地写
-/// （闭包 env 变量更新的典型形态：wasm 侧链查找已定位 owner，receiver == owner，
-/// 槽必然在 receiver 自身上）。其余情况（槽在原型链上 / accessor / 非可写 /
-/// 未命中需创建）一律回退慢路径，由 async `ordinary_set_by_name_id` 完整处理。
+/// 同步数据槽写入快路径：覆盖「就地写」与「在普通对象上定义新数据槽」两种形态，
+/// 与 async `ordinary_set_by_name_id` 逐分支对齐：
+/// - receiver 自身存在可写数据槽 → 就地写（闭包 env 变量更新的典型形态）；
+/// - 原型链上存在 accessor / 非可写数据槽 / 数组 / proxy → 回退慢路径
+///   （setter 调用 / 严格模式失败 / ArrayNamedPropsStore 语义）；
+/// - 链上未命中或命中可写数据槽（shadow）→ receiver 可扩展时定义数据槽
+///   （闭包 env 创建时首个 SetProp 的典型形态），不可扩展回退慢路径。
 fn gc_obj_set_data_impl(
     caller: &mut Caller<'_, RuntimeState>,
     object: i64,
@@ -55,20 +61,57 @@ fn gc_obj_set_data_impl(
     // 已确认 is_object：handle 即低 32 位（handle_index_of 对普通对象直接取低 32 位）。
     let handle = (object as u64 & 0xFFFF_FFFF) as u32;
     let access = caller.data().heap_access_v2().clone();
-    match access.get_property_slot(handle, key) {
-        Ok(Some(slot)) => {
-            if slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0
-                || slot.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0
-            {
-                return FAST_PATH_MISS;
-            }
-            match access.set_property(handle, key, value as u64) {
-                // value 按位解释为槽值（NaN-boxed i64 → u64）。
-                Ok(()) => value::encode_undefined(),
-                Err(_) => FAST_PATH_MISS,
-            }
+    // 1) 自身已有槽：数据 + 可写 → 就地写；否则回退。
+    if let Ok(Some(slot)) = access.get_property_slot(handle, key) {
+        if slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0
+            || slot.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0
+        {
+            return FAST_PATH_MISS;
         }
-        _ => FAST_PATH_MISS,
+        return match access.set_property(handle, key, value as u64) {
+            // value 按位解释为槽值（NaN-boxed i64 → u64）。
+            Ok(()) => value::encode_undefined(),
+            Err(_) => FAST_PATH_MISS,
+        };
+    }
+    // 2) 链查找：accessor / 非可写 / 数组 / proxy → 回退；
+    //    可写数据槽（外层）或未命中 → 在 receiver 上定义（shadow/创建）。
+    let mut current = handle;
+    for _ in 0..FAST_PATH_MAX_DEPTH {
+        match access.get_property_slot(current, key) {
+            Ok(Some(slot)) => {
+                if slot.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0
+                    || slot.flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0
+                {
+                    return FAST_PATH_MISS;
+                }
+                break; // 外层可写数据槽 → shadow 定义
+            }
+            Ok(None) => {
+                // 数组在链上拥有命名属性（ArrayNamedPropsStore）→ 回退
+                if access.object_type(current).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY)) {
+                    return FAST_PATH_MISS;
+                }
+                let Ok(proto) = access.prototype(current) else {
+                    return FAST_PATH_MISS;
+                };
+                if proto == 0xFFFF_FFFF || proto == current || proto & 0x8000_0000 != 0 {
+                    break; // 链尽头 → 创建定义
+                }
+                current = proto;
+            }
+            Err(_) => return FAST_PATH_MISS,
+        }
+    }
+    // 与 define_value_on_receiver 一致：不可扩展 → 回退慢路径（严格模式抛错语义）。
+    if !crate::is_extensible_impl(caller, object) {
+        return FAST_PATH_MISS;
+    }
+    match access.set_property(handle, key, value as u64) {
+        // value 按位解释为槽值（NaN-boxed i64 → u64）；未命中时以默认
+        // 数据属性 flags（configurable|enumerable|writable）定义新槽。
+        Ok(()) => value::encode_undefined(),
+        Err(_) => FAST_PATH_MISS,
     }
 }
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use wasmtime::{AsContext, Caller};
@@ -46,6 +47,49 @@ impl PropertyKeyTable {
 }
 
 pub(crate) type SharedPropertyKeyTable = Arc<Mutex<PropertyKeyTable>>;
+
+/// 内存 c-string 键 → 规范 name_id 的直接映射缓存（热路径 canonicalize 用）。
+///
+/// 不用 HashMap：闭包 env 变量访问等热循环每次属性访问都 canonicalize 同一常量键，
+/// HashMap 的 SipHash + 分配占可测开销；256 路直接映射命中只需一次取模 + 一次比较，
+/// 且无锁（AtomicU64，Relaxed 已足够：同一 index 的 canonicalize 结果幂等，
+/// 陈旧读也返回同一 id）。冲突时重新 canonicalize（幂等，安全）。
+#[derive(Debug)]
+pub(crate) struct MemoryNameIdCache {
+    entries: [AtomicU64; MEMORY_NAME_ID_CACHE_WAYS],
+}
+
+const MEMORY_NAME_ID_CACHE_WAYS: usize = 256;
+const MEMORY_NAME_ID_EMPTY: u64 = u64::MAX;
+
+impl Default for MemoryNameIdCache {
+    fn default() -> Self {
+        Self {
+            entries: std::array::from_fn(|_| AtomicU64::new(MEMORY_NAME_ID_EMPTY)),
+        }
+    }
+}
+
+impl MemoryNameIdCache {
+    #[inline]
+    pub(crate) fn lookup(&self, index: u32) -> Option<u32> {
+        let packed = self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)]
+            .load(Ordering::Relaxed);
+        if packed == MEMORY_NAME_ID_EMPTY || packed >> 32 != u64::from(index) {
+            None
+        } else {
+            Some(packed as u32)
+        }
+    }
+
+    #[inline]
+    pub(crate) fn insert(&self, index: u32, id: u32) {
+        self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)].store(
+            (u64::from(index) << 32) | u64::from(id),
+            Ordering::Relaxed,
+        );
+    }
+}
 
 pub(crate) fn intern_runtime_property_key(state: &RuntimeState, key: RuntimeString) -> u32 {
     let mut keys = state
@@ -101,34 +145,17 @@ pub(crate) fn canonicalize_v2_name_id_with_env<C: AsContext<Data = RuntimeState>
             // 故可按 (memory index → 规范 name_id) 缓存。闭包 env 变量访问等热循环
             // 每次属性访问都 canonicalize 同一常量键，命中缓存跳过读内存、UTF-8
             // 转换、intern 哈希与临时分配。
-            if let Some(&cached) = ctx
-                .as_context()
-                .data()
-                .memory_name_id_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(&index)
-            {
+            if let Some(cached) = ctx.as_context().data().memory_name_id_cache.lookup(index) {
                 return Some(cached);
             }
             let bytes = crate::runtime_render::read_string_bytes_mem(ctx, &env.memory, index);
             let key = RuntimeString::from_utf8_lossy(&bytes);
             let canonical = intern_runtime_property_key(ctx.as_context().data(), key);
             let encoded = encode_runtime_string_name_id(canonical);
-            {
-                let mut cache = ctx
-                    .as_context()
-                    .data()
-                    .memory_name_id_cache
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                // 上限保护：运行期动态字符串键可能大量增长；缓存可安全清空
-                // （canonicalize 幂等，intern 表只增），防止内存无界膨胀。
-                if cache.len() >= 4096 {
-                    cache.clear();
-                }
-                cache.insert(index, encoded);
-            }
+            ctx.as_context()
+                .data()
+                .memory_name_id_cache
+                .insert(index, encoded);
             Some(encoded)
         }
         DecodedNameId::RuntimeString(_) | DecodedNameId::Symbol(_) => Some(name_id),

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
@@ -175,6 +175,7 @@ mod runtime_source_map;
 
 mod runtime_startup;
 mod runtime_string;
+mod runtime_strings_gc;
 mod runtime_structured_clone;
 mod runtime_streams;
 mod runtime_typedarray;
@@ -1135,6 +1136,9 @@ impl Clone for RuntimeState {
             iterators: self.iterators.clone(),
             enumerators: self.enumerators.clone(),
             runtime_strings: self.runtime_strings.clone(),
+            string_free_slots: self.string_free_slots.clone(),
+            runtime_string_approx_bytes: self.runtime_string_approx_bytes.clone(),
+            runtime_string_next_sweep: self.runtime_string_next_sweep.clone(),
             runtime_property_keys: self.runtime_property_keys.clone(),
             memory_string_cache: self.memory_string_cache.clone(),
             memory_name_id_cache: self.memory_name_id_cache.clone(),
@@ -1331,13 +1335,19 @@ struct RuntimeState {
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
     runtime_strings: Arc<Mutex<Vec<runtime_string::RuntimeString>>>,
+    /// 字符串表清扫回收的空槽（handle 稳定复用：存字符串时优先 pop）。
+    string_free_slots: Arc<Mutex<Vec<u32>>>,
+    /// 字符串表估算字节（UTF-16 2B/unit + 每项 64B 开销），清扫阈值判断用。
+    runtime_string_approx_bytes: Arc<AtomicUsize>,
+    /// 下次触发清扫的估算字节阈值（清扫后按存活量翻倍，避免合法大活集反复清扫）。
+    runtime_string_next_sweep: Arc<AtomicUsize>,
     runtime_property_keys: crate::property_key::SharedPropertyKeyTable,
     /// 线性内存 c-string 偏移缓存：避免 find_memory_c_string 反复全堆 memmem。
     memory_string_cache: Arc<Mutex<HashMap<String, u32>>>,
     /// 内存 c-string 键 → 规范 name_id 缓存：热路径（闭包 env 变量访问等）每次
     /// 属性访问都经 canonicalize_v2_name_id_with_env，常量键内容写入后不再变更，
-    /// 命中缓存可跳过读内存 + UTF-8 转换 + intern + 哈希，只做一次 HashMap 查询。
-    memory_name_id_cache: Arc<Mutex<HashMap<u32, u32>>>,
+    /// 命中缓存可跳过读内存 + UTF-8 转换 + intern + 哈希，只做一次直接映射查询。
+    memory_name_id_cache: Arc<crate::property_key::MemoryNameIdCache>,
     /// 进程内可捕获的诊断输出（如 unhandled rejection 警告）；真实 CLI 由 execute 刷到 stderr。
     diagnostics: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
@@ -1964,11 +1974,16 @@ impl RuntimeState {
             iterators: Arc::new(Mutex::new(Vec::new())),
             enumerators: Arc::new(Mutex::new(Vec::new())),
             runtime_strings: Arc::new(Mutex::new(Vec::new())),
+            string_free_slots: Arc::new(Mutex::new(Vec::new())),
+            runtime_string_approx_bytes: Arc::new(AtomicUsize::new(0)),
+            runtime_string_next_sweep: Arc::new(AtomicUsize::new(
+                crate::runtime_strings_gc::SWEEP_THRESHOLD_BYTES,
+            )),
             runtime_property_keys: Arc::new(Mutex::new(
                 crate::property_key::PropertyKeyTable::new(),
             )),
             memory_string_cache: Arc::new(Mutex::new(HashMap::new())),
-            memory_name_id_cache: Arc::new(Mutex::new(HashMap::new())),
+            memory_name_id_cache: Arc::new(crate::property_key::MemoryNameIdCache::default()),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             runtime_error: Arc::new(Mutex::new(None)),
             host_temp_roots: Arc::new(Mutex::new(Vec::new())),
