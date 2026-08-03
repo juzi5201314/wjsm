@@ -229,6 +229,62 @@ pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64)
     }
 }
 
+/// SameValueZero 稳定哈希：内容相等的值（含 -0.0/+0.0、任意 NaN、内容相同的字符串）
+/// 必须产生相同哈希，供 Map/Set 哈希索引使用。非字符串值直接按编码身份；
+/// 字符串按 UTF-16 内容哈希（运行时表字符串与 wasm 内存静态字符串统一处理）。
+/// 泛型于 `AsContext`：Caller 与 Store/state-only 路径（如 worker 反序列化）皆可用。
+pub(crate) fn same_value_zero_stable_hash<C: AsContext<Data = RuntimeState>>(
+    ctx: &C,
+    val: i64,
+) -> u64 {
+    if value::is_f64(val) {
+        let bits = val as u64;
+        // -0.0 → +0.0（SameValueZero 视二者相等）。
+        if bits == 0x8000_0000_0000_0000 {
+            return 0;
+        }
+        // 任意 NaN → 规范 NaN（SameValueZero 视所有 NaN 相等）。
+        if (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000
+            && (bits & 0x000F_FFFF_FFFF_FFFF) != 0
+        {
+            return 0x7FF8_0000_0000_0000;
+        }
+        return bits;
+    }
+    if value::is_string(val) || value::is_runtime_string_handle(val) {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64 偏移基
+        if value::is_runtime_string_handle(val) {
+            let handle = value::decode_runtime_string_handle(val) as usize;
+            let strings = ctx
+                .as_context()
+                .data()
+                .runtime_strings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(rs) = strings.get(handle) {
+                for unit in rs.as_utf16_units() {
+                    hash ^= *unit as u64;
+                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        } else if let Some(env) = ctx.as_context().data().cached_wasm_env.as_ref() {
+            let data = env.memory.data(ctx);
+            if let Some(bytes) = nul_terminated_string_bytes(data, value::decode_string_ptr(val))
+                && let Ok(text) = std::str::from_utf8(bytes)
+            {
+                for unit in text.encode_utf16() {
+                    hash ^= unit as u64;
+                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+        return hash;
+    }
+    // 其余类型（undefined/null/bool/object/function/closure/symbol/bigint 等）
+    // SameValueZero 即编码身份（handle 或字面编码），直接哈希编码。
+    val as u64
+}
+
 /// 通过 handle_idx 解析对象身份。
 ///
 /// V2-only：handle 表在 memory64；成功时返回 handle 本身（调用方按 handle 再经

@@ -143,6 +143,8 @@ impl Lowerer {
             typedarray_bindings: std::collections::HashSet::new(),
             sab_bindings: std::collections::HashSet::new(),
             dataview_bindings: std::collections::HashSet::new(),
+            map_bindings: std::collections::HashSet::new(),
+            set_bindings: std::collections::HashSet::new(),
             module_const_literals: std::collections::HashMap::new(),
             eval_continue_block: None,
             new_expr_continue_block: None,
@@ -1208,6 +1210,26 @@ impl Lowerer {
         let name = ident.sym.to_string();
         if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
             self.dataview_bindings.contains(&(scope_id, name))
+        } else {
+            false
+        }
+    }
+
+    /// 检查指定 Ident 是否为已知的 Map 绑定。
+    pub(crate) fn is_map_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+            self.map_bindings.contains(&(scope_id, name))
+        } else {
+            false
+        }
+    }
+
+    /// 检查指定 Ident 是否为已知的 Set 绑定。
+    pub(crate) fn is_set_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+            self.set_bindings.contains(&(scope_id, name))
         } else {
             false
         }

@@ -210,7 +210,17 @@ fn clone_map(
             .unwrap_or_else(|e| e.into_inner());
         table
             .get(handle)
-            .map(|entry| (entry.keys.clone(), entry.values.clone()))
+            .map(|entry| {
+                let mut keys = Vec::with_capacity(entry.live_count as usize);
+                let mut values = Vec::with_capacity(entry.live_count as usize);
+                for i in 0..entry.keys.len() {
+                    if !entry.deleted[i] {
+                        keys.push(entry.keys[i]);
+                        values.push(entry.values[i]);
+                    }
+                }
+                (keys, values)
+            })
             .unwrap_or_default()
     };
     let new_handle = caller.data().alloc_map_entry();
@@ -232,6 +242,7 @@ fn clone_map(
         if let Some(entry) = table.get_mut(new_handle as usize) {
             entry.keys = cloned_keys;
             entry.values = cloned_values;
+            crate::runtime_collections::map_entry_reindex(caller, entry);
         }
     }
     Ok(clone)
@@ -251,7 +262,15 @@ fn clone_set(
             .unwrap_or_else(|e| e.into_inner());
         table
             .get(handle)
-            .map(|entry| entry.values.clone())
+            .map(|entry| {
+                let mut values = Vec::with_capacity(entry.live_count as usize);
+                for i in 0..entry.values.len() {
+                    if !entry.deleted[i] {
+                        values.push(entry.values[i]);
+                    }
+                }
+                values
+            })
             .unwrap_or_default()
     };
     let new_handle = caller.data().alloc_set_entry();
@@ -269,6 +288,7 @@ fn clone_set(
             .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(new_handle as usize) {
             entry.values = cloned_values;
+            crate::runtime_collections::set_entry_reindex(caller, entry);
         }
     }
     Ok(clone)

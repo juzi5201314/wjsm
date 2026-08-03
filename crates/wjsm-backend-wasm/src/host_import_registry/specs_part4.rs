@@ -321,6 +321,18 @@ pub(crate) static SPECS_PART4: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "set_proto_has",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::SetProtoHas)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "set_proto_delete",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::SetProtoDelete)),
+        group: None,
+    },
+    HostImportSpec {
         name: "map_set_has",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::MapSetHas)),

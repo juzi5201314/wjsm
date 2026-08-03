@@ -358,6 +358,42 @@ pub(crate) fn builtin_from_array_proto_method(name: &str) -> Option<Builtin> {
     }
 }
 
+/// 将 Map.prototype 方法名映射到 Builtin 变体，用于语义层优化。
+/// 仅在 receiver 是静态已知 Map 绑定时启用（monkey-patch 语义与 Array 优化一致：
+/// 直接内建调用，不读取被改写的方法属性）。
+pub(crate) fn builtin_from_map_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "set" => Some(MapProtoSet),
+        "get" => Some(MapProtoGet),
+        "has" => Some(MapSetHas),
+        "delete" => Some(MapSetDelete),
+        "clear" => Some(MapSetClear),
+        "forEach" => Some(MapSetForEach),
+        "keys" => Some(MapSetKeys),
+        "values" => Some(MapSetValues),
+        "entries" => Some(MapSetEntries),
+        _ => None,
+    }
+}
+
+/// 将 Set.prototype 方法名映射到 Builtin 变体（has/delete 用专用直连内建，
+/// 免去共享 MapSet.has/delete 先查 __map_handle__ 的额外属性读取）。
+pub(crate) fn builtin_from_set_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "add" => Some(SetProtoAdd),
+        "has" => Some(SetProtoHas),
+        "delete" => Some(SetProtoDelete),
+        "clear" => Some(MapSetClear),
+        "forEach" => Some(MapSetForEach),
+        "keys" => Some(MapSetKeys),
+        "values" => Some(MapSetValues),
+        "entries" => Some(MapSetEntries),
+        _ => None,
+    }
+}
+
 /// 将 Object.prototype 方法名映射到 Builtin 变体，用于语义层优化。
 ///
 /// 只拦截无需读取同名函数值的 `hasOwnProperty`。`toString` / `valueOf` 必须走运行时属性
@@ -653,8 +689,21 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::ErrorProtoToString => ("Error.prototype.toString", 1),
         // ── Map builtins ──
         Builtin::MapConstructor => ("Map", 0),
+        Builtin::MapProtoSet => ("Map.prototype.set", 3),
+        Builtin::MapProtoGet => ("Map.prototype.get", 2),
+        Builtin::MapSetHas => ("Map.prototype.has", 2),
+        Builtin::MapSetDelete => ("Map.prototype.delete", 2),
+        Builtin::MapSetClear => ("Map.prototype.clear", 1),
+        Builtin::MapSetForEach => ("Map.prototype.forEach", 3),
+        Builtin::MapSetKeys => ("Map.prototype.keys", 1),
+        Builtin::MapSetValues => ("Map.prototype.values", 1),
+        Builtin::MapSetEntries => ("Map.prototype.entries", 1),
+        Builtin::MapSetGetSize => ("Map.prototype.size", 1),
         // ── Set builtins ──
         Builtin::SetConstructor => ("Set", 0),
+        Builtin::SetProtoAdd => ("Set.prototype.add", 2),
+        Builtin::SetProtoHas => ("Set.prototype.has", 2),
+        Builtin::SetProtoDelete => ("Set.prototype.delete", 2),
         // ── WeakMap builtins ──
         Builtin::WeakMapConstructor => ("WeakMap", 0),
         Builtin::WeakMapProtoSet => ("WeakMap.prototype.set", 3),

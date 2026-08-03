@@ -423,19 +423,8 @@ impl Compiler {
             }
             // ── Map/Set multi-arg builtins ──
             Builtin::MapProtoSet
-            | Builtin::MapProtoGet
-            | Builtin::MapSetHas
-            | Builtin::MapSetDelete
-            | Builtin::SetProtoAdd
             // ── WeakMap multi-arg builtins ──
             | Builtin::WeakMapProtoSet
-            | Builtin::WeakMapProtoGet
-            | Builtin::WeakMapProtoHas
-            | Builtin::WeakMapProtoDelete
-            // ── WeakSet multi-arg builtins ──
-            | Builtin::WeakSetProtoAdd
-            | Builtin::WeakSetProtoHas
-            | Builtin::WeakSetProtoDelete
             // ── ArrayBuffer multi-arg builtins ──
             | Builtin::ArrayBufferProtoSlice
             // ── SharedArrayBuffer builtins (2-arg / 3-arg) ──
@@ -489,6 +478,33 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
                 for _ in args.len()..3 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_idx(builtin)?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(BuiltinDispatch::Handled)
+            }
+            // ── Map/Set 2-arg builtins（this, key/value；宿主签名为 2 参直传，不补 undefined）──
+            Builtin::MapProtoGet
+            | Builtin::MapSetHas
+            | Builtin::MapSetDelete
+            | Builtin::SetProtoAdd
+            | Builtin::SetProtoHas
+            | Builtin::SetProtoDelete
+            // ── WeakMap/WeakSet 2-arg builtins ──
+            | Builtin::WeakMapProtoGet
+            | Builtin::WeakMapProtoHas
+            | Builtin::WeakMapProtoDelete
+            | Builtin::WeakSetProtoAdd
+            | Builtin::WeakSetProtoHas
+            | Builtin::WeakSetProtoDelete => {
+                for arg in args.iter().take(2) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..2 {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
                 let func_idx = self.builtin_func_idx(builtin)?;

@@ -50,6 +50,14 @@ pub(crate) struct MapEntry {
     pub(crate) owner: Option<u32>,
     pub(crate) keys: Vec<i64>,
     pub(crate) values: Vec<i64>,
+    /// SameValueZero 稳定哈希 → 槽位索引（仅存活键）。哈希冲突时回退线性扫描。
+    pub(crate) index: HashMap<u64, u32>,
+    /// 平行删除标记（槽位保留以保证插入顺序，迭代/快照需跳过）。
+    pub(crate) deleted: Vec<bool>,
+    /// 存活键数（= size）。
+    pub(crate) live_count: u32,
+    /// 已删除槽位数（触发压缩阈值）。
+    pub(crate) deleted_count: u32,
 }
 
 impl MapEntry {
@@ -58,6 +66,10 @@ impl MapEntry {
             owner: None,
             keys: Vec::new(),
             values: Vec::new(),
+            index: HashMap::new(),
+            deleted: Vec::new(),
+            live_count: 0,
+            deleted_count: 0,
         }
     }
 
@@ -65,12 +77,24 @@ impl MapEntry {
         self.owner = None;
         self.keys.clear();
         self.values.clear();
+        self.index.clear();
+        self.deleted.clear();
+        self.live_count = 0;
+        self.deleted_count = 0;
     }
 }
 
 pub(crate) struct SetEntry {
     pub(crate) owner: Option<u32>,
     pub(crate) values: Vec<i64>,
+    /// SameValueZero 稳定哈希 → 槽位索引（仅存活值）。哈希冲突时回退线性扫描。
+    pub(crate) index: HashMap<u64, u32>,
+    /// 平行删除标记（槽位保留以保证插入顺序，迭代/快照需跳过）。
+    pub(crate) deleted: Vec<bool>,
+    /// 存活值数（= size）。
+    pub(crate) live_count: u32,
+    /// 已删除槽位数（触发压缩阈值）。
+    pub(crate) deleted_count: u32,
 }
 
 impl SetEntry {
@@ -78,12 +102,20 @@ impl SetEntry {
         Self {
             owner: None,
             values: Vec::new(),
+            index: HashMap::new(),
+            deleted: Vec::new(),
+            live_count: 0,
+            deleted_count: 0,
         }
     }
 
     pub(crate) fn clear_for_reuse(&mut self) {
         self.owner = None;
         self.values.clear();
+        self.index.clear();
+        self.deleted.clear();
+        self.live_count = 0;
+        self.deleted_count = 0;
     }
 }
 

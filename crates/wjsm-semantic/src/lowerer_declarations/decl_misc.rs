@@ -75,6 +75,16 @@ impl Lowerer {
                     {
                         self.dataview_bindings.insert((scope_id, name.clone()));
                     }
+                    if is_map_constructor_expr(init)
+                        && let Ok((scope_id, _)) = self.scopes.lookup(&name)
+                    {
+                        self.map_bindings.insert((scope_id, name.clone()));
+                    }
+                    if is_set_constructor_expr(init)
+                        && let Ok((scope_id, _)) = self.scopes.lookup(&name)
+                    {
+                        self.set_bindings.insert((scope_id, name.clone()));
+                    }
                     // const + 字面量初始化 → 记录为可折叠常量（捕获读取直接内联）。
                     // 仅限简单 ident 绑定（非解构）与纯字面量（Num/Str/Bool/Null），
                     // 保证折叠值恒定且无副作用；TDZ 安全见 load_captured_binding 注释。

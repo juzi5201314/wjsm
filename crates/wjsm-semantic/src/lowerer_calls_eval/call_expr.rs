@@ -464,6 +464,36 @@ impl Lowerer {
                             block,
                         );
                     }
+                    // Map.prototype 方法调用优化（带 receiver guard）。
+                    // 仅静态已知 Map 绑定直连 CallBuiltin（new Map() 赋值/声明），
+                    // 免去每次调用的通用 Get + NativeCallable dispatch 往返。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && let Some(map_builtin) =
+                            builtin_from_map_proto_method(&prop_ident.sym)
+                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                        && self.is_map_binding(receiver_ident)
+                    {
+                        return self.emit_proto_builtin_call(
+                            map_builtin,
+                            member_expr,
+                            &call.args,
+                            block,
+                        );
+                    }
+                    // Set.prototype 方法调用优化（带 receiver guard）。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && let Some(set_builtin) =
+                            builtin_from_set_proto_method(&prop_ident.sym)
+                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                        && self.is_set_binding(receiver_ident)
+                    {
+                        return self.emit_proto_builtin_call(
+                            set_builtin,
+                            member_expr,
+                            &call.args,
+                            block,
+                        );
+                    }
                     // Array.prototype 方法调用优化（带 receiver guard）。
                     // 仅静态已知 Array 绑定直连；Map/Set 的 forEach/entries 等必须走自身方法。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop

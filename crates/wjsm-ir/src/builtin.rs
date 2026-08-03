@@ -333,6 +333,8 @@ pub enum Builtin {
     // ── Set built-in ──────────────────────────────────────────────────
     SetConstructor,
     SetProtoAdd,
+    SetProtoHas,
+    SetProtoDelete,
     // ── Map/Set shared methods (dispatch at runtime) ──────────────────
     MapSetHas,
     MapSetDelete,
@@ -813,6 +815,8 @@ impl Builtin {
             Self::MapProtoGet => "Map.prototype.get",
             Self::SetConstructor => "Set",
             Self::SetProtoAdd => "Set.prototype.add",
+            Self::SetProtoHas => "Set.prototype.has",
+            Self::SetProtoDelete => "Set.prototype.delete",
             Self::MapSetHas => "MapSet.has",
             Self::MapSetDelete => "MapSet.delete",
             Self::MapSetClear => "MapSet.clear",

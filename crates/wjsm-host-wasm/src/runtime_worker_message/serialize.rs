@@ -376,7 +376,17 @@ fn serialize_map(
             .unwrap_or_else(|e| e.into_inner());
         table
             .get(handle)
-            .map(|entry| (entry.keys.clone(), entry.values.clone()))
+            .map(|entry| {
+                let mut keys = Vec::with_capacity(entry.live_count as usize);
+                let mut values = Vec::with_capacity(entry.live_count as usize);
+                for i in 0..entry.keys.len() {
+                    if !entry.deleted[i] {
+                        keys.push(entry.keys[i]);
+                        values.push(entry.values[i]);
+                    }
+                }
+                (keys, values)
+            })
             .unwrap_or_default()
     };
     let (keys, values) = snapshot;
@@ -405,7 +415,15 @@ fn serialize_set(
             .unwrap_or_else(|e| e.into_inner());
         table
             .get(handle)
-            .map(|entry| entry.values.clone())
+            .map(|entry| {
+                let mut values = Vec::with_capacity(entry.live_count as usize);
+                for i in 0..entry.values.len() {
+                    if !entry.deleted[i] {
+                        values.push(entry.values[i]);
+                    }
+                }
+                values
+            })
             .unwrap_or_default()
     };
     let mut values = Vec::with_capacity(snapshot.len());

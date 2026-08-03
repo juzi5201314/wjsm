@@ -243,3 +243,23 @@ fn is_dataview_constructor_expr(expr: &swc_ast::Expr) -> bool {
     }
     false
 }
+
+/// 判断表达式是否为 Map 构造函数调用（`new Map(...)` 形式）。
+fn is_map_constructor_expr(expr: &swc_ast::Expr) -> bool {
+    if let swc_ast::Expr::New(new_expr) = expr
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
+    {
+        return ident.sym.as_ref() == "Map";
+    }
+    false
+}
+
+/// 判断表达式是否为 Set 构造函数调用（`new Set(...)` 形式）。
+fn is_set_constructor_expr(expr: &swc_ast::Expr) -> bool {
+    if let swc_ast::Expr::New(new_expr) = expr
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
+    {
+        return ident.sym.as_ref() == "Set";
+    }
+    false
+}

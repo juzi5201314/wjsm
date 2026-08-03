@@ -517,7 +517,7 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
     match iter {
         IteratorState::StringIter { string, unit_pos } => *unit_pos >= string.utf16_len(),
         IteratorState::ArrayIter { index, length, .. } => *index >= *length,
-        IteratorState::MapKeyIter {
+        | IteratorState::MapKeyIter {
             index, map_handle, ..
         }
         | IteratorState::MapValueIter {
@@ -531,8 +531,16 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
                 .map_table
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            *map_handle >= table.len() as u32
-                || *index as usize >= table[*map_handle as usize].keys.len()
+            if *map_handle >= table.len() as u32 {
+                true
+            } else {
+                let entry = &table[*map_handle as usize];
+                let mut idx = *index as usize;
+                while idx < entry.keys.len() && entry.deleted[idx] {
+                    idx += 1;
+                }
+                idx >= entry.keys.len()
+            }
         }
         IteratorState::SetValueIter {
             index, set_handle, ..
@@ -545,8 +553,16 @@ fn raw_iterator_done(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -
                 .set_table
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            *set_handle >= table.len() as u32
-                || *index as usize >= table[*set_handle as usize].values.len()
+            if *set_handle >= table.len() as u32 {
+                true
+            } else {
+                let entry = &table[*set_handle as usize];
+                let mut idx = *index as usize;
+                while idx < entry.values.len() && entry.deleted[idx] {
+                    idx += 1;
+                }
+                idx >= entry.values.len()
+            }
         }
         IteratorState::IndexValueIter { index, values } => *index as usize >= values.len(),
         IteratorState::TypedArrayValueIter { index, length, .. }
@@ -574,15 +590,51 @@ fn advance_raw_iterator(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize
             string_iter_advance_unit_pos(string, unit_pos)
         }
         IteratorState::ArrayIter { index, .. }
-        | IteratorState::MapKeyIter { index, .. }
-        | IteratorState::MapValueIter { index, .. }
-        | IteratorState::MapEntryIter { index, .. }
-        | IteratorState::SetValueIter { index, .. }
-        | IteratorState::SetEntryIter { index, .. }
         | IteratorState::IndexValueIter { index, .. }
         | IteratorState::TypedArrayValueIter { index, .. }
         | IteratorState::TypedArrayEntryIter { index, .. } => {
             *index += 1;
+        }
+        IteratorState::MapKeyIter {
+            index, map_handle, ..
+        }
+        | IteratorState::MapValueIter {
+            index, map_handle, ..
+        }
+        | IteratorState::MapEntryIter {
+            index, map_handle, ..
+        } => {
+            // value() 已把 index 推进到已消费槽位之后；此处仅跳过剩余 tombstone。
+            let table = caller
+                .data()
+                .map_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *map_handle < table.len() as u32 {
+                let entry = &table[*map_handle as usize];
+                while *index < entry.keys.len() as u32 && entry.deleted[*index as usize] {
+                    *index += 1;
+                }
+            }
+        }
+        IteratorState::SetValueIter {
+            index, set_handle, ..
+        }
+        | IteratorState::SetEntryIter {
+            index, set_handle, ..
+        } => {
+            // value() 已把 index 推进到已消费槽位之后；此处仅跳过剩余 tombstone。
+            let table = caller
+                .data()
+                .set_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *set_handle < table.len() as u32 {
+                let entry = &table[*set_handle as usize];
+                while *index < entry.values.len() as u32 && entry.deleted[*index as usize] {
+                    *index += 1;
+                }
+            }
         }
         IteratorState::RegExpStringIter { .. } => {
             drop(iters);
@@ -1990,10 +2042,13 @@ pub(crate) async fn advance_async_from_sync_async(
                     .unwrap_or_else(|e| e.into_inner());
                 if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.keys.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.keys.len() {
                         let val = entry.keys[idx];
-                        *index += 1;
+                        *index = idx as u32 + 1;
                         drop(table);
                         Some((false, val))
                     } else {
@@ -2015,10 +2070,13 @@ pub(crate) async fn advance_async_from_sync_async(
                     .unwrap_or_else(|e| e.into_inner());
                 if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.values.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.values.len() {
                         let val = entry.values[idx];
-                        *index += 1;
+                        *index = idx as u32 + 1;
                         drop(table);
                         Some((false, val))
                     } else {
@@ -2040,11 +2098,14 @@ pub(crate) async fn advance_async_from_sync_async(
                     .unwrap_or_else(|e| e.into_inner());
                 if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.keys.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.keys.len() {
                         let key = entry.keys[idx];
                         let item = entry.values[idx];
-                        *index += 1;
+                        *index = idx as u32 + 1;
                         drop(table);
                         drop(iters);
                         let pair = alloc_array(caller, 2);
@@ -2073,10 +2134,13 @@ pub(crate) async fn advance_async_from_sync_async(
                     .unwrap_or_else(|e| e.into_inner());
                 if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.values.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.values.len() {
                         let val = entry.values[idx];
-                        *index += 1;
+                        *index = idx as u32 + 1;
                         drop(table);
                         Some((false, val))
                     } else {
@@ -2098,10 +2162,13 @@ pub(crate) async fn advance_async_from_sync_async(
                     .unwrap_or_else(|e| e.into_inner());
                 if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.values.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.values.len() {
                         let item = entry.values[idx];
-                        *index += 1;
+                        *index = idx as u32 + 1;
                         drop(table);
                         drop(iters);
                         let pair = alloc_array(caller, 2);

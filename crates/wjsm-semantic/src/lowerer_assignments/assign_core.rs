@@ -492,6 +492,17 @@ impl Lowerer {
                 } else {
                     self.dataview_bindings.remove(&(scope_id, name.clone()));
                 }
+                // 更新 Map/Set 绑定跟踪（原型方法直连优化）。
+                if is_map_constructor_expr(assign.right.as_ref()) {
+                    self.map_bindings.insert((scope_id, name.clone()));
+                } else {
+                    self.map_bindings.remove(&(scope_id, name.clone()));
+                }
+                if is_set_constructor_expr(assign.right.as_ref()) {
+                    self.set_bindings.insert((scope_id, name.clone()));
+                } else {
+                    self.set_bindings.remove(&(scope_id, name.clone()));
+                }
                 Ok(rhs)
             }
             op => {

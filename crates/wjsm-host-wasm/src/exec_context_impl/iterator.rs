@@ -237,15 +237,55 @@ macro_rules! exec_ctx_iterator {
                 IteratorNextStep::Advanced
             }
             crate::IteratorState::ArrayIter { index, .. }
-            | crate::IteratorState::MapKeyIter { index, .. }
-            | crate::IteratorState::MapValueIter { index, .. }
-            | crate::IteratorState::SetValueIter { index, .. }
-            | crate::IteratorState::SetEntryIter { index, .. }
-            | crate::IteratorState::MapEntryIter { index, .. }
             | crate::IteratorState::IndexValueIter { index, .. }
             | crate::IteratorState::TypedArrayValueIter { index, .. }
             | crate::IteratorState::TypedArrayEntryIter { index, .. } => {
                 *index += 1;
+                IteratorNextStep::Advanced
+            }
+            crate::IteratorState::MapKeyIter {
+                index, map_handle, ..
+            }
+            | crate::IteratorState::MapValueIter {
+                index, map_handle, ..
+            }
+            | crate::IteratorState::MapEntryIter {
+                index, map_handle, ..
+            } => {
+                // value() 已把 index 推进到已消费槽位之后；此处仅跳过剩余 tombstone。
+                let table = self
+                    .caller
+                    .data()
+                    .map_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if *map_handle < table.len() as u32 {
+                    let entry = &table[*map_handle as usize];
+                    while *index < entry.keys.len() as u32 && entry.deleted[*index as usize] {
+                        *index += 1;
+                    }
+                }
+                IteratorNextStep::Advanced
+            }
+            crate::IteratorState::SetValueIter {
+                index, set_handle, ..
+            }
+            | crate::IteratorState::SetEntryIter {
+                index, set_handle, ..
+            } => {
+                // value() 已把 index 推进到已消费槽位之后；此处仅跳过剩余 tombstone。
+                let table = self
+                    .caller
+                    .data()
+                    .set_table
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if *set_handle < table.len() as u32 {
+                    let entry = &table[*set_handle as usize];
+                    while *index < entry.values.len() as u32 && entry.deleted[*index as usize] {
+                        *index += 1;
+                    }
+                }
                 IteratorNextStep::Advanced
             }
             crate::IteratorState::RegExpStringIter { .. } => {
@@ -366,7 +406,12 @@ macro_rules! exec_ctx_iterator {
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         Some(if *map_handle < table.len() as u32 {
-                            *index as usize >= table[*map_handle as usize].keys.len()
+                            let entry = &table[*map_handle as usize];
+                            let mut idx = *index as usize;
+                            while idx < entry.keys.len() && entry.deleted[idx] {
+                                idx += 1;
+                            }
+                            idx >= entry.keys.len()
                         } else {
                             true
                         })
@@ -384,7 +429,12 @@ macro_rules! exec_ctx_iterator {
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         Some(if *set_handle < table.len() as u32 {
-                            *index as usize >= table[*set_handle as usize].values.len()
+                            let entry = &table[*set_handle as usize];
+                            let mut idx = *index as usize;
+                            while idx < entry.values.len() && entry.deleted[idx] {
+                                idx += 1;
+                            }
+                            idx >= entry.values.len()
                         } else {
                             true
                         })

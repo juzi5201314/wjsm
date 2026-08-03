@@ -64,8 +64,13 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .unwrap_or_else(|e| e.into_inner());
                 let val = if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.keys.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.keys.len() {
+                        // 消费该槽位：推进 index 越过已读槽位，供 advance 跳过 tombstone。
+                        *index = idx as u32 + 1;
                         Some(entry.keys[idx])
                     } else {
                         None
@@ -86,8 +91,12 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .unwrap_or_else(|e| e.into_inner());
                 let val = if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.values.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.values.len() {
+                        *index = idx as u32 + 1;
                         Some(entry.values[idx])
                     } else {
                         None
@@ -109,8 +118,12 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
 
                 if *map_handle < table.len() as u32 {
                     let entry = &table[*map_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.keys.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.keys.len() {
+                        *index = idx as u32 + 1;
                         let key = entry.keys[idx];
                         let value = entry.values[idx];
                         drop(table);
@@ -141,8 +154,12 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     .unwrap_or_else(|e| e.into_inner());
                 let val = if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.values.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.values.len() {
+                        *index = idx as u32 + 1;
                         Some(entry.values[idx])
                     } else {
                         None
@@ -164,8 +181,12 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
 
                 if *set_handle < table.len() as u32 {
                     let entry = &table[*set_handle as usize];
-                    let idx = *index as usize;
+                    let mut idx = *index as usize;
+                    while idx < entry.values.len() && entry.deleted[idx] {
+                        idx += 1;
+                    }
                     if idx < entry.values.len() {
+                        *index = idx as u32 + 1;
                         let item = entry.values[idx];
                         drop(table);
                         drop(iters);

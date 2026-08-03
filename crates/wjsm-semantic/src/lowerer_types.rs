@@ -178,6 +178,12 @@ pub(crate) struct Lowerer {
     /// 追踪当前作用域中已推断为 DataView 的绑定（scope_id, name）。
     /// DataView 原型方法使用专用宿主导入签名，静态已知 receiver 必须直连 CallBuiltin，避免通用 call_indirect 调用约定不匹配。
     pub(crate) dataview_bindings: std::collections::HashSet<(usize, String)>,
+    /// 追踪当前作用域中已推断为 Map 的绑定（scope_id, name）。
+    /// Map 原型方法（set/get/has/delete 等）静态已知 receiver 直连 CallBuiltin，
+    /// 免去每次调用的通用 Get + NativeCallable dispatch 往返。
+    pub(crate) map_bindings: std::collections::HashSet<(usize, String)>,
+    /// 追踪当前作用域中已推断为 Set 的绑定（scope_id, name）。
+    pub(crate) set_bindings: std::collections::HashSet<(usize, String)>,
 }
 
 /// 追踪当前作用域中的 using 变量，用于在作用域退出时自动 dispose。

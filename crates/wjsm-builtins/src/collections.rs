@@ -10,7 +10,9 @@ fn collection_handle<E: ExecContext>(ctx: &mut E, this_val: Value, prop: &str) -
     if !value::is_object(this_val) {
         return None;
     }
-    let h = ctx.read_property_by_string_key(this_val, prop);
+    // 经 name_id 读取（intern 一次），避免每次调用的运行时字符串分配。
+    let name_id = ctx.intern_property_key(prop);
+    let h = ctx.get_property_by_name_id(this_val, name_id);
     if value::is_undefined(h) {
         return None;
     }
@@ -179,6 +181,25 @@ pub fn set_proto_add<E: ExecContext>(ctx: &mut E, this_val: Value, key: Value) -
     };
     ctx.set_add(handle, key);
     this_val
+}
+
+pub fn set_proto_has<E: ExecContext>(ctx: &mut E, this_val: Value, key: Value) -> Value {
+    // 直连 __set_handle__（不先试 __map_handle__，避免 Set 每 op 两次属性读取）。
+    if let Some(h) = collection_handle(ctx, this_val, "__set_handle__") {
+        return value::encode_bool(ctx.map_set_has(h, key, true));
+    }
+    ctx.set_last_error(
+        "TypeError: Method Set.prototype.has called on incompatible receiver".to_string(),
+    );
+    value::encode_bool(false)
+}
+
+pub fn set_proto_delete<E: ExecContext>(ctx: &mut E, this_val: Value, key: Value) -> Value {
+    // 直连 __set_handle__。
+    if let Some(h) = collection_handle(ctx, this_val, "__set_handle__") {
+        return value::encode_bool(ctx.map_set_delete(h, key, true));
+    }
+    value::encode_bool(false)
 }
 
 pub fn map_set_has<E: ExecContext>(ctx: &mut E, this_val: Value, key: Value) -> Value {

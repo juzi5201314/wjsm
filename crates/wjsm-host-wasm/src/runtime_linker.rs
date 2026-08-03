@@ -978,6 +978,7 @@ pub(super) fn register_complex_bridges(
                         }
                         index += 1;
                     }
+                    let mut built: Vec<(i64, i64)> = Vec::with_capacity(groups.len());
                     for (group_key, elements) in &groups {
                         let arr = alloc_array(&mut caller, elements.len() as u32);
                         if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
@@ -986,13 +987,21 @@ pub(super) fn register_complex_bridges(
                             }
                             write_array_length(&mut caller, arr_ptr, elements.len() as u32);
                         }
-                        let mut table = caller
-                            .data()
-                            .map_table
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        table[map_handle].keys.push(*group_key);
-                        table[map_handle].values.push(arr);
+                        built.push((*group_key, arr));
+                    }
+                    let mut table = caller
+                        .data()
+                        .map_table
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if let Some(entry) = table.get_mut(map_handle) {
+                        entry.keys.clear();
+                        entry.values.clear();
+                        for (group_key, arr) in built {
+                            entry.keys.push(group_key);
+                            entry.values.push(arr);
+                        }
+                        crate::runtime_collections::map_entry_reindex(&caller, entry);
                     }
                 }
                 map_result

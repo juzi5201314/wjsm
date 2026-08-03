@@ -494,8 +494,12 @@ fn collect_collection_values_for_marked_owners(
                 None => true,
             };
             if should_trace {
-                out.extend(entry.keys.iter().copied());
-                out.extend(entry.values.iter().copied());
+                for i in 0..entry.keys.len() {
+                    if !entry.deleted[i] {
+                        out.push(entry.keys[i]);
+                        out.push(entry.values[i]);
+                    }
+                }
             }
         }
     }
@@ -506,7 +510,11 @@ fn collect_collection_values_for_marked_owners(
                 None => true,
             };
             if should_trace {
-                out.extend(entry.values.iter().copied());
+                for i in 0..entry.values.len() {
+                    if !entry.deleted[i] {
+                        out.push(entry.values[i]);
+                    }
+                }
             }
         }
     }

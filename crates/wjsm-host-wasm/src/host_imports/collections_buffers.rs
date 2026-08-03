@@ -71,6 +71,8 @@ pub(crate) fn define_collections_buffers(
     wrap3!("map_proto_set", wjsm_builtins::collections::map_proto_set);
     wrap2!("map_proto_get", wjsm_builtins::collections::map_proto_get);
     wrap2!("set_proto_add", wjsm_builtins::collections::set_proto_add);
+    wrap2!("set_proto_has", wjsm_builtins::collections::set_proto_has);
+    wrap2!("set_proto_delete", wjsm_builtins::collections::set_proto_delete);
     wrap2!("map_set_has", wjsm_builtins::collections::map_set_has);
     wrap2!("map_set_delete", wjsm_builtins::collections::map_set_delete);
     wrap1!("map_set_clear", wjsm_builtins::collections::map_set_clear);

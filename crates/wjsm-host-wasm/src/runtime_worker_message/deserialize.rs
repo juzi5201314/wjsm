@@ -177,6 +177,7 @@ fn deserialize_map<C: AsContextMut<Data = RuntimeState>>(
         if let Some(entry) = table.get_mut(new_handle as usize) {
             entry.keys = keys;
             entry.values = values;
+            crate::runtime_collections::map_entry_reindex(&*ctx, entry);
         }
     }
     obj
@@ -204,6 +205,7 @@ fn deserialize_set<C: AsContextMut<Data = RuntimeState>>(
             .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = table.get_mut(new_handle as usize) {
             entry.values = values;
+            crate::runtime_collections::set_entry_reindex(&*ctx, entry);
         }
     }
     obj

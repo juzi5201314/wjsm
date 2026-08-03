@@ -8,197 +8,28 @@ macro_rules! exec_ctx_collections {
         self.caller.data().alloc_set_entry()
     }
     fn map_set(&mut self, handle: u32, key: Value, val: Value) {
-        let mut table = self
-            .caller
-            .data()
-            .map_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let Some(entry) = table.get_mut(handle as usize) else {
-            return;
-        };
-        for i in 0..entry.keys.len() {
-            if crate::same_value_zero(self.caller, entry.keys[i], key) {
-                entry.values[i] = val;
-                return;
-            }
-        }
-        entry.keys.push(key);
-        entry.values.push(val);
+        crate::runtime_collections::map_set_impl(self.caller, handle, key, val);
     }
     fn map_get(&mut self, handle: u32, key: Value) -> Option<Value> {
-        let table = self
-            .caller
-            .data()
-            .map_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let entry = table.get(handle as usize)?;
-        for i in 0..entry.keys.len() {
-            if crate::same_value_zero(self.caller, entry.keys[i], key) {
-                return Some(entry.values[i]);
-            }
-        }
-        None
+        crate::runtime_collections::map_get_impl(self.caller, handle, key)
     }
     fn map_set_has(&mut self, handle: u32, key: Value, is_set: bool) -> bool {
-        if is_set {
-            let table = self
-                .caller
-                .data()
-                .set_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let Some(entry) = table.get(handle as usize) else {
-                return false;
-            };
-            entry
-                .values
-                .iter()
-                .any(|&v| crate::same_value_zero(self.caller, v, key))
-        } else {
-            self.map_get(handle, key).is_some()
-        }
+        crate::runtime_collections::map_set_has_impl(self.caller, handle, key, is_set)
     }
     fn map_set_delete(&mut self, handle: u32, key: Value, is_set: bool) -> bool {
-        if is_set {
-            let mut table = self
-                .caller
-                .data()
-                .set_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let Some(entry) = table.get_mut(handle as usize) else {
-                return false;
-            };
-            if let Some(pos) = entry
-                .values
-                .iter()
-                .position(|&v| crate::same_value_zero(self.caller, v, key))
-            {
-                entry.values.remove(pos);
-                return true;
-            }
-            false
-        } else {
-            let mut table = self
-                .caller
-                .data()
-                .map_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let Some(entry) = table.get_mut(handle as usize) else {
-                return false;
-            };
-            if let Some(pos) = entry
-                .keys
-                .iter()
-                .position(|&k| crate::same_value_zero(self.caller, k, key))
-            {
-                entry.keys.remove(pos);
-                entry.values.remove(pos);
-                return true;
-            }
-            false
-        }
+        crate::runtime_collections::map_set_delete_impl(self.caller, handle, key, is_set)
     }
     fn map_set_clear(&mut self, handle: u32, is_set: bool) {
-        if is_set {
-            let mut table = self
-                .caller
-                .data()
-                .set_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(entry) = table.get_mut(handle as usize) {
-                entry.values.clear();
-            }
-        } else {
-            let mut table = self
-                .caller
-                .data()
-                .map_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(entry) = table.get_mut(handle as usize) {
-                entry.keys.clear();
-                entry.values.clear();
-            }
-        }
+        crate::runtime_collections::map_set_clear_impl(self.caller, handle, is_set);
     }
     fn map_set_size(&mut self, handle: u32, is_set: bool) -> u32 {
-        if is_set {
-            let table = self
-                .caller
-                .data()
-                .set_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            table
-                .get(handle as usize)
-                .map(|e| e.values.len() as u32)
-                .unwrap_or(0)
-        } else {
-            let table = self
-                .caller
-                .data()
-                .map_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            table
-                .get(handle as usize)
-                .map(|e| e.keys.len() as u32)
-                .unwrap_or(0)
-        }
+        crate::runtime_collections::map_set_size_impl(self.caller, handle, is_set)
     }
     fn set_add(&mut self, handle: u32, key: Value) {
-        let mut table = self
-            .caller
-            .data()
-            .set_table
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let Some(entry) = table.get_mut(handle as usize) else {
-            return;
-        };
-        if !entry
-            .values
-            .iter()
-            .any(|&v| crate::same_value_zero(self.caller, v, key))
-        {
-            entry.values.push(key);
-        }
+        crate::runtime_collections::set_add_impl(self.caller, handle, key);
     }
     fn map_set_entries_snapshot(&mut self, handle: u32, is_set: bool) -> Vec<(Value, Value)> {
-        if is_set {
-            let table = self
-                .caller
-                .data()
-                .set_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            table
-                .get(handle as usize)
-                .map(|e| e.values.iter().map(|&v| (v, v)).collect())
-                .unwrap_or_default()
-        } else {
-            let table = self
-                .caller
-                .data()
-                .map_table
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            table
-                .get(handle as usize)
-                .map(|e| {
-                    e.keys
-                        .iter()
-                        .zip(e.values.iter())
-                        .map(|(&k, &v)| (k, v))
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
+        crate::runtime_collections::map_set_entries_snapshot_impl(self.caller, handle, is_set)
     }
     fn create_map_set_iterator(&mut self, handle: u32, is_set: bool, kind: u8) -> Value {
         use crate::types::MapSetMethodKind;
