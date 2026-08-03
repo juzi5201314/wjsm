@@ -10,12 +10,21 @@ use wjsm_ir::{constants, value};
 
 const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
 
+/// 相邻两次惰性合并之间允许新增的空闲区间数量。
+/// GC 清扫逐对象释放时，每次 `release_region` 只 push，累计达到该值才排序归并一次；
+/// 单次排序成本 O((baseline + BATCH) log)，清扫总成本 O(n log BATCH) 而非 O(n² log n)。
+const FREE_REGION_MERGE_BATCH: usize = 1024;
+
 /// V2 dynamic heap 的唯一 host access owner；所有地址均为 memory64 byte offset。
 pub struct HeapAccessV2<M: GrowableHeapMemory> {
     memory: M,
     next_object: AtomicU64,
     heap_limit: u64,
     free_regions: Mutex<Vec<(u64, u64)>>,
+    /// 上次惰性合并时的空闲区数量（排序基线）。`free_regions` 长度超过
+    /// `baseline + FREE_REGION_MERGE_BATCH` 时才重新排序合并，把 GC 清扫批量
+    /// 释放的每次 `release_region` 摊还为 O(1)。
+    merged_free_region_count: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +49,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             next_object: AtomicU64::new(next_object),
             heap_limit,
             free_regions: Mutex::new(Vec::new()),
+            merged_free_region_count: AtomicU64::new(0),
         }
     }
 
@@ -82,12 +92,23 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .free_regions
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        // 惰性合并：只在列表相对上次合并明显增长时排序归并一次。GC 清扫逐对象
+        // 释放时若每次 `release_region` 都全表排序，纯对象分配循环会在清扫大堆时
+        // 退化为 O(n² log n)（见 release_region 注释）；这里把排序成本摊还到 NLAB
+        // 补给（take）路径，清扫本身只剩 O(n) 次 push。
+        let baseline = self.merged_free_region_count.load(Ordering::Relaxed) as usize;
+        if regions.len() >= baseline.saturating_add(FREE_REGION_MERGE_BATCH) {
+            self.merged_free_region_count
+                .store(regions.len() as u64, Ordering::Relaxed);
+            Self::merge_regions(&mut regions);
+        }
         let index = regions
             .iter()
             .position(|(start, end)| end.saturating_sub(*start) >= minimum_bytes)?;
         let (start, end) = regions.remove(index);
         let allocation_end = start + minimum_bytes;
         if allocation_end < end {
+            // 余量追加在尾部；首次适配搜索不依赖顺序，下次合并时统一归并。
             regions.push((allocation_end, end));
         }
         Some((start, allocation_end))
@@ -102,6 +123,20 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         regions.push((start, end));
+        // 批量释放（GC 清扫逐对象 retire_handle / 重定位逐对象 relocate）时按批次
+        // 排序归并：每累计 FREE_REGION_MERGE_BATCH 个新区间才合并一次，单次成本
+        // O((baseline + BATCH) log)，总成本 O(n log BATCH)，避免每次 push 都
+        // O(n log n) 全表排序。
+        let baseline = self.merged_free_region_count.load(Ordering::Relaxed) as usize;
+        if regions.len() >= baseline.saturating_add(FREE_REGION_MERGE_BATCH) {
+            self.merged_free_region_count
+                .store(regions.len() as u64, Ordering::Relaxed);
+            Self::merge_regions(&mut regions);
+        }
+    }
+
+    /// 按起始地址排序并合并相邻/重叠空闲区。
+    fn merge_regions(regions: &mut Vec<(u64, u64)>) {
         regions.sort_unstable_by_key(|(start, _)| *start);
         let mut merged: Vec<(u64, u64)> = Vec::with_capacity(regions.len());
         for (start, end) in regions.drain(..) {
