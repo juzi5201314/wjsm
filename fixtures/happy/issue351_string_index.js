@@ -1,0 +1,16 @@
+const s = "hello";
+console.log(s[0]);
+console.log(s[1]);
+console.log(s[4]);
+console.log(s[999]);
+console.log(s[-1]);
+console.log(s["0"]);
+console.log(s["length"]);
+let i = 2;
+console.log(s[i]);
+console.log(s[0] + s[1]);
+console.log(s.charAt(0));
+const u = "\u{1D400}";
+console.log(u[0].charCodeAt(0).toString(16));
+console.log(u[1].charCodeAt(0).toString(16));
+console.log(u[2]);

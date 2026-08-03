@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+h
+e
+o
+undefined
+undefined
+h
+5
+l
+he
+h
+d835
+dc00
+undefined
+--- stderr ---

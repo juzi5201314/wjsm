@@ -243,7 +243,7 @@ fn is_valid_code_point(cp: u32) -> bool {
     cp <= 0x10FFFF && !(0xD800..=0xDFFF).contains(&cp)
 }
 
-/// 原始字符串属性读取（length + includes/startsWith/indexOf）。
+/// 原始字符串属性读取（length + 整数下标 StringGet + includes/startsWith/indexOf）。
 pub fn primitive_string_get_property<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
@@ -252,6 +252,14 @@ pub fn primitive_string_get_property<E: ExecContext>(
     if ctx.name_id_matches(name_id, "length") {
         let len = ctx.get_runtime_string(receiver).utf16_len();
         return value::encode_f64(len as f64);
+    }
+    // ECMAScript §10.4.3 StringGet：规范数字索引键返回该位置的 UTF-16 code unit。
+    if let Some(index) = canonical_string_index_key(ctx, name_id) {
+        let s = ctx.get_runtime_string(receiver);
+        let Some(unit) = s.code_unit_at(index) else {
+            return value::encode_undefined();
+        };
+        return ctx.store_runtime_string(RuntimeString::from_utf16_code_unit(unit));
     }
     let method = if ctx.name_id_matches(name_id, "includes") {
         0
@@ -267,6 +275,24 @@ pub fn primitive_string_get_property<E: ExecContext>(
         return value::encode_undefined();
     };
     ctx.create_string_primitive_method(method)
+}
+
+/// name_id → 规范数字索引（CanonicalNumericIndexString 的整数形态）。
+/// 仅接受纯 ASCII 数字且无前导零的键（"0"/"12"）；"007"/"1.5"/"-1"/symbol 等返回 None，
+/// 交给后续方法分派（String.prototype 上无此类属性，结果仍为 undefined）。
+fn canonical_string_index_key<E: ExecContext>(ctx: &mut E, name_id: u32) -> Option<usize> {
+    let key = ctx.name_id_to_property_key_value(name_id)?;
+    if !value::is_string(key) {
+        return None;
+    }
+    let text = ctx.value_to_key_string(key).ok()?;
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if text.len() > 1 && text.starts_with('0') {
+        return None;
+    }
+    text.parse::<usize>().ok()
 }
 
 pub fn string_at<E: ExecContext>(ctx: &mut E, receiver: Value, index: Value) -> Value {
