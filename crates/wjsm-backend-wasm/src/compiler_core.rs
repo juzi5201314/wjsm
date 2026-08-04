@@ -406,6 +406,7 @@ impl Compiler {
             current_emit_block_idx: 0,
             current_emit_instr_idx: 0,
             gc_analysis: None,
+            current_call_cache_slots: HashMap::new(),
             f64_analysis: None,
             normal_init_values: None,
             source_file: None,

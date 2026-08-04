@@ -257,6 +257,61 @@ impl Compiler {
         self.shadow_sp_scratch_idx = previous_shadow_sp_scratch_idx;
     }
 
+    /// 为当前函数的动态 Call/ConstructCall 调用点分配独立缓存 locals。
+    ///
+    /// Wasm locals 按参数、i64 声明、i32 声明分组；cache 的 i64 段接在既有
+    /// i64 scratch 后，func_idx 的 i32 段接在全部既有 i32 scratch 后，避免
+    /// shadow_sp/call_func/safepoint/computed/eval locals 发生类型或索引碰撞。
+    fn setup_call_cache_locals(
+        &mut self,
+        function: &IrFunction,
+        total_locals: u32,
+        param_count_for_i64: u32,
+        existing_i32_scratch: u32,
+    ) -> (u32, u32) {
+        self.current_call_cache_slots.clear();
+        let cache_keys: Vec<(usize, usize)> = function
+            .blocks()
+            .iter()
+            .enumerate()
+            .flat_map(|(block_idx, block)| {
+                block.instructions().iter().enumerate().filter_map(
+                    move |(instr_idx, instruction)| {
+                        matches!(
+                            instruction,
+                            Instruction::Call { .. } | Instruction::ConstructCall { .. }
+                        )
+                        .then_some((block_idx, instr_idx))
+                    },
+                )
+            })
+            .collect();
+        let cache_count = cache_keys.len() as u32;
+        let cache_i64_base = total_locals + 2;
+        let cache_i32_base = cache_i64_base + 2 * cache_count;
+        let cache_func_i32_base = cache_i32_base + existing_i32_scratch;
+        for (slot, key) in cache_keys.into_iter().enumerate() {
+            let i64_base = cache_i64_base + 2 * slot as u32;
+            self.current_call_cache_slots.insert(
+                key,
+                (i64_base, i64_base + 1, cache_func_i32_base + slot as u32),
+            );
+        }
+
+        // 闭包表只追加不可变；缓存 locals 不登记为 GC root，但调用点的 callee
+        // 仍由当前指令 liveness spill 保活，故 miss/hit 都不会改变 GC 语义。
+        self.string_concat_scratch_idx = total_locals;
+        self.shadow_sp_scratch_idx = cache_i32_base;
+        self.safepoint_sp_saved_idx = cache_i32_base + 2;
+        self.computed_idx_scratch_idx = cache_i32_base + 3;
+        self.eval_var_base_local_idx = cache_i32_base + 4;
+
+        let total_i64_locals =
+            total_locals.saturating_sub(param_count_for_i64) + 2 + 2 * cache_count;
+        let total_i32_locals = existing_i32_scratch + cache_count;
+        (total_i64_locals, total_i32_locals)
+    }
+
     pub(crate) fn compile_function(
         &mut self,
         module: &IrModule,
@@ -272,6 +327,7 @@ impl Compiler {
         self.current_home_object = function.home_object;
         self.current_function_id = Some(function_id);
         self.const_string_ptrs.clear();
+        self.current_call_cache_slots.clear();
         self.ssa_local_base = if self.mode == CompileMode::Eval {
             function.params().len() as u32
         } else {
@@ -305,7 +361,7 @@ impl Compiler {
         self.computed_idx_scratch_idx = local_count + 5;
         self.eval_var_base_local_idx = local_count + 6;
         let param_i64_count = self.ssa_local_base;
-        let total_i64_locals = local_count.saturating_sub(param_i64_count) + 2; // string_concat + call_env_obj
+        let total_i64_locals = local_count.saturating_sub(param_i64_count) + 2;
         let total_i32_locals = 4 + u32::from(!self.var_memory_offsets.is_empty());
         let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
             Vec::new()
@@ -386,8 +442,9 @@ impl Compiler {
         self.current_func_returns_value = true;
         self.current_home_object = function.home_object;
         self.current_function_id = Some(function_id);
-        self.const_string_ptrs.clear();
         self.begin_function_debug(function.name());
+        self.const_string_ptrs.clear();
+        self.current_call_cache_slots.clear();
         // WASM params（Shadow）: local 0 = env_obj (i64), local 1 = this_val (i64),
         //              local 2 = args_base_ptr (i32), local 3 = args_count (i32)
         // WASM params（Direct）: local 0 = env (i64), local 1 = this (i64),
@@ -469,11 +526,6 @@ impl Compiler {
         self.current_emit_block_idx = 0;
         self.current_emit_instr_idx = 0;
 
-        // 计算实际需要的 local 数量
-        // SSA 值从 ssa_local_base 开始分配，需要 ssa_local_base + max_ssa 个 locals
-        // 但 var_locals 已经包含了声明的参数，其索引也是从 ssa_local_base 开始
-        // 所以实际需要的 locals 数量 = max_ssa (SSA 值数量)
-        // 而不是 ssa_local_base + max_ssa (因为 params 是 WASM 参数，不是声明的 locals)
         let max_ssa = function
             .blocks()
             .iter()
@@ -481,13 +533,8 @@ impl Compiler {
             .map(max_instruction_value_id)
             .max()
             .map_or(0, |max| max + 1);
-
-        // 总 local 数量
-        // 为避免 SSA locals 和 var locals 索引重叠（SSA 值可能需要跨 StoreVar 保持活性，如解构），
-        // 将 var locals 偏移到 SSA 最大值之后。
         let ssa_max = max_ssa + self.ssa_local_base;
         let var_rebase_start = self.ssa_local_base;
-        // rebase: 所有 >= ssa_local_base 的 var/phi local 索引偏移到 ssa_max 之后
         let offset = ssa_max.saturating_sub(var_rebase_start);
         for idx in self.var_locals.values_mut() {
             if *idx >= var_rebase_start {
@@ -503,25 +550,13 @@ impl Compiler {
         let total_locals = ssa_max
             .max(total_var_locals)
             .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1));
-
-        // scratch locals: 所有 i64 在前，然后所有 i32（WASM locals 按 type 分组）
-        // string_concat (i64) at total_locals
-        // call_env_obj (i64) at total_locals+1
-        // shadow_sp (i32) at total_locals+2
-        // call_func_idx (i32) at total_locals+3
-        // safepoint_sp_saved (i32) at total_locals+4  (P2: safepoint spill save/restore)
-        // computed_idx_scratch (i32) at total_locals+5  (emit_computed_get/set 暂存规范数字索引)
-        self.string_concat_scratch_idx = total_locals;
-        // call_env_obj scratch = string_concat + 1 (i64), computed by call_env_obj_scratch()
-        self.shadow_sp_scratch_idx = total_locals + 2;
-        self.safepoint_sp_saved_idx = total_locals + 4;
-        self.computed_idx_scratch_idx = total_locals + 5;
-        self.eval_var_base_local_idx = total_locals + 6;
-        // call_func_idx = shadow_sp + 1 (i32), computed by call_func_idx_scratch()
-        let wasm_param_count = prologue_kind.wasm_param_count();
-        let total_i64_locals = total_locals.saturating_sub(wasm_param_count) + 2; // string_concat + call_env_obj
-        let total_i32_locals = 4 + u32::from(!self.var_memory_offsets.is_empty());
-
+        let existing_i32_scratch = 4 + u32::from(!self.var_memory_offsets.is_empty());
+        let (total_i64_locals, total_i32_locals) = self.setup_call_cache_locals(
+            function,
+            total_locals,
+            prologue_kind.wasm_param_count(),
+            existing_i32_scratch,
+        );
         let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
             Vec::new()
         } else {

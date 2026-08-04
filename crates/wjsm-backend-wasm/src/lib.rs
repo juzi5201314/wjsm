@@ -315,7 +315,8 @@ struct Compiler {
     current_emit_block_idx: usize,
     /// 当前 emit 位置在当前 block 内的指令下标。
     current_emit_instr_idx: usize,
-    // ── Layer 3: callee no-GC 分析 ──
+    /// 当前函数内动态 Call 调用点的独立缓存槽：(guest callee, env, func_idx)。
+    pub(crate) current_call_cache_slots: HashMap<(usize, usize), (u32, u32, u32)>,
     /// 模块级 GC 分析结果。compile_module 入口计算一次，用于 Call safepoint 省略判断。
     gc_analysis: Option<GcAnalysis>,
     // ── f64 值类型传播分析（Step 1）──

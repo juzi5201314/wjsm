@@ -1,6 +1,60 @@
 use super::*;
 
 impl Compiler {
+    fn active_call_cache_slots(&self) -> Option<(u32, u32, u32)> {
+        self.current_call_cache_slots
+            .get(&(self.current_emit_block_idx, self.current_emit_instr_idx))
+            .copied()
+    }
+
+    /// 解析闭包的函数表索引和环境；缓存按当前 IR block/instruction 精确区分调用点。
+    fn emit_closure_resolution(&mut self, callee_local: u32) {
+        let call_func_idx_scratch = self.call_func_idx_scratch();
+        let call_env_obj_scratch = self.call_env_obj_scratch();
+        let cache = self.active_call_cache_slots();
+        if let Some((cache_callee, cache_env, cache_func)) = cache {
+            self.emit(WasmInstruction::LocalGet(callee_local));
+            self.emit(WasmInstruction::LocalGet(cache_callee));
+            self.emit(WasmInstruction::I64Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::LocalGet(cache_func));
+            self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+            self.emit(WasmInstruction::LocalGet(cache_env));
+            self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+            self.emit(WasmInstruction::Else);
+            self.emit(WasmInstruction::LocalGet(callee_local));
+            self.emit(WasmInstruction::LocalSet(cache_callee));
+            self.emit(WasmInstruction::LocalGet(callee_local));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc],
+            ));
+            self.emit(WasmInstruction::LocalTee(cache_func));
+            self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+            self.emit(WasmInstruction::LocalGet(callee_local));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
+            ));
+            self.emit(WasmInstruction::LocalTee(cache_env));
+            self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+            self.emit(WasmInstruction::End);
+        } else {
+            self.emit(WasmInstruction::LocalGet(callee_local));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc],
+            ));
+            self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+            self.emit(WasmInstruction::LocalGet(callee_local));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
+            ));
+            self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        }
+    }
+
     pub(crate) fn compile_call_with_new_target(
         &mut self,
         dest: &Option<ValueId>,
@@ -123,18 +177,7 @@ impl Compiler {
         self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64)); // TAG_CLOSURE
         self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-        self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(
-            self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc],
-        ));
-        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
-        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-        self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(
-            self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
-        ));
-        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        self.emit_closure_resolution(self.local_idx(callee.0));
         self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
