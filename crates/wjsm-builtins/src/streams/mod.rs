@@ -99,9 +99,7 @@ pub(crate) fn fulfill_byob_read<E: ExecContext>(
             controller.chunk_queue.push_front(rest);
         });
     }
-    let result_view = ctx
-        .stream_transfer_byob_view(view, written)
-        .unwrap_or(view);
+    let result_view = ctx.stream_transfer_byob_view(view, written).unwrap_or(view);
     let result = build_reader_result(ctx, false, Some(result_view));
     ctx.settle_promise(promise, PromiseSettlement::Fulfill(result));
 }
@@ -155,10 +153,7 @@ pub fn create_readable_stream_object<E: ExecContext>(ctx: &mut E, stream_handle:
     object
 }
 
-pub fn create_controller_object<E: ExecContext>(
-    ctx: &mut E,
-    controller_handle: u32,
-) -> Value {
+pub fn create_controller_object<E: ExecContext>(ctx: &mut E, controller_handle: u32) -> Value {
     let object = ctx.alloc_object(6);
     define_data_property_with_flags(
         ctx,
@@ -175,12 +170,11 @@ pub fn create_controller_object<E: ExecContext>(
         ("close", ReadableStreamDefaultControllerMethodKind::Close),
         ("error", ReadableStreamDefaultControllerMethodKind::Error),
     ] {
-        let callable = ctx.create_native_callable(
-            NativeCallableRef::ReadableStreamDefaultControllerMethod {
+        let callable =
+            ctx.create_native_callable(NativeCallableRef::ReadableStreamDefaultControllerMethod {
                 handle: controller_handle,
                 kind,
-            },
-        );
+            });
         define_data_property_with_flags(
             ctx,
             object,
@@ -199,12 +193,11 @@ pub fn create_controller_object<E: ExecContext>(
             ReadableStreamDefaultControllerMethodKind::GetByobRequest,
         ),
     ] {
-        let getter = ctx.create_native_callable(
-            NativeCallableRef::ReadableStreamDefaultControllerMethod {
+        let getter =
+            ctx.create_native_callable(NativeCallableRef::ReadableStreamDefaultControllerMethod {
                 handle: controller_handle,
                 kind,
-            },
-        );
+            });
         define_accessor_property(ctx, object, name, getter);
     }
     if let Some(object_handle) = ctx.weak_target_handle(object) {

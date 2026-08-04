@@ -191,9 +191,9 @@ impl Compiler {
                 // 恒 false（is_exception 且操作数必非异常）→ 异常目标（true）是
                 // 死代码：直接跳正常路径，不发射条件求值与 if/else。
                 let condition_constant_false = self.current_function_id.is_some_and(|f| {
-                    self.f64_analysis.as_ref().is_some_and(|a| {
-                        a.condition_constant_false(f, *condition)
-                    })
+                    self.f64_analysis
+                        .as_ref()
+                        .is_some_and(|a| a.condition_constant_false(f, *condition))
                 });
                 let true_terminates = matches!(
                     blocks[true_block.0 as usize].terminator(),
@@ -391,11 +391,9 @@ fn block_id(idx: usize) -> wjsm_ir::BasicBlockId {
 
 /// 消除单个函数中的空跳转块（每轮最多消除一个，返回是否消除）。
 fn eliminate_empty_jump_blocks_in_function(module: &mut IrModule, function_id: usize) -> usize {
-    let Some(function) = module
-        .function_mut(wjsm_ir::FunctionId(
-            u32::try_from(function_id).expect("function id must fit u32"),
-        ))
-    else {
+    let Some(function) = module.function_mut(wjsm_ir::FunctionId(
+        u32::try_from(function_id).expect("function id must fit u32"),
+    )) else {
         return 0;
     };
     let entry = function.entry().0 as usize;
@@ -443,9 +441,9 @@ fn eliminate_empty_jump_blocks_in_function(module: &mut IrModule, function_id: u
             // 风险大于收益，保守保留。
             let loops = &loops;
             let t_is_update_to_header = match blocks.get(t).map(|b| b.terminator()) {
-                Some(Terminator::Jump { target: jt }) => loops
-                    .iter()
-                    .any(|l| l.header_idx == jt.0 as usize),
+                Some(Terminator::Jump { target: jt }) => {
+                    loops.iter().any(|l| l.header_idx == jt.0 as usize)
+                }
                 _ => false,
             };
             if !t_is_update_to_header {
@@ -653,10 +651,7 @@ mod tests {
             other => panic!("expected branch, got {other:?}"),
         }
         assert!(blocks[5].instructions().is_empty());
-        assert!(matches!(
-            blocks[5].terminator(),
-            Terminator::Unreachable
-        ));
+        assert!(matches!(blocks[5].terminator(), Terminator::Unreachable));
         // 变换后：无非循环头后向边 → 可结构化编译。
         assert!(!has_non_loop_header_back_edge(&module.functions()[0]));
         module.verify().expect("transformed IR must verify");
@@ -766,10 +761,7 @@ mod tests {
         let eliminated = eliminate_empty_jump_blocks(&mut module);
         assert_eq!(eliminated, 0, "目标含 phi 时必须保守跳过");
         let blocks = module.functions()[0].blocks();
-        assert!(matches!(
-            blocks[4].terminator(),
-            Terminator::Jump { .. }
-        ));
+        assert!(matches!(blocks[4].terminator(), Terminator::Jump { .. }));
         module.verify().expect("untouched IR must verify");
     }
 
@@ -805,7 +797,10 @@ mod tests {
         module.push_function(f);
 
         let eliminated = eliminate_empty_jump_blocks(&mut module);
-        assert_eq!(eliminated, 2, "bb4/bb3 逐轮塌缩至 latch bb2；bb2 与入口 bb0 保留");
+        assert_eq!(
+            eliminated, 2,
+            "bb4/bb3 逐轮塌缩至 latch bb2；bb2 与入口 bb0 保留"
+        );
 
         let blocks = module.functions()[0].blocks();
         // 循环头 bb1 最终直达 latch bb2
@@ -882,4 +877,3 @@ mod tests {
         lower_module(parse_module(source).expect("parse"), false).expect("lower")
     }
 }
-

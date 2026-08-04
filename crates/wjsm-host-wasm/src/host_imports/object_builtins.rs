@@ -221,7 +221,11 @@ pub(crate) fn read_property_by_string_key_raw(
             let key_id = crate::property_key::encode_runtime_string_name_id(
                 crate::property_key::intern_runtime_property_key(caller.data(), key.clone()),
             );
-            return match access.get_property_slot_on_proto_chain(handle, key_id).ok().flatten() {
+            return match access
+                .get_property_slot_on_proto_chain(handle, key_id)
+                .ok()
+                .flatten()
+            {
                 Some(property) if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 => {
                     super::get_method::invoke_getter_sync(caller, property.getter as i64, obj)
                 }

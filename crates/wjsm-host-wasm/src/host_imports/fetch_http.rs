@@ -8,8 +8,6 @@ use crate::{
 };
 use wasmtime::Caller;
 
-
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn perform_http_fetch(
     caller: &mut Caller<'_, RuntimeState>,
@@ -54,10 +52,7 @@ pub(crate) async fn perform_http_fetch(
     }
     {
         let mut context = WasmExecContext::new(caller);
-        wjsm_builtins::fetch::resource_timing::mark_request_start(
-            &mut context,
-            &resource_timing,
-        );
+        wjsm_builtins::fetch::resource_timing::mark_request_start(&mut context, &resource_timing);
     }
 
     let response = req_builder
@@ -163,11 +158,7 @@ pub(crate) async fn perform_http_fetch(
             http_handle: Some(http_handle),
         },
     );
-    wjsm_builtins::fetch::set_response_resource_timing(
-        &mut context,
-        response,
-        resource_timing,
-    );
+    wjsm_builtins::fetch::set_response_resource_timing(&mut context, response, resource_timing);
     Ok(response)
 }
 
@@ -181,4 +172,3 @@ fn is_signal_aborted(caller: &Caller<'_, RuntimeState>, handle: u32) -> bool {
         .map(|s| s.aborted)
         .unwrap_or(false)
 }
-

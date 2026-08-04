@@ -5,7 +5,7 @@ use wjsm_host::{
 use wjsm_ir::value;
 
 use super::constructors::resolve_request;
-use super::objects::{create_response, set_response_resource_timing, ResponseSpec};
+use super::objects::{ResponseSpec, create_response, set_response_resource_timing};
 use super::resource_timing;
 
 #[derive(Debug, thiserror::Error)]
@@ -75,10 +75,7 @@ fn reject_type_error<E: ExecContext>(ctx: &mut E, promise: Value, message: &str)
     ctx.settle_promise(promise, PromiseSettlement::Reject(error));
 }
 
-fn perform_data_url_fetch<E: ExecContext>(
-    ctx: &mut E,
-    url: &str,
-) -> Result<Value, DataUrlError> {
+fn perform_data_url_fetch<E: ExecContext>(ctx: &mut E, url: &str) -> Result<Value, DataUrlError> {
     let (media_type, is_base64, data) = parse_data_url(url)?;
     let bytes = if is_base64 {
         base64::engine::general_purpose::STANDARD.decode(data.as_bytes())?

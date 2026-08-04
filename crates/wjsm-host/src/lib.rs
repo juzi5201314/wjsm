@@ -28,22 +28,22 @@
 //! - **零 vtable builtins**：`wjsm-builtins` 以 `<E: ExecContext>` 泛型实例化，编译期单态化。
 
 mod async_host;
+pub mod backend;
 mod console_host;
 mod exec_context;
-pub mod backend;
+mod fetch_types;
 mod gc_host;
 mod heap_context;
-mod fetch_types;
 mod json_value;
-mod object_host;
 mod module_types;
+mod object_host;
 pub mod property_key;
 mod runtime_string;
 mod runtime_trait;
 mod stream_types;
 
-pub use backend::JsBackend;
 pub use async_host::AsyncHost;
+pub use backend::JsBackend;
 pub use console_host::ConsoleHost;
 pub use exec_context::{
     AtomicsRmwOp, BoundEntry, CapturedScope, ClosureEntry, ExecContext, ExecFuture,
@@ -57,7 +57,6 @@ pub use fetch_types::{
     HeadersEntry, HeadersGuard, HeadersMethodKind, HttpRequestSpec, RedirectMode, RequestCache,
     RequestCredentials, RequestMethodKind, RequestMode, ResponseMethodKind, ResponseType,
     SharedFetchResourceTiming,
-
 };
 pub use gc_host::{GcHost, GcOutcome};
 pub use heap_context::{AsyncHookEvent, HeapContext};
@@ -75,6 +74,7 @@ pub use property_key::{
     symbol_value_to_name_id,
 };
 pub use runtime_string::RuntimeString;
+pub use runtime_trait::HostRuntime;
 pub use stream_types::{
     ByobRequestEntry, ControllerKind, ReadableStreamByobRequestMethodKind,
     ReadableStreamDefaultControllerMethodKind, ReadableStreamDefaultReaderMethodKind,
@@ -84,7 +84,6 @@ pub use stream_types::{
     WritableStreamDefaultWriterMethodKind, WritableStreamEntry, WritableStreamMethodKind,
     WritableStreamState, WriterEntry,
 };
-pub use runtime_trait::HostRuntime;
 
 // ── 值与 handle：单一来源是 wjsm-ir 的 NaN-boxing 定义 ──
 /// NaN-boxed JS 值（i64）。编码/解码见 `wjsm_ir::value`。

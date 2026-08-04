@@ -2,7 +2,7 @@ use wjsm_host::{ExecContext, PromiseSettlement, ResponseMethodKind, Value};
 use wjsm_ir::value;
 
 use super::headers::clone_handle;
-use super::objects::{create_response, ResponseSpec};
+use super::objects::{ResponseSpec, create_response};
 use super::resource_timing;
 
 pub fn call_method<E: ExecContext>(
@@ -33,9 +33,7 @@ pub fn call_method<E: ExecContext>(
     {
         return Some(rejected_type_error(ctx, "body stream is locked"));
     }
-    if consuming
-        && let Some(http_handle) = entry.http_response_handle
-    {
+    if consuming && let Some(http_handle) = entry.http_response_handle {
         let promise = ctx.alloc_promise();
         if ctx.consume_fetch_body_to_bytes(http_handle, promise, kind) {
             set_body_used(ctx, this_value);
@@ -52,11 +50,7 @@ pub fn call_method<E: ExecContext>(
         ResponseMethodKind::Json => {
             let text = String::from_utf8_lossy(&entry.body).into_owned();
             let text = ctx.store_string_owned(text);
-            let parsed = crate::json::json_parse_sync_impl(
-                ctx,
-                text,
-                value::encode_undefined(),
-            );
+            let parsed = crate::json::json_parse_sync_impl(ctx, text, value::encode_undefined());
             let promise = ctx.alloc_promise();
             if value::is_exception(parsed) {
                 let reason = ctx.exception_reason(parsed);
@@ -93,11 +87,7 @@ pub fn call_method<E: ExecContext>(
     };
     if consuming {
         if entry.http_response_handle.is_none() {
-            resource_timing::record_body_bytes(
-                &entry.resource_timing,
-                body_length,
-                body_length,
-            );
+            resource_timing::record_body_bytes(&entry.resource_timing, body_length, body_length);
             resource_timing::complete(ctx, &entry.resource_timing);
         }
         set_body_used(ctx, this_value);

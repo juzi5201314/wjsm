@@ -282,23 +282,67 @@ pub fn math_clz32<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
     })
 }
 
-pub fn math_hypot<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Value {
-    if args_count == 0 {
+#[inline]
+fn math_hypot_numbers(numbers: &[f64]) -> Value {
+    // ECMA-262 要求 Infinity 优先于 NaN，且两者都在全部参数完成 ToNumber 后判断。
+    if numbers.iter().any(|number| number.is_infinite()) {
+        return value::encode_f64(f64::INFINITY);
+    }
+    if numbers.iter().any(|number| number.is_nan()) {
+        return value::encode_f64(f64::NAN);
+    }
+
+    let scale = numbers
+        .iter()
+        .map(|number| number.abs())
+        .fold(0.0_f64, f64::max);
+    if scale == 0.0 {
         return value::encode_f64(0.0);
     }
-    let mut sum = 0.0_f64;
-    for i in 0..args_count as u32 {
-        let val = ctx.read_shadow_arg(args_base, i);
-        let x = match math_decode_f64_arg(ctx, val) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        if x.is_infinite() {
-            return value::encode_f64(f64::INFINITY);
-        }
-        sum += x * x;
+    if let [lhs, rhs] = numbers {
+        return value::encode_f64(lhs.hypot(*rhs));
     }
-    value::encode_f64(sum.sqrt())
+
+    // 先按最大绝对值缩放以避免平方溢出/下溢，再用补偿求和降低累计舍入误差。
+    let mut sum = 0.0_f64;
+    let mut compensation = 0.0_f64;
+    for number in numbers {
+        let ratio = number.abs() / scale;
+        let term = ratio * ratio;
+        let corrected = term - compensation;
+        let next = sum + corrected;
+        compensation = (next - sum) - corrected;
+        sum = next;
+    }
+    value::encode_f64(scale * sum.sqrt())
+}
+
+pub fn math_hypot<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Value {
+    let args_count = u32::try_from(args_count).expect("Math.hypot 参数数量必须非负");
+    let mut coerced = Vec::with_capacity(
+        usize::try_from(args_count).expect("Math.hypot 参数数量必须可表示为 usize"),
+    );
+    for index in 0..args_count {
+        let value = ctx.read_shadow_arg(args_base, index);
+        let number = match math_decode_f64_arg(ctx, value) {
+            Ok(number) => number,
+            Err(error) => return error,
+        };
+        coerced.push(number);
+    }
+    math_hypot_numbers(&coerced)
+}
+
+pub fn math_hypot2<E: ExecContext>(ctx: &mut E, lhs: Value, rhs: Value) -> Value {
+    let lhs = match math_decode_f64_arg(ctx, lhs) {
+        Ok(number) => number,
+        Err(error) => return error,
+    };
+    let rhs = match math_decode_f64_arg(ctx, rhs) {
+        Ok(number) => number,
+        Err(error) => return error,
+    };
+    math_hypot_numbers(&[lhs, rhs])
 }
 
 pub fn math_imul<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {

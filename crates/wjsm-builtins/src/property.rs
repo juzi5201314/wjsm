@@ -2,11 +2,7 @@ use wjsm_host::{ExecContext, Value};
 use wjsm_ir::value;
 
 /// V2 `[[Get]]`：按规范化 name_id 分派原始值、数组、对象、函数与 Proxy。
-pub async fn get_by_name_id<E: ExecContext>(
-    ctx: &mut E,
-    receiver: Value,
-    name_id: u32,
-) -> Value {
+pub async fn get_by_name_id<E: ExecContext>(ctx: &mut E, receiver: Value, name_id: u32) -> Value {
     if value::is_proxy(receiver) {
         return crate::proxy_reflect_async::proxy_trap_internal_get_async(
             ctx,
@@ -91,9 +87,7 @@ pub async fn get_by_name_id<E: ExecContext>(
                 wjsm_host::PropertyLookup::Missing => {}
             }
         }
-        if value::is_function(receiver)
-            || value::is_closure(receiver)
-            || value::is_bound(receiver)
+        if value::is_function(receiver) || value::is_closure(receiver) || value::is_bound(receiver)
         {
             return ctx.callable_get_property(receiver, name_id);
         }
@@ -135,21 +129,13 @@ pub async fn set_by_name_id<E: ExecContext>(
         return;
     }
     let _ = crate::proxy_reflect_async::ordinary_set_by_name_id(
-        ctx,
-        receiver,
-        receiver,
-        name_id,
-        new_value,
+        ctx, receiver, receiver, name_id, new_value,
     )
     .await;
 }
 
 /// V2 `[[Delete]]`：Proxy、数组索引 hole 与普通属性删除的统一入口。
-pub async fn delete_by_name_id<E: ExecContext>(
-    ctx: &mut E,
-    target: Value,
-    name_id: u32,
-) -> Value {
+pub async fn delete_by_name_id<E: ExecContext>(ctx: &mut E, target: Value, name_id: u32) -> Value {
     if value::is_proxy(target) {
         return crate::proxy_reflect_async::proxy_trap_internal_delete_async(
             ctx,

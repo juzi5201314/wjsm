@@ -17,7 +17,7 @@ impl Lowerer {
 
         let outer_block = self.ensure_open(flow)?;
 
-        let (outer_block, ctor_dest) = self.lower_class_body(
+        let (outer_block, ctor_dest, ctor_function_id) = self.lower_class_body(
             &class_name,
             &class_decl.class,
             class_decl.span(),
@@ -32,6 +32,10 @@ impl Lowerer {
         // 收尾存储须同步进共享 env：方法闭包在类求值期间 materialize（此时类名尚未存储），
         // 运行时方法体读到的是 env 中的类名值。
         let class_binding = CapturedBinding::new(&class_name, class_body_name_scope_id);
+        if let Some(function_id) = ctor_function_id {
+            self.current_function
+                .record_known_callee(class_binding.var_ir_name(), function_id);
+        }
         let outer_block = self.store_binding_value(
             outer_block,
             &class_binding,
@@ -50,6 +54,10 @@ impl Lowerer {
             .resolve_scope_id(&class_name)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
         let ir_name = format!("${outer_scope_id}.{class_name}");
+        if let Some(function_id) = ctor_function_id {
+            self.current_function
+                .record_known_callee(ir_name.clone(), function_id);
+        }
         self.current_function.append_instruction(
             outer_block,
             Instruction::StoreVar {

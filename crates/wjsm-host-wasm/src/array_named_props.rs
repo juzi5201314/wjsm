@@ -34,11 +34,7 @@ fn canonical_name_id(caller: &mut Caller<'_, RuntimeState>, name_id: u32) -> u32
     crate::property_key::canonicalize_v2_name_id(caller, name_id).unwrap_or(name_id)
 }
 
-fn invoke_getter_sync(
-    caller: &mut Caller<'_, RuntimeState>,
-    getter: i64,
-    receiver: i64,
-) -> i64 {
+fn invoke_getter_sync(caller: &mut Caller<'_, RuntimeState>, getter: i64, receiver: i64) -> i64 {
     let runtime = tokio::runtime::Handle::current();
     tokio::task::block_in_place(|| {
         runtime

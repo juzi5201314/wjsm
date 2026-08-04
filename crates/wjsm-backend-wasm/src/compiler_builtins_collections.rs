@@ -292,10 +292,19 @@ impl Compiler {
                 }
                 Ok(BuiltinDispatch::Handled)
             }
-            // ── Math variadic builtins (shadow stack) ──
-            Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot => {
-                self.compile_proto_method_call(dest, builtin, args).map(|_| BuiltinDispatch::Handled)
+            // ── Math.hypot 固定二参：寄存器直传，免变参 shadow stack 打包/解包 ──
+            Builtin::MathHypot if args.len() == 2 => {
+                self.emit(WasmInstruction::LocalGet(self.local_idx(args[0].0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(args[1].0)));
+                let func_idx = self.special_host_import_indices[&SpecialHostImport::MathHypot2];
+                self.emit(WasmInstruction::Call(func_idx));
+                self.store_or_drop_call_result(dest);
+                Ok(BuiltinDispatch::Handled)
             }
+            // ── Math variadic builtins (shadow stack) ──
+            Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot => self
+                .compile_proto_method_call(dest, builtin, args)
+                .map(|_| BuiltinDispatch::Handled),
             // ── Number builtins ──
             Builtin::NumberConstructor
             | Builtin::NumberIsNaN

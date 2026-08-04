@@ -26,11 +26,6 @@ fn is_env_name(name: &str) -> bool {
     name == "$env" || name.ends_with(".$env")
 }
 
-/// 是否为 this 变量 IR 名（`$this` 或 `${scope}.$this`）。
-fn is_this_name(name: &str) -> bool {
-    name == "$this" || name.ends_with(".$this")
-}
-
 /// 指令的 ValueId 操作数（uses）。与后端 `analysis_liveness` 的收集规则一致。
 fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
     use Instruction::*;
@@ -117,9 +112,9 @@ fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
         Terminator::Branch { condition, .. } => vec![*condition],
         Terminator::Switch { value, .. } => vec![*value],
         Terminator::Throw { value } => vec![*value],
-        Terminator::Return { value: None }
-        | Terminator::Jump { .. }
-        | Terminator::Unreachable => vec![],
+        Terminator::Return { value: None } | Terminator::Jump { .. } | Terminator::Unreachable => {
+            vec![]
+        }
     }
 }
 
@@ -191,8 +186,8 @@ pub fn run(module: &mut Module) {
         return;
     }
 
-    // 2. 不可变绑定集合：known_callee_vars 中 store 恰一次的函数声明名。
-    //    唯一一次 store 即函数声明初始 store（fn_decls 的 record_known_callee + StoreVar 路径）。
+    // 2. 不可变绑定集合：known_callee_vars 中 store 恰一次的函数或类声明名。
+    //    唯一一次 store 即声明初始 store（record_known_callee + StoreVar 路径）。
     let mut store_count: HashMap<&str, u32> = HashMap::new();
     for function in module.functions() {
         for block in function.blocks() {
@@ -215,9 +210,8 @@ pub fn run(module: &mut Module) {
         return;
     }
 
-    // 3. per 函数判定：env_required / this_required / has_new_target / resolvable_env_gets。
+    // 3. per 函数判定：env_required / has_new_target / resolvable_env_gets。
     let mut env_required: HashSet<FunctionId> = HashSet::new();
-    let mut this_required: HashSet<FunctionId> = HashSet::new();
     let mut has_new_target: HashSet<FunctionId> = HashSet::new();
     // env_deps：函数 → 其 env 读取（`GetProp(env, immutable 函数声明)`）依赖的目标
     // 函数。目标函数 env_required 时该读取不会被替换为 FunctionRef，env 仍然必需，
@@ -261,20 +255,21 @@ pub fn run(module: &mut Module) {
                 {
                     has_new_target.insert(func_id);
                 }
+                // SuperCall 也在后端调用 new.target，阻止 direct_callable。
+                if matches!(instruction, Instruction::SuperCall { .. }) {
+                    has_new_target.insert(func_id);
+                }
             }
         }
 
-        // env / this LoadVar dest 收集。
+        // env LoadVar dest 收集。
         let mut env_load_dests: Vec<ValueId> = Vec::new();
-        let mut this_load_dests: Vec<ValueId> = Vec::new();
         for block in function.blocks() {
             for instruction in block.instructions() {
-                if let Instruction::LoadVar { dest, name } = instruction {
-                    if is_env_name(name) {
-                        env_load_dests.push(*dest);
-                    } else if is_this_name(name) {
-                        this_load_dests.push(*dest);
-                    }
+                if let Instruction::LoadVar { dest, name } = instruction
+                    && is_env_name(name)
+                {
+                    env_load_dests.push(*dest);
                 }
             }
         }
@@ -326,22 +321,6 @@ pub fn run(module: &mut Module) {
                 env_required.insert(func_id);
             }
         }
-
-        // this LoadVar dest：有 use（含 terminator）即 this_required。
-        for this_dest in this_load_dests {
-            let mut has_use = !collect_uses(function, this_dest).is_empty();
-            if !has_use {
-                for block in function.blocks() {
-                    if terminator_uses(block.terminator()).contains(&this_dest) {
-                        has_use = true;
-                        break;
-                    }
-                }
-            }
-            if has_use {
-                this_required.insert(func_id);
-            }
-        }
     }
 
     // env_required 不动点：函数直接不可解析（非 `GetProp(env, immutable)` use）或经
@@ -350,9 +329,7 @@ pub fn run(module: &mut Module) {
     loop {
         let mut changed = false;
         for (f, targets) in &env_deps {
-            if !env_required.contains(f)
-                && targets.iter().any(|t| env_required.contains(t))
-            {
+            if !env_required.contains(f) && targets.iter().any(|t| env_required.contains(t)) {
                 env_required.insert(*f);
                 changed = true;
             }
@@ -370,20 +347,18 @@ pub fn run(module: &mut Module) {
         });
     }
 
-    // 4. 写回 direct_callable（函数体不依赖 env/this/new.target，且无 eval）。
+    // 4. 写回 direct_callable（函数体不依赖 env/new.target，且无 eval）。
+    // direct ABI 显式传递 this，因此读取 this 不影响静态直调。
     let mut direct_callables: Vec<(FunctionId, bool)> = Vec::new();
     for (func_idx, function) in module.functions().iter().enumerate() {
         let func_id = FunctionId(func_idx as u32);
         let direct_callable = !env_required.contains(&func_id)
-            && !this_required.contains(&func_id)
             && !has_new_target.contains(&func_id)
             && !function.has_eval();
         direct_callables.push((func_id, direct_callable));
     }
     for (func_id, direct_callable) in direct_callables {
-        if direct_callable
-            && let Some(f) = module.function_mut(func_id)
-        {
+        if direct_callable && let Some(f) = module.function_mut(func_id) {
             f.set_direct_callable(true);
         }
     }
@@ -404,7 +379,9 @@ pub fn run(module: &mut Module) {
     let mut functionref_consts: HashMap<FunctionId, ConstantId> = HashMap::new();
     for (idx, constant) in module.constants().iter().enumerate() {
         if let Constant::FunctionRef(id) = constant {
-            functionref_consts.entry(*id).or_insert(ConstantId(idx as u32));
+            functionref_consts
+                .entry(*id)
+                .or_insert(ConstantId(idx as u32));
         }
     }
     for fn_id in replaceable.values() {

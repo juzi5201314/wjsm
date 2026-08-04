@@ -481,7 +481,11 @@ const FAST_PATH_MISS_I64: i64 = (value::BOX_BASE as i64) | (0x1E_i64 << 32);
 /// 未命中）。
 fn emit_obj_get_v2() -> Function {
     // local 2 = 保存的 obj，local 3 = 保存的 name_id，local 4 = 快路径结果。
-    let mut func = Function::new(vec![(1, ValType::I64), (1, ValType::I32), (1, ValType::I64)]);
+    let mut func = Function::new(vec![
+        (1, ValType::I64),
+        (1, ValType::I32),
+        (1, ValType::I64),
+    ]);
     // 保存原始参数：快路径调用会消耗栈上参数，慢路径回退需要重放。
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::LocalSet(2));
@@ -513,7 +517,11 @@ fn emit_obj_get_v2() -> Function {
 /// 哨兵回退 async `gc_obj_set`。
 fn emit_obj_set_v2() -> Function {
     // local 3 = obj，local 4 = name_id，local 5 = val，local 6 = 快路径状态。
-    let mut func = Function::new(vec![(1, ValType::I64), (1, ValType::I32), (2, ValType::I64)]);
+    let mut func = Function::new(vec![
+        (1, ValType::I64),
+        (1, ValType::I32),
+        (2, ValType::I64),
+    ]);
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::LocalSet(3));
     func.instruction(&WasmInstruction::LocalGet(1));

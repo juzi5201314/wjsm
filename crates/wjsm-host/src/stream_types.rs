@@ -185,4 +185,3 @@ pub enum WritableStreamDefaultControllerMethodKind {
     Error,
     GetSignal,
 }
-

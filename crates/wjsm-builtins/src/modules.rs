@@ -14,9 +14,9 @@ pub fn cjs_require_property<E: ExecContext>(
     property: &str,
 ) -> Option<Value> {
     match property {
-        "resolve" => Some(ctx.create_native_callable(NativeCallableRef::CjsRequireResolve {
-            referrer,
-        })),
+        "resolve" => {
+            Some(ctx.create_native_callable(NativeCallableRef::CjsRequireResolve { referrer }))
+        }
         "cache" => Some(ctx.create_require_cache_proxy()),
         _ => None,
     }
@@ -27,9 +27,8 @@ pub fn cjs_require_resolve_property<E: ExecContext>(
     referrer: RuntimeModuleReferrer,
     property: &str,
 ) -> Option<Value> {
-    (property == "paths").then(|| {
-        ctx.create_native_callable(NativeCallableRef::CjsRequireResolvePaths { referrer })
-    })
+    (property == "paths")
+        .then(|| ctx.create_native_callable(NativeCallableRef::CjsRequireResolvePaths { referrer }))
 }
 
 pub fn call_cjs_require<E: ExecContext>(
@@ -125,11 +124,7 @@ pub fn call_import_meta_resolve<E: ExecContext>(
         Ok(specifier) => specifier,
         Err(exception) => return exception,
     };
-    match ctx.module_resolve(
-        referrer,
-        &specifier,
-        RuntimeModuleResolutionKind::Import,
-    ) {
+    match ctx.module_resolve(referrer, &specifier, RuntimeModuleResolutionKind::Import) {
         Ok(resolved) => ctx.store_string_owned(resolved.url),
         Err(error) => module_load_error_exception(ctx, &specifier, error),
     }
@@ -208,11 +203,7 @@ pub fn call_cjs_require_resolve<E: ExecContext>(
         Ok(specifier) => specifier,
         Err(exception) => return exception,
     };
-    match ctx.module_resolve(
-        referrer,
-        &specifier,
-        RuntimeModuleResolutionKind::Require,
-    ) {
+    match ctx.module_resolve(referrer, &specifier, RuntimeModuleResolutionKind::Require) {
         Ok(resolved) => {
             let resolved_id = resolved
                 .path

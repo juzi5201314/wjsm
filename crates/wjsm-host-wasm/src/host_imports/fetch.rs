@@ -1,8 +1,7 @@
-use crate::*;
 use crate::exec_context_impl::WasmExecContext;
+use crate::*;
 use anyhow::Result;
 use wasmtime::{Caller, Func, Linker, Store};
-
 
 // ── Public registration ─────────────────────────────────────────────────────
 
@@ -195,4 +194,3 @@ pub(crate) fn define_fetch(
     )?;
     Ok(())
 }
-

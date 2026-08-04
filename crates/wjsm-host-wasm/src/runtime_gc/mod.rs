@@ -43,8 +43,8 @@ pub use api::GcContext;
 /// `HeapAccessV2` 在本 crate 的具体实例化（wasmtime shared memory64 后端）。
 /// 算法已下沉至 `wjsm-gc::heap_access`，本路径仅做单态化类型别名。
 pub type HeapAccessV2 = wjsm_gc::HeapAccessV2<crate::heap::SharedHeapMemory>;
-pub use wjsm_gc::HeapAccessV2Error;
 pub use roots_v2::V2ConditionalRoots;
+pub use wjsm_gc::HeapAccessV2Error;
 
 // 兼容旧路径（crate::runtime_gc::{control,registry,...}）
 pub mod registry {

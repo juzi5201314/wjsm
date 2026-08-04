@@ -224,9 +224,7 @@ pub async fn ordinary_set_by_name_id<E: ExecContext>(
         if !visited.insert(current) {
             return false;
         }
-        if let Some((_slot, flags, _getter, setter)) =
-            ctx.get_own_property_slot(current, name_id)
-        {
+        if let Some((_slot, flags, _getter, setter)) = ctx.get_own_property_slot(current, name_id) {
             if flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
                 if value::is_undefined(setter) || value::is_null(setter) {
                     return false;
@@ -263,9 +261,7 @@ pub async fn define_value_on_receiver<E: ExecContext>(
             return false;
         };
         let existing = Box::pin(reflect_get_own_property_descriptor_on_object_async(
-            ctx,
-            receiver,
-            property,
+            ctx, receiver, property,
         ))
         .await;
         if value::is_exception(existing) {

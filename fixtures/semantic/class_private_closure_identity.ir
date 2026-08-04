@@ -132,7 +132,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @PrivateClosure.empty [home_object=@7.prototype] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @PrivateClosure.empty [home_object=@7.prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = const c24
       return %0
@@ -239,28 +239,28 @@ module {
       call builtin.private_accessor_bind(%10, %17, %13, %16)
       return
 
-  fn @PrivateClosure.capturedMethod [home_object=@7.prototype] [params: $10.$env, $10.$this] [entry=bb0]:
+  fn @PrivateClosure.capturedMethod [home_object=@7.prototype] [direct_callable] [params: $10.$env, $10.$this] [entry=bb0]:
     bb0:
       %0 = load var $10.$this
       %1 = const c56
       %2 = call builtin.private_get(%0, %1)
       return %2
 
-  fn @PrivateClosure.emptyMethod [home_object=@7.prototype] [params: $11.$env, $11.$this] [entry=bb0]:
+  fn @PrivateClosure.emptyMethod [home_object=@7.prototype] [direct_callable] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = load var $11.$this
       %1 = const c59
       %2 = call builtin.private_get(%0, %1)
       return %2
 
-  fn @PrivateClosure.read [home_object=@7.prototype] [params: $12.$env, $12.$this] [entry=bb0]:
+  fn @PrivateClosure.read [home_object=@7.prototype] [direct_callable] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = load var $12.$this
       %1 = const c62
       %2 = call builtin.private_get(%0, %1)
       return %2
 
-  fn @PrivateClosure.write [home_object=@7.prototype] [params: $13.$env, $13.$this, $13.next] [entry=bb0]:
+  fn @PrivateClosure.write [home_object=@7.prototype] [direct_callable] [params: $13.$env, $13.$this, $13.next] [entry=bb0]:
     bb0:
       %0 = load var $13.$this
       %1 = const c65
@@ -274,7 +274,7 @@ module {
       %5 = call builtin.exception_value(%2)
       throw %5
 
-  fn @PrivateClosure.read [home_object=@7] [params: $14.$env, $14.$this] [entry=bb0]:
+  fn @PrivateClosure.read [home_object=@7] [direct_callable] [params: $14.$env, $14.$this] [entry=bb0]:
     bb0:
       %0 = load var $14.$this
       %1 = const c68
@@ -282,14 +282,14 @@ module {
       %3 = call %2, this=%0
       return %3
 
-  fn @PrivateClosure.readStatic [home_object=@7] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @PrivateClosure.readStatic [home_object=@7] [direct_callable] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       %0 = load var $15.$this
       %1 = const c71
       %2 = call builtin.private_get(%0, %1)
       return %2
 
-  fn @PrivateClosure.writeStatic [home_object=@7] [params: $16.$env, $16.$this, $16.next] [entry=bb0]:
+  fn @PrivateClosure.writeStatic [home_object=@7] [direct_callable] [params: $16.$env, $16.$this, $16.next] [entry=bb0]:
     bb0:
       %0 = load var $16.$this
       %1 = const c74

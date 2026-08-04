@@ -11,11 +11,7 @@ pub fn create_proxy<E: ExecContext>(ctx: &mut E, target: Value, handler: Value) 
     ctx.alloc_proxy(target, handler)
 }
 
-pub fn create_revocable_proxy<E: ExecContext>(
-    ctx: &mut E,
-    target: Value,
-    handler: Value,
-) -> Value {
+pub fn create_revocable_proxy<E: ExecContext>(ctx: &mut E, target: Value, handler: Value) -> Value {
     let proxy = create_proxy(ctx, target, handler);
     if value::is_exception(proxy) {
         return proxy;
@@ -27,7 +23,6 @@ pub fn create_revocable_proxy<E: ExecContext>(
     result
 }
 
-
 pub async fn reflect_delete_property<E: ExecContext>(
     ctx: &mut E,
     target: Value,
@@ -36,19 +31,13 @@ pub async fn reflect_delete_property<E: ExecContext>(
     if !value::is_proxy(target) {
         return crate::proxy_reflect::reflect_delete_property_impl(ctx, target, property);
     }
-    let (target, handler) = match crate::proxy_traps::proxy_trap_proxy_entry(
-        ctx,
-        target,
-        "deleteProperty",
-    ) {
-        Ok(pair) => pair,
-        Err(exception) => return exception,
-    };
-    if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(
-        ctx,
-        handler,
-        "deleteProperty",
-    ) {
+    let (target, handler) =
+        match crate::proxy_traps::proxy_trap_proxy_entry(ctx, target, "deleteProperty") {
+            Ok(pair) => pair,
+            Err(exception) => return exception,
+        };
+    if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "deleteProperty")
+    {
         return match ctx.call_js_async(trap, handler, &[target, property]).await {
             Ok(result) => value::encode_bool(value::is_truthy(result)),
             Err(_) => value::encode_bool(false),
@@ -66,7 +55,8 @@ pub async fn reflect_apply<E: ExecContext>(
     if !ctx.is_callable(target) {
         return ctx.make_type_error("TypeError: Reflect.apply target must be callable");
     }
-    let args = match crate::proxy_reflect_async::extract_array_like_elements(ctx, args_array).await {
+    let args = match crate::proxy_reflect_async::extract_array_like_elements(ctx, args_array).await
+    {
         Ok(args) => args,
         Err(error) => {
             ctx.set_last_error(error);
@@ -92,7 +82,8 @@ pub async fn reflect_construct<E: ExecContext>(
             "TypeError: Reflect.construct target and newTarget must be constructors",
         );
     }
-    let args = match crate::proxy_reflect_async::extract_array_like_elements(ctx, args_array).await {
+    let args = match crate::proxy_reflect_async::extract_array_like_elements(ctx, args_array).await
+    {
         Ok(args) => args,
         Err(error) => {
             ctx.set_last_error(error);
@@ -136,19 +127,12 @@ pub async fn reflect_is_extensible<E: ExecContext>(ctx: &mut E, target: Value) -
     if !value::is_proxy(target) {
         return value::encode_bool(ctx.is_extensible(target));
     }
-    let (target, handler) = match crate::proxy_traps::proxy_trap_proxy_entry(
-        ctx,
-        target,
-        "isExtensible",
-    ) {
-        Ok(pair) => pair,
-        Err(exception) => return exception,
-    };
-    if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(
-        ctx,
-        handler,
-        "isExtensible",
-    ) {
+    let (target, handler) =
+        match crate::proxy_traps::proxy_trap_proxy_entry(ctx, target, "isExtensible") {
+            Ok(pair) => pair,
+            Err(exception) => return exception,
+        };
+    if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "isExtensible") {
         return match ctx.call_js_async(trap, handler, &[target]).await {
             Ok(result) => value::encode_bool(value::is_truthy(result)),
             Err(_) => value::encode_bool(false),
@@ -165,19 +149,14 @@ pub async fn reflect_prevent_extensions<E: ExecContext>(ctx: &mut E, target: Val
     if !value::is_proxy(target) {
         return value::encode_bool(ctx.prevent_extensions(target));
     }
-    let (target, handler) = match crate::proxy_traps::proxy_trap_proxy_entry(
-        ctx,
-        target,
-        "preventExtensions",
-    ) {
-        Ok(pair) => pair,
-        Err(exception) => return exception,
-    };
-    if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(
-        ctx,
-        handler,
-        "preventExtensions",
-    ) {
+    let (target, handler) =
+        match crate::proxy_traps::proxy_trap_proxy_entry(ctx, target, "preventExtensions") {
+            Ok(pair) => pair,
+            Err(exception) => return exception,
+        };
+    if let Some(trap) =
+        crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "preventExtensions")
+    {
         return match ctx.call_js_async(trap, handler, &[target]).await {
             Ok(result) => value::encode_bool(value::is_truthy(result)),
             Err(_) => value::encode_bool(false),
@@ -195,19 +174,13 @@ pub async fn reflect_define_property<E: ExecContext>(
     if !value::is_proxy(target) {
         return value::encode_bool(ctx.define_property_or_throw(target, property, descriptor));
     }
-    let (target, handler) = match crate::proxy_traps::proxy_trap_proxy_entry(
-        ctx,
-        target,
-        "defineProperty",
-    ) {
-        Ok(pair) => pair,
-        Err(exception) => return exception,
-    };
-    if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(
-        ctx,
-        handler,
-        "defineProperty",
-    ) {
+    let (target, handler) =
+        match crate::proxy_traps::proxy_trap_proxy_entry(ctx, target, "defineProperty") {
+            Ok(pair) => pair,
+            Err(exception) => return exception,
+        };
+    if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "defineProperty")
+    {
         return match ctx
             .call_js_async(trap, handler, &[target, property, descriptor])
             .await
@@ -238,7 +211,9 @@ pub async fn proxy_apply<E: ExecContext>(
         return value::encode_undefined();
     };
     if ctx.proxy_is_revoked(value::decode_proxy_handle(proxy)) {
-        ctx.set_last_error("TypeError: Cannot perform call on a proxy that has been revoked".to_string());
+        ctx.set_last_error(
+            "TypeError: Cannot perform call on a proxy that has been revoked".to_string(),
+        );
         return value::encode_undefined();
     }
     if !ctx.is_callable(entry.target) {
@@ -250,11 +225,7 @@ pub async fn proxy_apply<E: ExecContext>(
     if !value::is_undefined(trap) && !value::is_null(trap) {
         let args_array = args_array(ctx, &args);
         return match ctx
-            .call_js_async(
-                trap,
-                entry.handler,
-                &[entry.target, this_value, args_array],
-            )
+            .call_js_async(trap, entry.handler, &[entry.target, this_value, args_array])
             .await
         {
             Ok(result) => result,

@@ -21,7 +21,12 @@ fn quick_expands_smoke_config() {
     let cli = Cli::parse_from(["wjsm-bench", "--quick"]);
     assert_eq!(
         cli.effective(),
-        EffectiveConfig { runs: 3, warmup: 1, window_ms: 200, warmup_ms: 500 }
+        EffectiveConfig {
+            runs: 3,
+            warmup: 1,
+            window_ms: 200,
+            warmup_ms: 500
+        }
     );
 }
 
@@ -38,7 +43,12 @@ fn explicit_flags_win_without_quick() {
     ]);
     assert_eq!(
         cli.effective(),
-        EffectiveConfig { runs: 5, warmup: 2, window_ms: 400, warmup_ms: 500 }
+        EffectiveConfig {
+            runs: 5,
+            warmup: 2,
+            window_ms: 400,
+            warmup_ms: 500
+        }
     );
 }
 
@@ -54,7 +64,12 @@ fn quick_overrides_explicit_flags() {
     ]);
     assert_eq!(
         cli.effective(),
-        EffectiveConfig { runs: 3, warmup: 1, window_ms: 200, warmup_ms: 500 }
+        EffectiveConfig {
+            runs: 3,
+            warmup: 1,
+            window_ms: 200,
+            warmup_ms: 500
+        }
     );
 }
 
@@ -107,8 +122,14 @@ fn parse_hyperfine_wall_json() {
     let path = std::env::temp_dir().join("wjsm-bench-contract-hyperfine.json");
     std::fs::write(&path, payload).unwrap();
     let commands = vec![
-        (wjsm_bench::runner::RuntimeKind::Node, "node /x.js".to_owned()),
-        (wjsm_bench::runner::RuntimeKind::Wjsm, "wjsm run /x.js".to_owned()),
+        (
+            wjsm_bench::runner::RuntimeKind::Node,
+            "node /x.js".to_owned(),
+        ),
+        (
+            wjsm_bench::runner::RuntimeKind::Wjsm,
+            "wjsm run /x.js".to_owned(),
+        ),
     ];
     let parsed = wjsm_bench::runner::parse_wall_json(&path, &commands).unwrap();
     assert_eq!(parsed.len(), 2);

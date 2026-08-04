@@ -3,7 +3,7 @@
 //! 所有子进程 `current_dir(repo_root)`；任何调用失败/非零退出都硬失败，
 //! 错误信息含 场景/运行时/档位 + stderr 尾部。场景在 wjsm 下跑不通 = 必须修的缺陷。
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,10 +12,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cli::{Cli, EffectiveConfig};
 use crate::report::{
-    rfc3339_now, write_json, BenchConfig, BenchReport, RegimeReport, RuntimeReport, ScenarioReport,
-    WallStats,
+    BenchConfig, BenchReport, RegimeReport, RuntimeReport, ScenarioReport, WallStats, rfc3339_now,
+    write_json,
 };
-use crate::work_dir::{repo_root, scenarios_dir, work_dir, COLD_CACHE_DIR};
+use crate::work_dir::{COLD_CACHE_DIR, repo_root, scenarios_dir, work_dir};
 
 /// 运行时种类，顺序即 hyperfine 命令顺序。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,12 +45,28 @@ pub fn run(cli: Cli) -> Result<i32> {
     let mut regimes = BTreeMap::new();
     regimes.insert(
         "default".to_owned(),
-        run_regime(&scenarios, &runtimes, &node_bin, &wjsm_bin, &effective, false, cli.verbose)?,
+        run_regime(
+            &scenarios,
+            &runtimes,
+            &node_bin,
+            &wjsm_bin,
+            &effective,
+            false,
+            cli.verbose,
+        )?,
     );
     if cli.cold {
         regimes.insert(
             "wjsm_cold".to_owned(),
-            run_regime(&scenarios, &runtimes, &node_bin, &wjsm_bin, &effective, true, cli.verbose)?,
+            run_regime(
+                &scenarios,
+                &runtimes,
+                &node_bin,
+                &wjsm_bin,
+                &effective,
+                true,
+                cli.verbose,
+            )?,
         );
     }
 
@@ -80,7 +96,11 @@ pub fn run(cli: Cli) -> Result<i32> {
 
 fn parse_runtimes(runtimes: &str) -> Result<Vec<RuntimeKind>> {
     let mut out = Vec::new();
-    for part in runtimes.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+    for part in runtimes
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         match part {
             "node" => out.push(RuntimeKind::Node),
             "wjsm" => out.push(RuntimeKind::Wjsm),
@@ -139,7 +159,9 @@ fn run_regime(
 ) -> Result<RegimeReport> {
     let mut regime = RegimeReport::default();
     for scenario in scenarios {
-        let wall = measure_wall(scenario, runtimes, node_bin, wjsm_bin, effective, cold, verbose)?;
+        let wall = measure_wall(
+            scenario, runtimes, node_bin, wjsm_bin, effective, cold, verbose,
+        )?;
         let mut scenario_report = ScenarioReport::default();
         for rt in runtimes {
             let mut runtime = RuntimeReport::default();
@@ -147,7 +169,8 @@ fn run_regime(
                 runtime.wall = Some(stats.clone());
             }
             if !cold {
-                runtime.ns_per_op = measure_ns_per_op(scenario, *rt, node_bin, wjsm_bin, effective)?;
+                runtime.ns_per_op =
+                    measure_ns_per_op(scenario, *rt, node_bin, wjsm_bin, effective)?;
             }
             runtime.max_rss_kb = measure_rss(scenario, *rt, node_bin, wjsm_bin, effective, cold)?;
             match rt {
@@ -167,7 +190,9 @@ fn regime_name(cold: bool) -> &'static str {
 /// 对外部二进制做简单 shell 引用（hyperfine 命令走 shell）。
 fn shell_quote(value: &str) -> String {
     if !value.is_empty()
-        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-_.@/%+=".contains(&byte))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.@/%+=".contains(&byte))
     {
         value.to_owned()
     } else {
@@ -179,7 +204,11 @@ fn runtime_command(rt: RuntimeKind, node_bin: &str, wjsm_bin: &str, scenario: &s
     let scenario_abs = scenarios_dir().join(format!("{scenario}.js"));
     match rt {
         RuntimeKind::Node => {
-            format!("{} {}", shell_quote(node_bin), shell_quote(&scenario_abs.to_string_lossy()))
+            format!(
+                "{} {}",
+                shell_quote(node_bin),
+                shell_quote(&scenario_abs.to_string_lossy())
+            )
         }
         RuntimeKind::Wjsm => format!(
             "{} run {}",
@@ -255,7 +284,10 @@ fn measure_wall(
     }
     apply_scenario_env(&mut process, effective);
     let status = process.status().with_context(|| {
-        format!("hyperfine 执行失败（场景 {scenario}，档位 {}）", regime_name(cold))
+        format!(
+            "hyperfine 执行失败（场景 {scenario}，档位 {}）",
+            regime_name(cold)
+        )
     })?;
     if !status.success() {
         return Err(anyhow!(
@@ -295,8 +327,8 @@ pub fn parse_wall_json(
 ) -> Result<BTreeMap<String, WallStats>> {
     let payload =
         std::fs::read(path).with_context(|| format!("读取 hyperfine 报告 {}", path.display()))?;
-    let parsed: HyperfineReport =
-        serde_json::from_slice(&payload).with_context(|| format!("解析 hyperfine 报告 {}", path.display()))?;
+    let parsed: HyperfineReport = serde_json::from_slice(&payload)
+        .with_context(|| format!("解析 hyperfine 报告 {}", path.display()))?;
     if parsed.results.len() != commands.len() {
         return Err(anyhow!(
             "hyperfine 报告结果数 {} 与命令数 {} 不一致（{}）",
@@ -347,9 +379,9 @@ fn measure_ns_per_op(
         process.env("WJSM_DISABLE_LICM", "1");
     }
     apply_scenario_env(&mut process, effective);
-    let output = process.output().with_context(|| {
-        format!("执行 {}（场景 {scenario}，ns_per_op）失败", rt.as_str())
-    })?;
+    let output = process
+        .output()
+        .with_context(|| format!("执行 {}（场景 {scenario}，ns_per_op）失败", rt.as_str()))?;
     if !output.status.success() {
         return Err(anyhow!(
             "{} 运行场景 {scenario} 失败（退出码 {}）：\n{}",
@@ -404,9 +436,7 @@ fn measure_rss(
     let available = cfg!(target_os = "linux") && Path::new("/usr/bin/time").exists();
     if !available {
         if !RSS_HINT_PRINTED.swap(true, Ordering::Relaxed) {
-            eprintln!(
-                "wjsm-bench: 未找到 /usr/bin/time（GNU time），跳过 RSS 采集"
-            );
+            eprintln!("wjsm-bench: 未找到 /usr/bin/time（GNU time），跳过 RSS 采集");
         }
         return Ok(None);
     }
@@ -424,7 +454,10 @@ fn measure_rss(
         process.env("WJSM_CACHE_DIR", COLD_CACHE_DIR);
     }
     let output = process.output().with_context(|| {
-        format!("/usr/bin/time 执行失败（场景 {scenario}，运行时 {}）", rt.as_str())
+        format!(
+            "/usr/bin/time 执行失败（场景 {scenario}，运行时 {}）",
+            rt.as_str()
+        )
     })?;
     if !output.status.success() {
         return Err(anyhow!(
@@ -477,8 +510,12 @@ fn print_table(report: &BenchReport) {
         for (scenario, item) in &regime.scenarios {
             let node = item.node.as_ref();
             let wjsm = item.wjsm.as_ref();
-            let node_wall_ms = node.and_then(|rt| rt.wall.as_ref()).map(|wall| wall.median_s * 1000.0);
-            let wjsm_wall_ms = wjsm.and_then(|rt| rt.wall.as_ref()).map(|wall| wall.median_s * 1000.0);
+            let node_wall_ms = node
+                .and_then(|rt| rt.wall.as_ref())
+                .map(|wall| wall.median_s * 1000.0);
+            let wjsm_wall_ms = wjsm
+                .and_then(|rt| rt.wall.as_ref())
+                .map(|wall| wall.median_s * 1000.0);
             let ratio = match (wjsm_wall_ms, node_wall_ms) {
                 (Some(wjsm_ms), Some(node_ms)) if node_ms > 0.0 => {
                     format!("{:.1}x", wjsm_ms / node_ms)

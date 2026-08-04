@@ -6,9 +6,7 @@ use crate::{
 use wasmtime::Caller;
 use wjsm_ir::value;
 
-pub(crate) fn create_writable_abort_signal_object(
-    caller: &mut Caller<'_, RuntimeState>,
-) -> i64 {
+pub(crate) fn create_writable_abort_signal_object(caller: &mut Caller<'_, RuntimeState>) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let signal_handle = {
         let mut table = caller
@@ -30,12 +28,8 @@ pub(crate) fn create_writable_abort_signal_object(
         "__abort_signal_handle__",
         value::encode_f64(signal_handle as f64),
     );
-    let _ = define_host_data_property_from_caller(
-        caller,
-        signal,
-        "aborted",
-        value::encode_bool(false),
-    );
+    let _ =
+        define_host_data_property_from_caller(caller, signal, "aborted", value::encode_bool(false));
     signal
 }
 
@@ -57,12 +51,7 @@ fn mark_abort_signal(caller: &mut Caller<'_, RuntimeState>, signal: i64, reason:
             entry.reason = Some(reason);
         }
     }
-    let _ = set_host_data_property_from_caller(
-        caller,
-        signal,
-        "aborted",
-        value::encode_bool(true),
-    );
+    let _ = set_host_data_property_from_caller(caller, signal, "aborted", value::encode_bool(true));
 }
 
 pub(crate) fn mark_writable_stream_signal_aborted(

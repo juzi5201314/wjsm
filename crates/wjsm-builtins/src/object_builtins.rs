@@ -345,10 +345,7 @@ pub fn object_define_properties<E: ExecContext>(ctx: &mut E, target: Value, prop
 }
 
 /// `Object.getOwnPropertyDescriptors(obj)`：返回全部自有属性的描述符对象。
-pub fn object_get_own_property_descriptors<E: ExecContext>(
-    ctx: &mut E,
-    target: Value,
-) -> Value {
+pub fn object_get_own_property_descriptors<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
     if value::is_null(target) || value::is_undefined(target) {
         ctx.set_last_error("TypeError: Cannot convert undefined or null to object".to_string());
         return value::encode_undefined();

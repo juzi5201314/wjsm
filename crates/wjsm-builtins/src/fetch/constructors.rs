@@ -1,14 +1,10 @@
-use wjsm_host::{
-    ExecContext, RedirectMode, RequestMethodKind, ResponseType, Value,
-};
+use wjsm_host::{ExecContext, RedirectMode, RequestMethodKind, ResponseType, Value};
 use wjsm_ir::value;
 
-use super::headers::{
-    clone_handle, create_from_init, object_headers_handle, string_from_value,
-};
+use super::headers::{clone_handle, create_from_init, object_headers_handle, string_from_value};
 use super::objects::{
-    create_empty_headers, create_request, create_response, define_request_init_properties,
-    hidden_handle, RequestSpec, ResponseSpec,
+    RequestSpec, ResponseSpec, create_empty_headers, create_request, create_response,
+    define_request_init_properties, hidden_handle,
 };
 
 pub struct ResolvedRequest {
@@ -20,11 +16,7 @@ pub struct ResolvedRequest {
     pub signal_handle: Option<u32>,
 }
 
-pub fn construct_request<E: ExecContext>(
-    ctx: &mut E,
-    this_value: Value,
-    args: &[Value],
-) -> Value {
+pub fn construct_request<E: ExecContext>(ctx: &mut E, this_value: Value, args: &[Value]) -> Value {
     let input = args
         .first()
         .copied()
@@ -43,7 +35,10 @@ pub fn construct_request<E: ExecContext>(
     let mut keepalive = false;
     let copied_request = hidden_handle(ctx, input, "__request_handle__").is_some();
     if copied_request {
-        cache = string_property(ctx, input, "cache").ok().flatten().unwrap_or(cache);
+        cache = string_property(ctx, input, "cache")
+            .ok()
+            .flatten()
+            .unwrap_or(cache);
         credentials = string_property(ctx, input, "credentials")
             .ok()
             .flatten()
@@ -90,14 +85,7 @@ pub fn construct_request<E: ExecContext>(
             signal_handle: resolved.signal_handle,
         },
     );
-    define_request_init_properties(
-        ctx,
-        request,
-        &cache,
-        &credentials,
-        &integrity,
-        keepalive,
-    );
+    define_request_init_properties(ctx, request, &cache, &credentials, &integrity, keepalive);
     if copied_request {
         let url = ctx.read_property_by_string_key(input, "url");
         if let Some(handle) = ctx.handle_index_of(request) {
@@ -107,11 +95,7 @@ pub fn construct_request<E: ExecContext>(
     request
 }
 
-pub fn construct_response<E: ExecContext>(
-    ctx: &mut E,
-    this_value: Value,
-    args: &[Value],
-) -> Value {
+pub fn construct_response<E: ExecContext>(ctx: &mut E, this_value: Value, args: &[Value]) -> Value {
     let body_raw = args
         .first()
         .copied()

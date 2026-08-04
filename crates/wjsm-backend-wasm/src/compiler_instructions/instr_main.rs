@@ -516,14 +516,21 @@ impl Compiler {
                 let obj_local = self.local_idx(object.0);
                 let box_base = value::BOX_BASE as i64;
 
-                // (1) is_boxed: (val & BOX_BASE) == BOX_BASE → i32
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(box_base));
+                // ── 快路径：obj 与 value 均为普通对象（TAG_OBJECT）时，经 handle
+                //    entry（原子读 + Stable 状态检查）直接写对象头 proto 字段，
+                //    免 host 往返与 safepoint spill（与 HeapAccessV2::set_prototype
+                //    逐位一致：保留高 32 位 object type，覆写低 32 位 proto handle）。
+                //    其余（value 为函数/闭包/数组/bound/proxy、entry 状态非稳定）
+                //    回退慢路径 host 完整语义。
+                //
+                // cond = (tag(obj) == TAG_OBJECT) && (tag(val) == TAG_OBJECT)
+                self.emit(WasmInstruction::LocalGet(obj_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
                 self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
                 self.emit(WasmInstruction::I64Eq);
-
-                // (2) tag == OBJECT
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -531,74 +538,169 @@ impl Compiler {
                 self.emit(WasmInstruction::I64And);
                 self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
                 self.emit(WasmInstruction::I64Eq);
-
-                // (3) tag == FUNCTION
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
-                self.emit(WasmInstruction::I64Eq);
-
-                // (4) tag == TAG_CLOSURE
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
-                self.emit(WasmInstruction::I64Eq);
-
-                // (5) tag == TAG_ARRAY
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_ARRAY as i64));
-                self.emit(WasmInstruction::I64Eq);
-
-                // (6) tag == TAG_BOUND
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_BOUND as i64));
-                self.emit(WasmInstruction::I64Eq);
-
-                // (7) tag == TAG_PROXY
-                self.emit(WasmInstruction::LocalGet(val_local));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
-                self.emit(WasmInstruction::I64Eq);
-
-                // (2) OR (3) OR (4) OR (5) OR (6) OR (7): tag_valid → i32
-                self.emit(WasmInstruction::I32Or);
-                self.emit(WasmInstruction::I32Or);
-                self.emit(WasmInstruction::I32Or);
-                self.emit(WasmInstruction::I32Or);
-                self.emit(WasmInstruction::I32Or);
-                // (1) AND tag_valid: combined → i32
                 self.emit(WasmInstruction::I32And);
-
-                // 条件分支：仅当 tag 有效时执行 __proto__ 存储
                 self.emit(WasmInstruction::If(BlockType::Empty));
                 {
-                    // 经 host import 写原型，避免 memory32 obj_table 直接写。
-                    // obj_set_proto_of 内部走 HeapAccessV2::set_prototype。
-                    let spill = self.current_spill_locals();
-                    self.emit_safepoint_spill_prologue(&spill);
+                    // 快路径：entry = atomic_load(handle << 3)，state ∈ {1,2,5} 时
+                    // 解地址写 proto。
                     self.emit(WasmInstruction::LocalGet(obj_local));
+                    self.emit(WasmInstruction::I32WrapI64);
+                    self.emit(WasmInstruction::I64ExtendI32U);
+                    self.emit(WasmInstruction::I64Const(3));
+                    self.emit(WasmInstruction::I64Shl);
+                    self.emit(WasmInstruction::I64AtomicLoad(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+                    }));
+                    self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+
+                    // state = entry & 0xFFFF；借用 computed_idx_scratch 暂存（本分支不使用）。
+                    self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+                    self.emit(WasmInstruction::I32WrapI64);
+                    self.emit(WasmInstruction::I32Const(0xFFFF));
+                    self.emit(WasmInstruction::I32And);
+                    self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+                    // state_ok = (state==1) || (state==2) || (state==5)
+                    self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+                    self.emit(WasmInstruction::I32Const(1));
+                    self.emit(WasmInstruction::I32Eq);
+                    self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+                    self.emit(WasmInstruction::I32Const(2));
+                    self.emit(WasmInstruction::I32Eq);
+                    self.emit(WasmInstruction::I32Or);
+                    self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+                    self.emit(WasmInstruction::I32Const(5));
+                    self.emit(WasmInstruction::I32Eq);
+                    self.emit(WasmInstruction::I32Or);
+                    self.emit(WasmInstruction::If(BlockType::Empty));
+                    {
+                        // addr = entry >> 16；store(addr, (load(addr) & ~0xFFFF_FFFF) | proto)
+                        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+                        self.emit(WasmInstruction::I64Const(16));
+                        self.emit(WasmInstruction::I64ShrU);
+                        self.emit(WasmInstruction::LocalSet(self.fast_addr_scratch_idx));
+                        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+                        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+                        self.emit(WasmInstruction::I64Load(MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+                        }));
+                        self.emit(WasmInstruction::I64Const(-4_294_967_296_i64)); // 0xFFFF_FFFF_0000_0000：保留 object type，覆写低 32 位 proto
+                        self.emit(WasmInstruction::I64And);
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        self.emit(WasmInstruction::I32WrapI64);
+                        self.emit(WasmInstruction::I64ExtendI32U);
+                        self.emit(WasmInstruction::I64Or);
+                        self.emit(WasmInstruction::I64Store(MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+                        }));
+                    }
+                    // 慢路径 1：entry 状态非稳定（Relocating/Free/Retired）→ host 完整处理
+                    self.emit(WasmInstruction::Else);
+                    {
+                        let spill = self.current_spill_locals();
+                        self.emit_safepoint_spill_prologue(&spill);
+                        self.emit(WasmInstruction::LocalGet(obj_local));
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        let func_idx = self.builtin_func_idx(&Builtin::ObjectSetPrototypeOf)?;
+                        self.emit(WasmInstruction::Call(func_idx));
+                        self.emit(WasmInstruction::Drop);
+                        self.emit_safepoint_spill_epilogue(spill.len());
+                    }
+                    self.emit(WasmInstruction::End);
+                }
+                // 慢路径 2：value 非普通对象（函数/闭包/数组/bound/proxy 等）→ 原逻辑
+                self.emit(WasmInstruction::Else);
+                {
+                    // (1) is_boxed: (val & BOX_BASE) == BOX_BASE → i32
                     self.emit(WasmInstruction::LocalGet(val_local));
-                    let func_idx = self.builtin_func_idx(&Builtin::ObjectSetPrototypeOf)?;
-                    self.emit(WasmInstruction::Call(func_idx));
-                    self.emit(WasmInstruction::Drop);
-                    self.emit_safepoint_spill_epilogue(spill.len());
+                    self.emit(WasmInstruction::I64Const(box_base));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(box_base));
+                    self.emit(WasmInstruction::I64Eq);
+
+                    // (2) tag == OBJECT
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+                    self.emit(WasmInstruction::I64Eq);
+
+                    // (3) tag == FUNCTION
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+                    self.emit(WasmInstruction::I64Eq);
+
+                    // (4) tag == TAG_CLOSURE
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+                    self.emit(WasmInstruction::I64Eq);
+
+                    // (5) tag == TAG_ARRAY
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+                    self.emit(WasmInstruction::I64Eq);
+
+                    // (6) tag == TAG_BOUND
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_BOUND as i64));
+                    self.emit(WasmInstruction::I64Eq);
+
+                    // (7) tag == TAG_PROXY
+                    self.emit(WasmInstruction::LocalGet(val_local));
+                    self.emit(WasmInstruction::I64Const(32));
+                    self.emit(WasmInstruction::I64ShrU);
+                    self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+                    self.emit(WasmInstruction::I64And);
+                    self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
+                    self.emit(WasmInstruction::I64Eq);
+
+                    // (2) OR (3) OR (4) OR (5) OR (6) OR (7): tag_valid → i32
+                    self.emit(WasmInstruction::I32Or);
+                    self.emit(WasmInstruction::I32Or);
+                    self.emit(WasmInstruction::I32Or);
+                    self.emit(WasmInstruction::I32Or);
+                    self.emit(WasmInstruction::I32Or);
+                    // (1) AND tag_valid: combined → i32
+                    self.emit(WasmInstruction::I32And);
+
+                    // 条件分支：仅当 tag 有效时执行 __proto__ 存储
+                    self.emit(WasmInstruction::If(BlockType::Empty));
+                    {
+                        // 经 host import 写原型，避免 memory32 obj_table 直接写。
+                        // obj_set_proto_of 内部走 HeapAccessV2::set_prototype。
+                        let spill = self.current_spill_locals();
+                        self.emit_safepoint_spill_prologue(&spill);
+                        self.emit(WasmInstruction::LocalGet(obj_local));
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        let func_idx = self.builtin_func_idx(&Builtin::ObjectSetPrototypeOf)?;
+                        self.emit(WasmInstruction::Call(func_idx));
+                        self.emit(WasmInstruction::Drop);
+                        self.emit_safepoint_spill_epilogue(spill.len());
+                    }
+                    self.emit(WasmInstruction::End);
                 }
                 self.emit(WasmInstruction::End);
                 Ok(false)

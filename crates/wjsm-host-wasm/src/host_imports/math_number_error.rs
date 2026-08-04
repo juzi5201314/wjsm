@@ -249,6 +249,14 @@ pub(crate) fn define_math_number_error(
         },
     );
     linker.define(&mut store, "env", "math_hypot", math_hypot_fn)?;
+    let math_hypot2_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, lhs: i64, rhs: i64| -> i64 {
+            let mut ctx = WasmExecContext::new(&mut caller);
+            wjsm_builtins::math_number_error::math_hypot2(&mut ctx, lhs, rhs)
+        },
+    );
+    linker.define(&mut store, "env", "math_hypot2", math_hypot2_fn)?;
     let math_imul_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {

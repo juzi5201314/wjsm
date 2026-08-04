@@ -468,8 +468,7 @@ impl Lowerer {
                     // 仅静态已知 Map 绑定直连 CallBuiltin（new Map() 赋值/声明），
                     // 免去每次调用的通用 Get + NativeCallable dispatch 往返。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
-                        && let Some(map_builtin) =
-                            builtin_from_map_proto_method(&prop_ident.sym)
+                        && let Some(map_builtin) = builtin_from_map_proto_method(&prop_ident.sym)
                         && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                         && self.is_map_binding(receiver_ident)
                     {
@@ -482,8 +481,7 @@ impl Lowerer {
                     }
                     // Set.prototype 方法调用优化（带 receiver guard）。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
-                        && let Some(set_builtin) =
-                            builtin_from_set_proto_method(&prop_ident.sym)
+                        && let Some(set_builtin) = builtin_from_set_proto_method(&prop_ident.sym)
                         && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                         && self.is_set_binding(receiver_ident)
                     {

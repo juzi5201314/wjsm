@@ -14,7 +14,7 @@ pub(crate) use wjsm_host::{
     AbortSignalEntry, ByobRequestEntry, CjsRequireCacheTrapKind, FetchRequestEntry,
     FetchResponseEntry, HeadersEntry, HeadersMethodKind, ReadableStreamByobRequestMethodKind,
     ReadableStreamDefaultControllerMethodKind, ReadableStreamDefaultReaderMethodKind,
-    ReadableStreamEntry, ReadableStreamMethodKind, RedirectMode, ReaderEntry, RequestMethodKind,
+    ReadableStreamEntry, ReadableStreamMethodKind, ReaderEntry, RedirectMode, RequestMethodKind,
     ResponseMethodKind, ResponseType, SharedFetchResourceTiming, StreamControllerEntry,
     StreamState, TransformStreamEntry, TransformStreamMethodKind,
     WritableStreamDefaultControllerMethodKind, WritableStreamDefaultWriterMethodKind,
@@ -199,7 +199,6 @@ pub(crate) struct HttpResponseEntry {
     pub resource_timing: Option<SharedFetchResourceTiming>,
 }
 
-
 #[derive(Clone, Debug)]
 pub(crate) struct ProxyEntry {
     pub(crate) target: i64,
@@ -265,7 +264,6 @@ impl OsInfoKind {
         self as u8
     }
 }
-
 
 #[derive(Clone)]
 pub(crate) enum NativeCallable {

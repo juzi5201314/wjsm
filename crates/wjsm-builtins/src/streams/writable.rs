@@ -49,10 +49,8 @@ pub fn create_writable_stream_object<E: ExecContext>(ctx: &mut E, handle: u32) -
         ("abort", WritableStreamMethodKind::Abort),
         ("close", WritableStreamMethodKind::Close),
     ] {
-        let callable = ctx.create_native_callable(NativeCallableRef::WritableStreamMethod {
-            handle,
-            kind,
-        });
+        let callable =
+            ctx.create_native_callable(NativeCallableRef::WritableStreamMethod { handle, kind });
         define_data_property_with_flags(
             ctx,
             object,
@@ -76,12 +74,11 @@ fn create_writable_controller_object<E: ExecContext>(ctx: &mut E, handle: u32) -
         value::encode_f64(handle as f64),
         constants::FLAG_PRIVATE,
     );
-    let error = ctx.create_native_callable(
-        NativeCallableRef::WritableStreamDefaultControllerMethod {
+    let error =
+        ctx.create_native_callable(NativeCallableRef::WritableStreamDefaultControllerMethod {
             handle,
             kind: WritableStreamDefaultControllerMethodKind::Error,
-        },
-    );
+        });
     define_data_property_with_flags(
         ctx,
         object,
@@ -89,12 +86,11 @@ fn create_writable_controller_object<E: ExecContext>(ctx: &mut E, handle: u32) -
         error,
         constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
     );
-    let signal = ctx.create_native_callable(
-        NativeCallableRef::WritableStreamDefaultControllerMethod {
+    let signal =
+        ctx.create_native_callable(NativeCallableRef::WritableStreamDefaultControllerMethod {
             handle,
             kind: WritableStreamDefaultControllerMethodKind::GetSignal,
-        },
-    );
+        });
     define_accessor_property(ctx, object, "signal", signal);
     if let Some(object_handle) = ctx.weak_target_handle(object) {
         ctx.bind_stream_controller_object(object_handle, handle);
@@ -120,9 +116,11 @@ fn create_writer_object<E: ExecContext>(ctx: &mut E, handle: u32) -> Value {
             WritableStreamDefaultWriterMethodKind::ReleaseLock,
         ),
     ] {
-        let callable = ctx.create_native_callable(
-            NativeCallableRef::WritableStreamDefaultWriterMethod { handle, kind },
-        );
+        let callable =
+            ctx.create_native_callable(NativeCallableRef::WritableStreamDefaultWriterMethod {
+                handle,
+                kind,
+            });
         define_data_property_with_flags(
             ctx,
             object,
@@ -139,9 +137,11 @@ fn create_writer_object<E: ExecContext>(ctx: &mut E, handle: u32) -> Value {
             WritableStreamDefaultWriterMethodKind::GetDesiredSize,
         ),
     ] {
-        let getter = ctx.create_native_callable(
-            NativeCallableRef::WritableStreamDefaultWriterMethod { handle, kind },
-        );
+        let getter =
+            ctx.create_native_callable(NativeCallableRef::WritableStreamDefaultWriterMethod {
+                handle,
+                kind,
+            });
         define_accessor_property(ctx, object, name, getter);
     }
     if let Some(object_handle) = ctx.weak_target_handle(object) {
@@ -268,9 +268,10 @@ fn call_sink_close<E: ExecContext>(ctx: &mut E, stream: u32, promise: Value) -> 
 
 pub fn write_from_pipe<E: ExecContext>(ctx: &mut E, stream: u32, chunk: Value, promise: Value) {
     let is_transform = ctx.with_transform_streams(|entries| {
-        entries.iter().filter_map(Option::as_ref).any(|entry| {
-            entry.writable_stream_handle == Some(stream)
-        })
+        entries
+            .iter()
+            .filter_map(Option::as_ref)
+            .any(|entry| entry.writable_stream_handle == Some(stream))
     });
     if is_transform {
         super::transform::call_transform_from_writable(ctx, stream, chunk, promise);
@@ -336,9 +337,7 @@ fn abort_stream<E: ExecContext>(ctx: &mut E, stream: u32, reason: Value) {
 }
 
 fn close_stream<E: ExecContext>(ctx: &mut E, stream: u32, promise: Value) {
-    let current = ctx.with_writable_stream(stream, |entry| {
-        (entry.controller_handle, entry.state)
-    });
+    let current = ctx.with_writable_stream(stream, |entry| (entry.controller_handle, entry.state));
     let Some((controller, WritableStreamState::Writable)) = current else {
         let error = ctx.make_type_error("WritableStream is not in writable state");
         ctx.settle_promise(promise, PromiseSettlement::Reject(error));
@@ -401,10 +400,9 @@ fn get_writer<E: ExecContext>(ctx: &mut E, stream: u32) -> Option<Value> {
     let closed = ctx.alloc_promise();
     let ready = ctx.alloc_promise();
     match state {
-        (WritableStreamState::Writable, _) => ctx.settle_promise(
-            ready,
-            PromiseSettlement::Fulfill(value::encode_undefined()),
-        ),
+        (WritableStreamState::Writable, _) => {
+            ctx.settle_promise(ready, PromiseSettlement::Fulfill(value::encode_undefined()))
+        }
         (WritableStreamState::Closed, _) => ctx.settle_promise(
             closed,
             PromiseSettlement::Fulfill(value::encode_undefined()),
@@ -440,12 +438,12 @@ pub fn call_default_writer_method<E: ExecContext>(
             }
             Some(value::encode_undefined())
         }
-        WritableStreamDefaultWriterMethodKind::GetClosed => {
-            ctx.with_writer(handle, |entry| entry.closed_promise).flatten()
-        }
-        WritableStreamDefaultWriterMethodKind::GetReady => {
-            ctx.with_writer(handle, |entry| entry.ready_promise).flatten()
-        }
+        WritableStreamDefaultWriterMethodKind::GetClosed => ctx
+            .with_writer(handle, |entry| entry.closed_promise)
+            .flatten(),
+        WritableStreamDefaultWriterMethodKind::GetReady => ctx
+            .with_writer(handle, |entry| entry.ready_promise)
+            .flatten(),
         WritableStreamDefaultWriterMethodKind::GetDesiredSize => {
             let stream = ctx.with_writer(handle, |entry| entry.writable_stream_handle)?;
             let controller = ctx
@@ -479,9 +477,7 @@ fn writer_write<E: ExecContext>(ctx: &mut E, writer: u32, args: &[Value]) -> Opt
     };
     let state = ctx.with_writable_stream(stream, |entry| (entry.state, entry.error));
     match state {
-        Some((WritableStreamState::Writable, _)) => {
-            write_from_pipe(ctx, stream, chunk, promise)
-        }
+        Some((WritableStreamState::Writable, _)) => write_from_pipe(ctx, stream, chunk, promise),
         Some((WritableStreamState::Errored, error)) => ctx.settle_promise(
             promise,
             PromiseSettlement::Reject(error.unwrap_or_else(value::encode_undefined)),
@@ -540,9 +536,7 @@ pub fn call_controller_method<E: ExecContext>(
                 .first()
                 .copied()
                 .unwrap_or_else(value::encode_undefined);
-            if let Some(stream) =
-                ctx.with_stream_controller(handle, |entry| entry.stream_handle)
-            {
+            if let Some(stream) = ctx.with_stream_controller(handle, |entry| entry.stream_handle) {
                 let _ = ctx.with_writable_stream(stream, |entry| {
                     entry.state = WritableStreamState::Errored;
                     entry.error = Some(error);

@@ -31,7 +31,7 @@ impl Lowerer {
 
         let decorator_name = class_expr.ident.as_ref().map(|id| id.sym.as_ref());
 
-        let (block, ctor_dest) = self.lower_class_body(
+        let (block, ctor_dest, ctor_function_id) = self.lower_class_body(
             &class_name,
             &class_expr.class,
             class_expr.span(),
@@ -47,13 +47,11 @@ impl Lowerer {
             // 收尾存储须同步进共享 env：方法闭包在类求值期间 materialize（此时类名尚未存储），
             // 运行时方法体读到的是 env 中的类名值。
             let class_binding = CapturedBinding::new(name, *scope_id);
-            self.store_binding_value(
-                block,
-                &class_binding,
-                ctor_dest,
-                class_expr.span(),
-                true,
-            )?;
+            if let Some(function_id) = ctor_function_id {
+                self.current_function
+                    .record_known_callee(class_binding.var_ir_name(), function_id);
+            }
+            self.store_binding_value(block, &class_binding, ctor_dest, class_expr.span(), true)?;
             self.scopes.pop_scope();
         }
 

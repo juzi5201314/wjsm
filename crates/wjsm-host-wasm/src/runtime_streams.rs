@@ -71,17 +71,11 @@ pub(crate) fn finish_pipe_to_write_with_env<
             .unwrap_or_else(|failure| failure.into_inner());
         streams
             .get_mut(readable_handle as usize)
-            .map(|stream| {
-                wjsm_builtins::streams::runtime::finish_pipe_to_write(stream, error)
-            })
+            .map(|stream| wjsm_builtins::streams::runtime::finish_pipe_to_write(stream, error))
             .unwrap_or((None, false))
     };
     if let (Some(promise), Some(error)) = (promise, error) {
-        settle_promise(
-            ctx.state_mut(),
-            promise,
-            PromiseSettlement::Reject(error),
-        );
+        settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(error));
     } else if should_pump {
         pump_readable_stream_pipe_to_with_env(ctx, env, readable_handle);
     }
@@ -140,11 +134,7 @@ pub(crate) fn pump_readable_stream_pipe_to_with_env<
     }
 }
 
-fn attach_pipe_reactions<C: RuntimeStateAccess>(
-    ctx: &mut C,
-    promise: i64,
-    readable_handle: u32,
-) {
+fn attach_pipe_reactions<C: RuntimeStateAccess>(ctx: &mut C, promise: i64, readable_handle: u32) {
     let fulfill = create_native_callable(
         ctx.state_mut(),
         NativeCallable::ReadableStreamPipeToWriteFulfilled { readable_handle },
@@ -166,11 +156,9 @@ fn attach_pipe_reactions<C: RuntimeStateAccess>(
             promise,
             ReactionType::Fulfill,
         ));
-        entry.reject_reactions.push(PromiseReaction::new(
-            reject,
-            promise,
-            ReactionType::Reject,
-        ));
+        entry
+            .reject_reactions
+            .push(PromiseReaction::new(reject, promise, ReactionType::Reject));
     }
 }
 
@@ -190,11 +178,13 @@ fn schedule_pull<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
             .inner
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        controllers.get(controller_handle as usize).and_then(|controller| {
-            controller
-                .pull_callback
-                .map(|callback| (callback, controller.underlying_source))
-        })
+        controllers
+            .get(controller_handle as usize)
+            .and_then(|controller| {
+                controller
+                    .pull_callback
+                    .map(|callback| (callback, controller.underlying_source))
+            })
     };
     let Some((callback, this_value)) = pull else {
         return;
@@ -227,15 +217,16 @@ fn dispatch_write<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
             .inner
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        transforms.iter().find(|entry| {
-            entry.writable_stream_handle == Some(writable_handle)
-        }).map(|entry| {
-            (
-                entry.transform_callback,
-                entry.readable_controller_handle,
-                entry.transformer_this,
-            )
-        })
+        transforms
+            .iter()
+            .find(|entry| entry.writable_stream_handle == Some(writable_handle))
+            .map(|entry| {
+                (
+                    entry.transform_callback,
+                    entry.readable_controller_handle,
+                    entry.transformer_this,
+                )
+            })
     };
     if let Some((callback, controller_handle, this_value)) = transform {
         dispatch_transform_write(
@@ -266,9 +257,9 @@ fn dispatch_write<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         controller.and_then(|handle| {
-            controllers.get(handle as usize).map(|entry| {
-                (entry.write_callback, entry.underlying_source, handle)
-            })
+            controllers
+                .get(handle as usize)
+                .map(|entry| (entry.write_callback, entry.underlying_source, handle))
         })
     };
     if let Some((Some(callback), this_value, controller_handle)) = sink {
@@ -351,12 +342,8 @@ fn dispatch_transform_write<C: AsContextMut<Data = RuntimeState> + RuntimeStateA
             .and_then(|reader| reader.pending_read_promise.take())
     };
     if let Some(read_promise) = pending {
-        let result = crate::host_imports::build_reader_result_with_env(
-            ctx,
-            env,
-            false,
-            Some(chunk),
-        );
+        let result =
+            crate::host_imports::build_reader_result_with_env(ctx, env, false, Some(chunk));
         settle_promise(
             ctx.state_mut(),
             read_promise,
@@ -395,7 +382,8 @@ fn dispatch_close<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
                 )
             })
     };
-    if let Some((callback, Some(controller_handle), Some(readable_handle), this_value)) = transform {
+    if let Some((callback, Some(controller_handle), Some(readable_handle), this_value)) = transform
+    {
         let controller = create_controller_object_with_env(ctx, env, controller_handle);
         ctx.state_mut()
             .microtask_queue
@@ -429,9 +417,9 @@ fn dispatch_close<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         controller.and_then(|handle| {
-            controllers.get(handle as usize).map(|entry| {
-                (entry.sink_close_callback, entry.underlying_source, handle)
-            })
+            controllers
+                .get(handle as usize)
+                .map(|entry| (entry.sink_close_callback, entry.underlying_source, handle))
         })
     };
     let Some((callback, this_value, controller_handle)) = sink else {
@@ -452,11 +440,7 @@ fn dispatch_close<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
     true
 }
 
-fn create_controller_object_with_env<C>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    handle: u32,
-) -> i64
+fn create_controller_object_with_env<C>(ctx: &mut C, env: &WasmEnv, handle: u32) -> i64
 where
     C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
 {
@@ -469,7 +453,10 @@ where
         value::encode_f64(handle as f64),
     );
     for (name, kind) in [
-        ("enqueue", ReadableStreamDefaultControllerMethodKind::Enqueue),
+        (
+            "enqueue",
+            ReadableStreamDefaultControllerMethodKind::Enqueue,
+        ),
         ("close", ReadableStreamDefaultControllerMethodKind::Close),
         ("error", ReadableStreamDefaultControllerMethodKind::Error),
     ] {

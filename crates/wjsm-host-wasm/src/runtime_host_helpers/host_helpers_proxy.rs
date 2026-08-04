@@ -657,13 +657,11 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     }
 
     if value::is_regexp(target) {
-        if let Some(name_id) = crate::property_key::property_key_value_to_name_id(caller, prop, true)
+        if let Some(name_id) =
+            crate::property_key::property_key_value_to_name_id(caller, prop, true)
         {
-            let own = crate::runtime_regexp::primitive_regexp_get_property_impl(
-                caller,
-                target,
-                name_id,
-            );
+            let own =
+                crate::runtime_regexp::primitive_regexp_get_property_impl(caller, target, name_id);
             if !value::is_undefined(own) {
                 return own;
             }
@@ -774,9 +772,7 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         let access = caller.data().heap_access_v2().clone();
         if access.resolve_handle(handle).is_ok() {
             match access.get_property_slot_on_proto_chain(handle, name_id) {
-                Ok(Some(property))
-                    if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 =>
-                {
+                Ok(Some(property)) if property.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 => {
                     let getter = property.getter as i64;
                     if value::is_undefined(getter) || value::is_null(getter) {
                         return value::encode_undefined();

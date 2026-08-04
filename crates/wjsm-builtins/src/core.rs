@@ -278,7 +278,8 @@ pub fn string_concat<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
         let a_big = value::is_bigint(pa);
         let b_big = value::is_bigint(pb);
         if a_big != b_big {
-            return ctx.make_type_error("Cannot mix BigInt and other types, use explicit conversions");
+            return ctx
+                .make_type_error("Cannot mix BigInt and other types, use explicit conversions");
         }
         if a_big {
             match (ctx.read_bigint(pa), ctx.read_bigint(pb)) {
@@ -322,9 +323,7 @@ pub fn string_concat_va<E: ExecContext>(ctx: &mut E, args_base: i32, args_count:
         }
         parts.push(arg);
     }
-    if all_cheap
-        && let Some(units) = ctx.concat_utf16_va(&parts)
-    {
+    if all_cheap && let Some(units) = ctx.concat_utf16_va(&parts) {
         return ctx.store_runtime_string(units);
     }
     // 慢路径：任意操作数需 ToPrimitive 等 → UTF-8 字节拼接（原逻辑）。

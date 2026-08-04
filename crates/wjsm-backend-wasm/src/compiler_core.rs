@@ -356,6 +356,8 @@ impl Compiler {
             shadow_sp_scratch_idx: 0,
             safepoint_sp_saved_idx: 0,
             computed_idx_scratch_idx: 0,
+            fast_entry_scratch_idx: 0,
+            fast_addr_scratch_idx: 0,
             eval_var_base_local_idx: 0,
             object_heap_start_global_idx: 5,
             num_ir_functions_global_idx: 6,

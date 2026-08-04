@@ -144,7 +144,8 @@ struct Compiler {
     compiled_blocks: std::collections::HashSet<usize>,
     /// LICM 提升的 preheader 块索引（按函数分组）。structured 编译在循环头前
     /// 提前发射其指令；compile_module 末尾清理。
-    hoisted_preheader_blocks: std::collections::HashMap<FunctionId, std::collections::HashSet<usize>>,
+    hoisted_preheader_blocks:
+        std::collections::HashMap<FunctionId, std::collections::HashSet<usize>>,
     /// Blocks whose code was already emitted by common_direct_jump optimization
     /// inside compile_branch_body_with_context. Prevents duplicate emission without
     /// affecting compile_structured's main loop break behavior.
@@ -222,6 +223,10 @@ struct Compiler {
     /// 独立于 safepoint_sp_saved_idx：GetElem/SetElem 现为 safepoint，
     /// safepoint_sp_saved_idx 被 spill prologue 占用，不可复用。
     computed_idx_scratch_idx: u32,
+    /// SetProto/GetProp 等对象访问内联快路径的 handle entry 暂存（i64）。
+    fast_entry_scratch_idx: u32,
+    /// 对象内联访问快路径的对象地址暂存（i64）。
+    fast_addr_scratch_idx: u32,
     /// WASM local index for the base address of eval-visible variable storage.
     eval_var_base_local_idx: u32,
     /// WASM global index for __object_heap_start (runtime GC heap base).

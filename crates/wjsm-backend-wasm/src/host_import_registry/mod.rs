@@ -35,6 +35,7 @@ pub enum SpecialHostImport {
     ClosureGetFunc,
     ClosureGetEnv,
     NativeCall,
+    MathHypot2,
     NewTargetSet,
     ObjGetByIndex,
     ObjectProtoInit,

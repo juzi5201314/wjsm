@@ -47,7 +47,9 @@
 //! 非 direct_callable 函数（module entry、eval）不参与形参分析（无 param_is_f64
 //! 条目），但其函数内 known_f64/known_bool 照常计算（作为调用方约束其他函数）。
 use std::collections::{HashMap, HashSet};
-use wjsm_ir::{BinaryOp, Builtin, Constant, FunctionId, Instruction, Module, Terminator, UnaryOp, ValueId};
+use wjsm_ir::{
+    BinaryOp, Builtin, Constant, FunctionId, Instruction, Module, Terminator, UnaryOp, ValueId,
+};
 
 /// f64 值类型传播分析结果。
 #[derive(Debug, Clone, Default)]
@@ -316,7 +318,10 @@ fn analyze_inner(module: &Module) -> F64Analysis {
                             if is_bb0 {
                                 info.var_bb0_stores.insert(name.as_str());
                             }
-                            info.var_stores.entry(name.as_str()).or_default().push(*value);
+                            info.var_stores
+                                .entry(name.as_str())
+                                .or_default()
+                                .push(*value);
                         }
                         Instruction::LoadVar { dest, name } => {
                             if is_bb0 {
@@ -334,7 +339,11 @@ fn analyze_inner(module: &Module) -> F64Analysis {
                         Instruction::Unary { dest, op, value } => {
                             info.unaries.push((*dest, *op, *value));
                         }
-                        Instruction::Call { dest: Some(dest), callee, .. } => {
+                        Instruction::Call {
+                            dest: Some(dest),
+                            callee,
+                            ..
+                        } => {
                             info.calls.push((*dest, *callee));
                         }
                         _ => {}
@@ -459,13 +468,8 @@ fn analyze_inner(module: &Module) -> F64Analysis {
         .collect();
     for _ in 0..64 {
         // 1. can_throw：用上一轮 known_f64/dead_blocks 判定（每轮乐观起点重算）。
-        let next_can_throw = compute_can_throw(
-            module,
-            &infos,
-            &var_store_count,
-            &known_f64,
-            &dead_blocks,
-        );
+        let next_can_throw =
+            compute_can_throw(module, &infos, &var_store_count, &known_f64, &dead_blocks);
 
         // 2. known_f64：用新 can_throw/returns_f64 重算（形参收缩 → 集合单调收缩）。
         let next_known_f64: Vec<HashSet<ValueId>> = (0..num_functions)
@@ -670,10 +674,7 @@ fn least_fixed_point(
 
         // Binary：lhs ∧ rhs 均 f64 → f64。Add 亦含（双 f64 无字符串拼接语义）。
         for (dest, _, lhs, rhs) in &info.binaries {
-            if !known.contains(dest)
-                && known.contains(lhs)
-                && known.contains(rhs)
-            {
+            if !known.contains(dest) && known.contains(lhs) && known.contains(rhs) {
                 known.insert(*dest);
                 changed = true;
             }
@@ -736,8 +737,7 @@ fn least_fixed_point(
         // （TAG_EXCEPTION handle 不可能出现，调用结果规范必为 f64 返回）。
         for (dest, callee) in &info.calls {
             if !known.contains(dest)
-                && let Some(g) =
-                    resolve_callee(module, info, var_store_count, *callee)
+                && let Some(g) = resolve_callee(module, info, var_store_count, *callee)
                 && !can_throw[g.0 as usize]
                 && returns_f64[g.0 as usize]
             {
@@ -758,12 +758,9 @@ fn least_fixed_point(
 ///
 /// 白名单仅含确定纯的 builtin；已知 f64 实参的算术 builtin 走 f64 特例（无
 /// ToNumeric/ToPrimitive/reentrant）。其余一律保守 true。
-fn builtin_may_throw(
-    builtin: Builtin,
-    known: &HashSet<ValueId>,
-    args: &[ValueId],
-) -> bool {
-    let all_f64 = |need: usize| args.len() >= need && args.iter().take(need).all(|a| known.contains(a));
+fn builtin_may_throw(builtin: Builtin, known: &HashSet<ValueId>, args: &[ValueId]) -> bool {
+    let all_f64 =
+        |need: usize| args.len() >= need && args.iter().take(need).all(|a| known.contains(a));
     match builtin {
         // 纯 builtin：构造/检查/读取，不抛 JS 异常。
         Builtin::CreateClosure
@@ -958,9 +955,7 @@ fn compute_never_exception(
         }
         // Unary：Neg/Pos 已知 f64 操作数 → 纯 f64 运算，必非异常（BitNot 保守不标）。
         for (dest, op, value) in &info.unaries {
-            if matches!(op, UnaryOp::Neg | UnaryOp::Pos)
-                && known_f64[fidx].contains(value)
-            {
+            if matches!(op, UnaryOp::Neg | UnaryOp::Pos) && known_f64[fidx].contains(value) {
                 out[fidx].insert(*dest);
             }
         }
@@ -1059,9 +1054,7 @@ fn compute_truthiness_only(
                     break;
                 }
                 match bb.terminator() {
-                    Terminator::Return {
-                        value: Some(rv),
-                    } if *rv == v => {
+                    Terminator::Return { value: Some(rv) } if *rv == v => {
                         only = false;
                     }
                     Terminator::Throw { value: tv } if *tv == v => {
@@ -1216,7 +1209,9 @@ fn instruction_uses_value(ins: &Instruction, v: ValueId) -> bool {
     use Instruction::*;
     match ins {
         Binary { lhs, rhs, .. } => *lhs == v || *rhs == v,
-        Unary { value, .. } | IsException { value, .. } | EncodeException { value, .. }
+        Unary { value, .. }
+        | IsException { value, .. }
+        | EncodeException { value, .. }
         | ExceptionToObject { value, .. } => *value == v,
         Compare { lhs, rhs, .. } => *lhs == v || *rhs == v,
         Phi { sources, .. } => sources.iter().any(|s| s.value == v),
@@ -1251,10 +1246,7 @@ fn instruction_uses_value(ins: &Instruction, v: ValueId) -> bool {
         | DeleteProp { object, key, .. }
         | OptionalGetProp { object, key, .. } => *object == v || *key == v,
         SetProp {
-            object,
-            key,
-            value,
-            ..
+            object, key, value, ..
         } => *object == v || *key == v || *value == v,
         SetProto { object, value } => *object == v || *value == v,
         GetElem { object, index, .. } => *object == v || *index == v,
@@ -1514,7 +1506,9 @@ mod tests {
         for block in program.functions()[fib.0 as usize].blocks() {
             for ins in block.instructions() {
                 if let Instruction::Binary {
-                    dest, op: BinaryOp::Sub, ..
+                    dest,
+                    op: BinaryOp::Sub,
+                    ..
                 } = ins
                 {
                     assert_value_known_f64(&program, &analysis, "fib", *dest);
@@ -1577,9 +1571,7 @@ mod tests {
 
     #[test]
     fn compare_dest_is_known_bool() {
-        let program = lower(
-            "function f(n) { return n < 2; } console.log(f(1));",
-        );
+        let program = lower("function f(n) { return n < 2; } console.log(f(1));");
         let analysis = F64Analysis::analyze(&program);
         let f = function_id(&program, "f");
         let mut compare_dests = Vec::new();
@@ -1595,7 +1587,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(compare_dests.len(), 1, "`n < 2` 应降低为一次 AbstractCompare");
+        assert_eq!(
+            compare_dests.len(),
+            1,
+            "`n < 2` 应降低为一次 AbstractCompare"
+        );
         assert!(
             analysis.value_known_bool(f, compare_dests[0]),
             "AbstractCompare 的 dest 必须 known_bool"

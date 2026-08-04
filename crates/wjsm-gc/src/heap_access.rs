@@ -5,7 +5,9 @@ use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::heap::{GrowableHeapMemory, HandleGeneration, HandleState, HeapAddress, HeapMemoryError};
+use crate::heap::{
+    GrowableHeapMemory, HandleGeneration, HandleState, HeapAddress, HeapMemoryError,
+};
 use wjsm_ir::{constants, value};
 
 const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;

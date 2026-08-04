@@ -601,18 +601,11 @@ pub async fn arr_proto_flat_map<E: ExecContext>(
     for i in 0..len {
         let elem = array_get_or_undefined(ctx, this_val, i);
         let idx_val = value::encode_f64(i as f64);
-        let mapped = match call_cb_async(
-            ctx,
-            cb,
-            prepared,
-            this_arg,
-            &[elem, idx_val, this_val],
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+        let mapped =
+            match call_cb_async(ctx, cb, prepared, this_arg, &[elem, idx_val, this_val]).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
         if value::is_array(mapped) {
             let mapped_len = ctx.array_read_length(mapped).unwrap_or(0);
             for j in 0..mapped_len {

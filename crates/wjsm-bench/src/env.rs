@@ -61,7 +61,10 @@ pub fn detect(node_bin: &str, wjsm_bin: &str) -> EnvironmentSnapshot {
     let mut system = sysinfo::System::new_all();
     system.refresh_all();
     let cpus = system.cpus();
-    let cpu_brand = cpus.first().map(|cpu| cpu.brand().to_owned()).unwrap_or_default();
+    let cpu_brand = cpus
+        .first()
+        .map(|cpu| cpu.brand().to_owned())
+        .unwrap_or_default();
     let logical_cores = cpus.len();
     let physical_cores = sysinfo::System::physical_core_count().unwrap_or(logical_cores);
 

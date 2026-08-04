@@ -72,7 +72,10 @@ pub(crate) fn define_collections_buffers(
     wrap2!("map_proto_get", wjsm_builtins::collections::map_proto_get);
     wrap2!("set_proto_add", wjsm_builtins::collections::set_proto_add);
     wrap2!("set_proto_has", wjsm_builtins::collections::set_proto_has);
-    wrap2!("set_proto_delete", wjsm_builtins::collections::set_proto_delete);
+    wrap2!(
+        "set_proto_delete",
+        wjsm_builtins::collections::set_proto_delete
+    );
     wrap2!("map_set_has", wjsm_builtins::collections::map_set_has);
     wrap2!("map_set_delete", wjsm_builtins::collections::map_set_delete);
     wrap1!("map_set_clear", wjsm_builtins::collections::map_set_clear);
@@ -95,7 +98,10 @@ pub(crate) fn define_collections_buffers(
         },
     )?;
     wrap1!("map_set_keys", wjsm_builtins::collections::map_set_keys);
-    wrap1!("map_set_first_key", wjsm_builtins::collections::map_set_first_key);
+    wrap1!(
+        "map_set_first_key",
+        wjsm_builtins::collections::map_set_first_key
+    );
     wrap1!("map_set_values", wjsm_builtins::collections::map_set_values);
     wrap1!(
         "map_set_entries",
@@ -201,13 +207,41 @@ pub(crate) fn define_collections_buffers(
     }
 
     dataview_get_fn!(dataview_proto_get_int8_fn, "dataview_proto_get_int8", Int8);
-    dataview_get_fn!(dataview_proto_get_uint8_fn, "dataview_proto_get_uint8", Uint8);
-    dataview_get_fn!(dataview_proto_get_int16_fn, "dataview_proto_get_int16", Int16);
-    dataview_get_fn!(dataview_proto_get_uint16_fn, "dataview_proto_get_uint16", Uint16);
-    dataview_get_fn!(dataview_proto_get_int32_fn, "dataview_proto_get_int32", Int32);
-    dataview_get_fn!(dataview_proto_get_uint32_fn, "dataview_proto_get_uint32", Uint32);
-    dataview_get_fn!(dataview_proto_get_float32_fn, "dataview_proto_get_float32", Float32);
-    dataview_get_fn!(dataview_proto_get_float64_fn, "dataview_proto_get_float64", Float64);
+    dataview_get_fn!(
+        dataview_proto_get_uint8_fn,
+        "dataview_proto_get_uint8",
+        Uint8
+    );
+    dataview_get_fn!(
+        dataview_proto_get_int16_fn,
+        "dataview_proto_get_int16",
+        Int16
+    );
+    dataview_get_fn!(
+        dataview_proto_get_uint16_fn,
+        "dataview_proto_get_uint16",
+        Uint16
+    );
+    dataview_get_fn!(
+        dataview_proto_get_int32_fn,
+        "dataview_proto_get_int32",
+        Int32
+    );
+    dataview_get_fn!(
+        dataview_proto_get_uint32_fn,
+        "dataview_proto_get_uint32",
+        Uint32
+    );
+    dataview_get_fn!(
+        dataview_proto_get_float32_fn,
+        "dataview_proto_get_float32",
+        Float32
+    );
+    dataview_get_fn!(
+        dataview_proto_get_float64_fn,
+        "dataview_proto_get_float64",
+        Float64
+    );
 
     macro_rules! dataview_set_fn {
         ($name:ident, $import:literal, $kind:ident) => {
@@ -232,13 +266,41 @@ pub(crate) fn define_collections_buffers(
     }
 
     dataview_set_fn!(dataview_proto_set_int8_fn, "dataview_proto_set_int8", Int8);
-    dataview_set_fn!(dataview_proto_set_uint8_fn, "dataview_proto_set_uint8", Uint8);
-    dataview_set_fn!(dataview_proto_set_int16_fn, "dataview_proto_set_int16", Int16);
-    dataview_set_fn!(dataview_proto_set_uint16_fn, "dataview_proto_set_uint16", Uint16);
-    dataview_set_fn!(dataview_proto_set_int32_fn, "dataview_proto_set_int32", Int32);
-    dataview_set_fn!(dataview_proto_set_uint32_fn, "dataview_proto_set_uint32", Uint32);
-    dataview_set_fn!(dataview_proto_set_float32_fn, "dataview_proto_set_float32", Float32);
-    dataview_set_fn!(dataview_proto_set_float64_fn, "dataview_proto_set_float64", Float64);
+    dataview_set_fn!(
+        dataview_proto_set_uint8_fn,
+        "dataview_proto_set_uint8",
+        Uint8
+    );
+    dataview_set_fn!(
+        dataview_proto_set_int16_fn,
+        "dataview_proto_set_int16",
+        Int16
+    );
+    dataview_set_fn!(
+        dataview_proto_set_uint16_fn,
+        "dataview_proto_set_uint16",
+        Uint16
+    );
+    dataview_set_fn!(
+        dataview_proto_set_int32_fn,
+        "dataview_proto_set_int32",
+        Int32
+    );
+    dataview_set_fn!(
+        dataview_proto_set_uint32_fn,
+        "dataview_proto_set_uint32",
+        Uint32
+    );
+    dataview_set_fn!(
+        dataview_proto_set_float32_fn,
+        "dataview_proto_set_float32",
+        Float32
+    );
+    dataview_set_fn!(
+        dataview_proto_set_float64_fn,
+        "dataview_proto_set_float64",
+        Float64
+    );
     macro_rules! typedarray_constructor {
         ($name:ident, $import:literal, $size:expr, $kind:expr) => {
             let $name = Func::wrap(
@@ -314,7 +376,11 @@ pub(crate) fn define_collections_buffers(
             linker.define(&mut store, "env", $import, $name)?;
         };
     }
-    typedarray_property!(typedarray_proto_length_fn, "typedarray_proto_length", "length");
+    typedarray_property!(
+        typedarray_proto_length_fn,
+        "typedarray_proto_length",
+        "length"
+    );
     typedarray_property!(
         typedarray_proto_byte_length_fn,
         "typedarray_proto_byte_length",
@@ -328,11 +394,7 @@ pub(crate) fn define_collections_buffers(
 
     let typedarray_proto_set_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         this_value: i64,
-         source: i64,
-         offset: i64|
-         -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, this_value: i64, source: i64, offset: i64| -> i64 {
             wjsm_builtins::collections_buffers::typedarray_set(
                 &mut WasmExecContext::new(&mut caller),
                 this_value,
@@ -594,10 +656,7 @@ pub(crate) fn define_collections_buffers(
     let exception_value_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, exception: i64| -> i64 {
-            wjsm_builtins::core::exception_value(
-                &mut WasmExecContext::new(&mut caller),
-                exception,
-            )
+            wjsm_builtins::core::exception_value(&mut WasmExecContext::new(&mut caller), exception)
         },
     );
     linker.define(&mut store, "env", "exception_value", exception_value_fn)?;
@@ -619,29 +678,21 @@ pub(crate) fn define_collections_buffers(
     );
     linker.define(&mut store, "env", "date_constructor", date_constructor_fn)?;
 
-    let date_now_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>| -> i64 {
-            wjsm_builtins::date::now(&mut WasmExecContext::new(&mut caller))
-        },
-    );
+    let date_now_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
+        wjsm_builtins::date::now(&mut WasmExecContext::new(&mut caller))
+    });
     linker.define(&mut store, "env", "date_now", date_now_fn)?;
 
-    let performance_now_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>| -> i64 {
+    let performance_now_fn =
+        Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
             crate::runtime_node_globals::call_performance_now(&mut caller)
-        },
-    );
+        });
     linker.define(&mut store, "env", "performance_now", performance_now_fn)?;
 
     let date_parse_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, argument: i64| -> i64 {
-            wjsm_builtins::date::parse(
-                &mut WasmExecContext::new(&mut caller),
-                argument,
-            )
+            wjsm_builtins::date::parse(&mut WasmExecContext::new(&mut caller), argument)
         },
     );
     linker.define(&mut store, "env", "date_parse", date_parse_fn)?;

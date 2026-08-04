@@ -294,9 +294,9 @@ impl Compiler {
                     .iter()
                     .any(|ins| matches!(ins, Instruction::Phi { .. }));
                 let condition_constant_false = self.current_function_id.is_some_and(|f| {
-                    self.f64_analysis.as_ref().is_some_and(|a| {
-                        a.condition_constant_false(f, *condition)
-                    })
+                    self.f64_analysis
+                        .as_ref()
+                        .is_some_and(|a| a.condition_constant_false(f, *condition))
                 });
                 if condition_constant_false
                     && !false_has_phi

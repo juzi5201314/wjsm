@@ -263,9 +263,10 @@ impl Compiler {
     ) -> Result<()> {
         // Step 4b：目标有 fast 入口且调用点实参数 == 声明形参数 → 寄存器直传。
         // 不写 shadow、不推进/恢复 sp、无溢出检查（fast 入口 prologue 的容量检查保留）。
-        if let Some(&FastEntry { param_count, wasm_idx }) = self
-            .function_fast_entries
-            .get(&fn_id.0)
+        if let Some(&FastEntry {
+            param_count,
+            wasm_idx,
+        }) = self.function_fast_entries.get(&fn_id.0)
             && args.len() == param_count as usize
         {
             self.emit(WasmInstruction::I64Const(value::encode_undefined())); // env
@@ -556,8 +557,7 @@ impl Compiler {
                 // 混合类型（一个 f64 一个 NaN-boxed）→ false ✓
 
                 // Step 2d：双已知 f64 → 直接 f64.eq（无类型检查、无 host 调用）。
-                let both_known_f64 =
-                    self.value_known_f64(lhs) && self.value_known_f64(rhs);
+                let both_known_f64 = self.value_known_f64(lhs) && self.value_known_f64(rhs);
                 if !both_known_f64 {
                     // 检查 lhs 是否为 plain f64：(lhs & BOX_BASE) != BOX_BASE
                     self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));

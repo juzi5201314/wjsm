@@ -75,10 +75,7 @@ impl ModuleGraph {
         root: &Path,
         options: ResolutionOptions,
     ) -> Result<Self> {
-        anyhow::ensure!(
-            !frontier.is_empty(),
-            "builtin 闭包 frontier 不能为空"
-        );
+        anyhow::ensure!(!frontier.is_empty(), "builtin 闭包 frontier 不能为空");
         let mut resolver = ModuleResolver::with_options(root, options);
         let mut roots = Vec::with_capacity(frontier.len());
         for specifier in frontier {
@@ -122,7 +119,11 @@ impl ModuleGraph {
                 source: node.source.clone(),
                 path: node.path.clone(),
                 ast: node.ast.clone(),
-                imports: node.imports.iter().map(|(_, import)| import.clone()).collect(),
+                imports: node
+                    .imports
+                    .iter()
+                    .map(|(_, import)| import.clone())
+                    .collect(),
                 exports: node.exports.clone(),
                 dynamic_imports: node
                     .dynamic_imports

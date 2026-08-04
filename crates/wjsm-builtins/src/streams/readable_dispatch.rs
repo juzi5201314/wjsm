@@ -29,12 +29,11 @@ fn create_reader_object<E: ExecContext>(
             ReadableStreamDefaultReaderMethodKind::ReleaseLock,
         ),
     ] {
-        let callable = ctx.create_native_callable(
-            NativeCallableRef::ReadableStreamDefaultReaderMethod {
+        let callable =
+            ctx.create_native_callable(NativeCallableRef::ReadableStreamDefaultReaderMethod {
                 handle: reader_handle,
                 kind,
-            },
-        );
+            });
         define_data_property_with_flags(
             ctx,
             object,
@@ -43,12 +42,10 @@ fn create_reader_object<E: ExecContext>(
             constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
         );
     }
-    let closed = ctx.create_native_callable(
-        NativeCallableRef::ReadableStreamDefaultReaderMethod {
-            handle: reader_handle,
-            kind: ReadableStreamDefaultReaderMethodKind::GetClosed,
-        },
-    );
+    let closed = ctx.create_native_callable(NativeCallableRef::ReadableStreamDefaultReaderMethod {
+        handle: reader_handle,
+        kind: ReadableStreamDefaultReaderMethodKind::GetClosed,
+    });
     define_accessor_property(ctx, object, "closed", closed);
     define_data_property_with_flags(
         ctx,
@@ -117,9 +114,7 @@ fn get_reader<E: ExecContext>(ctx: &mut E, handle: u32, args: &[Value]) -> Optio
         return Some(ctx.make_type_error("ReadableStream is already locked to a reader"));
     }
     if wants_byob && !is_byte_stream {
-        return Some(ctx.make_type_error(
-            "ReadableStreamBYOBReader requires a byte stream",
-        ));
+        return Some(ctx.make_type_error("ReadableStreamBYOBReader requires a byte stream"));
     }
     let closed_promise = ctx.alloc_promise();
     let reader_handle = ctx.alloc_reader(ReaderEntry {
@@ -174,41 +169,36 @@ fn cancel<E: ExecContext>(ctx: &mut E, handle: u32) -> Option<Value> {
 }
 
 fn tee<E: ExecContext>(ctx: &mut E, handle: u32) -> Option<Value> {
-    let (state, controller_handle, is_byte_stream) = ctx.with_readable_stream(handle, |stream| {
-        if stream.locked {
-            return None;
-        }
-        stream.disturbed = true;
-        stream.locked = true;
-        Some((
-            stream.state.clone(),
-            stream.controller_handle,
-            stream.is_byte_stream,
-        ))
-    })??;
+    let (state, controller_handle, is_byte_stream) =
+        ctx.with_readable_stream(handle, |stream| {
+            if stream.locked {
+                return None;
+            }
+            stream.disturbed = true;
+            stream.locked = true;
+            Some((
+                stream.state.clone(),
+                stream.controller_handle,
+                stream.is_byte_stream,
+            ))
+        })??;
     let controller_handle = controller_handle?;
-    let (queue, high_water_mark, strategy_size) = ctx.with_stream_controller(
-        controller_handle,
-        |controller| {
+    let (queue, high_water_mark, strategy_size) =
+        ctx.with_stream_controller(controller_handle, |controller| {
             (
                 controller.chunk_queue.clone(),
                 controller.high_water_mark,
                 controller.strategy_size,
             )
-        },
-    )?;
-    let mut first_controller = new_readable_controller(
-        high_water_mark,
-        matches!(state, StreamState::Closed),
-    );
+        })?;
+    let mut first_controller =
+        new_readable_controller(high_water_mark, matches!(state, StreamState::Closed));
     first_controller.chunk_queue = queue.clone();
     first_controller.strategy_size = strategy_size;
     first_controller.started = true;
     let first_controller_handle = ctx.alloc_stream_controller(first_controller);
-    let mut second_controller = new_readable_controller(
-        high_water_mark,
-        matches!(state, StreamState::Closed),
-    );
+    let mut second_controller =
+        new_readable_controller(high_water_mark, matches!(state, StreamState::Closed));
     second_controller.chunk_queue = queue;
     second_controller.strategy_size = strategy_size;
     second_controller.started = true;
@@ -303,9 +293,7 @@ pub(crate) fn transform_parts_from_object<E: ExecContext>(
     if value::is_f64(raw) {
         let handle = value::decode_f64(raw) as u32;
         return ctx
-            .with_transform_stream(handle, |entry| {
-                entry.readable_obj.zip(entry.writable_obj)
-            })
+            .with_transform_stream(handle, |entry| entry.readable_obj.zip(entry.writable_obj))
             .flatten();
     }
     let readable = ctx.read_property_by_string_key(transform, "readable");

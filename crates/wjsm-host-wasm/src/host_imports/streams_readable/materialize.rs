@@ -12,19 +12,9 @@ pub(crate) fn build_reader_result(
 ) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let object = alloc_host_object(caller, &env, 2);
-    let _ = define_host_data_property_from_caller(
-        caller,
-        object,
-        "done",
-        value::encode_bool(done),
-    );
+    let _ = define_host_data_property_from_caller(caller, object, "done", value::encode_bool(done));
     let result_value = result_value.unwrap_or_else(value::encode_undefined);
-    let _ = define_host_data_property_from_caller(
-        caller,
-        object,
-        "value",
-        result_value,
-    );
+    let _ = define_host_data_property_from_caller(caller, object, "value", result_value);
     object
 }
 

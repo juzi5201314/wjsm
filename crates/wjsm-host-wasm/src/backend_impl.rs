@@ -6,7 +6,9 @@ use anyhow::Result;
 use wjsm_host::JsBackend;
 use wjsm_ir::Program;
 
-use crate::{CompileOptions, RuntimeOptions, compile_with_options, execute_with_writer_with_options};
+use crate::{
+    CompileOptions, RuntimeOptions, compile_with_options, execute_with_writer_with_options,
+};
 
 /// wasmtime 后端：IR → wasm 字节 → wasmtime 执行。
 pub struct WasmBackend;

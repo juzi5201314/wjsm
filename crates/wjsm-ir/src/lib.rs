@@ -1155,12 +1155,20 @@ impl Instruction {
                 *object = f(*object);
                 *value = f(*value);
             }
-            Self::GetElem { dest, object, index } => {
+            Self::GetElem {
+                dest,
+                object,
+                index,
+            } => {
                 *dest = f(*dest);
                 *object = f(*object);
                 *index = f(*index);
             }
-            Self::SetElem { object, index, value } => {
+            Self::SetElem {
+                object,
+                index,
+                value,
+            } => {
                 *object = f(*object);
                 *index = f(*index);
                 *value = f(*value);

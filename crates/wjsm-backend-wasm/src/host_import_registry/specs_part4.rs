@@ -3,7 +3,7 @@
 //! 按位置拆分，条目顺序不可更改（WASM 函数索引依赖位置）。
 
 use super::HostImportGroup;
-use super::{HostImportKey, HostImportSpec};
+use super::{HostImportKey, HostImportSpec, SpecialHostImport};
 use wjsm_ir::Builtin;
 
 /// 第 4 部分：`math_cosh` ~ `weakset_constructor`
@@ -42,6 +42,12 @@ pub(crate) static SPECS_PART4: &[HostImportSpec] = &[
         name: "math_hypot",
         type_idx: 19,
         key: Some(HostImportKey::Builtin(Builtin::MathHypot)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "math_hypot2",
+        type_idx: 2,
+        key: Some(HostImportKey::Special(SpecialHostImport::MathHypot2)),
         group: None,
     },
     HostImportSpec {

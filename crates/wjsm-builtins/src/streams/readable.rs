@@ -36,10 +36,8 @@ pub async fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
         1.0
     };
 
-    let controller_handle = ctx.alloc_stream_controller(new_readable_controller(
-        high_water_mark,
-        false,
-    ));
+    let controller_handle =
+        ctx.alloc_stream_controller(new_readable_controller(high_water_mark, false));
     let stream_handle = ctx.alloc_readable_stream(ReadableStreamEntry {
         state: StreamState::Readable,
         error: None,
@@ -85,8 +83,7 @@ pub fn create_closed_from_bytes<E: ExecContext>(
     response_body_handle: Option<u32>,
     response_body_object: Option<Value>,
 ) -> (Value, u32) {
-    let controller_handle =
-        ctx.alloc_stream_controller(new_readable_controller(1.0, true));
+    let controller_handle = ctx.alloc_stream_controller(new_readable_controller(1.0, true));
     if !bytes.is_empty() {
         let chunk = ctx.stream_create_uint8array(bytes);
         let _ = ctx.with_stream_controller(controller_handle, |controller| {
@@ -109,7 +106,10 @@ pub fn create_closed_from_bytes<E: ExecContext>(
         controller.stream_handle = stream_handle;
         controller.started = true;
     });
-    (create_readable_stream_object(ctx, stream_handle), stream_handle)
+    (
+        create_readable_stream_object(ctx, stream_handle),
+        stream_handle,
+    )
 }
 
 pub fn controller_enqueue<E: ExecContext>(
@@ -121,28 +121,30 @@ pub fn controller_enqueue<E: ExecContext>(
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
-    let (close_requested, stream_handle) = ctx.with_stream_controller(
-        controller_handle,
-        |controller| (controller.close_requested, controller.stream_handle),
-    )?;
+    let (close_requested, stream_handle) = ctx
+        .with_stream_controller(controller_handle, |controller| {
+            (controller.close_requested, controller.stream_handle)
+        })?;
     if close_requested {
         return Some(ctx.make_type_error("Cannot enqueue to a closed stream"));
     }
     let state = ctx.with_readable_stream(stream_handle, |stream| stream.state.clone());
     if matches!(state, Some(StreamState::Closed | StreamState::Errored)) {
-        return Some(ctx.make_type_error(
-            "Cannot enqueue to a closed or errored stream",
-        ));
+        return Some(ctx.make_type_error("Cannot enqueue to a closed or errored stream"));
     }
     let pending = ctx.with_readers(|readers| {
-        readers.iter_mut().filter_map(Option::as_mut).find_map(|reader| {
-            if reader.stream_handle != stream_handle {
-                return None;
-            }
-            reader.pending_read_promise.take().map(|promise| {
-                (reader.kind, reader.pending_byob_view.take(), promise)
+        readers
+            .iter_mut()
+            .filter_map(Option::as_mut)
+            .find_map(|reader| {
+                if reader.stream_handle != stream_handle {
+                    return None;
+                }
+                reader
+                    .pending_read_promise
+                    .take()
+                    .map(|promise| (reader.kind, reader.pending_byob_view.take(), promise))
             })
-        })
     });
     if let Some((kind, view, promise)) = pending {
         if kind == ReaderKind::Byob {
@@ -164,18 +166,13 @@ pub fn controller_enqueue<E: ExecContext>(
     Some(value::encode_undefined())
 }
 
-pub fn controller_close<E: ExecContext>(
-    ctx: &mut E,
-    controller_handle: u32,
-) -> Option<Value> {
-    let (already_closed, stream_handle) = ctx.with_stream_controller(
-        controller_handle,
-        |controller| {
+pub fn controller_close<E: ExecContext>(ctx: &mut E, controller_handle: u32) -> Option<Value> {
+    let (already_closed, stream_handle) =
+        ctx.with_stream_controller(controller_handle, |controller| {
             let already_closed = controller.close_requested;
             controller.close_requested = true;
             (already_closed, controller.stream_handle)
-        },
-    )?;
+        })?;
     if already_closed {
         return Some(ctx.make_type_error("The stream has already been closed"));
     }
@@ -183,15 +180,18 @@ pub fn controller_close<E: ExecContext>(
         stream.state = StreamState::Closed;
     });
     let pending = ctx.with_readers(|readers| {
-        readers.iter_mut().filter_map(Option::as_mut).find_map(|reader| {
-            if reader.stream_handle != stream_handle {
-                return None;
-            }
-            reader
-                .pending_read_promise
-                .take()
-                .map(|promise| (reader.pending_byob_view.take(), promise))
-        })
+        readers
+            .iter_mut()
+            .filter_map(Option::as_mut)
+            .find_map(|reader| {
+                if reader.stream_handle != stream_handle {
+                    return None;
+                }
+                reader
+                    .pending_read_promise
+                    .take()
+                    .map(|promise| (reader.pending_byob_view.take(), promise))
+            })
     });
     if let Some((view, promise)) = pending {
         let result = build_reader_result(ctx, true, view);
@@ -210,9 +210,8 @@ pub fn controller_error<E: ExecContext>(
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
-    let stream_handle = ctx.with_stream_controller(controller_handle, |controller| {
-        controller.stream_handle
-    })?;
+    let stream_handle =
+        ctx.with_stream_controller(controller_handle, |controller| controller.stream_handle)?;
     let _ = ctx.with_readable_stream(stream_handle, |stream| {
         stream.state = StreamState::Errored;
         if value::is_string(error) {
@@ -220,15 +219,17 @@ pub fn controller_error<E: ExecContext>(
         }
     });
     let pending = ctx.with_readers(|readers| {
-        readers.iter_mut().filter_map(Option::as_mut).find_map(|reader| {
-            (reader.stream_handle == stream_handle)
-                .then(|| reader.pending_read_promise.take())
-                .flatten()
-        })
+        readers
+            .iter_mut()
+            .filter_map(Option::as_mut)
+            .find_map(|reader| {
+                (reader.stream_handle == stream_handle)
+                    .then(|| reader.pending_read_promise.take())
+                    .flatten()
+            })
     });
     if let Some(promise) = pending {
         ctx.settle_promise(promise, PromiseSettlement::Reject(error));
     }
     Some(value::encode_undefined())
 }
-

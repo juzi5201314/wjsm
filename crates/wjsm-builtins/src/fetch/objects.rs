@@ -75,7 +75,8 @@ pub fn init_headers_object<E: ExecContext>(ctx: &mut E, object: Value, handle: u
         ("keys", HeadersMethodKind::Keys),
         ("values", HeadersMethodKind::Values),
     ] {
-        let callable = ctx.create_native_callable(NativeCallableRef::HeadersMethod { handle, kind });
+        let callable =
+            ctx.create_native_callable(NativeCallableRef::HeadersMethod { handle, kind });
         define_data(ctx, object, name, callable);
     }
 }
@@ -177,7 +178,8 @@ pub fn create_response<E: ExecContext>(ctx: &mut E, spec: ResponseSpec) -> Value
         ("arrayBuffer", ResponseMethodKind::ArrayBuffer),
         ("clone", ResponseMethodKind::Clone),
     ] {
-        let callable = ctx.create_native_callable(NativeCallableRef::ResponseMethod { handle, kind });
+        let callable =
+            ctx.create_native_callable(NativeCallableRef::ResponseMethod { handle, kind });
         define_data(ctx, object, name, callable);
     }
     object
@@ -293,9 +295,8 @@ pub fn construct_abort_controller<E: ExecContext>(ctx: &mut E, this_value: Value
         "__abort_signal_handle__",
         value::encode_f64(signal_handle as f64),
     );
-    let abort = ctx.create_native_callable(NativeCallableRef::AbortControllerAbort {
-        signal_handle,
-    });
+    let abort =
+        ctx.create_native_callable(NativeCallableRef::AbortControllerAbort { signal_handle });
     define_data(ctx, object, "abort", abort);
     object
 }

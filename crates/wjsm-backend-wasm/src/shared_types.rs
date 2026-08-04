@@ -181,10 +181,9 @@ pub fn build_shared_type_section() -> TypeSection {
     // N = 声明形参数（0..=MAX_FAST_PARAMS）。类型索引 = FAST_ENTRY_TYPE_BASE + N。
     // 参数寄存器直传（无 args_base/args_count、无 shadow 读写）。
     for n in 0..=crate::compiler_module::MAX_FAST_PARAMS {
-        types.ty().function(
-            vec![ValType::I64; 2 + n as usize],
-            vec![ValType::I64],
-        );
+        types
+            .ty()
+            .function(vec![ValType::I64; 2 + n as usize], vec![ValType::I64]);
     }
     types
 }

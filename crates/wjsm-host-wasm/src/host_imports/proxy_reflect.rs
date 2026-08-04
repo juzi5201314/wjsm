@@ -10,7 +10,6 @@ use wasmtime::{Caller, Func, Linker};
 use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
-
 /// Proxy create / revocable 注册。
 pub(crate) fn define_proxy_reflect(
     linker: &mut Linker<RuntimeState>,

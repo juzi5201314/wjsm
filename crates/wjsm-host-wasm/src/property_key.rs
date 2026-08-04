@@ -73,8 +73,8 @@ impl Default for MemoryNameIdCache {
 impl MemoryNameIdCache {
     #[inline]
     pub(crate) fn lookup(&self, index: u32) -> Option<u32> {
-        let packed = self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)]
-            .load(Ordering::Relaxed);
+        let packed =
+            self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)].load(Ordering::Relaxed);
         if packed == MEMORY_NAME_ID_EMPTY || packed >> 32 != u64::from(index) {
             None
         } else {
@@ -84,10 +84,8 @@ impl MemoryNameIdCache {
 
     #[inline]
     pub(crate) fn insert(&self, index: u32, id: u32) {
-        self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)].store(
-            (u64::from(index) << 32) | u64::from(id),
-            Ordering::Relaxed,
-        );
+        self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)]
+            .store((u64::from(index) << 32) | u64::from(id), Ordering::Relaxed);
     }
 }
 

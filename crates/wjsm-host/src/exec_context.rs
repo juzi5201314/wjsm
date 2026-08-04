@@ -227,7 +227,9 @@ pub struct CapturedScope {
 /// builtins 直接创建的变体）；完整枚举留在 `wjsm-host-wasm` types.rs。
 #[derive(Clone, Debug)]
 pub enum NativeCallableRef {
-    QueuingStrategySize { kind: QueuingStrategySizeKind },
+    QueuingStrategySize {
+        kind: QueuingStrategySizeKind,
+    },
     HeadersMethod {
         handle: u32,
         kind: crate::HeadersMethodKind,
@@ -240,7 +242,9 @@ pub enum NativeCallableRef {
         handle: u32,
         kind: crate::RequestMethodKind,
     },
-    AbortControllerAbort { signal_handle: u32 },
+    AbortControllerAbort {
+        signal_handle: u32,
+    },
     CjsRequireResolve {
         referrer: crate::RuntimeModuleReferrer,
     },
@@ -267,10 +271,18 @@ pub enum NativeCallableRef {
         handle: u32,
         kind: ReadableStreamByobRequestMethodKind,
     },
-    ReadableStreamAsyncIteratorNext { reader_handle: u32 },
-    ReadableStreamAsyncIteratorReturn { reader_handle: u32 },
-    ReadableStreamPipeToWriteFulfilled { readable_handle: u32 },
-    ReadableStreamPipeToWriteRejected { readable_handle: u32 },
+    ReadableStreamAsyncIteratorNext {
+        reader_handle: u32,
+    },
+    ReadableStreamAsyncIteratorReturn {
+        reader_handle: u32,
+    },
+    ReadableStreamPipeToWriteFulfilled {
+        readable_handle: u32,
+    },
+    ReadableStreamPipeToWriteRejected {
+        readable_handle: u32,
+    },
     WritableStreamConstructor,
     WritableStreamMethod {
         handle: u32,
@@ -366,7 +378,8 @@ pub trait ExecContext: HeapContext {
     /// 结果可跨多次 `call_prepared_async` 复用，避免每次调用重复解析
     /// （closure 表 Mutex 加锁 + 类型分派 + Proxy apply 链遍历）。
     fn prepare_callback(&mut self, func: Value) -> Option<PreparedCallback> {
-        self.is_callable(func).then(|| PreparedCallback::generic(func))
+        self.is_callable(func)
+            .then(|| PreparedCallback::generic(func))
     }
     /// 用预解析目标调用 JS 函数；语义等同 `call_js_async`。
     /// `prepared` 必须来自 `prepare_callback`（或 None 对应值本身可调用）。
@@ -1132,10 +1145,7 @@ pub trait ExecContext: HeapContext {
         &'a mut self,
         resolved: crate::RuntimeResolvedModule,
         env: crate::RuntimeInstantiationEnv,
-    ) -> ExecFuture<
-        'a,
-        Result<crate::RuntimeInstantiatedModule, crate::RuntimeModuleLoadError>,
-    >;
+    ) -> ExecFuture<'a, Result<crate::RuntimeInstantiatedModule, crate::RuntimeModuleLoadError>>;
     fn module_finish_loaded(
         &mut self,
         key: crate::RuntimeModuleKey,
@@ -1283,10 +1293,7 @@ pub trait ExecContext: HeapContext {
         handle: u32,
         f: impl FnOnce(&mut crate::AbortSignalEntry) -> R,
     ) -> Option<R>;
-    fn http_fetch_begin<'a>(
-        &'a mut self,
-        request: crate::HttpRequestSpec,
-    ) -> ExecFuture<'a>;
+    fn http_fetch_begin<'a>(&'a mut self, request: crate::HttpRequestSpec) -> ExecFuture<'a>;
     fn create_arraybuffer_from_bytes(&mut self, bytes: &[u8]) -> Value;
     fn consume_fetch_body_to_bytes(
         &mut self,
@@ -1305,7 +1312,11 @@ pub trait ExecContext: HeapContext {
     fn stream_typedarray_u8_bytes(&mut self, typedarray: Value) -> Option<Vec<u8>>;
     fn stream_write_u8_bytes(&mut self, view: Value, bytes: &[u8]) -> Option<usize>;
     fn stream_transfer_byob_view(&mut self, view: Value, bytes_written: usize) -> Option<Value>;
-    fn mark_response_body_used(&mut self, response_handle: Option<u32>, response_obj: Option<Value>);
+    fn mark_response_body_used(
+        &mut self,
+        response_handle: Option<u32>,
+        response_obj: Option<Value>,
+    );
     fn schedule_readable_pull(&mut self, callback: Value, this_value: Value, controller: Value);
     fn schedule_readable_pipe_pump(&mut self, readable_handle: u32);
     fn fetch_body_reader_read(
@@ -1344,7 +1355,6 @@ pub trait ExecContext: HeapContext {
 
     fn cancel_http_response(&mut self, http_handle: u32);
 
-
     fn alloc_readable_stream(&mut self, entry: crate::ReadableStreamEntry) -> u32;
     fn with_readable_stream<R>(
         &mut self,
@@ -1359,10 +1369,7 @@ pub trait ExecContext: HeapContext {
         handle: u32,
         f: impl FnOnce(&mut crate::ReaderEntry) -> R,
     ) -> Option<R>;
-    fn with_readers<R>(
-        &mut self,
-        f: impl FnOnce(&mut [Option<crate::ReaderEntry>]) -> R,
-    ) -> R;
+    fn with_readers<R>(&mut self, f: impl FnOnce(&mut [Option<crate::ReaderEntry>]) -> R) -> R;
     fn bind_reader_object(&mut self, object: Handle, handle: u32);
 
     fn alloc_stream_controller(&mut self, entry: crate::StreamControllerEntry) -> u32;
@@ -1395,10 +1402,7 @@ pub trait ExecContext: HeapContext {
         handle: u32,
         f: impl FnOnce(&mut crate::WriterEntry) -> R,
     ) -> Option<R>;
-    fn with_writers<R>(
-        &mut self,
-        f: impl FnOnce(&mut [Option<crate::WriterEntry>]) -> R,
-    ) -> R;
+    fn with_writers<R>(&mut self, f: impl FnOnce(&mut [Option<crate::WriterEntry>]) -> R) -> R;
     fn bind_writer_object(&mut self, object: Handle, handle: u32);
 
     fn alloc_transform_stream(&mut self, entry: crate::TransformStreamEntry) -> u32;

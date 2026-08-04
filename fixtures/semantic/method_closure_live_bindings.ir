@@ -307,7 +307,7 @@ module {
       %17 = call builtin.exception_value(%14)
       throw %17
 
-  fn @StaticClosure.constructor [home_object=@5.prototype] [params: $7.$env, $7.$this] [entry=bb0]:
+  fn @StaticClosure.constructor [home_object=@5.prototype] [direct_callable] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       return
 
@@ -346,7 +346,7 @@ module {
       %2 = get_prop %0, %1
       return %2
 
-  fn @AccessorClosure.constructor [home_object=@8.prototype] [params: $11.$env, $11.$this] [entry=bb0]:
+  fn @AccessorClosure.constructor [home_object=@8.prototype] [direct_callable] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       return
 
@@ -385,7 +385,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @MethodClosure.constructor [home_object=@11.prototype] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @MethodClosure.constructor [home_object=@11.prototype] [direct_callable] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       return
 
@@ -417,7 +417,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @GeneratorClosure.constructor [home_object=@13.prototype] [params: $18.$env, $18.$this] [entry=bb0]:
+  fn @GeneratorClosure.constructor [home_object=@13.prototype] [direct_callable] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
       return
 
@@ -820,7 +820,7 @@ module {
     bb35:
       branch %170, bb36, bb37
     bb36:
-      %171 = load var $0.StaticClosure
+      %171 = const c94
       %172 = const c108
       %173 = get_prop %171, %172
       %174 = call %173, this=%171
@@ -873,7 +873,7 @@ module {
       set_prop %182, %206, %183
       store var $10.AccessorClosure, %182
       store var $0.AccessorClosure, %182
-      %207 = load var $0.AccessorClosure
+      %207 = const c111
       %208 = new_object(capacity=4)
       %209 = call builtin.get_prototype_from_constructor(%207)
       set_proto %208, %209
@@ -904,7 +904,7 @@ module {
       throw %215
     bb47:
       store var $0.accessorWriter, %213
-      %218 = load var $0.AccessorClosure
+      %218 = const c111
       %219 = new_object(capacity=4)
       %220 = call builtin.get_prototype_from_constructor(%218)
       set_proto %219, %220
@@ -998,7 +998,7 @@ module {
       set_prop %254, %263, %255
       store var $14.MethodClosure, %254
       store var $0.MethodClosure, %254
-      %264 = load var $0.MethodClosure
+      %264 = const c140
       %265 = new_object(capacity=4)
       %266 = call builtin.get_prototype_from_constructor(%264)
       set_proto %265, %266
@@ -1079,7 +1079,7 @@ module {
       set_prop %293, %304, %294
       store var $17.GeneratorClosure, %293
       store var $0.GeneratorClosure, %293
-      %305 = load var $0.GeneratorClosure
+      %305 = const c154
       %306 = new_object(capacity=4)
       %307 = call builtin.get_prototype_from_constructor(%305)
       set_proto %306, %307

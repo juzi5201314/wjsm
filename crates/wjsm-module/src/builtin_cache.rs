@@ -163,8 +163,8 @@ pub(crate) fn build_builtin_segment(
         .topological_order()
         .with_context(|| format!("builtin 闭包拓扑排序 {frontier:?}"))?;
     let _ = cycles;
-    let link = analyze_module_links(&graph)
-        .with_context(|| format!("分析 builtin 链接 {frontier:?}"))?;
+    let link =
+        analyze_module_links(&graph).with_context(|| format!("分析 builtin 链接 {frontier:?}"))?;
 
     // 3) 整体 lower 闭包，拿 LoweringMetadata（export_map / module_scopes / scope_count）。
     let mut modules = Vec::new();
@@ -234,9 +234,8 @@ pub(crate) fn build_builtin_segment(
         .collect();
     module_export_names.sort_by_key(|(id, _)| *id);
 
-    let scope_count = u32::try_from(metadata.scope_count).with_context(|| {
-        format!("builtin 段作用域总数 {} 超出 u32", metadata.scope_count)
-    })?;
+    let scope_count = u32::try_from(metadata.scope_count)
+        .with_context(|| format!("builtin 段作用域总数 {} 超出 u32", metadata.scope_count))?;
 
     Ok(BuiltinSegmentCacheFile {
         version: BUILTIN_CACHE_VERSION,
@@ -256,8 +255,8 @@ fn locate_entry_function(program: &Program) -> Result<FunctionId, anyhow::Error>
         .iter()
         .position(|function| function.name() == wjsm_ir::MODULE_ENTRY_IR_NAME)
         .with_context(|| format!("builtin 段缺少入口函数 {}", wjsm_ir::MODULE_ENTRY_IR_NAME))?;
-    let index = u32::try_from(index)
-        .with_context(|| format!("builtin 段函数表索引 {index} 超出 u32"))?;
+    let index =
+        u32::try_from(index).with_context(|| format!("builtin 段函数表索引 {index} 超出 u32"))?;
     Ok(FunctionId(index))
 }
 
@@ -297,7 +296,12 @@ impl BuiltinSegmentCacheFile {
             module_export_names: self
                 .module_export_names
                 .iter()
-                .map(|(id, names)| (ModuleId(*id), names.iter().cloned().collect::<BTreeSet<_>>()))
+                .map(|(id, names)| {
+                    (
+                        ModuleId(*id),
+                        names.iter().cloned().collect::<BTreeSet<_>>(),
+                    )
+                })
                 .collect::<HashMap<_, _>>(),
             module_scopes: self
                 .modules
@@ -321,7 +325,10 @@ mod tests {
         let a = builtin_cache_key(&frontier(&["fs", "path"]), false).unwrap();
         let b = builtin_cache_key(&frontier(&["path", "fs"]), false).unwrap();
         assert_eq!(a, b);
-        assert_ne!(a, builtin_cache_key(&frontier(&["fs", "path"]), true).unwrap());
+        assert_ne!(
+            a,
+            builtin_cache_key(&frontier(&["fs", "path"]), true).unwrap()
+        );
         assert_eq!(a.len(), 64, "sha256 十六进制长度");
     }
 
@@ -342,10 +349,8 @@ mod tests {
     fn store_load_roundtrip_and_version_gate() {
         // 最小合法 Program：单个空入口函数（verify 可过）。
         let mut program = Program::new();
-        let mut function = wjsm_ir::Function::new(
-            wjsm_ir::MODULE_ENTRY_IR_NAME,
-            wjsm_ir::BasicBlockId(0),
-        );
+        let mut function =
+            wjsm_ir::Function::new(wjsm_ir::MODULE_ENTRY_IR_NAME, wjsm_ir::BasicBlockId(0));
         function.push_block(wjsm_ir::BasicBlock::new_with_terminator(
             wjsm_ir::BasicBlockId(0),
             wjsm_ir::Terminator::Return { value: None },
@@ -368,10 +373,8 @@ mod tests {
             module_export_names: vec![(0, vec!["readFile".to_string()])],
         };
 
-        let dir = std::env::temp_dir().join(format!(
-            "wjsm-builtin-cache-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("wjsm-builtin-cache-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         store_builtin_segment(&dir, "testkey", &segment).unwrap();
         let loaded = load_builtin_segment(&dir, "testkey").expect("roundtrip 应命中");
@@ -404,19 +407,21 @@ mod tests {
             .iter()
             .map(|record| record.canonical.as_str())
             .collect();
-        assert!(canonicals.contains(&"assert"), "闭包含 assert: {canonicals:?}");
-        assert!(canonicals.contains(&"util"), "assert 依赖 util: {canonicals:?}");
+        assert!(
+            canonicals.contains(&"assert"),
+            "闭包含 assert: {canonicals:?}"
+        );
+        assert!(
+            canonicals.contains(&"util"),
+            "assert 依赖 util: {canonicals:?}"
+        );
         // 入口模块排在最前（module_id 升序）。
         assert_eq!(segment.modules[0].canonical, "assert");
 
         // 入口函数已改名为 $builtin_main（避免与用户段 $module_main 冲突），
         // 且段程序通过 IR 校验（load_builtin_segment 的命中也依赖 verify 通过）。
-        let index =
-            usize::try_from(segment.entry_function_id.0).expect("u32 索引在 usize 内");
-        assert_eq!(
-            segment.program.functions()[index].name(),
-            "$builtin_main"
-        );
+        let index = usize::try_from(segment.entry_function_id.0).expect("u32 索引在 usize 内");
+        assert_eq!(segment.program.functions()[index].name(), "$builtin_main");
         assert!(segment.program.verify().is_ok());
         assert!(!segment.module_export_names.is_empty());
         // LoweringMetadata 已接入：作用域总数与导出映射不再是占位。
@@ -432,10 +437,8 @@ mod tests {
         );
 
         // 段可序列化落盘并读回。
-        let dir = std::env::temp_dir().join(format!(
-            "wjsm-builtin-cache-closure-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("wjsm-builtin-cache-closure-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         store_builtin_segment(&dir, "assert", &segment).unwrap();
         let loaded = load_builtin_segment(&dir, "assert").expect("闭包段 roundtrip 应命中");
@@ -447,8 +450,14 @@ mod tests {
         assert_eq!(loaded.entry_function_id, segment.entry_function_id);
         assert_eq!(loaded.export_map, segment.export_map);
         assert_eq!(loaded.module_export_names, segment.module_export_names);
-        assert_eq!(loaded.program.functions().len(), segment.program.functions().len());
-        assert_eq!(loaded.program.constants().len(), segment.program.constants().len());
+        assert_eq!(
+            loaded.program.functions().len(),
+            segment.program.functions().len()
+        );
+        assert_eq!(
+            loaded.program.constants().len(),
+            segment.program.constants().len()
+        );
         assert!(loaded.program.verify().is_ok());
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -465,20 +474,28 @@ mod tests {
             .iter()
             .map(|record| record.canonical.as_str())
             .collect();
-        assert!(canonicals.contains(&"assert"), "闭包含 assert: {canonicals:?}");
+        assert!(
+            canonicals.contains(&"assert"),
+            "闭包含 assert: {canonicals:?}"
+        );
         assert!(canonicals.contains(&"fs"), "闭包含 fs: {canonicals:?}");
         // 入口按 frontier 排序确定分配：assert 在 fs 前。
         assert_eq!(multi.modules[0].canonical, "assert");
         assert!(multi.program.verify().is_ok());
-        let multi_index =
-            usize::try_from(multi.entry_function_id.0).expect("u32 索引在 usize 内");
-        assert_eq!(multi.program.functions()[multi_index].name(), "$builtin_main");
+        let multi_index = usize::try_from(multi.entry_function_id.0).expect("u32 索引在 usize 内");
+        assert_eq!(
+            multi.program.functions()[multi_index].name(),
+            "$builtin_main"
+        );
 
         // to_semantic_segment：字段齐全且 id 对应。
         let semantic = multi.to_semantic_segment();
         assert_eq!(semantic.scope_count, multi.scope_count);
         assert_eq!(semantic.entry_function_id, multi.entry_function_id);
-        assert_eq!(semantic.program.functions().len(), multi.program.functions().len());
+        assert_eq!(
+            semantic.program.functions().len(),
+            multi.program.functions().len()
+        );
         for record in &multi.modules {
             let module_id = ModuleId(record.module_id);
             assert_eq!(

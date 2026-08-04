@@ -4,7 +4,7 @@ impl Lowerer {
     /// 共享类体降级：构造器函数、原型对象、超类链、方法/访问器/静态块/字段、装饰器。
     ///
     /// 调用方负责类名词法作用域的 push/pop 与最终名字绑定。
-    /// 返回 (最终 block, 构造器值)。
+    /// 返回（最终 block、构造器值、未被 class decorator 替换的构造器 FunctionId）。
     pub(super) fn lower_class_body(
         &mut self,
         class_name: &str,
@@ -12,7 +12,7 @@ impl Lowerer {
         class_span: Span,
         decorator_name: Option<&str>,
         block: BasicBlockId,
-    ) -> Result<(BasicBlockId, ValueId), LoweringError> {
+    ) -> Result<(BasicBlockId, ValueId, Option<FunctionId>), LoweringError> {
         let constructor = class.body.iter().find_map(|member| match member {
             swc_ast::ClassMember::Constructor(c) => Some(c),
             _ => None,
@@ -363,11 +363,12 @@ impl Lowerer {
             },
         );
 
+        let direct_constructor = class.decorators.is_empty().then_some(ctor_function_id);
         let (block, ctor_dest) =
             self.emit_apply_class_decorators(block, ctor_dest, &class.decorators, decorator_name)?;
 
         self.pop_class_private_name_scope();
-        Ok((block, ctor_dest))
+        Ok((block, ctor_dest, direct_constructor))
     }
 
     /// 处理单个类方法成员（Method / Getter / Setter）。
@@ -394,8 +395,8 @@ impl Lowerer {
                             .set_initialised(sid, class_name, true)
                             .map_err(|msg| self.error(method.span, msg))?;
                     }
-                    let function = self
-                        .lower_method_prop_to_fn(&method.key, &method.function, Some(target))?;
+                    let function =
+                        self.lower_method_prop_to_fn(&method.key, &method.function, Some(target))?;
                     if let Some(sid) = class_scope_id {
                         let _ = self.scopes.set_initialised(sid, class_name, false);
                     }

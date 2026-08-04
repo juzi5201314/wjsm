@@ -71,22 +71,22 @@ pub(crate) use core::define_core;
 pub(crate) use gc::{allocate_v2_array_handle, define_v2};
 
 pub(crate) use fetch::define_fetch;
-pub(crate) use fetch_http::perform_http_fetch;
 pub(crate) use fetch_core::create_arraybuffer_with_bytes;
+pub(crate) use fetch_http::perform_http_fetch;
 pub(crate) use get_builtin_global_entry::define_get_builtin_global;
 pub(crate) use math_number_error::define_math_number_error;
 pub(crate) use primitive_core::define_primitive_core;
+pub(crate) use streams_fetch_body::call_fetch_body_reader_read;
+pub(crate) use streams_fetch_body::consume_fetch_body_to_bytes;
 pub(crate) use streams_queuing::call_queuing_strategy_size_from_caller;
 pub(crate) use streams_queuing::construct_byte_length_queuing_strategy;
 pub(crate) use streams_queuing::construct_count_queuing_strategy;
 pub(crate) use streams_readable::build_reader_result_with_env;
-pub(crate) use streams_readable::{
-    create_uint8array_with_env, mark_response_body_used_from_caller,
-    transfer_byob_view_with_env, typedarray_u8_bytes, write_u8_bytes_to_view,
-};
 pub(crate) use streams_readable::cancel_http_response_from_caller;
-pub(crate) use streams_fetch_body::call_fetch_body_reader_read;
-pub(crate) use streams_fetch_body::consume_fetch_body_to_bytes;
+pub(crate) use streams_readable::{
+    create_uint8array_with_env, mark_response_body_used_from_caller, transfer_byob_view_with_env,
+    typedarray_u8_bytes, write_u8_bytes_to_view,
+};
 pub(crate) use streams_writable::{
     create_writable_abort_signal_object, mark_writable_stream_signal_aborted,
 };

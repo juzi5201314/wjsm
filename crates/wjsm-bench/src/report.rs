@@ -72,7 +72,11 @@ pub fn rfc3339_now() -> String {
     let days = i64::try_from(secs / 86_400).expect("unix 秒数除以 86400 必然落在 i64 范围内");
     let secs_of_day = secs % 86_400;
     let (year, month, day) = civil_from_days(days);
-    let (hour, minute, second) = (secs_of_day / 3600, (secs_of_day % 3600) / 60, secs_of_day % 60);
+    let (hour, minute, second) = (
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60,
+    );
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
@@ -99,8 +103,10 @@ pub fn write_json(path: &std::path::Path, value: &impl Serialize) -> anyhow::Res
         .unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(parent)
         .map_err(|error| anyhow::anyhow!("创建 {} 失败: {error}", parent.display()))?;
-    let payload = serde_json::to_vec_pretty(value).map_err(|error| anyhow::anyhow!("序列化报告失败: {error}"))?;
-    std::fs::write(path, payload).map_err(|error| anyhow::anyhow!("写入 {} 失败: {error}", path.display()))
+    let payload = serde_json::to_vec_pretty(value)
+        .map_err(|error| anyhow::anyhow!("序列化报告失败: {error}"))?;
+    std::fs::write(path, payload)
+        .map_err(|error| anyhow::anyhow!("写入 {} 失败: {error}", path.display()))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use wasmtime::SharedMemory;
 use wjsm_gc::heap::{GrowableHeapMemory, HeapAddress, HeapMemory, HeapMemoryError};

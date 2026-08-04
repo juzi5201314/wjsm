@@ -267,8 +267,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                 caller.data().count_barrier_load();
                 if value::is_array(array)
                     && index >= 0
-                    && access.object_type(handle).ok()
-                        == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+                    && access.object_type(handle).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
                 {
                     // hole 视为缺失属性，归一为 undefined；否则洞哨兵会作为 NaN 泄漏给调用方
                     let element = access
@@ -311,8 +310,7 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                 caller.data().count_barrier_store();
                 if value::is_array(array)
                     && index >= 0
-                    && access.object_type(handle).ok()
-                        == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+                    && access.object_type(handle).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
                 {
                     crate::set_v2_array_element(
                         &mut caller,
@@ -346,7 +344,6 @@ fn v2_index_property_key(caller: &Caller<'_, RuntimeState>, index: i32) -> u32 {
         ),
     )
 }
-
 
 fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
     let env = crate::WasmEnv::from_caller(caller)
@@ -404,9 +401,7 @@ fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime:
         }
     }
     crate::runtime_startup::install_array_proto_to_string(caller, &env, prototype)
-        .ok_or_else(|| {
-            wasmtime::Error::msg("V2 Array.prototype toString installation failed")
-        })?;
+        .ok_or_else(|| wasmtime::Error::msg("V2 Array.prototype toString installation failed"))?;
     let iterator_value =
         crate::create_native_callable(caller.data(), crate::NativeCallable::ArrayProtoValues);
     let keys = crate::create_native_callable(caller.data(), crate::NativeCallable::ArrayProtoKeys);
@@ -437,8 +432,6 @@ fn ensure_v2_array_prototype(caller: &mut Caller<'_, RuntimeState>) -> wasmtime:
     }
     Ok(handle)
 }
-
-
 
 fn take_next_handle(caller: &mut Caller<'_, RuntimeState>) -> wasmtime::Result<u32> {
     let env = crate::WasmEnv::from_caller(caller)

@@ -81,8 +81,7 @@ impl Compiler {
                 // blocks 末尾，这里在 `Block + Loop` 之前顺序发射其指令（不发射
                 // Jump(header) terminator，fall-through 进入紧随的循环头）。
                 if let Some(func_id) = self.current_function_id
-                    && let Some(preheaders) =
-                        self.hoisted_preheader_blocks.get(&func_id).cloned()
+                    && let Some(preheaders) = self.hoisted_preheader_blocks.get(&func_id).cloned()
                 {
                     let mut chain: Vec<usize> = preheaders
                         .iter()
@@ -185,9 +184,9 @@ impl Compiler {
                         .iter()
                         .any(|ins| matches!(ins, Instruction::Phi { .. }));
                     let condition_constant_false = self.current_function_id.is_some_and(|f| {
-                        self.f64_analysis.as_ref().is_some_and(|a| {
-                            a.condition_constant_false(f, *condition)
-                        })
+                        self.f64_analysis
+                            .as_ref()
+                            .is_some_and(|a| a.condition_constant_false(f, *condition))
                     });
                     if condition_constant_false
                         && !false_has_phi

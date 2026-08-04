@@ -6,7 +6,6 @@ use wjsm_host::{ExecContext, HeapContext};
 use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 
-
 pub(crate) fn define_array_object(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,

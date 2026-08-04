@@ -1,8 +1,8 @@
 use wjsm_host::{
     ByobRequestEntry, ExecContext, NativeCallableRef, PromiseReaction, PromiseSettlement,
-    ReactionType, ReadableStreamByobRequestMethodKind,
-    ReadableStreamDefaultControllerMethodKind, ReadableStreamDefaultReaderMethodKind,
-    ReadableStreamPipeToEntry, ReaderKind, StreamState, Value,
+    ReactionType, ReadableStreamByobRequestMethodKind, ReadableStreamDefaultControllerMethodKind,
+    ReadableStreamDefaultReaderMethodKind, ReadableStreamPipeToEntry, ReaderKind, StreamState,
+    Value,
 };
 use wjsm_ir::value;
 
@@ -20,11 +20,7 @@ pub fn readable_stream_pipe_to<E: ExecContext>(
     let Some(destination) =
         super::readable_dispatch::writable_stream_handle_from_object(ctx, destination)
     else {
-        reject_promise_with_type_error(
-            ctx,
-            promise,
-            "pipeTo destination must be a WritableStream",
-        );
+        reject_promise_with_type_error(ctx, promise, "pipeTo destination must be a WritableStream");
         return Some(promise);
     };
     let can_start = ctx.with_readable_stream(readable_handle, |stream| {
@@ -76,10 +72,15 @@ enum PipeToStep {
 }
 
 fn next_pipe_to_step<E: ExecContext>(ctx: &mut E, readable_handle: u32) -> PipeToStep {
-    let Some((controller_handle, state, pipe_to)) = ctx.with_readable_stream(
-        readable_handle,
-        |stream| (stream.controller_handle, stream.state.clone(), stream.pipe_to),
-    ) else {
+    let Some((controller_handle, state, pipe_to)) =
+        ctx.with_readable_stream(readable_handle, |stream| {
+            (
+                stream.controller_handle,
+                stream.state.clone(),
+                stream.pipe_to,
+            )
+        })
+    else {
         return PipeToStep::Done;
     };
     let Some(pipe_to) = pipe_to else {
@@ -151,12 +152,13 @@ fn attach_pipe_to_write_reactions<E: ExecContext>(
     write_promise: Value,
     readable_handle: u32,
 ) {
-    let fulfill = ctx.create_native_callable(
-        NativeCallableRef::ReadableStreamPipeToWriteFulfilled { readable_handle },
-    );
-    let reject = ctx.create_native_callable(
-        NativeCallableRef::ReadableStreamPipeToWriteRejected { readable_handle },
-    );
+    let fulfill =
+        ctx.create_native_callable(NativeCallableRef::ReadableStreamPipeToWriteFulfilled {
+            readable_handle,
+        });
+    let reject = ctx.create_native_callable(NativeCallableRef::ReadableStreamPipeToWriteRejected {
+        readable_handle,
+    });
     ctx.mark_promise_handled(write_promise);
     ctx.push_promise_reaction(
         write_promise,
@@ -220,9 +222,9 @@ pub fn readable_stream_pipe_through<E: ExecContext>(
     let Some((readable, writable)) =
         super::readable_dispatch::transform_parts_from_object(ctx, transform)
     else {
-        return Some(ctx.make_type_error(
-            "pipeThrough transform must contain readable and writable",
-        ));
+        return Some(
+            ctx.make_type_error("pipeThrough transform must contain readable and writable"),
+        );
     };
     let _ = readable_stream_pipe_to(ctx, readable_handle, writable);
     Some(readable)
@@ -241,12 +243,11 @@ pub fn call_default_reader_method<E: ExecContext>(
             let _ = ctx.with_readable_stream(stream_handle, |stream| stream.locked = false);
             Some(value::encode_undefined())
         }
-        ReadableStreamDefaultReaderMethodKind::GetClosed => ctx
-            .with_reader(handle, |reader| {
-                reader
-                    .closed_promise
-                    .unwrap_or_else(value::encode_undefined)
-            }),
+        ReadableStreamDefaultReaderMethodKind::GetClosed => ctx.with_reader(handle, |reader| {
+            reader
+                .closed_promise
+                .unwrap_or_else(value::encode_undefined)
+        }),
     }
 }
 
@@ -363,9 +364,7 @@ pub fn call_default_controller_method<E: ExecContext>(
         }
         ReadableStreamDefaultControllerMethodKind::GetDesiredSize => Some(
             ctx.with_stream_controller(handle, |controller| {
-                value::encode_f64(
-                    controller.high_water_mark - controller.chunk_queue.len() as f64,
-                )
+                value::encode_f64(controller.high_water_mark - controller.chunk_queue.len() as f64)
             })
             .unwrap_or_else(value::encode_null),
         ),

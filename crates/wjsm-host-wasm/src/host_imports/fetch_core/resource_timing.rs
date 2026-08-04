@@ -7,17 +7,10 @@ pub(crate) fn record_http_response_body_bytes(
     decoded_size: usize,
 ) {
     let timing = http_resource_timing(state, http_handle);
-    wjsm_builtins::fetch::resource_timing::record_body_bytes(
-        &timing,
-        encoded_size,
-        decoded_size,
-    );
+    wjsm_builtins::fetch::resource_timing::record_body_bytes(&timing, encoded_size, decoded_size);
 }
 
-pub(crate) fn complete_http_response_resource_timing(
-    state: &RuntimeState,
-    http_handle: u32,
-) {
+pub(crate) fn complete_http_response_resource_timing(state: &RuntimeState, http_handle: u32) {
     let timing = http_resource_timing(state, http_handle);
     let Some(timing) = wjsm_builtins::fetch::resource_timing::finish(&timing) else {
         return;

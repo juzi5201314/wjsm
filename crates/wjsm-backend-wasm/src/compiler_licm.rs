@@ -24,7 +24,9 @@ use crate::analysis_f64::F64Analysis;
 use crate::compiler_gc_analysis::GcAnalysis;
 use std::cmp::Reverse;
 use std::collections::HashSet;
-use wjsm_ir::{BasicBlock, BasicBlockId, Builtin, FunctionId, Instruction, Module, Terminator, ValueId};
+use wjsm_ir::{
+    BasicBlock, BasicBlockId, Builtin, FunctionId, Instruction, Module, Terminator, ValueId,
+};
 
 /// 指令的 dest（与 wjsm-ir verify 的 instruction_dest 相同的完整匹配）。
 fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
@@ -52,10 +54,18 @@ fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | Instruction::IsException { dest, .. }
         | Instruction::EncodeException { dest, .. }
         | Instruction::ExceptionToObject { dest, .. } => Some(*dest),
-        Instruction::CallBuiltin { dest: Some(dest), .. }
-        | Instruction::Call { dest: Some(dest), .. }
-        | Instruction::SuperCall { dest: Some(dest), .. }
-        | Instruction::ConstructCall { dest: Some(dest), .. } => Some(*dest),
+        Instruction::CallBuiltin {
+            dest: Some(dest), ..
+        }
+        | Instruction::Call {
+            dest: Some(dest), ..
+        }
+        | Instruction::SuperCall {
+            dest: Some(dest), ..
+        }
+        | Instruction::ConstructCall {
+            dest: Some(dest), ..
+        } => Some(*dest),
         _ => None,
     }
 }
@@ -324,11 +334,7 @@ fn deterministic_pure_builtin(
 /// 传递其表值、unknown callee / `SuperCall` / 属性写 / 对象构造 / `Suspend`
 /// （can_throw 已拒这些路径，此处为提升 gate 的双保险）。死异常块跳过
 /// （与 `compute_can_throw` 同模式——折叠路径不构成真实状态写）。
-fn compute_may_write_state(
-    module: &Module,
-    f64: &F64Analysis,
-    gc: &GcAnalysis,
-) -> Vec<bool> {
+fn compute_may_write_state(module: &Module, f64: &F64Analysis, gc: &GcAnalysis) -> Vec<bool> {
     let n = module.functions().len();
     let mut may_write = vec![false; n];
     for _ in 0..64 {
@@ -532,7 +538,10 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                     let block = &blocks[b];
                     for (i, ins) in block.instructions().iter().enumerate() {
                         let Instruction::Call {
-                            callee, this_val, args, ..
+                            callee,
+                            this_val,
+                            args,
+                            ..
                         } = ins
                         else {
                             continue;
@@ -603,7 +612,10 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                     .remove(plan.instr);
                 let mut deps: Vec<ValueId> = Vec::new();
                 if let Instruction::Call {
-                    callee, this_val, args, ..
+                    callee,
+                    this_val,
+                    args,
+                    ..
                 } = &call
                 {
                     deps.push(*callee);
@@ -620,9 +632,9 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
                     // 全模块扫描后 `!plan.body.contains` 即 break 的语义完全等价）。
                     for &bi in &plan.body {
                         if let Some(b) = function.blocks_mut().get_mut(bi)
-                            && let Some(pos) = b.instructions_mut().iter().position(|ins| {
-                                matches!(ins, Instruction::Const { dest, .. } if *dest == v)
-                            })
+                            && let Some(pos) = b.instructions_mut().iter().position(
+                                |ins| matches!(ins, Instruction::Const { dest, .. } if *dest == v),
+                            )
                         {
                             let def = b.instructions_mut().remove(pos);
                             moved.insert(v);
@@ -641,12 +653,7 @@ pub(crate) fn hoist_loop_invariant_pure_calls(
 
             // 先重定向（blocks 里还没有新 preheader，避免 preheader 的
             // Jump(header) 被误改成 Jump(自己) 形成自环），再追加 preheader。
-            retarget_external_preds(
-                function.blocks_mut(),
-                &plan.body,
-                plan.header,
-                preheader_id,
-            );
+            retarget_external_preds(function.blocks_mut(), &plan.body, plan.header, preheader_id);
             function.push_block(preheader);
             // 记录新 preheader 的块索引（append 后即 blocks 末位）。
             preheaders.insert(function.blocks().len() - 1);

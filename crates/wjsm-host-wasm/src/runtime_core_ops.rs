@@ -38,8 +38,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
     if let Some(iter) = iters.get_mut(handle_idx) {
         match iter {
             IteratorState::StringIter { string, unit_pos } => {
-                let current = (*unit_pos < string.utf16_len())
-                    .then(|| (string.clone(), *unit_pos));
+                let current = (*unit_pos < string.utf16_len()).then(|| (string.clone(), *unit_pos));
                 drop(iters);
                 current.map_or_else(
                     || value::encode_undefined(),

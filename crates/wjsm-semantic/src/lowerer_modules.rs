@@ -286,22 +286,22 @@ fn inline_builtin_entry(
     flow: StmtFlow,
 ) -> Result<StmtFlow, LoweringError> {
     let entry_block = lowerer.async_main_body_entry.unwrap_or(BasicBlockId(0));
-    let entry_block_idx =
-        usize::try_from(entry_block.0).expect("BasicBlockId 索引在 usize 内");
+    let entry_block_idx = usize::try_from(entry_block.0).expect("BasicBlockId 索引在 usize 内");
     let entry_fn_idx = usize::try_from(builtin.entry_function_id.0)
         .expect("builtin 段入口函数 id 索引在 usize 内");
     let entry_fn = &builtin.program.functions()[entry_fn_idx];
 
     // ── 基线：用户 main 当前的 ValueId / 块计数 ──
     let value_base = lowerer.next_value;
-    let block_base = u32::try_from(lowerer.current_function.blocks.len())
-        .expect("用户 main 块数在 u32 内");
+    let block_base =
+        u32::try_from(lowerer.current_function.blocks.len()).expect("用户 main 块数在 u32 内");
 
     // 取走用户入口块原有指令与终止器（内容整体搬进新 cont_block）。
     let original_instructions =
         std::mem::take(lowerer.current_function.blocks[entry_block_idx].instructions_mut());
-    let original_terminator =
-        lowerer.current_function.blocks[entry_block_idx].terminator().clone();
+    let original_terminator = lowerer.current_function.blocks[entry_block_idx]
+        .terminator()
+        .clone();
     let cont_block = lowerer.current_function.new_block();
     for instruction in original_instructions {
         lowerer
@@ -356,7 +356,9 @@ fn inline_builtin_entry(
                     .current_function
                     .append_instruction(entry_block, instruction);
             }
-            lowerer.current_function.set_terminator(entry_block, terminator);
+            lowerer
+                .current_function
+                .set_terminator(entry_block, terminator);
         } else {
             let new_block = lowerer.current_function.new_block();
             for instruction in rewritten_instructions {
@@ -364,7 +366,9 @@ fn inline_builtin_entry(
                     .current_function
                     .append_instruction(new_block, instruction);
             }
-            lowerer.current_function.set_terminator(new_block, terminator);
+            lowerer
+                .current_function
+                .set_terminator(new_block, terminator);
         }
     }
 

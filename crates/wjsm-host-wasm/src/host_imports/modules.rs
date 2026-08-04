@@ -139,4 +139,3 @@ fn attach_require_cache_trap(
     let trap = create_native_callable(caller.data(), NativeCallable::CjsRequireCacheTrap { kind });
     let _ = define_host_data_property_from_caller(caller, handler, name, trap);
 }
-

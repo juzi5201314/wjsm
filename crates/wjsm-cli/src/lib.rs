@@ -2321,19 +2321,14 @@ fn compile_bundle(
             )
         })?
     } else {
-        wjsm_module::lower_bundle_with_debug(
-            entry,
-            root,
-            resolution_options.clone(),
-            debug_codegen,
-        )
-        .with_context(|| {
-            format!(
-                "bundle entry {} from root {}",
-                entry.display(),
-                root.display()
-            )
-        })?
+        wjsm_module::lower_bundle_with_debug(entry, root, resolution_options.clone(), debug_codegen)
+            .with_context(|| {
+                format!(
+                    "bundle entry {} from root {}",
+                    entry.display(),
+                    root.display()
+                )
+            })?
     };
     if verify_ir {
         verify_ir_for_pipeline(&program, true)?;

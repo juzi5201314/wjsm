@@ -7,7 +7,6 @@ use anyhow::Result;
 use wasmtime::Store;
 use wasmtime::{Caller, Linker};
 
-
 use crate::exec_context_impl::WasmExecContext;
 use crate::*;
 

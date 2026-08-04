@@ -140,7 +140,6 @@ pub enum HeadersMethodKind {
     ForEach,
     Keys,
     Values,
-
 }
 
 #[derive(Clone, Copy, Debug)]

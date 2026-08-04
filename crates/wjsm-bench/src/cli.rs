@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -51,7 +51,12 @@ impl Cli {
     /// `--quick` 优先于显式 --runs/--warmup/--window-ms。
     pub fn effective(&self) -> EffectiveConfig {
         if self.quick {
-            EffectiveConfig { runs: 3, warmup: 1, window_ms: 200, warmup_ms: self.warmup_ms }
+            EffectiveConfig {
+                runs: 3,
+                warmup: 1,
+                window_ms: 200,
+                warmup_ms: self.warmup_ms,
+            }
         } else {
             EffectiveConfig {
                 runs: self.runs,
@@ -99,5 +104,7 @@ pub fn resolve_node() -> Result<String> {
     if let Some(found) = which("node") {
         return Ok(found);
     }
-    Err(anyhow!("找不到 node 可执行文件：请安装 Node.js，或用 NODE=<路径> 指定"))
+    Err(anyhow!(
+        "找不到 node 可执行文件：请安装 Node.js，或用 NODE=<路径> 指定"
+    ))
 }

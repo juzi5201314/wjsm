@@ -6,13 +6,13 @@
 use crate::runtime_string::RuntimeString;
 use crate::types::EnumeratorState;
 use crate::{RuntimeState, WasmEnv, value};
-use wjsm_ir::constants;
 use wasmtime::Caller;
 use wjsm_host::{
     AsyncHookEvent, AtomicsRmwOp, BoundEntry, ClosureEntry, ExecContext, ExecFuture, GcOutcome,
     Handle, HeapContext, IteratorNextStep, PromiseSettlement, ProxyEntry, RegExpMatchInfo,
     TypedArrayView, Value,
 };
+use wjsm_ir::constants;
 
 /// Wasmtime 后端的 [`ExecContext`] / [`HeapContext`] 实现。
 ///

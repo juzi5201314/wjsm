@@ -28,11 +28,10 @@ pub fn begin<E: ExecContext>(
     })))
 }
 
-pub fn mark_request_start<E: ExecContext>(
-    ctx: &mut E,
-    timing: &Option<SharedFetchResourceTiming>,
-) {
-    mutate(timing, |entry| entry.request_start_time = ctx.performance_now());
+pub fn mark_request_start<E: ExecContext>(ctx: &mut E, timing: &Option<SharedFetchResourceTiming>) {
+    mutate(timing, |entry| {
+        entry.request_start_time = ctx.performance_now()
+    });
 }
 
 pub fn mark_response_start<E: ExecContext>(
@@ -57,18 +56,13 @@ pub fn record_body_bytes(
         entry.decoded_body_size = entry.decoded_body_size.saturating_add(decoded_size as u64);
     });
 }
-pub fn complete<E: ExecContext>(
-    ctx: &mut E,
-    timing: &Option<SharedFetchResourceTiming>,
-) {
+pub fn complete<E: ExecContext>(ctx: &mut E, timing: &Option<SharedFetchResourceTiming>) {
     if let Some(snapshot) = finish(timing) {
         ctx.commit_fetch_resource_timing(&snapshot);
     }
 }
 
-pub fn finish(
-    timing: &Option<SharedFetchResourceTiming>,
-) -> Option<FetchResourceTimingState> {
+pub fn finish(timing: &Option<SharedFetchResourceTiming>) -> Option<FetchResourceTimingState> {
     let timing = timing.as_ref()?;
     let mut timing = timing.lock().unwrap_or_else(|error| error.into_inner());
     if timing.completed {

@@ -162,8 +162,9 @@ impl GcAnalysis {
                             }
                         }
 
-                        // ── Call：追溯 callee ──
-                        Instruction::Call { callee, .. } => {
+                        // ── Call / ConstructCall：追溯 callee ──
+                        Instruction::Call { callee, .. }
+                        | Instruction::ConstructCall { callee, .. } => {
                             match callee_sources.get(callee) {
                                 // callee 是 direct_call pass 替换后的 Const(FunctionRef)
                                 Some(CalleeSource::FunctionRef(callee_fn_id)) => {
@@ -171,6 +172,9 @@ impl GcAnalysis {
                                     call_edges[func_idx].push(callee_fn_id);
                                     call_targets.insert((func_id, *callee), callee_fn_id);
                                     // 目标函数 direct_callable → 调用点可发射直接 call。
+                                    // ConstructCall 同样适用：new.target 由 direct_callable
+                                    // 保证不被读取，this/返回值语义由 IR 层 new_object、
+                                    // is_js_object + phi 回退处理。
                                     if module
                                         .functions()
                                         .get(callee_fn_id.0 as usize)

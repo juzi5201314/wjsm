@@ -12,13 +12,13 @@
 use std::collections::{BTreeSet, HashMap};
 
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, Constant, Function, FunctionId, ImportBinding, Instruction,
-    ModuleId, Terminator, ValueId,
+    BasicBlock, BasicBlockId, Constant, Function, FunctionId, ImportBinding, Instruction, ModuleId,
+    Terminator, ValueId,
 };
 use wjsm_parser::parse_module;
 use wjsm_semantic::{
-    BuiltinSegment, ModuleKind, ModuleLoweringInput, ModuleMetadata, lower_modules_with_builtin_seed,
-    lower_modules_with_debug_meta,
+    BuiltinSegment, ModuleKind, ModuleLoweringInput, ModuleMetadata,
+    lower_modules_with_builtin_seed, lower_modules_with_debug_meta,
 };
 
 fn esm_input(id: u32, filename: &str, source: &str) -> ModuleLoweringInput {
@@ -142,9 +142,7 @@ fn seed_lower_inlines_builtin_entry_into_user_main() {
     // builtin 段函数在前（保持段内顺序），入口 $builtin_main 是 functions[0]（死代码保留）
     assert_eq!(functions[0].name(), "$builtin_main");
     // 用户函数在后，最后一个函数是用户 $module_main
-    let main_fn = functions
-        .last()
-        .expect("合并程序至少含用户 $module_main");
+    let main_fn = functions.last().expect("合并程序至少含用户 $module_main");
     assert_eq!(main_fn.name(), wjsm_ir::MODULE_ENTRY_IR_NAME);
     assert!(functions.len() >= 2);
 
@@ -170,7 +168,10 @@ fn seed_lower_inlines_builtin_entry_into_user_main() {
         .iter()
         .flat_map(|b| b.instructions())
         .any(|i| matches!(i, Instruction::Call { .. }));
-    assert!(!has_any_call, "inline 后用户 $module_main 不应再有 Call（含 entry Call）");
+    assert!(
+        !has_any_call,
+        "inline 后用户 $module_main 不应再有 Call（含 entry Call）"
+    );
 
     // 注入的 export_map 生效：console.log(answer) 解析为读取 builtin 导出 `$1.answer`。
     let reads_builtin_export = main_fn
@@ -238,7 +239,8 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
     // 1) 用 lower_modules_with_debug_meta 生成一个"builtin 段"（多模块 + 函数 +
     //    顶层控制流 if + 三目 phi，强制 inline 手术做块/phi 重映射）。
     let segment_source_a = "export function makeCounter() { let n = 0; return () => ++n; }\nexport const base = 10;\nlet warmed = false;\nif (base > 5) { warmed = true; }\nexport const label = base > 5 ? 'big' : 'small';\nexport function isWarmed() { return warmed; }\n";
-    let segment_source_b = "import { base } from './seg_a.js';\nexport function addBase(x) { return x + base; }\n";
+    let segment_source_b =
+        "import { base } from './seg_a.js';\nexport function addBase(x) { return x + base; }\n";
     let mut segment_import_map = HashMap::new();
     segment_import_map.insert(
         ModuleId(2),
@@ -249,7 +251,10 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
         }],
     );
     let mut segment_export_names = HashMap::new();
-    segment_export_names.insert(ModuleId(1), BTreeSet::from(["base".to_string(), "makeCounter".to_string()]));
+    segment_export_names.insert(
+        ModuleId(1),
+        BTreeSet::from(["base".to_string(), "makeCounter".to_string()]),
+    );
     segment_export_names.insert(ModuleId(2), BTreeSet::from(["addBase".to_string()]));
 
     let (segment_program, meta) = lower_modules_with_debug_meta(
@@ -270,9 +275,8 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
         .expect("segment program should verify");
 
     // 段入口 = 最后一个函数（finalize 最后 push 的 $module_main），改名为 $builtin_main。
-    let entry_function_id = FunctionId(
-        u32::try_from(segment_program.functions().len() - 1).expect("函数数在 u32 内"),
-    );
+    let entry_function_id =
+        FunctionId(u32::try_from(segment_program.functions().len() - 1).expect("函数数在 u32 内"));
     let mut segment_program = segment_program;
     segment_program
         .function_mut(entry_function_id)
@@ -318,7 +322,9 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
     )
     .expect("round-trip seed lower should succeed");
 
-    program.verify().expect("merged round-trip program should verify");
+    program
+        .verify()
+        .expect("merged round-trip program should verify");
 
     // 3) 跨函数可见性：builtin 段的模块作用域变量在用户 $module_main 内 store+load 同函数。
     //    段内模块作用域 id 来自 meta.module_scopes（seg_a 的顶层作用域）。

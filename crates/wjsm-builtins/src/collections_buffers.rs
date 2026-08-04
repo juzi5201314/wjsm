@@ -45,13 +45,8 @@ pub fn dataview_constructor<E: ExecContext>(
     if offset > buffer_length || length > buffer_length.saturating_sub(offset) {
         return range_error(ctx);
     }
-    let Some(handle) = ctx.dataview_create(
-        buffer_handle,
-        Some(buffer),
-        offset,
-        length,
-        is_shared,
-    ) else {
+    let Some(handle) = ctx.dataview_create(buffer_handle, Some(buffer), offset, length, is_shared)
+    else {
         return value::encode_undefined();
     };
     let object = ctx.alloc_object(8);
@@ -339,10 +334,10 @@ fn decode_dataview_value(kind: DataViewValueKind, bytes: &[u8]) -> Value {
         DataViewValueKind::Float32 => value::encode_f64(f32::from_le_bytes(
             bytes.try_into().expect("DataView read length is validated"),
         ) as f64),
-        DataViewValueKind::Float64 => f64::from_le_bytes(
-            bytes.try_into().expect("DataView read length is validated"),
-        )
-        .to_bits() as i64,
+        DataViewValueKind::Float64 => {
+            f64::from_le_bytes(bytes.try_into().expect("DataView read length is validated"))
+                .to_bits() as i64
+        }
     }
 }
 

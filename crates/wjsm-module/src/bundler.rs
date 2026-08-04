@@ -142,12 +142,9 @@ impl ModuleBundler {
         };
 
         // 5) 重建 canonical 闭包图（确定性纯解析，id 布局与段一致），共享节点进用户图。
-        let closure = ModuleGraph::build_builtin_closure(
-            &frontier,
-            &self.root_path,
-            self.options.clone(),
-        )
-        .with_context(|| "Failed to rebuild builtin closure graph")?;
+        let closure =
+            ModuleGraph::build_builtin_closure(&frontier, &self.root_path, self.options.clone())
+                .with_context(|| "Failed to rebuild builtin closure graph")?;
         let user_graph = ModuleGraph::build_user_with_builtin_closure(
             entry,
             &self.root_path,
@@ -534,7 +531,10 @@ mod tests {
     /// 断言合并 Program 的布局契约（与 wjsm-semantic hydrate 对齐）：
     /// builtin 段函数原序在前（functions[0..F_b)），$builtin_main 在段内
     /// entry_function_id 位置；用户函数在后，$module_main 是最后一个函数。
-    fn assert_merged_layout(program: &Program, segment: &crate::builtin_cache::BuiltinSegmentCacheFile) {
+    fn assert_merged_layout(
+        program: &Program,
+        segment: &crate::builtin_cache::BuiltinSegmentCacheFile,
+    ) {
         let builtin_count = segment.program.functions().len();
         assert!(
             program.functions().len() > builtin_count,
@@ -554,7 +554,8 @@ mod tests {
             .map(|function| function.name())
             .collect();
         assert_eq!(
-            &merged_names[..builtin_count], segment_names.as_slice(),
+            &merged_names[..builtin_count],
+            segment_names.as_slice(),
             "builtin 段函数应原序前置"
         );
         let entry_index =
@@ -602,7 +603,11 @@ mod tests {
         // 缓存落盘：同 key 文件存在；二次调用命中并产出同结构 Program。
         let key = crate::builtin_cache::builtin_cache_key(&frontier, false).unwrap();
         let cache_file = cache_dir.join("builtin_ir").join(format!("{key}.bin"));
-        assert!(cache_file.is_file(), "缓存文件应落盘: {}", cache_file.display());
+        assert!(
+            cache_file.is_file(),
+            "缓存文件应落盘: {}",
+            cache_file.display()
+        );
         let second = bundler
             .lower_bundle_cached(&fixture)
             .expect("二次 cached lower 应命中缓存并成功");
@@ -613,16 +618,20 @@ mod tests {
         );
 
         // 缓存失效：emit_debug_checks 不同 → 不同 key，重建后新 key 文件出现。
-        let debug_bundler = ModuleBundler::with_resolution_options(&root, ResolutionOptions::default())
-            .expect("bundler")
-            .with_emit_debug_checks(true);
+        let debug_bundler =
+            ModuleBundler::with_resolution_options(&root, ResolutionOptions::default())
+                .expect("bundler")
+                .with_emit_debug_checks(true);
         let _debug_program = debug_bundler
             .lower_bundle_cached(&fixture)
             .expect("debug cached lower 应成功");
         let debug_key = crate::builtin_cache::builtin_cache_key(&frontier, true).unwrap();
         assert_ne!(debug_key, key, "emit_debug_checks 应改变缓存键");
         assert!(
-            cache_dir.join("builtin_ir").join(format!("{debug_key}.bin")).is_file(),
+            cache_dir
+                .join("builtin_ir")
+                .join(format!("{debug_key}.bin"))
+                .is_file(),
             "debug 段缓存文件应落盘"
         );
 
@@ -657,7 +666,10 @@ mod tests {
 
         let key = crate::builtin_cache::builtin_cache_key(&frontier, false).unwrap();
         assert!(
-            cache_dir.join("builtin_ir").join(format!("{key}.bin")).is_file(),
+            cache_dir
+                .join("builtin_ir")
+                .join(format!("{key}.bin"))
+                .is_file(),
             "async_hooks 段缓存文件应落盘"
         );
         let _ = std::fs::remove_dir_all(&cache_dir);
@@ -700,12 +712,18 @@ mod tests {
             .iter()
             .map(|record| record.canonical.as_str())
             .collect();
-        assert!(canonicals.contains(&"async_hooks"), "闭包含 async_hooks: {canonicals:?}");
+        assert!(
+            canonicals.contains(&"async_hooks"),
+            "闭包含 async_hooks: {canonicals:?}"
+        );
         assert!(canonicals.contains(&"util"), "闭包含 util: {canonicals:?}");
 
         let key = crate::builtin_cache::builtin_cache_key(&frontier, false).unwrap();
         assert!(
-            cache_dir.join("builtin_ir").join(format!("{key}.bin")).is_file(),
+            cache_dir
+                .join("builtin_ir")
+                .join(format!("{key}.bin"))
+                .is_file(),
             "多入口段缓存文件应落盘"
         );
         let _ = std::fs::remove_dir_all(&cache_dir);

@@ -1,7 +1,9 @@
 use wjsm_host::{ExecContext, HeadersGuard, HeadersMethodKind, Value};
 use wjsm_ir::value;
 
-use super::objects::{create_empty_headers, create_headers_object, hidden_handle, init_headers_object};
+use super::objects::{
+    create_empty_headers, create_headers_object, hidden_handle, init_headers_object,
+};
 
 pub fn construct<E: ExecContext>(ctx: &mut E, this_value: Value, args: &[Value]) -> Value {
     let handle = create_empty_headers(ctx);
@@ -28,7 +30,9 @@ pub fn call_method<E: ExecContext>(
 ) -> Option<Value> {
     match kind {
         HeadersMethodKind::Get => {
-            let name = string_from_value(ctx, *args.first()?).ok()?.to_ascii_lowercase();
+            let name = string_from_value(ctx, *args.first()?)
+                .ok()?
+                .to_ascii_lowercase();
             let values = ctx.with_headers(handle, |entry| {
                 entry
                     .pairs
@@ -56,13 +60,17 @@ pub fn call_method<E: ExecContext>(
             })
         }
         HeadersMethodKind::Has => {
-            let name = string_from_value(ctx, *args.first()?).ok()?.to_ascii_lowercase();
+            let name = string_from_value(ctx, *args.first()?)
+                .ok()?
+                .to_ascii_lowercase();
             ctx.with_headers(handle, |entry| {
                 value::encode_bool(entry.pairs.iter().any(|(key, _)| key == &name))
             })
         }
         HeadersMethodKind::Delete => {
-            let name = string_from_value(ctx, *args.first()?).ok()?.to_ascii_lowercase();
+            let name = string_from_value(ctx, *args.first()?)
+                .ok()?
+                .to_ascii_lowercase();
             ctx.with_headers(handle, |entry| {
                 let before = entry.pairs.len();
                 entry.pairs.retain(|(key, _)| key != &name);
@@ -110,7 +118,9 @@ pub async fn call_method_async<E: ExecContext>(
         let name = ctx.store_string_owned(name);
         let content = ctx.store_string_owned(content);
         let arguments = [content, name, this_value];
-        ctx.call_js_async(callback, this_arg, &arguments).await.ok()?;
+        ctx.call_js_async(callback, this_arg, &arguments)
+            .await
+            .ok()?;
     }
     Some(value::encode_undefined())
 }
@@ -157,11 +167,7 @@ pub fn create_from_init<E: ExecContext>(ctx: &mut E, init: Value) -> Result<u32,
     Ok(handle)
 }
 
-pub fn fill_from_init<E: ExecContext>(
-    ctx: &mut E,
-    handle: u32,
-    init: Value,
-) -> Result<(), Value> {
+pub fn fill_from_init<E: ExecContext>(ctx: &mut E, handle: u32, init: Value) -> Result<(), Value> {
     if value::is_undefined(init) || value::is_null(init) {
         return Ok(());
     }
@@ -177,14 +183,18 @@ pub fn fill_from_init<E: ExecContext>(
             .array_read_length(init)
             .ok_or_else(|| ctx.make_type_error("invalid Headers init"))?;
         for index in 0..length {
-            let entry = ctx.array_read_elem(init, index).unwrap_or_else(value::encode_undefined);
+            let entry = ctx
+                .array_read_elem(init, index)
+                .unwrap_or_else(value::encode_undefined);
             if !value::is_array(entry) || ctx.array_read_length(entry) != Some(2) {
-                return Err(ctx.make_type_error(
-                    "Headers sequence entry must have length 2",
-                ));
+                return Err(ctx.make_type_error("Headers sequence entry must have length 2"));
             }
-            let name = ctx.array_read_elem(entry, 0).unwrap_or_else(value::encode_undefined);
-            let content = ctx.array_read_elem(entry, 1).unwrap_or_else(value::encode_undefined);
+            let name = ctx
+                .array_read_elem(entry, 0)
+                .unwrap_or_else(value::encode_undefined);
+            let content = ctx
+                .array_read_elem(entry, 1)
+                .unwrap_or_else(value::encode_undefined);
             let name = string_from_value(ctx, name)?;
             let content = string_from_value(ctx, content)?;
             append_pair(ctx, handle, name, content)?;
@@ -234,11 +244,7 @@ fn set_pair<E: ExecContext>(
     Ok(())
 }
 
-fn validate_pair<E: ExecContext>(
-    ctx: &mut E,
-    name: &str,
-    content: &str,
-) -> Result<(), Value> {
+fn validate_pair<E: ExecContext>(ctx: &mut E, name: &str, content: &str) -> Result<(), Value> {
     if name.is_empty()
         || !name.as_bytes().iter().all(|byte| {
             matches!(
@@ -266,7 +272,10 @@ fn validate_pair<E: ExecContext>(
     {
         return Err(ctx.make_type_error("invalid header name"));
     }
-    if content.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0)) {
+    if content
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+    {
         return Err(ctx.make_type_error("invalid header value"));
     }
     Ok(())

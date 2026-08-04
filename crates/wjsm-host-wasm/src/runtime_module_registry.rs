@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use wjsm_ir::value;
 pub use wjsm_host::{
     RuntimeModuleImportResult, RuntimeModuleKey, RuntimeModuleRequireResult,
     RuntimeRequireCacheEntry,
 };
+use wjsm_ir::value;
 
 fn module_key_can_delete_from_require_cache(key: &RuntimeModuleKey) -> bool {
     matches!(key, RuntimeModuleKey::File(_) | RuntimeModuleKey::Json(_))
@@ -20,7 +20,6 @@ fn module_key_from_registered_module_id(module_id: u32) -> RuntimeModuleKey {
 
 const RUNTIME_MODULE_ID_BASE: u32 = 1 << 30;
 
-
 fn require_cache_id_for_key(key: &RuntimeModuleKey) -> Option<String> {
     match key {
         RuntimeModuleKey::File(path) | RuntimeModuleKey::Json(path) => {
@@ -34,7 +33,6 @@ fn require_cache_id_for_key(key: &RuntimeModuleKey) -> Option<String> {
 fn require_cache_id_matches_key(cache_id: &str, key: &RuntimeModuleKey) -> bool {
     require_cache_id_for_key(key).as_deref() == Some(cache_id)
 }
-
 
 /// registry 中单个模块的执行状态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +51,6 @@ pub enum RuntimeModuleState {
         error_value: i64,
     },
 }
-
 
 /// 运行时模块状态的唯一 owner。
 #[derive(Clone, Debug)]

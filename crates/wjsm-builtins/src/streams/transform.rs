@@ -67,10 +67,8 @@ fn create_transform_object<E: ExecContext>(ctx: &mut E, handle: u32) -> Value {
         ("readable", TransformStreamMethodKind::GetReadable),
         ("writable", TransformStreamMethodKind::GetWritable),
     ] {
-        let getter = ctx.create_native_callable(NativeCallableRef::TransformStreamMethod {
-            handle,
-            kind,
-        });
+        let getter =
+            ctx.create_native_callable(NativeCallableRef::TransformStreamMethod { handle, kind });
         define_accessor_property(ctx, object, name, getter);
     }
     if let Some(object_handle) = ctx.weak_target_handle(object) {
@@ -105,8 +103,10 @@ pub async fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
         Err(exception) => return exception,
     };
 
-    let readable_controller =
-        ctx.alloc_stream_controller(new_controller(ControllerKind::ReadableDefault, readable_hwm));
+    let readable_controller = ctx.alloc_stream_controller(new_controller(
+        ControllerKind::ReadableDefault,
+        readable_hwm,
+    ));
     let readable_stream = ctx.alloc_readable_stream(ReadableStreamEntry {
         state: StreamState::Readable,
         error: None,
@@ -210,11 +210,14 @@ pub fn call_transform_from_writable<E: ExecContext>(
     let stream = ctx.with_stream_controller(controller, |entry| entry.stream_handle);
     if let Some(stream) = stream {
         let pending = ctx.with_readers(|readers| {
-            readers.iter_mut().filter_map(Option::as_mut).find_map(|reader| {
-                (reader.stream_handle == stream)
-                    .then(|| reader.pending_read_promise.take())
-                    .flatten()
-            })
+            readers
+                .iter_mut()
+                .filter_map(Option::as_mut)
+                .find_map(|reader| {
+                    (reader.stream_handle == stream)
+                        .then(|| reader.pending_read_promise.take())
+                        .flatten()
+                })
         });
         if let Some(promise) = pending {
             let result = build_reader_result(ctx, false, Some(chunk));

@@ -1,5 +1,5 @@
-use super::*;
 use super::module_bootstrap::PrologueKind;
+use super::*;
 
 /// 判定函数是否可获得 direct_call fast 入口；返回声明形参数（排除 $env/$this）。
 ///
@@ -30,6 +30,11 @@ fn fast_entry_param_count(function: &IrFunction) -> Option<u32> {
                 {
                     return None;
                 }
+                // forward_args 的 super() 依赖 args_base/args_count 参数
+                // （Type 12 shadow prologue），fast entry 寄存器直传无这些参数。
+                Instruction::SuperCall {
+                    forward_args: true, ..
+                } => return None,
                 _ => {}
             }
         }
@@ -150,8 +155,7 @@ impl Compiler {
                 && let Some(n) = fast_entry_param_count(function)
             {
                 let fast_idx = self._next_import_func;
-                self.functions
-                    .function(FAST_ENTRY_TYPE_BASE + n);
+                self.functions.function(FAST_ENTRY_TYPE_BASE + n);
                 self._next_import_func += 1;
                 if let Some(span) = function.source_span() {
                     self.source_map_entries
@@ -351,11 +355,7 @@ impl Compiler {
         self.user_func_base_idx = self._next_import_func;
         for (function_id, function) in module.functions().iter().enumerate() {
             if is_module_entry_ir_function(function.name()) {
-                self.compile_function(
-                    &module,
-                    function,
-                    wjsm_ir::FunctionId(function_id as u32),
-                )?;
+                self.compile_function(&module, function, wjsm_ir::FunctionId(function_id as u32))?;
             } else {
                 self.compile_js_function(
                     &module,
@@ -365,9 +365,8 @@ impl Compiler {
                 )?;
                 // Step 4a：fast 入口体紧随 slow 入口体发射，
                 // 与 Pass 1 的函数段注册顺序（slow → fast）保持一致。
-                if let Some(&FastEntry { param_count, .. }) = self
-                    .function_fast_entries
-                    .get(&(function_id as u32))
+                if let Some(&FastEntry { param_count, .. }) =
+                    self.function_fast_entries.get(&(function_id as u32))
                 {
                     self.compile_js_function(
                         &module,
