@@ -45,6 +45,8 @@ module {
     c42 = number(3)
     c43 = number(4)
     c44 = functionref(@1)
+    c45 = bool(true)
+    c46 = bool(false)
 
   fn @gen$gen [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -94,7 +96,6 @@ module {
       %27 = call builtin.generator.throw(%26, %20)
       return %27
     bb5:
-      %31 = load var $1.$resume_val
       %32 = const c31
       %33 = load var $1.$generator
       %34 = call builtin.generator.return(%33, %32)
@@ -120,8 +121,6 @@ module {
       %3 = const c35
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
-      %4 = load var $env
-      %5 = const c36
       %6 = const c44
       %7 = const c37
       set_prop %2, %7, %6

@@ -40,6 +40,8 @@ module {
     c37 = string("$0.calls")
     c38 = functionref(@2)
     c39 = undefined
+    c40 = bool(true)
+    c41 = bool(false)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
     bb0:

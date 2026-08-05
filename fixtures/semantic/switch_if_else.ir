@@ -26,6 +26,8 @@ module {
     c23 = string("matched")
     c24 = string("nope")
     c25 = string("default")
+    c26 = bool(true)
+    c27 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

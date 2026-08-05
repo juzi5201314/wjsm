@@ -89,6 +89,7 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         IsException { value, .. }
         | EncodeException { value, .. }
         | ExceptionToObject { value, .. } => vec![*value],
+        GuardSameFunction { callee, .. } => vec![*callee],
         ObjectSpread { source, .. } => vec![*source],
         StoreVar { value, .. } => vec![*value],
         // 无操作数
@@ -160,6 +161,7 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | NewPromise { dest }
         | CollectRestArgs { dest, .. }
         | IsException { dest, .. }
+        | GuardSameFunction { dest, .. }
         | EncodeException { dest, .. }
         | ExceptionToObject { dest, .. } => *dest,
         Call { dest, .. }

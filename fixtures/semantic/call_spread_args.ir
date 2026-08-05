@@ -192,8 +192,6 @@ module {
       %3 = const c21
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $1.arguments, %2
-      %4 = load var $env
-      %5 = const c22
       %6 = const c28
       %7 = const c23
       set_prop %2, %7, %6
@@ -304,7 +302,6 @@ module {
       %27 = call builtin.generator.throw(%26, %20)
       return %27
     bb5:
-      %31 = load var $6.$resume_val
       %32 = const c94
       %33 = load var $6.$generator
       %34 = call builtin.generator.next(%33, %32)
@@ -330,7 +327,6 @@ module {
       %42 = call builtin.generator.throw(%41, %35)
       return %42
     bb10:
-      %46 = load var $6.$resume_val
       %47 = load var $6.$generator
       %48 = const c97
       %49 = call builtin.generator.return(%47, %48)
@@ -356,8 +352,6 @@ module {
       %3 = const c102
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $7.arguments, %2
-      %4 = load var $env
-      %5 = const c103
       %6 = const c111
       %7 = const c104
       set_prop %2, %7, %6
@@ -483,7 +477,6 @@ module {
       %27 = call builtin.generator.throw(%26, %20)
       return %27
     bb5:
-      %31 = load var $10.$resume_val
       %32 = const c151
       %33 = load var $10.$generator
       %34 = call builtin.generator.next(%33, %32)
@@ -509,7 +502,6 @@ module {
       %42 = call builtin.generator.throw(%41, %35)
       return %42
     bb10:
-      %46 = load var $10.$resume_val
       %47 = load var $10.$generator
       %48 = const c154
       %49 = call builtin.generator.return(%47, %48)
@@ -535,8 +527,6 @@ module {
       %3 = const c159
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $11.arguments, %2
-      %4 = load var $env
-      %5 = const c160
       %6 = const c168
       %7 = const c161
       set_prop %2, %7, %6
@@ -904,8 +894,7 @@ module {
       store var $0.$__wjsm_gen_expr_8, %178
       %179 = const c168
       set_elem %175, %177, %179
-      %180 = is_exception %179
-      branch %180, bb28, bb27
+      jump bb27
     bb26:
       %171 = call builtin.exception_value(%169)
       throw %171
@@ -921,8 +910,7 @@ module {
       %189 = is_exception %188
       branch %189, bb30, bb29
     bb28:
-      %181 = call builtin.exception_value(%179)
-      throw %181
+      unreachable
     bb29:
       %191 = const c172
       %192 = new_object(capacity=4)

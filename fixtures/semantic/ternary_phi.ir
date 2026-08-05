@@ -23,6 +23,7 @@ module {
     c20 = bool(true)
     c21 = number(1)
     c22 = number(2)
+    c23 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -68,17 +69,14 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c20
-      branch %21, bb1, bb2
+      jump bb1
     bb1:
       %22 = const c21
       jump bb3
     bb2:
-      %23 = const c22
-      jump bb3
+      unreachable
     bb3:
-      %24 = phi [(bb1, %22), (bb2, %23)]
-      store var $0.x, %24
+      store var $0.x, %22
       %25 = load var $0.x
       %26 = call builtin.console.log(%25)
       %27 = is_exception %26

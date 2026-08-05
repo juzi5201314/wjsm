@@ -45,6 +45,7 @@ module {
     c42 = number(7)
     c43 = functionref(@2)
     c44 = undefined
+    c45 = bool(true)
 
   fn @anon_0$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:

@@ -49,6 +49,8 @@ module {
     c46 = string("$0.rejectA")
     c47 = number(1)
     c48 = functionref(@3)
+    c49 = bool(true)
+    c50 = bool(false)
 
   fn @arrow_0 [captures: $0.rejectA] [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
     bb0:

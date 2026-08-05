@@ -52,16 +52,28 @@ impl Compiler {
                     false
                 };
                 if is_outside_loop {
+                    let exit_idx = top.exit_idx;
                     self.emit(WasmInstruction::End);
                     self.emit(WasmInstruction::End);
                     self.loop_stack.pop();
+                    // 循环体若以跳转链（内联克隆体等）衔接回边，回边后的顺序
+                    // 推进可能越过循环出口块（出口位于链起点与回边之间、索引
+                    // 更小）——弹栈后显式回到出口块编译，否则出口代码永久丢失。
+                    if !self.compiled_blocks.contains(&exit_idx) && exit_idx < idx {
+                        idx = exit_idx;
+                    }
                 } else {
                     break;
                 }
             }
 
             if self.compiled_blocks.contains(&idx) {
-                break;
+                // 分支体内递归编译（compile_branch_body 的 should_follow 内联、
+                // common_direct_jump）会把后续块提前编译：顺序推进遇到已编译块
+                // 时跳过继续，而非 break——break 会丢弃其后未编译的块
+                // （如 phi merge 后的尾块），导致执行落入未编译的 unreachable。
+                idx += 1;
+                continue;
             }
 
             // 死异常块（is_exception 恒 false 分支的异常目标）不生成代码。

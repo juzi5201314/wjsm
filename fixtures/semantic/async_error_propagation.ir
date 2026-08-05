@@ -43,6 +43,7 @@ module {
     c40 = functionref(@1)
     c41 = undefined
     c42 = functionref(@2)
+    c43 = bool(true)
 
   fn @boom$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -84,8 +85,6 @@ module {
       %3 = const c29
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
-      %4 = load var $env
-      %5 = const c30
       %6 = const c40
       %7 = const c31
       set_prop %2, %7, %6

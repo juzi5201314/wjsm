@@ -58,6 +58,8 @@ module {
     c55 = functionref(@3)
     c56 = undefined
     c57 = undefined
+    c58 = bool(true)
+    c59 = bool(false)
 
   fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:

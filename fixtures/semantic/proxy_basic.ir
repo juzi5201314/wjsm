@@ -25,6 +25,8 @@ module {
     c22 = null
     c23 = string("x")
     c24 = string("x")
+    c25 = bool(true)
+    c26 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

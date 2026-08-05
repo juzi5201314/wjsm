@@ -26,6 +26,8 @@ module {
     c23 = string("finally")
     c24 = string("finally")
     c25 = string("after")
+    c26 = bool(true)
+    c27 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -78,15 +80,9 @@ module {
       %23 = is_exception %22
       branch %23, bb5, bb4
     bb2:
-      %34 = const c24
-      %35 = call builtin.console.log(%34)
-      %36 = is_exception %35
-      branch %36, bb11, bb10
+      unreachable
     bb3:
-      %38 = const c25
-      %39 = call builtin.console.log(%38)
-      %40 = is_exception %39
-      branch %40, bb13, bb12
+      unreachable
     bb4:
       %29 = const c22
       %30 = const c23
@@ -110,13 +106,11 @@ module {
       %33 = call builtin.exception_value(%31)
       throw %33
     bb10:
-      jump bb3
+      unreachable
     bb11:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      unreachable
     bb12:
-      return
+      unreachable
     bb13:
-      %41 = call builtin.exception_value(%39)
-      throw %41
+      unreachable
 }

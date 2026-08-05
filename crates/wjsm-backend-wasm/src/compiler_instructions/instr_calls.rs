@@ -1,15 +1,14 @@
 use super::*;
 
 impl Compiler {
-    fn active_call_cache_slots(&self) -> Option<(u32, u32, u32)> {
+    pub(crate) fn active_call_cache_slots(&self) -> Option<(u32, u32, u32)> {
         self.current_call_cache_slots
             .get(&(self.current_emit_block_idx, self.current_emit_instr_idx))
             .copied()
     }
 
     /// 解析闭包的函数表索引和环境；缓存按当前 IR block/instruction 精确区分调用点。
-    fn emit_closure_resolution(&mut self, callee_local: u32) {
-        let call_func_idx_scratch = self.call_func_idx_scratch();
+    pub(super) fn emit_closure_resolution(&mut self, callee_local: u32) {        let call_func_idx_scratch = self.call_func_idx_scratch();
         let call_env_obj_scratch = self.call_env_obj_scratch();
         let cache = self.active_call_cache_slots();
         if let Some((cache_callee, cache_env, cache_func)) = cache {

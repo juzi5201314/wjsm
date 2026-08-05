@@ -38,6 +38,8 @@ module {
     c35 = number(3)
     c36 = undefined
     c37 = string("x")
+    c38 = bool(true)
+    c39 = bool(false)
 
   fn @$module_main [has_eval] [entry=bb0]:
     bb0:
@@ -85,7 +87,6 @@ module {
       store var $0.$global, %20
       %21 = const c20
       store var $this, %21
-      %22 = const c21
       %23 = const c22
       store var $0.x, %23
       %24 = const c23

@@ -27,6 +27,8 @@ module {
     c24 = undefined
     c25 = string("get")
     c26 = string("x")
+    c27 = bool(true)
+    c28 = bool(false)
 
   fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.t, $1.p, $1.r] [entry=bb0]:
     bb0:

@@ -80,6 +80,7 @@ fn instr_dest(ins: &Instruction) -> Option<ValueId> {
         | NewPromise { dest }
         | CollectRestArgs { dest, .. }
         | IsException { dest, .. }
+        | GuardSameFunction { dest, .. }
         | EncodeException { dest, .. }
         | ExceptionToObject { dest, .. } => *dest,
         Call { dest, .. }
@@ -179,6 +180,7 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         | ExceptionToObject { value, .. } => {
             vec![*value]
         }
+        GuardSameFunction { callee, .. } => vec![*callee],
         Phi { .. } => vec![], // Phi use 经边分发，不计入块 use 集
         Const { .. } => vec![],
         StoreVar { value, .. } => vec![*value],

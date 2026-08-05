@@ -211,6 +211,7 @@ fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | NewPromise { dest }
         | CollectRestArgs { dest, .. }
         | IsException { dest, .. }
+        | GuardSameFunction { dest, .. }
         | EncodeException { dest, .. }
         | ExceptionToObject { dest, .. } => *dest,
         Call { dest, .. }
@@ -1213,6 +1214,7 @@ fn instruction_uses_value(ins: &Instruction, v: ValueId) -> bool {
         | IsException { value, .. }
         | EncodeException { value, .. }
         | ExceptionToObject { value, .. } => *value == v,
+        GuardSameFunction { callee, .. } => *callee == v,
         Compare { lhs, rhs, .. } => *lhs == v || *rhs == v,
         Phi { sources, .. } => sources.iter().any(|s| s.value == v),
         CallBuiltin { args, .. } => args.contains(&v),
@@ -1405,6 +1407,7 @@ fn compute_dynamically_reachable(
                     | Instruction::Compare { .. }
                     | Instruction::StringConcatVa { .. }
                     | Instruction::IsException { .. }
+                    | Instruction::GuardSameFunction { .. }
                     | Instruction::EncodeException { .. }
                     | Instruction::ExceptionToObject { .. }
                     | Instruction::PromiseResolve { .. }
@@ -1559,7 +1562,9 @@ mod tests {
     #[test]
     fn fewer_args_than_params_kills_param() {
         // f 有 2 个形参但只被 f(1) 调用：形参 1 实际是 undefined → false。
-        let program = lower("function f(a, b) { return a; } console.log(f(1));");
+        // f 含 rest 参数（CollectRestArgs，inline_for_ea 的排除指令）→ 不被内联，
+        // 调用点保留供 f64 形参传播（否则内联消除调用点后形参被收紧为 false）。
+        let program = lower("function f(a, b, ...r) { return a + r.length; } console.log(f(1));");
         let analysis = F64Analysis::analyze(&program);
         let f = function_id(&program, "f");
         assert_eq!(

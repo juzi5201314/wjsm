@@ -100,6 +100,8 @@ module {
     c97 = number(4)
     c98 = string("read")
     c99 = number(4)
+    c100 = bool(true)
+    c101 = bool(false)
 
   fn @PrivateClosure.captured [home_object=@7.prototype] [captures: $0.privateValue] [params: $2.$env, $2.$this, $2.next] [entry=bb0]:
     bb0:
@@ -117,10 +119,9 @@ module {
       %5 = is_nullish %4
       branch %5, bb2, bb1
     bb4:
-      %6 = phi [(bb2, %2)]
       %7 = const c22
       %8 = load var $2.next
-      set_prop %6, %7, %8
+      set_prop %2, %7, %8
       %9 = is_exception %8
       branch %9, bb6, bb5
     bb5:
@@ -160,10 +161,9 @@ module {
       %5 = is_nullish %4
       branch %5, bb2, bb1
     bb4:
-      %6 = phi [(bb2, %2)]
       %7 = const c27
       %8 = load var $5.next
-      set_prop %6, %7, %8
+      set_prop %2, %7, %8
       %9 = is_exception %8
       branch %9, bb6, bb5
     bb5:
@@ -195,10 +195,9 @@ module {
       %5 = is_nullish %4
       branch %5, bb2, bb1
     bb4:
-      %6 = phi [(bb2, %2)]
       %7 = const c30
       %8 = load var $7.next
-      set_prop %6, %7, %8
+      set_prop %2, %7, %8
       %9 = is_exception %8
       branch %9, bb6, bb5
     bb5:

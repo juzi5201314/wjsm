@@ -279,7 +279,9 @@ impl Compiler {
                     move |(instr_idx, instruction)| {
                         matches!(
                             instruction,
-                            Instruction::Call { .. } | Instruction::ConstructCall { .. }
+                            Instruction::Call { .. }
+                                | Instruction::ConstructCall { .. }
+                                | Instruction::GuardSameFunction { .. }
                         )
                         .then_some((block_idx, instr_idx))
                     },

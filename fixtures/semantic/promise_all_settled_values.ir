@@ -41,6 +41,8 @@ module {
     c38 = string("value")
     c39 = functionref(@0)
     c40 = undefined
+    c41 = bool(true)
+    c42 = bool(false)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.results] [entry=bb0]:
     bb0:

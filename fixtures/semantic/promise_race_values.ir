@@ -32,6 +32,8 @@ module {
     c29 = undefined
     c30 = number(9)
     c31 = functionref(@1)
+    c32 = bool(true)
+    c33 = bool(false)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:

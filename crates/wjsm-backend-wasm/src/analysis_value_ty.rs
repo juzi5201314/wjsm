@@ -266,6 +266,10 @@ fn dest_and_kind(ins: &Instruction, constants: &[Constant]) -> Option<(ValueId, 
         // 纯 tag 检查，不触发 GC。曾误判 Handle，现修正。
         IsException { dest, .. } => (*dest, ValueTy::Scalar),
 
+        // ── GuardSameFunction -> bool (Scalar) ──
+        // 守卫为纯 tag/表索引比较，不分配、不触发 GC；dest 为 boxed bool。
+        GuardSameFunction { dest, .. } => (*dest, ValueTy::Scalar),
+
         // ── EncodeException -> Handle（保持保守）──
         // 结果 = BOX_BASE | (TAG_EXCEPTION<<32) | 对象handle。
         // TAG_EXCEPTION 在 tag_needs_root 中为 true，且 low32 携带真实对象 handle，

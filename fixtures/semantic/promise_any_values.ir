@@ -34,6 +34,8 @@ module {
     c31 = number(2)
     c32 = string("rejected")
     c33 = functionref(@1)
+    c34 = bool(true)
+    c35 = bool(false)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:

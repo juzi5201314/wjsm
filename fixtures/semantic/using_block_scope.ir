@@ -32,6 +32,8 @@ module {
     c29 = undefined
     c30 = number(6)
     c31 = string("after")
+    c32 = bool(true)
+    c33 = bool(false)
 
   fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
@@ -105,15 +107,8 @@ module {
       store var $this, %20
       %21 = const c25
       store var $0.makeDisposable, %21
-      %22 = const c26
-      %23 = const c25
       %24 = const c27
-      %25 = call %23, this=%22, args=[%24]
-      store var $3.a, %25
-      %26 = const c28
-      %27 = call builtin.console.log(%26)
-      %28 = is_exception %27
-      branch %28, bb2, bb1
+      jump bb9
     bb1:
       %30 = load var $3.a
       %32 = const c29
@@ -140,4 +135,21 @@ module {
     bb7:
       %39 = call builtin.exception_value(%37)
       throw %39
+    bb8:
+      store var $3.a, %41
+      %26 = const c28
+      %27 = call builtin.console.log(%26)
+      %28 = is_exception %27
+      branch %28, bb2, bb1
+    bb9:
+      %41 = new_object(capacity=4)
+      %43 = const c20
+      set_prop %41, %43, %24
+      %44 = const c22
+      %45 = const c23
+      %46 = call builtin.create_closure(%44, %45)
+      %47 = const c24
+      %48 = call builtin.symbol.well_known(%47)
+      set_prop %41, %48, %46
+      jump bb8
 }

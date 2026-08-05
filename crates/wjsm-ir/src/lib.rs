@@ -799,6 +799,13 @@ pub enum Instruction {
         dest: ValueId,
         value: ValueId,
     },
+    /// 推测内联防卫：callee 底层函数 == function 时为 boxed true，否则 boxed false。
+    /// 失配时调用点必须回退动态调用（语义由内联 pass 的回退分支保证）。
+    GuardSameFunction {
+        dest: ValueId,
+        callee: ValueId,
+        function: FunctionId,
+    },
     /// 将错误对象编码为 TAG_EXCEPTION（用于函数返回异常）
     EncodeException {
         dest: ValueId,
@@ -1030,6 +1037,15 @@ impl fmt::Display for Instruction {
             Self::IsException { dest, value } => {
                 write!(formatter, "{dest} = is_exception {value}")
             }
+            Self::GuardSameFunction {
+                dest,
+                callee,
+                function,
+            } => write!(
+                formatter,
+                "{dest} = guard_same_function {callee}, @{function}",
+                function = function.0
+            ),
             Self::EncodeException { dest, value } => {
                 write!(formatter, "{dest} = encode_exception {value}")
             }
@@ -1218,6 +1234,10 @@ impl Instruction {
             Self::IsException { dest, value } => {
                 *dest = f(*dest);
                 *value = f(*value);
+            }
+            Self::GuardSameFunction { dest, callee, .. } => {
+                *dest = f(*dest);
+                *callee = f(*callee);
             }
             Self::EncodeException { dest, value } => {
                 *dest = f(*dest);

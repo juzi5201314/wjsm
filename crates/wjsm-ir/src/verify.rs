@@ -387,6 +387,9 @@ fn verify_instruction_uses(
         | Instruction::ExceptionToObject { value, .. } => {
             verify_value_use(function, definitions, *value, site, dominance)?;
         }
+        Instruction::GuardSameFunction { callee, .. } => {
+            verify_value_use(function, definitions, *callee, site, dominance)?;
+        }
         Instruction::CallBuiltin { args, .. } => {
             verify_value_slice(function, definitions, args, site, dominance)?;
         }
@@ -700,6 +703,7 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::NewPromise { dest }
         | Instruction::CollectRestArgs { dest, .. }
         | Instruction::IsException { dest, .. }
+        | Instruction::GuardSameFunction { dest, .. }
         | Instruction::EncodeException { dest, .. }
         | Instruction::ExceptionToObject { dest, .. } => Some(*dest),
         Instruction::CallBuiltin { dest, .. }

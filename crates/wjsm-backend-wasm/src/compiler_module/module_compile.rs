@@ -411,6 +411,18 @@ impl Compiler {
         }
 
         // Record user function base index (after all imports + helpers)
+        // getter 直调 helper：所有快链 accessor 分支共享（模块级函数，控制体积）。
+        // (slot_addr, obj, canonical) -> i64 —— Type 16（(i64,i64,i64)->i64）。
+        self.getter_direct_func_idx = self._next_import_func;
+        self.functions.function(16);
+        self._next_import_func += 1;
+        // GetProp 快链 helper：(obj, canonical) -> i64（Type 2，与 f64_mod 同签名）。
+        // canonical 全值：低 32 = name_id（槽匹配），高 32 = 数据段 ptr（宿主 obj_get）。
+        // 所有常量键 GetProp 共享同一份槽扫描 + 原型遍历逻辑。
+        self.fast_chain_func_idx = self._next_import_func;
+        self.functions.function(2);
+        self._next_import_func += 1;
+
         self.user_func_base_idx = self._next_import_func;
         for (function_id, function) in module.functions().iter().enumerate() {
             if is_module_entry_ir_function(function.name()) {
@@ -508,6 +520,11 @@ impl Compiler {
             self.compile_bootstrap_once_function();
             self.compile_init_function_props_function();
         }
+        // getter 直调 helper 体：注册在 Pass 1（IR 函数 + init_globals/bootstrap/
+        // init_function_props 之后、user_func_base_idx 之前），函数体须在 Pass 3
+        // 之后发射，与函数段索引顺序对齐。
+        self.compile_getter_direct_helper();
+        self.compile_fast_chain_helper();
         // Eval / Normal 均把函数填入父模块 __table（eval 现在 import 同一张表）。
         // 私有 table + element 会在临时 Instance 销毁后让 FunctionRef 失效。
         self.elements.active(
@@ -657,6 +674,502 @@ impl Compiler {
         // global 26: __barrier_buf_end
         self.emit(WasmInstruction::I32Const(init.barrier_buf_end));
         self.emit(WasmInstruction::GlobalSet(26));
+    }
+
+    /// getter 直调 helper（Type 39）：(slot_addr: i64, obj: i64, key: i32) -> i64。
+    /// 从槽读 getter 值：TAG_FUNCTION/TAG_CLOSURE 经 call_indirect 直调（receiver =
+    /// obj），其他 tag 落宿主 obj_get(obj, key)。被所有快链 accessor 分支共享，
+    /// 把 20 份内联展开压缩为 O(1) 模块级函数（控制 wasm 函数体大小）。
+    ///
+    /// helper local 布局（param 之后）：i64 3=getter 4=env；i32 5=sp_saved 6=func。
+    /// 无 spill（调用点负责 spill live handles）。
+    fn compile_getter_direct_helper(&mut self) {
+        let saved = (
+            self.string_concat_scratch_idx,
+            self.fast_entry_scratch_idx,
+            self.fast_addr_scratch_idx,
+            self.shadow_sp_scratch_idx,
+        );
+        self.string_concat_scratch_idx = 3; // getter（call_env_obj = 4）
+        self.fast_entry_scratch_idx = 3;
+        self.fast_addr_scratch_idx = 4; // env
+        self.shadow_sp_scratch_idx = 5; // sp_saved（call_func_idx = 6）
+
+        const GETTER: u32 = 3;
+        const ENV: u32 = 4;
+        const SP_SAVED: u32 = 5;
+        const FUNC: u32 = 6;
+        let sp_global = self.shadow_sp_global_idx;
+        let closure_get_func = self.special_host_import_indices
+            [&crate::host_import_registry::SpecialHostImport::ClosureGetFunc];
+        let closure_get_env = self.special_host_import_indices
+            [&crate::host_import_registry::SpecialHostImport::ClosureGetEnv];
+
+        self.current_func = Some(Function::new(vec![
+            (2, ValType::I64),
+            (2, ValType::I32),
+        ]));
+
+        // getter = i64.load [slot_addr(0) + GETTER_OFFSET]
+        self.emit(WasmInstruction::LocalGet(0));
+        self.emit(WasmInstruction::I64Load(MemArg {
+            offset: wjsm_ir::constants::PROP_SLOT_GETTER_OFFSET as u64,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::LocalSet(GETTER));
+
+        // TAG_FUNCTION → env = undefined。
+        self.emit(WasmInstruction::LocalGet(GETTER));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(GETTER));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(FUNC));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalSet(ENV));
+        self.emit(WasmInstruction::GlobalGet(sp_global));
+        self.emit(WasmInstruction::LocalSet(SP_SAVED));
+        self.emit(WasmInstruction::LocalGet(ENV));
+        self.emit(WasmInstruction::LocalGet(1));
+        self.emit(WasmInstruction::LocalGet(SP_SAVED));
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::LocalGet(FUNC));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
+            table_index: 0,
+        });
+        self.emit(WasmInstruction::LocalGet(SP_SAVED));
+        self.emit(WasmInstruction::GlobalSet(sp_global));
+        self.emit(WasmInstruction::Else);
+        // TAG_CLOSURE → 宿主解析 func/env（helper 无缓存槽）。
+        self.emit(WasmInstruction::LocalGet(GETTER));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(GETTER));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(closure_get_func));
+        self.emit(WasmInstruction::LocalSet(FUNC));
+        self.emit(WasmInstruction::LocalGet(GETTER));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(closure_get_env));
+        self.emit(WasmInstruction::LocalSet(ENV));
+        self.emit(WasmInstruction::GlobalGet(sp_global));
+        self.emit(WasmInstruction::LocalSet(SP_SAVED));
+        self.emit(WasmInstruction::LocalGet(ENV));
+        self.emit(WasmInstruction::LocalGet(1));
+        self.emit(WasmInstruction::LocalGet(SP_SAVED));
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::LocalGet(FUNC));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
+            table_index: 0,
+        });
+        self.emit(WasmInstruction::LocalGet(SP_SAVED));
+        self.emit(WasmInstruction::GlobalSet(sp_global));
+        self.emit(WasmInstruction::Else);
+        // 其他 tag → 宿主 obj_get（读不到合法 getter，走完整宿主语义）。
+        // canonical 高 32 = 数据段 ptr（宿主 obj_get 期望）。
+        self.emit(WasmInstruction::LocalGet(1));
+        self.emit(WasmInstruction::LocalGet(2));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+        self.emit(WasmInstruction::End); // closure
+        self.emit(WasmInstruction::End); // function
+
+        self.emit(WasmInstruction::End); // 函数尾（栈上 i64 结果）
+        self.codes.function(
+            self.current_func
+                .as_ref()
+                .expect("getter_direct helper should be initialized"),
+        );
+        self.current_func = None;
+        (
+            self.string_concat_scratch_idx,
+            self.fast_entry_scratch_idx,
+            self.fast_addr_scratch_idx,
+            self.shadow_sp_scratch_idx,
+        ) = saved;
+    }
+
+    /// GetProp 快链 helper（Type 2）：(obj: i64, canonical: i64) -> i64。
+    /// 内联版 emit_get_prop_fast_chain 的模块级共享形态：own 4 槽扫描 +
+    /// count>4 落宿主 + 原型链有界遍历（4 层）+ accessor getter 直调 +
+    /// 链末 undefined。所有常量键 GetProp 调用点共享，把每指令 ~500 条展开
+    /// 压缩为 spill + call + epilogue（控制 wasm 函数体大小）。
+    /// canonical 全值：低 32 = name_id（槽匹配），高 32 = 数据段 ptr（宿主 obj_get）。
+    ///
+    /// helper local 布局（param 之后）：i64 2=slot_addr 3=fast_entry 4=fast_addr；
+    /// i32 5=computed 6=shadow_sp。命中/失败路径均直接 return。
+    fn compile_fast_chain_helper(&mut self) {
+        let saved = (
+            self.string_concat_scratch_idx,
+            self.fast_entry_scratch_idx,
+            self.fast_addr_scratch_idx,
+            self.shadow_sp_scratch_idx,
+        );
+        self.string_concat_scratch_idx = 1; // call_env_obj = 2（slot_addr）
+        self.fast_entry_scratch_idx = 3;
+        self.fast_addr_scratch_idx = 4;
+        self.computed_idx_scratch_idx = 5;
+        self.shadow_sp_scratch_idx = 6;
+
+        let slot_addr_local = 2u32;
+        let obj_local = 0u32;
+        let key_local = 1u32;
+        let getter_direct = self.getter_direct_func_idx;
+        let obj_get = self.obj_get_func_idx;
+        // 宿主 obj_get 期望 canonical 高 32（数据段 ptr）。
+        let obj_get_ret = |compiler: &mut Self| {
+            compiler.emit(WasmInstruction::LocalGet(0));
+            compiler.emit(WasmInstruction::LocalGet(1));
+            compiler.emit(WasmInstruction::I64Const(32));
+            compiler.emit(WasmInstruction::I64ShrU);
+            compiler.emit(WasmInstruction::I32WrapI64);
+            compiler.emit(WasmInstruction::Call(obj_get));
+            compiler.emit(WasmInstruction::Return);
+        };
+
+        self.current_func = Some(Function::new(vec![
+            (3, ValType::I64),
+            (2, ValType::I32),
+        ]));
+
+        // (1) boxed object tag 检查。
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        obj_get_ret(self);
+        self.emit(WasmInstruction::End);
+
+        // (2-3) 句柄表 entry + 稳定状态检查（1/2/5）。
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I64ExtendI32U);
+        self.emit(WasmInstruction::I64Const(3));
+        self.emit(WasmInstruction::I64Shl);
+        self.emit(WasmInstruction::I64AtomicLoad(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I32Const(0xFFFF));
+        self.emit(WasmInstruction::I32And);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(2));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::I32Or);
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(5));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::I32Or);
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        obj_get_ret(self);
+        self.emit(WasmInstruction::End);
+
+        // (4) 对象地址。
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(16));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::LocalSet(self.fast_addr_scratch_idx));
+
+        // (5) 堆类型检查。
+        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+        self.emit(WasmInstruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xFF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(wjsm_ir::HEAP_TYPE_OBJECT as i64));
+        self.emit(WasmInstruction::I64Ne);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        obj_get_ret(self);
+        self.emit(WasmInstruction::End);
+
+        // (6-7) shape（capacity | count<<32）。
+        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+        self.emit(WasmInstruction::I64Load(MemArg {
+            offset: wjsm_ir::constants::HEAP_OBJECT_CAPACITY_OFFSET as u64,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I32LtU);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::End);
+
+        // (8) own 4 槽扫描（命中即 return）。
+        self.emit_slot_scan_ret(
+            slot_addr_local,
+            self.fast_addr_scratch_idx,
+            self.computed_idx_scratch_idx,
+            key_local,
+            obj_local,
+            getter_direct,
+        );
+
+        // (8b) count > 4 → 宿主 obj_get（溢出槽无法就地判定）。
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(4));
+        self.emit(WasmInstruction::I32GtU);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        obj_get_ret(self);
+        self.emit(WasmInstruction::End);
+
+        // (9) 原型链遍历（4 层，顺序展开）。
+        for _layer in 0..4_u32 {
+            // 读 proto（header 低 32）。
+            self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+            // 链末（PROTO_NULL_SENTINEL）→ undefined。
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const(0xFFFF_FFFFu32 as i32));
+            self.emit(WasmInstruction::I32Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+            self.emit(WasmInstruction::Return);
+            self.emit(WasmInstruction::End);
+            // proxy 哨兵 → 宿主。
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const(0x8000_0000u32 as i32));
+            self.emit(WasmInstruction::I32And);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            obj_get_ret(self);
+            self.emit(WasmInstruction::End);
+            // 句柄解码 + 稳定状态。
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Const(3));
+            self.emit(WasmInstruction::I64Shl);
+            self.emit(WasmInstruction::I64AtomicLoad(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::I32Const(0xFFFF));
+            self.emit(WasmInstruction::I32And);
+            self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const(1));
+            self.emit(WasmInstruction::I32Eq);
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const(2));
+            self.emit(WasmInstruction::I32Eq);
+            self.emit(WasmInstruction::I32Or);
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const(5));
+            self.emit(WasmInstruction::I32Eq);
+            self.emit(WasmInstruction::I32Or);
+            self.emit(WasmInstruction::I32Eqz);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            obj_get_ret(self);
+            self.emit(WasmInstruction::End);
+            // 对象地址 + 堆类型。
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(16));
+            self.emit(WasmInstruction::I64ShrU);
+            self.emit(WasmInstruction::LocalSet(self.fast_addr_scratch_idx));
+            self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::I64Const(32));
+            self.emit(WasmInstruction::I64ShrU);
+            self.emit(WasmInstruction::I64Const(0xFF));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I64Const(wjsm_ir::HEAP_TYPE_OBJECT as i64));
+            self.emit(WasmInstruction::I64Ne);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            obj_get_ret(self);
+            self.emit(WasmInstruction::End);
+            // shape。
+            self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: wjsm_ir::constants::HEAP_OBJECT_CAPACITY_OFFSET as u64,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(32));
+            self.emit(WasmInstruction::I64ShrU);
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::I32LtU);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::Else);
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::End);
+            // 槽扫描（命中 return）。
+            self.emit_slot_scan_ret(
+                slot_addr_local,
+                self.fast_addr_scratch_idx,
+                self.computed_idx_scratch_idx,
+                key_local,
+                obj_local,
+                getter_direct,
+            );
+            // count > 4 → 宿主。
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const(4));
+            self.emit(WasmInstruction::I32GtU);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            obj_get_ret(self);
+            self.emit(WasmInstruction::End);
+        }
+
+        // 4 层后仍未命中 → 宿主 obj_get。
+        obj_get_ret(self);
+
+        self.emit(WasmInstruction::End); // 函数尾
+        self.codes.function(
+            self.current_func
+                .as_ref()
+                .expect("fast_chain helper should be initialized"),
+        );
+        self.current_func = None;
+        (
+            self.string_concat_scratch_idx,
+            self.fast_entry_scratch_idx,
+            self.fast_addr_scratch_idx,
+            self.shadow_sp_scratch_idx,
+        ) = saved;
+    }
+
+    /// 槽扫描（return 形态，供 fast_chain helper 使用）：扫描 4 个内联槽，
+    /// 数据槽命中 → 读值 return；accessor 命中 → getter 直调 helper 结果 return；
+    /// 未命中 → fallthrough。`key_local` 是 canonical 全值（低 32 = name_id）。
+    fn emit_slot_scan_ret(
+        &mut self,
+        slot_addr_local: u32,
+        addr_local: u32,
+        count_local: u32,
+        key_local: u32,
+        obj_local: u32,
+        getter_direct: u32,
+    ) {
+        for slot_index in 0..4_u32 {
+            self.emit(WasmInstruction::Block(BlockType::Empty));
+            self.emit(WasmInstruction::LocalGet(count_local));
+            self.emit(WasmInstruction::I32Const((slot_index + 1) as i32));
+            self.emit(WasmInstruction::I32LtU);
+            self.emit(WasmInstruction::BrIf(0));
+
+            let slot_offset = wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE
+                + slot_index * wjsm_ir::constants::PROP_SLOT_SIZE;
+            self.emit(WasmInstruction::LocalGet(addr_local));
+            self.emit(WasmInstruction::I64Const(slot_offset as i64));
+            self.emit(WasmInstruction::I64Add);
+            self.emit(WasmInstruction::LocalSet(slot_addr_local));
+
+            self.emit(WasmInstruction::LocalGet(slot_addr_local));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: wjsm_ir::constants::PROP_SLOT_NAME_ID_OFFSET as u64,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::LocalTee(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::LocalGet(key_local));
+            self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I64Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            // accessor 槽 → getter 直调 helper；数据槽 → 返回值。
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(32));
+            self.emit(WasmInstruction::I64ShrU);
+            self.emit(WasmInstruction::I64Const(
+                wjsm_ir::constants::FLAG_IS_ACCESSOR as i64,
+            ));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I64Const(0));
+            self.emit(WasmInstruction::I64Ne);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::LocalGet(slot_addr_local));
+            self.emit(WasmInstruction::LocalGet(obj_local));
+            self.emit(WasmInstruction::LocalGet(key_local));
+            self.emit(WasmInstruction::Call(getter_direct));
+            self.emit(WasmInstruction::Return);
+            self.emit(WasmInstruction::Else);
+            self.emit(WasmInstruction::LocalGet(slot_addr_local));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: wjsm_ir::constants::PROP_SLOT_VALUE_OFFSET as u64,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::Return);
+            self.emit(WasmInstruction::End);
+            self.emit(WasmInstruction::End);
+            self.emit(WasmInstruction::End); // 槽 Block
+        }
     }
 
     fn compile_init_globals_function(&mut self) {

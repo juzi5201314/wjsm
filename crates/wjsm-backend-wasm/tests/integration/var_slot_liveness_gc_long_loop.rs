@@ -8,11 +8,15 @@ use wjsm_ir::{BasicBlockId, Function, Instruction, Program};
 use wjsm_parser::parse_module;
 use wjsm_semantic::lower_module;
 
+// `tmp` 逃逸（写入外层 saved）阻止 escape_scalar 消除，保留下面的 liveness
+// 回归场景；若 tmp 不逃逸，EA 会把对象标量替换掉，循环体不再有 get_prop/NewObject。
 const SOURCE: &str = r#"
 let total = 0;
+let saved = null;
 for (let i = 0; i < 200000; i++) {
   const tmp = { x: i, y: i + 1 };
   total += tmp.x;
+  saved = tmp;
 }
 console.log("done", total > 0);
 "#;

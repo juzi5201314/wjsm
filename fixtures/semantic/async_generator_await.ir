@@ -67,6 +67,8 @@ module {
     c64 = string("value")
     c65 = functionref(@3)
     c66 = undefined
+    c67 = bool(true)
+    c68 = bool(false)
 
   fn @gen$asyncgen [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -154,7 +156,6 @@ module {
       call builtin.async_generator.throw(%39, %33)
       return
     bb8:
-      %42 = load var $1.$resume_val
       %43 = load var $1.input
       %44 = const c34
       %45 = add %43, %44
@@ -182,7 +183,6 @@ module {
       call builtin.async_generator.throw(%54, %48)
       return
     bb13:
-      %57 = load var $1.$resume_val
       %58 = load var $1.$generator
       %59 = const c37
       call builtin.async_generator.return(%58, %59)
@@ -208,8 +208,6 @@ module {
       %3 = const c47
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
-      %4 = load var $env
-      %5 = const c48
       %6 = const c56
       %7 = const c49
       set_prop %2, %7, %6

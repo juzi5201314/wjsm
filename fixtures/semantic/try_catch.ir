@@ -22,6 +22,8 @@ module {
     c19 = undefined
     c20 = number(42)
     c21 = string("after try")
+    c22 = bool(true)
+    c23 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

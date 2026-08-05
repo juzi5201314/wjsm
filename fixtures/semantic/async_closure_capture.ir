@@ -65,6 +65,7 @@ module {
     c62 = undefined
     c63 = functionref(@5)
     c64 = undefined
+    c65 = bool(true)
 
   fn @anon_0$async [captures: $0.undefined, $1.count] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
@@ -115,7 +116,6 @@ module {
       promise_reject %26, %22
       return
     bb5:
-      %27 = load var $2.$resume_val
       %28 = load var $2.$closure_env
       %29 = const c34
       %30 = load var $2.$closure_env

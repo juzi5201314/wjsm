@@ -27,6 +27,7 @@ module {
     c24 = number(3)
     c25 = number(1)
     c26 = string("default")
+    c27 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -92,7 +93,6 @@ module {
       %25 = stricteq %23, %24
       branch %25, bb2, bb3
     bb5:
-      %26 = const c23
       %27 = load var $0.i
       %28 = const c24
       %29 = call builtin.abstract_compare(%27, %28)

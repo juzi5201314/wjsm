@@ -88,10 +88,11 @@ fn known_no_gc_callee_omits_safepoint_spill() -> Result<()> {
     // `arguments` object. The call must be flagged no-GC so the spill is dropped.
     let program = lower(
         r#"
+let base = 1;
 function outer(o) {
-  function inc(x) { return x + 1; }
+  function inc(x) { return base; }
   let a = { v: 1 };
-  return inc(o) + a.v;
+  return inc(o) + a.v + base;
 }
 console.log(outer(1));
 "#,
@@ -123,10 +124,11 @@ fn unknown_function_expression_callee_forces_conservative_spill() -> Result<()> 
     // is forced by unknown-ness, not by the target being may-GC.
     let program = lower(
         r#"
+let base = 1;
 function outer(o) {
-  let f = function (x) { return x + 1; };
+  let f = function (x) { return base; };
   let a = { v: 1 };
-  return f(o) + a.v;
+  return f(o) + a.v + base;
 }
 console.log(outer(1));
 "#,
@@ -168,10 +170,11 @@ fn known_but_transitively_allocating_callee_spills() -> Result<()> {
     // spill at the call site.
     let program = lower(
         r#"
+let base = 1;
 function outer(o) {
-  function inner(x) { return { v: x }; }
+  function inner(x) { return { v: x, w: base }; }
   let a = { v: 1 };
-  return inner(o).v + a.v;
+  return inner(o).v + a.v + base;
 }
 console.log(outer(1));
 "#,
@@ -199,9 +202,10 @@ console.log(outer(1));
 fn binary_string_add_marks_function_may_gc() -> Result<()> {
     let program = lower(
         r#"
+let suffix = "-suffix";
 function outer(value) {
-  function concat(input) { return input + "-suffix"; }
-  return concat(value);
+  function concat(input) { return input + suffix; }
+  return concat(value) + suffix;
 }
 console.log(outer("prefix"));
 "#,

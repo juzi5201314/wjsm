@@ -45,6 +45,8 @@ module {
     c42 = string("$0.resolveA")
     c43 = number(1)
     c44 = functionref(@3)
+    c45 = bool(true)
+    c46 = bool(false)
 
   fn @arrow_0 [captures: $0.resolveA] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:

@@ -24,6 +24,8 @@ module {
     c21 = string("length")
     c22 = functionref(@0)
     c23 = undefined
+    c24 = bool(true)
+    c25 = bool(false)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.values] [entry=bb0]:
     bb0:

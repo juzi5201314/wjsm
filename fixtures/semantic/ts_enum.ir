@@ -34,6 +34,8 @@ module {
     c31 = string("Blue")
     c32 = string("Red")
     c33 = string("Green")
+    c34 = bool(true)
+    c35 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -79,37 +81,17 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = new_object(capacity=4)
       %22 = const c20
-      %23 = const c21
-      set_prop %21, %23, %22
-      %24 = const c22
-      %25 = const c23
-      set_prop %21, %24, %25
       %26 = const c24
-      %27 = const c25
-      set_prop %21, %27, %26
-      %28 = const c26
-      %29 = const c27
-      set_prop %21, %28, %29
-      %30 = const c28
-      %31 = const c29
-      set_prop %21, %31, %30
-      %32 = const c30
-      %33 = const c31
-      set_prop %21, %32, %33
-      store var $0.Color, %21
-      %34 = load var $0.Color
       %35 = const c32
       %36 = get_prop %34, %35
-      %37 = call builtin.console.log(%36)
+      %37 = call builtin.console.log(%22)
       %38 = is_exception %37
       branch %38, bb2, bb1
     bb1:
-      %40 = load var $0.Color
       %41 = const c33
       %42 = get_prop %40, %41
-      %43 = call builtin.console.log(%42)
+      %43 = call builtin.console.log(%26)
       %44 = is_exception %43
       branch %44, bb4, bb3
     bb2:

@@ -36,6 +36,8 @@ module {
     c33 = number(3)
     c34 = undefined
     c35 = string("x")
+    c36 = bool(true)
+    c37 = bool(false)
 
   fn @$module_main [has_eval] [entry=bb0]:
     bb0:

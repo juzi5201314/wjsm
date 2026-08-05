@@ -38,6 +38,8 @@ module {
     c35 = string("Right")
     c36 = string("Up")
     c37 = string("1")
+    c38 = bool(true)
+    c39 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

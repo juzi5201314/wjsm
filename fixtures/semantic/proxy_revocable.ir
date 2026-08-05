@@ -29,6 +29,8 @@ module {
     c26 = string("x")
     c27 = string("FAIL: revoked get did not throw")
     c28 = string("revoked-get-throws")
+    c29 = bool(true)
+    c30 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

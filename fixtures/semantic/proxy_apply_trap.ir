@@ -29,6 +29,8 @@ module {
     c26 = undefined
     c27 = number(3)
     c28 = number(4)
+    c29 = bool(true)
+    c30 = bool(false)
 
   fn @target [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.a, $1.b] [entry=bb0]:
     bb0:

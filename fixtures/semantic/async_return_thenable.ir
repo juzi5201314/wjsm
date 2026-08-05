@@ -48,6 +48,7 @@ module {
     c45 = undefined
     c46 = functionref(@3)
     c47 = undefined
+    c48 = bool(true)
 
   fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
@@ -108,8 +109,6 @@ module {
       %3 = const c33
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $3.arguments, %2
-      %4 = load var $env
-      %5 = const c34
       %6 = const c44
       %7 = const c35
       set_prop %2, %7, %6

@@ -32,6 +32,7 @@ module {
     c29 = number(0)
     c30 = undefined
     c31 = number(5)
+    c32 = bool(true)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -139,7 +140,6 @@ module {
       %48 = is_exception %47
       branch %48, bb16, bb15
     bb15:
-      %50 = const c29
       %51 = const c30
       %52 = is_nullish %51
       branch %52, bb17, bb18

@@ -21,6 +21,8 @@ module {
     c18 = number(inf)
     c19 = undefined
     c20 = string("abc")
+    c21 = bool(true)
+    c22 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

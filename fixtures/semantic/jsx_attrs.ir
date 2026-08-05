@@ -28,6 +28,8 @@ module {
     c25 = string("text")
     c26 = string("type")
     c27 = string("props")
+    c28 = bool(true)
+    c29 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

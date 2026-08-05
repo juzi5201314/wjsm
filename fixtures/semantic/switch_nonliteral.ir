@@ -44,6 +44,8 @@ module {
     c41 = number(1)
     c42 = string("computed match")
     c43 = string("default computed")
+    c44 = bool(true)
+    c45 = bool(false)
 
   fn @getValue [needs_prototype] [direct_callable] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -125,21 +127,16 @@ module {
       %44 = is_exception %43
       branch %44, bb14, bb13
     bb5:
-      %26 = const c25
-      %27 = const c22
-      %28 = call %27, this=%26
-      %29 = is_exception %28
-      branch %29, bb8, bb7
+      jump bb54
     bb6:
       %32 = const c26
       %33 = stricteq %25, %32
       branch %33, bb3, bb4
     bb7:
-      %31 = stricteq %25, %28
+      %31 = stricteq %25, %103
       branch %31, bb2, bb6
     bb8:
-      %30 = call builtin.exception_value(%28)
-      throw %30
+      unreachable
     bb9:
       jump bb1
     bb10:
@@ -180,17 +177,12 @@ module {
       %48 = stricteq %46, %47
       branch %48, bb16, bb20
     bb20:
-      %49 = const c30
-      %50 = const c22
-      %51 = call %50, this=%49
-      %52 = is_exception %51
-      branch %52, bb22, bb21
+      jump bb52
     bb21:
-      %54 = stricteq %46, %51
+      %54 = stricteq %46, %101
       branch %54, bb17, bb18
     bb22:
-      %53 = call builtin.exception_value(%51)
-      throw %53
+      unreachable
     bb23:
       jump bb15
     bb24:
@@ -281,4 +273,14 @@ module {
     bb50:
       %99 = call builtin.exception_value(%97)
       throw %99
+    bb51:
+      jump bb21
+    bb52:
+      %101 = const c21
+      jump bb51
+    bb53:
+      jump bb7
+    bb54:
+      %103 = const c21
+      jump bb53
 }

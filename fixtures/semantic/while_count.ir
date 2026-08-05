@@ -24,6 +24,7 @@ module {
     c21 = bool(true)
     c22 = number(5)
     c23 = number(1)
+    c24 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -73,7 +74,6 @@ module {
       store var $0.i, %21
       jump bb1
     bb1:
-      %22 = const c21
       %23 = load var $0.i
       %24 = const c22
       %25 = call builtin.abstract_compare(%23, %24)

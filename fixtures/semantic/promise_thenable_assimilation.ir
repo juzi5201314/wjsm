@@ -27,6 +27,8 @@ module {
     c24 = undefined
     c25 = functionref(@1)
     c26 = undefined
+    c27 = bool(true)
+    c28 = bool(false)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:

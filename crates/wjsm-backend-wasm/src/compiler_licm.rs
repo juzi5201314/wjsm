@@ -52,6 +52,7 @@ fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | Instruction::NewPromise { dest }
         | Instruction::CollectRestArgs { dest, .. }
         | Instruction::IsException { dest, .. }
+        | Instruction::GuardSameFunction { dest, .. }
         | Instruction::EncodeException { dest, .. }
         | Instruction::ExceptionToObject { dest, .. } => Some(*dest),
         Instruction::CallBuiltin {

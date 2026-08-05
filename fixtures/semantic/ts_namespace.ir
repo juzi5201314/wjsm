@@ -26,6 +26,8 @@ module {
     c23 = string("double")
     c24 = string("double")
     c25 = number(5)
+    c26 = bool(true)
+    c27 = bool(false)
 
   fn @double [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.n] [entry=bb0]:
     bb0:

@@ -31,6 +31,8 @@ module {
     c28 = string("A")
     c29 = number(1)
     c30 = string("1")
+    c31 = bool(true)
+    c32 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

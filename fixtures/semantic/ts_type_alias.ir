@@ -25,6 +25,8 @@ module {
     c22 = number(0)
     c23 = string("y")
     c24 = string("x")
+    c25 = bool(true)
+    c26 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -70,18 +72,10 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = new_object(capacity=4)
       %22 = const c20
-      %23 = const c21
-      set_prop %21, %23, %22
-      %24 = const c22
-      %25 = const c23
-      set_prop %21, %25, %24
-      store var $0.origin, %21
-      %26 = load var $0.origin
       %27 = const c24
       %28 = get_prop %26, %27
-      %29 = call builtin.console.log(%28)
+      %29 = call builtin.console.log(%22)
       %30 = is_exception %29
       branch %30, bb2, bb1
     bb1:

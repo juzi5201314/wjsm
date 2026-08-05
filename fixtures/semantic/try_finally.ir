@@ -24,6 +24,8 @@ module {
     c21 = string("finally")
     c22 = string("finally")
     c23 = string("after")
+    c24 = bool(true)
+    c25 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

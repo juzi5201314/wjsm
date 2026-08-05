@@ -335,6 +335,8 @@ impl Compiler {
             function_name_to_wasm_idx: HashMap::new(),
             obj_new_func_idx: 0,
             obj_get_func_idx: 0,
+            getter_direct_func_idx: 0,
+            fast_chain_func_idx: 0,
             obj_set_func_idx: 0,
             obj_delete_func_idx: 0,
             arr_new_func_idx: 0,

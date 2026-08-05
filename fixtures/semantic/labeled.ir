@@ -26,6 +26,8 @@ module {
     c23 = number(1)
     c24 = number(3)
     c25 = number(1)
+    c26 = bool(true)
+    c27 = bool(false)
 
   fn @$module_main [entry=bb0]:
     bb0:

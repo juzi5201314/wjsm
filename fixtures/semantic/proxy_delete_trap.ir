@@ -25,6 +25,7 @@ module {
     c22 = undefined
     c23 = string("deleteProperty")
     c24 = string("x")
+    c25 = bool(false)
 
   fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
     bb0:

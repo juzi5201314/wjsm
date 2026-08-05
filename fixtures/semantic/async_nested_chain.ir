@@ -99,6 +99,7 @@ module {
     c96 = undefined
     c97 = functionref(@6)
     c98 = undefined
+    c99 = bool(true)
 
   fn @c$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -140,8 +141,6 @@ module {
       %3 = const c29
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
-      %4 = load var $env
-      %5 = const c30
       %6 = const c40
       %7 = const c31
       set_prop %2, %7, %6

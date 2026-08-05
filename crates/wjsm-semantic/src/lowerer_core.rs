@@ -1177,6 +1177,8 @@ impl Lowerer {
         crate::passes::inline_for_ea::run(&mut self.module);
         // escape_scalar pass：逃逸分析 + 标量替换，消除局部 NewObject 分配。
         crate::passes::escape_scalar::run(&mut self.module);
+        // 终轮 cfg_fold：折叠 EA 删除后新死的指令、常量分支、phi 化简 + DCE。
+        crate::passes::cfg_fold::run(&mut self.module);
         Ok(self.module)
     }
 }

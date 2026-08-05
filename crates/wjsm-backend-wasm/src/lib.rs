@@ -176,6 +176,12 @@ struct Compiler {
     obj_new_func_idx: u32,
     /// WASM index of $obj_get helper.
     obj_get_func_idx: u32,
+    /// WASM index of getter 直调 helper（快链 accessor 分支共享调用）。
+    getter_direct_func_idx: u32,
+    /// WASM index of GetProp 快链 helper：(obj, key) -> i64。所有常量键 GetProp
+    /// 共享同一份"own 槽扫描 + 原型链遍历 + getter 直调"逻辑（模块级函数），
+    /// 调用点仅保留 spill + call + epilogue，控制 wasm 函数体大小。
+    fast_chain_func_idx: u32,
     /// WASM index of $obj_set helper.
     obj_set_func_idx: u32,
     /// WASM index of $obj_delete helper.
@@ -787,6 +793,7 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::Suspend { promise, .. } => promise.0,
         Instruction::GeneratorSuspend { result, .. } => result.0,
         Instruction::IsException { dest, value } => dest.0.max(value.0),
+        Instruction::GuardSameFunction { dest, callee, .. } => dest.0.max(callee.0),
         Instruction::EncodeException { dest, value } => dest.0.max(value.0),
         Instruction::ExceptionToObject { dest, value } => dest.0.max(value.0),
         Instruction::CollectRestArgs { dest, .. } => dest.0,

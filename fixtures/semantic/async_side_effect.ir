@@ -57,6 +57,7 @@ module {
     c54 = string("$0.x")
     c55 = functionref(@2)
     c56 = undefined
+    c57 = bool(true)
 
   fn @inc$async [captures: $0.undefined, $0.x] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -107,7 +108,6 @@ module {
       promise_reject %26, %22
       return
     bb5:
-      %27 = load var $1.$resume_val
       %28 = load var $1.$closure_env
       %29 = const c32
       %30 = load var $1.$closure_env

@@ -27,6 +27,8 @@ module {
     c24 = number(2)
     c25 = functionref(@0)
     c26 = undefined
+    c27 = bool(true)
+    c28 = bool(false)
 
   fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
