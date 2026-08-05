@@ -2,35 +2,45 @@
 
 这一章列出与 Node.js 或 ECMAScript 预期不一致的地方。遇到异常行为时先在这里找，能省掉一轮调试。
 
-## 内置原型方法不能作为值取出
+## 内置原型方法大多不能作为值取出
 
 `String`、TypedArray、`DataView` 的原型方法由语义层在**调用点**识别并转成 Builtin 调用，它们不是可读取的属性：
 
 ```bash
-wjsm run -e 'const s = "ab"; console.log(typeof s.slice)'   # undefined
-wjsm run -e 'const s = "ab"; console.log(s.slice(1))'       # b
+wjsm run -e 'console.log(typeof "ab".charAt)'                  # undefined
+wjsm run -e 'console.log(typeof new Uint8Array(2).fill)'       # undefined
 ```
 
 直接调用正常，取值、解构、传递为回调则拿到 `undefined`：
 
 ```js
-const slice = "ab".slice;        // undefined
+const charAt = "ab".charAt;          // undefined
 [1, 2].map(new Uint8Array(2).fill);  // 不可用
 ```
+
+`String` 有一组例外：`slice`、`concat`、`includes`、`startsWith`、`indexOf` 五个方法可以作为值取出，并在绑定 `this` 后复用：
+
+```bash
+wjsm run -e 'const slice = "ab".slice; console.log(slice.call("abcdef", 1, 3))'  # bc
+```
+
+其余 String 方法（`charAt`、`toUpperCase`、`split`、`replace` 等）仍只能在调用点使用。
 
 `Array.prototype` 是例外，它的方法是真实属性，`typeof [].map === "function"`、`Array.prototype.map` 都成立。
 
 `DataView` 的访问器同样受此影响：`dv.byteLength` 读到 `undefined`，但 `dv.getUint8(0)`、`dv.setUint32(0, x)` 可用。
 
-> <details><summary>为什么 `String.prototype.slice` 不能作为值取出来？</summary>
+> <details><summary>为什么这些方法不能作为值取出来？</summary>
 >
 > 这是个有意思的取舍。String、TypedArray、DataView 的方法由 wjsm 语义层在「看到调用形态」时直接识别——它检查 `something.slice(...)` 这种结构，识别成内置函数调用，跳过原型链查找。
 >
-> 这样做的好处是性能：每次字符串方法调用省一次属性查找、一次原型链遍历。坏处是这个方法「只存在于调用点」——你 `obj.slice` 取出来的不是函数。
+> 这样做的好处是性能：每次调用省一次属性查找、一次原型链遍历。坏处是这些方法「只存在于调用点」——你 `obj.charAt` 取出来的不是函数。
+>
+> 常用的五个 String 方法（`slice`/`concat`/`includes`/`startsWith`/`indexOf`）因为太常被取出传递，已经在属性读取路径上补了实现；其余方法按需补齐。
 >
 > 实际遇到的最常见坑：用 `arr.map` 之类的高阶函数。`Array.prototype.map` 是个真实属性，能用；但 `new Uint8Array(2).fill` 这种 TypedArray 实例的 `.fill` 取出来是 `undefined`——必须直接用 `arr.fill(value)`。
 >
-> 写代码时记住一条：**builtin 方法只能直接调用，不要取出当回调**。要包成回调就自己写一个箭头函数：
+> 写代码时记住一条：**这类 builtin 方法优先直接调用，不要取出当回调**。要包成回调就自己写一个箭头函数：
 >
 > ```js
 > const fillValue = (v) => new Uint8Array(2).fill(v);  // 自己包一层
@@ -40,14 +50,22 @@ const slice = "ab".slice;        // undefined
 
 ## 内置构造器的 instanceof
 
-用户定义的类、`Object`、`Array`、`RegExp`、`Promise` 的 `instanceof` 正常。`Map`、`Set`、`WeakMap`、`WeakSet` 上的 `instanceof` 会抛 `TypeError: Function has non-object prototype property`：
+用户定义的类、`Object`、`Array`、`RegExp`、`Promise` 的 `instanceof` 正常。`Map`、`Set`、`WeakMap`、`WeakSet` 上的 `instanceof` 不返回布尔值，而是产生一个异常值：
 
 ```bash
-wjsm run -e 'console.log([] instanceof Array)'      # true
-wjsm run -e 'console.log(new Map() instanceof Map)' # TypeError
+wjsm run -e 'console.log(new Map() instanceof Map)'   # [exception:1]
 ```
 
-判定这些类型时改用行为检测，或 `Object.prototype.toString.call(value)`。
+这个异常值被后续运算消费的行为不统一，按实测记录：
+
+| 消费方式 | 结果 |
+| --- | --- |
+| 直接 `console.log` | 输出 `[exception:1]` |
+| `if` 条件判断、赋值给变量 | 抛可捕获的 `TypeError: Function has non-object prototype property` |
+| `typeof` | `number` |
+| `!` 取反 | `false` |
+
+Node.js 对 `new Map() instanceof Map` 返回 `true`。判定这些类型时改用行为检测，或 `Object.prototype.toString.call(value)`。
 
 ## Intl 与 locale 敏感方法
 
@@ -98,16 +116,16 @@ let x = 1;
 f();               // Node 输出 1；wjsm 报 cannot access `x` before initialisation
 ```
 
-这条规则同样命中类体内引用自身类名的写法，因为类绑定在类定义求值完成前处于 TDZ：
+类名引用按位置区分：方法体、构造器、getter/setter 体与实例字段初始化器属于延迟执行的成员，引用自身类名可用；静态字段初始值、静态块、计算属性键与 `extends` 子句在类定义求值期间执行，引用类名仍报 TDZ：
 
 ```js
 class C {
-  static s = 1;
-  m() { return C.s }   // 报 cannot access `C` before initialisation
+  m() { return C.name }   // 可用
+  static s = C;           // 报 cannot access `C` before initialisation
 }
 ```
 
-改写方式是把引用换成不依赖外层绑定的形式：类内用 `this.constructor.s` 或 `new.target`，普通函数把变量作为参数传入，或把声明提到使用之前。
+改写方式是把引用换成不依赖外层绑定的形式：类内用 `this.constructor` 或 `new.target`，普通函数把变量作为参数传入，或把声明提到使用之前。
 
 ## TypeScript 构造器参数属性不生效
 

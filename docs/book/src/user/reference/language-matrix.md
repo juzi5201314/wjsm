@@ -26,7 +26,7 @@
 | 继承与 `super` | 可用 | |
 | getter / setter | 可用 | 含类原型与 `defineProperty` |
 | 计算属性名 | 可用 | |
-| 方法体内引用类名 | 不可用 | 静态 TDZ 拒绝，用 `this.constructor` 替代 |
+| 方法体内引用类名 | 可用（延迟成员） | 方法、构造器、getter/setter、实例字段初始化器内可用；静态字段初始值、`extends` 等类定义期求值的位置仍报 TDZ |
 
 > <details><summary>「不可用」不一定是真的不能跑</summary>
 >
@@ -53,8 +53,8 @@
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | `Object`、`Array`、`Function` | 可用 | `Array.prototype` 方法是真实属性 |
-| `String` 方法 | 仅调用点 | 取值得到 `undefined` |
-| `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 这四者上的 `instanceof` 会抛 `TypeError` |
+| `String` 方法 | 多数仅调用点 | `slice`/`concat`/`includes`/`startsWith`/`indexOf` 可取值传递，其余方法取值得到 `undefined` |
+| `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 这四者上的 `instanceof` 产生异常值而非布尔，见[限制](../runtime/limitations.md) |
 | `Promise` 及组合子 | 可用 | 含 `allSettled`、`withResolvers` |
 | `Proxy` / `Reflect` | 可用 | |
 | `BigInt` | 可用 | |

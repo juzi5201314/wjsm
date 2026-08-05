@@ -12,12 +12,14 @@
 | `WJSM_SHADOW_STACK_MAX` | 字节或 `K`/`M`/`G` | `16M` | 影子栈软上限；被 `--shadow-stack-max` 覆盖 |
 | `WJSM_COMPILER` | `winch`（大小写不敏感），其他值按 Cranelift | Cranelift | 选择 Wasmtime 编译器；启用 inspector 时强制 Cranelift |
 | `WJSM_OPT_LEVEL` | `none` \| `speed_and_size` \| 其他 | 默认等级 | Cranelift 优化等级 |
+| `WJSM_DISABLE_LICM` | `0`/`false`/`off`/空/未设置保持启用 | 启用 | 关闭编译期循环不变量调用提升，供基准对照 |
 
 ## 缓存与启动
 
 | 变量 | 取值 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `WJSM_CACHE_DIR` | 目录路径 | `$HOME/.cache/wjsm` | 编译缓存位置；空值等同未设置。`HOME` 也不可用时缓存禁用 |
+| `WJSM_NO_BUILTIN_CACHE` | 任意非空值 | 关闭 | 禁用 builtin IR 段缓存，每次启动完整 lower builtin 段 |
 | `WJSM_STARTUP_SNAPSHOT` | `0`/`false`/`off` 关闭 | 启用 | 启动快照开关 |
 | `WJSM_STARTUP_SNAPSHOT_DEBUG` | `1`/`true`/`on` 启用 | 关闭 | 输出快照恢复诊断 |
 

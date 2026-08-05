@@ -44,8 +44,17 @@
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `WJSM_CACHE_DIR` | 编译缓存目录 | `$HOME/.cache/wjsm` |
+| `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段缓存 | 未设置 |
 
 `WJSM_CACHE_DIR=`（空值）不禁用缓存，回落到 `$HOME/.cache/wjsm`。
+
+### 编译优化
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `WJSM_DISABLE_LICM` | 关闭 IR 层循环不变量纯调用提升（`0`/`false`/`off`/空/未设置保持启用） | 启用 |
+
+`WJSM_DISABLE_LICM` 的读取在 `compiler_module/module_compile.rs` 的 `licm_disabled_by_env`。bench runner 给 wjsm 子进程设 `WJSM_DISABLE_LICM=1`，避免循环内纯 `work()` 被提升出循环测不到真实开销。
 
 ### 测试
 

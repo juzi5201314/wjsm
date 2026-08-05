@@ -10,11 +10,13 @@
 
 ## 集合
 
-`collections.rs` 实现 Map/Set/WeakMap/WeakSet：
+`wjsm-builtins` 的 `collections.rs` 定义 Map/Set/WeakMap/WeakSet 的语义算法入口，而 Map/Set 的存储核心在 `wjsm-host-wasm/src/runtime_collections.rs`：
 
-- Map/Set 用对象表存储键值对，GC 跟踪键的可达性。
-- WeakMap/WeakSet 的键是弱引用，GC 回收键时自动清除条目。
-- `WeakRef` 和 `FinalizationRegistry` 在 `weakref_finalization.rs` 实现。
+- **Map/Set 哈希索引**：keys/values（Set 仅 values）用保持插入顺序的平行 `Vec` 存储；`index` 是 SameValueZero 稳定哈希 → 槽位索引的映射（仅存活键）。删除打 tombstone（`deleted` 平行标记）以保持迭代顺序，tombstone 过半时压缩重建（剔除 tombstone 槽位并重建索引）。哈希冲突（不同键同哈希）回退存活槽位线性扫描保证正确。
+- **WeakMap/WeakSet** 的键是弱引用，GC 回收键时自动清除条目。
+- **`WeakRef` 和 `FinalizationRegistry`** 在 `weakref_finalization.rs` 实现。
+
+这套结构把「查找」从 O(n) 线性扫描降到哈希定位，同时保序——`Map` 的迭代顺序仍严格等于插入顺序（tombstone 不物理移动元素）。
 
 ## 数组
 

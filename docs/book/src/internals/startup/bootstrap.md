@@ -33,4 +33,4 @@ immortal 对象是 bootstrap 创建的永生对象，GC 不回收。它们的句
 
 - [启动路径概览](startup-path.md)
 - [快照捕获与恢复](capture-and-restore.md)
-- [ABI 哈希与失效策略](abi-hash-and-invalidation.md)
+- [ABI Hash 与兼容性指纹](abi-hash.md)

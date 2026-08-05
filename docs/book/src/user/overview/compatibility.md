@@ -8,7 +8,7 @@ wjsm 不维护静态的兼容性 Roadmap 表。实际支持范围由三类可执
 
 | 证据 | 位置 | 含义 |
 | --- | --- | --- |
-| 行为 fixture | `fixtures/happy`（1357 项）、`fixtures/errors`（158 项） | 已验证的可观察行为与错误信息 |
+| 行为 fixture | `fixtures/happy`（676 项）、`fixtures/errors`（78 项） | 已验证的可观察行为与错误信息 |
 | 模块 fixture | `fixtures/modules`（71 项） | 已验证的模块加载与包解析行为 |
 | Test262 | `wjsm-test262` runner + `test262` 子模块 | ECMAScript 一致性覆盖情况 |
 

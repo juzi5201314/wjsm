@@ -85,6 +85,7 @@ WJSM=target/release/wjsm-cli target/release/wjsm-bench --runtimes node   # 只�
 - **冷档只针对 wjsm**：node 没有等效的"每进程编译缓存关闭"开关，其冷热由 OS 页缓存决定，hyperfine `--warmup` 已覆盖。报告如实记录，不假装公平。
 - **GC 只比用户可观察结果**：wjsm 的 host GC 与 V8 的 JIT 内 GC 机制不同，只比较端到端时间与 RSS，不比内部指标。
 - **排除 HTTP / fs / npm**：场景只用核心语言能力 + `performance` + `console.log`，不含 I/O，避免系统调用与页面缓存干扰。
+- **LICM 禁用**：bench runner 给 wjsm 子进程设 `WJSM_DISABLE_LICM=1`（node 忽略该变量）。wjsm 的循环不变量调用提升会把场景里的纯 `work()` 调用移出循环只执行一次——fib30 这类场景提升后 `ns_per_op` 只剩空转开销，测不到真实调用成本。禁用 LICM 保证测到循环内的真实开销。
 - **首跑数字即基线**：本套件定位是量化基线 + 回归跟踪，不承诺持平 Node；后续改动对比同报告结构即可。
 - **不要并发跑 `--cold`**：固定冷缓存目录 `/tmp/wjsm-bench-cold-cache` 会被两个进程互相清空。
 

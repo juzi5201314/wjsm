@@ -14,7 +14,15 @@
 
 ## 为什么 per-flavor
 
-不同 GC flavor 的 support module 有不同的 barrier、alloc、scan 函数。mark-sweep 不需要读屏障，ZGC 需要。per-flavor cwasm 让运行时只加载当前 GC 对应的实现，减小内存占用。
+不同 GC flavor 的 support module 有不同的 barrier、alloc、scan 函数：
+
+| GC | 需要的 support 函数 |
+| --- | --- |
+| Mark-Sweep | 分配、标记、清除 |
+| G1 | 分配、SATB 写屏障、标记、remset |
+| ZGC | 分配、着色指针读屏障、代际写屏障、并发标记、转发 |
+
+per-flavor cwasm 让运行时只加载当前 GC 对应的实现，减小内存占用。
 
 ## 加载时机
 

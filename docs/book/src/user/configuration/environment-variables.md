@@ -28,6 +28,7 @@ WJSM_GC=bogus wjsm run app.js
 | `WJSM_STARTUP_SNAPSHOT` | `0`、`false`、`off` 关闭启动快照，其他值或未设置即启用 |
 | `WJSM_STARTUP_SNAPSHOT_DEBUG` | `1`、`true`、`on` 打开快照诊断输出 |
 | `WJSM_CACHE_DIR` | 编译缓存目录；非空值优先，为空或未设置时回落到 `$HOME/.cache/wjsm` |
+| `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段缓存，lower 阶段每次完整重建 builtin 模块段 |
 
 两个来源都不可用时（`WJSM_CACHE_DIR` 空且 `HOME` 空）缓存禁用，此时 `wjsm cache stats` 打印 `Cache disabled`。
 
@@ -37,6 +38,9 @@ WJSM_GC=bogus wjsm run app.js
 | --- | --- |
 | `WJSM_COMPILER` | `winch`（大小写不敏感）选择 Winch，其他值用 Cranelift |
 | `WJSM_OPT_LEVEL` | `none`、`speed_and_size`，其他值用默认等级 |
+| `WJSM_DISABLE_LICM` | `0`、`false`、`off`、空值或未设置时保持启用；其他值关闭循环不变量调用提升 |
+
+`WJSM_DISABLE_LICM` 面向性能对照实验：wjsm 在编译期会把循环体内的纯函数调用提升到循环外只执行一次，关闭它可以让基准测到循环内的真实调用成本（`wjsm-bench` 就是这么用的）。日常使用没有理由关闭。
 
 ## 系统能力
 

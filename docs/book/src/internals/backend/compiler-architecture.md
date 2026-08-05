@@ -32,12 +32,14 @@
 
 `compiler_module/module_compile.rs` 的 `compile_module` 按固定顺序推进：
 
-1. **Pass 0**：`GcAnalysis::analyze(module)` 做模块级 GC 分析，并记录源文件路径。
-2. **Pass 1**：遍历所有 IR 函数登记 WASM 函数索引、参数个数、`needs_prototype`、函数表下标与 source span。模块入口 `$module_main` 在 Normal 模式用 Type 4（`() -> i64`），Eval 模式用 Type 3（`(i64) -> i64`）；其余 JS 函数统一 Type 12。
-3. **导出入口**：Normal 模式导出 `main`，Eval 模式导出 `__eval_entry`。
-4. **预留 helper 索引**：绑定 support helper 与 `Array.prototype` 方法表，使用户函数编译时索引已确定。
-5. **函数体编译**：逐函数生成指令。
-6. **收尾**：`finish()` 组装各 section 成模块字节。
+1. **空跳转块消除**：`eliminate_empty_jump_blocks` 清洗 CFG——语句级 `is_exception` 分叉常落到无指令的空 continue 跳板，它产生的非循环头后向边会把整个函数降级为 cfg 状态机分派（循环性能约 2 倍损失），必须在分析前消除。
+2. **LICM（循环不变量纯调用提升）**：`compiler_licm.rs` 扫描每个函数的自然循环，把满足「callee 已知 ∧ `!may_gc` ∧ `!can_throw` ∧ 不读写持久状态 ∧ 参数循环不变」的直接调用移到循环头前的 preheader 只执行一次。`WJSM_DISABLE_LICM` 生效时整体跳过。Cranelift 的 egraph LICM 只提升 pure 节点而把 `call` 硬编码为有副作用，wasm call 永远不会被 Cranelift 移出循环，所以这一步必须在 wjsm IR 层做。
+3. **Pass 0**：`F64Analysis::analyze(module)` 做 f64 值类型传播分析，`GcAnalysis::analyze` 做模块级 GC 分析。LICM 无提升时复用提升前的分析结果（省一轮重分析）；有提升则用变换后的 IR 重新分析。
+4. **Pass 1**：遍历所有 IR 函数登记 WASM 函数索引、参数个数、`needs_prototype`、函数表下标与 source span。模块入口 `$module_main` 在 Normal 模式用 Type 4（`() -> i64`），Eval 模式用 Type 3（`(i64) -> i64`）；其余 JS 函数统一 Type 12。
+5. **导出入口**：Normal 模式导出 `main`，Eval 模式导出 `__eval_entry`。
+6. **预留 helper 索引**：绑定 support helper 与 `Array.prototype` 方法表，使用户函数编译时索引已确定。
+7. **函数体编译**：逐函数生成指令。
+8. **收尾**：`finish()` 组装各 section 成模块字节。
 
 先登记全部函数再编译函数体，是因为函数体内的直接调用与 `call_indirect` 都需要提前确定索引。
 
@@ -53,13 +55,13 @@
 
 ## 子模块划分
 
-编译器按职责切成目录：
-
 - `compiler_core.rs`：section 初始化、import 构造、global 布局。
 - `compiler_module/`：模块级编排（`module_compile`、`module_setup`、`module_bootstrap`）。
 - `compiler_instructions/`：指令翻译（`instr_main`、`instr_calls`、`instr_helpers`、`instr_super`）。
-- `compiler_control/`：控制流（`control_branch`、`control_structured`、`control_switch`、`control_analysis`、`control_locals`）。
+- `compiler_control/`：控制流（`control_branch`、`control_structured`、`control_switch`、`control_analysis`、`control_locals`）与空跳转块消除。
 - `compiler_builtins*.rs`：Builtin 分派，按 core / collections / string_math / async_proxy / runtime 分组。
+- `analysis_f64.rs`：f64 值类型传播分析（`known_f64`/`known_bool`/`param_is_f64` 三表）、函数级 `can_throw`/`returns_f64` 分析、死异常块判定。
+- `compiler_licm.rs`：循环不变量纯调用提升，消费 F64Analysis 与 GcAnalysis 结果。
 - `analysis_liveness.rs` / `analysis_value_ty.rs` / `compiler_gc_analysis.rs`：活跃性、值类型与 GC 分析。
 - `host_import_registry/`：host import 规格表。
 - `support_module.rs` / `shared_types.rs`：support 模块与共享 type section。

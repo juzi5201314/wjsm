@@ -1,6 +1,6 @@
 # Workspace crate 地图
 
-这一章给出 15 个 workspace 成员各自的职责、公开面和规模，用于判断某个改动应该落在哪个 crate。
+这一章给出 16 个 workspace 成员各自的职责、公开面和规模，用于判断某个改动应该落在哪个 crate。
 
 ## 成员清单
 
@@ -23,6 +23,7 @@
 | `wjsm-cli` | 参数模型、配置合并、命令实现 | `clap`、`wjsm-*` | 9 / 4649 |
 | `wjsm-test262` | Test262 runner，子进程与并发预算 | `clap`、`rayon`、`comfy-table` | 5 / 1836 |
 | `wjsm-gc-bench` | GC 基准 runner 与报告 | `wjsm-runtime`、`sysinfo` | 11 / 724 |
+| `wjsm-bench` | wjsm × Node.js 跨运行时基准 harness | `clap`、`hyperfine`（外部命令）、`serde_json` | 7 / 971 |
 
 > <details><summary>为什么 `wjsm-host-wasm` 占 70% 代码量？</summary>
 >
@@ -56,6 +57,7 @@
 | 新 Node 内置模块 | `wjsm-module` 元数据 + `wjsm-host-wasm` 支撑 |
 | GC 或对象布局 | `wjsm-gc`，必要时同步快照格式 |
 | 新命令或参数 | `wjsm-cli` |
+| 新基准场景 | `bench/scenarios/*.js`（双运行时同源） |
 
 ## 相关章节
 

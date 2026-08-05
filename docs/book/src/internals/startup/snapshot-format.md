@@ -54,6 +54,6 @@
 
 ## 深入了解
 
-- [ABI 哈希如何组合](abi-hash-and-invalidation.md)
+- [ABI Hash 与兼容性指纹](abi-hash.md)
 - [快照捕获与恢复的流程](capture-and-restore.md)
 - [启动路径概览](startup-path.md)

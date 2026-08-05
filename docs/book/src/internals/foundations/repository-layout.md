@@ -33,8 +33,8 @@ wjsm/
 >
 > 它们测的「行为类型」不同：
 >
-> - **`fixtures/happy`**：跑应该成功的程序，验证输出与 `.expected` 文件一致。约 1357 项。
-> - **`fixtures/errors`**：跑会失败的程序，验证错误信息与位置。约 158 项。
+> - **`fixtures/happy`**：跑应该成功的程序，验证输出与 `.expected` 文件一致。约 676 项。
+> - **`fixtures/errors`**：跑会失败的程序，验证错误信息与位置。约 78 项。
 > - **`fixtures/modules`**：多文件项目，验证模块图、bundling、require 缓存等。约 71 项。
 > - **`fixtures/semantic`**：IR 文本快照，验证 lowering 结果。123 项左右，由 `lowering_snapshots` 测试使用。
 >
@@ -50,8 +50,8 @@ wjsm/
 
 | 套件 | 内容 | 规模 |
 | --- | --- | --- |
-| `fixtures/happy` | 成功路径的可观察输出 | 约 1357 项 |
-| `fixtures/errors` | 期望报错的用例 | 约 158 项 |
+| `fixtures/happy` | 成功路径的可观察输出 | 约 676 项 |
+| `fixtures/errors` | 期望报错的用例 | 约 78 项 |
 | `fixtures/modules` | 模块系统与运行时加载 | 约 71 项 |
 | `fixtures/semantic` | IR lowering 快照 | 由 `lowering_snapshots` 使用 |
 
