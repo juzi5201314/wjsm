@@ -393,6 +393,14 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "canonicalize_name_id",
+        type_idx: 10,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::CanonicalizeNameId,
+        )),
+        group: None,
+    },
+    HostImportSpec {
         name: "string_to_array_index",
         type_idx: 10,
         key: Some(HostImportKey::Special(

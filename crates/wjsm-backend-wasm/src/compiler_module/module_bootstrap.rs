@@ -391,6 +391,9 @@ impl Compiler {
         if is_module_entry_ir_function(function.name()) && self.mode == CompileMode::Normal {
             // P2.2: globals 初始化在 __wjsm_bootstrap_once 中执行（bootstrap_done 检查之后），
             // 确保 run_bootstrap_only 直接调用 bootstrap 时也能正确初始化 globals。
+            // canonical name_id globals 必须在每个模块（含运行时 require 的模块）的
+            // main prologue 初始化，否则 fast chain 慢路径以 key=0 查属性。
+            self.emit_canonical_name_id_globals_init();
             self.emit_startup_phase_call(self.bootstrap_func_idx);
             self.emit_startup_phase_call(self.init_function_props_func_idx);
         }

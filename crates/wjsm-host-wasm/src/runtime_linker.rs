@@ -236,6 +236,16 @@ pub(super) fn register_common_bridges(
         },
     );
     linker.define(&mut *store, "env", "symbol_property_key", f)?;
+    // canonicalize_name_id: convert a memory-string name_id into its runtime-string id.
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+            // The import ABI carries the low 32-bit encoded name_id in an i64.
+            crate::property_key::canonicalize_v2_name_id(&mut caller, key as u32)
+                .map_or(-1, |name_id| i32::from_ne_bytes(name_id.to_ne_bytes()))
+        },
+    );
+    linker.define(&mut *store, "env", "canonicalize_name_id", f)?;
     // string_to_array_index：key 为「规范数字索引字符串」（CanonicalNumericIndexString，
     // 范围 [0, 2^31)）时返回该索引，否则 -1。用于 a["5"] 这类字符串键索引数组——
     // "5"→5（元素），"05"/"5.0"/"x"/" 5"/"length"→-1（命名属性）。

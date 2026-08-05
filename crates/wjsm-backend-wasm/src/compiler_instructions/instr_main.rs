@@ -1,6 +1,16 @@
 use super::*;
 
 impl Compiler {
+    fn canonical_global_for_ptr(&self, ptr: u32) -> Option<u32> {
+        self.canonical_name_id_globals
+            .iter()
+            .find_map(|(name, &global_idx)| {
+                (self.string_ptr_cache.get(name) == Some(&ptr)).then_some(global_idx)
+            })
+    }
+}
+
+impl Compiler {
     pub(crate) fn compile_instruction(
         &mut self,
         module: &IrModule,
@@ -445,12 +455,22 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::GetProp { dest, object, key } => {
-                // GC safepoint：obj_get 内部经 host import 可能触发 GC。
+                // Constant string keys use a preinitialized canonical name_id global.
+                if let Some(&ptr) = self.const_string_ptrs.get(&key.0)
+                    && !matches!(self.mode, CompileMode::Eval)
+                    && let Some(canonical_global_idx) = self.canonical_global_for_ptr(ptr)
+                {
+                    let spill = self.current_spill_locals();
+                    self.emit_get_prop_fast_chain(dest.0, object.0, canonical_global_idx, &spill)?;
+                    return Ok(false);
+                }
+                // Non-constant keys / Eval mode use the original host path.
+                // 非常量键 / Eval 模式 → 原慢路径（host import）。
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);
                 // Pass full boxed i64 value — helper resolves tag internally.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-                // Key：常量字符串键直接内联 name_id（数据段偏移），免 symbol_property_key。
+                // Key: constant strings retain the raw pointer for the host helper.
                 if let Some(&ptr) = self.const_string_ptrs.get(&key.0) {
                     self.emit(WasmInstruction::I32Const(ptr as i32));
                 } else {
@@ -459,14 +479,23 @@ impl Compiler {
                         self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
                     ));
                 }
-                // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit_safepoint_spill_epilogue(spill.len());
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
             Instruction::SetProp { object, key, value } => {
-                // GC safepoint：obj_set 内部经 host import 可能触发 GC。
+                // DEBUG: disabled to isolate bug
+                if false
+                    && let Some(&ptr) = self.const_string_ptrs.get(&key.0)
+                    && !matches!(self.mode, CompileMode::Eval)
+                    && let Some(canonical_global_idx) = self.canonical_global_for_ptr(ptr)
+                {
+                    let spill = self.current_spill_locals();
+                    self.emit_set_prop_fast_chain(object.0, canonical_global_idx, value.0, &spill)?;
+                    return Ok(false);
+                }
+                // 非常量键 / Eval 模式 → 原慢路径（host import）。
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);
                 // Pass full boxed i64 value — helper resolves tag internally.
@@ -1023,5 +1052,378 @@ impl Compiler {
                 Ok(false)
             }
         }
+    }
+    /// Emit the inline own-property read chain used for constant string keys.
+    fn emit_get_prop_fast_chain(
+        &mut self,
+        dest: u32,
+        object: u32,
+        canonical_global_idx: u32,
+        spill: &[u32],
+    ) -> Result<()> {
+        let obj_local = self.local_idx(object);
+        let dest_local = self.local_idx(dest);
+        let slot_addr_local = self.call_env_obj_scratch();
+
+        // The outer block is the successful fast-path exit. The inner block is
+        // the common target for every fast-path miss before the host call.
+        self.emit(WasmInstruction::Block(BlockType::Empty));
+        self.emit(WasmInstruction::Block(BlockType::Empty));
+
+        // (1) A boxed object's tag is stored in bits 32..36.
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::BrIf(0));
+
+        // (2) Read the memory64 handle-table entry atomically.
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I64ExtendI32U);
+        self.emit(WasmInstruction::I64Const(3));
+        self.emit(WasmInstruction::I64Shl);
+        self.emit(WasmInstruction::I64AtomicLoad(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+
+        // (3) Only stable young/old and pinned-old entries can be read without
+        // crossing a GC relocation or reclamation point.
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I32Const(0xFFFF));
+        self.emit(WasmInstruction::I32And);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(2));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::I32Or);
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(5));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::I32Or);
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::BrIf(0));
+
+        // (4) Decode the object address from the stable entry.
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(16));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::LocalSet(self.fast_addr_scratch_idx));
+
+        // (5) The heap header's byte at offset four identifies ordinary
+        // objects. Load the full header as an i64, as required by the V2 ABI.
+        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+        self.emit(WasmInstruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xFF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(wjsm_ir::HEAP_TYPE_OBJECT as i64));
+        self.emit(WasmInstruction::I64Ne);
+        self.emit(WasmInstruction::BrIf(0));
+
+        // (6-7) Shape is capacity | (count << 32). The count is enough for
+        // the bounded scan because the heap maintains count <= capacity.
+        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+        self.emit(WasmInstruction::I64Load(MemArg {
+            offset: wjsm_ir::constants::HEAP_OBJECT_CAPACITY_OFFSET as u64,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+        // Malformed metadata must not scan beyond the allocated capacity.
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I32LtU);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::End);
+
+        // (8) Check the four inline slots. Each slot has its own skip block so
+        // that Br(0) skips only the current slot when count is too small. From
+        // the accessor branch below the labels are: accessor If (0), name If
+        // (1), slot block (2), fast-fail block (3), done block (4).
+        for slot_index in 0..4_u32 {
+            self.emit(WasmInstruction::Block(BlockType::Empty));
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const((slot_index + 1) as i32));
+            self.emit(WasmInstruction::I32LtU);
+            self.emit(WasmInstruction::BrIf(0));
+
+            let slot_offset = wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE
+                + slot_index * wjsm_ir::constants::PROP_SLOT_SIZE;
+            self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+            self.emit(WasmInstruction::I64Const(slot_offset as i64));
+            self.emit(WasmInstruction::I64Add);
+            self.emit(WasmInstruction::LocalSet(slot_addr_local));
+
+            self.emit(WasmInstruction::LocalGet(slot_addr_local));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: wjsm_ir::constants::PROP_SLOT_NAME_ID_OFFSET as u64,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::LocalTee(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::GlobalGet(canonical_global_idx));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+
+            // Accessors need the host path (which invokes the getter with the
+            // correct receiver). Data slots can return directly from memory.
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(32));
+            self.emit(WasmInstruction::I64ShrU);
+            self.emit(WasmInstruction::I64Const(
+                wjsm_ir::constants::FLAG_IS_ACCESSOR as i64,
+            ));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I64Const(0));
+            self.emit(WasmInstruction::I64Ne);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::Br(3));
+            self.emit(WasmInstruction::Else);
+            self.emit(WasmInstruction::LocalGet(slot_addr_local));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: wjsm_ir::constants::PROP_SLOT_VALUE_OFFSET as u64,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::LocalSet(dest_local));
+            self.emit(WasmInstruction::Br(4));
+            self.emit(WasmInstruction::End);
+            self.emit(WasmInstruction::End);
+            self.emit(WasmInstruction::End);
+        }
+
+        self.emit(WasmInstruction::End);
+
+        // Slow path: spill only around the host call, never around the pure
+        // memory fast path above.
+        self.emit_safepoint_spill_prologue(spill);
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::GlobalGet(canonical_global_idx));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+        self.emit_safepoint_spill_epilogue(spill.len());
+        self.emit(WasmInstruction::LocalSet(dest_local));
+
+        self.emit(WasmInstruction::End);
+        Ok(())
+    }
+
+    /// Emit the inline own-property write chain used for constant string keys.
+    /// Only writable, non-accessor own data slots are updated inline; every
+    /// other case uses the host helper for complete setter/prototype semantics.
+    fn emit_set_prop_fast_chain(
+        &mut self,
+        object: u32,
+        canonical_global_idx: u32,
+        value: u32,
+        spill: &[u32],
+    ) -> Result<()> {
+        let obj_local = self.local_idx(object);
+        let val_local = self.local_idx(value);
+        let slot_addr_local = self.call_env_obj_scratch();
+
+        self.emit(WasmInstruction::Block(BlockType::Empty));
+        self.emit(WasmInstruction::Block(BlockType::Empty));
+
+        // (1) Object tag check. A failed check branches to fast_fail.
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::BrIf(0));
+
+        // (2) Atomic handle-table entry load.
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I64ExtendI32U);
+        self.emit(WasmInstruction::I64Const(3));
+        self.emit(WasmInstruction::I64Shl);
+        self.emit(WasmInstruction::I64AtomicLoad(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+
+        // (3) Stable handle state check: 1, 2, or 5.
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I32Const(0xFFFF));
+        self.emit(WasmInstruction::I32And);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(2));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::I32Or);
+        self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+        self.emit(WasmInstruction::I32Const(5));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::I32Or);
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::BrIf(0));
+
+        // (4) Decode object address.
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(16));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::LocalSet(self.fast_addr_scratch_idx));
+
+        // (5) Confirm the V2 heap type is an ordinary object.
+        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+        self.emit(WasmInstruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xFF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(wjsm_ir::HEAP_TYPE_OBJECT as i64));
+        self.emit(WasmInstruction::I64Ne);
+        self.emit(WasmInstruction::BrIf(0));
+
+        // (6-7) Read shape and retain its property count in the i32 scratch.
+        self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+        self.emit(WasmInstruction::I64Load(MemArg {
+            offset: wjsm_ir::constants::HEAP_OBJECT_CAPACITY_OFFSET as u64,
+            align: 3,
+            memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+        }));
+        self.emit(WasmInstruction::LocalSet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(self.computed_idx_scratch_idx));
+
+        // (8) Scan four own slots. In the matching-slot condition, branch
+        // depths are writable If (0), name If (1), slot block (2), fast_fail
+        // (3), and done (4).
+        for slot_index in 0..4_u32 {
+            self.emit(WasmInstruction::Block(BlockType::Empty));
+            self.emit(WasmInstruction::LocalGet(self.computed_idx_scratch_idx));
+            self.emit(WasmInstruction::I32Const((slot_index + 1) as i32));
+            self.emit(WasmInstruction::I32LtU);
+            self.emit(WasmInstruction::BrIf(0));
+
+            let slot_offset = wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE
+                + slot_index * wjsm_ir::constants::PROP_SLOT_SIZE;
+            self.emit(WasmInstruction::LocalGet(self.fast_addr_scratch_idx));
+            self.emit(WasmInstruction::I64Const(slot_offset as i64));
+            self.emit(WasmInstruction::I64Add);
+            self.emit(WasmInstruction::LocalSet(slot_addr_local));
+
+            self.emit(WasmInstruction::LocalGet(slot_addr_local));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: wjsm_ir::constants::PROP_SLOT_NAME_ID_OFFSET as u64,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::LocalTee(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(0xFFFF_FFFF));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::GlobalGet(canonical_global_idx));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+
+            // Require FLAG_WRITABLE and reject FLAG_IS_ACCESSOR.
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(32));
+            self.emit(WasmInstruction::I64ShrU);
+            self.emit(WasmInstruction::I64Const(
+                wjsm_ir::constants::FLAG_WRITABLE as i64,
+            ));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I64Const(0));
+            self.emit(WasmInstruction::I64Ne);
+            self.emit(WasmInstruction::LocalGet(self.fast_entry_scratch_idx));
+            self.emit(WasmInstruction::I64Const(32));
+            self.emit(WasmInstruction::I64ShrU);
+            self.emit(WasmInstruction::I64Const(
+                wjsm_ir::constants::FLAG_IS_ACCESSOR as i64,
+            ));
+            self.emit(WasmInstruction::I64And);
+            self.emit(WasmInstruction::I64Const(0));
+            self.emit(WasmInstruction::I64Eq);
+            self.emit(WasmInstruction::I32And);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::LocalGet(slot_addr_local));
+            self.emit(WasmInstruction::LocalGet(val_local));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: wjsm_ir::constants::PROP_SLOT_VALUE_OFFSET as u64,
+                align: 3,
+                memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
+            }));
+            self.emit(WasmInstruction::Br(4));
+            self.emit(WasmInstruction::Else);
+            self.emit(WasmInstruction::Br(3));
+            self.emit(WasmInstruction::End);
+            self.emit(WasmInstruction::End);
+            self.emit(WasmInstruction::End);
+        }
+
+        self.emit(WasmInstruction::End);
+
+        // Slow path for non-objects, unstable handles, prototype/accessor
+        // semantics, missing slots, and non-writable data properties.
+        self.emit_safepoint_spill_prologue(spill);
+        self.emit(WasmInstruction::LocalGet(obj_local));
+        self.emit(WasmInstruction::GlobalGet(canonical_global_idx));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+        self.emit_safepoint_spill_epilogue(spill.len());
+
+        self.emit(WasmInstruction::End);
+        Ok(())
     }
 }

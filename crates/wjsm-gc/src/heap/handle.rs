@@ -208,7 +208,7 @@ impl HandleTableV2 {
         }
         let raw = self
             .next_handle
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |next| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |next| {
                 (next <= u64::from(u32::MAX)).then_some(next + 1)
             })
             .map_err(|_| HandleTableError::HandleExhausted)?;

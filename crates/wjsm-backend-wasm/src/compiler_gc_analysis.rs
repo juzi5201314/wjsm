@@ -204,7 +204,7 @@ impl GcAnalysis {
                         }
 
                         // SuperCall/ConstructCall：构造调用几乎必分配，保守 may-GC
-                        Instruction::SuperCall { .. } | Instruction::ConstructCall { .. } => {
+                        Instruction::SuperCall { .. } => {
                             direct_may_gc[func_idx] = true;
                         }
 

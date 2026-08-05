@@ -27,7 +27,7 @@ fn is_env_name(name: &str) -> bool {
 }
 
 /// 指令的 ValueId 操作数（uses）。与后端 `analysis_liveness` 的收集规则一致。
-fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
+pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
     use Instruction::*;
     match ins {
         Binary { lhs, rhs, .. } | Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
@@ -106,7 +106,7 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
 }
 
 /// 终止器的 ValueId 操作数（uses）。
-fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
+pub(crate) fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
     match terminator {
         Terminator::Return { value: Some(v) } => vec![*v],
         Terminator::Branch { condition, .. } => vec![*condition],
@@ -119,7 +119,7 @@ fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
 }
 
 /// 收集 `target` 在本函数中的全部 use 指令（含 Phi source）。
-fn collect_uses(function: &Function, target: ValueId) -> Vec<&Instruction> {
+pub(crate) fn collect_uses(function: &Function, target: ValueId) -> Vec<&Instruction> {
     let mut uses = Vec::new();
     for block in function.blocks() {
         for instruction in block.instructions() {
@@ -136,7 +136,7 @@ fn collect_uses(function: &Function, target: ValueId) -> Vec<&Instruction> {
 }
 
 /// 取 producing 指令的 dest（def）。非 producing 返回 None。
-fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
+pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
     use Instruction::*;
     Some(match ins {
         Const { dest, .. }

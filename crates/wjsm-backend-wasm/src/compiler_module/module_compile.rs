@@ -350,6 +350,65 @@ impl Compiler {
         self.good_color_global_idx = 24;
         self.barrier_buf_ptr_global_idx = 25;
         self.barrier_buf_end_global_idx = 26;
+        self.canonical_name_id_global_base = if self.mode == CompileMode::Normal {
+            31
+        } else {
+            0
+        };
+        self.canonical_name_id_globals.clear();
+        self.canonical_name_id_count = 0;
+
+        // Canonical name_id globals are only valid in Normal mode. Pre-scan all
+        // property instructions before function emission so fast-chain codegen
+        // can resolve each constant key's global index.
+        if self.mode == CompileMode::Normal {
+            let mut canonical_keys = Vec::new();
+            let mut seen_keys = std::collections::HashSet::new();
+            for function in module.functions() {
+                let mut string_constants = HashMap::new();
+                for block in function.blocks() {
+                    for instruction in block.instructions() {
+                        if let Instruction::Const { dest, constant } = instruction
+                            && let Some(Constant::String(name)) =
+                                module.constants().get(constant.0 as usize)
+                        {
+                            string_constants.insert(*dest, name.clone());
+                        }
+                    }
+                }
+                for block in function.blocks() {
+                    for instruction in block.instructions() {
+                        let key = match instruction {
+                            Instruction::GetProp { key, .. } | Instruction::SetProp { key, .. } => {
+                                key
+                            }
+                            _ => continue,
+                        };
+                        if let Some(name) = string_constants.get(key)
+                            && seen_keys.insert(name.clone())
+                        {
+                            canonical_keys.push(name.clone());
+                        }
+                    }
+                }
+            }
+            for name in canonical_keys {
+                // Intern before compiling functions so pointer-to-global lookup is
+                // independent of the relative position of the Const instruction.
+                self.intern_data_string(&name);
+                let global_idx = self.canonical_name_id_global_base + self.canonical_name_id_count;
+                self.canonical_name_id_globals.insert(name.clone(), global_idx);
+                self.canonical_name_id_count += 1;
+                self.globals.global(
+                    GlobalType {
+                        val_type: ValType::I64,
+                        mutable: true,
+                        shared: false,
+                    },
+                    &ConstExpr::i64_const(0),
+                );
+            }
+        }
 
         // Record user function base index (after all imports + helpers)
         self.user_func_base_idx = self._next_import_func;
@@ -618,5 +677,41 @@ impl Compiler {
         );
         self.current_func = None;
         self.shadow_sp_scratch_idx = previous_shadow_sp_scratch_idx;
+    }
+
+    /// 初始化 canonical name_id globals：每个常量属性键对应一个 i64 global，
+    /// 高 32 位存数据段 ptr，低 32 位存 canonical RuntimeString name_id。
+    ///
+    /// 必须在**每个模块的 main 入口 prologue** 中执行（而非仅主模块的
+    /// `__wjsm_init_globals`）：运行时 `require` 加载的模块（data_base 非零、
+    /// 共享 imported globals）同样使用 fast chain，其 canonical globals 若未
+    /// 初始化，fast chain 慢路径会以 key=0 查属性导致语义错误。
+    pub(super) fn emit_canonical_name_id_globals_init(&mut self) {
+        if self.canonical_name_id_globals.is_empty() {
+            return;
+        }
+        debug_assert_eq!(
+            self.canonical_name_id_count as usize,
+            self.canonical_name_id_globals.len()
+        );
+        let mut canonical_globals: Vec<_> = self
+            .canonical_name_id_globals
+            .iter()
+            .map(|(name, &global_idx)| (name.clone(), global_idx))
+            .collect();
+        canonical_globals.sort_by_key(|(_, global_idx)| *global_idx);
+        let canonicalize_idx =
+            self.special_host_import_indices[&SpecialHostImport::CanonicalizeNameId];
+        for (name, global_idx) in canonical_globals {
+            let ptr = self.intern_data_string(&name);
+            self.emit(WasmInstruction::I64Const(value::encode_string_ptr(ptr)));
+            self.emit(WasmInstruction::Call(canonicalize_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Const(i64::from(ptr)));
+            self.emit(WasmInstruction::I64Const(32));
+            self.emit(WasmInstruction::I64Shl);
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::GlobalSet(global_idx));
+        }
     }
 }

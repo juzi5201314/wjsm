@@ -51,12 +51,12 @@ pub(crate) type SharedPropertyKeyTable = Arc<Mutex<PropertyKeyTable>>;
 /// 内存 c-string 键 → 规范 name_id 的直接映射缓存（热路径 canonicalize 用）。
 ///
 /// 不用 HashMap：闭包 env 变量访问等热循环每次属性访问都 canonicalize 同一常量键，
-/// HashMap 的 SipHash + 分配占可测开销；256 路直接映射命中只需一次取模 + 一次比较，
+/// HashMap 的 SipHash + 分配占可测开销；256 组双路相连命中只需一次取模 + 两次比较，
 /// 且无锁（AtomicU64，Relaxed 已足够：同一 index 的 canonicalize 结果幂等，
 /// 陈旧读也返回同一 id）。冲突时重新 canonicalize（幂等，安全）。
 #[derive(Debug)]
 pub(crate) struct MemoryNameIdCache {
-    entries: [AtomicU64; MEMORY_NAME_ID_CACHE_WAYS],
+    entries: [AtomicU64; MEMORY_NAME_ID_CACHE_WAYS * 2],
 }
 
 const MEMORY_NAME_ID_CACHE_WAYS: usize = 256;
@@ -73,19 +73,35 @@ impl Default for MemoryNameIdCache {
 impl MemoryNameIdCache {
     #[inline]
     pub(crate) fn lookup(&self, index: u32) -> Option<u32> {
-        let packed =
-            self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)].load(Ordering::Relaxed);
-        if packed == MEMORY_NAME_ID_EMPTY || packed >> 32 != u64::from(index) {
-            None
-        } else {
-            Some(packed as u32)
+        let way0 = (index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)) * 2;
+        let way1 = way0 + 1;
+
+        for entry in [way0, way1] {
+            let packed = self.entries[entry].load(Ordering::Relaxed);
+            if packed != MEMORY_NAME_ID_EMPTY && packed >> 32 == u64::from(index) {
+                return Some(packed as u32);
+            }
         }
+        None
     }
 
     #[inline]
     pub(crate) fn insert(&self, index: u32, id: u32) {
-        self.entries[index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)]
-            .store((u64::from(index) << 32) | u64::from(id), Ordering::Relaxed);
+        let way0 = (index as usize & (MEMORY_NAME_ID_CACHE_WAYS - 1)) * 2;
+        let way1 = way0 + 1;
+        let packed = (u64::from(index) << 32) | u64::from(id);
+
+        if self.entries[way0]
+            .compare_exchange(
+                MEMORY_NAME_ID_EMPTY,
+                packed,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            self.entries[way1].store(packed, Ordering::Relaxed);
+        }
     }
 }
 

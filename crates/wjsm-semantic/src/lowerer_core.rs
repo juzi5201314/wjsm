@@ -1173,6 +1173,10 @@ impl Lowerer {
         }
         // direct_call pass：标记可直接调用的函数并替换绑定读取为 FunctionRef。
         crate::passes::direct_call::run(&mut self.module);
+        // inline_for_ea pass：构造器体 + 方法内联，使 EA/SR 能消除 new 分配。
+        crate::passes::inline_for_ea::run(&mut self.module);
+        // escape_scalar pass：逃逸分析 + 标量替换，消除局部 NewObject 分配。
+        crate::passes::escape_scalar::run(&mut self.module);
         Ok(self.module)
     }
 }

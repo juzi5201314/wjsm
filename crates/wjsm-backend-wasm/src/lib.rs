@@ -257,6 +257,10 @@ struct Compiler {
     barrier_buf_ptr_global_idx: u32,
     /// WASM global index for the write-barrier event buffer end.
     barrier_buf_end_global_idx: u32,
+    /// Base WASM global index for per-key canonical name_id values.
+    canonical_name_id_global_base: u32,
+    /// Number of per-key canonical name_id globals allocated for this module.
+    canonical_name_id_count: u32,
     /// WASM global index for Array.prototype method table base.
     arr_proto_table_base_global_idx: u32,
     /// WASM global index for Array.prototype method table length.
@@ -298,6 +302,8 @@ struct Compiler {
     /// 当前函数内常量字符串键（ValueId → 数据段偏移）：GetProp/SetProp/DeleteProp
     /// 的编译期 name_id 直传（免 symbol_property_key 运行时调用）。按函数清空。
     const_string_ptrs: HashMap<u32, u32>,
+    /// Map constant property key text to its canonical name_id global index.
+    canonical_name_id_globals: HashMap<String, u32>,
     mode: CompileMode,
     function_param_counts: Vec<u32>,
     function_names: Vec<String>,
