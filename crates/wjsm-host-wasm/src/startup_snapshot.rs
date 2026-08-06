@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use wasmtime::*;
+use wjsm_gc::ShapeTableSnapshot;
 use wjsm_ir::value;
 
 use crate::runtime_string::RuntimeString;
@@ -75,6 +76,13 @@ pub(crate) fn capture_startup_snapshot(
     let object_bytes = access
         .capture_object_region()
         .map_err(|e| anyhow::anyhow!("capture: V2 object region: {e}"))?;
+    // 堆字节与 shape 表必须成对捕获：对象头 +12 只存 shape_id，属性名/flags/
+    // 值槽下标全部在宿主 ShapeTable；只带堆字节恢复会得到属性全丢的对象。
+    let shape_table_bytes = bincode::serde::encode_to_vec(
+        access.export_shapes(),
+        bincode::config::standard(),
+    )
+    .map_err(|e| anyhow::anyhow!("capture: shape 表序列化失败: {e}"))?;
     let heap_used = u32::try_from(object_bytes.len())
         .map_err(|_| anyhow::anyhow!("capture: V2 object region exceeds u32"))?;
     if heap_used == 0 && obj_table_count == 0 {
@@ -188,6 +196,7 @@ pub(crate) fn capture_startup_snapshot(
         runtime_strings,
         native_callables,
         native_callable_methods,
+        shape_table_bytes,
     })
 }
 
@@ -567,6 +576,15 @@ pub(crate) fn restore_startup_snapshot(
     access
         .restore_object_region(&object_bytes)
         .map_err(|e| anyhow::anyhow!("restore: V2 object region: {e}"))?;
+    // 恢复宿主 ShapeTable：对象头 +12 只存 shape_id，属性名与布局全在 shape 表。
+    // 必须在堆字节恢复之后、任何属性访问之前导入，否则 shape_id 指向空表、
+    // 全部属性名丢失。bincode 字节与捕获端 `export_shapes()` 成对。
+    let (shape_snapshot, _consumed): (ShapeTableSnapshot, usize) = bincode::serde::decode_from_slice(
+        snapshot.shape_table_bytes,
+        bincode::config::standard(),
+    )
+    .map_err(|e| anyhow::anyhow!("restore: shape 表反序列化失败: {e}"))?;
+    access.import_shapes(shape_snapshot);
     let object_base = access.object_heap_base();
     for i in 0..obj_table_count as usize {
         let rel = snapshot.handle_rel_offsets[i];

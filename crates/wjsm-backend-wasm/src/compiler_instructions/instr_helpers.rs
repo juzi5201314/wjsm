@@ -114,7 +114,7 @@ impl Compiler {
     /// 旧实现把所有 computed key `to_int32` 后只走 `$elem_get`，导致 `a[变量]` 读 undefined、
     /// `o[字符串]` 读写错位。按 key 类型分派 + CanonicalNumericIndexString 后均正确。
     /// 索引 scratch 使用独立的 `computed_idx_scratch_idx`（i32）。
-    pub(super) fn emit_computed_get(&mut self, object: ValueId, key: ValueId) {
+    pub(crate) fn emit_computed_get(&mut self, object: ValueId, key: ValueId) {
         let box_base = value::BOX_BASE as i64;
         let obj_l = self.local_idx(object.0);
         let key_l = self.local_idx(key.0);

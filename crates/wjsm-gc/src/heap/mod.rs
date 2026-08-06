@@ -29,8 +29,8 @@ pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, Relocati
 pub use epoch::EpochParticipant;
 pub use handle::{HandleRegionBackend, HandleTableV2, PlatformHandleRegion};
 pub use handle_entry::{
-    ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId,
-    HandleState, HandleTableError,
+    ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN,
+    HandleGeneration, HandleId, HandleState, HandleTableError,
 };
 pub use layout::ManagedHeapLayout;
 pub use memory::{GrowableHeapMemory, HeapMemory};

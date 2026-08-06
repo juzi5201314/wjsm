@@ -1,0 +1,18 @@
+exit_code: 0
+--- stdout ---
+packed: 1.5 2.5 3.5 3
+holey: 1 undefined undefined 4 4
+holey-in: true false true
+holey-keys: 0,3
+oob-proto: 77
+oob-plain: undefined
+hole-proto: from-proto
+accessor: 1 99 3
+accessor-calls: 1
+accessor-loop: 990 11
+mixed: 10 20 222 undefined 60 7
+roundtrip: 0,1,4,9,16,25,36,49
+overwrite: -1 4 16
+push: 5 4 undefined
+pop: 4 4
+--- stderr ---

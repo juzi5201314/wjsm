@@ -44,7 +44,7 @@ pub use api::GcContext;
 /// 算法已下沉至 `wjsm-gc::heap_access`，本路径仅做单态化类型别名。
 pub type HeapAccessV2 = wjsm_gc::HeapAccessV2<crate::heap::SharedHeapMemory>;
 pub use roots_v2::V2ConditionalRoots;
-pub use wjsm_gc::HeapAccessV2Error;
+pub use wjsm_gc::{HeapAccessV2Error, HeapAccessV2Property};
 
 // 兼容旧路径（crate::runtime_gc::{control,registry,...}）
 pub mod registry {

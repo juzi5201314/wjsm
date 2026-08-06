@@ -30,17 +30,43 @@ pub enum HandleGeneration {
 }
 
 /// 与 memory64 ABI 对齐的低 16-bit handle entry 状态。
+///
+/// 判别值刻意让**稳定态成为连续高值区间**（>= [`HANDLE_STATE_STABLE_MIN`]）：
+/// wasm 侧的属性访问快链每次都要判断「这个句柄现在可以直接读地址吗」，
+/// 连续区间把三次相等比较（`state==StableYoung | state==StableOld |
+/// state==PinnedOld`）压成一次 `i32.ge_u`，省下 4 条指令与 2 个分支。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum HandleState {
     Free = 0,
-    StableYoung = 1,
-    StableOld = 2,
-    RelocatingYoung = 3,
-    RelocatingOld = 4,
-    PinnedOld = 5,
-    Retired = 6,
+    Retired = 1,
+    RelocatingYoung = 2,
+    RelocatingOld = 3,
+    /// 稳定态起点：以下状态的 entry 地址可被直接使用。
+    StableYoung = 4,
+    StableOld = 5,
+    PinnedOld = 6,
 }
+
+/// 稳定态判别值下界；wasm 快链用 `state >= HANDLE_STATE_STABLE_MIN` 单比较判定。
+pub const HANDLE_STATE_STABLE_MIN: u16 = HandleState::StableYoung as u16;
+
+// 状态编码是 codegen（`wjsm_ir::constants::HANDLE_STATE_*`，wasm 发布对象时写入）
+// 与本模块（宿主解析 entry）之间的 ABI 契约。两处必须逐一相等，否则 wasm 分配的
+// 对象会被宿主判为非稳定态而整体不可解析——用编译期断言钉死，禁止靠人工同步。
+const _: () = {
+    use wjsm_ir::constants as abi;
+    assert!(HandleState::Free as u16 as u32 == abi::HANDLE_STATE_FREE);
+    assert!(HandleState::Retired as u16 as u32 == abi::HANDLE_STATE_RETIRED);
+    assert!(
+        HandleState::RelocatingYoung as u16 as u32 == abi::HANDLE_STATE_RELOCATING_YOUNG
+    );
+    assert!(HandleState::RelocatingOld as u16 as u32 == abi::HANDLE_STATE_RELOCATING_OLD);
+    assert!(HandleState::StableYoung as u16 as u32 == abi::HANDLE_STATE_STABLE_YOUNG);
+    assert!(HandleState::StableOld as u16 as u32 == abi::HANDLE_STATE_STABLE_OLD);
+    assert!(HandleState::PinnedOld as u16 as u32 == abi::HANDLE_STATE_PINNED_OLD);
+    assert!(HANDLE_STATE_STABLE_MIN as u32 == abi::HANDLE_STATE_STABLE_MIN);
+};
 
 // `stable_for`/`relocating_for`/`is_stable` 等由 HandleTableV2 使用；随 GC 算法层迁移后启用。
 #[allow(dead_code)]
@@ -48,12 +74,12 @@ impl HandleState {
     pub const fn from_raw(raw: u16) -> Option<Self> {
         match raw {
             0 => Some(Self::Free),
-            1 => Some(Self::StableYoung),
-            2 => Some(Self::StableOld),
-            3 => Some(Self::RelocatingYoung),
-            4 => Some(Self::RelocatingOld),
-            5 => Some(Self::PinnedOld),
-            6 => Some(Self::Retired),
+            1 => Some(Self::Retired),
+            2 => Some(Self::RelocatingYoung),
+            3 => Some(Self::RelocatingOld),
+            4 => Some(Self::StableYoung),
+            5 => Some(Self::StableOld),
+            6 => Some(Self::PinnedOld),
             _ => None,
         }
     }
@@ -81,7 +107,7 @@ impl HandleState {
     }
 
     pub const fn is_stable(self) -> bool {
-        matches!(self, Self::StableYoung | Self::StableOld | Self::PinnedOld)
+        (self as u16) >= HANDLE_STATE_STABLE_MIN
     }
 }
 

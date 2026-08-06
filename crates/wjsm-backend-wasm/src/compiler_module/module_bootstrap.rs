@@ -289,9 +289,9 @@ impl Compiler {
             })
             .collect();
         let cache_count = cache_keys.len() as u32;
-        // i64 scratch 区：string_concat(+0)、call_env_obj(+1)、fast_entry(+2)、fast_addr(+3)。
-        // 闭包调用缓存条目从 +4 起，fast path scratch 索引固定不随 cache 数变化。
-        let cache_i64_base = total_locals + 4;
+        // i64 scratch 区：string_concat(+0)、call_env_obj(+1)、ic_addr(+2)。
+        // 闭包调用缓存条目从 +3 起，scratch 索引固定不随 cache 数变化。
+        let cache_i64_base = total_locals + 3;
         let cache_i32_base = cache_i64_base + 2 * cache_count;
         let cache_func_i32_base = cache_i32_base + existing_i32_scratch;
         for (slot, key) in cache_keys.into_iter().enumerate() {
@@ -305,15 +305,14 @@ impl Compiler {
         // 闭包表只追加不可变；缓存 locals 不登记为 GC root，但调用点的 callee
         // 仍由当前指令 liveness spill 保活，故 miss/hit 都不会改变 GC 语义。
         self.string_concat_scratch_idx = total_locals;
-        self.fast_entry_scratch_idx = total_locals + 2;
-        self.fast_addr_scratch_idx = total_locals + 3;
+        self.ic_addr_scratch_idx = total_locals + 2;
         self.shadow_sp_scratch_idx = cache_i32_base;
         self.safepoint_sp_saved_idx = cache_i32_base + 2;
         self.computed_idx_scratch_idx = cache_i32_base + 3;
         self.eval_var_base_local_idx = cache_i32_base + 4;
 
         let total_i64_locals =
-            total_locals.saturating_sub(param_count_for_i64) + 4 + 2 * cache_count;
+            total_locals.saturating_sub(param_count_for_i64) + 3 + 2 * cache_count;
         let total_i32_locals = existing_i32_scratch + cache_count;
         (total_i64_locals, total_i32_locals)
     }
@@ -357,22 +356,20 @@ impl Compiler {
         let local_count = self.required_local_count(function);
         // string_concat (i64) at local_count
         // call_env_obj (i64) at local_count+1
-        // fast_entry (i64) at local_count+2  (对象访问内联快路径的 handle entry 暂存)
-        // fast_addr (i64) at local_count+3  (对象访问内联快路径的对象地址暂存)
-        // shadow_sp (i32) at local_count+4
-        // call_func_idx (i32) at local_count+5
-        // safepoint_sp_saved (i32) at local_count+6  (P2: safepoint spill save/restore)
-        // computed_idx_scratch (i32) at local_count+7  (emit_computed_get/set 暂存规范数字索引)
-        // eval_var_base (i32) at local_count+8
+        // ic_addr (i64) at local_count+2   (IC 快链暂存 handle entry / 对象地址)
+        // shadow_sp (i32) at local_count+3
+        // call_func_idx (i32) at local_count+4
+        // safepoint_sp_saved (i32) at local_count+5  (P2: safepoint spill save/restore)
+        // computed_idx_scratch (i32) at local_count+6  (emit_computed_get/set 暂存规范数字索引)
+        // eval_var_base (i32) at local_count+7
         self.string_concat_scratch_idx = local_count;
-        self.shadow_sp_scratch_idx = local_count + 4;
-        self.safepoint_sp_saved_idx = local_count + 6;
-        self.computed_idx_scratch_idx = local_count + 7;
-        self.fast_entry_scratch_idx = local_count + 2;
-        self.fast_addr_scratch_idx = local_count + 3;
-        self.eval_var_base_local_idx = local_count + 8;
+        self.ic_addr_scratch_idx = local_count + 2;
+        self.shadow_sp_scratch_idx = local_count + 3;
+        self.safepoint_sp_saved_idx = local_count + 5;
+        self.computed_idx_scratch_idx = local_count + 6;
+        self.eval_var_base_local_idx = local_count + 7;
         let param_i64_count = self.ssa_local_base;
-        let total_i64_locals = local_count.saturating_sub(param_i64_count) + 4;
+        let total_i64_locals = local_count.saturating_sub(param_i64_count) + 3;
         let total_i32_locals = 4 + u32::from(!self.var_memory_offsets.is_empty());
         let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
             Vec::new()
@@ -393,9 +390,6 @@ impl Compiler {
         if is_module_entry_ir_function(function.name()) && self.mode == CompileMode::Normal {
             // P2.2: globals 初始化在 __wjsm_bootstrap_once 中执行（bootstrap_done 检查之后），
             // 确保 run_bootstrap_only 直接调用 bootstrap 时也能正确初始化 globals。
-            // canonical name_id globals 必须在每个模块（含运行时 require 的模块）的
-            // main prologue 初始化，否则 fast chain 慢路径以 key=0 查属性。
-            self.emit_canonical_name_id_globals_init();
             self.emit_startup_phase_call(self.bootstrap_func_idx);
             self.emit_startup_phase_call(self.init_function_props_func_idx);
         }

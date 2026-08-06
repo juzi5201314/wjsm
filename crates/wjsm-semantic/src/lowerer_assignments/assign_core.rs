@@ -529,11 +529,15 @@ impl Lowerer {
                     },
                 );
 
-                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-                let dest = self.alloc_value();
+                // RHS 可能通过构造器/new 内联分裂块，lower_expr_then_continue 会自动
+                // 追踪所有续接块并更新 current_block，确保后续的 Binary + StoreVar
+                // 插入到 RHS 求值完成后的正确续接块，而非被分裂前的原始块。
+                let mut current_block = block;
+                let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
 
+                let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Binary {
                         dest,
                         op: bin_op,
@@ -543,17 +547,18 @@ impl Lowerer {
                 );
 
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::StoreVar {
                         name: ir_name,
                         value: dest,
                     },
                 );
                 let after_write_block =
-                    self.append_eval_var_leak_if_needed(&name, kind, dest, block)?;
-                if after_write_block != block {
-                    self.expr_merge_block = Some(after_write_block);
-                }
+                    self.append_eval_var_leak_if_needed(&name, kind, dest, current_block)?;
+                // 钉死后续语句入口（与简单赋值路径一致）；无论 current_block 是否
+                // 与原始 block 相同，调用方都需要知道最终插入点，否则循环的步进指令
+                // 会落回原始 block，导致步进与累加之间的 CFG 边缺失。
+                self.expr_merge_block = Some(after_write_block);
 
                 Ok(dest)
             }

@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+1 undefined 3 4
+a,c,d false true
+1 20 3 4 5
+a,c,d,e,b
+undefined 20 3 4 undefined c,d,b
+true true undefined
+a,b,d a,b,c,d
+9 8 7 6
+0 66 138 70
+undefined 0 138 69
+1000 1033 1069 70
+--- stderr ---

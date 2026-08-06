@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+proto: 10100
+proto-updated: 2000
+shadow: 5 200
+unshadow: 200
+class: 180000
+proto-method: 3 4 12
+after-gc: 84 8 7
+fanout: 10
+--- stderr ---

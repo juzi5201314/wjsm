@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+1 2 9
+5 10 9
+plain,doubled,tail
+true 10 5
+21 42
+1
+77
+5
+6
+function function true
+21 true true
+--- stderr ---

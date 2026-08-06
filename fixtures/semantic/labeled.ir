@@ -76,23 +76,23 @@ module {
       %21 = const c20
       store var $0.total, %21
       %22 = const c21
-      store var $0.i, %22
+      store var $1.i, %22
       jump bb1
     bb1:
-      %23 = load var $0.i
+      %23 = load var $1.i
       %24 = const c22
       %25 = call builtin.abstract_compare(%23, %24)
       branch %25, bb2, bb4
     bb2:
-      %26 = load var $0.i
+      %26 = load var $1.i
       %27 = const c23
       %28 = call builtin.strict_eq(%26, %27)
       branch %28, bb5, bb6
     bb3:
-      %37 = load var $0.i
+      %37 = load var $1.i
       %38 = const c25
       %39 = add %37, %38
-      store var $0.i, %39
+      store var $1.i, %39
       jump bb1
     bb4:
       %40 = load var $0.total
@@ -102,7 +102,7 @@ module {
     bb5:
       jump bb3
     bb6:
-      %29 = load var $0.i
+      %29 = load var $1.i
       %30 = const c24
       %31 = call builtin.strict_eq(%29, %30)
       branch %31, bb7, bb8
@@ -110,7 +110,7 @@ module {
       jump bb4
     bb8:
       %32 = load var $0.total
-      %33 = load var $0.i
+      %33 = load var $1.i
       %34 = add %32, %33
       store var $0.total, %34
       %35 = is_exception %34

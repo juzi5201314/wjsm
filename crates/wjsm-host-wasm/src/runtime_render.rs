@@ -433,53 +433,6 @@ pub(crate) fn format_f64_radix_to_string(x: f64, radix: i32) -> String {
     }
 }
 
-pub(crate) fn find_memory_c_string_global(
-    caller: &mut Caller<'_, RuntimeState>,
-    name: &str,
-) -> Option<u32> {
-    let mut needle = Vec::with_capacity(name.len() + 1);
-    needle.extend_from_slice(name.as_bytes());
-    needle.push(0);
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return None;
-    };
-    memory
-        .data(&*caller)
-        .windows(needle.len())
-        .position(|window| window == needle.as_slice())
-        .map(|offset| offset as u32)
-}
-
-pub(crate) fn alloc_heap_c_string_global(
-    caller: &mut Caller<'_, RuntimeState>,
-    name: &str,
-) -> Option<u32> {
-    let env = WasmEnv::from_caller(caller)?;
-    let heap_ptr = env.heap_ptr.get(&mut *caller).i32().unwrap_or(0) as usize;
-    let bytes = name.as_bytes();
-    let end = heap_ptr.checked_add(bytes.len() + 1)?;
-    let aligned_end = (end + 7) & !7;
-    if !crate::runtime_heap::ensure_heap_allocation_bytes(
-        caller,
-        &env,
-        heap_ptr,
-        aligned_end.saturating_sub(heap_ptr),
-    ) {
-        return None;
-    }
-    {
-        let data = env.memory.data_mut(&mut *caller);
-        data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
-        data[heap_ptr + bytes.len()] = 0;
-        data[end..aligned_end].fill(0);
-    }
-    let _ = env.heap_ptr.set(&mut *caller, Val::I32(aligned_end as i32));
-    if let Some(alloc_ptr) = env.alloc_ptr {
-        let _ = alloc_ptr.set(&mut *caller, Val::I32(aligned_end as i32));
-    }
-    Some(heap_ptr as u32)
-}
-
 #[cfg(test)]
 mod format_radix_tests {
     use super::*;

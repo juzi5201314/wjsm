@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+1,2,3,4
+alt: 500
+grow: 500 500 10 20
+delete: 50 undefined 2
+overwrite: 0;10;20;30;40;
+str: 3 arr: 3
+fn: 7 function
+accessor: 420 10
+--- stderr ---

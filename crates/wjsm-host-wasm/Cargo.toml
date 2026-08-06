@@ -15,6 +15,7 @@ anyhow = { workspace = true }
 wjsm-host = { path = "../wjsm-host" }
 wjsm-builtins = { path = "../wjsm-builtins" }
 wjsm-gc = { path = "../wjsm-gc" }
+bincode = { version = "2", features = ["serde"] }
 crossbeam-deque = "0.8.6"
 parking_lot = "0.12"
 wasmtime = { workspace = true }

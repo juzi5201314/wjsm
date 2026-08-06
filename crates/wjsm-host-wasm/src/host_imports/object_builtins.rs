@@ -234,13 +234,6 @@ pub(crate) fn read_property_by_string_key_raw(
             };
         }
     }
-    let Some(ptr) = resolve_handle(caller, obj) else {
-        return value::encode_undefined();
-    };
-    let key_index = intern_runtime_property_key(caller.data(), key);
-    let name_id = encode_runtime_string_name_id(key_index);
-    let Some((_, _, val)) = find_property_slot_by_name_id(caller, ptr, name_id) else {
-        return value::encode_undefined();
-    };
-    val
+    // V2-only：`obj` 不在 handle 表则无属性可读，禁止 main memory 回落。
+    value::encode_undefined()
 }

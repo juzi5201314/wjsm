@@ -8,17 +8,17 @@ use crate::runtime_gc::api::{GcContext, Handle};
 use wasmtime::Val;
 use wjsm_ir::constants;
 
-/// 对象 header 常量（与 runtime_heap.rs / runtime_values.rs 一致）。
+/// 对象 header 常量（与 runtime_heap.rs / wjsm-gc::heap_access 一致）。
 pub const HEADER_SIZE: usize = constants::HEAP_OBJECT_HEADER_SIZE as usize;
-pub const OBJECT_ELEM_SIZE: usize = constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
-pub const ARRAY_ELEM_SIZE: usize = constants::HEAP_ARRAY_ELEMENT_SIZE as usize;
+/// 隐藏类重构后对象值槽与数组元素同为 8 字节，payload 完全同构。
+pub const VALUE_SLOT_SIZE: usize = constants::HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
 
 /// GC 已知的堆对象布局分类（issue #119：禁止把未知 tag 静默当成 OBJECT 而不告警）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GcHeapLayout {
-    /// 数组：len@+8，元素 8B。
+    /// 数组：容量@+12，长度@+8。
     Array,
-    /// 普通对象或 Arguments（属性槽布局与 OBJECT 相同）。
+    /// 普通对象或 Arguments：值槽容量@+8，shape_id@+12。
     ObjectLike,
 }
 
@@ -52,24 +52,18 @@ pub(crate) fn gc_heap_layout(heap_type: u8) -> GcHeapLayout {
     }
 }
 
-fn object_cap_and_elem_size(heap_type: u8) -> (usize, usize) {
+/// 容量字段偏移随布局不同：数组在 `+12`，对象在 `+8`（`+12` 被 shape_id 占用）。
+fn capacity_offset(heap_type: u8) -> usize {
     match gc_heap_layout(heap_type) {
-        GcHeapLayout::Array => (
-            constants::HEAP_ARRAY_CAPACITY_OFFSET as usize,
-            ARRAY_ELEM_SIZE,
-        ),
-        GcHeapLayout::ObjectLike => (
-            constants::HEAP_OBJECT_CAPACITY_OFFSET as usize,
-            OBJECT_ELEM_SIZE,
-        ),
+        GcHeapLayout::Array => constants::HEAP_ARRAY_CAPACITY_OFFSET as usize,
+        GcHeapLayout::ObjectLike => constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as usize,
     }
 }
 
 /// 从 memory 现场读对象 header，算对象总大小（HEADER + payload）。
 ///
-/// 对象布局：proto(4) heap_type(1) pad(3) capacity(4) num_props/len(4) [payload]。
-/// - OBJECT: capacity@+8, elem_size=32 → size = 16 + cap*32
-/// - ARRAY:  capacity@+12, elem_size=8  → size = 16 + cap*8
+/// 对象与数组的 payload 同为 8 字节槽，故公式统一为 `16 + capacity * 8`；
+/// 只有容量字段的位置不同（见 [`capacity_offset`]）。
 ///
 /// 返回 None 表示 ptr 越界或 header 不可读（调用方应跳过）。
 pub fn object_size_from_memory(data: &[u8], ptr: usize) -> Option<usize> {
@@ -77,9 +71,11 @@ pub fn object_size_from_memory(data: &[u8], ptr: usize) -> Option<usize> {
         return None;
     }
     let heap_type = data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize];
-    let (cap_off, elem_size) = object_cap_and_elem_size(heap_type);
-    let capacity = unsafe { read_u32_le_unchecked(data, ptr + cap_off) } as usize;
-    let payload = capacity.checked_mul(elem_size)?;
+    // SAFETY: 上面已确认 `ptr + HEADER_SIZE <= data.len()`，而容量字段落在
+    // header 的 `+8..+16` 区间内，故 `offset..offset + 4` 必在 `data` 内。
+    let capacity =
+        unsafe { read_u32_le_unchecked(data, ptr + capacity_offset(heap_type)) } as usize;
+    let payload = capacity.checked_mul(VALUE_SLOT_SIZE)?;
     HEADER_SIZE.checked_add(payload)
 }
 

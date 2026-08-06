@@ -46,16 +46,53 @@ impl Lowerer {
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(class_span, msg))?;
 
-        let ctor_param_pats: Vec<&swc_ast::Pat> = constructor
-            .into_iter()
-            .flat_map(|ctor| &ctor.params)
-            .filter_map(|param| match param {
-                swc_ast::ParamOrTsParamProp::Param(param) => Some(&param.pat),
-                swc_ast::ParamOrTsParamProp::TsParamProp(_) => None,
-            })
-            .collect();
+        // TypeScript 参数属性 `constructor(private x: number)` 同时是构造器**形参**
+        // 与**实例字段声明**。此前整个 TsParamProp 被丢弃，导致形参不存在、字段也
+        // 不存在（`this.x` 读到 undefined）。这里把它归一成普通形参 Pat 参与形参
+        // 处理，并记录字段名，稍后发射 `this.<name> = <name>`。
+        let mut ctor_param_pats_owned: Vec<swc_ast::Pat> = Vec::new();
+        // （形参在 param_ir_names 中的下标, 字段名）
+        let mut param_prop_slots: Vec<(usize, String)> = Vec::new();
+        // param_ir_names 前两项固定为 $env / $this；Rest 形参不占 IR 形参名。
+        let mut ir_slot = 2usize;
+        for param in constructor.into_iter().flat_map(|ctor| &ctor.params) {
+            let pat = match param {
+                swc_ast::ParamOrTsParamProp::Param(param) => param.pat.clone(),
+                swc_ast::ParamOrTsParamProp::TsParamProp(prop) => {
+                    let (pat, binding) = match &prop.param {
+                        swc_ast::TsParamPropParam::Ident(binding) => {
+                            (swc_ast::Pat::Ident(binding.clone()), binding)
+                        }
+                        swc_ast::TsParamPropParam::Assign(assign) => match &*assign.left {
+                            swc_ast::Pat::Ident(binding) => {
+                                (swc_ast::Pat::Assign(assign.clone()), binding)
+                            }
+                            // TS 早期错误：参数属性的绑定必须是标识符，不允许解构。
+                            other => {
+                                return Err(self.error(
+                                    other.span(),
+                                    "a parameter property may not be declared using a binding pattern",
+                                ));
+                            }
+                        },
+                    };
+                    param_prop_slots.push((ir_slot, binding.id.sym.to_string()));
+                    pat
+                }
+            };
+            if !matches!(pat, swc_ast::Pat::Rest(_)) {
+                ir_slot += 1;
+            }
+            ctor_param_pats_owned.push(pat);
+        }
+        let ctor_param_pats: Vec<&swc_ast::Pat> = ctor_param_pats_owned.iter().collect();
         let param_ir_names =
             self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id)?;
+        // 形参 IR 名此时才确定，回填成 (形参 IR 名, 字段名)。
+        let param_prop_fields: Vec<(String, String)> = param_prop_slots
+            .into_iter()
+            .map(|(slot, field)| (param_ir_names[slot].clone(), field))
+            .collect();
         if let Some(ctor) = constructor {
             if class.super_class.is_some()
                 && let Some(body) = &ctor.body
@@ -104,6 +141,9 @@ impl Lowerer {
         }
         let defer_instance_initializers = constructor.is_some() && class.super_class.is_some();
         if !defer_instance_initializers {
+            // 参数属性字段先于字段初始化器生效（TS 语义），故在其之前发射。
+            field_block =
+                self.emit_param_prop_fields(field_block, this_scope_id, &param_prop_fields);
             field_block = self.emit_instance_initializers(
                 field_block,
                 this_scope_id,
@@ -166,8 +206,12 @@ impl Lowerer {
                     && stmt_is_direct_super_call(stmt)
                     && let StmtFlow::Open(b) = inner_flow
                 {
+                    // 派生类：`this` 在 super() 之后才存在，故参数属性字段与
+                    // 字段初始化器都必须推迟到此处，且参数属性先行。
+                    let after_props =
+                        self.emit_param_prop_fields(b, this_scope_id, &param_prop_fields);
                     inner_flow = StmtFlow::Open(self.emit_instance_initializers(
-                        b,
+                        after_props,
                         this_scope_id,
                         &class.body,
                         &private_members,

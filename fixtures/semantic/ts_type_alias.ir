@@ -73,8 +73,6 @@ module {
       %20 = const c19
       store var $this, %20
       %22 = const c20
-      %27 = const c24
-      %28 = get_prop %26, %27
       %29 = call builtin.console.log(%22)
       %30 = is_exception %29
       branch %30, bb2, bb1

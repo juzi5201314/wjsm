@@ -72,7 +72,7 @@ fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
 }
 
 /// 查找所有回边（latch → header，target 序号 ≤ 源块）。
-fn find_back_edges(blocks: &[BasicBlock]) -> Vec<(usize, usize)> {
+pub(crate) fn find_back_edges(blocks: &[BasicBlock]) -> Vec<(usize, usize)> {
     let mut edges = Vec::new();
     for (i, block) in blocks.iter().enumerate() {
         let mut targets = Vec::new();
@@ -109,7 +109,7 @@ fn find_back_edges(blocks: &[BasicBlock]) -> Vec<(usize, usize)> {
 
 /// 预构建前驱表：`preds[b]` = 所有跳转到 `b` 的块索引（O(V+E) 一次构建）。
 /// 反向可达（谁可到达某块）沿此表遍历即 O(V+E)，替代每轮全模块扫描的 O(V²)。
-fn build_preds(blocks: &[BasicBlock]) -> Vec<Vec<usize>> {
+pub(crate) fn build_preds(blocks: &[BasicBlock]) -> Vec<Vec<usize>> {
     let mut preds = vec![Vec::new(); blocks.len()];
     for (i, block) in blocks.iter().enumerate() {
         let mut targets = Vec::new();
@@ -162,7 +162,7 @@ fn build_value_defs(blocks: &[BasicBlock]) -> std::collections::HashMap<ValueId,
 
 /// 计算自然循环体：从 header 正向可达 ∧ 反向可达 latch 的块（含 header/latch）。
 /// `preds` 为预构建前驱表（见 [`build_preds`]），反向可达沿表遍历保持 O(V+E)。
-fn compute_loop_body(
+pub(crate) fn compute_loop_body(
     blocks: &[BasicBlock],
     preds: &[Vec<usize>],
     header: usize,

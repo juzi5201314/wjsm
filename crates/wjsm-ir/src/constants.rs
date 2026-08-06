@@ -155,19 +155,32 @@ pub const NAME_ID_RUNTIME_STRING_FLAG: u32 = 0x4000_0000;
 pub const NAME_ID_SYMBOL_FLAG: u32 = 0x8000_0000;
 pub const NAME_ID_KIND_MASK: u32 = NAME_ID_RUNTIME_STRING_FLAG | NAME_ID_SYMBOL_FLAG;
 pub const NAME_ID_INDEX_MASK: u32 = !NAME_ID_KIND_MASK;
-// ── 属性槽相关常量 ──────────────────────────────────────────────────────────
-// 属性槽格式（32 字节）：
-// Offset 0:  name_id (4 bytes)  - 字符串或 Symbol 属性键编码
-// Offset 4:  flags (4 bytes)    - 属性标志位
-// Offset 8:  value (8 bytes)    - 数据属性的值，访问器属性为 undefined
-// Offset 16: getter (8 bytes)   - 访问器属性的 getter，数据属性为 undefined
-// Offset 24: setter (8 bytes)   - 访问器属性的 setter，数据属性为 undefined
-pub const PROP_SLOT_SIZE: u32 = 32;
-pub const PROP_SLOT_NAME_ID_OFFSET: u32 = 0;
-pub const PROP_SLOT_FLAGS_OFFSET: u32 = 4;
-pub const PROP_SLOT_VALUE_OFFSET: u32 = 8;
-pub const PROP_SLOT_GETTER_OFFSET: u32 = 16;
-pub const PROP_SLOT_SETTER_OFFSET: u32 = 24;
+// ── 隐藏类（Shape）与紧凑值数组 ────────────────────────────────────────────
+// 属性元数据（name_id / flags / 值槽下标）由宿主侧 `wjsm-gc::ShapeTable` 持有，
+// 堆内只留紧凑值数组：每槽 8 字节 boxed i64，与数组元素完全同构。
+// accessor 属性占两个相邻值槽（index = getter，index + 1 = setter），无侧表。
+//
+// 这条同构性是 GC / handle remap / ZGC 重定位 / 快照恢复能统一按
+// `16 + value_capacity * 8` 遍历的前提：扫描期无需查 ShapeTable，
+// 未使用的值槽恒为 0（即 +0.0，不是句柄），扫到也是惰性的。
+
+/// 空对象 shape；`ShapeTable` 的 0 号记录恒为它。
+pub const SHAPE_ID_EMPTY: u32 = 0;
+/// 属性数达到该阈值时，shape 内建 name_id → 下标哈希表；之下线性扫。
+pub const SHAPE_MAP_THRESHOLD: u32 = 8;
+/// 属性数超过该阈值的对象退化为字典 shape（独占、不共享、IC 不回填）。
+pub const DICTIONARY_THRESHOLD: u32 = 64;
+/// ShapeTable 的全局 shape 数预算；超出后新 transition 一律退化字典。
+///
+/// 这里刻意**不**用「单个 shape 的 transition 出边上限」：空 shape 是整棵
+/// transition 树的根，它的出边数等于全程序中「作为首个属性出现过的名字」个数
+/// （bootstrap 一轮就有数百个）。按出边设限会让根 shape 迅速触顶，此后每个新对象
+/// 都退化成字典、inline cache 永久失效——正是要避免的病态。
+///
+/// 全局预算直接约束真正关心的东西（shape 表内存），且正常程序远不会触及：
+/// shape 数正比于源码中不同的「属性名序列」条数，实测 bootstrap + 用户代码
+/// 通常在数百量级。
+pub const SHAPE_TABLE_BUDGET: u32 = 1 << 16;
 
 // ── 启动快照相关堆布局常量 ──────────────────────────────────────────────────
 // 这些值决定 object heap 与 handle table 的二进制布局；任何变更都必须进入
@@ -179,13 +192,79 @@ pub const HEAP_OBJECT_HEADER_PAD_START: u32 = 5;
 pub const HEAP_OBJECT_HEADER_PAD_LEN: u32 = 3;
 pub const HEAP_OBJECT_HEADER_PAD_END: u32 =
     HEAP_OBJECT_HEADER_PAD_START + HEAP_OBJECT_HEADER_PAD_LEN;
-pub const HEAP_OBJECT_CAPACITY_OFFSET: u32 = 8;
-pub const HEAP_OBJECT_PROPERTY_COUNT_OFFSET: u32 = 12;
-pub const HEAP_OBJECT_PROPERTY_SLOT_SIZE: u32 = PROP_SLOT_SIZE;
+/// 值槽容量（不是属性数）；与数组的 `HEAP_ARRAY_CAPACITY_OFFSET` 靠 heap_type 区分。
+pub const HEAP_OBJECT_VALUE_CAPACITY_OFFSET: u32 = 8;
+/// 指向宿主 `ShapeTable` 的隐藏类 id；与数组的 length 字段位置别名。
+pub const HEAP_OBJECT_SHAPE_ID_OFFSET: u32 = 12;
+pub const HEAP_OBJECT_VALUE_SLOT_SIZE: u32 = 8;
+
+// ── Inline Cache 槽布局（主 memory0，紧接 data segment）─────────────────────
+// 每个「常量键的属性访问点」在编译期分配一个 16 字节 IC 槽：
+//
+// +0  u32 shape_id      命中要求与对象头 `+12` 的 shape_id 精确相等
+// +4  u32 value_index   值槽下标（×8 即字节偏移）
+// +8  u32 kind          0=Empty 1=OwnData 2=ProtoData 3=Megamorphic
+// +12 u32 proto_generation  kind=ProtoData 时填充时的原型世代
+//
+// 空槽判定用 `kind == 0`（而非 shape_id == 0）——`SHAPE_ID_EMPTY` 是合法 shape。
+// IC 区由 data segment 的零填充自动初始化为 Empty，无需运行时初始化。
+//
+// shape 变化会自动使 IC 失效（命中前提是 shape_id 精确相等）；原型链命中
+// 额外比对 `proto_generation`，由宿主 `ShapeTable` 在原型形状变化时 bump。
+pub const IC_SLOT_SIZE: u32 = 16;
+pub const IC_SLOT_SHAPE_ID_OFFSET: u32 = 0;
+pub const IC_SLOT_VALUE_INDEX_OFFSET: u32 = 4;
+pub const IC_SLOT_KIND_OFFSET: u32 = 8;
+pub const IC_SLOT_PROTO_GENERATION_OFFSET: u32 = 12;
+/// 空槽：从未命中过，miss 处理器负责回填。
+pub const IC_KIND_EMPTY: u32 = 0;
+/// 自有数据属性：值就在接收者的值槽里。
+pub const IC_KIND_OWN_DATA: u32 = 1;
+/// 原型链数据属性：值在 `proto_holder` 的值槽里（方法调用主路径）。
+pub const IC_KIND_PROTO_DATA: u32 = 2;
+/// 退化：accessor / proxy / 字典 shape / 数组命名属性 → 此后永久落宿主。
+pub const IC_KIND_MEGAMORPHIC: u32 = 3;
+
+// ── 数组 ElementsKind（header pad 首字节）──────────────────────────────────
+// kind 存在对象头 `+5`（pad 区首字节），**不借 capacity 的高位**：
+// capacity 有十余处读写点（publish/relocate/array_shape/GC 扫描/handle remap…），
+// 借位要求每一处都记得掩码，漏一处就静默算错数组尺寸并损坏堆。pad 字节此前
+// 恒为 0、无人读写，改动面收敛在本文件与 heap_access 的 kind 存取器里。
+//
+// kind 让元素读只用一次字节比较就能判定「能否直接读槽」：
+// - PACKED：无洞、无索引 accessor → 快链可直接 load
+// - HOLEY：可能含 `encode_array_hole()` → 落宿主（洞须按缺失属性继续查原型链）
+// - DICTIONARY：索引位置存在 accessor 等异质属性 → 必须走完整 [[Get]]
+//
+// kind 只单向升级（PACKED → HOLEY → DICTIONARY），永不回退：回退需要全扫描，
+// 而三种状态都只决定是否走快链，不影响语义正确性。
+pub const HEAP_ARRAY_KIND_OFFSET: u32 = HEAP_OBJECT_HEADER_PAD_START;
+/// 无洞、无异质索引属性：元素快链可直接读槽。
+pub const ARRAY_KIND_PACKED: u32 = 0;
+/// 可能含洞哨兵：洞按缺失属性处理（须查原型链），故落宿主。
+pub const ARRAY_KIND_HOLEY: u32 = 1;
+/// 索引位置存在 accessor 等异质属性：必须走完整 `[[Get]]`。
+pub const ARRAY_KIND_DICTIONARY: u32 = 2;
 pub const HEAP_ARRAY_LENGTH_OFFSET: u32 = 8;
 pub const HEAP_ARRAY_CAPACITY_OFFSET: u32 = 12;
 pub const HEAP_ARRAY_ELEMENT_SIZE: u32 = 8;
 pub const HANDLE_TABLE_ENTRY_SIZE: u32 = 8;
+
+// ── handle entry 状态编码（codegen ↔ 宿主堆的 ABI 契约）───────────────────
+// entry = (address << 16) | state；下列判别值必须与 `wjsm_gc::HandleState`
+// 逐一对应。wasm 侧发布对象时写 `HANDLE_STATE_STABLE_YOUNG`，属性访问快链用
+// `state >= HANDLE_STATE_STABLE_MIN` 单比较判定「地址可直接使用」。
+//
+// 稳定态刻意排在连续高位区间，使快链省下两次相等比较与两个分支。
+pub const HANDLE_STATE_FREE: u32 = 0;
+pub const HANDLE_STATE_RETIRED: u32 = 1;
+pub const HANDLE_STATE_RELOCATING_YOUNG: u32 = 2;
+pub const HANDLE_STATE_RELOCATING_OLD: u32 = 3;
+pub const HANDLE_STATE_STABLE_YOUNG: u32 = 4;
+pub const HANDLE_STATE_STABLE_OLD: u32 = 5;
+pub const HANDLE_STATE_PINNED_OLD: u32 = 6;
+/// 稳定态下界：`state >= 此值` ⇔ entry 地址可被直接使用。
+pub const HANDLE_STATE_STABLE_MIN: u32 = HANDLE_STATE_STABLE_YOUNG;
 pub const GC_INITIAL_TRIGGER_BYTES: u32 = 256 * 1024;
 pub const HANDLE_TABLE_GC_WINDOWS: u32 = 2;
 pub const HANDLE_TABLE_MIN_ENTRIES: u32 =
@@ -206,15 +285,32 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         ("heap_object_type_offset", HEAP_OBJECT_TYPE_OFFSET),
         ("heap_object_header_pad_start", HEAP_OBJECT_HEADER_PAD_START),
         ("heap_object_header_pad_len", HEAP_OBJECT_HEADER_PAD_LEN),
-        ("heap_object_capacity_offset", HEAP_OBJECT_CAPACITY_OFFSET),
         (
-            "heap_object_property_count_offset",
-            HEAP_OBJECT_PROPERTY_COUNT_OFFSET,
+            "heap_object_value_capacity_offset",
+            HEAP_OBJECT_VALUE_CAPACITY_OFFSET,
         ),
+        ("heap_object_shape_id_offset", HEAP_OBJECT_SHAPE_ID_OFFSET),
         (
-            "heap_object_property_slot_size",
-            HEAP_OBJECT_PROPERTY_SLOT_SIZE,
+            "heap_object_value_slot_size",
+            HEAP_OBJECT_VALUE_SLOT_SIZE,
         ),
+        ("shape_id_empty", SHAPE_ID_EMPTY),
+        ("shape_map_threshold", SHAPE_MAP_THRESHOLD),
+        ("dictionary_threshold", DICTIONARY_THRESHOLD),
+        ("shape_table_budget", SHAPE_TABLE_BUDGET),
+        // 数组 ElementsKind 占 header pad 首字节，改变数组头解释方式 → 进 ABI。
+        ("heap_array_kind_offset", HEAP_ARRAY_KIND_OFFSET),
+        ("array_kind_holey", ARRAY_KIND_HOLEY),
+        ("array_kind_dictionary", ARRAY_KIND_DICTIONARY),
+        // IC 区插在 data segment 与 heap_start 之间，改变对象堆基址 → 进 ABI。
+        ("ic_slot_size", IC_SLOT_SIZE),
+        ("ic_kind_own_data", IC_KIND_OWN_DATA),
+        ("ic_kind_proto_data", IC_KIND_PROTO_DATA),
+        ("ic_kind_megamorphic", IC_KIND_MEGAMORPHIC),
+        // handle entry 状态编码：codegen 发布对象时写入，快链据此判定稳定态。
+        ("handle_state_stable_min", HANDLE_STATE_STABLE_MIN),
+        ("handle_state_stable_young", HANDLE_STATE_STABLE_YOUNG),
+        ("handle_state_retired", HANDLE_STATE_RETIRED),
         ("heap_array_length_offset", HEAP_ARRAY_LENGTH_OFFSET),
         ("heap_array_capacity_offset", HEAP_ARRAY_CAPACITY_OFFSET),
         ("heap_array_element_size", HEAP_ARRAY_ELEMENT_SIZE),

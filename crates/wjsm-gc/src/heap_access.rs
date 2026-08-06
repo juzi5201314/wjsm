@@ -8,9 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::heap::{
     GrowableHeapMemory, HandleGeneration, HandleState, HeapAddress, HeapMemoryError,
 };
+use crate::shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot};
 use wjsm_ir::{constants, value};
-
-const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
 
 /// 相邻两次惰性合并之间允许新增的空闲区间数量。
 /// GC 清扫逐对象释放时，每次 `release_region` 只 push，累计达到该值才排序归并一次；
@@ -27,6 +26,8 @@ pub struct HeapAccessV2<M: GrowableHeapMemory> {
     /// `baseline + FREE_REGION_MERGE_BATCH` 时才重新排序合并，把 GC 清扫批量
     /// 释放的每次 `release_region` 摊还为 O(1)。
     merged_free_region_count: AtomicU64,
+    /// 属性元数据（name_id / flags / 值槽下标）的唯一 owner；堆内只留紧凑值数组。
+    shapes: ShapeTable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,6 +53,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             heap_limit,
             free_regions: Mutex::new(Vec::new()),
             merged_free_region_count: AtomicU64::new(0),
+            shapes: ShapeTable::new(),
         }
     }
 
@@ -218,6 +220,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map_err(HeapAccessV2Error::Memory)
     }
 
+    /// 发布新对象：header 写 proto / value_capacity / 空 shape，并登记 handle entry。
+    /// `capacity` 是**值槽**容量（8 字节/槽），不是属性数。
     pub fn publish_object(
         &self,
         handle: u32,
@@ -231,15 +235,50 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         let mut header = [0_u8; constants::HEAP_OBJECT_HEADER_SIZE as usize];
         header[constants::HEAP_OBJECT_PROTO_OFFSET as usize..][..4]
             .copy_from_slice(&prototype.to_le_bytes());
-        header[constants::HEAP_OBJECT_CAPACITY_OFFSET as usize..][..4]
+        header[constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as usize..][..4]
             .copy_from_slice(&capacity.to_le_bytes());
+        header[constants::HEAP_OBJECT_SHAPE_ID_OFFSET as usize..][..4]
+            .copy_from_slice(&ShapeTable::empty_shape().to_le_bytes());
         self.memory
             .copy_from(HeapAddress::new(object), &header)
             .map_err(HeapAccessV2Error::Memory)?;
+        self.shapes.note_prototype(prototype);
         let entry = (object << 16) | u64::from(crate::heap::HandleState::StableYoung as u16);
         self.memory
             .store_word(HeapAddress::new(u64::from(handle) * 8), entry)
             .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 宿主侧隐藏类表；IC 回填与属性枚举都经它。
+    pub fn shapes(&self) -> &ShapeTable {
+        &self.shapes
+    }
+
+    /// 导出 ShapeTable（startup snapshot / realm 克隆）。
+    /// 堆字节与 shape 表必须成对捕获，否则恢复后 shape_id 指向错误的属性结构。
+    pub fn export_shapes(&self) -> ShapeTableSnapshot {
+        self.shapes.export()
+    }
+
+    /// 恢复 ShapeTable，与 `restore_object_region` 成对使用。
+    pub fn import_shapes(&self, snapshot: ShapeTableSnapshot) {
+        self.shapes.import(snapshot);
+    }
+
+    /// 读对象当前 shape_id。数组没有 shape（`+12` 是 capacity），调用方须先判类型。
+    pub fn shape_id_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
+        self.memory
+            .load_word(HeapAddress::new(
+                object + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64,
+            ))
+            .map(|word| (word >> 32) as u32)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 读 handle 的 shape_id。
+    pub fn shape_id(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.shape_id_at(object)
     }
 
     pub fn set_prototype(&self, handle: u32, prototype: u32) -> Result<(), HeapAccessV2Error> {
@@ -248,6 +287,10 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .memory
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
+        self.shapes.note_prototype(prototype);
+        // 换 proto 会改变整条链的解析结果：接收者自身的 IC 靠缓存的 expected_proto
+        // 比较失效，但以本对象为原型的下游对象必须整体重新预热。
+        self.shapes.invalidate_if_prototype(handle);
         self.memory
             .store_word(
                 HeapAddress::new(object),
@@ -279,6 +322,47 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             )
             .map_err(HeapAccessV2Error::Memory)?;
         Ok(())
+    }
+
+    /// 读数组 ElementsKind（对象头 `+5` 的 pad 首字节）。
+    ///
+    /// 头字节 `+0..8` 是一个 word：低 32 位 proto、`+4` heap_type、`+5` kind。
+    /// 故 kind = `(header >> 40) & 0xFF`。新分配的数组 header 全零 ⇒ PACKED。
+    pub fn array_kind(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.array_kind_at(object)
+    }
+
+    pub fn array_kind_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
+        let header = self
+            .memory
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        Ok(((header >> (constants::HEAP_ARRAY_KIND_OFFSET * 8)) & 0xFF) as u32)
+    }
+
+    /// 单向升级数组 ElementsKind；已是更高等级时不降级。
+    ///
+    /// 升级只会让元素读**更保守**（退回宿主完整语义），因此永不破坏正确性；
+    /// 降级则需要全扫描证明「不含洞且无异质索引属性」，不值得。
+    pub fn raise_array_kind(&self, handle: u32, kind: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let header = self
+            .memory
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let shift = constants::HEAP_ARRAY_KIND_OFFSET * 8;
+        let current = ((header >> shift) & 0xFF) as u32;
+        if current >= kind {
+            return Ok(());
+        }
+        let cleared = header & !(0xFF_u64 << shift);
+        self.memory
+            .store_word(
+                HeapAddress::new(object),
+                cleared | (u64::from(kind) << shift),
+            )
+            .map_err(HeapAccessV2Error::Memory)
     }
 
     pub fn get_element(&self, handle: u32, index: u32) -> Result<Option<u64>, HeapAccessV2Error> {
@@ -326,6 +410,21 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .store_word(HeapAddress::new(address), value)
             .map_err(HeapAccessV2Error::Memory)?;
         if index >= length {
+            // 跨越式写入（`a[5] = v` 而 length 只有 1）必须把 `[length, index)`
+            // 填成洞哨兵：这些槽自分配起是 0，而 `0u64` 解码为 `+0.0`，
+            // 不填就会让 `a[2]` 读出 0 而非 undefined。
+            if index > length {
+                for gap in length..index {
+                    self.memory
+                        .store_word(
+                            HeapAddress::new(array_element_address(object, gap)?),
+                            value::encode_array_hole() as u64,
+                        )
+                        .map_err(HeapAccessV2Error::Memory)?;
+                }
+                // 产生了洞 → 元素读必须落宿主（洞按缺失属性查原型链）。
+                self.raise_array_kind(handle, constants::ARRAY_KIND_HOLEY)?;
+            }
             self.memory
                 .store_word(
                     HeapAddress::new(shape_address),
@@ -461,24 +560,23 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         Ok(length + 1)
     }
 
+    /// 删除自有属性：对象退化为字典 shape，被删属性的值槽清零。
+    /// 值槽不回收——其余属性的下标必须保持稳定，否则已发射的 IC 会读错槽。
     pub fn delete_property(&self, handle: u32, key: u32) -> Result<bool, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
-        let (capacity, count) = self.property_shape(object)?;
-        for index in 0..count.min(capacity) {
-            let slot = property_slot_address(object, index)?;
-            let name = self
-                .memory
-                .load_word(HeapAddress::new(slot))
-                .map_err(HeapAccessV2Error::Memory)? as u32;
-            if name == key {
-                self.memory
-                    .store_word(HeapAddress::new(slot), 0)
-                    .map_err(HeapAccessV2Error::Memory)?;
-                return Ok(true);
-            }
+        let shape_id = self.shape_id_at(object)?;
+        let Some((dictionary_id, (index, span))) = self.shapes.remove_prop(shape_id, key) else {
+            return Ok(true);
+        };
+        self.write_shape_id(object, dictionary_id)?;
+        self.shapes.invalidate_if_prototype(handle);
+        for offset in 0..span {
+            self.memory
+                .store_word(HeapAddress::new(value_slot_address(object, index + offset)?), 0)
+                .map_err(HeapAccessV2Error::Memory)?;
         }
         Ok(true)
     }
@@ -575,39 +673,40 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         Ok(bytes)
     }
 
+    /// 对象与数组的字节数公式统一为 `header + capacity * 8`——两者 payload 同构。
     fn object_size(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
-        if self.object_type(handle)? == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
-            let (_, capacity) = self.array_shape(handle)?;
-            return u64::from(capacity)
-                .checked_mul(u64::from(constants::HEAP_ARRAY_ELEMENT_SIZE))
-                .and_then(|payload| {
-                    payload.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE))
-                })
-                .ok_or(HeapAccessV2Error::AddressOverflow);
-        }
         let object = self.resolve_handle(handle)?;
-        let (capacity, _) = self.property_shape(object)?;
-        object_property_bytes(capacity)
+        let capacity = if self.object_at_is_array(object)? {
+            self.array_shape(handle)?.1
+        } else {
+            self.value_capacity(object)?
+        };
+        object_payload_bytes(capacity)
     }
 
+    /// 读对象 heap_type。
+    ///
+    /// `heap_type` 是 `+4` 处的**单字节**；`+5` 起是 pad（数组 ElementsKind 占用）。
+    /// 因此必须显式掩掉高位，不能整取 `header >> 32` 的 u32——那会把 kind 字节
+    /// 混进类型值（HEAP_TYPE_ARRAY 会读成 0x101）。
     pub fn object_type(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
-        Ok((self
-            .memory
-            .load_word(HeapAddress::new(object))
-            .map_err(HeapAccessV2Error::Memory)?
-            >> 32) as u32)
+        self.object_type_at(object)
     }
 
-    /// 数组的 offset 8/12 是 length/元素容量，与对象属性头（capacity/count）
-    /// 布局别名；own 属性槽操作绝不能作用于数组对象——数组命名属性由宿主
-    /// `ArrayNamedPropsStore` 侧表承载（与 V1 support 模块语义一致）。
-    fn object_at_is_array(&self, object: u64) -> Result<bool, HeapAccessV2Error> {
+    pub fn object_type_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
         let header = self
             .memory
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
-        Ok((header >> 32) as u32 == u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+        Ok(header_heap_type(header))
+    }
+
+    /// 数组的 offset 8/12 是 length/元素容量，与对象属性头（capacity/shape_id）
+    /// 布局别名；own 属性槽操作绝不能作用于数组对象——数组命名属性由宿主
+    /// `ArrayNamedPropsStore` 侧表承载（与 V1 support 模块语义一致）。
+    fn object_at_is_array(&self, object: u64) -> Result<bool, HeapAccessV2Error> {
+        Ok(self.object_type_at(object)? == u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
     }
 
     /// 覆写对象 header 中的 heap type 标记（如 HEAP_TYPE_ARGUMENTS）。
@@ -639,6 +738,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map(|property| property.value))
     }
 
+    /// 读自有属性槽：shape 查 name_id → 值槽下标，再按数据/accessor 取值。
     pub fn get_property_slot(
         &self,
         handle: u32,
@@ -648,41 +748,29 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         if self.object_at_is_array(object)? {
             return Ok(None);
         }
-        let (capacity, count) = self.property_shape(object)?;
-        for index in 0..count.min(capacity) {
-            let slot = property_slot_address(object, index)?;
-            let name_and_flags = self
-                .memory
-                .load_word(HeapAddress::new(slot))
-                .map_err(HeapAccessV2Error::Memory)?;
-            if name_and_flags as u32 == key {
-                return self.read_property_slot(slot).map(Some);
-            }
-        }
-        Ok(None)
+        let shape_id = self.shape_id_at(object)?;
+        let Some(prop) = self.shapes.lookup(shape_id, key) else {
+            return Ok(None);
+        };
+        self.read_prop(object, &prop).map(Some)
     }
 
+    /// 自有属性的 `(name_id, flags)` 列表，按插入序（即 `Object.keys` 顺序）。
     pub fn own_property_slots(&self, handle: u32) -> Result<Vec<(u32, u32)>, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Ok(Vec::new());
         }
-        let (capacity, count) = self.property_shape(object)?;
-        let mut slots = Vec::with_capacity(count.min(capacity) as usize);
-        for index in 0..count.min(capacity) {
-            let slot = property_slot_address(object, index)?;
-            let name_and_flags = self
-                .memory
-                .load_word(HeapAddress::new(slot))
-                .map_err(HeapAccessV2Error::Memory)?;
-            let key = name_and_flags as u32;
-            if key != 0 {
-                slots.push((key, (name_and_flags >> 32) as u32));
-            }
-        }
-        Ok(slots)
+        let shape_id = self.shape_id_at(object)?;
+        Ok(self
+            .shapes
+            .props(shape_id)
+            .into_iter()
+            .map(|prop| (prop.name_id, prop.flags))
+            .collect())
     }
-    /// 覆写已存在属性槽的 flags（seal/freeze 等描述符收紧路径）。
+
+    /// 收紧已存在属性的 flags（seal/freeze 等描述符路径）。属性不存在则无操作。
     pub fn update_property_flags(
         &self,
         handle: u32,
@@ -693,24 +781,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         if self.object_at_is_array(object)? {
             return Ok(());
         }
-        let (capacity, count) = self.property_shape(object)?;
-        for index in 0..count.min(capacity) {
-            let slot = property_slot_address(object, index)?;
-            let name = self
-                .memory
-                .load_word(HeapAddress::new(slot))
-                .map_err(HeapAccessV2Error::Memory)? as u32;
-            if name == key {
-                return self
-                    .memory
-                    .store_word(
-                        HeapAddress::new(slot),
-                        u64::from(key) | (u64::from(flags) << 32),
-                    )
-                    .map_err(HeapAccessV2Error::Memory);
-            }
-        }
-        Ok(())
+        let shape_id = self.shape_id_at(object)?;
+        let Some(transition) = self.shapes.update_flags(shape_id, key, flags) else {
+            return Ok(());
+        };
+        // flags 收紧不改属性种类时下标不变，无需扩容；改变种类时按 transition 处理。
+        self.apply_transition(handle, object, shape_id, transition)
+            .map(|_| ())
     }
 
     pub fn get_property_slot_on_proto_chain(
@@ -730,7 +807,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 .memory
                 .load_word(HeapAddress::new(object))
                 .map_err(HeapAccessV2Error::Memory)?;
-            let object_type = (header >> 32) as u32;
+            let object_type = header_heap_type(header);
             if object_type != u32::from(wjsm_ir::HEAP_TYPE_ARRAY)
                 && let Some(property) = self.get_property_slot(current, key)?
             {
@@ -809,21 +886,17 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map(|property| property.value))
     }
 
+    /// 写自有属性：命中现有 shape 槽则原地覆写，否则按默认数据属性 flags 定义。
     pub fn set_property(&self, handle: u32, key: u32, value: u64) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
-        let (capacity, count) = self.property_shape(object)?;
-        for index in 0..count.min(capacity) {
-            let slot = property_slot_address(object, index)?;
-            let name = self
-                .memory
-                .load_word(HeapAddress::new(slot))
-                .map_err(HeapAccessV2Error::Memory)? as u32;
-            if name == key {
-                return self.store_property_value(slot, value);
-            }
+        let shape_id = self.shape_id_at(object)?;
+        if let Some(prop) = self.shapes.lookup(shape_id, key)
+            && !prop.is_accessor()
+        {
+            return self.store_value_slot(object, prop.index, value);
         }
         self.define_property_slot(
             handle,
@@ -849,86 +922,94 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         if self.object_at_is_array(object)? {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
-        let (capacity, count) = self.property_shape(object)?;
-        for index in 0..count.min(capacity) {
-            let slot = property_slot_address(object, index)?;
-            let name = self
-                .memory
-                .load_word(HeapAddress::new(slot))
-                .map_err(HeapAccessV2Error::Memory)? as u32;
-            if name == key {
-                return self.write_property_slot(slot, key, flags, property_value, getter, setter);
+        let shape_id = self.shape_id_at(object)?;
+        let transition = self.shapes.transition_add(shape_id, key, flags);
+        // transition 可能触发扩容 relocate，对象地址随之变化。
+        let object = self.apply_transition(handle, object, shape_id, transition)?;
+        if flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
+            self.store_value_slot(object, transition.index, getter)?;
+            self.store_value_slot(object, transition.index + 1, setter)
+        } else {
+            self.store_value_slot(object, transition.index, property_value)
+        }
+    }
+
+    /// 落地一次 shape 变化：按需扩容值数组、清理被弃用的旧槽、写入新 shape_id、
+    /// 使以本对象为原型的 IC 失效。返回（可能因扩容而改变的）对象地址。
+    fn apply_transition(
+        &self,
+        handle: u32,
+        object: u64,
+        old_shape_id: u32,
+        transition: crate::shape::ShapeTransition,
+    ) -> Result<u64, HeapAccessV2Error> {
+        let mut object = object;
+        if self.value_capacity(object)? < transition.slot_count {
+            self.grow_value_capacity(handle, object, transition.slot_count)?;
+            object = self.resolve_handle(handle)?;
+        }
+        if let Some((index, span)) = transition.abandoned {
+            // 弃用槽必须清零：残留句柄会让 GC 误留对象存活。
+            for offset in 0..span {
+                self.store_value_slot(object, index + offset, 0)?;
             }
         }
-        if count == capacity {
-            self.grow_object_property_capacity(handle, object, capacity, count)?;
-            return self.define_property_slot(handle, key, flags, property_value, getter, setter);
+        if transition.shape_id != old_shape_id {
+            self.write_shape_id(object, transition.shape_id)?;
+            self.shapes.invalidate_if_prototype(handle);
         }
-        let slot = property_slot_address(object, count)?;
-        self.write_property_slot(slot, key, flags, property_value, getter, setter)?;
+        Ok(object)
+    }
+
+    fn write_shape_id(&self, object: u64, shape_id: u32) -> Result<(), HeapAccessV2Error> {
+        let address = object + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64;
+        let word = self
+            .memory
+            .load_word(HeapAddress::new(address))
+            .map_err(HeapAccessV2Error::Memory)?;
         self.memory
             .store_word(
-                HeapAddress::new(object + constants::HEAP_OBJECT_CAPACITY_OFFSET as u64),
-                u64::from(capacity) | (u64::from(count + 1) << 32),
+                HeapAddress::new(address),
+                (word & u64::from(u32::MAX)) | (u64::from(shape_id) << 32),
             )
             .map_err(HeapAccessV2Error::Memory)
     }
 
-    fn property_shape(&self, object: u64) -> Result<(u32, u32), HeapAccessV2Error> {
-        let shape = self
-            .memory
+    /// 值槽容量（8 字节/槽）。
+    fn value_capacity(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
+        self.memory
             .load_word(HeapAddress::new(
-                object + constants::HEAP_OBJECT_CAPACITY_OFFSET as u64,
+                object + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64,
             ))
-            .map_err(HeapAccessV2Error::Memory)?;
-        Ok((shape as u32, (shape >> 32) as u32))
+            .map(|word| word as u32)
+            .map_err(HeapAccessV2Error::Memory)
     }
 
-    /// 将对象属性槽 capacity 扩到至少 `needed`（分配新区、拷贝 header+slots、更新 handle entry）。
-    /// 禁止 main memory 路径；旧区经 `release_region` 回收。
+    /// 把值数组容量扩到至少 `needed` 槽（分配新区、整块搬运、更新 handle entry）。
     pub fn grow_object_capacity(&self, handle: u32, needed: u32) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
-        let (capacity, count) = self.property_shape(object)?;
-        if needed <= capacity {
+        if needed <= self.value_capacity(object)? {
             return Ok(());
         }
+        self.grow_value_capacity(handle, object, needed)
+    }
+
+    fn grow_value_capacity(
+        &self,
+        handle: u32,
+        object: u64,
+        needed: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let capacity = self.value_capacity(object)?;
         let new_capacity = capacity.saturating_mul(2).max(4).max(needed);
-        self.relocate_object_to_capacity(handle, object, capacity, count, new_capacity)
-    }
-
-    fn grow_object_property_capacity(
-        &self,
-        handle: u32,
-        object: u64,
-        capacity: u32,
-        count: u32,
-    ) -> Result<(), HeapAccessV2Error> {
-        let minimum = count
-            .checked_add(1)
-            .ok_or(HeapAccessV2Error::AddressOverflow)?;
-        let new_capacity = capacity.saturating_mul(2).max(4).max(minimum);
-        if new_capacity == capacity {
-            return Err(HeapAccessV2Error::AddressOverflow);
-        }
-        self.relocate_object_to_capacity(handle, object, capacity, count, new_capacity)
-    }
-
-    fn relocate_object_to_capacity(
-        &self,
-        handle: u32,
-        object: u64,
-        capacity: u32,
-        count: u32,
-        new_capacity: u32,
-    ) -> Result<(), HeapAccessV2Error> {
         if new_capacity <= capacity {
             return Err(HeapAccessV2Error::AddressOverflow);
         }
-        let old_bytes = object_property_bytes(capacity)?;
-        let new_bytes = object_property_bytes(new_capacity)?;
+        let old_bytes = object_payload_bytes(capacity)?;
+        let new_bytes = object_payload_bytes(new_capacity)?;
         let (destination, _) = self.reserve_nlab(new_bytes)?;
         let contents = self
             .memory
@@ -937,10 +1018,19 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.memory
             .copy_from(HeapAddress::new(destination), &contents)
             .map_err(HeapAccessV2Error::Memory)?;
+        // 新增槽必须清零：reserve_nlab 复用的空闲区可能残留旧句柄字节。
+        for index in capacity..new_capacity {
+            self.store_value_slot(destination, index, 0)?;
+        }
+        let capacity_address = destination + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64;
+        let word = self
+            .memory
+            .load_word(HeapAddress::new(capacity_address))
+            .map_err(HeapAccessV2Error::Memory)?;
         self.memory
             .store_word(
-                HeapAddress::new(destination + constants::HEAP_OBJECT_CAPACITY_OFFSET as u64),
-                u64::from(new_capacity) | (u64::from(count) << 32),
+                HeapAddress::new(capacity_address),
+                (word & !u64::from(u32::MAX)) | u64::from(new_capacity),
             )
             .map_err(HeapAccessV2Error::Memory)?;
         let entry_address = u64::from(handle) * 8;
@@ -958,93 +1048,78 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         Ok(())
     }
 
-    fn read_property_slot(&self, slot: u64) -> Result<HeapAccessV2Property, HeapAccessV2Error> {
-        let name_and_flags = self
-            .memory
-            .load_word(HeapAddress::new(slot))
-            .map_err(HeapAccessV2Error::Memory)?;
+    fn read_prop(
+        &self,
+        object: u64,
+        prop: &ShapeProp,
+    ) -> Result<HeapAccessV2Property, HeapAccessV2Error> {
+        let undefined = value::encode_undefined() as u64;
+        if prop.is_accessor() {
+            return Ok(HeapAccessV2Property {
+                flags: prop.flags,
+                value: undefined,
+                getter: self.load_value_slot(object, prop.getter_index())?,
+                setter: self.load_value_slot(object, prop.setter_index())?,
+            });
+        }
         Ok(HeapAccessV2Property {
-            flags: (name_and_flags >> 32) as u32,
-            value: self
-                .memory
-                .load_word(HeapAddress::new(
-                    slot + constants::PROP_SLOT_VALUE_OFFSET as u64,
-                ))
-                .map_err(HeapAccessV2Error::Memory)?,
-            getter: self
-                .memory
-                .load_word(HeapAddress::new(
-                    slot + constants::PROP_SLOT_GETTER_OFFSET as u64,
-                ))
-                .map_err(HeapAccessV2Error::Memory)?,
-            setter: self
-                .memory
-                .load_word(HeapAddress::new(
-                    slot + constants::PROP_SLOT_SETTER_OFFSET as u64,
-                ))
-                .map_err(HeapAccessV2Error::Memory)?,
+            flags: prop.flags,
+            value: self.load_value_slot(object, prop.index)?,
+            getter: undefined,
+            setter: undefined,
         })
     }
 
-    fn write_property_slot(
-        &self,
-        slot: u64,
-        key: u32,
-        flags: u32,
-        property_value: u64,
-        getter: u64,
-        setter: u64,
-    ) -> Result<(), HeapAccessV2Error> {
+    fn load_value_slot(&self, object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
         self.memory
-            .store_word(
-                HeapAddress::new(slot),
-                u64::from(key) | (u64::from(flags) << 32),
-            )
-            .map_err(HeapAccessV2Error::Memory)?;
-        self.store_property_value(slot, property_value)?;
-        self.memory
-            .store_word(
-                HeapAddress::new(slot + constants::PROP_SLOT_GETTER_OFFSET as u64),
-                getter,
-            )
-            .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
-            .store_word(
-                HeapAddress::new(slot + constants::PROP_SLOT_SETTER_OFFSET as u64),
-                setter,
-            )
+            .load_word(HeapAddress::new(value_slot_address(object, index)?))
             .map_err(HeapAccessV2Error::Memory)
     }
 
-    fn store_property_value(&self, slot: u64, value: u64) -> Result<(), HeapAccessV2Error> {
+    fn store_value_slot(
+        &self,
+        object: u64,
+        index: u32,
+        value: u64,
+    ) -> Result<(), HeapAccessV2Error> {
         self.memory
-            .store_word(
-                HeapAddress::new(slot + constants::PROP_SLOT_VALUE_OFFSET as u64),
-                value,
-            )
+            .store_word(HeapAddress::new(value_slot_address(object, index)?), value)
             .map_err(HeapAccessV2Error::Memory)
     }
 }
 
-fn property_slot_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
+/// 从 header word 提取 heap_type。
+///
+/// header 首 8 字节是一个 word：低 32 位 proto handle、`+4` heap_type（**单字节**）、
+/// `+5..8` pad（数组 ElementsKind 占 `+5`）。因此类型必须按字节掩码提取——
+/// 整取 `header >> 32` 会把 kind 字节混进类型值。
+fn header_heap_type(header: u64) -> u32 {
+    ((header >> (constants::HEAP_OBJECT_TYPE_OFFSET * 8)) & 0xFF) as u32
+}
+
+/// 值槽地址：`object + 16 + index * 8`，与数组元素同一套公式。
+pub fn value_slot_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
     object
         .checked_add(constants::HEAP_OBJECT_HEADER_SIZE as u64)
-        .and_then(|base| base.checked_add(u64::from(index) * constants::PROP_SLOT_SIZE as u64))
+        .and_then(|base| {
+            base.checked_add(
+                u64::from(index) * u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE),
+            )
+        })
         .ok_or(HeapAccessV2Error::AddressOverflow)
 }
 
-fn object_property_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
+/// 对象/数组字节数：`16 + capacity * 8`。
+pub fn object_payload_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
     u64::from(capacity)
-        .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
+        .checked_mul(u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE))
         .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
         .ok_or(HeapAccessV2Error::AddressOverflow)
 }
 
+/// 数组元素地址；与对象值槽同构，故直接复用同一公式。
 fn array_element_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
-    object
-        .checked_add(constants::HEAP_OBJECT_HEADER_SIZE as u64)
-        .and_then(|base| base.checked_add(u64::from(index) * 8))
-        .ok_or(HeapAccessV2Error::AddressOverflow)
+    value_slot_address(object, index)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -116,19 +116,18 @@ fn zgc_relocate_non_rs_entry_repairs_to_remapped() {
 fn zgc_relocate_raw_copy_preserves_handle_slots() {
     let src = 128;
     let dest = 512;
+    // 新布局：16 字节头 + value_capacity × 8 字节值槽；属性值直接写在值槽里。
     let size = constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
-    let slot_addr = src
-        + constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + constants::PROP_SLOT_VALUE_OFFSET as usize;
-    let dest_slot_addr = dest
-        + constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + constants::PROP_SLOT_VALUE_OFFSET as usize;
+        + constants::HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
+    let slot_addr = src + constants::HEAP_OBJECT_HEADER_SIZE as usize; // 值槽 0
+    let dest_slot_addr = dest + constants::HEAP_OBJECT_HEADER_SIZE as usize;
     let child = value::encode_object_handle(42);
     let mut data = vec![0u8; 1024];
     data[src + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = HEAP_TYPE_OBJECT;
-    data[src + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize..][..4]
-        .copy_from_slice(&1u32.to_le_bytes());
+    data[src + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as usize..][..4]
+        .copy_from_slice(&1u32.to_le_bytes()); // value_capacity = 1
+    data[src + constants::HEAP_OBJECT_SHAPE_ID_OFFSET as usize..][..4]
+        .copy_from_slice(&1u32.to_le_bytes()); // shape_id = 1
     data[slot_addr..slot_addr + 8].copy_from_slice(&child.to_le_bytes());
 
     assert!(copy_raw_object(&mut data, src, dest, size, &mut Vec::new()));
@@ -141,11 +140,10 @@ fn zgc_relocate_raw_copy_preserves_handle_slots() {
 fn zgc_relocate_host_resolve_heals_rs_object() {
     let (mut store, env) = test_store_env();
     let source = ZPAGE_SIZE;
+    // 新布局：16 字节头 + 1 × 8 字节值槽。
     let size = constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
-    let slot_addr = source
-        + constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + constants::PROP_SLOT_VALUE_OFFSET as usize;
+        + constants::HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
+    let slot_addr = source + constants::HEAP_OBJECT_HEADER_SIZE as usize; // 值槽 0
     let child = value::encode_object_handle(77);
     let mut pages = ZPageSpace::default();
     pages.attach(ZPAGE_SIZE, 4 * ZPAGE_SIZE);
@@ -161,16 +159,16 @@ fn zgc_relocate_host_resolve_heals_rs_object() {
                 .to_le_bytes(),
         );
         data[source + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = HEAP_TYPE_OBJECT;
-        data[source + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize..][..4]
-            .copy_from_slice(&1u32.to_le_bytes());
+        data[source + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as usize..][..4]
+            .copy_from_slice(&1u32.to_le_bytes()); // value_capacity = 1
+        data[source + constants::HEAP_OBJECT_SHAPE_ID_OFFSET as usize..][..4]
+            .copy_from_slice(&1u32.to_le_bytes()); // shape_id = 1
         data[slot_addr..slot_addr + 8].copy_from_slice(&child.to_le_bytes());
     });
 
     let raw = relocate.relocate_or_remap_handle(&mut ctx, &mut pages, 0);
     let moved = ZEntry::from(raw);
-    let copied_slot = moved.ptr() as usize
-        + constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + constants::PROP_SLOT_VALUE_OFFSET as usize;
+    let copied_slot = moved.ptr() as usize + constants::HEAP_OBJECT_HEADER_SIZE as usize;
     let (table_raw, copied) = ctx.with_memory(|data| {
         let table_raw = u32::from_le_bytes(data[0..4].try_into().unwrap());
         let copied = i64::from_le_bytes(data[copied_slot..copied_slot + 8].try_into().unwrap());
@@ -197,8 +195,9 @@ fn zgc_relocate_remapped_entry_points_at_destination() {
 fn zgc_relocate_source_page_waits_for_last_live_object() {
     let mut pages = ZPageSpace::default();
     let first = ZPAGE_SIZE;
+    // 新布局对象：16 字节头 + 1 × 8 字节值槽。
     let object_size = constants::HEAP_OBJECT_HEADER_SIZE as usize
-        + constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
+        + constants::HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
     let second = first + object_size;
     pages.attach(ZPAGE_SIZE, 3 * ZPAGE_SIZE);
     pages.add_live_bytes_range(first, object_size);

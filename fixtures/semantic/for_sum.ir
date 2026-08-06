@@ -74,26 +74,26 @@ module {
       %21 = const c20
       store var $0.sum, %21
       %22 = const c21
-      store var $0.i, %22
+      store var $1.i, %22
       jump bb1
     bb1:
-      %23 = load var $0.i
+      %23 = load var $1.i
       %24 = const c22
       %26 = call builtin.abstract_compare(%24, %23)
       %25 = not %26
       branch %25, bb2, bb4
     bb2:
       %27 = load var $0.sum
-      %28 = load var $0.i
+      %28 = load var $1.i
       %29 = add %27, %28
       store var $0.sum, %29
       %30 = is_exception %29
       branch %30, bb6, bb5
     bb3:
-      %32 = load var $0.i
+      %32 = load var $1.i
       %33 = const c23
       %34 = add %32, %33
-      store var $0.i, %34
+      store var $1.i, %34
       jump bb1
     bb4:
       %35 = load var $0.sum

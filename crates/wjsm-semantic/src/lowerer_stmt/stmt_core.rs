@@ -475,12 +475,40 @@ impl Lowerer {
         for_stmt: &swc_ast::ForStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        // `for (let i ...)` 的头部绑定属于本循环自有的词法作用域（ES2015 13.7.4）：
+        // 相邻两个 `for (let i ...)` 各自持有独立的 `i`，不构成重复声明。
+        // 头部作用域必须在此压栈，因为 predeclare 只提升 `var`。
+        let head_scope = matches!(
+            &for_stmt.init,
+            Some(swc_ast::VarDeclOrExpr::VarDecl(decl))
+                if decl.kind != swc_ast::VarDeclKind::Var
+        );
+        if head_scope {
+            self.scopes.push_scope(ScopeKind::Block);
+        }
+        let result = self.lower_for_in_head_scope(for_stmt, flow);
+        if head_scope {
+            self.scopes.pop_scope();
+        }
+        result
+    }
+
+    fn lower_for_in_head_scope(
+        &mut self,
+        for_stmt: &swc_ast::ForStmt,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
         // init
         let block = if let Some(init) = &for_stmt.init {
             match init {
                 swc_ast::VarDeclOrExpr::VarDecl(var_decl) => {
+                    // 头部 `let`/`const` 在本循环作用域内声明；`var` 已由 predeclare
+                    // 提升到函数作用域，lower_var_decl 只做 mark_initialised。
+                    if var_decl.kind != swc_ast::VarDeclKind::Var {
+                        self.predeclare_var_decl(var_decl)?;
+                    }
                     // 必须使用 lower_var_decl 返回的继续块：can_throw 初始化器会插入
                     // 异常分叉（lower_value_exception_branch），store 落在分叉的
                     // continue 块上；若沿用 init 前的旧块，后面的

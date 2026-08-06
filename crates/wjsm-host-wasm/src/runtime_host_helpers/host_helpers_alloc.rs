@@ -212,7 +212,7 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
         let handle = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(-1);
         let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
         let bytes = u64::from(constants::HEAP_OBJECT_HEADER_SIZE)
-            + u64::from(capacity) * u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE);
+            + u64::from(capacity) * u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE);
         let access = ctx.as_context().data().heap_access_v2().clone();
         if handle < 0 || proto < 0 {
             return value::encode_undefined();

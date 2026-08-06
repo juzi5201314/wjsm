@@ -20,9 +20,10 @@ pub use managed_heap_v2::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
-/// 格式版本:v9 函数属性对象新增 prototype + constructor 属性。
-/// 任何 wire 改动必须递增。
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 9;
+/// 格式版本:v10 新增 shape 表段：对象头 +12 只存 shape_id，属性元数据（name_id /
+/// flags / 值槽下标）全部在宿主 `wjsm_gc::ShapeTable`，堆字节与 shape 表必须
+/// 成对捕获/恢复。任何 wire 改动必须递增。
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
@@ -65,6 +66,9 @@ pub struct StartupSnapshotOwned {
     pub runtime_strings: Vec<SnapshotRuntimeString>,
     pub native_callables: Vec<SnapshotNativeCallable>,
     pub native_callable_methods: Vec<u8>,
+    /// 宿主 `wjsm_gc::ShapeTable` 的 bincode 序列化字节（不透明，本 crate 不解释）。
+    /// 堆字节与 shape 表必须成对存在：对象头 +12 只存 shape_id。
+    pub shape_table_bytes: Vec<u8>,
 }
 
 /// Decoded snapshot view: `object_bytes` 安全借用输入 bytes，
@@ -77,6 +81,8 @@ pub struct StartupSnapshotView<'a> {
     pub runtime_strings: Vec<SnapshotRuntimeString>,
     pub native_callables: Vec<SnapshotNativeCallable>,
     pub native_callable_methods: Vec<u8>,
+    /// 宿主 shape 表的 bincode 字节（与 `object_bytes` 成对）。
+    pub shape_table_bytes: &'a [u8],
 }
 
 // ── SnapshotNativeCallable ─────────────────────────────────────────
@@ -286,19 +292,21 @@ const SK_OBJECT_BYTES: u32 = 1;
 const SK_HANDLE_OFFSETS: u32 = 2;
 const SK_RUNTIME_STRINGS: u32 = 3;
 const SK_NATIVE_CALLABLES: u32 = 4;
-const SECTION_COUNT: u32 = 4;
+const SK_SHAPE_TABLE: u32 = 5;
+const SECTION_COUNT: u32 = 5;
 
 pub fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
     // 两次写入: 先算 offset，再写最终 buf。
     let header_bytes = build_header_bytes(&snapshot.header);
 
     // section payloads (pre-serialized)
-    let (obj_payload, ho_payload, rs_payload, nc_payload) = build_section_payloads(snapshot);
+    let (obj_payload, ho_payload, rs_payload, nc_payload, st_payload) =
+        build_section_payloads(snapshot);
 
     // compute offsets
     let header_size = header_bytes.len() as u32;
     let st_start = align_up(header_size, 4);
-    let st_size = SECTION_COUNT * 12; // 48
+    let st_size = SECTION_COUNT * 12; // 60
     let payload_start = align_up(st_start + st_size, 4);
 
     let mut off = payload_start;
@@ -309,8 +317,10 @@ pub fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
     let rs_start = off;
     off += align_up(rs_payload.len() as u32, 4);
     let nc_start = off;
+    off += align_up(nc_payload.len() as u32, 4);
+    let st_payload_start = off;
 
-    let total_size = align_up(nc_start + nc_payload.len() as u32, 4) as usize;
+    let total_size = align_up(st_payload_start + st_payload.len() as u32, 4) as usize;
     let mut buf = Vec::with_capacity(total_size);
 
     buf.extend_from_slice(&header_bytes);
@@ -343,6 +353,12 @@ pub fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
         nc_start,
         nc_payload.len() as u32,
     );
+    write_section_entry(
+        &mut buf,
+        SK_SHAPE_TABLE,
+        st_payload_start,
+        st_payload.len() as u32,
+    );
 
     while (buf.len() as u32) < payload_start {
         buf.push(0);
@@ -352,7 +368,8 @@ pub fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
     append_padded(&mut buf, &obj_payload);
     append_padded(&mut buf, &ho_payload);
     append_padded(&mut buf, &rs_payload);
-    buf.extend_from_slice(&nc_payload);
+    append_padded(&mut buf, &nc_payload);
+    append_padded(&mut buf, &st_payload);
 
     buf
 }
@@ -380,7 +397,9 @@ fn build_header_bytes(header: &StartupSnapshotHeader) -> Vec<u8> {
     b
 }
 
-fn build_section_payloads(snapshot: &StartupSnapshotOwned) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+fn build_section_payloads(
+    snapshot: &StartupSnapshotOwned,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
     let obj_payload = snapshot.object_bytes.clone();
 
     let mut ho_payload = Vec::with_capacity(snapshot.handle_rel_offsets.len() * 4);
@@ -409,7 +428,11 @@ fn build_section_payloads(snapshot: &StartupSnapshotOwned) -> (Vec<u8>, Vec<u8>,
         nc_payload.extend_from_slice(&raw.to_le_bytes());
     }
 
-    (obj_payload, ho_payload, rs_payload, nc_payload)
+    // shape 表段：宿主 `wjsm_gc::ShapeTable` 由调用方（host-wasm）用 bincode
+    // 序列化成不透明字节，本 crate 只负责按段搬运。长度由 section 表项给出。
+    let st_payload = snapshot.shape_table_bytes.clone();
+
+    (obj_payload, ho_payload, rs_payload, nc_payload, st_payload)
 }
 
 fn write_section_entry(buf: &mut Vec<u8>, kind: u32, offset: u32, len: u32) {
@@ -501,10 +524,12 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     let mut runtime_strings: Vec<SnapshotRuntimeString> = Vec::new();
     let mut native_callables: Vec<SnapshotNativeCallable> = Vec::new();
     let mut native_callable_methods: Vec<u8> = Vec::new();
+    let mut shape_table_bytes: &[u8] = &[];
     let mut seen_object = false;
     let mut seen_handles = false;
     let mut seen_strings = false;
     let mut seen_native = false;
+    let mut seen_shape = false;
 
     for i in 0..section_count {
         let off = st_start + i * 12;
@@ -614,17 +639,26 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                 native_callables = ncs;
                 native_callable_methods = methods;
             }
+            SK_SHAPE_TABLE => {
+                if seen_shape {
+                    bail!("duplicate section kind {}", _kind);
+                }
+                seen_shape = true;
+                // 不透明字节：由宿主反序列化为 `wjsm_gc::ShapeTableSnapshot`。
+                shape_table_bytes = data;
+            }
             _ => bail!("unknown snapshot section kind {}", _kind),
         }
     }
 
-    if !seen_object || !seen_handles || !seen_strings || !seen_native {
+    if !seen_object || !seen_handles || !seen_strings || !seen_native || !seen_shape {
         bail!(
-            "missing required snapshot sections (object={}, handles={}, strings={}, native={})",
+            "missing required snapshot sections (object={}, handles={}, strings={}, native={}, shape={})",
             seen_object,
             seen_handles,
             seen_strings,
-            seen_native
+            seen_native,
+            seen_shape
         );
     }
     if object_bytes.len() != heap_used as usize {
@@ -658,6 +692,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         runtime_strings,
         native_callables,
         native_callable_methods,
+        shape_table_bytes,
     })
 }
 
@@ -712,13 +747,9 @@ fn abi_hasher() -> DefaultHasher {
         }
     }
 
-    // Property slot constants
-    constants::PROP_SLOT_SIZE.hash(&mut hasher);
-    constants::PROP_SLOT_NAME_ID_OFFSET.hash(&mut hasher);
-    constants::PROP_SLOT_FLAGS_OFFSET.hash(&mut hasher);
-    constants::PROP_SLOT_VALUE_OFFSET.hash(&mut hasher);
-    constants::PROP_SLOT_GETTER_OFFSET.hash(&mut hasher);
-    constants::PROP_SLOT_SETTER_OFFSET.hash(&mut hasher);
+    // 旧属性槽常量（PROP_SLOT_SIZE / *_OFFSET）已随重构删除：新布局由
+    // value_capacity / shape_id / 值槽 8B / shape 阈值常量构成，全部经
+    // `heap_layout_abi_inputs()` 进入哈希（见下），此处不再单独列出。
     constants::FLAG_CONFIGURABLE.hash(&mut hasher);
     constants::FLAG_ENUMERABLE.hash(&mut hasher);
     constants::FLAG_WRITABLE.hash(&mut hasher);
@@ -805,12 +836,7 @@ mod tests {
             }
         }
 
-        constants::PROP_SLOT_SIZE.hash(&mut hasher);
-        constants::PROP_SLOT_NAME_ID_OFFSET.hash(&mut hasher);
-        constants::PROP_SLOT_FLAGS_OFFSET.hash(&mut hasher);
-        constants::PROP_SLOT_VALUE_OFFSET.hash(&mut hasher);
-        constants::PROP_SLOT_GETTER_OFFSET.hash(&mut hasher);
-        constants::PROP_SLOT_SETTER_OFFSET.hash(&mut hasher);
+        // 与 `abi_hasher()` 保持逐项同步；旧 PROP_SLOT_* 常量已删除。
         constants::FLAG_CONFIGURABLE.hash(&mut hasher);
         constants::FLAG_ENUMERABLE.hash(&mut hasher);
         constants::FLAG_WRITABLE.hash(&mut hasher);
@@ -857,12 +883,13 @@ mod tests {
             runtime_strings,
             native_callables: Vec::new(),
             native_callable_methods: Vec::new(),
+            shape_table_bytes: Vec::new(),
         }
     }
 
     #[test]
-    fn snapshot_format_version_is_v9_prototype_boundary() {
-        assert_eq!(SNAPSHOT_FORMAT_VERSION, 9);
+    fn snapshot_format_version_is_v10_shape_table_boundary() {
+        assert_eq!(SNAPSHOT_FORMAT_VERSION, 10);
     }
 
     #[test]
@@ -893,6 +920,18 @@ mod tests {
     }
 
     #[test]
+    fn shape_table_section_roundtrips_opaque_bytes() {
+        // v10 起快照必须携带宿主 ShapeTable 的序列化字节（与堆字节成对）。
+        let mut snapshot = snapshot_with_runtime_strings(Vec::new());
+        snapshot.shape_table_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        let bytes = encode_snapshot(&snapshot);
+        let decoded = decode_snapshot(&bytes).expect("snapshot decodes");
+
+        assert_eq!(decoded.shape_table_bytes, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
     fn abi_hash_includes_heap_layout_inputs() {
         assert_eq!(abi_hash(), expected_static_abi_hash());
     }
@@ -912,9 +951,17 @@ mod tests {
         let inputs = constants::heap_layout_abi_inputs();
         for required in [
             "heap_object_header_size",
-            "heap_object_capacity_offset",
-            "heap_object_property_count_offset",
-            "heap_object_property_slot_size",
+            "heap_object_value_capacity_offset",
+            "heap_object_shape_id_offset",
+            "heap_object_value_slot_size",
+            "shape_id_empty",
+            "shape_map_threshold",
+            "dictionary_threshold",
+            "shape_table_budget",
+            // IC 区改变对象堆基址；句柄状态编码是 codegen ↔ 宿主堆的 ABI 契约。
+            "ic_slot_size",
+            "handle_state_stable_min",
+            "heap_array_kind_offset",
             "heap_array_length_offset",
             "heap_array_capacity_offset",
             "heap_array_element_size",

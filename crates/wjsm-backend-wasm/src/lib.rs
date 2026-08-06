@@ -176,12 +176,6 @@ struct Compiler {
     obj_new_func_idx: u32,
     /// WASM index of $obj_get helper.
     obj_get_func_idx: u32,
-    /// WASM index of getter 直调 helper（快链 accessor 分支共享调用）。
-    getter_direct_func_idx: u32,
-    /// WASM index of GetProp 快链 helper：(obj, key) -> i64。所有常量键 GetProp
-    /// 共享同一份"own 槽扫描 + 原型链遍历 + getter 直调"逻辑（模块级函数），
-    /// 调用点仅保留 spill + call + epilogue，控制 wasm 函数体大小。
-    fast_chain_func_idx: u32,
     /// WASM index of $obj_set helper.
     obj_set_func_idx: u32,
     /// WASM index of $obj_delete helper.
@@ -229,10 +223,6 @@ struct Compiler {
     /// 独立于 safepoint_sp_saved_idx：GetElem/SetElem 现为 safepoint，
     /// safepoint_sp_saved_idx 被 spill prologue 占用，不可复用。
     computed_idx_scratch_idx: u32,
-    /// SetProto/GetProp 等对象访问内联快路径的 handle entry 暂存（i64）。
-    fast_entry_scratch_idx: u32,
-    /// 对象内联访问快路径的对象地址暂存（i64）。
-    fast_addr_scratch_idx: u32,
     /// WASM local index for the base address of eval-visible variable storage.
     eval_var_base_local_idx: u32,
     /// WASM global index for __object_heap_start (runtime GC heap base).
@@ -263,10 +253,6 @@ struct Compiler {
     barrier_buf_ptr_global_idx: u32,
     /// WASM global index for the write-barrier event buffer end.
     barrier_buf_end_global_idx: u32,
-    /// Base WASM global index for per-key canonical name_id values.
-    canonical_name_id_global_base: u32,
-    /// Number of per-key canonical name_id globals allocated for this module.
-    canonical_name_id_count: u32,
     /// WASM global index for Array.prototype method table base.
     arr_proto_table_base_global_idx: u32,
     /// WASM global index for Array.prototype method table length.
@@ -308,8 +294,6 @@ struct Compiler {
     /// 当前函数内常量字符串键（ValueId → 数据段偏移）：GetProp/SetProp/DeleteProp
     /// 的编译期 name_id 直传（免 symbol_property_key 运行时调用）。按函数清空。
     const_string_ptrs: HashMap<u32, u32>,
-    /// Map constant property key text to its canonical name_id global index.
-    canonical_name_id_globals: HashMap<String, u32>,
     mode: CompileMode,
     function_param_counts: Vec<u32>,
     function_names: Vec<String>,
@@ -334,6 +318,16 @@ struct Compiler {
     current_emit_instr_idx: usize,
     /// 当前函数内动态 Call 调用点的独立缓存槽：(guest callee, env, func_idx)。
     pub(crate) current_call_cache_slots: HashMap<(usize, usize), (u32, u32, u32)>,
+    // ── Inline cache（R2）──
+    /// 常量键属性访问点 → IC 槽在 memory0 的字节地址。
+    /// key = (函数 id, block 索引, 指令下标)；compile_module 入口一次性编号。
+    ic_sites: HashMap<(u32, usize, usize), u32>,
+    /// IC 区基址（memory0，16 字节对齐）。
+    ic_base: u32,
+    /// IC 槽总数（决定 IC 区大小与 heap_start 位置）。
+    ic_slot_count: u32,
+    /// IC 快链暂存对象地址的 i64 scratch local。
+    ic_addr_scratch_idx: u32,
     /// 模块级 GC 分析结果。compile_module 入口计算一次，用于 Call safepoint 省略判断。
     gc_analysis: Option<GcAnalysis>,
     // ── f64 值类型传播分析（Step 1）──
@@ -480,6 +474,7 @@ mod compiler_core;
 mod compiler_data;
 mod compiler_gc_analysis;
 mod compiler_helpers;
+mod compiler_ic;
 mod compiler_instructions;
 mod compiler_licm;
 mod compiler_module;

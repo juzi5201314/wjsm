@@ -61,22 +61,39 @@ fn compile(source: &str) -> Vec<u8> {
     wjsm_backend_wasm::compile(&program).expect("compile")
 }
 
-/// 从 WASM 二进制中提取第一个 active data segment 的原始字节内容。
-/// Normal mode 编译 data_base 为 0，因此字节偏移 = 运行时内存地址。
+/// 按各 active data segment 的偏移重建线性内存映像。
+///
+/// 产物可能包含**多个** active segment：IC 区是全零的，编译器跳过它不发射
+/// （wasm 内存按规范零初始化），于是字符串区被切成「IC 区之前」与「之后」两段。
+/// 因此不能只取第一段——必须按每段声明的偏移写入同一张映像，还原真实内存布局。
+/// Normal mode 编译 data_base 为 0，故映像下标 = 运行时内存地址。
 fn extract_active_data_bytes(wasm: &[u8]) -> Vec<u8> {
+    let mut image = Vec::new();
     for payload in wasmparser::Parser::new(0).parse_all(wasm) {
         let wasmparser::Payload::DataSection(section) = payload.expect("valid wasm") else {
             continue;
         };
         for segment_result in section {
             let segment = segment_result.expect("valid segment");
-            if let wasmparser::DataKind::Active { .. } = segment.kind {
-                return segment.data.to_vec();
+            let wasmparser::DataKind::Active { offset_expr, .. } = segment.kind else {
+                continue;
+            };
+            let mut reader = offset_expr.get_operators_reader();
+            let wasmparser::Operator::I32Const { value } =
+                reader.read().expect("offset expr operator")
+            else {
+                panic!("active data segment offset must be i32.const");
+            };
+            let start = usize::try_from(value).expect("non-negative data offset");
+            let end = start + segment.data.len();
+            if image.len() < end {
+                image.resize(end, 0);
             }
+            image[start..end].copy_from_slice(segment.data);
         }
         break;
     }
-    Vec::new()
+    image
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {

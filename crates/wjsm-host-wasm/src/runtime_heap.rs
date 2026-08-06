@@ -198,7 +198,7 @@ fn alloc_host_object_v2_with_env<C: AsContextMut<Data = RuntimeState>>(
         return value::encode_undefined();
     }
     let Some(bytes) = u64::from(capacity)
-        .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
+        .checked_mul(u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE))
         .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
     else {
         set_runtime_error(
@@ -240,7 +240,7 @@ pub(crate) fn alloc_host_object_v2(caller: &mut Caller<'_, RuntimeState>, capaci
         return value::encode_undefined();
     };
     let Some(bytes) = u64::from(capacity)
-        .checked_mul(u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE))
+        .checked_mul(u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE))
         .and_then(|slots| slots.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
     else {
         set_runtime_error(

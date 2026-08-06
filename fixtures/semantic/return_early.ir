@@ -73,23 +73,23 @@ module {
       %20 = const c19
       store var $this, %20
       %21 = const c20
-      store var $0.i, %21
+      store var $1.i, %21
       jump bb1
     bb1:
-      %22 = load var $0.i
+      %22 = load var $1.i
       %23 = const c21
       %24 = call builtin.abstract_compare(%22, %23)
       branch %24, bb2, bb4
     bb2:
-      %25 = load var $0.i
+      %25 = load var $1.i
       %26 = const c22
       %27 = call builtin.abstract_eq(%25, %26)
       branch %27, bb5, bb6
     bb3:
-      %32 = load var $0.i
+      %32 = load var $1.i
       %33 = const c23
       %34 = add %32, %33
-      store var $0.i, %34
+      store var $1.i, %34
       jump bb1
     bb4:
       %35 = const c24
@@ -99,7 +99,7 @@ module {
     bb5:
       return
     bb6:
-      %28 = load var $0.i
+      %28 = load var $1.i
       %29 = call builtin.console.log(%28)
       %30 = is_exception %29
       branch %30, bb8, bb7

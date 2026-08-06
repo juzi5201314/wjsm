@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+3 7
+x,y x,y
+10 20 40 30
+x,y y,x
+1 2 5 x,y,z
+undefined x,y
+100 2 5 3
+0 5 11 12
+--- stderr ---

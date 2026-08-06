@@ -71,6 +71,12 @@ pub enum SpecialHostImport {
     /// gc_take_freed_handle() -> handle（-1 表空）：从 host handle_free_list pop 复用。
     GcTakeFreedHandle,
     CanonicalizeNameId,
+    /// ic_backfill(obj, name_id, ic_slot)：inline cache 未命中后填充缓存。
+    ///
+    /// IC 只缓存「shape_id → 值槽下标」的位置信息，属性语义仍由 obj_get/obj_set
+    /// 承担；本导入不返回值、不改变任何可观测行为，只写 IC 槽。因此缓存永远
+    /// 不可能让语义走偏——最坏情况是 shape 比较失败，退回宿主慢路径。
+    IcBackfill,
     /// debug_break(line, col, flags) -> ()：调试检查点 / debugger 语句。
     /// flags bit0=1 表示 unconditional debugger 断点。
     DebugBreak,

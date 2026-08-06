@@ -192,6 +192,14 @@ fn analyze_candidate(
     // 代理读：转发变量的 LoadVar dest 的 use 按 GetProp 常量键分类。
     if !escapes && let Some(var) = &forwarded_var {
         for (_, _, load_dest) in load_var_positions(function, var) {
+            // `collect_uses` 只扫指令，不含终止器；`return o` / `throw o` /
+            // `if (o)` 里的 LoadVar dest 必须单独判定为逃逸，否则删掉
+            // NewObject/StoreVar/LoadVar 之后终止器会引用一个已不存在的 ValueId，
+            // 产出悬空 SSA（后端按未定义 local 发射，类型随 local 布局漂移）。
+            if used_in_terminator(function, load_dest) {
+                escapes = true;
+                break;
+            }
             for use_instr in collect_uses(function, load_dest) {
                 match use_instr {
                     Instruction::GetProp { dest, object, key }
@@ -379,6 +387,23 @@ pub(crate) fn run(module: &mut Module) {
                                 }
                             }
                             _ => {}
+                        }
+                    }
+                }
+            }
+
+            // 标量化的 GetProp 指令：dest 已被替换成常量，但指令本身未被删除。
+            // 这使其 object 操作数（已删除的 NewObject dest）成为悬空引用，
+            // wasm 后端将其映射到 local0（零值），导致 ic_backfill 和 obj_get
+            // 每次都收到空对象，IC 永久退化为 MEGAMORPHIC。
+            // 修复：凡 dest 在 all_replacements 中的 GetProp 一律加入删除列表。
+            if !all_replacements.is_empty() {
+                for block in function.blocks() {
+                    for (idx, instruction) in block.instructions().iter().enumerate() {
+                        if let Instruction::GetProp { dest, .. } = instruction {
+                            if all_replacements.contains_key(dest) {
+                                delete_targets.push((block.id(), idx));
+                            }
                         }
                     }
                 }

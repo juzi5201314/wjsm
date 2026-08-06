@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+1 hi own
+later
+own-hi hi
+hi
+other-hi 2 undefined 1
+1 undefined undefined
+3 6
+x,y x,y,z
+10000
+2 12
+--- stderr ---

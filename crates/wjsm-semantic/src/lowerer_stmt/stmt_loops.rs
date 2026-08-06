@@ -1,11 +1,48 @@
 use super::*;
 
 impl Lowerer {
+    /// `for (let x in/of ...)` 的头部绑定属于本循环自有的词法作用域
+    /// （ES2015 13.7.5）：相邻两个循环各自持有独立绑定，不构成重复声明。
+    /// 头部作用域必须在此压栈，因为 predeclare 只提升 `var`。
+    fn for_head_needs_scope(left: &swc_ast::ForHead) -> bool {
+        matches!(left, swc_ast::ForHead::VarDecl(decl) if decl.kind != swc_ast::VarDeclKind::Var)
+    }
+
+    /// 在头部作用域内声明 `let`/`const` 绑定（`var` 已由 predeclare 提升）。
+    fn declare_for_head_bindings(
+        &mut self,
+        left: &swc_ast::ForHead,
+    ) -> Result<(), LoweringError> {
+        if let swc_ast::ForHead::VarDecl(var_decl) = left
+            && var_decl.kind != swc_ast::VarDeclKind::Var
+        {
+            self.predeclare_var_decl(var_decl)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn lower_for_in(
         &mut self,
         for_in: &swc_ast::ForInStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        let head_scope = Self::for_head_needs_scope(&for_in.left);
+        if head_scope {
+            self.scopes.push_scope(ScopeKind::Block);
+        }
+        let result = self.lower_for_in_scoped(for_in, flow);
+        if head_scope {
+            self.scopes.pop_scope();
+        }
+        result
+    }
+
+    fn lower_for_in_scoped(
+        &mut self,
+        for_in: &swc_ast::ForInStmt,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        self.declare_for_head_bindings(&for_in.left)?;
         let mut block = self.ensure_open(flow)?;
 
         let rhs = self.lower_expr(&for_in.right, block)?;
@@ -112,6 +149,23 @@ impl Lowerer {
         if for_of.is_await {
             return self.lower_for_await_of(for_of, flow);
         }
+        let head_scope = Self::for_head_needs_scope(&for_of.left);
+        if head_scope {
+            self.scopes.push_scope(ScopeKind::Block);
+        }
+        let result = self.lower_for_of_scoped(for_of, flow);
+        if head_scope {
+            self.scopes.pop_scope();
+        }
+        result
+    }
+
+    fn lower_for_of_scoped(
+        &mut self,
+        for_of: &swc_ast::ForOfStmt,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        self.declare_for_head_bindings(&for_of.left)?;
         let mut block = self.ensure_open(flow)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;
@@ -221,7 +275,23 @@ impl Lowerer {
                 "for await...of is only valid in async functions",
             ));
         }
+        let head_scope = Self::for_head_needs_scope(&for_of.left);
+        if head_scope {
+            self.scopes.push_scope(ScopeKind::Block);
+        }
+        let result = self.lower_for_await_of_scoped(for_of, flow);
+        if head_scope {
+            self.scopes.pop_scope();
+        }
+        result
+    }
 
+    fn lower_for_await_of_scoped(
+        &mut self,
+        for_of: &swc_ast::ForOfStmt,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        self.declare_for_head_bindings(&for_of.left)?;
         let mut block = self.ensure_open(flow)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;

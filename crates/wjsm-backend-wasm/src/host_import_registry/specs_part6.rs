@@ -597,4 +597,12 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         key: Some(HostImportKey::Special(SpecialHostImport::DebugBreak)),
         group: None,
     },
+    // Inline cache 缓存填充：type 39 = (i64, i32, i32) -> ()。
+    // 只写 IC 槽，不参与属性语义（语义仍由 obj_get/obj_set 承担）。
+    HostImportSpec {
+        name: "ic_backfill",
+        type_idx: 39,
+        key: Some(HostImportKey::Special(SpecialHostImport::IcBackfill)),
+        group: None,
+    },
 ];

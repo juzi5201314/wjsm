@@ -1,8 +1,18 @@
 //! JS 堆对象引用槽遍历 owner。
 //!
 //! 本模块只暴露 handle/value 级扫描结果，不把裸对象指针泄漏给算法层。
-//! mark-sweep、G1 young/mixed 与未来 ZGC mark 共用这里的对象布局解析，避免
+//! mark-sweep、G1 young/mixed 与 ZGC mark 共用这里的对象布局解析，避免
 //! 每个算法复制 proto / property / element / side-table-backed 引用扫描逻辑。
+//!
+//! # 对象与数组是同构的
+//!
+//! 隐藏类重构之后堆内只有「16 字节 header + N×8 值槽」一种 payload 形态：
+//! 属性名与 flags 全在宿主 `ShapeTable`，堆里每个 8 字节槽统一是一个 boxed i64。
+//! 因此扫描既不需要查 shape 表，也不需要按 flags 区分数据/accessor 槽——
+//! 对象与数组走同一套 `16 + i * 8` 公式，只在容量字段的取法上不同
+//! （对象读 `+8` 的 value_capacity，数组读 `+8` 的 length）。
+//!
+//! 未使用的值槽恒为 0（即 `+0.0`，不是句柄），扫到也是惰性的。
 
 use std::ops::Range;
 
@@ -11,8 +21,6 @@ use wjsm_ir::{constants, value};
 use crate::runtime_gc::api::{GcContext, Handle, Value};
 use crate::runtime_gc::context::GcHeapLayout;
 
-const TYPEDARRAY_HANDLE_PROP: &str = "__typedarray_handle__";
-const DATAVIEW_HANDLE_PROP: &str = "__dataview_handle__";
 const OBLET_SLOT_COUNT: usize = 256;
 const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
 
@@ -28,13 +36,8 @@ pub(crate) enum ScanTask {
         handle: Handle,
         ptr: usize,
     },
-    ArrayElements {
-        handle: Handle,
-        ptr: usize,
-        start: usize,
-        end: usize,
-    },
-    PropertySlots {
+    /// 值槽区间 `[start, end)`；对象与数组共用，公式同为 `ptr + 16 + i * 8`。
+    ValueSlots {
         handle: Handle,
         ptr: usize,
         start: usize,
@@ -45,7 +48,6 @@ pub(crate) enum ScanTask {
 #[derive(Default)]
 pub(crate) struct ObjectWalker {
     raw_values: Vec<Value>,
-    side_children: SideTableChildHandles,
 }
 
 impl ObjectWalker {
@@ -67,7 +69,6 @@ impl ObjectWalker {
             ctx.with_memory(|data| {
                 self.collect_task_raw_values(data, task);
             });
-            collect_side_table_child_raw_values(ctx, &self.side_children, &mut self.raw_values);
             for &val in &self.raw_values {
                 visit_value_handles(ctx, val, obj_table_count, visit);
             }
@@ -76,26 +77,7 @@ impl ObjectWalker {
 
     fn collect_task_raw_values(&mut self, data: &[u8], task: ScanTask) {
         self.raw_values.clear();
-        self.side_children.clear();
-        collect_task_slot_values(
-            data,
-            task,
-            &mut |slot| self.raw_values.push(slot.value),
-            &mut self.side_children,
-        );
-    }
-}
-
-#[derive(Default)]
-struct SideTableChildHandles {
-    typedarrays: Vec<usize>,
-    dataviews: Vec<usize>,
-}
-
-impl SideTableChildHandles {
-    fn clear(&mut self) {
-        self.typedarrays.clear();
-        self.dataviews.clear();
+        collect_task_slot_values(data, task, &mut |slot| self.raw_values.push(slot.value));
     }
 }
 
@@ -151,21 +133,16 @@ pub(crate) fn scan_tasks_for_ptr(data: &[u8], handle: Handle, ptr: usize) -> Vec
 
     let mut tasks = vec![ScanTask::Header { handle, ptr }];
     let heap_type = data[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize];
-    match crate::runtime_gc::context::gc_heap_layout(heap_type) {
-        GcHeapLayout::Array => {
-            let len = read_u32(data, ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize)
-                .unwrap_or_default() as usize;
-            push_oblet_tasks(&mut tasks, handle, ptr, len, true);
-        }
+    // 数组扫到 length（尾部空闲容量必为空洞/未初始化），对象扫满 value_capacity
+    // （shape 之外的槽恒为 0，扫到是惰性的，因此无需查 ShapeTable 取 slot_count）。
+    let slot_count = match crate::runtime_gc::context::gc_heap_layout(heap_type) {
+        GcHeapLayout::Array => read_u32(data, ptr + constants::HEAP_ARRAY_LENGTH_OFFSET as usize),
         GcHeapLayout::ObjectLike => {
-            let num_props = read_u32(
-                data,
-                ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize,
-            )
-            .unwrap_or_default() as usize;
-            push_oblet_tasks(&mut tasks, handle, ptr, num_props, false);
+            read_u32(data, ptr + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as usize)
         }
     }
+    .unwrap_or_default() as usize;
+    push_oblet_tasks(&mut tasks, handle, ptr, slot_count);
     tasks
 }
 
@@ -184,16 +161,11 @@ pub(crate) fn collect_slots_in_range(
         };
         let tasks = scan_tasks_for_ptr(data, h, ptr);
         for task in tasks {
-            collect_task_slot_values(
-                data,
-                task,
-                &mut |slot| {
-                    if range.contains(&slot.slot_addr) {
-                        out.push(slot);
-                    }
-                },
-                &mut SideTableChildHandles::default(),
-            );
+            collect_task_slot_values(data, task, &mut |slot| {
+                if range.contains(&slot.slot_addr) {
+                    out.push(slot);
+                }
+            });
         }
     }
 }
@@ -288,97 +260,34 @@ pub(crate) fn visit_value_references(
     }
 }
 
-fn push_oblet_tasks(
-    tasks: &mut Vec<ScanTask>,
-    handle: Handle,
-    ptr: usize,
-    len: usize,
-    array: bool,
-) {
+fn push_oblet_tasks(tasks: &mut Vec<ScanTask>, handle: Handle, ptr: usize, len: usize) {
     let mut start = 0;
     while start < len {
         let end = (start + OBLET_SLOT_COUNT).min(len);
-        if array {
-            tasks.push(ScanTask::ArrayElements {
-                handle,
-                ptr,
-                start,
-                end,
-            });
-        } else {
-            tasks.push(ScanTask::PropertySlots {
-                handle,
-                ptr,
-                start,
-                end,
-            });
-        }
+        tasks.push(ScanTask::ValueSlots {
+            handle,
+            ptr,
+            start,
+            end,
+        });
         start = end;
     }
 }
 
-fn collect_task_slot_values(
-    data: &[u8],
-    task: ScanTask,
-    visit: &mut dyn FnMut(SlotValue),
-    side_children: &mut SideTableChildHandles,
-) {
+fn collect_task_slot_values(data: &[u8], task: ScanTask, visit: &mut dyn FnMut(SlotValue)) {
     match task {
         ScanTask::Header { ptr, .. } => collect_header_value(data, ptr, visit),
-        ScanTask::ArrayElements {
+        ScanTask::ValueSlots {
             ptr, start, end, ..
         } => {
             for idx in start..end {
                 let slot_addr = ptr
                     + constants::HEAP_OBJECT_HEADER_SIZE as usize
-                    + idx * constants::HEAP_ARRAY_ELEMENT_SIZE as usize;
-                if let Some(value) = read_i64(data, slot_addr) {
-                    visit(SlotValue { slot_addr, value });
-                }
-            }
-        }
-        ScanTask::PropertySlots {
-            ptr, start, end, ..
-        } => {
-            for idx in start..end {
-                let slot = ptr
-                    + constants::HEAP_OBJECT_HEADER_SIZE as usize
-                    + idx * constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
-                if slot + constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize > data.len() {
+                    + idx * constants::HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
+                let Some(value) = read_i64(data, slot_addr) else {
                     break;
-                }
-                let name_id = read_u32(data, slot + constants::PROP_SLOT_NAME_ID_OFFSET as usize)
-                    .unwrap_or_default();
-                let value_raw = read_i64(data, slot + constants::PROP_SLOT_VALUE_OFFSET as usize);
-                if let Some(value) = value_raw {
-                    visit(SlotValue {
-                        slot_addr: slot + constants::PROP_SLOT_VALUE_OFFSET as usize,
-                        value,
-                    });
-                }
-                for val_off in [
-                    constants::PROP_SLOT_GETTER_OFFSET as usize,
-                    constants::PROP_SLOT_SETTER_OFFSET as usize,
-                ] {
-                    if let Some(value) = read_i64(data, slot + val_off) {
-                        visit(SlotValue {
-                            slot_addr: slot + val_off,
-                            value,
-                        });
-                    }
-                }
-                if memory_c_string_eq(data, name_id, TYPEDARRAY_HANDLE_PROP) {
-                    if let Some(raw) = value_raw
-                        && let Some(handle) = decode_side_table_handle_value(raw)
-                    {
-                        side_children.typedarrays.push(handle);
-                    }
-                } else if memory_c_string_eq(data, name_id, DATAVIEW_HANDLE_PROP)
-                    && let Some(raw) = value_raw
-                    && let Some(handle) = decode_side_table_handle_value(raw)
-                {
-                    side_children.dataviews.push(handle);
-                }
+                };
+                visit(SlotValue { slot_addr, value });
             }
         }
     }
@@ -397,46 +306,6 @@ fn collect_header_value(data: &[u8], ptr: usize, visit: &mut dyn FnMut(SlotValue
         };
         visit(SlotValue { slot_addr, value });
     }
-}
-
-fn collect_side_table_child_raw_values(
-    ctx: &mut GcContext<'_>,
-    handles: &SideTableChildHandles,
-    out: &mut Vec<Value>,
-) {
-    ctx.with_state(|st| {
-        if let Ok(table) = st.typedarray_table.lock() {
-            for &handle in &handles.typedarrays {
-                if let Some(value) = table.get(handle).and_then(|entry| entry.buffer_object) {
-                    out.push(value);
-                }
-            }
-        }
-        if let Ok(table) = st.dataview_table.lock() {
-            for &handle in &handles.dataviews {
-                if let Some(value) = table.get(handle).and_then(|entry| entry.buffer_object) {
-                    out.push(value);
-                }
-            }
-        }
-    });
-}
-
-fn decode_side_table_handle_value(raw: Value) -> Option<usize> {
-    if !value::is_f64(raw) {
-        return None;
-    }
-    let n = value::decode_f64(raw);
-    (n.is_finite() && n >= 0.0 && n.fract() == 0.0).then_some(n as usize)
-}
-
-fn memory_c_string_eq(data: &[u8], name_id: u32, expected: &str) -> bool {
-    let start = name_id as usize;
-    let end = match start.checked_add(expected.len()) {
-        Some(end) => end,
-        None => return false,
-    };
-    end < data.len() && data.get(start..end) == Some(expected.as_bytes()) && data[end] == 0
 }
 
 fn read_u32(data: &[u8], addr: usize) -> Option<u32> {
@@ -466,17 +335,10 @@ pub(crate) fn mark_drain_on_buffer(
         }
     }
     let mut raw_values = Vec::new();
-    let mut side_children = SideTableChildHandles::default();
     while let Some(h) = worklist.pop() {
         for task in scan_tasks_for_handle(data, h, table_base, obj_table_count) {
             raw_values.clear();
-            side_children.clear();
-            collect_task_slot_values(
-                data,
-                task,
-                &mut |slot| raw_values.push(slot.value),
-                &mut side_children,
-            );
+            collect_task_slot_values(data, task, &mut |slot| raw_values.push(slot.value));
             for &val in &raw_values {
                 if let Some(child) = resolve_buffer_value_handle(
                     val,
@@ -521,6 +383,7 @@ mod tests {
     use super::*;
     use crate::runtime_gc::mark_bitmap::MarkBitmap;
 
+    /// 按新布局伪造对象堆：16 字节 header + N×8 值槽，`+8` 写值槽容量、`+12` 写 shape_id。
     fn build_object_buffer(
         table_base: usize,
         objects: &[(Handle, usize, u32, Vec<Value>)],
@@ -530,7 +393,7 @@ mod tests {
         for (_h, ptr, _proto, props) in objects {
             let end = *ptr
                 + constants::HEAP_OBJECT_HEADER_SIZE as usize
-                + props.len() * constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
+                + props.len() * constants::HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
             size = size.max(end);
         }
         let mut buf = vec![0u8; size];
@@ -542,20 +405,16 @@ mod tests {
             let ptr = *ptr;
             buf[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
             buf[ptr + constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_OBJECT;
-            let cap = props.len() as u32;
-            buf[ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize
-                ..ptr + constants::HEAP_OBJECT_CAPACITY_OFFSET as usize + 4]
-                .copy_from_slice(&cap.to_le_bytes());
-            buf[ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize
-                ..ptr + constants::HEAP_OBJECT_PROPERTY_COUNT_OFFSET as usize + 4]
-                .copy_from_slice(&cap.to_le_bytes());
-            for (i, pval) in props.iter().enumerate() {
+            let capacity = props.len() as u32;
+            let capacity_off = ptr + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as usize;
+            buf[capacity_off..capacity_off + 4].copy_from_slice(&capacity.to_le_bytes());
+            let shape_off = ptr + constants::HEAP_OBJECT_SHAPE_ID_OFFSET as usize;
+            buf[shape_off..shape_off + 4].copy_from_slice(&constants::SHAPE_ID_EMPTY.to_le_bytes());
+            for (index, slot_value) in props.iter().enumerate() {
                 let slot = ptr
                     + constants::HEAP_OBJECT_HEADER_SIZE as usize
-                    + i * constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE as usize;
-                buf[slot + constants::PROP_SLOT_VALUE_OFFSET as usize
-                    ..slot + constants::PROP_SLOT_VALUE_OFFSET as usize + 8]
-                    .copy_from_slice(&pval.to_le_bytes());
+                    + index * constants::HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
+                buf[slot..slot + 8].copy_from_slice(&slot_value.to_le_bytes());
             }
         }
         buf
@@ -617,7 +476,7 @@ mod tests {
         assert_eq!(tasks[0], ScanTask::Header { handle: 0, ptr });
         assert_eq!(
             tasks[1],
-            ScanTask::ArrayElements {
+            ScanTask::ValueSlots {
                 handle: 0,
                 ptr,
                 start: 0,
@@ -626,7 +485,7 @@ mod tests {
         );
         assert_eq!(
             tasks[2],
-            ScanTask::ArrayElements {
+            ScanTask::ValueSlots {
                 handle: 0,
                 ptr,
                 start: 256,
@@ -635,7 +494,7 @@ mod tests {
         );
         assert_eq!(
             tasks[3],
-            ScanTask::ArrayElements {
+            ScanTask::ValueSlots {
                 handle: 0,
                 ptr,
                 start: 512,
@@ -655,9 +514,8 @@ mod tests {
             vec![enc_obj(7), enc_obj(8)],
         )];
         let buf = build_object_buffer(table_base, &objects, 1);
-        let first_value_addr = obj_ptr
-            + constants::HEAP_OBJECT_HEADER_SIZE as usize
-            + constants::PROP_SLOT_VALUE_OFFSET as usize;
+        // 第 0 号值槽紧随 header，其地址即 card 区间的下界。
+        let first_value_addr = obj_ptr + constants::HEAP_OBJECT_HEADER_SIZE as usize;
         let mut slots = Vec::new();
 
         collect_slots_in_range(

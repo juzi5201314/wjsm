@@ -2002,25 +2002,8 @@ pub(crate) fn set_host_data_property_from_caller(
     {
         return define_host_data_property_from_caller(caller, obj, name, val);
     }
-    let name_id = find_memory_c_string_global(caller, name)
-        .or_else(|| alloc_heap_c_string_global(caller, name))?;
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize)?;
-    if let Some((slot_offset, flags, _old)) =
-        find_property_slot_by_name_id(caller, obj_ptr, name_id)
-    {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data_mut(&mut *caller);
-        let value_end = slot_offset.checked_add(16)?;
-        if flags & constants::FLAG_WRITABLE == 0 || value_end > data.len() {
-            return None;
-        }
-        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-        Some(())
-    } else {
-        define_host_data_property_from_caller(caller, obj, name, val)
-    }
+    // V2-only：`obj` 不在 handle 表则失败，禁止 main memory 回落。
+    None
 }
 
 pub(crate) fn eval_to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> f64 {

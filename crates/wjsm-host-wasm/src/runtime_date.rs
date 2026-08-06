@@ -21,42 +21,28 @@ pub(crate) fn write_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64
     if !value::is_object(this_val) {
         return;
     }
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
-    let Some(op) = obj_ptr else {
-        return;
-    };
-    let name_id = match find_memory_c_string_global(caller, "__date_ms__") {
-        Some(id) => id,
-        None => return,
-    };
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return;
-    };
-    let data = memory.data(&*caller);
-    if op + 16 > data.len() {
+    // `__date_ms__` 由 wjsm-builtins 的 Date 构造器定义为数据属性，这里只覆写其值：
+    // 属性不存在时不新建，与「只有真正的 Date 实例才带内部槽」的语义一致。
+    let handle = value::decode_object_handle(this_val);
+    let access = caller.data().heap_access_v2().clone();
+    if access.resolve_handle(handle).is_err() {
         return;
     }
-    let num_props =
-        u32::from_le_bytes([data[op + 12], data[op + 13], data[op + 14], data[op + 15]]) as usize;
-    for i in 0..num_props {
-        let slot_offset = op + 16 + i * 32;
-        if slot_offset + 32 > data.len() {
-            break;
-        }
-        let slot_name_id = u32::from_le_bytes([
-            data[slot_offset],
-            data[slot_offset + 1],
-            data[slot_offset + 2],
-            data[slot_offset + 3],
-        ]);
-        if slot_name_id == name_id {
-            let val = value::encode_f64(ms);
-            let _ = data;
-            let data = memory.data_mut(&mut *caller);
-            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-            return;
-        }
+    let Some(key) = crate::property_key::canonicalize_v2_name_id(
+        caller,
+        crate::property_key::encode_runtime_string_name_id(
+            crate::property_key::intern_runtime_property_key(
+                caller.data(),
+                crate::runtime_string::RuntimeString::from_utf8_str("__date_ms__"),
+            ),
+        ),
+    ) else {
+        return;
+    };
+    if access.get_property(handle, key).ok().flatten().is_none() {
+        return;
     }
+    let _ = access.set_property(handle, key, value::encode_f64(ms) as u64);
 }
 
 // 纯时间转换 / 日期解析已迁至 wjsm-builtins。

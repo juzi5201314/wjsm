@@ -17,6 +17,7 @@ pub mod heap;
 pub mod heap_access;
 pub mod mark_bitmap;
 pub mod mark_sweep;
+pub mod shape;
 pub mod telemetry;
 pub mod zgc;
 
@@ -36,14 +37,15 @@ pub use cpu_time::thread_cpu_ns;
 pub use g1::{G1V2, G1V2CollectionKind, G1V2Error, G1V2Generation, G1V2Report};
 pub use heap::{
     Allocation, AllocationClass, AllocatorError, GrowableHeapMemory, HANDLE_ENTRY_BYTES,
-    HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleState, HandleTableError, HandleTableV2,
-    HeapAddress, HeapMemory, HeapMemoryError, ManagedAllocator, ManagedHeap, ManagedHeapLayout,
-    NativeHeapMemory, Nlab, ObjectRef, PAGE_GRANULE_BYTES,
+    HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN, HandleGeneration, HandleId, HandleState,
+    HandleTableError, HandleTableV2, HeapAddress, HeapMemory, HeapMemoryError, ManagedAllocator,
+    ManagedHeap, ManagedHeapLayout, NativeHeapMemory, Nlab, ObjectRef, PAGE_GRANULE_BYTES,
 };
 pub use heap_access::{HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property};
 pub use mark_bitmap::MarkBitmap;
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;
+pub use shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot, ShapeTransition};
 pub use registry::GcAlgorithmKind;
 pub use telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,

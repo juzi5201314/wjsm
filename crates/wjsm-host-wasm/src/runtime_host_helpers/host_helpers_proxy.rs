@@ -16,194 +16,19 @@ pub(crate) fn define_property_on_normal_object(
         );
     }
 
-    // V2 对象堆在 memory64；resolve_handle 返回 handle id 而非 memory32 指针，
-    // 必须走 heap_access_v2，禁止继续写 main memory 槽。
+    // 对象堆在 memory64，属性元数据在宿主 ShapeTable；DefineProperty 一律走
+    // heap_access_v2，不存在 main memory 槽路径。
     // 函数/闭包/bound 用 function_props handle（handle_index_of）。
+    let handle = handle_index_of(caller, target) as u32;
+    if caller
+        .data()
+        .heap_access_v2()
+        .resolve_handle(handle)
+        .is_err()
     {
-        let handle = handle_index_of(caller, target) as u32;
-        if caller
-            .data()
-            .heap_access_v2()
-            .resolve_handle(handle)
-            .is_ok()
-        {
-            return define_property_on_v2_object(caller, target, name_id, desc);
-        }
+        return Err("TypeError: Invalid target object".to_string());
     }
-
-    let obj_ptr = match resolve_handle(caller, target) {
-        Some(p) => p,
-        None => return Err("TypeError: Invalid target object".to_string()),
-    };
-
-    let found = find_property_slot_by_name_id(caller, obj_ptr, name_id);
-    if let Some((slot_offset, old_flags, old_val)) = found {
-        // 属性已存在
-        let old_configurable = (old_flags & constants::FLAG_CONFIGURABLE) != 0;
-        let old_enumerable = (old_flags & constants::FLAG_ENUMERABLE) != 0;
-        let old_writable = (old_flags & constants::FLAG_WRITABLE) != 0;
-        let old_accessor = (old_flags & constants::FLAG_IS_ACCESSOR) != 0;
-
-        // 提前安全地读取 old_getter 与 old_setter，避免在闭包中捕获或多次移动 caller
-        let (old_getter, old_setter) = if old_accessor {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return Err("TypeError: Memory not found".to_string());
-            };
-            let data = memory.data(&*caller);
-            let g =
-                i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
-            let s =
-                i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
-            (g, s)
-        } else {
-            (value::encode_undefined(), value::encode_undefined())
-        };
-
-        // 如果不可配置属性，执行严格的 invariants 检查
-        if !old_configurable {
-            if desc.configurable == Some(true) {
-                return Err("TypeError: Cannot redefine non-configurable property".to_string());
-            }
-            if let Some(new_enum) = desc.enumerable
-                && new_enum != old_enumerable
-            {
-                return Err(
-                    "TypeError: Cannot redefine enumerable attribute of non-configurable property"
-                        .to_string(),
-                );
-            }
-            let is_new_accessor = desc.get.is_some() || desc.set.is_some();
-            if is_new_accessor != old_accessor {
-                return Err("TypeError: Cannot change property type from data to accessor or vice versa on non-configurable property".to_string());
-            }
-            if !old_accessor {
-                // 数据属性
-                if !old_writable {
-                    if desc.writable == Some(true) {
-                        return Err(
-                            "TypeError: Cannot make non-writable property writable".to_string()
-                        );
-                    }
-                    if let Some(new_val) = desc.value {
-                        let same = {
-                            let mut ctx = crate::exec_context_impl::WasmExecContext::new(caller);
-                            wjsm_builtins::core::strict_eq_impl(&mut ctx, old_val, new_val)
-                        };
-                        if value::is_falsy(same) {
-                            return Err("TypeError: Cannot change value of non-configurable non-writable property".to_string());
-                        }
-                    }
-                }
-            } else {
-                // 访问器属性
-                if let Some(new_getter) = desc.get
-                    && new_getter != old_getter
-                {
-                    return Err(
-                        "TypeError: Cannot change getter of non-configurable property".to_string(),
-                    );
-                }
-                if let Some(new_setter) = desc.set
-                    && new_setter != old_setter
-                {
-                    return Err(
-                        "TypeError: Cannot change setter of non-configurable property".to_string(),
-                    );
-                }
-            }
-        }
-
-        // 计算新 flags
-        let is_accessor = desc.get.is_some()
-            || desc.set.is_some()
-            || (desc.value.is_none() && desc.writable.is_none() && old_accessor);
-        let mut flags: i32 = 0;
-        if is_accessor {
-            flags |= constants::FLAG_IS_ACCESSOR;
-        }
-
-        let writable = desc
-            .writable
-            .unwrap_or(if !is_accessor { old_writable } else { false });
-        if writable {
-            flags |= constants::FLAG_WRITABLE;
-        }
-        let enumerable = desc.enumerable.unwrap_or(old_enumerable);
-        if enumerable {
-            flags |= constants::FLAG_ENUMERABLE;
-        }
-        let configurable = desc.configurable.unwrap_or(old_configurable);
-        if configurable {
-            flags |= constants::FLAG_CONFIGURABLE;
-        }
-
-        let val = desc.value.unwrap_or(old_val);
-        let getter = desc.get.unwrap_or(old_getter);
-        let setter = desc.set.unwrap_or(old_setter);
-
-        let Some(env) = WasmEnv::from_caller(caller) else {
-            return Ok(false);
-        };
-        {
-            let data = env.memory.data_mut(&mut *caller);
-            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-        }
-        let handle = handle_index_of(caller, target) as u32;
-        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
-        let _ = crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle,
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Value,
-            val,
-        );
-        let _ = crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle,
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Getter,
-            getter,
-        );
-        let _ = crate::runtime_gc::heap_access::write_property_slot(
-            caller,
-            &env,
-            handle,
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Setter,
-            setter,
-        );
-
-        Ok(true)
-    } else {
-        // 新增属性
-        if !is_extensible_impl(caller, target) {
-            return Err("TypeError: Cannot add property to non-extensible object".to_string());
-        }
-
-        let is_accessor = desc.get.is_some() || desc.set.is_some();
-        let mut flags: i32 = 0;
-        if is_accessor {
-            flags |= constants::FLAG_IS_ACCESSOR;
-        }
-        if desc.writable.unwrap_or(false) && !is_accessor {
-            flags |= constants::FLAG_WRITABLE;
-        }
-        if desc.enumerable.unwrap_or(false) {
-            flags |= constants::FLAG_ENUMERABLE;
-        }
-        if desc.configurable.unwrap_or(false) {
-            flags |= constants::FLAG_CONFIGURABLE;
-        }
-
-        let val = desc.value.unwrap_or(value::encode_undefined());
-        let getter = desc.get.unwrap_or(value::encode_undefined());
-        let setter = desc.set.unwrap_or(value::encode_undefined());
-
-        write_new_property_to_memory(caller, target, name_id, flags, val, getter, setter);
-        Ok(true)
-    }
+    define_property_on_v2_object(caller, target, name_id, desc)
 }
 
 /// V2 DefineProperty：读写均走 heap_access_v2，含 non-configurable invariants。
@@ -359,38 +184,6 @@ fn define_property_on_v2_object(
                 .map_err(|error| format!("TypeError: {error}"))?;
         }
         Ok(true)
-    }
-}
-
-/// 新增 own 属性（V2-only）：经 `HeapAccessV2` define；禁止 main memory 写。
-pub(crate) fn write_new_property_to_memory(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    name_id: u32,
-    flags: i32,
-    val: i64,
-    getter: i64,
-    setter: i64,
-) {
-    let handle = crate::runtime_values::handle_index_of(caller, target) as u32;
-    let access = caller.data().heap_access_v2().clone();
-    if access.resolve_handle(handle).is_err() {
-        return;
-    }
-    let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, name_id) else {
-        return;
-    };
-    let is_accessor = flags as u32 & constants::FLAG_IS_ACCESSOR as u32 != 0;
-    if is_accessor {
-        let _ = access.define_accessor_property_with_flags(
-            handle,
-            key,
-            getter as u64,
-            setter as u64,
-            flags as u32,
-        );
-    } else {
-        let _ = access.define_data_property(handle, key, val as u64, flags as u32);
     }
 }
 
@@ -804,10 +597,10 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         && (value::is_function(target) || value::is_closure(target) || value::is_bound(target))
     {
         if let Some(id) = name_id
-            && let Some((_, _, value)) = find_property_slot_by_name_id(caller, obj_ptr, id)
-            && !value::is_undefined(value)
+            && let Some(property) = find_property_slot_by_name_id(caller, obj_ptr, id)
+            && !value::is_undefined(property.value as i64)
         {
-            return value;
+            return property.value as i64;
         }
 
         let default_proto = {
@@ -831,22 +624,12 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     }
 
     if let Some(id) = name_id
-        && let Some((slot_offset, flags, value)) =
-            find_property_slot_by_name_id(caller, obj_ptr, id)
+        && let Some(property) = find_property_slot_by_name_id(caller, obj_ptr, id)
     {
-        if (flags & constants::FLAG_IS_ACCESSOR) == 0 {
-            return value;
+        if (property.flags as i32 & constants::FLAG_IS_ACCESSOR) == 0 {
+            return property.value as i64;
         }
-        let getter = {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return value::encode_undefined();
-            };
-            let data = memory.data(&*caller);
-            if slot_offset + 24 > data.len() {
-                return value::encode_undefined();
-            }
-            i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap())
-        };
+        let getter = property.getter as i64;
         if value::is_undefined(getter) || value::is_null(getter) {
             return value::encode_undefined();
         }

@@ -3,7 +3,7 @@ use crate::runtime_string::RuntimeString;
 
 pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     obj: i64,
     name: &str,
     val: i64,
@@ -36,16 +36,8 @@ pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeS
                 .ok();
         }
     }
-    let name_id = find_memory_c_string_with_env(ctx, env, name)
-        .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
-    define_host_data_property_by_name_id_with_env(
-        ctx,
-        env,
-        obj,
-        encode_string_name_id(name_id),
-        val,
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
-    )
+    // V2-only：`obj` 不在 handle 表则失败，禁止 main memory 回落。
+    None
 }
 
 pub(crate) fn define_host_data_property_by_name_id_with_env<
@@ -74,89 +66,15 @@ pub(crate) fn define_host_data_property_by_name_id_with_env<
                 .ok();
         }
     }
-    let obj_ptr = resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
-    let (capacity, num_props) = {
-        let data = env.memory.data(&*ctx);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        let capacity = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]);
-        (capacity, num_props)
-    };
-    if let Some((slot_offset, _, _)) =
-        find_property_slot_by_name_id_with_env(ctx, env, obj_ptr, name_id)
-    {
-        let slot_idx = (slot_offset - (obj_ptr + 16)) / 32;
-        crate::runtime_gc::heap_access::write_property_slot(
-            ctx,
-            env,
-            value::decode_object_handle(obj),
-            slot_idx,
-            crate::runtime_gc::heap_access::SlotPart::Value,
-            val,
-        )?;
-        return Some(());
-    }
-    if num_props >= capacity {
-        return None;
-    }
-    let slot_idx = num_props as usize;
-    let slot_offset = obj_ptr + 16 + slot_idx * 32;
-    {
-        let data = env.memory.data_mut(&mut *ctx);
-        if slot_offset + 32 > data.len() {
-            return None;
-        }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    }
-    let undef = value::encode_undefined();
-    crate::runtime_gc::heap_access::write_property_slot(
-        ctx,
-        env,
-        value::decode_object_handle(obj),
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Value,
-        val,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        ctx,
-        env,
-        value::decode_object_handle(obj),
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Getter,
-        undef,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        ctx,
-        env,
-        value::decode_object_handle(obj),
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Setter,
-        undef,
-    )?;
-    let data = env.memory.data_mut(&mut *ctx);
-    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
-    Some(())
+    // V2-only：`obj` 不在 handle 表则失败，禁止 main memory 回落。
+    None
 }
 
 /// 定义一个访问器（getter/setter）属性到宿主创建的对象上（泛型版本，V2-only）。
-/// slot 布局与数据属性相同（32字节），但 flags 标记为 IS_ACCESSOR，
-/// offset 8 = undefined（保留），offset 16 = getter，offset 24 = setter。
+/// 属性 flags 标记 IS_ACCESSOR，getter/setter 占两个相邻值槽（由 ShapeTable 分配下标）。
 pub(crate) fn define_host_accessor_property_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     obj: i64,
     name: &str,
     getter: i64,
@@ -183,71 +101,8 @@ pub(crate) fn define_host_accessor_property_with_env<C: AsContextMut<Data = Runt
                 .ok();
         }
     }
-    let name_id = find_memory_c_string_with_env(ctx, env, name)
-        .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
-    let obj_ptr = resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
-    let (capacity, num_props) = {
-        let data = env.memory.data(&*ctx);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        let capacity = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]);
-        (capacity, num_props)
-    };
-    if num_props >= capacity {
-        return None;
-    }
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_IS_ACCESSOR;
-    let slot_idx = num_props as usize;
-    let slot_offset = obj_ptr + 16 + slot_idx * 32;
-    {
-        let data = env.memory.data_mut(&mut *ctx);
-        if slot_offset + 32 > data.len() {
-            return None;
-        }
-        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    }
-    let undef = value::encode_undefined();
-    crate::runtime_gc::heap_access::write_property_slot(
-        ctx,
-        env,
-        value::decode_object_handle(obj),
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Value,
-        undef,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        ctx,
-        env,
-        value::decode_object_handle(obj),
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Getter,
-        getter,
-    )?;
-    crate::runtime_gc::heap_access::write_property_slot(
-        ctx,
-        env,
-        value::decode_object_handle(obj),
-        slot_idx,
-        crate::runtime_gc::heap_access::SlotPart::Setter,
-        setter,
-    )?;
-    let data = env.memory.data_mut(&mut *ctx);
-    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
-    Some(())
+    // V2-only：`obj` 不在 handle 表则失败，禁止 main memory 回落。
+    None
 }
 
 pub(crate) fn alloc_promise_all_settled_result(
@@ -265,7 +120,7 @@ pub(crate) fn alloc_aggregate_error(caller: &mut Caller<'_, RuntimeState>, error
 }
 // ── 辅助函数：检查字符串是否是规范整数索引（ECMAScript §10.1.12 OrdinaryOwnPropertyKeys）──
 // 返回 Some(数字值) 如果是规范的整数索引字符串（即 parse 回来再转回字符串保持一致），否则 None。
-fn canonical_integer_index(s: &str) -> Option<u32> {
+pub(crate) fn canonical_integer_index(s: &str) -> Option<u32> {
     if s.is_empty() || s.len() > 10 {
         return None;
     }
@@ -395,89 +250,9 @@ pub(crate) fn collect_own_property_names(
             }
         };
     }
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return vec![];
-    };
-    let data = mem.data(&*caller);
-    if obj_ptr + 16 > data.len() {
-        return vec![];
-    }
-    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
-        let len = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let _ = data;
-        let _ = mem;
-        let mut names = Vec::new();
-        for i in 0..len {
-            if array_elem_present(caller, obj_ptr, i) {
-                names.push(i.to_string());
-            }
-        }
-        if !enumerable_only {
-            names.push("length".to_string());
-        }
-        return names;
-    }
-    let num_props = u32::from_le_bytes([
-        data[obj_ptr + 12],
-        data[obj_ptr + 13],
-        data[obj_ptr + 14],
-        data[obj_ptr + 15],
-    ]) as usize;
-    let mut name_ids = Vec::new();
-    for i in 0..num_props {
-        let slot_offset = obj_ptr + 16 + i * 32;
-        if slot_offset + 32 > data.len() {
-            break;
-        }
-        let flags = i32::from_le_bytes([
-            data[slot_offset + 4],
-            data[slot_offset + 5],
-            data[slot_offset + 6],
-            data[slot_offset + 7],
-        ]);
-        if (flags & constants::FLAG_PRIVATE) != 0 {
-            continue;
-        }
-        if enumerable_only && (flags & 2) == 0 {
-            continue;
-        }
-        let name_id = u32::from_le_bytes([
-            data[slot_offset],
-            data[slot_offset + 1],
-            data[slot_offset + 2],
-            data[slot_offset + 3],
-        ]);
-        if is_symbol_name_id(name_id) {
-            continue;
-        }
-        name_ids.push(name_id);
-    }
-    let _ = data;
-    let _ = mem;
-    let mut string_ids = Vec::new();
-    let mut int_index_names = Vec::new();
-    for name_id in name_ids {
-        let name_bytes = read_string_bytes(caller, name_id);
-        let name = String::from_utf8_lossy(&name_bytes).to_string();
-        if let Some(int_idx) = canonical_integer_index(&name) {
-            int_index_names.push((int_idx, name));
-        } else {
-            string_ids.push(name);
-        }
-    }
-    // 按规范排序：整数索引键按数值升序，然后字符串键保持插入顺序
-    int_index_names.sort_by_key(|(idx, _)| *idx);
-    let mut names: Vec<String> = int_index_names.into_iter().map(|(_, name)| name).collect();
-    names.extend(string_ids);
-    names
+    // V2-only：`obj_ptr` 不是可解析 handle，无 own 属性可枚举。
+    vec![]
 }
-
-/// 从 boxed 对象/数组收集 own 字符串属性名（数组含侧表命名属性）。
 pub(crate) fn collect_own_property_names_from_value(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
@@ -527,79 +302,8 @@ pub(crate) fn collect_own_property_values(
                 .collect(),
         };
     }
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return vec![];
-    };
-    let data = mem.data(&*caller);
-    if obj_ptr + 16 > data.len() {
-        return vec![];
-    }
-    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
-        let len = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let _ = data;
-        let _ = mem;
-        let mut values = Vec::new();
-        for i in 0..len {
-            if let Some(value) = read_array_elem(caller, obj_ptr, i) {
-                values.push(value);
-            }
-        }
-        if !enumerable_only {
-            values.push(value::encode_f64(len as f64));
-        }
-        return values;
-    }
-    let num_props = u32::from_le_bytes([
-        data[obj_ptr + 12],
-        data[obj_ptr + 13],
-        data[obj_ptr + 14],
-        data[obj_ptr + 15],
-    ]) as usize;
-    let mut values = Vec::new();
-    for i in 0..num_props {
-        let slot_offset = obj_ptr + 16 + i * 32;
-        if slot_offset + 32 > data.len() {
-            break;
-        }
-        let flags = i32::from_le_bytes([
-            data[slot_offset + 4],
-            data[slot_offset + 5],
-            data[slot_offset + 6],
-            data[slot_offset + 7],
-        ]);
-        if (flags & constants::FLAG_PRIVATE) != 0 {
-            continue;
-        }
-        if enumerable_only && (flags & 2) == 0 {
-            continue;
-        }
-        let name_id = u32::from_le_bytes([
-            data[slot_offset],
-            data[slot_offset + 1],
-            data[slot_offset + 2],
-            data[slot_offset + 3],
-        ]);
-        if is_symbol_name_id(name_id) {
-            continue;
-        }
-        let value = i64::from_le_bytes([
-            data[slot_offset + 8],
-            data[slot_offset + 9],
-            data[slot_offset + 10],
-            data[slot_offset + 11],
-            data[slot_offset + 12],
-            data[slot_offset + 13],
-            data[slot_offset + 14],
-            data[slot_offset + 15],
-        ]);
-        values.push(value);
-    }
-    values
+    // V2-only：`obj_ptr` 不是可解析 handle，无 own 属性可枚举。
+    vec![]
 }
 
 pub(crate) fn collect_own_property_key_values(
@@ -666,108 +370,6 @@ pub(crate) fn collect_own_property_key_values(
             }
         };
     }
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return vec![];
-    };
-    let data = mem.data(&*caller);
-    if obj_ptr + 16 > data.len() {
-        return vec![];
-    }
-    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
-        let len = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let _ = data;
-        let _ = mem;
-        if symbols_only {
-            return crate::array_named_props::ArrayNamedPropsStore::collect_property_key_values_by_ptr(
-                caller, obj_ptr, true,
-            );
-        }
-        let mut keys = Vec::new();
-        for i in 0..len {
-            if array_elem_present(caller, obj_ptr, i) {
-                keys.push(store_runtime_string(caller, i.to_string()));
-            }
-        }
-        keys.push(store_runtime_string(caller, "length".to_string()));
-        keys.extend(
-            crate::array_named_props::ArrayNamedPropsStore::collect_property_key_values_by_ptr(
-                caller, obj_ptr, false,
-            ),
-        );
-        return keys;
-    }
-
-    let num_props = u32::from_le_bytes([
-        data[obj_ptr + 12],
-        data[obj_ptr + 13],
-        data[obj_ptr + 14],
-        data[obj_ptr + 15],
-    ]) as usize;
-    let mut slots = Vec::new();
-    for i in 0..num_props {
-        let slot_offset = obj_ptr + 16 + i * 32;
-        if slot_offset + 32 > data.len() {
-            break;
-        }
-        let flags = i32::from_le_bytes([
-            data[slot_offset + 4],
-            data[slot_offset + 5],
-            data[slot_offset + 6],
-            data[slot_offset + 7],
-        ]);
-        if (flags & constants::FLAG_PRIVATE) != 0 {
-            continue;
-        }
-        let name_id = u32::from_le_bytes([
-            data[slot_offset],
-            data[slot_offset + 1],
-            data[slot_offset + 2],
-            data[slot_offset + 3],
-        ]);
-        slots.push(name_id);
-    }
-    let _ = data;
-    let _ = mem;
-
-    let mut string_keys = Vec::new();
-    let mut sym_name_ids = Vec::new();
-    let mut int_index_entries = Vec::new();
-    for name_id in slots {
-        match decode_name_id(name_id) {
-            DecodedNameId::Symbol(_) => {
-                if let Some(symbol_key) = name_id_to_property_key_value(name_id) {
-                    sym_name_ids.push(symbol_key);
-                }
-            }
-            _ if !symbols_only => {
-                let Some(name) = name_id_to_runtime_property_string(caller, name_id) else {
-                    continue;
-                };
-                let name_lossy = name.to_utf8_lossy();
-                if let Some(int_idx) = canonical_integer_index(&name_lossy) {
-                    int_index_entries.push((int_idx, name));
-                } else {
-                    string_keys.push(name);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // 按规范排序：整数索引键按数值升序，然后字符串键保持插入顺序，最后 Symbol 键保持插入顺序
-    int_index_entries.sort_by_key(|(idx, _)| *idx);
-    let mut keys: Vec<i64> = int_index_entries
-        .into_iter()
-        .map(|(_, name)| store_runtime_string(caller, name))
-        .collect();
-    for name in string_keys {
-        keys.push(store_runtime_string(caller, name));
-    }
-    keys.extend(sym_name_ids);
-    keys
+    // V2-only：`obj_ptr` 不是可解析 handle，无 own 属性键可枚举。
+    vec![]
 }

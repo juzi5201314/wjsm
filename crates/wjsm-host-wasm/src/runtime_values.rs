@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime_string::RuntimeString;
+use crate::runtime_gc::HeapAccessV2Property;
 use crate::wasm_env::WasmEnv;
 
 /// 计算 boxed value 在 obj_table 中的 handle 索引。
@@ -367,16 +368,6 @@ pub(crate) fn read_array_elem_with_env<C: AsContext<Data = RuntimeState>>(
     }
 }
 
-pub(crate) fn array_elem_present_with_env<C: AsContext<Data = RuntimeState>>(
-    ctx: &C,
-    env: &WasmEnv,
-    ptr: usize,
-    index: u32,
-) -> bool {
-    read_array_elem_raw_with_env(ctx, env, ptr, index)
-        .is_some_and(|value| !value::is_array_hole(value))
-}
-
 /// 写入数组元素（`ptr` 为 handle；V2-only）。
 pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
@@ -401,340 +392,106 @@ pub(crate) fn write_array_hole_with_env<C: AsContextMut<Data = RuntimeState>>(
     write_array_elem_with_env(ctx, env, ptr, index, value::encode_array_hole());
 }
 
-/// 沿原型链递归查找属性（带 visited set 防环路）
+/// 沿原型链读取属性（V2-only）。
+///
+/// V2 原型链遍历由 `HeapAccessV2::get_property_slot_on_proto_chain` 统一负责
+/// （含 proxy 短路、环检测）；`env` / `visited` 仅为与既有调用点签名对齐而保留
+/// （旧 V1 线性内存回落已删除，visited 不再参与扫描）。
 pub(crate) fn read_object_property_by_name_proto_walk_with_env<
     C: AsContextMut<Data = RuntimeState>,
 >(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     obj_ptr: usize,
     prop_name: &str,
-    visited: &mut std::collections::HashSet<usize>,
+    _visited: &mut std::collections::HashSet<usize>,
 ) -> Option<i64> {
-    {
-        let handle = u32::try_from(obj_ptr).ok()?;
-        let access = ctx.as_context().data().heap_access_v2().clone();
-        if access.resolve_handle(handle).is_ok() {
-            let key = crate::property_key::encode_runtime_string_name_id(
-                crate::property_key::intern_runtime_property_key(
-                    ctx.as_context().data(),
-                    RuntimeString::from_utf8_str(prop_name),
-                ),
-            );
-            // V2 原型链遍历由 HeapAccessV2 统一负责（含 proxy 短路、环检测）；
-            // visited 仅用于 V1 ptr 线性内存扫描，V2 无需重复。
-            return access
-                .get_property_slot_on_proto_chain(handle, key)
-                .ok()
-                .flatten()
-                .map(|property| property.value as i64);
-        }
-    }
-    if !visited.insert(obj_ptr) {
-        return None; // 环路检测
-    }
-    let num_props = {
-        let data = env.memory.data(&*ctx);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize
-    };
-    let mut slots = Vec::with_capacity(num_props);
-    {
-        let data = env.memory.data(&*ctx);
-        for i in 0..num_props {
-            let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 8 > data.len() {
-                break;
-            }
-            let name_id = u32::from_le_bytes([
-                data[slot_offset],
-                data[slot_offset + 1],
-                data[slot_offset + 2],
-                data[slot_offset + 3],
-            ]);
-            let flags = i32::from_le_bytes([
-                data[slot_offset + 4],
-                data[slot_offset + 5],
-                data[slot_offset + 6],
-                data[slot_offset + 7],
-            ]);
-            slots.push((name_id, flags));
-        }
-    }
-    for (i, (name_id, flags)) in slots.iter().enumerate() {
-        if (*flags & constants::FLAG_PRIVATE) != 0 || is_symbol_name_id(*name_id) {
-            continue;
-        }
-        let name_bytes = read_string_bytes_mem(ctx, &env.memory, *name_id);
-        if name_bytes == prop_name.as_bytes() {
-            let data = env.memory.data(&*ctx);
-            let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 32 > data.len() {
-                return None;
-            }
-            return Some(i64::from_le_bytes([
-                data[slot_offset + 8],
-                data[slot_offset + 9],
-                data[slot_offset + 10],
-                data[slot_offset + 11],
-                data[slot_offset + 12],
-                data[slot_offset + 13],
-                data[slot_offset + 14],
-                data[slot_offset + 15],
-            ]));
-        }
-    }
-    // 自身未找到 → 继续沿原型链
-    let proto_handle = {
-        let data = env.memory.data(&*ctx);
-        if obj_ptr + 4 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr],
-            data[obj_ptr + 1],
-            data[obj_ptr + 2],
-            data[obj_ptr + 3],
-        ])
-    };
-    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+    let handle = u32::try_from(obj_ptr).ok()?;
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    if access.resolve_handle(handle).is_err() {
         return None;
     }
-    let proto_ptr = resolve_handle_idx_with_env(ctx, env, proto_handle as usize)?;
-    read_object_property_by_name_proto_walk_with_env(ctx, env, proto_ptr, prop_name, visited)
+    let key = crate::property_key::encode_runtime_string_name_id(
+        crate::property_key::intern_runtime_property_key(
+            ctx.as_context().data(),
+            RuntimeString::from_utf8_str(prop_name),
+        ),
+    );
+    access
+        .get_property_slot_on_proto_chain(handle, key)
+        .ok()
+        .flatten()
+        .map(|property| property.value as i64)
 }
 
-/// 从对象中按名称读取属性值（用于 define_property 等）
+/// 从对象中按名称读取属性值（V2-only，含原型链）。
+///
+/// 旧 V1 线性内存 32 字节槽回落已删除：handle 无法解析即返回 None，
+/// 原型链遍历由 `HeapAccessV2::get_property_slot_on_proto_chain` 统一负责。
 pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
-    env: &WasmEnv,
+    _env: &WasmEnv,
     obj_ptr: usize,
     prop_name: &str,
 ) -> Option<i64> {
-    {
-        let handle = u32::try_from(obj_ptr).ok()?;
-        let access = ctx.as_context().data().heap_access_v2().clone();
-        if access.resolve_handle(handle).is_ok() {
-            let key = crate::property_key::encode_runtime_string_name_id(
-                crate::property_key::intern_runtime_property_key(
-                    ctx.as_context().data(),
-                    RuntimeString::from_utf8_str(prop_name),
-                ),
-            );
-            return access
-                .get_property_slot_on_proto_chain(handle, key)
-                .ok()
-                .flatten()
-                .map(|property| property.value as i64);
-        }
-    }
-    let num_props = {
-        let data = env.memory.data(&*ctx);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize
-    };
-    let prop_key = RuntimeString::from_utf8_str(prop_name);
-    let mut slots = Vec::with_capacity(num_props);
-    {
-        let data = env.memory.data(&*ctx);
-        for i in 0..num_props {
-            let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 8 > data.len() {
-                break;
-            }
-            let name_id = u32::from_le_bytes([
-                data[slot_offset],
-                data[slot_offset + 1],
-                data[slot_offset + 2],
-                data[slot_offset + 3],
-            ]);
-            let flags = i32::from_le_bytes([
-                data[slot_offset + 4],
-                data[slot_offset + 5],
-                data[slot_offset + 6],
-                data[slot_offset + 7],
-            ]);
-            slots.push((name_id, flags));
-        }
-    }
-    for (i, (name_id, flags)) in slots.iter().enumerate() {
-        if (*flags & constants::FLAG_PRIVATE) != 0 || is_symbol_name_id(*name_id) {
-            continue;
-        }
-        if name_id_matches_runtime_string(ctx, env, *name_id, &prop_key) {
-            let data = env.memory.data(&*ctx);
-            let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 32 > data.len() {
-                return None;
-            }
-            return Some(i64::from_le_bytes([
-                data[slot_offset + 8],
-                data[slot_offset + 9],
-                data[slot_offset + 10],
-                data[slot_offset + 11],
-                data[slot_offset + 12],
-                data[slot_offset + 13],
-                data[slot_offset + 14],
-                data[slot_offset + 15],
-            ]));
-        }
-    }
-    // 自身属性未找到 → 沿 [[Prototype]] 链查找
-    let proto_handle = {
-        let data = env.memory.data(&*ctx);
-        if obj_ptr + 4 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr],
-            data[obj_ptr + 1],
-            data[obj_ptr + 2],
-            data[obj_ptr + 3],
-        ])
-    };
-    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+    let handle = u32::try_from(obj_ptr).ok()?;
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    if access.resolve_handle(handle).is_err() {
         return None;
     }
-    let proto_ptr = resolve_handle_idx_with_env(ctx, env, proto_handle as usize)?;
-    let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    visited.insert(obj_ptr);
-    read_object_property_by_name_proto_walk_with_env(ctx, env, proto_ptr, prop_name, &mut visited)
+    let key = crate::property_key::encode_runtime_string_name_id(
+        crate::property_key::intern_runtime_property_key(
+            ctx.as_context().data(),
+            RuntimeString::from_utf8_str(prop_name),
+        ),
+    );
+    access
+        .get_property_slot_on_proto_chain(handle, key)
+        .ok()
+        .flatten()
+        .map(|property| property.value as i64)
 }
 
-fn find_property_slot_by_name_id_with_visibility<C: AsContextMut<Data = RuntimeState>>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    obj_ptr: usize,
-    name_id: u32,
-    private_slot: bool,
-) -> Option<(usize, i32, i64)> {
-    {
-        let handle = u32::try_from(obj_ptr).ok()?;
-        let access = ctx.as_context().data().heap_access_v2().clone();
-        if access.resolve_handle(handle).is_ok() {
-            let key = crate::property_key::canonicalize_v2_name_id_with_env(ctx, env, name_id)?;
-            let property = access.get_property_slot(handle, key).ok().flatten()?;
-            let is_private = (property.flags as i32 & constants::FLAG_PRIVATE) != 0;
-            if is_private != private_slot {
-                return None;
-            }
-            // V2 没有线性槽偏移；调用方若只需要 flags/value（getOwnPropertyDescriptor
-            // 等），slot_offset 仅作哨兵，后续读内存路径会被 V2 专用分支覆盖。
-            return Some((usize::MAX, property.flags as i32, property.value as i64));
-        }
-    }
-    let num_props = {
-        let data = env.memory.data(&*ctx);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize
-    };
-    let target_key = match decode_name_id(name_id) {
-        DecodedNameId::MemoryString(index) => Some(RuntimeString::from_utf8_lossy(
-            &read_string_bytes_mem(ctx, &env.memory, index),
-        )),
-        DecodedNameId::RuntimeString(index) => {
-            runtime_property_key_units(ctx.as_context().data(), index)
-        }
-        DecodedNameId::Symbol(_) => None,
-    };
-    for i in 0..num_props {
-        let slot_offset = obj_ptr + 16 + i * 32;
-        let (slot_name_id, flags, val) = {
-            let data = env.memory.data(&*ctx);
-            if slot_offset + 32 > data.len() {
-                break;
-            }
-            let slot_name_id = u32::from_le_bytes([
-                data[slot_offset],
-                data[slot_offset + 1],
-                data[slot_offset + 2],
-                data[slot_offset + 3],
-            ]);
-            let flags = i32::from_le_bytes([
-                data[slot_offset + 4],
-                data[slot_offset + 5],
-                data[slot_offset + 6],
-                data[slot_offset + 7],
-            ]);
-            let val = i64::from_le_bytes([
-                data[slot_offset + 8],
-                data[slot_offset + 9],
-                data[slot_offset + 10],
-                data[slot_offset + 11],
-                data[slot_offset + 12],
-                data[slot_offset + 13],
-                data[slot_offset + 14],
-                data[slot_offset + 15],
-            ]);
-            (slot_name_id, flags, val)
-        };
-        if ((flags & constants::FLAG_PRIVATE) != 0) != private_slot {
-            continue;
-        }
-        let same_name = slot_name_id == name_id
-            || target_key
-                .as_ref()
-                .is_some_and(|key| name_id_matches_runtime_string(ctx, env, slot_name_id, key));
-        if same_name {
-            return Some((slot_offset, flags, val));
-        }
-    }
-    None
-}
-
-/// 从对象中按 name_id 查找普通属性的 slot_offset。
+/// 从对象中按 name_id 查找 own 属性（V2-only，排除 private 属性）。
+///
+/// 返回完整属性槽：accessor 属性的 getter/setter 也在其中，调用方无需再按
+/// 线性偏移去堆里捞——堆内已无 name_id/flags，槽的语义只有 ShapeTable 知道。
 pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     obj_ptr: usize,
     name_id: u32,
-) -> Option<(usize, i32, i64)> {
-    find_property_slot_by_name_id_with_visibility(ctx, env, obj_ptr, name_id, false)
+) -> Option<HeapAccessV2Property> {
+    let handle = u32::try_from(obj_ptr).ok()?;
+    let access = ctx.as_context().data().heap_access_v2().clone();
+    if access.resolve_handle(handle).is_err() {
+        return None;
+    }
+    let key = crate::property_key::canonicalize_v2_name_id_with_env(ctx, env, name_id)?;
+    let property = access.get_property_slot(handle, key).ok().flatten()?;
+    if (property.flags as i32 & constants::FLAG_PRIVATE) != 0 {
+        return None;
+    }
+    Some(property)
 }
 
+/// 从对象中按 name_id 读取 own 属性（V2-only）。
 pub(crate) fn read_object_property_by_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
     name_id: u32,
 ) -> Option<i64> {
-    {
-        let handle = u32::try_from(obj_ptr).ok()?;
-        let access = caller.data().heap_access_v2().clone();
-        if access.resolve_handle(handle).is_ok() {
-            let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
-            return access
-                .get_property(handle, key)
-                .ok()
-                .flatten()
-                .map(|property_value| property_value as i64);
-        }
+    let handle = u32::try_from(obj_ptr).ok()?;
+    let access = caller.data().heap_access_v2().clone();
+    if access.resolve_handle(handle).is_err() {
+        return None;
     }
-    let env = WasmEnv::from_caller(caller)?;
-    let (slot_offset, _flags, val) =
-        find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)?;
-    let _ = slot_offset;
-    Some(val)
+    let key = crate::property_key::canonicalize_v2_name_id(caller, name_id)?;
+    access
+        .get_property(handle, key)
+        .ok()
+        .flatten()
+        .map(|property_value| property_value as i64)
 }
 
 pub(crate) fn write_object_property_by_name_id(
@@ -767,7 +524,7 @@ pub(crate) fn write_object_property_by_name_id(
     }
 }
 
-/// 读取对象/函数的所有属性名，用于 for...in 枚举
+/// 读取对象/函数的所有属性名，用于 for...in 枚举（V2-only）。
 pub(crate) fn enumerate_object_keys(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
@@ -775,80 +532,16 @@ pub(crate) fn enumerate_object_keys(
     if value::is_array(val) {
         return collect_own_property_names_from_value(caller, val, true);
     }
-
-    // 解析对象指针：通过 handle 表统一解析
-    let ptr: usize = match resolve_handle(caller, val) {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
-    // V2：ptr 即 handle，主存槽位扫描会读到垃圾；走 V2 形状感知的收集器
-    // （enumerable_only=false 与下方 V1 扫描的"非 private 全收"语义一致）。
-    if caller
-        .data()
-        .heap_access_v2()
-        .resolve_handle(value::decode_handle(val))
-        .is_ok()
-    {
-        return crate::runtime_host_helpers::collect_own_property_names(caller, ptr, false);
-    }
-
-    // 读取属性列表
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+    // V2：resolve_handle 返回 handle 本身，主存槽位扫描会读到垃圾；
+    // 一律走 V2 形状感知的收集器（enumerable_only=false = 非 private 全收）。
+    let Some(ptr) = resolve_handle(caller, val) else {
         return Vec::new();
     };
-    let data = memory.data(&*caller);
-    if ptr + 16 > data.len() {
-        return Vec::new();
-    }
-
-    let num_props = u32::from_le_bytes([
-        data[ptr + 12],
-        data[ptr + 13],
-        data[ptr + 14],
-        data[ptr + 15],
-    ]) as usize;
-
-    let mut name_ids = Vec::with_capacity(num_props);
-    for i in 0..num_props {
-        let slot_offset = ptr + 16 + i * 32;
-        if slot_offset + 8 > data.len() {
-            break;
-        }
-        let flags = i32::from_le_bytes([
-            data[slot_offset + 4],
-            data[slot_offset + 5],
-            data[slot_offset + 6],
-            data[slot_offset + 7],
-        ]);
-        if (flags & constants::FLAG_PRIVATE) != 0 {
-            continue;
-        }
-        let name_id = u32::from_le_bytes([
-            data[slot_offset],
-            data[slot_offset + 1],
-            data[slot_offset + 2],
-            data[slot_offset + 3],
-        ]);
-        name_ids.push(name_id);
-    }
-    let _ = data; // 释放对 memory 的借用
-
-    let mut keys = Vec::with_capacity(name_ids.len());
-    for name_id in name_ids {
-        if is_symbol_name_id(name_id) {
-            continue;
-        }
-        let name_bytes = read_string_bytes(caller, name_id);
-        if let Ok(name) = std::str::from_utf8(&name_bytes) {
-            keys.push(name.to_string());
-        }
-    }
-    keys
+    crate::runtime_host_helpers::collect_own_property_names(caller, ptr, false)
 }
 
-/// 分配描述符对象，用于 Object.getOwnPropertyDescriptor 返回值
-/// 对象格式：header(16 bytes) + 4 slots * 32 bytes = 144 bytes
+/// 分配描述符对象，用于 Object.getOwnPropertyDescriptor 返回值。
+/// V2 布局：header(16 bytes) + 6 个 8 字节值槽（`alloc_host_object_v2` 容量即值槽数）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn allocate_descriptor_object(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1571,88 +1264,8 @@ pub(crate) fn object_rest_impl(
             return result;
         }
     }
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let Some(source_ptr) = resolve_handle(caller, obj) else {
-        return alloc_host_object(caller, &env, 0);
-    };
-
-    let excluded_key_bytes = collect_excluded_key_bytes(caller, excluded_keys);
-
-    let source_props: Vec<(u32, i64)> = {
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-            return alloc_host_object(caller, &env, 0);
-        };
-        let num_props = {
-            let data = mem.data(&*caller);
-            if source_ptr + 16 > data.len() {
-                return alloc_host_object(caller, &env, 0);
-            }
-            u32::from_le_bytes([
-                data[source_ptr + 12],
-                data[source_ptr + 13],
-                data[source_ptr + 14],
-                data[source_ptr + 15],
-            ]) as usize
-        };
-        let mut props = Vec::new();
-        for i in 0..num_props {
-            let slot_offset = source_ptr + 16 + i * 32;
-            let (name_id, flags, val) = {
-                let data = mem.data(&*caller);
-                if slot_offset + 32 > data.len() {
-                    break;
-                }
-                let name_id = u32::from_le_bytes([
-                    data[slot_offset],
-                    data[slot_offset + 1],
-                    data[slot_offset + 2],
-                    data[slot_offset + 3],
-                ]);
-                let flags = i32::from_le_bytes([
-                    data[slot_offset + 4],
-                    data[slot_offset + 5],
-                    data[slot_offset + 6],
-                    data[slot_offset + 7],
-                ]);
-                let val = i64::from_le_bytes([
-                    data[slot_offset + 8],
-                    data[slot_offset + 9],
-                    data[slot_offset + 10],
-                    data[slot_offset + 11],
-                    data[slot_offset + 12],
-                    data[slot_offset + 13],
-                    data[slot_offset + 14],
-                    data[slot_offset + 15],
-                ]);
-                (name_id, flags, val)
-            };
-            if (flags & constants::FLAG_ENUMERABLE) == 0 {
-                continue;
-            }
-            if !excluded_key_bytes.is_empty() {
-                let name_bytes = read_string_bytes_mem(caller, &mem, name_id);
-                if excluded_key_bytes
-                    .iter()
-                    .any(|excluded| excluded == &name_bytes)
-                {
-                    continue;
-                }
-            }
-            props.push((name_id, val));
-        }
-        props
-    };
-
-    let result = alloc_host_object(caller, &env, source_props.len() as u32);
-    let Some(result_ptr) = resolve_handle(caller, result) else {
-        return result;
-    };
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
-    for (name_id, val) in source_props {
-        write_object_property_by_name_id(caller, result_ptr, result, name_id, val, flags);
-    }
-    result
+    // V2-only：源对象不在 handle 表则返回空对象，禁止 main memory 回落。
+    crate::runtime_host_helpers::alloc_object(caller, 0)
 }
 
 pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, source: i64) {
@@ -1748,11 +1361,6 @@ caller_env_wrapper! {
 
 caller_env_wrapper! {
     #[inline]
-    pub(crate) fn array_elem_present(ptr: usize, index: u32) -> bool = array_elem_present_with_env
-}
-
-caller_env_wrapper! {
-    #[inline]
     pub(crate) fn write_array_hole(ptr: usize, index: u32) = write_array_hole_with_env
 }
 
@@ -1768,5 +1376,5 @@ caller_env_wrapper! {
 
 caller_env_wrapper! {
     #[inline]
-    pub(crate) fn find_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_property_slot_by_name_id_with_env
+    pub(crate) fn find_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<HeapAccessV2Property> = find_property_slot_by_name_id_with_env
 }

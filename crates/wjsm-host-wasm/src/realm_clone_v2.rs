@@ -54,6 +54,16 @@ pub(crate) fn clone_pristine_realm_v2<C: AsContextMut<Data = RuntimeState>>(
         remap_object(&access, &map, source, map.get(source).unwrap())?;
     }
 
+    // 克隆末尾：目标 realm 与源 realm 共享同一 HeapAccessV2（同一 shape 表）。
+    // 先把源 realm 的 shape 表整体导入（export/import 内容等价，但显式保证
+    // 克隆结果不依赖捕获时序），再把原型登记集合按 HandleMap 重写为克隆产物的
+    // 新 handle——后续 clone realm 的原型形状变化能正确 bump proto 世代；
+    // 未出现在 map 里的 handle 保持原值。
+    access.import_shapes(access.export_shapes());
+    access
+        .shapes()
+        .remap_prototypes(|h| map.get(h).unwrap_or(h));
+
     let realm_id = RealmId(
         ctx.as_context()
             .data()
@@ -143,11 +153,14 @@ fn duplicate_object<C: AsContextMut<Data = RuntimeState>>(
                 + u64::from(constants::HEAP_OBJECT_HEADER_SIZE),
         )
     } else {
-        let slots = access.own_property_slots(source)?;
-        let capacity = u32::try_from(slots.len().max(4))?;
+        // 对象按新布局：16 字节头 + value_capacity × 8 字节值槽（accessor 占两槽）。
+        // 容量取源 shape 需要的值槽总数（下限 4 与宿主扩容策略一致）；克隆后
+        // `remap_object` 逐属性重定义，容量不足时经 transition 自动扩容。
+        let shape_id = access.shape_id(source)?;
+        let capacity = access.shapes().slot_count(shape_id).max(4);
         (
             capacity,
-            u64::from(capacity) * u64::from(constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE)
+            u64::from(capacity) * u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE)
                 + u64::from(constants::HEAP_OBJECT_HEADER_SIZE),
         )
     };

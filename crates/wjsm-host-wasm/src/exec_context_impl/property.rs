@@ -240,7 +240,6 @@ macro_rules! exec_ctx_property {
     ) -> Option<Value> {
         use crate::constants;
         use std::collections::HashSet;
-        use wasmtime::Extern;
 
         let mut visited = HashSet::new();
         let mut current = obj_ptr;
@@ -248,23 +247,14 @@ macro_rules! exec_ctx_property {
             if !visited.insert(current) {
                 return None;
             }
-            if let Some((slot_offset, flags, val)) =
+            if let Some(property) =
                 crate::runtime_values::find_property_slot_by_name_id(self.caller, current, name_id)
             {
-                if (flags & constants::FLAG_IS_ACCESSOR) == 0 {
-                    return Some(val);
+                // 数据属性直接取值；accessor 调 getter（堆里 getter 是一个普通值槽）。
+                if (property.flags as i32 & constants::FLAG_IS_ACCESSOR) != 0 {
+                    return Some(self.invoke_getter_sync(property.getter as i64, receiver));
                 }
-                let getter = {
-                    let Some(Extern::Memory(memory)) = self.caller.get_export("memory") else {
-                        return Some(value::encode_undefined());
-                    };
-                    let data = memory.data(&*self.caller);
-                    if slot_offset + 24 > data.len() {
-                        return Some(value::encode_undefined());
-                    }
-                    i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap())
-                };
-                return Some(self.invoke_getter_sync(getter, receiver));
+                return Some(property.value as i64);
             }
             let env = self.env()?;
             let proto_handle = {
@@ -391,7 +381,7 @@ macro_rules! exec_ctx_property {
         let prototype = value::decode_object_handle(self.caller.data().function_prototype);
         let capacity = 4u32;
         let bytes = u64::from(capacity)
-            * u64::from(wjsm_ir::constants::HEAP_OBJECT_PROPERTY_SLOT_SIZE)
+            * u64::from(wjsm_ir::constants::HEAP_OBJECT_VALUE_SLOT_SIZE)
             + u64::from(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE);
         let Ok((address, _)) = crate::runtime_heap::allocate_v2_object_bytes_with_context(
             self.caller,

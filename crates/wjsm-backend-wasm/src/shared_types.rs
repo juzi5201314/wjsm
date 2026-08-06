@@ -177,7 +177,15 @@ pub fn build_shared_type_section() -> TypeSection {
         vec![ValType::I64],
     );
 
-    // Type 39+: direct_call fast 入口（Step 4）：(i64 env, i64 this, i64×N) -> i64。
+    // Type 39: (i64, i32, i32) -> () — ic_backfill（obj, name_id, ic_slot）。
+    // IC 只缓存「shape_id → 值槽下标」，属性语义仍由 obj_get/obj_set 承担；
+    // 本导入只在 miss 之后填充缓存，因此无返回值、不参与语义。
+    types.ty().function(
+        vec![ValType::I64, ValType::I32, ValType::I32],
+        vec![],
+    );
+
+    // Type 40+: direct_call fast 入口（Step 4）：(i64 env, i64 this, i64×N) -> i64。
     // N = 声明形参数（0..=MAX_FAST_PARAMS）。类型索引 = FAST_ENTRY_TYPE_BASE + N。
     // 参数寄存器直传（无 args_base/args_count、无 shadow 读写）。
     for n in 0..=crate::compiler_module::MAX_FAST_PARAMS {

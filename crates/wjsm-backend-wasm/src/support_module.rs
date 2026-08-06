@@ -356,6 +356,7 @@ fn emit_gc_safepoint_poll_if_due_support(func: &mut Function) {
 }
 
 /// obj_new (param $capacity i32) (result i32)
+/// capacity 是值槽数（8 字节/槽）；对象字节数 = 16 + capacity * 8。
 fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
     // local 0 = capacity:i32, 1 = size:i64, 2 = ptr:i64, 3 = handle:i32, 4 = end:i64。
     let mut func = Function::new(vec![
@@ -367,9 +368,11 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
 
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I64ExtendI32U);
-    func.instruction(&WasmInstruction::I64Const(32));
+    func.instruction(&WasmInstruction::I64Const(
+        wjsm_ir::constants::HEAP_OBJECT_VALUE_SLOT_SIZE as i64,
+    ));
     func.instruction(&WasmInstruction::I64Mul);
-    func.instruction(&WasmInstruction::I64Const(16));
+    func.instruction(&WasmInstruction::I64Const(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE as i64));
     func.instruction(&WasmInstruction::I64Add);
     func.instruction(&WasmInstruction::LocalSet(1));
 
@@ -420,6 +423,8 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::LocalSet(2));
 
+    // 对象头（16 字节）：+0 proto handle、+4 heap_type、+8 value_capacity（值槽数）、
+    // +12 shape_id = SHAPE_ID_EMPTY（空对象 shape，宿主 ShapeTable 分配）。
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::GlobalGet(G_OBJECT_PROTO_HANDLE));
     func.instruction(&WasmInstruction::I32Store(MemArg {
@@ -437,14 +442,16 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 8,
+        offset: u64::from(wjsm_ir::constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET),
         align: 2,
         memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
     }));
     func.instruction(&WasmInstruction::LocalGet(2));
-    func.instruction(&WasmInstruction::I32Const(0));
+    func.instruction(&WasmInstruction::I32Const(
+        wjsm_ir::constants::SHAPE_ID_EMPTY as i32,
+    ));
     func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 12,
+        offset: u64::from(wjsm_ir::constants::HEAP_OBJECT_SHAPE_ID_OFFSET),
         align: 2,
         memory_index: wjsm_ir::HEAP_MEMORY_INDEX,
     }));
@@ -456,7 +463,11 @@ fn emit_obj_new_v2(_flavor: GcFlavor) -> Function {
     func.instruction(&WasmInstruction::LocalGet(2));
     func.instruction(&WasmInstruction::I64Const(16));
     func.instruction(&WasmInstruction::I64Shl);
-    func.instruction(&WasmInstruction::I64Const(1));
+    // 发布为稳定态（young）：属性访问快链据 `state >= HANDLE_STATE_STABLE_MIN`
+    // 判定地址可直接使用。禁止写裸字面量——状态编码是与宿主堆的 ABI 契约。
+    func.instruction(&WasmInstruction::I64Const(
+        wjsm_ir::constants::HANDLE_STATE_STABLE_YOUNG as i64,
+    ));
     func.instruction(&WasmInstruction::I64Or);
     func.instruction(&WasmInstruction::I64AtomicStore(MemArg {
         offset: 0,

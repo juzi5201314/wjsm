@@ -1043,28 +1043,45 @@ fn compute_region(
         }
     }
 
-    // ── 出口检查：S 内终止器指向 S 外目标时，目标块指令/终止器不得使用 T 值 ──
+    // ── 出口检查：S 外的可达块不得使用 T 值 ──
+    //
+    // 必须做**传递**可达性，不能只看一层后继：S 的收集会在「不含区域定义」的块
+    // 上剪枝（纯 `jump` 跳板就是这种块），于是真正消费 T 值的块可能隔着一两个
+    // 跳板落在 S 外。只查一层会让它漏过检查——区域克隆不含它，克隆路径上该块
+    // 的 T 值引用要么悬空、要么落回慢路径的定义，表现为「快路径丢掉了对累加器
+    // 的写回」（`t += f()` 恒为初值）。
     let s_set: HashSet<BasicBlockId> = s_blocks.iter().copied().collect();
+    let mut exit_seen: HashSet<BasicBlockId> = HashSet::new();
+    let mut exit_stack: Vec<BasicBlockId> = Vec::new();
     for &bid in &s_blocks {
-        let block = match function.block_by_id(bid) {
-            Some(b) => b,
-            None => continue,
+        let Some(block) = function.block_by_id(bid) else {
+            continue;
         };
         for succ in terminator_successors(block.terminator()) {
             if !s_set.contains(&succ) {
-                let target = match function.block_by_id(succ) {
-                    Some(b) => b,
-                    None => continue,
-                };
-                let uses_t = target.instructions().iter().any(|ins| {
-                    instr_uses(ins).iter().any(|u| closure.contains(u))
-                }) || terminator_uses(target.terminator())
-                    .iter()
-                    .any(|u| closure.contains(u));
-                if uses_t {
-                    return None;
-                }
+                exit_stack.push(succ);
             }
+        }
+    }
+    while let Some(bid) = exit_stack.pop() {
+        if s_set.contains(&bid) || !exit_seen.insert(bid) {
+            continue;
+        }
+        let Some(block) = function.block_by_id(bid) else {
+            continue;
+        };
+        let uses_t = block
+            .instructions()
+            .iter()
+            .any(|ins| instr_uses(ins).iter().any(|u| closure.contains(u)))
+            || terminator_uses(block.terminator())
+                .iter()
+                .any(|u| closure.contains(u));
+        if uses_t {
+            return None;
+        }
+        for succ in terminator_successors(block.terminator()) {
+            exit_stack.push(succ);
         }
     }
 
@@ -1472,8 +1489,6 @@ fn inline_speculative_candidate(
         block_map.insert(orig, next_id);
         next_id = BasicBlockId(next_id.0 + 1);
     }
-    let mut remap_block = |b: BasicBlockId| block_map.get(&b).copied().unwrap_or(b);
-    let mapped_dest = ValueId(candidate.dest.0 + value_offset);
     // 返回值可能来自参数 LoadVar 的 dest（如 `return x`），经 param_subst 解析
     // 为实参值，否则区域克隆中 R 的 use 会指向悬空值。
     if let Some((_, resolved)) = param_subst
@@ -1482,6 +1497,64 @@ fn inline_speculative_candidate(
     {
         ret_mapped = *resolved;
     }
+
+    // 区域内定义的 ValueId：只有它们在克隆时需要重编号。
+    //
+    // 区域**使用**但在区域外定义的值（B_pre 里的 `load var`、更早块的计算结果）
+    // 必须原样引用：给全部 ValueId 盲目加偏移会让它们指向从未定义的编号，产出
+    // 悬空 SSA。后端把未定义 ValueId 当成未初始化 local 发射，于是累加器这类
+    // 跨迭代变量会读到陈旧值（`t = t + f()` 只保留最后一轮），且具体表现随
+    // local 布局漂移。
+    let region_defs: HashSet<ValueId> = {
+        let function = &module.functions()[func_idx];
+        let mut defs = HashSet::new();
+        for &orig in &region_blocks {
+            if orig == call_block_id {
+                // 调用块只克隆调用点之后的部分；调用点之前的定义留在 B_pre。
+                for ins in &post_instructions {
+                    if let Some(d) = instruction_dest(ins) {
+                        defs.insert(d);
+                    }
+                }
+            } else {
+                for ins in function.blocks()[orig.0 as usize].instructions() {
+                    if let Some(d) = instruction_dest(ins) {
+                        defs.insert(d);
+                    }
+                }
+            }
+        }
+        defs
+    };
+    // 区域偏移必须高于 callee 克隆已占用的编号，否则两套克隆会撞号。
+    let region_offset = {
+        let mut max_used = guard_dest.0.max(undefined_dest.0).max(ret_mapped.0);
+        for block in &callee_clones {
+            for ins in block.instructions() {
+                if let Some(d) = instruction_dest(ins) {
+                    max_used = max_used.max(d.0);
+                }
+                for used in instr_uses(ins) {
+                    max_used = max_used.max(used.0);
+                }
+            }
+            for used in terminator_uses(block.terminator()) {
+                max_used = max_used.max(used.0);
+            }
+        }
+        max_used + 1
+    };
+    let remap_region_value = |v: ValueId| -> ValueId {
+        if v == candidate.dest {
+            // 调用结果 → 快路径 callee 克隆的返回值。
+            ret_mapped
+        } else if region_defs.contains(&v) {
+            ValueId(v.0 + region_offset)
+        } else {
+            // 区域外定义（B_pre / 更早块）：克隆体与慢路径共用同一定义。
+            v
+        }
+    };
 
     // 变量改名：函数内所有 StoreVar/LoadVar 都在 S 内 → 克隆中改名 V$ea{N}。
     let s_set: HashSet<BasicBlockId> = region_blocks.iter().copied().collect();
@@ -1537,14 +1610,14 @@ fn inline_speculative_candidate(
             // 未定义——降级为恒 false（走原始慢路径块，参数有效）。
             if let Instruction::GuardSameFunction { dest, .. } = ins {
                 clone.push_instruction(Instruction::Const {
-                    dest: ValueId(dest.0 + value_offset),
+                    dest: remap_region_value(*dest),
                     constant: bool_false_id,
                 });
                 return;
             }
             let mut ins = ins.clone();
-            add_offset_to_value_id(&mut ins, value_offset);
-            replace_value_id(&mut ins, mapped_dest, ret_mapped);
+            ins.remap_values(&mut |v| remap_region_value(v));
+            ins.remap_blocks(&mut |b: BasicBlockId| block_map.get(&b).copied().unwrap_or(b));
             clone.push_instruction(ins);
         };
         if orig == call_block_id {
@@ -1553,9 +1626,8 @@ fn inline_speculative_candidate(
                 clone_instruction(ins, &mut clone);
             }
             let mut term = orig_terminator.clone();
-            term.remap_values(&mut |v| ValueId(v.0 + value_offset));
-            term.remap_blocks(&mut remap_block);
-            replace_value_id_in_terminator(&mut term, mapped_dest, ret_mapped);
+            term.remap_values(&mut |v| remap_region_value(v));
+            term.remap_blocks(&mut |b: BasicBlockId| block_map.get(&b).copied().unwrap_or(b));
             clone.set_terminator(term);
         } else {
             let src = &module.functions()[func_idx].blocks()[orig.0 as usize];
@@ -1563,9 +1635,8 @@ fn inline_speculative_candidate(
                 clone_instruction(ins, &mut clone);
             }
             let mut term = src.terminator().clone();
-            term.remap_values(&mut |v| ValueId(v.0 + value_offset));
-            term.remap_blocks(&mut remap_block);
-            replace_value_id_in_terminator(&mut term, mapped_dest, ret_mapped);
+            term.remap_values(&mut |v| remap_region_value(v));
+            term.remap_blocks(&mut |b: BasicBlockId| block_map.get(&b).copied().unwrap_or(b));
             clone.set_terminator(term);
         }
         region_clones.push(clone);

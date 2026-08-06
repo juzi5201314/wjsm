@@ -77,8 +77,8 @@ module {
       branch %24, bb2, bb4
     bb2:
       %25 = call builtin.enumerator.key(%22)
-      store var $0.k, %25
-      %26 = load var $0.k
+      store var $1.k, %25
+      %26 = load var $1.k
       %27 = call builtin.console.log(%26)
       %28 = is_exception %27
       branch %28, bb6, bb5

@@ -370,6 +370,57 @@ impl Lowerer {
         Ok(self.resolve_store_block(block))
     }
 
+    /// TypeScript 参数属性 `constructor(private x)`：把形参值写入 `this.<name>`。
+    ///
+    /// `fields` 的每项为 `(形参 IR 名, 字段名)`。调用点必须保证 `this` 已可用
+    /// （派生类需在 `super()` 之后），且按 TS 语义排在实例字段初始化器之前。
+    pub(crate) fn emit_param_prop_fields(
+        &mut self,
+        mut block: BasicBlockId,
+        this_scope_id: usize,
+        fields: &[(String, String)],
+    ) -> BasicBlockId {
+        for (ir_name, field_name) in fields {
+            let value = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: value,
+                    name: ir_name.clone(),
+                },
+            );
+            let this_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: this_val,
+                    name: format!("${this_scope_id}.$this"),
+                },
+            );
+            let key_const = self
+                .module
+                .add_constant(Constant::String(field_name.clone()));
+            let key_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: key_dest,
+                    constant: key_const,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: this_val,
+                    key: key_dest,
+                    value,
+                },
+            );
+            block = self.resolve_store_block(block);
+        }
+        block
+    }
+
     pub(crate) fn emit_static_field_init(
         &mut self,
         block: BasicBlockId,

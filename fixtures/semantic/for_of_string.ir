@@ -77,8 +77,8 @@ module {
       branch %24, bb2, bb4
     bb2:
       %25 = call builtin.iterator.value(%22)
-      store var $0.c, %25
-      %26 = load var $0.c
+      store var $1.c, %25
+      %26 = load var $1.c
       %27 = call builtin.console.log(%26)
       %28 = is_exception %27
       branch %28, bb6, bb5

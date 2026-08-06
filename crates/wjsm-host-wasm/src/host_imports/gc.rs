@@ -16,6 +16,75 @@ const FAST_PATH_MISS: i64 = (value::BOX_BASE as i64) | (0x1E_i64 << 32);
 /// 快路径链查找的最大深度：超出即回退慢路径（防御异常原型链环）。
 const FAST_PATH_MAX_DEPTH: u32 = 32;
 
+/// Inline cache 缓存填充：把「本次访问在 `object` 上解析到的值槽位置」写进 IC 槽。
+///
+/// 只写位置信息（shape_id + 值槽下标 + kind），**不参与属性语义**：读写本身已由
+/// `obj_get`/`obj_set` 完成。因此本函数无法让语义走偏——它至多让 wasm 侧下次
+/// 跳过一次宿主往返，而 shape 不匹配时快链自动退回宿主。
+///
+/// 三类情形写 `IC_KIND_MEGAMORPHIC`，此后该站点永久落宿主：
+/// accessor 属性、字典 shape、以及在原型链上而非自身命中（本步只缓存自有属性）。
+fn ic_backfill_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, key: i32, ic_slot: i32) {
+    use wjsm_ir::constants;
+
+    let Ok(slot_addr) = usize::try_from(ic_slot) else {
+        return;
+    };
+    // 阶段一：解析出可缓存的位置信息（借用 caller）。
+    let (kind, shape_id, value_index) = resolve_ic_entry(caller, object, key);
+    // 阶段二：写 IC 槽（重新可变借用 caller）。
+    let Some(env) = crate::WasmEnv::from_caller(caller) else {
+        return;
+    };
+    let data = env.memory.data_mut(&mut *caller);
+    if slot_addr + constants::IC_SLOT_SIZE as usize > data.len() {
+        return;
+    }
+    let mut write = |offset: u32, value: u32| {
+        let at = slot_addr + offset as usize;
+        data[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    write(constants::IC_SLOT_SHAPE_ID_OFFSET, shape_id);
+    write(constants::IC_SLOT_VALUE_INDEX_OFFSET, value_index);
+    write(constants::IC_SLOT_PROTO_GENERATION_OFFSET, 0);
+    // kind 最后写：wasm 侧以 kind != 0 判定槽可用，最后写保证读到的是完整记录。
+    write(constants::IC_SLOT_KIND_OFFSET, kind);
+}
+
+/// 解析 `object.key` 是否为「可按 shape 缓存的自有数据属性」。
+/// 返回 `(kind, shape_id, value_index)`；不可缓存时 kind = MEGAMORPHIC。
+fn resolve_ic_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    object: i64,
+    key: i32,
+) -> (u32, u32, u32) {
+    use wjsm_ir::constants;
+    const UNCACHEABLE: (u32, u32, u32) = (constants::IC_KIND_MEGAMORPHIC, 0, 0);
+
+    // 只有普通对象参与缓存：函数/闭包的属性对象走 function_props 偏移，
+    // 数组的命名属性在宿主侧表里，二者都不适合按 shape 缓存。
+    if !value::is_object(object) {
+        return UNCACHEABLE;
+    }
+    let Some(key) = crate::property_key::canonicalize_v2_name_id(caller, key as u32) else {
+        return UNCACHEABLE;
+    };
+    let handle = value::decode_object_handle(object);
+    let access = caller.data().heap_access_v2().clone();
+    let Ok(shape_id) = access.shape_id(handle) else {
+        return UNCACHEABLE;
+    };
+    // 字典 shape 不共享，缓存它没有收益且会随每次增删失效。
+    if access.shapes().is_dictionary(shape_id) {
+        return UNCACHEABLE;
+    }
+    match access.shapes().lookup(shape_id, key) {
+        // 自有数据属性 → 可缓存。accessor 需要调用 getter，不缓存。
+        Some(prop) if !prop.is_accessor() => (constants::IC_KIND_OWN_DATA, shape_id, prop.index),
+        _ => UNCACHEABLE,
+    }
+}
+
 /// 同步属性读取快路径：原型链上命中**数据槽**时直接返回槽值（闭包 env 变量、普通
 /// 对象属性、函数/闭包实例属性（含类构造器的 prototype）读取的典型形态）；命中
 /// **访问器槽**且 getter 可同步调用时直接经 `call_js` 重入调用（类 getter 的典型
@@ -269,13 +338,36 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                     && index >= 0
                     && access.object_type(handle).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
                 {
-                    // hole 视为缺失属性，归一为 undefined；否则洞哨兵会作为 NaN 泄漏给调用方
-                    let element = access
-                        .get_element(handle, index as u32)?
-                        .map(|raw| raw as i64)
-                        .filter(|raw| !value::is_array_hole(*raw))
-                        .unwrap_or_else(value::encode_undefined);
-                    return Ok(element);
+                    // DICTIONARY 表示某些索引位置存在 accessor 等异质属性（如
+                    // `Object.defineProperty(arr, "1", {get(){…}})`）。这类键与元素
+                    // 存储重叠，必须逐索引判断：只有**该索引**在侧表里有条目时才
+                    // 走完整 [[Get]]（触发 getter）；其余索引仍读元素槽。
+                    //
+                    // 不能对整个数组一律落 [[Get]]——数组的 [[Get]] 只查侧表、
+                    // 不读元素存储，那会让所有普通元素读成 undefined。
+                    let index_has_side_entry = access.array_kind(handle).ok()
+                        == Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+                        && {
+                            let name_id = v2_index_property_key(&caller, index);
+                            crate::array_named_props::ArrayNamedPropsStore::get_slot(
+                                &mut caller,
+                                array,
+                                name_id,
+                            )
+                            .is_some()
+                        };
+                    // 命中真实元素才短路。越界或洞都是「缺失自有属性」，按 [[Get]]
+                    // 语义必须继续沿原型链查找（`Array.prototype[9] = 77;
+                    // [1,2][9]` 须得 77），不能就地归一为 undefined——那会把
+                    // 原型上的索引属性整个吞掉。
+                    if !index_has_side_entry
+                        && let Some(element) = access
+                            .get_element(handle, index as u32)?
+                            .map(|raw| raw as i64)
+                            .filter(|raw| !value::is_array_hole(*raw))
+                    {
+                        return Ok(element);
+                    }
                 }
                 let name_id = v2_index_property_key(&caller, index);
                 Ok(wjsm_builtins::property::get_by_name_id(
@@ -330,6 +422,13 @@ pub(crate) fn define_v2(linker: &mut Linker<RuntimeState>) -> Result<()> {
                 .await;
                 Ok(())
             })
+        },
+    )?;
+    linker.func_wrap(
+        "env",
+        "ic_backfill",
+        |mut caller: Caller<'_, RuntimeState>, object: i64, key: i32, ic_slot: i32| {
+            ic_backfill_impl(&mut caller, object, key, ic_slot);
         },
     )?;
     Ok(())

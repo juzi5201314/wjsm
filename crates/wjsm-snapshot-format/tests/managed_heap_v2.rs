@@ -49,7 +49,8 @@ fn managed_heap_v2_snapshot_roundtrips_page_and_atomic_handle_metadata() {
 
     assert_eq!(decoded, snapshot);
     assert_ne!(&bytes[..SNAPSHOT_MAGIC.len()], &SNAPSHOT_MAGIC);
-    assert_eq!(SNAPSHOT_FORMAT_VERSION, 9);
+    // v10：对象堆改隐藏类 + 8 字节紧凑值数组，旧快照必须失效。
+    assert_eq!(SNAPSHOT_FORMAT_VERSION, 10);
 }
 
 #[test]

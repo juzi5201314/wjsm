@@ -90,8 +90,6 @@ module {
       %31 = call builtin.exception_value(%29)
       throw %31
     bb3:
-      %27 = const c24
-      %28 = get_prop %26, %27
       %29 = call builtin.console.log(%24)
       %30 = is_exception %29
       branch %30, bb2, bb1

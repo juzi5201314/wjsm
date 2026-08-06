@@ -202,9 +202,12 @@ impl Lowerer {
                 }
             }
             swc_ast::Stmt::For(for_stmt) => {
-                // For `for (let x ...)`, the init variable is in a separate scope
+                // `let`/`const` 在 for 头声明的绑定属于 per-loop 自有作用域，
+                // 由 lower_for → lower_var_decl 在正确的作用域内处理；
+                // 只有 `var` 需要在此提升到函数作用域。
                 if let Some(init) = &for_stmt.init
                     && let swc_ast::VarDeclOrExpr::VarDecl(var_decl) = init
+                    && var_decl.kind == swc_ast::VarDeclKind::Var
                 {
                     self.predeclare_var_decl(var_decl)?;
                 }
@@ -216,8 +219,11 @@ impl Lowerer {
                 )?;
             }
             swc_ast::Stmt::ForIn(for_in) => {
-                // Pre-declare the loop variable if it's a var declaration
-                if let swc_ast::ForHead::VarDecl(var_decl) = &for_in.left {
+                // 同 `Stmt::For`：`let`/`const` 头部绑定属于 per-loop 作用域，
+                // 由 lower_for_in 压栈后自行声明；只有 `var` 在此提升。
+                if let swc_ast::ForHead::VarDecl(var_decl) = &for_in.left
+                    && var_decl.kind == swc_ast::VarDeclKind::Var
+                {
                     self.predeclare_var_decl(var_decl)?;
                 }
                 self.predeclare_stmt_with_mode_and_eval_strings(
@@ -227,7 +233,9 @@ impl Lowerer {
                 )?;
             }
             swc_ast::Stmt::ForOf(for_of) => {
-                if let swc_ast::ForHead::VarDecl(var_decl) = &for_of.left {
+                if let swc_ast::ForHead::VarDecl(var_decl) = &for_of.left
+                    && var_decl.kind == swc_ast::VarDeclKind::Var
+                {
                     self.predeclare_var_decl(var_decl)?;
                 }
                 self.predeclare_stmt_with_mode_and_eval_strings(

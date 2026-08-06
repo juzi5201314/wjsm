@@ -28,6 +28,21 @@ fn main_fn(program: &Program) -> &Function {
         .expect("module_main")
 }
 
+/// `tmp` 的 IR 名带作用域前缀（`$<scope>.tmp`），而 for 头部绑定自持一个词法
+/// 作用域，故循环体的作用域号会随词法嵌套变化。这里按后缀解析实际名字，
+/// 使断言锁定「tmp 槽位在安全点被占用」这一契约本身，而非某个具体作用域编号。
+fn tmp_var_name(function: &Function) -> String {
+    function
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .find_map(|ins| match ins {
+            Instruction::StoreVar { name, .. } if name.ends_with(".tmp") => Some(name.clone()),
+            _ => None,
+        })
+        .expect("loop body must store the tmp binding")
+}
+
 #[test]
 fn gc_long_loop_tmp_slot_occupied_at_get_prop() -> Result<()> {
     let program = lower_module(parse_module(SOURCE)?, false)?;
@@ -46,17 +61,18 @@ fn gc_long_loop_tmp_slot_occupied_at_get_prop() -> Result<()> {
         .position(|ins| matches!(ins, Instruction::GetProp { .. }))
         .expect("get_prop in loop body");
 
+    let tmp = tmp_var_name(f);
     let at_get_prop = var_live
         .get(&(bb2, get_prop_idx))
         .cloned()
         .unwrap_or_default();
     assert!(
-        at_get_prop.contains("$1.tmp"),
+        at_get_prop.contains(&tmp),
         "tmp slot must be occupied before get_prop (was {:?})",
         at_get_prop
     );
     assert_eq!(
-        var_ty.get("$1.tmp"),
+        var_ty.get(&tmp),
         Some(&wjsm_backend_wasm::analysis_value_ty::ValueTy::Handle)
     );
     let new_obj_idx = f
@@ -73,7 +89,7 @@ fn gc_long_loop_tmp_slot_occupied_at_get_prop() -> Result<()> {
         .cloned()
         .unwrap_or_default();
     assert!(
-        at_new_obj.contains("$1.tmp"),
+        at_new_obj.contains(&tmp),
         "prior iteration tmp must occupy slot at next new_object safepoint: {:?}",
         at_new_obj
     );

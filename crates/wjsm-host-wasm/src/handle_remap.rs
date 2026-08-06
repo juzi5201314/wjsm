@@ -1,18 +1,21 @@
 //! 共享对象图 walker + 可插拔 RemapPolicy。
 //!
 //! Snapshot 恢复与 realm 克隆都要扫对象图，但改写语义不同：
-//! - [`FuncTableIndexRangePolicy`]：仅平移属性槽内 `TAG_FUNCTION` 的 WASM 表索引
+//! - [`FuncTableIndexRangePolicy`]：仅平移值槽内 `TAG_FUNCTION` 的 WASM 表索引
 //! - [`ObjectHandleMapPolicy`]：按 handle map 重写对象/数组句柄与 proto header
+//!
+//! 隐藏类重构后堆内 payload 只有一种形态：`16 + capacity * 8`，每槽一个 boxed i64。
+//! 属性名与 flags 全在宿主 `ShapeTable`，所以这里既不区分数据/accessor 槽，
+//! 也不需要 shape 表——对象与数组走同一套遍历，只在容量字段位置上不同。
+//! 未使用的值槽恒为 0，`remap_value` 对它是恒等变换。
 
 use std::collections::HashMap;
 
 use crate::heap::HandleId;
 use anyhow::Result;
 use wjsm_ir::constants::{
-    FLAG_IS_ACCESSOR, HEAP_ARRAY_CAPACITY_OFFSET, HEAP_ARRAY_ELEMENT_SIZE,
-    HEAP_OBJECT_CAPACITY_OFFSET, HEAP_OBJECT_HEADER_SIZE, HEAP_OBJECT_PROPERTY_SLOT_SIZE,
-    HEAP_OBJECT_PROTO_OFFSET, HEAP_OBJECT_TYPE_OFFSET, PROP_SLOT_FLAGS_OFFSET,
-    PROP_SLOT_GETTER_OFFSET, PROP_SLOT_SETTER_OFFSET, PROP_SLOT_SIZE, PROP_SLOT_VALUE_OFFSET,
+    HEAP_ARRAY_CAPACITY_OFFSET, HEAP_OBJECT_HEADER_SIZE, HEAP_OBJECT_PROTO_OFFSET,
+    HEAP_OBJECT_TYPE_OFFSET, HEAP_OBJECT_VALUE_CAPACITY_OFFSET, HEAP_OBJECT_VALUE_SLOT_SIZE,
 };
 use wjsm_ir::value;
 use wjsm_ir::value::TAG_ARRAY;
@@ -70,9 +73,6 @@ pub trait RemapPolicy {
     /// 改写 OBJECT header 中的 proto handle（裸 u32）。
     fn remap_proto_handle(&self, h: u32) -> u32;
 
-    /// 是否处理 accessor 的 getter/setter（FuncTable 策略保持跳过）。
-    fn visit_accessors(&self) -> bool;
-
     /// 是否处理 ARRAY 元素槽。
     fn visit_array_elements(&self) -> bool;
 }
@@ -99,10 +99,6 @@ impl RemapPolicy for FuncTableIndexRangePolicy {
 
     fn remap_proto_handle(&self, h: u32) -> u32 {
         h
-    }
-
-    fn visit_accessors(&self) -> bool {
-        false
     }
 
     fn visit_array_elements(&self) -> bool {
@@ -144,25 +140,23 @@ impl RemapPolicy for ObjectHandleMapPolicy<'_> {
         self.map.get(h).unwrap_or(h)
     }
 
-    fn visit_accessors(&self) -> bool {
-        true
-    }
-
     fn visit_array_elements(&self) -> bool {
         true
     }
 }
 
-/// 线性扫 heap 字节切片，按 policy 就地改写 OBJECT/ARRAY 槽。
+/// 线性扫 heap 字节切片，按 policy 就地改写 OBJECT/ARRAY 值槽。
 pub fn walk_and_remap_heap(heap: &mut [u8], policy: &dyn RemapPolicy) -> Result<()> {
     let heap_end = heap.len();
     let mut ptr = 0usize;
     while ptr + HEAP_OBJECT_HEADER_SIZE as usize <= heap_end {
         let heap_type = heap[ptr + HEAP_OBJECT_TYPE_OFFSET as usize];
-        let (capacity_offset, elem_size) = if heap_type == HEAP_TYPE_ARRAY {
-            (HEAP_ARRAY_CAPACITY_OFFSET, HEAP_ARRAY_ELEMENT_SIZE)
+        // 容量字段位置是对象与数组的唯一差别：对象在 `+8`（`+12` 是 shape_id），
+        // 数组在 `+12`（`+8` 是 length）。槽尺寸两者同为 8 字节。
+        let capacity_offset = if heap_type == HEAP_TYPE_ARRAY {
+            HEAP_ARRAY_CAPACITY_OFFSET
         } else if heap_type == HEAP_TYPE_OBJECT {
-            (HEAP_OBJECT_CAPACITY_OFFSET, HEAP_OBJECT_PROPERTY_SLOT_SIZE)
+            HEAP_OBJECT_VALUE_CAPACITY_OFFSET
         } else {
             ptr += 1;
             continue;
@@ -171,15 +165,15 @@ pub fn walk_and_remap_heap(heap: &mut [u8], policy: &dyn RemapPolicy) -> Result<
         let capacity =
             u32::from_le_bytes(heap[cap_start..cap_start + 4].try_into().expect("capacity"));
         let obj_size = (HEAP_OBJECT_HEADER_SIZE as usize)
-            .saturating_add(capacity as usize * elem_size as usize);
+            .saturating_add(capacity as usize * HEAP_OBJECT_VALUE_SLOT_SIZE as usize);
         if obj_size == 0 || ptr.saturating_add(obj_size) > heap_end {
             break;
         }
 
         if heap_type == HEAP_TYPE_OBJECT {
             remap_object_at(heap, ptr, capacity, policy)?;
-        } else if heap_type == HEAP_TYPE_ARRAY && policy.visit_array_elements() {
-            remap_array_elements_at(heap, ptr, capacity, policy)?;
+        } else if policy.visit_array_elements() {
+            remap_value_slots_at(heap, ptr, capacity, policy);
         }
 
         ptr += obj_size;
@@ -187,61 +181,36 @@ pub fn walk_and_remap_heap(heap: &mut [u8], policy: &dyn RemapPolicy) -> Result<
     Ok(())
 }
 
-/// 对单个 OBJECT 地址（含 proto + 属性槽）应用 policy。
+/// 对单个 OBJECT 地址（含 proto header + 全部值槽）应用 policy。
 pub fn remap_object_at(
     heap: &mut [u8],
     ptr: usize,
     capacity: u32,
     policy: &dyn RemapPolicy,
 ) -> Result<()> {
-    let heap_end = heap.len();
-    // proto header
     let proto_off = ptr + HEAP_OBJECT_PROTO_OFFSET as usize;
-    if proto_off + 4 <= heap_end {
+    if proto_off + 4 <= heap.len() {
         let old = u32::from_le_bytes(heap[proto_off..proto_off + 4].try_into().expect("proto"));
         let new_h = policy.remap_proto_handle(old);
         if new_h != old {
             heap[proto_off..proto_off + 4].copy_from_slice(&new_h.to_le_bytes());
         }
     }
-
-    let props_base = ptr + HEAP_OBJECT_HEADER_SIZE as usize;
-    for slot in 0..capacity as usize {
-        let slot_off = props_base + slot * PROP_SLOT_SIZE as usize;
-        if slot_off + PROP_SLOT_SIZE as usize > heap_end {
-            break;
-        }
-        let flags_off = slot_off + PROP_SLOT_FLAGS_OFFSET as usize;
-        let flags = i32::from_le_bytes(heap[flags_off..flags_off + 4].try_into().expect("flags"));
-        if flags & FLAG_IS_ACCESSOR != 0 {
-            if !policy.visit_accessors() {
-                continue;
-            }
-            rewrite_i64_slot(heap, slot_off + PROP_SLOT_GETTER_OFFSET as usize, policy);
-            rewrite_i64_slot(heap, slot_off + PROP_SLOT_SETTER_OFFSET as usize, policy);
-        } else {
-            rewrite_i64_slot(heap, slot_off + PROP_SLOT_VALUE_OFFSET as usize, policy);
-        }
-    }
+    remap_value_slots_at(heap, ptr, capacity, policy);
     Ok(())
 }
 
-fn remap_array_elements_at(
-    heap: &mut [u8],
-    ptr: usize,
-    capacity: u32,
-    policy: &dyn RemapPolicy,
-) -> Result<()> {
+/// 改写 `[ptr + 16, ptr + 16 + capacity * 8)` 区间内的每个值槽。
+fn remap_value_slots_at(heap: &mut [u8], ptr: usize, capacity: u32, policy: &dyn RemapPolicy) {
     let heap_end = heap.len();
-    let elems_base = ptr + HEAP_OBJECT_HEADER_SIZE as usize;
-    for i in 0..capacity as usize {
-        let off = elems_base + i * HEAP_ARRAY_ELEMENT_SIZE as usize;
+    let slots_base = ptr + HEAP_OBJECT_HEADER_SIZE as usize;
+    for index in 0..capacity as usize {
+        let off = slots_base + index * HEAP_OBJECT_VALUE_SLOT_SIZE as usize;
         if off + 8 > heap_end {
             break;
         }
         rewrite_i64_slot(heap, off, policy);
     }
-    Ok(())
 }
 
 fn rewrite_i64_slot(heap: &mut [u8], off: usize, policy: &dyn RemapPolicy) {

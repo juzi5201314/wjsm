@@ -428,7 +428,12 @@ pub(crate) fn array_named_set_sync(
     }
 }
 
-/// 数组上非索引命名属性的 DefineOwnProperty。
+/// 数组上命名属性的 DefineOwnProperty。
+///
+/// 索引位置的属性（`Object.defineProperty(arr, "1", …)`）与元素存储是同一组
+/// 属性键：定义索引 accessor 后，`arr[1]` 必须调用 getter 而非读元素槽。
+/// 元素读的快路径无法表达 accessor，故这里把数组 kind 升级为 DICTIONARY，
+/// 让后续元素读一律走完整 `[[Get]]`（会查侧表并触发 getter）。
 pub(crate) fn define_data_property_on_array_named(
     caller: &mut Caller<'_, RuntimeState>,
     arr: i64,
@@ -451,6 +456,14 @@ pub(crate) fn define_data_property_on_array_named(
     }
     if completed.configurable.unwrap_or(false) {
         flags |= constants::FLAG_CONFIGURABLE;
+    }
+    // 名字是规范整数索引 → 该键与元素存储重叠，元素读必须改走完整 [[Get]]。
+    if let Some(name) = crate::runtime_host_helpers::name_id_to_runtime_property_string(caller, name_id)
+        && crate::runtime_host_helpers::canonical_integer_index(&name.to_utf8_lossy()).is_some()
+    {
+        let handle = value::decode_handle(arr);
+        let access = caller.data().heap_access_v2().clone();
+        let _ = access.raise_array_kind(handle, constants::ARRAY_KIND_DICTIONARY);
     }
     ArrayNamedPropsStore::set_descriptor(
         caller,
