@@ -113,10 +113,7 @@ fn gc_obj_get_data_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, key:
         }
         Ok(Some(slot)) => {
             // 访问器槽：与 async `read_property` 一致——getter 为 null/undefined 返回
-            // undefined，否则以 receiver 同步调用（`call_js` 与 async 路径共用
-            // `call_wasm_callback_async`，wasm 函数 / native callable / bound / proxy
-            // 全部支持；在 sync host 函数内经 block_on 直跑，省去外层 wasmtime async
-            // 调用机制的固定开销）。
+            // undefined，否则以 receiver 同步调用。
             let getter = slot.getter as i64;
             if value::is_undefined(getter) || value::is_null(getter) {
                 return value::encode_undefined();
