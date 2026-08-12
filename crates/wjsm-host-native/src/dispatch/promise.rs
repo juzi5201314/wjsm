@@ -155,9 +155,11 @@ pub(crate) fn enqueue_stream_task(state: &mut NativeAgentState, task: super::str
 }
 
 fn mark_promise_handled(state: &mut NativeAgentState, promise: u32) {
-    if let Some(promise) = state.promises.get_mut(&promise) {
-        promise.handled = true;
+    if let Some(p) = state.promises.get_mut(&promise) {
+        p.handled = true;
     }
+    // 从待报告列表中移除（如果存在）
+    state.pending_unhandled_rejections.retain(|(h, _)| *h != promise);
 }
 pub(crate) fn observe(
     state: &mut NativeAgentState,
@@ -577,6 +579,12 @@ pub(crate) fn settle_promise(
     } else {
         PromiseState::Fulfilled(value)
     };
+    // 如果 promise rejected 且应报告 unhandled rejection，立即格式化 reason 并记录到待报告列表
+    // 必须立即格式化，因为后续 GC 可能回收 reason 对应的对象（如 Error）
+    if rejected && promise.report_unhandled && !promise.handled {
+        let reason_text = super::modules::exception_text(state, value);
+        state.pending_unhandled_rejections.push((handle, reason_text));
+    }
     let reactions = state.promise_reactions.remove(&handle).unwrap_or_default();
     super::node_async_hooks::promise_settled(state, handle);
     for scheduled in reactions {
@@ -1064,26 +1072,36 @@ pub(crate) fn drain_microtasks(ctx: &mut NativeVmContext, state: &mut NativeAgen
 }
 
 fn report_unhandled_rejections(state: &mut NativeAgentState) {
-    let reasons = state
-        .promises
-        .values_mut()
-        .filter_map(|promise| match promise.state {
-            PromiseState::Rejected(reason)
-                if promise.report_unhandled && !promise.handled && !promise.unhandled_reported =>
+    // 从待报告列表中收集所有 reason
+    // 已被 handle 的 promise 在 mark_promise_handled 时已从列表移除
+    let reasons: Vec<_> = state
+        .pending_unhandled_rejections
+        .iter()
+        .filter_map(|&(handle, ref reason_text)| {
+            // 如果 promise 仍存在，标记为已报告
+            if let Some(promise) = state.promises.get_mut(&handle)
+                && !promise.unhandled_reported
             {
                 promise.unhandled_reported = true;
-                Some(reason)
+                Some(reason_text.clone())
+            } else if state.promises.contains_key(&handle) {
+                None
+            } else {
+                // promise 已被 GC，仍需报告
+                Some(reason_text.clone())
             }
-            _ => None,
         })
-        .collect::<Vec<_>>();
-    for reason in reasons {
-        let text = super::modules::exception_text(state, reason);
+        .collect();
+    
+    for text in reasons {
         state
             .stderr
             .borrow_mut()
             .extend_from_slice(format!("UnhandledPromiseRejectionWarning: {text}\n").as_bytes());
     }
+    
+    // 报告完成后清空列表
+    state.pending_unhandled_rejections.clear();
 }
 
 pub(crate) fn drain_event_loop(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {

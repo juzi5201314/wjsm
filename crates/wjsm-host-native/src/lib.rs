@@ -763,6 +763,9 @@ struct NativeAgentState {
     async_iterator_objects: HashSet<i64>,
     async_generator_resume_completions: HashMap<u32, f64>,
     promise_reactions: HashMap<u32, Vec<dispatch::promise::NativeScheduledReaction>>,
+    /// 待报告的 unhandled rejection: (promise_handle, reason)
+    /// GC 可能回收 promise 对象，但 reason 必须留存到事件循环结束时报告
+    pending_unhandled_rejections: Vec<(u32, String)>,
     microtasks: VecDeque<dispatch::promise::NativeScheduledMicrotask>,
     iterator_next: HashMap<u32, u32>,
     array_properties: HashMap<(u32, u32), i64>,
@@ -916,6 +919,7 @@ impl NativeAgentState {
             async_iterator_objects: HashSet::new(),
             async_generator_resume_completions: HashMap::new(),
             promise_reactions: HashMap::new(),
+            pending_unhandled_rejections: Vec::new(),
             promise_combinators: Vec::new(),
             microtasks: VecDeque::new(),
             iterator_next: HashMap::new(),
@@ -1171,6 +1175,7 @@ impl NativeAgentState {
         self.async_iterator_objects.clear();
         self.async_generator_resume_completions.clear();
         self.promise_reactions.clear();
+        self.pending_unhandled_rejections.clear();
         self.microtasks.clear();
         self.iterator_next.clear();
         self.node_vm = dispatch::node_vm::NodeVmState::default();
