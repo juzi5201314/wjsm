@@ -50,7 +50,7 @@ test-group = 'async-hooks-load'
 threads-required = "num-cpus"
 
 # worker_threads / async_local_worker fixture 在 debug 模式下需冷编译 worker 源码
-# + 启动独立 wasmtime engine + thread spawn，3s 门禁不足；允许 15s 才判死。
+# + 启动独立 native runtime + thread spawn，3s 门禁不足；允许 15s 才判死。
 [[profile.default.overrides]]
 filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/)'
 test-group = 'worker-runtime'

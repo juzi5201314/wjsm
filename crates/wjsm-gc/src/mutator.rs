@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::control::{GcRuntimeV2, RootSnapshot};
 
-/// mutator 只发布 handle roots；Wasm Store/Caller/WasmEnv 永远留在 mutator 侧。
+/// mutator 只发布 handle roots；owner context 统一持有堆与 collector 状态。
 pub struct MutatorContext {
     runtime: Arc<GcRuntimeV2>,
     participant_id: u32,

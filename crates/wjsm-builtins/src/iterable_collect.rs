@@ -1,14 +1,14 @@
 //! 可迭代对象抽干（Array.from / Map/Set 构造 / Object.fromEntries 共享）。
 //!
-//! 控制流在 builtins；再入走 `call_js_async`，表推进走 ExecContext 原语。
+//! 控制流在 builtins；再入走 `call_js`，表推进走 ExecContext 原语。
 
-use crate::core_async;
+use crate::core_reentrant;
 use crate::string_iter::string_iter_advance_unit_pos;
 use wjsm_host::{ExecContext, Value};
 use wjsm_ir::{value, wk_symbol};
 
 /// 抽干构造器 iterable 参数（Map/Set）：`undefined`/`null` → 空；否则 GetIterator。
-pub async fn collect_constructor_iterable_values<E: ExecContext>(
+pub fn collect_constructor_iterable_values<E: ExecContext>(
     ctx: &mut E,
     source: Value,
 ) -> Option<Vec<Value>> {
@@ -21,33 +21,30 @@ pub async fn collect_constructor_iterable_values<E: ExecContext>(
             wjsm_host::encode_symbol_name_id(wk_symbol::ITERATOR),
         ) {
             Ok(Some(method)) => {
-                let iterator = match ctx.call_js_async(method, source, &[]).await {
+                let iterator = match ctx.call_js(method, source, &[]) {
                     Ok(v) => v,
                     Err(_) => value::encode_undefined(),
                 };
                 if value::is_exception(iterator) {
                     return Some(vec![iterator]);
                 }
-                return collect_iterator_protocol_values(ctx, iterator).await;
+                return collect_iterator_protocol_values(ctx, iterator);
             }
             Ok(None) => {}
             Err(e) => return Some(vec![ctx.make_type_error(&e.to_string())]),
         }
     }
-    let iterator = core_async::iterator_from(ctx, source).await;
+    let iterator = core_reentrant::iterator_from(ctx, source);
     if value::is_exception(iterator) {
         return Some(vec![iterator]);
     }
-    collect_iterator_protocol_values(ctx, iterator).await
+    collect_iterator_protocol_values(ctx, iterator)
 }
 
 /// Array.from 源收集：数组 / 字符串 / TypedArray / 迭代器 / 类数组。
-pub async fn collect_array_from_values<E: ExecContext>(
-    ctx: &mut E,
-    source: Value,
-) -> Option<Vec<Value>> {
+pub fn collect_array_from_values<E: ExecContext>(ctx: &mut E, source: Value) -> Option<Vec<Value>> {
     if value::is_iterator(source) {
-        return Some(drain_raw_iterator_via_protocol(ctx, source).await);
+        return Some(drain_raw_iterator_via_protocol(ctx, source));
     }
     if value::is_array(source) {
         let len = ctx.array_read_length(source).unwrap_or(0);
@@ -86,14 +83,14 @@ pub async fn collect_array_from_values<E: ExecContext>(
             wjsm_host::encode_symbol_name_id(wk_symbol::ITERATOR),
         ) {
             Ok(Some(method)) => {
-                let iterator = match ctx.call_js_async(method, source, &[]).await {
+                let iterator = match ctx.call_js(method, source, &[]) {
                     Ok(v) => v,
                     Err(_) => value::encode_undefined(),
                 };
                 if value::is_exception(iterator) {
                     return Some(vec![iterator]);
                 }
-                return collect_iterator_protocol_values(ctx, iterator).await;
+                return collect_iterator_protocol_values(ctx, iterator);
             }
             Ok(None) => {
                 // 类数组
@@ -123,7 +120,7 @@ pub async fn collect_array_from_values<E: ExecContext>(
     None
 }
 
-async fn collect_iterator_protocol_values<E: ExecContext>(
+fn collect_iterator_protocol_values<E: ExecContext>(
     ctx: &mut E,
     iterator: Value,
 ) -> Option<Vec<Value>> {
@@ -140,7 +137,7 @@ async fn collect_iterator_protocol_values<E: ExecContext>(
     }
     let mut out = Vec::new();
     loop {
-        let result = match ctx.call_js_async(next, iterator, &[]).await {
+        let result = match ctx.call_js(next, iterator, &[]) {
             Ok(v) => v,
             Err(_) => value::encode_undefined(),
         };
@@ -160,19 +157,16 @@ async fn collect_iterator_protocol_values<E: ExecContext>(
     Some(out)
 }
 
-async fn drain_raw_iterator_via_protocol<E: ExecContext>(
-    ctx: &mut E,
-    iterator: Value,
-) -> Vec<Value> {
+fn drain_raw_iterator_via_protocol<E: ExecContext>(ctx: &mut E, iterator: Value) -> Vec<Value> {
     // 同步推进非 Object 迭代器；ObjectIter 走 next 协议
     let mut out = Vec::new();
     loop {
-        let done = core_async::iterator_done(ctx, iterator).await;
+        let done = core_reentrant::iterator_done(ctx, iterator);
         if value::decode_bool(done) {
             break;
         }
         out.push(ctx.iterator_current_value(iterator));
-        let _ = core_async::iterator_next(ctx, iterator).await;
+        let _ = core_reentrant::iterator_next(ctx, iterator);
     }
     out
 }

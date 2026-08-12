@@ -3,11 +3,7 @@
 use wjsm_host::{ExecContext, Value, encode_symbol_name_id};
 use wjsm_ir::{value, wk_symbol};
 
-async fn ordinary_has_instance<E: ExecContext>(
-    ctx: &mut E,
-    object: Value,
-    constructor: Value,
-) -> Value {
+fn ordinary_has_instance<E: ExecContext>(ctx: &mut E, object: Value, constructor: Value) -> Value {
     if !ctx.is_callable(constructor) {
         return ctx.make_type_error("Right-hand side of instanceof is not callable");
     }
@@ -16,13 +12,12 @@ async fn ordinary_has_instance<E: ExecContext>(
     }
 
     let prototype_key = ctx.store_string("prototype");
-    let prototype = crate::proxy_reflect_async::reflect_get_impl_with_receiver_async(
+    let prototype = crate::proxy_reflect_reentrant::reflect_get_impl_with_receiver(
         ctx,
         constructor,
         prototype_key,
         constructor,
-    )
-    .await;
+    );
     if value::is_exception(prototype) {
         return prototype;
     }
@@ -61,22 +56,18 @@ async fn ordinary_has_instance<E: ExecContext>(
 }
 
 /// ECMAScript InstanceofOperator：先查 @@hasInstance，再走 OrdinaryHasInstance。
-pub async fn op_instanceof<E: ExecContext>(
-    ctx: &mut E,
-    object: Value,
-    constructor: Value,
-) -> Value {
+pub fn op_instanceof<E: ExecContext>(ctx: &mut E, object: Value, constructor: Value) -> Value {
     if !value::is_js_object(constructor) {
         return ctx.make_type_error("Right-hand side of instanceof is not an object");
     }
     let name_id = encode_symbol_name_id(wk_symbol::HAS_INSTANCE);
     match crate::get_method::get_method_by_name_id(ctx, constructor, name_id) {
-        Ok(Some(method)) => match ctx.call_js_async(method, constructor, &[object]).await {
+        Ok(Some(method)) => match ctx.call_js(method, constructor, &[object]) {
             Ok(result) if value::is_exception(result) => result,
             Ok(result) => value::encode_bool(ctx.to_boolean(result)),
             Err(_) => value::encode_undefined(),
         },
-        Ok(None) => ordinary_has_instance(ctx, object, constructor).await,
+        Ok(None) => ordinary_has_instance(ctx, object, constructor),
         Err(exception) => exception,
     }
 }

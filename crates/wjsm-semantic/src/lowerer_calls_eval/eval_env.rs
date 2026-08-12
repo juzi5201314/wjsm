@@ -6,10 +6,10 @@ impl Lowerer {
     }
 
     pub(crate) fn load_eval_scope_env(&mut self, block: BasicBlockId) -> ValueId {
-        // 嵌套函数：闭包 env 参数即为 sandbox / outer shared env
-        // 模块主函数：参数名为 $eval_env
-        let name = if let Ok((scope_id, _)) = self.scopes.lookup("$env") {
-            format!("${scope_id}.$env")
+        // 嵌套函数从 native ABI 的 canonical `$env` slot 读取闭包环境；
+        // 模块主函数则从显式 `$eval_env` 参数读取 sandbox。
+        let name = if self.scopes.lookup("$env").is_ok() {
+            "$env".to_string()
         } else {
             EVAL_SCOPE_ENV_PARAM.to_string()
         };
@@ -76,6 +76,92 @@ impl Lowerer {
         }
     }
 
+    pub(crate) fn lower_eval_typeof_binding(
+        &mut self,
+        name: &str,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let environment = self.load_eval_scope_env(block);
+        let key = self.append_eval_env_key_const(block, name);
+        let has_binding = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(has_binding),
+                builtin: Builtin::EvalHasBinding,
+                args: vec![environment, key],
+            },
+        );
+
+        let present = self.current_function.new_block();
+        let missing = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition: has_binding,
+                true_block: present,
+                false_block: missing,
+            },
+        );
+
+        let loaded = self.alloc_value();
+        self.current_function.append_instruction(
+            present,
+            Instruction::CallBuiltin {
+                dest: Some(loaded),
+                builtin: Builtin::EvalGetBinding,
+                args: vec![environment, key],
+            },
+        );
+        let present_end = self.lower_value_exception_branch(present, loaded)?;
+        let present_type = self.alloc_value();
+        self.current_function.append_instruction(
+            present_end,
+            Instruction::CallBuiltin {
+                dest: Some(present_type),
+                builtin: Builtin::TypeOf,
+                args: vec![loaded],
+            },
+        );
+        self.current_function
+            .set_terminator(present_end, Terminator::Jump { target: merge });
+
+        let missing_type = self.alloc_value();
+        let undefined = self
+            .module
+            .add_constant(Constant::String("undefined".into()));
+        self.current_function.append_instruction(
+            missing,
+            Instruction::Const {
+                dest: missing_type,
+                constant: undefined,
+            },
+        );
+        self.current_function
+            .set_terminator(missing, Terminator::Jump { target: merge });
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: present_end,
+                        value: present_type,
+                    },
+                    PhiSource {
+                        predecessor: missing,
+                        value: missing_type,
+                    },
+                ],
+            },
+        );
+        self.expr_merge_block = Some(merge);
+        Ok(result)
+    }
+
     pub(crate) fn append_eval_env_write(
         &mut self,
         name: &str,
@@ -136,15 +222,8 @@ impl Lowerer {
             return Ok(ok_block);
         }
         let key = self.append_eval_env_key_const(block, name);
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: env,
-                key,
-                value,
-            },
-        );
-        Ok(block)
+        let result = self.emit_set_prop(block, env, key, value);
+        self.lower_value_exception_branch(block, result)
     }
     pub(super) fn const_val_i64(&mut self, block: BasicBlockId, value: i64) -> ValueId {
         let dest = self.alloc_value();

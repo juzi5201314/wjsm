@@ -1,11 +1,11 @@
 use std::sync::{Arc, Barrier};
 use std::thread;
-use wjsm_gc::{GrowableHeapMemory, HeapAddress, HeapMemoryError, NativeHeapMemory};
+use wjsm_gc::{GrowableHeapMemory, HeapAddress, HeapMemoryError, TestHeapMemory};
 
 #[test]
 fn native_memory_checks_alignment_bounds_and_u64_addresses() {
     let base = 1_u64 << 40;
-    let memory = NativeHeapMemory::with_base(base, 64);
+    let memory = TestHeapMemory::with_base(base, 64);
     let word = HeapAddress::new(base + 8);
 
     memory.store_word(word, 0x0102_0304_0506_0708).unwrap();
@@ -22,7 +22,7 @@ fn native_memory_checks_alignment_bounds_and_u64_addresses() {
 
 #[test]
 fn native_memory_publishes_words_seqcst_across_threads() {
-    let memory = NativeHeapMemory::new(64);
+    let memory = TestHeapMemory::new(64);
     let producer = memory.clone();
     let barrier = Arc::new(Barrier::new(2));
     let producer_barrier = Arc::clone(&barrier);
@@ -38,7 +38,7 @@ fn native_memory_publishes_words_seqcst_across_threads() {
 
 #[test]
 fn native_memory_copies_only_checked_unpublished_byte_ranges() {
-    let memory = NativeHeapMemory::new(64);
+    let memory = TestHeapMemory::new(64);
     memory
         .copy_from(HeapAddress::new(3), &[1, 2, 3, 4])
         .unwrap();
@@ -54,7 +54,7 @@ fn native_memory_copies_only_checked_unpublished_byte_ranges() {
 
 #[test]
 fn native_memory_growable_word_store_is_seqcst_visible() {
-    let memory = NativeHeapMemory::with_capacity(0, 0, 64);
+    let memory = TestHeapMemory::with_capacity(0, 0, 64);
     memory.grow_to(24).unwrap();
     memory
         .store_word(HeapAddress::new(16), 0xfeed_face)

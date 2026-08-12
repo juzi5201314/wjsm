@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::control::{GcRuntimeV2, RootSnapshot};
 
-/// collector context 是 Store-free、Caller-free 的线程安全 view。
+/// collector context 是不持有 agent 状态的线程安全 view。
 pub struct CollectorContext {
     runtime: Arc<GcRuntimeV2>,
     collector_id: u32,

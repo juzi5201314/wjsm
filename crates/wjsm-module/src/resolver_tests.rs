@@ -860,6 +860,42 @@ fn runtime_resolve_package_uses_require_condition() {
 }
 
 #[test]
+fn runtime_resolve_extensionless_detects_commonjs_source() {
+    let root = create_temp_project("runtime_extensionless_cjs");
+    write_file(&root, "main.js", "require('./child');\n");
+    write_file(&root, "child", "exports.value = 1;\n");
+
+    let resolved = resolve_runtime_specifier(
+        "./child",
+        &root.join("main.js"),
+        &root,
+        &ResolutionOptions::default(),
+        RuntimeResolveKind::Require,
+    )
+    .expect("extensionless CommonJS source should resolve");
+
+    assert_eq!(resolved.format, RuntimeModuleFormat::CommonJs);
+}
+
+#[test]
+fn runtime_resolve_js_detects_commonjs_source_without_package() {
+    let root = create_temp_project("runtime_js_cjs");
+    write_file(&root, "main.js", "require('./child.js');\n");
+    write_file(&root, "child.js", "module.exports = { value: 1 };\n");
+
+    let resolved = resolve_runtime_specifier(
+        "./child.js",
+        &root.join("main.js"),
+        &root,
+        &ResolutionOptions::default(),
+        RuntimeResolveKind::Require,
+    )
+    .expect("JavaScript CommonJS source should resolve");
+
+    assert_eq!(resolved.format, RuntimeModuleFormat::CommonJs);
+}
+
+#[test]
 fn runtime_resolve_import_meta_uses_import_condition() {
     let root = create_temp_project("runtime_import_condition");
     write_type_module_package(&root);

@@ -33,19 +33,23 @@ module {
     c30 = functionref(@1)
     c31 = functionref(@0)
     c32 = number(5)
-    c33 = number(2)
-    c34 = number(3)
-    c35 = undefined
-    c36 = number(4)
-    c37 = number(0)
-    c38 = undefined
-    c39 = bool(false)
-    c40 = functionref(@1)
-    c41 = undefined
-    c42 = number(7)
-    c43 = functionref(@2)
-    c44 = undefined
-    c45 = bool(true)
+    c33 = number(0)
+    c34 = number(0)
+    c35 = number(1)
+    c36 = bool(false)
+    c37 = number(2)
+    c38 = number(3)
+    c39 = undefined
+    c40 = number(4)
+    c41 = number(0)
+    c42 = undefined
+    c43 = bool(false)
+    c44 = functionref(@1)
+    c45 = undefined
+    c46 = number(7)
+    c47 = functionref(@2)
+    c48 = undefined
+    c49 = bool(true)
 
   fn @anon_0$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -97,17 +101,23 @@ module {
       %6 = const c32
       %7 = call builtin.continuation.create(%5, %4, %6)
       %8 = const c33
-      call builtin.continuation.save_var(%7, %8, %4)
       %9 = const c34
+      call builtin.continuation.save_var(%7, %8, %9)
       %10 = const c35
-      call builtin.continuation.save_var(%7, %9, %10)
-      %11 = load var $2.x
-      %12 = const c36
-      call builtin.continuation.save_var(%7, %12, %11)
-      %13 = const c37
-      %14 = const c38
-      %15 = const c39
-      call builtin.async_function.resume(%5, %7, %13, %14, %15)
+      %11 = const c36
+      call builtin.continuation.save_var(%7, %10, %11)
+      %12 = const c37
+      call builtin.continuation.save_var(%7, %12, %4)
+      %13 = const c38
+      %14 = const c39
+      call builtin.continuation.save_var(%7, %13, %14)
+      %15 = load var $2.x
+      %16 = const c40
+      call builtin.continuation.save_var(%7, %16, %15)
+      %17 = const c41
+      %18 = const c42
+      %19 = const c43
+      call builtin.async_function.resume(%5, %7, %17, %18, %19)
       return %4
 
   fn @arrow_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
@@ -160,14 +170,14 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c40
+      %21 = const c44
       store var $0.fn, %21
-      %22 = const c41
+      %22 = const c45
       %23 = load var $0.fn
-      %24 = const c42
+      %24 = const c46
       %25 = call %23, this=%22, args=[%24]
-      %26 = const c43
-      %27 = const c44
+      %26 = const c47
+      %27 = const c48
       %28 = call builtin.promise.then(%25, %26, %27)
       %29 = is_exception %28
       branch %29, bb2, bb1

@@ -70,33 +70,45 @@ module {
       store var $this, %20
       %21 = const c20
       %22 = call builtin.iterator.from(%21)
-      jump bb1
+      %23 = is_exception %22
+      branch %23, bb2, bb1
     bb1:
-      %23 = call builtin.iterator.done(%22)
-      %24 = not %23
-      branch %24, bb2, bb4
+      jump bb3
     bb2:
-      %25 = call builtin.iterator.value(%22)
-      store var $1.c, %25
-      %26 = load var $1.c
-      %27 = call builtin.console.log(%26)
-      %28 = is_exception %27
-      branch %28, bb6, bb5
+      %24 = call builtin.exception_value(%22)
+      throw %24
     bb3:
-      call builtin.iterator.next(%22)
-      jump bb1
+      %25 = call builtin.iterator.done(%22)
+      %26 = is_exception %25
+      branch %26, bb8, bb7
     bb4:
-      return
+      %29 = call builtin.iterator.value(%22)
+      store var $1.c, %29
+      %30 = load var $1.c
+      %31 = call builtin.console.log(%30)
+      %32 = is_exception %31
+      branch %32, bb10, bb9
     bb5:
+      call builtin.iterator.next(%22)
       jump bb3
     bb6:
-      %29 = call builtin.exception_value(%27)
-      %30 = call builtin.iterator.close(%22, %29)
-      %31 = is_exception %30
-      branch %31, bb8, bb7
+      return
     bb7:
-      throw %29
+      %28 = not %25
+      branch %28, bb4, bb6
     bb8:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb9:
+      jump bb5
+    bb10:
+      %33 = call builtin.exception_value(%31)
+      %34 = call builtin.iterator.close(%22, %33)
+      %35 = is_exception %34
+      branch %35, bb12, bb11
+    bb11:
+      throw %33
+    bb12:
+      %36 = call builtin.exception_value(%34)
+      throw %36
 }

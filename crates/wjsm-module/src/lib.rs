@@ -1,5 +1,5 @@
 // wjsm-module: ES Module / CommonJS bundling support
-// 将多个模块编译为单一 WASM 二进制
+// 将多个模块 lower 为单一 semantic IR program
 
 mod builtin_cache;
 mod builtin_modules;
@@ -16,7 +16,7 @@ mod runtime_resolution;
 mod semantic;
 use swc_core::ecma::ast;
 
-pub use bundler::{ModuleBundler, RuntimeEntryBundle};
+pub use bundler::{ModuleBundler, RuntimeEntryBundle, logical_url_from_path, logical_url_path};
 pub use graph::{ModuleGraph, ModuleId};
 pub use resolution_options::ResolutionOptions;
 pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
@@ -29,7 +29,7 @@ pub use semantic::{ModuleLinkResult, analyze_module_links};
 use anyhow::{Context, Result};
 use std::path::Path;
 
-/// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
+/// 将入口模块及其依赖 lower 为 IR（不执行 codegen）
 pub fn lower_bundle(entry: &Path, root_path: &Path) -> Result<wjsm_ir::Program> {
     lower_bundle_with_options(entry, root_path, ResolutionOptions::default())
 }
@@ -53,6 +53,25 @@ pub fn lower_bundle_with_debug(
     let bundler = ModuleBundler::with_resolution_options(root_path, options)?
         .with_emit_debug_checks(emit_debug_checks);
     bundler.lower_bundle(entry)
+}
+/// Lower 入口模块及依赖并保留 portable manifest。
+pub fn lower_artifact_input(
+    entry: &Path,
+    root_path: &Path,
+) -> Result<wjsm_artifact_format::ArtifactBuildInput> {
+    lower_artifact_input_with_options(entry, root_path, ResolutionOptions::default(), false)
+}
+
+/// 使用显式解析与 debug 选项构造 portable artifact 输入。
+pub fn lower_artifact_input_with_options(
+    entry: &Path,
+    root_path: &Path,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<wjsm_artifact_format::ArtifactBuildInput> {
+    ModuleBundler::with_resolution_options(root_path, options)?
+        .with_emit_debug_checks(emit_debug_checks)
+        .lower_artifact_input(entry)
 }
 
 /// 同 [`lower_bundle_with_debug`]，但 builtin 依赖闭包走独立 lower + 磁盘缓存
@@ -142,7 +161,7 @@ pub fn parse_entry_ast_with_options(
 
 /// 将入口模块和按 bundle graph 收集到的所有依赖 lower 为 IR `Program`。
 ///
-/// codegen 由调用方负责（本 crate 不依赖任何 wasm 后端）；失败时错误会携带
+/// codegen 由调用方负责（本 crate 不依赖具体后端）；失败时错误会携带
 /// `entry` 和 `root_path`，方便调用方定位是哪个入口图构建失败。
 pub fn bundle_program(entry: &Path, root_path: &Path) -> Result<wjsm_ir::Program> {
     bundle_program_with_options(entry, root_path, ResolutionOptions::default())
@@ -437,5 +456,49 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn artifact_bytes_do_not_depend_on_absolute_build_root() {
+        let temp = std::env::temp_dir();
+        let roots = [
+            temp.join(format!("wjsm_artifact_root_a_{}", std::process::id())),
+            temp.join(format!("wjsm_artifact_root_b_{}", std::process::id())),
+        ];
+        for root in &roots {
+            let _ = std::fs::remove_dir_all(root);
+            std::fs::create_dir_all(root).expect("temp project dir should be creatable");
+            std::fs::write(root.join("package.json"), r#"{"type":"module"}"#)
+                .expect("package should be writable");
+            std::fs::write(
+                root.join("main.js"),
+                "import { value } from './lib.js';\nconsole.log(value);\n",
+            )
+            .expect("main module should be writable");
+            std::fs::write(root.join("lib.js"), "export const value = 42;\n")
+                .expect("lib module should be writable");
+        }
+
+        let artifacts: Vec<_> = roots
+            .iter()
+            .map(|root| {
+                let input = lower_artifact_input(Path::new("main.js"), root)
+                    .expect("artifact input should lower");
+                wjsm_artifact_format::PortableArtifact::from_input(&input)
+                    .expect("artifact should encode")
+            })
+            .collect();
+        assert_eq!(artifacts[0].bytes(), artifacts[1].bytes());
+        assert!(
+            artifacts[0]
+                .manifest()
+                .modules
+                .iter()
+                .all(|module| !module.logical_url.starts_with('/'))
+        );
+
+        for root in &roots {
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 }

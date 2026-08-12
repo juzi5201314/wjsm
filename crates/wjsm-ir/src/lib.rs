@@ -10,37 +10,8 @@ use std::fmt::{self, Write};
 pub use types::*;
 pub use verify::IrVerificationError;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleIdOffsetError {
-    module_id: ModuleId,
-    offset: u32,
-}
-
-impl ModuleIdOffsetError {
-    fn new(module_id: ModuleId, offset: u32) -> Self {
-        Self { module_id, offset }
-    }
-}
-
-impl fmt::Display for ModuleIdOffsetError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "module id {} cannot be offset by {} without overflowing u32",
-            self.module_id, self.offset
-        )
-    }
-}
-
-impl std::error::Error for ModuleIdOffsetError {}
-
-pub fn offset_module_id(module_id: ModuleId, offset: u32) -> Result<ModuleId, ModuleIdOffsetError> {
-    module_id
-        .0
-        .checked_add(offset)
-        .map(ModuleId)
-        .ok_or_else(|| ModuleIdOffsetError::new(module_id, offset))
-}
+/// Eval/VM 模块入口通过 native environment 参数接收的 scope bridge slot。
+pub const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Module {
@@ -95,6 +66,9 @@ impl Module {
     pub fn script_mode(&self) -> bool {
         self.script_mode
     }
+    pub fn set_script_mode(&mut self, script_mode: bool) {
+        self.script_mode = script_mode;
+    }
 
     pub fn source_file(&self) -> Option<&str> {
         self.source_file.as_deref()
@@ -103,25 +77,8 @@ impl Module {
     pub fn set_source_file(&mut self, file: impl Into<String>) {
         self.source_file = Some(file.into());
     }
-
-    pub fn offset_module_ids(&mut self, offset: u32) -> Result<(), ModuleIdOffsetError> {
-        if offset == 0 {
-            return Ok(());
-        }
-
-        // 先完整校验，再写回，避免溢出时留下半迁移 IR。
-        for constant in &self.constants {
-            if let Constant::ModuleId(module_id) = constant {
-                offset_module_id(*module_id, offset)?;
-            }
-        }
-
-        for constant in &mut self.constants {
-            if let Constant::ModuleId(module_id) = constant {
-                *module_id = offset_module_id(*module_id, offset)?;
-            }
-        }
-        Ok(())
+    pub fn clear_source_file(&mut self) {
+        self.source_file = None;
     }
 
     pub fn verify(&self) -> Result<(), IrVerificationError> {
@@ -196,50 +153,6 @@ impl fmt::Display for Constant {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn offset_module_ids_rewrites_only_module_id_constants() {
-        let mut module = Module::new();
-        module.add_constant(Constant::ModuleId(ModuleId(1)));
-        module.add_constant(Constant::String("keep".to_string()));
-        module.add_constant(Constant::ModuleId(ModuleId(3)));
-
-        module
-            .offset_module_ids(10)
-            .expect("module ids should offset");
-
-        assert_eq!(
-            module.constants(),
-            &[
-                Constant::ModuleId(ModuleId(11)),
-                Constant::String("keep".to_string()),
-                Constant::ModuleId(ModuleId(13)),
-            ]
-        );
-    }
-
-    #[test]
-    fn offset_module_ids_overflow_leaves_constants_unchanged() {
-        let mut module = Module::new();
-        module.add_constant(Constant::ModuleId(ModuleId(1)));
-        module.add_constant(Constant::ModuleId(ModuleId(u32::MAX)));
-
-        let error = module
-            .offset_module_ids(1)
-            .expect_err("overflow should be reported");
-
-        assert_eq!(
-            error.to_string(),
-            "module id mod4294967295 cannot be offset by 1 without overflowing u32"
-        );
-        assert_eq!(
-            module.constants(),
-            &[
-                Constant::ModuleId(ModuleId(1)),
-                Constant::ModuleId(ModuleId(u32::MAX)),
-            ]
-        );
-    }
 
     /// 序列化 → 反序列化 → 相等：验证 Program 可作为磁盘缓存的载体。
     #[test]
@@ -330,6 +243,7 @@ mod tests {
             key: ValueId(1),
         });
         entry.push_instruction(Instruction::SetElem {
+            dest: ValueId(13),
             object: ValueId(12),
             index: ValueId(0),
             value: ValueId(11),
@@ -390,7 +304,7 @@ pub struct Function {
     /// 后端 init_function_props 据此决定是否创建 prototype 对象。
     needs_prototype: bool,
     /// 函数声明的 JS 源码位置（1-indexed line:col）。
-    /// 语义层从 SWC span 填入，后端编码到 WASM custom section 供运行时错误映射。
+    /// 语义层从 SWC span 填入，后端编码到 native image metadata 供运行时错误映射。
     source_span: Option<SourceSpan>,
     /// 该函数是否可直接调用（函数体不依赖 env/this/new.target，且无 eval）。
     /// 由语义层 direct_call pass 计算，后端据此对调用点发射直接 `call`（跳过动态分派）。
@@ -453,6 +367,9 @@ impl Function {
 
     pub fn set_source_span(&mut self, span: SourceSpan) {
         self.source_span = Some(span);
+    }
+    pub fn clear_source_span(&mut self) {
+        self.source_span = None;
     }
 
     pub fn needs_prototype(&self) -> bool {
@@ -707,6 +624,7 @@ pub enum Instruction {
         key: ValueId,
     },
     SetProp {
+        dest: ValueId,
         object: ValueId,
         key: ValueId,
         value: ValueId,
@@ -735,6 +653,7 @@ pub enum Instruction {
     },
     /// 按数字索引写入数组元素
     SetElem {
+        dest: ValueId,
         object: ValueId,
         index: ValueId,
         value: ValueId,
@@ -955,8 +874,13 @@ impl fmt::Display for Instruction {
             Self::GetProp { dest, object, key } => {
                 write!(formatter, "{dest} = get_prop {object}, {key}")
             }
-            Self::SetProp { object, key, value } => {
-                write!(formatter, "set_prop {object}, {key}, {value}")
+            Self::SetProp {
+                dest,
+                object,
+                key,
+                value,
+            } => {
+                write!(formatter, "{dest} = set_prop {object}, {key}, {value}")
             }
             Self::DeleteProp { dest, object, key } => {
                 write!(formatter, "{dest} = delete_prop {object}, {key}")
@@ -975,11 +899,12 @@ impl fmt::Display for Instruction {
                 write!(formatter, "{dest} = get_elem {object}, {index}")
             }
             Self::SetElem {
+                dest,
                 object,
                 index,
                 value,
             } => {
-                write!(formatter, "set_elem {object}, {index}, {value}")
+                write!(formatter, "{dest} = set_elem {object}, {index}, {value}")
             }
             Self::OptionalGetProp { dest, object, key } => {
                 write!(formatter, "{dest} = optional_get_prop {object}, {key}")
@@ -1010,7 +935,7 @@ impl fmt::Display for Instruction {
                 Ok(())
             }
             Self::ObjectSpread { dest, source } => {
-                write!(formatter, "{dest} = object_spread {source}")
+                write!(formatter, "object_spread {source} into {dest}")
             }
             Self::GetSuperBase { dest } => {
                 write!(formatter, "{dest} = get_super_base")
@@ -1157,7 +1082,13 @@ impl Instruction {
                 *object = f(*object);
                 *key = f(*key);
             }
-            Self::SetProp { object, key, value } => {
+            Self::SetProp {
+                dest,
+                object,
+                key,
+                value,
+            } => {
+                *dest = f(*dest);
                 *object = f(*object);
                 *key = f(*key);
                 *value = f(*value);
@@ -1181,10 +1112,12 @@ impl Instruction {
                 *index = f(*index);
             }
             Self::SetElem {
+                dest,
                 object,
                 index,
                 value,
             } => {
+                *dest = f(*dest);
                 *object = f(*object);
                 *index = f(*index);
                 *value = f(*value);
@@ -1312,7 +1245,7 @@ impl Terminator {
 
 // ConstantId, FunctionId, BasicBlockId, ValueId, ModuleId → types.rs
 
-/// 合成模块顶层入口的 IR 函数名（与用户声明的 `main` 区分，避免 wasm 入口约定冲突）。
+/// 合成模块顶层入口的 IR 函数名（与用户声明的 `main` 区分，避免入口约定冲突）。
 pub const MODULE_ENTRY_IR_NAME: &str = "$module_main";
 
 /// 是否为编译器合成的模块入口函数（非用户 `function main()`）。
@@ -1344,49 +1277,6 @@ pub struct ReExportBinding {
     /// 当前模块对外导出名；`export *` 时为 None（表示复制源模块全部导出）
     pub exported_name: Option<String>,
 }
-
-// ── Shadow Stack Constants ──────────────────────────────────────────────
-// 影子栈位于独立 WASM 线性内存 `env.__shadow_memory`（memory index 1）。
-// 主内存不再预留影子区；冷启动只提交 INITIAL，按需 grow 到 soft max。
-
-/// 影子栈初始容量（1 页 = 64KiB = 8192 个 i64 槽位）。
-pub const SHADOW_STACK_INITIAL_SIZE: u32 = 64 * 1024;
-/// 向后兼容别名：表示冷启动初始容量，而非硬上限。
-pub const SHADOW_STACK_SIZE: u32 = SHADOW_STACK_INITIAL_SIZE;
-/// 默认软上限（16MiB）。超过时 ensure 返回失败并写入 RangeError。
-pub const SHADOW_STACK_DEFAULT_MAX_SIZE: u32 = 16 * 1024 * 1024;
-/// 影子内存在 multi-memory 模块中的 index（`env.memory`=0，`env.__shadow_memory`=1）。
-pub const SHADOW_MEMORY_INDEX: u32 = 1;
-/// 影子内存 import/export 名。
-pub const SHADOW_MEMORY_NAME: &str = "__shadow_memory";
-
-/// V2 shared dynamic heap 在 multi-memory 模块中的 index。
-pub const HEAP_MEMORY_INDEX: u32 = 2;
-/// V2 shared dynamic heap import/export 名。
-pub const HEAP_MEMORY_NAME: &str = "__heap_memory";
-/// V2 handle table 所需的最小 shared memory64 reserve（32 GiB）。
-pub const HEAP_MEMORY_MIN_BYTES: u64 = 32 * 1024 * 1024 * 1024;
-/// V2 high48 address ABI 的最大可寻址 shared memory64 范围（256 TiB）。
-pub const HEAP_MEMORY_MAX_BYTES: u64 = 1_u64 << 48;
-/// V2 shared memory64 最小 WebAssembly 64 KiB page 计数。
-pub const HEAP_MEMORY_MIN_PAGES: u64 = HEAP_MEMORY_MIN_BYTES / (64 * 1024);
-/// V2 shared memory64 最大 WebAssembly 64 KiB page 计数。
-pub const HEAP_MEMORY_MAX_PAGES: u64 = HEAP_MEMORY_MAX_BYTES / (64 * 1024);
-/// V2 NLAB fast-path 当前分配 cursor（i64 byte address）。
-pub const HEAP_ALLOC_PTR_GLOBAL_NAME: &str = "__heap_alloc_ptr";
-/// V2 NLAB fast-path 当前 buffer 末端（i64 byte address）。
-pub const HEAP_ALLOC_END_GLOBAL_NAME: &str = "__heap_alloc_end";
-/// V2 动态对象区起点（i64 byte address）。
-pub const HEAP_OBJECT_START_GLOBAL_NAME: &str = "__heap_object_start";
-/// V2 动态对象区上限（i64 byte address）。
-pub const HEAP_LIMIT_GLOBAL_NAME: &str = "__heap_limit_v2";
-/// V2 dynamic heap shared mutable global import 顺序。
-pub const V2_HEAP_GLOBAL_IMPORTS: [&str; 4] = [
-    HEAP_ALLOC_PTR_GLOBAL_NAME,
-    HEAP_ALLOC_END_GLOBAL_NAME,
-    HEAP_OBJECT_START_GLOBAL_NAME,
-    HEAP_LIMIT_GLOBAL_NAME,
-];
 
 // ── Well-Known Symbol 索引 ─────────────────────────────────────────────
 /// Well-known symbol 索引常量，semantic 和 runtime 共享。

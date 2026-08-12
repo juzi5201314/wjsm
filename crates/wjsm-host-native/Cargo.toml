@@ -1,0 +1,54 @@
+[package]
+name = "wjsm-host-native"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = "0.4"
+base64 = "0.22"
+hmac = "0.12"
+md-5 = "0.10"
+mio = { workspace = true }
+rand = "0.8"
+sha1 = "0.10"
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rcgen = { workspace = true }
+webpki-roots = { workspace = true }
+flate2 = { workspace = true }
+brotli = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+libc = "0.2"
+num-bigint = { version = "0.4", features = ["std"] }
+num-traits = { version = "0.2" }
+sysinfo = { workspace = true }
+url = { workspace = true }
+regress = { workspace = true }
+unicode-normalization = { workspace = true }
+wjsm-artifact-format = { path = "../wjsm-artifact-format" }
+wjsm-backend-native = { path = "../wjsm-backend-native" }
+wjsm-builtins = { path = "../wjsm-builtins" }
+wjsm-gc = { path = "../wjsm-gc" }
+wjsm-host = { path = "../wjsm-host" }
+wjsm-ir = { path = "../wjsm-ir" }
+wjsm-module = { path = "../wjsm-module" }
+wjsm-native-abi = { path = "../wjsm-native-abi" }
+wjsm-parser = { path = "../wjsm-parser" }
+wjsm-semantic = { path = "../wjsm-semantic" }
+wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }
+
+[build-dependencies]
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+walkdir = { workspace = true }
+wjsm-artifact-format = { path = "../wjsm-artifact-format" }
+wjsm-backend-native = { path = "../wjsm-backend-native" }
+wjsm-gc = { path = "../wjsm-gc" }
+wjsm-ir = { path = "../wjsm-ir" }
+wjsm-native-abi = { path = "../wjsm-native-abi" }
+wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }

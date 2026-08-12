@@ -234,14 +234,7 @@ impl Lowerer {
             }
             let current_val = self.load_value_for_shared_env_binding(block, binding);
             let key_val = self.append_env_key_const(block, binding);
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: env_val,
-                    key: key_val,
-                    value: current_val,
-                },
-            );
+            self.emit_set_prop(block, env_val, key_val, current_val);
         }
     }
 

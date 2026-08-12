@@ -91,19 +91,19 @@ module {
       %21 = new_object(capacity=4)
       %22 = const c22
       %23 = const c23
-      set_prop %21, %23, %22
+      %24 = set_prop %21, %23, %22
       store var $0.thenable, %21
-      %24 = const c24
-      %25 = load var $0.thenable
-      %26 = call builtin.promise.resolve_static(%24, %25)
-      %27 = const c25
-      %28 = const c26
-      %29 = call builtin.promise.then(%26, %27, %28)
-      %30 = is_exception %29
-      branch %30, bb2, bb1
+      %25 = const c24
+      %26 = load var $0.thenable
+      %27 = call builtin.promise.resolve_static(%25, %26)
+      %28 = const c25
+      %29 = const c26
+      %30 = call builtin.promise.then(%27, %28, %29)
+      %31 = is_exception %30
+      branch %31, bb2, bb1
     bb1:
       return
     bb2:
-      %31 = call builtin.exception_value(%29)
-      throw %31
+      %32 = call builtin.exception_value(%30)
+      throw %32
 }

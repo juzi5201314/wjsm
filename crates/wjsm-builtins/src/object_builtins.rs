@@ -95,7 +95,10 @@ pub fn object_assign<E: ExecContext>(
         return value::encode_undefined();
     }
     for i in 0..args_count as u32 {
-        let mut source = ctx.read_shadow_arg(args_base, i);
+        let mut source = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         if value::is_undefined(source) || value::is_null(source) {
             continue;
         }
@@ -381,7 +384,7 @@ pub fn object_get_own_property_descriptors<E: ExecContext>(ctx: &mut E, target: 
 }
 
 /// `Object.fromEntries(iterable)`：从 [key, value] 可迭代序列创建普通对象。
-pub async fn object_from_entries_impl<E: ExecContext>(ctx: &mut E, iterable: Value) -> Value {
+pub fn object_from_entries_impl<E: ExecContext>(ctx: &mut E, iterable: Value) -> Value {
     if value::is_null(iterable) || value::is_undefined(iterable) {
         ctx.set_last_error("TypeError: Cannot convert undefined or null to object".to_string());
         return value::encode_undefined();
@@ -389,8 +392,7 @@ pub async fn object_from_entries_impl<E: ExecContext>(ctx: &mut E, iterable: Val
     let result = ctx.alloc_object(0);
 
     // 数组快速路径 + 通用可迭代路径统一走 collect_constructor_iterable_values
-    let Some(values) =
-        crate::iterable_collect::collect_constructor_iterable_values(ctx, iterable).await
+    let Some(values) = crate::iterable_collect::collect_constructor_iterable_values(ctx, iterable)
     else {
         ctx.set_last_error("TypeError: value is not iterable".to_string());
         return value::encode_undefined();

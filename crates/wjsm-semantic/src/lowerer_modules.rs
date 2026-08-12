@@ -193,7 +193,7 @@ pub fn lower_modules_with_debug_meta(
 ///   module_export_names / module_scopes 注入；
 /// - **段入口函数体 inline 进用户 `$module_main` 入口块**（builtin 顶层先于所有
 ///   用户模块初始化执行，与 plain 路径拓扑序一致）。不采用跨函数 entry Call：
-///   LoadVar/StoreVar 在后端 Normal 模式编译为每函数 wasm local，builtin 段函数的
+///   LoadVar/StoreVar 在后端 Normal 模式按函数分配变量槽，builtin 段函数的
 ///   store 与用户函数的 load 无法共享；inline 后 builtin 的模块作用域变量写入与用户
 ///   的读取落在同一函数（同一批 local），语义与 plain 路径完全一致（含异常：builtin
 ///   顶层未捕获 throw 自然传播为 `$module_main` 的异常返回）。
@@ -260,9 +260,9 @@ pub fn lower_modules_with_builtin_seed(
 /// 将 builtin 段入口函数体 inline 进用户 `$module_main` 入口块（hydration 的
 /// "builtin 顶层先于用户模块初始化执行"步骤）。
 ///
-/// 不做跨函数 entry Call：后端 Normal 模式下 LoadVar/StoreVar 编译为每函数
-/// wasm local，段函数对模块作用域变量（`$N.x`）的 store 对用户函数不可见；
-/// inline 后两者落在同一函数（同一批 local），与 plain 路径语义完全一致。
+/// 不做跨函数 entry Call：后端 Normal 模式下 LoadVar/StoreVar 按函数分配变量槽，
+/// 段函数对模块作用域变量（`$N.x`）的 store 对用户函数不可见；inline 后两者落在
+/// 同一函数，与 plain 路径语义完全一致。
 ///
 /// 拼接手术：
 /// - 用户入口块原有内容整体搬入新 `cont_block`（builtin 顶层完成后接续）；
@@ -920,14 +920,7 @@ fn emit_cjs_property(
     value: wjsm_ir::ValueId,
 ) {
     let key_val = emit_cjs_string_constant(lowerer, block, key.to_string());
-    lowerer.current_function.append_instruction(
-        block,
-        Instruction::SetProp {
-            object,
-            key: key_val,
-            value,
-        },
-    );
+    lowerer.emit_set_prop(block, object, key_val, value);
 }
 
 fn emit_cjs_module_binding(
@@ -1400,14 +1393,7 @@ fn set_namespace_string_tag(lowerer: &mut Lowerer, ns_obj: wjsm_ir::ValueId, blo
             constant: tag_value,
         },
     );
-    lowerer.current_function.append_instruction(
-        block,
-        Instruction::SetProp {
-            object: ns_obj,
-            key: tag_key_val,
-            value: tag_value_val,
-        },
-    );
+    lowerer.emit_set_prop(block, ns_obj, tag_key_val, tag_value_val);
 }
 
 /// 完成 main 函数构建（处理 TLA 或普通返回）

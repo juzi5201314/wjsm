@@ -323,7 +323,10 @@ pub fn math_hypot<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) 
         usize::try_from(args_count).expect("Math.hypot 参数数量必须可表示为 usize"),
     );
     for index in 0..args_count {
-        let value = ctx.read_shadow_arg(args_base, index);
+        let value = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            index,
+        );
         let number = match math_decode_f64_arg(ctx, value) {
             Ok(number) => number,
             Err(error) => return error,
@@ -364,7 +367,10 @@ pub fn math_max<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) ->
     }
     let mut result = f64::NEG_INFINITY;
     for i in 0..args_count as u32 {
-        let val = ctx.read_shadow_arg(args_base, i);
+        let val = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         let x = match math_decode_f64_arg(ctx, val) {
             Ok(v) => v,
             Err(e) => return e,
@@ -385,7 +391,10 @@ pub fn math_min<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) ->
     }
     let mut result = f64::INFINITY;
     for i in 0..args_count as u32 {
-        let val = ctx.read_shadow_arg(args_base, i);
+        let val = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         let x = match math_decode_f64_arg(ctx, val) {
             Ok(v) => v,
             Err(e) => return e,

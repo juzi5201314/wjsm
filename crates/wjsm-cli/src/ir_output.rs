@@ -263,8 +263,4 @@ pub(crate) fn print_stats(result: &PipelineResult) {
         eprintln!("  Basic Blocks: {}", total_blocks);
         eprintln!("  Instructions: {}", total_instructions);
     }
-
-    if let Some(wasm) = &result.wasm {
-        eprintln!("  WASM Size: {} bytes", wasm.len());
-    }
 }

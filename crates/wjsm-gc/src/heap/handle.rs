@@ -1,12 +1,12 @@
 //! V2 的 8-byte atomic handle table（后端无关）。
 //!
-//! handle region 的物理后端经 [`HandleRegionBackend`] 抽象：
-//! wasm 后端用 wasmtime shared memory64（host-wasm 实现），native/独立 GC
-//! 用平台虚拟内存（[`PlatformHandleRegion`]，本模块提供）。`HandleTableV2`
-//! 的算法逻辑（entry/commit/epoch）与后端解耦。
+//! handle region 的物理后端经 [`HandleRegionBackend`] 抽象；native production
+//! 使用平台虚拟内存，测试可注入协议验证后端。`HandleTableV2` 的算法逻辑
+//! （entry/commit/epoch）与物理映射解耦。
 
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use super::epoch::{EpochParticipant, EpochQuarantine};
 use super::handle_entry::{
@@ -16,8 +16,7 @@ use super::handle_entry::{
 use super::layout::ManagedHeapLayout;
 
 const HANDLE_BLOCK_ENTRIES: usize = (HEAP_COMMIT_GRANULE_BYTES / HANDLE_ENTRY_BYTES) as usize;
-const COMMIT_BITMAP_WORDS: usize =
-    (HANDLE_REGION_BYTES as usize / HANDLE_ENTRY_BYTES as usize) / (HANDLE_BLOCK_ENTRIES * 64);
+const HANDLE_BLOCKS: usize = HANDLE_REGION_BYTES as usize / HEAP_COMMIT_GRANULE_BYTES as usize;
 
 fn reservation_error(error: impl std::fmt::Display) -> HandleTableError {
     HandleTableError::VirtualReservation {
@@ -29,8 +28,7 @@ fn reservation_error(error: impl std::fmt::Display) -> HandleTableError {
 ///
 /// 实现方负责保留 [`HANDLE_REGION_BYTES`] 的连续地址空间并保证其在
 /// `base_ptr` 生命周期内稳定映射。GC 只经 `base_ptr` 以 `AtomicU64` 访问 entry。
-/// 若后端以 `PROT_NONE` 预留（平台虚拟内存），必须在 `commit_block` 中把
-/// 对应 granule 变为可读写；wasm shared memory 等已全量可写的后端可 no-op。
+/// 对应 granule 变为可读写；已全量可写的测试后端可 no-op。
 pub trait HandleRegionBackend: Send + Sync {
     /// region 基址（已按 8-byte 对齐，覆盖整个 HANDLE_REGION_BYTES 保留区）。
     fn base_ptr(&self) -> *mut u8;
@@ -85,10 +83,10 @@ impl HandleRegionBackend for PlatformHandleRegion {
 
 /// V2 的连续 memory64 handle region；仅第一次发布 block 时增加 committed 计数。
 struct HandleRegion {
-    /// 保活物理映射（VirtualRange RAII / wasmtime SharedMemory）。
+    /// 保活物理映射（VirtualRange RAII 或测试后端资源）。
     backend: Box<dyn HandleRegionBackend>,
     base: usize,
-    committed_blocks: Box<[AtomicU64]>,
+    committed_blocks: Box<[AtomicU8]>,
     committed_bytes: AtomicU64,
 }
 
@@ -100,8 +98,8 @@ impl HandleRegion {
                 detail: "handle region backend returned a null base".to_owned(),
             });
         }
-        let committed_blocks = std::iter::repeat_with(|| AtomicU64::new(0))
-            .take(COMMIT_BITMAP_WORDS)
+        let committed_blocks = std::iter::repeat_with(|| AtomicU8::new(0))
+            .take(HANDLE_BLOCKS)
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Ok(Self {
@@ -123,9 +121,7 @@ impl HandleRegion {
 
     fn is_committed(&self, handle: HandleId) -> bool {
         let block = handle.get() as usize / HANDLE_BLOCK_ENTRIES;
-        let word = block / u64::BITS as usize;
-        let bit = 1_u64 << (block % u64::BITS as usize);
-        self.committed_blocks[word].load(Ordering::SeqCst) & bit != 0
+        self.committed_blocks[block].load(Ordering::Acquire) == 2
     }
 
     fn load_entry(&self, handle: HandleId) -> u64 {
@@ -135,18 +131,36 @@ impl HandleRegion {
         self.entry(handle).load(Ordering::SeqCst)
     }
 
-    fn commit(&self, handle: HandleId) {
+    fn commit(&self, handle: HandleId) -> Result<(), HandleTableError> {
         let block = handle.get() as usize / HANDLE_BLOCK_ENTRIES;
-        let word = block / u64::BITS as usize;
-        let bit = 1_u64 << (block % u64::BITS as usize);
-        let previous = self.committed_blocks[word].fetch_or(bit, Ordering::SeqCst);
-        if previous & bit == 0 {
-            let offset = block * HANDLE_BLOCK_ENTRIES * HANDLE_ENTRY_BYTES as usize;
-            let len = HEAP_COMMIT_GRANULE_BYTES as usize;
-            // 平台 PROT_NONE 预留必须 mprotect；失败时仍记 committed 并让后续访问暴露错误。
-            let _ = self.backend.commit_block(offset, len);
-            self.committed_bytes
-                .fetch_add(HEAP_COMMIT_GRANULE_BYTES, Ordering::SeqCst);
+        loop {
+            match self.committed_blocks[block].load(Ordering::Acquire) {
+                2 => return Ok(()),
+                0 => {
+                    if self.committed_blocks[block]
+                        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    let offset = block * HANDLE_BLOCK_ENTRIES * HANDLE_ENTRY_BYTES as usize;
+                    let len = HEAP_COMMIT_GRANULE_BYTES as usize;
+                    match self.backend.commit_block(offset, len) {
+                        Ok(()) => {
+                            self.committed_bytes
+                                .fetch_add(HEAP_COMMIT_GRANULE_BYTES, Ordering::Relaxed);
+                            self.committed_blocks[block].store(2, Ordering::Release);
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            self.committed_blocks[block].store(0, Ordering::Release);
+                            return Err(error);
+                        }
+                    }
+                }
+                1 => std::hint::spin_loop(),
+                _ => unreachable!("handle commit state is 0, 1, or 2"),
+            }
         }
     }
 
@@ -156,6 +170,13 @@ impl HandleRegion {
 }
 
 /// V2 的 8-byte atomic handle table；不触碰 active 4-byte obj_table ABI。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RestoredHandleEntry {
+    pub handle: HandleId,
+    pub address: u64,
+    pub generation: HandleGeneration,
+}
+
 pub struct HandleTableV2 {
     layout: ManagedHeapLayout,
     region: HandleRegion,
@@ -169,7 +190,7 @@ impl HandleTableV2 {
         Self::with_backend(layout, Box::new(PlatformHandleRegion::reserve()?))
     }
 
-    /// 用指定后端创建 handle table（wasm 后端注入 wasmtime shared region）。
+    /// 用指定物理后端创建 handle table；production 传入平台 region，测试传入协议后端。
     pub fn with_backend(
         layout: ManagedHeapLayout,
         backend: Box<dyn HandleRegionBackend>,
@@ -215,6 +236,37 @@ impl HandleTableV2 {
         Ok(HandleId::new(raw as u32))
     }
 
+    pub fn allocated_count(&self) -> u64 {
+        self.next_handle.load(Ordering::Acquire)
+    }
+
+    /// 捕获当前稳定 handle entry；free/retired slot 由 `next_handle` 保留为空洞。
+    pub fn snapshot_entries(&self) -> Result<Vec<RestoredHandleEntry>, HandleTableError> {
+        let next_handle = self.allocated_count();
+        let mut entries = Vec::new();
+        for raw in 0..next_handle {
+            let handle = HandleId::new(raw as u32);
+            let entry = ColoredHandleEntry::from_raw(self.region.load_entry(handle));
+            let state = entry.state();
+            if state.is_stable() {
+                entries.push(RestoredHandleEntry {
+                    handle,
+                    address: entry.address(),
+                    generation: entry.generation(),
+                });
+            } else if state != HandleState::Free && state != HandleState::Retired {
+                return Err(HandleTableError::InvalidTransition {
+                    handle,
+                    expected: state
+                        .generation()
+                        .map_or(HandleState::StableYoung, HandleState::stable_for),
+                    actual: state,
+                });
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn publish(
         &self,
         handle: HandleId,
@@ -222,9 +274,49 @@ impl HandleTableV2 {
         generation: HandleGeneration,
     ) -> Result<(), HandleTableError> {
         self.require_object_address(address)?;
-        self.region.commit(handle);
+        if u64::from(handle.get()) >= self.allocated_count() {
+            return Err(HandleTableError::UnallocatedHandle { handle });
+        }
+        self.region.commit(handle)?;
         let next = ColoredHandleEntry::new(address, HandleState::stable_for(generation))?;
         self.compare_exchange(handle, HandleState::Free, next)
+    }
+    pub fn restore_snapshot(
+        &self,
+        entries: &[RestoredHandleEntry],
+        next_handle: u64,
+    ) -> Result<(), HandleTableError> {
+        if self.allocated_count() != 0 {
+            return Err(HandleTableError::RestoreRequiresEmpty);
+        }
+        if next_handle > u64::from(u32::MAX) + 1 {
+            return Err(HandleTableError::HandleExhausted);
+        }
+        let mut seen = HashSet::with_capacity(entries.len());
+        for entry in entries {
+            if u64::from(entry.handle.get()) >= next_handle {
+                return Err(HandleTableError::RestoreHandleOutOfRange {
+                    handle: entry.handle,
+                    next_handle,
+                });
+            }
+            if !seen.insert(entry.handle.get()) {
+                return Err(HandleTableError::DuplicateRestoreHandle {
+                    handle: entry.handle,
+                });
+            }
+            self.require_object_address(entry.address)?;
+        }
+        for entry in entries {
+            self.region.commit(entry.handle)?;
+        }
+        for entry in entries {
+            let value =
+                ColoredHandleEntry::new(entry.address, HandleState::stable_for(entry.generation))?;
+            self.compare_exchange(entry.handle, HandleState::Free, value)?;
+        }
+        self.next_handle.store(next_handle, Ordering::Release);
+        Ok(())
     }
 
     #[inline(always)]
@@ -293,7 +385,7 @@ impl HandleTableV2 {
         }
         let retired = ColoredHandleEntry::new(current.address(), HandleState::Retired)?;
         self.compare_exchange(handle, state, retired)?;
-        self.epochs.retire(handle);
+        self.epochs.retire_handle(handle);
         Ok(())
     }
 
@@ -306,13 +398,21 @@ impl HandleTableV2 {
     }
 
     pub fn reclaim_quarantine(&self) -> usize {
-        let handles = self.epochs.take_reclaimable();
+        let handles = self.epochs.take_reclaimable_handles();
         for handle in &handles {
             self.free_retired(*handle)
                 .expect("retired handle state changed before epoch reclaim");
             self.epochs.make_reusable(*handle);
         }
         handles.len()
+    }
+
+    pub(crate) fn quarantine_allocation(&self, start: u64, bytes: u64) {
+        self.epochs.retire_allocation(start, bytes);
+    }
+
+    pub(crate) fn take_reclaimable_allocations(&self) -> Vec<(u64, u64)> {
+        self.epochs.take_reclaimable_allocations()
     }
 
     fn compare_exchange(

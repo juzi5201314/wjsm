@@ -53,6 +53,20 @@ impl ModuleGraph {
         let entry_id = resolver.resolve_entry_path(&entry_path)?;
         Self::build_from_resolver(resolver, entry_id)
     }
+    pub(crate) fn build_runtime_with_options(
+        entry: &Path,
+        root: &Path,
+        options: ResolutionOptions,
+    ) -> Result<Self> {
+        let entry_path = if entry.is_absolute() {
+            entry.to_path_buf()
+        } else {
+            root.join(entry)
+        };
+        let mut resolver = ModuleResolver::with_runtime_entry_options(root, options, &entry_path);
+        let entry_id = resolver.resolve_entry_path(&entry_path)?;
+        Self::build_from_resolver(resolver, entry_id)
+    }
 
     pub(crate) fn build_builtin_with_options(
         specifier: &str,

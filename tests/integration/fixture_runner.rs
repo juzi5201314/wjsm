@@ -7,11 +7,10 @@ use std::sync::Once;
 const UPDATE_SNAPSHOTS_ENV: &str = "WJSM_UPDATE_FIXTURES";
 const VERIFY_ORACLE_ENV: &str = "WJSM_VERIFY_ORACLE";
 
-/// 进程级一次性初始化测试环境：固定时区为 UTC，设置 wasm 编译缓存目录。
-/// 旧子进程模型靠 `Command::env("TZ","UTC")` 保证 Date fixture 稳定；
-/// in-process 调用无子进程，需在测试进程内设置。chrono 读 TZ 决定 Local 偏移，
-/// 必须在任何 Date 逻辑运行前设好。
-/// wasmtime 编译缓存指向 /tmp，避免相同 wasm bytes 的重复 Cranelift 编译。
+/// 进程级一次性初始化测试环境：固定时区为 UTC。
+/// 旧子进程模型靠 `Command::env("TZ", "UTC")` 保证 Date fixture 稳定；
+/// in-process 调用无子进程，需在测试进程内设置。
+/// chrono 读 TZ 决定 Local 偏移，必须在任何 Date 逻辑运行前设好。
 static ENV_INIT: Once = Once::new();
 
 fn ensure_test_env() {
@@ -20,11 +19,6 @@ fn ensure_test_env() {
         // call_once 保证无并发写。后续只读。
         unsafe {
             env::set_var("TZ", "UTC");
-            env::set_var("WJSM_CACHE_DIR", "/tmp/wjsm-test-cache");
-            // OS child（cluster/child_process）继承 Winch + cache。
-            if env::var_os("WJSM_COMPILER").is_none() {
-                env::set_var("WJSM_COMPILER", "winch");
-            }
             // 默认禁用 child_process，避免会话环境污染 fixture 期望。
             env::remove_var("WJSM_CHILD_PROCESS_ALLOW");
         }
@@ -95,7 +89,8 @@ impl FixtureRunner {
         {
             return Ok(());
         }
-        let (exit_code, stdout, stderr) = wjsm_cli::run_file_in_process(&fixture.input_path);
+        let (exit_code, stdout, stderr) =
+            wjsm_cli::run_file_in_process_with_root(&fixture.input_path, &self.fixtures_root);
         let actual = FixtureOutput {
             stdout: normalize_output(&stdout),
             stderr: normalize_output(&stderr),
@@ -218,7 +213,7 @@ fn verify_oracle(
 
     // 归一化 wjsm 输出用于对比：
     // - 去除对象句柄数字（[object Type:NNN] → [object Type]）
-    // - 去除 WASM 地址和回溯
+    // - 去除 native 地址和回溯
     let wjsm_stdout_raw = String::from_utf8_lossy(wjsm_stdout).replace("\r\n", "\n");
     let wjsm_stderr_raw = String::from_utf8_lossy(wjsm_stderr).replace("\r\n", "\n");
 
@@ -297,7 +292,7 @@ fn normalize_for_oracle(text: &str) -> String {
         i += 1;
     }
 
-    // 去除 WASM 地址 0xNNNN
+    // 去除不稳定的 native 地址 0xNNNN。
     let mut out = String::with_capacity(result.len());
     let mut chars = result.chars().peekable();
     while let Some(c) = chars.next() {
@@ -324,20 +319,6 @@ fn normalize_for_oracle(text: &str) -> String {
     }
     result = out;
 
-    // 去除 WASM 回溯行（含 "wasm backtrace"、"wasm function" 的行）
-    let lines: Vec<&str> = result.lines().collect();
-    let filtered: Vec<&str> = lines
-        .into_iter()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.contains("wasm backtrace")
-                && !trimmed.contains("wasm function ")
-                && !trimmed.contains("wasm trap:")
-                && trimmed != "<addr>"
-        })
-        .collect();
-    result = filtered.join("\n");
-
     result
 }
 
@@ -345,11 +326,11 @@ fn normalize_output(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
     let text = normalize_object_handles(&text);
     let text = normalize_paths(&text);
-    normalize_wasm_backtrace(&text)
+    normalize_native_backtrace(&text)
 }
 
-/// 归一化 wasm trap 回溯中的不稳定地址/函数索引。
-fn normalize_wasm_backtrace(text: &str) -> String {
+/// 归一化 native 回溯中的不稳定地址与生成函数位置。
+fn normalize_native_backtrace(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -365,7 +346,7 @@ fn normalize_wasm_backtrace(text: &str) -> String {
                 }
             }
             if had_hex {
-                out.push_str("<wasm-addr>");
+                out.push_str("<native-addr>");
             } else {
                 out.push('0');
                 out.push('x');
@@ -374,19 +355,7 @@ fn normalize_wasm_backtrace(text: &str) -> String {
         }
         out.push(c);
     }
-    let mut s = out;
-    while let Some(idx) = s.find("wasm function ") {
-        let start = idx + "wasm function ".len();
-        let digit_len = s[start..]
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .count();
-        if digit_len == 0 {
-            break;
-        }
-        s.replace_range(start..start + digit_len, "<idx>");
-    }
-    normalize_generated_anonymous_frames(&s)
+    normalize_generated_anonymous_frames(&out)
 }
 
 fn normalize_generated_anonymous_frames(text: &str) -> String {

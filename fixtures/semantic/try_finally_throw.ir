@@ -73,6 +73,7 @@ module {
       jump bb1
     bb1:
       %21 = const c20
+      store var $1.$abrupt_completion_1, %21
       %22 = const c21
       %23 = call builtin.console.log(%22)
       %24 = is_exception %23
@@ -82,7 +83,8 @@ module {
     bb3:
       unreachable
     bb4:
-      throw %21
+      %26 = load var $1.$abrupt_completion_1
+      throw %26
     bb5:
       %25 = call builtin.exception_value(%23)
       throw %25

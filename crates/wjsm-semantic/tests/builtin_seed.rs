@@ -4,9 +4,9 @@
 //! [`wjsm_semantic::lower_modules_with_debug_meta`]：
 //! - 段函数/常量预装（段函数在前、用户函数在后）；
 //! - **段入口函数体 inline 进用户 `$module_main` 入口块**：builtin 模块作用域变量
-//!   （`$N.x`）的 StoreVar 与用户 LoadVar 落在同一函数（同一批 wasm local），
-//!   跨函数可见性与 plain 路径一致（后端 Normal 模式 var 是每函数 local，跨函数
-//!   LoadVar/StoreVar 无法共享，故不做 entry Call）；
+//!   （`$N.x`）的 StoreVar 与用户 LoadVar 落在同一函数（同一批 native 变量槽），
+//!   跨函数可见性与 plain 路径一致（Normal 模式的变量槽不跨函数共享，
+//!   故不做 entry Call）；
 //! - 注入的 export_map 让用户 import 解析命中 builtin 导出。
 
 use std::collections::{BTreeSet, HashMap};
@@ -159,7 +159,7 @@ fn seed_lower_inlines_builtin_entry_into_user_main() {
     }
     assert!(matches!(&instructions[1], Instruction::StoreVar { name, .. } if name == "$1.answer"));
 
-    // 核心不变量：builtin 导出的 StoreVar 与用户 LoadVar 在同一函数（同一批 wasm local）。
+    // 核心不变量：builtin 导出的 StoreVar 与用户 LoadVar 在同一函数。
     assert_same_function_store_and_load(main_fn, "$1.answer");
 
     // 无 entry Call：inline 取代了跨函数调用，用户 $module_main 不应再有 Call。

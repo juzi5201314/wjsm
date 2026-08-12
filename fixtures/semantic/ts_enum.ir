@@ -82,20 +82,20 @@ module {
       %20 = const c19
       store var $this, %20
       %22 = const c20
-      %26 = const c24
-      %37 = call builtin.console.log(%22)
-      %38 = is_exception %37
-      branch %38, bb2, bb1
-    bb1:
-      %43 = call builtin.console.log(%26)
+      %28 = const c24
+      %43 = call builtin.console.log(%22)
       %44 = is_exception %43
-      branch %44, bb4, bb3
+      branch %44, bb2, bb1
+    bb1:
+      %49 = call builtin.console.log(%28)
+      %50 = is_exception %49
+      branch %50, bb4, bb3
     bb2:
-      %39 = call builtin.exception_value(%37)
-      throw %39
+      %45 = call builtin.exception_value(%43)
+      throw %45
     bb3:
       return
     bb4:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %51 = call builtin.exception_value(%49)
+      throw %51
 }

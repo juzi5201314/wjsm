@@ -150,16 +150,16 @@ fn quiet_suppresses_verbose_progress_but_keeps_program_output() -> Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn config_file_supplies_defaults_and_cli_overrides_target() -> Result<()> {
+fn config_file_supplies_defaults() -> Result<()> {
     let root = unique_temp_dir("wjsm_config");
     fs::create_dir_all(&root)?;
     let config = root.join("wjsm.toml");
-    fs::write(&config, "script = true\ntarget = 'jit'\nquiet = true\n")?;
+    fs::write(&config, "script = true\nquiet = true\n")?;
 
     let output = Command::new(resolve_binary_path())
         .arg("--config")
         .arg(&config)
-        .args(["--target", "wasm", "check", "-e", "var await = 1;"])
+        .args(["check", "-e", "var await = 1;"])
         .output()?;
 
     let stderr = normalized_stderr(&output);
@@ -372,8 +372,7 @@ fn process_exit_from_next_tick_skips_timer_and_preserves_stderr() -> Result<()> 
 fn backend_control_flow_compiles_loop_and_if_without_region_tree() -> Result<()> {
     let output = Command::new(resolve_binary_path())
         .args([
-            "dump-wat",
-            "--skeleton",
+            "dump-clif",
             "-e",
             "let i = 0; while (i < 3) { if (i < 2) { i = i + 1; } else { i = i + 1; } }",
         ])
@@ -382,7 +381,8 @@ fn backend_control_flow_compiles_loop_and_if_without_region_tree() -> Result<()>
     let stdout = normalized_stdout(&output);
     let stderr = normalized_stderr(&output);
     assert!(output.status.success(), "stderr: {stderr}");
-    assert!(stdout.contains("(module"), "wat output: {stdout}");
+    assert!(stdout.contains("function u0"), "clif output: {stdout}");
+    assert!(stdout.contains("block0"), "clif output: {stdout}");
     Ok(())
 }
 

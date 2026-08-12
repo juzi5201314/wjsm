@@ -47,7 +47,7 @@ impl Lowerer {
                 // 初始化器位于声明语句的顶层表达式位置：若它可能返回 TAG_EXCEPTION
                 // （调用 / 成员读取 / new / `in` 等），插入异常检查分叉，使
                 // `let x = throws()` 之类在 try/catch 中可被捕获，而非令 TAG_EXCEPTION
-                // 流入 StoreVar 后触发 WASM unreachable。
+                // 流入 StoreVar 后触发 native pending-exception invariant。
                 if self.expr_can_throw(init) && self.expr_exception_fork_allowed() {
                     block = self.lower_value_exception_branch(block, value)?;
                 }
@@ -358,14 +358,8 @@ impl Lowerer {
                 },
             );
         } else {
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: this_val,
-                    key: key_dest,
-                    value: init_val,
-                },
-            );
+            let result = self.emit_set_prop(block, this_val, key_dest, init_val);
+            return self.lower_value_exception_branch(block, result);
         }
         Ok(self.resolve_store_block(block))
     }
@@ -408,14 +402,7 @@ impl Lowerer {
                     constant: key_const,
                 },
             );
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: this_val,
-                    key: key_dest,
-                    value,
-                },
-            );
+            self.emit_set_prop(block, this_val, key_dest, value);
             block = self.resolve_store_block(block);
         }
         block
@@ -487,14 +474,7 @@ impl Lowerer {
                 },
             );
         } else {
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: ctor_dest,
-                    key: key_dest,
-                    value: init_val,
-                },
-            );
+            self.emit_set_prop(block, ctor_dest, key_dest, init_val);
         }
         Ok(())
     }
@@ -745,15 +725,8 @@ impl Lowerer {
                         .add_constant(Constant::String("callee".to_string())),
                 },
             );
-            self.current_function.append_instruction(
-                patch_block,
-                Instruction::SetProp {
-                    object: arguments_obj,
-                    key: callee_key,
-                    value: closure_val,
-                },
-            );
-            return Ok(self.resolve_store_block(patch_block));
+            let result = self.emit_set_prop(patch_block, arguments_obj, callee_key, closure_val);
+            return self.lower_value_exception_branch(patch_block, result);
         }
 
         if self.scopes.mark_initialised("arguments").is_err() {

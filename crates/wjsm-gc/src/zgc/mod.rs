@@ -1,8 +1,7 @@
 //! Generational ZGC V2 协议与算法（后端无关）。
 //!
-//! 本模块只含可泛型化、不绑 wasmtime 的部分。
-//! 跳过：`mark.rs` / `relocate.rs` / `relocate_tests.rs`（绑 `GcContext`/wasmtime）、
-//! `host_roots.rs`（依赖 host `roots_v2::V2ConditionalRoots` / `Realm`）。
+//! 本模块只含可泛型化、不绑具体执行后端的部分；collector host 接合位于
+//! `wjsm-host-native`。
 
 pub mod barrier;
 pub mod color;

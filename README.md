@@ -1,23 +1,23 @@
 # wjsm
 
-> Experimental AOT JavaScript/TypeScript runtime targeting WebAssembly.
+> Experimental AOT JavaScript/TypeScript runtime targeting native x86_64 Linux and Windows.
 
-wjsm 是一个实验性的 JavaScript/TypeScript 运行时：使用 SWC 解析源码，经过自有语义 IR 将程序提前编译为 WebAssembly，再由 Wasmtime 宿主执行。整个执行链不依赖 V8。
+wjsm 是一个实验性的 JavaScript/TypeScript 运行时：使用 SWC 解析源码，经过自有语义 IR，生成可跨平台携带的 portable `.wjsm` 制品，再由 Cranelift 编译为当前宿主的 native image 并由 NativeRuntime 执行。整个执行链不依赖 V8。
 
 > [!WARNING]
-> wjsm 当前版本为 `0.1.0`，尚未完整实现 ECMAScript、Web API 或 Node.js 兼容层。它适合参与运行时开发、验证 AOT/Wasm 方案和运行已覆盖的程序；请不要默认任意 npm 包或现有 Node.js 应用都能直接运行。
+> wjsm 当前版本为 `0.1.0`，尚未完整实现 ECMAScript、Web API 或 Node.js 兼容层。它适合参与运行时开发、验证 portable AOT/native runtime 方案和运行已覆盖的程序；请不要默认任意 npm 包或现有 Node.js 应用都能直接运行。
 
 ## 当前能力
 
 | 领域 | 当前状态 |
 | --- | --- |
-| 执行后端 | Wasm + Wasmtime 是当前可用后端；JIT 只有接入契约，`--target jit` 尚未实现 |
+| 执行后端 | Direct Cranelift native backend；portable `.wjsm` 是跨平台 semantic-IR 制品，native image 仅进入当前宿主缓存 |
 | 源码 | 按扩展名解析 `.js`、`.mjs`、`.cjs`、`.jsx`、`.ts`、`.tsx`；TypeScript 类型语法会参与解析和降级，但 wjsm 不是类型检查器 |
 | 语言语义 | 已覆盖作用域与 TDZ、闭包、类、异常、生成器、`async`/`await`、Promise、集合、TypedArray、Proxy/Reflect 等大量语义；完整度以测试和 Test262 结果为准 |
 | 模块与包 | 支持 ESM、CommonJS、动态加载、`node_modules` 解析、条件导出和内置 `install` 命令；Node.js 与 npm 生态兼容性仍是子集 |
 | Web/Node API | 已实现 Fetch、Streams、定时器、`async_hooks`、`worker_threads`、`vm`、`perf_hooks` 等已覆盖能力；不是完整 Node.js 替代品 |
 | 内存管理 | 统一 ManagedHeap，可选择 `mark-sweep`、`g1` 或 `zgc`；启动快照默认启用 |
-| 工具链 | 提供运行、构建、检查、lint、格式化、测试、REPL、IR/AST/WAT 输出、Wasm 验证与反汇编、缓存和 shell 补全 |
+| 工具链 | 提供运行、构建、检查、lint、格式化、测试、REPL、IR/AST/CLIF 输出、native 诊断、缓存和 shell 补全 |
 
 ## 快速开始
 
@@ -49,29 +49,29 @@ Hello, wjsm: 3
 ./target/release/wjsm eval '1 + 2 * 3'
 ```
 
-## AOT 构建
+## Portable AOT 构建
 
 ```bash
-./target/release/wjsm build app.ts -o app.wasm
-./target/release/wjsm validate app.wasm
-./target/release/wjsm size app.wasm
+./target/release/wjsm build app.ts -o app.wjsm
+./target/release/wjsm validate app.wjsm
+./target/release/wjsm size app.wjsm
+./target/release/wjsm run app.wjsm
 ```
 
-生成的 Wasm 模块使用 wjsm 的宿主 ABI 和 support module，不是可直接交给任意 WASI/WebAssembly 运行时的独立程序。日常执行请使用 `wjsm run`；嵌入场景应通过 `wjsm-host-wasm` 提供宿主能力。
+`app.wjsm` 只包含经过验证的 semantic IR、模块清单及可选 source metadata，能够跨平台携带；Cranelift object、relocation、可执行 image 和 native cache 都是当前宿主私有派生数据。`--format native-executable` 当前返回稳定的未实现错误，不创建或覆盖输出文件。
 
 ## 常用命令
 
 | 命令 | 用途 |
 | --- | --- |
-| `wjsm run <file>` | 编译并运行 JS/TS，可用 `--watch` 监听文件 |
-| `wjsm build <file> -o <file.wasm>` | 生成 Wasm，`--stage` 可停在 `parse`、`lower`、`compile` 或 `execute` |
+| `wjsm build <file> -o <file.wjsm>` | 生成 portable semantic-IR 制品，`--stage` 可停在 `parse`、`lower`、`compile` 或 `execute` |
 | `wjsm check <file>` | 解析并检查错误，不执行程序 |
 | `wjsm test <path>` | 运行 `*.test.js`、`*.test.ts`、`*_test.js`、`*_test.ts` |
 | `wjsm lint <file>` / `wjsm fmt <file>` | 检查或格式化源码；`fmt -w` 写回文件 |
 | `wjsm eval '<expr>'` / `wjsm repl` | 计算表达式或进入交互式 REPL |
 | `wjsm init <dir>` / `wjsm install [packages...]` | 创建项目或安装 npm 包 |
-| `wjsm dump-ast` / `dump-ir` / `dump-wat` | 查看编译流水线中间结果 |
-| `wjsm validate` / `size` / `disasm` | 检查和分析 Wasm 产物 |
+| `wjsm dump-ast` / `dump-ir` / `dump-clif` | 查看编译流水线中的 AST、semantic IR 或 Cranelift IR |
+| `wjsm validate` / `size` / `disasm` | 校验 portable 制品，或分析当前宿主的 native image |
 | `wjsm cache stats` / `cache clear` | 查看或清理编译缓存 |
 | `wjsm completions <shell>` | 生成 shell 补全脚本 |
 
@@ -103,17 +103,21 @@ JS / TS source
 wjsm-parser (SWC AST)
       │
       ▼
-wjsm-semantic (scope analysis + IR lowering)
-      │
+wjsm-semantic (scope analysis + verified IR lowering)
       ├── wjsm-module (ESM / CJS graph and resolution)
       ▼
-wjsm-backend-wasm (IR → WebAssembly)
+wjsm-artifact-format (portable .wjsm)
       │
       ▼
-wjsm-host-wasm (Wasmtime + host APIs + ManagedHeap)
+wjsm-backend-native (IR → Cranelift CLIF → relocatable native object)
+      │
+      ▼
+wjsm-host-native (native image/cache + ManagedHeap + host APIs)
 ```
 
-ECMAScript/Web/Node 语义算法位于后端无关的 `wjsm-builtins`，宿主契约位于 `wjsm-host`，GC 与对象堆抽象位于 `wjsm-gc`。`wjsm-runtime` 保留为兼容 facade。当前生产路径只有 Wasm 后端，但仓库已经定义新后端的静态接入契约。
+ECMAScript/Web/Node 语义算法位于后端无关的 `wjsm-builtins`，宿主契约位于 `wjsm-host`，GC 与对象堆抽象位于 `wjsm-gc`。`wjsm-runtime` 保留为 native runtime 的公共 facade。当前 production capability 只承诺 x86_64 Linux 与 x86_64 Windows；其他 target 在 native compiler 初始化时返回结构化 capability error，不切换到另一执行后端。
+
+Direct native code 不提供 Wasm memory/control-flow sandbox。artifact verifier、checked lowering、strict relocation、symbol allowlist 与 W^X 属于受信编译/加载边界，不等同于同进程隔离；运行不受信任代码时必须使用独立 OS process、权限隔离与资源限制。
 
 ## 开发与测试
 
@@ -136,8 +140,8 @@ cargo run --release -p wjsm-test262 -- run --suite test/built-ins --plain
 
 ## 深入阅读
 
-- [架构决策记录](./docs/adr/)：运行时、GC、快照、模块、调试器与多后端边界的权威设计记录。
-- [新后端实现指南](./docs/backend-implementation-guide.md)：实现 `HeapMemory`、`ExecContext` 和 `JsBackend` 的完整接入路径。
+- [架构决策记录](./docs/adr/)：运行时、GC、快照、模块、调试器与 Direct Cranelift 终态的权威决策记录。
+- [Direct Cranelift 后端实现指南](./docs/backend-implementation-guide.md)：portable artifact、CLIF/image/cache、NativeRuntime 与 ManagedHeap 的维护契约。
 
 ## 许可证
 

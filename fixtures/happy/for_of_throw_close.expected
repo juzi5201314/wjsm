@@ -1,5 +1,6 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
-false
+1
+boom
+true
 --- stderr ---
-Runtime error: TypeError: value is not iterable

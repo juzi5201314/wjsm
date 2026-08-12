@@ -1,0 +1,34 @@
+[package]
+name = "wjsm-backend-native"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[features]
+default = []
+disasm = ["cranelift-codegen/disas"]
+
+[dependencies]
+anyhow = { workspace = true }
+cranelift-codegen = { workspace = true }
+cranelift-control = { workspace = true }
+cranelift-frontend = { workspace = true }
+cranelift-module = { workspace = true }
+cranelift-native = { workspace = true }
+cranelift-object = { workspace = true }
+gimli = { workspace = true }
+libc = { workspace = true }
+object = { workspace = true }
+sha2 = { workspace = true }
+target-lexicon = { workspace = true }
+thiserror = { workspace = true }
+wjsm-artifact-format = { path = "../wjsm-artifact-format" }
+wjsm-ir = { path = "../wjsm-ir" }
+wjsm-native-abi = { path = "../wjsm-native-abi" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[build-dependencies]
+sha2 = { workspace = true }
+walkdir = { workspace = true }

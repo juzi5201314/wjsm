@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u16)]
 pub enum Builtin {
     ConsoleLog,
     ConsoleError,
@@ -11,9 +12,6 @@ pub enum Builtin {
     ConsoleTrace,
     Debugger,
     Throw,
-    /// 影子栈容量不足时由 guest 调用：尝试 grow 独立 shadow memory 并更新
-    /// `__shadow_stack_end`；成功返回 1，失败写 runtime_error 并返回 0。
-    EnsureShadowStackCapacity,
     F64Mod,
     F64Exp,
     IteratorFrom,
@@ -497,9 +495,45 @@ pub enum Builtin {
     TransformStreamConstructor,
     CountQueuingStrategyConstructor,
     ByteLengthQueuingStrategyConstructor,
+    // ── structuredClone ──
+    StructuredClone,
+    // ── 全局 Number 强制转换函数 ──
+    GlobalIsNaN,
+    GlobalIsFinite,
+    // ── Symbol.prototype ──
+    SymbolProtoToString,
+    SymbolProtoValueOf,
+    // ── RegExp well-known symbol methods ──
+    RegExpProtoMatch,
+    RegExpProtoReplace,
+    RegExpProtoSearch,
+    RegExpProtoSplit,
+    // ── BigInt.prototype ──
+    BigIntProtoToString,
+    BigIntProtoValueOf,
 }
 
 impl Builtin {
+    /// 返回 portable artifact 使用的稳定宽度 builtin ID。
+    pub const fn wire_id(self) -> u16 {
+        self as u16
+    }
+
+    /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
+    pub const fn last_wire_id() -> u16 {
+        Self::BigIntProtoValueOf as u16
+    }
+
+    /// 从 portable artifact 的 builtin ID 恢复枚举。
+    pub fn from_wire_id(id: u16) -> Option<Self> {
+        if id > Self::last_wire_id() {
+            return None;
+        }
+
+        // SAFETY: `Builtin` 使用 `repr(u16)`，全部 variant 连续且上界已检查。
+        Some(unsafe { std::mem::transmute::<u16, Self>(id) })
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             // Console / debugger / 迭代器 / 枚举器 / 运算符 / 属性描述符
@@ -511,7 +545,6 @@ impl Builtin {
             Self::ConsoleTrace => "console.trace",
             Self::Debugger => "debugger",
             Self::Throw => "throw",
-            Self::EnsureShadowStackCapacity => "ensure_shadow_stack_capacity",
             Self::F64Mod => "f64.mod",
             Self::F64Exp => "f64.exp",
             Self::IteratorFrom => "iterator.from",
@@ -959,6 +992,17 @@ impl Builtin {
             Self::TransformStreamConstructor => "TransformStream",
             Self::CountQueuingStrategyConstructor => "CountQueuingStrategy",
             Self::ByteLengthQueuingStrategyConstructor => "ByteLengthQueuingStrategy",
+            Self::StructuredClone => "structuredClone",
+            Self::GlobalIsNaN => "isNaN",
+            Self::GlobalIsFinite => "isFinite",
+            Self::SymbolProtoToString => "Symbol.prototype.toString",
+            Self::SymbolProtoValueOf => "Symbol.prototype.valueOf",
+            Self::RegExpProtoMatch => "RegExp.prototype[@@match]",
+            Self::RegExpProtoReplace => "RegExp.prototype[@@replace]",
+            Self::RegExpProtoSearch => "RegExp.prototype[@@search]",
+            Self::RegExpProtoSplit => "RegExp.prototype[@@split]",
+            Self::BigIntProtoToString => "BigInt.prototype.toString",
+            Self::BigIntProtoValueOf => "BigInt.prototype.valueOf",
         }
     }
 }

@@ -1,11 +1,11 @@
 use wjsm_gc::{
-    G1V2, G1V2Generation, GcRuntimeV2, HandleId, ManagedHeapLayout, NativeHeapMemory, RootSnapshot,
+    G1V2, G1V2Generation, GcRuntimeV2, HandleId, ManagedHeapLayout, RootSnapshot, TestHeapMemory,
 };
 
 const PAGE_BYTES: u64 = 64 * 1024;
 
-fn native_heap(layout: &ManagedHeapLayout) -> NativeHeapMemory {
-    NativeHeapMemory::for_layout(layout)
+fn native_heap(layout: &ManagedHeapLayout) -> TestHeapMemory {
+    TestHeapMemory::for_layout(layout)
 }
 
 fn root_snapshot(handles: impl IntoIterator<Item = HandleId>) -> RootSnapshot {

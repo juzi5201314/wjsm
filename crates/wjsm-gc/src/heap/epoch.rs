@@ -13,7 +13,8 @@ pub(crate) struct EpochQuarantine {
     current: AtomicU64,
     next_participant: AtomicU64,
     participants: Mutex<BTreeMap<u64, Arc<AtomicU64>>>,
-    retired: Mutex<Vec<RetiredHandle>>,
+    retired_handles: Mutex<Vec<RetiredHandle>>,
+    retired_allocations: Mutex<Vec<RetiredAllocation>>,
     reusable: Mutex<Vec<HandleId>>,
 }
 
@@ -23,7 +24,8 @@ impl EpochQuarantine {
             current: AtomicU64::new(1),
             next_participant: AtomicU64::new(0),
             participants: Mutex::new(BTreeMap::new()),
-            retired: Mutex::new(Vec::new()),
+            retired_handles: Mutex::new(Vec::new()),
+            retired_allocations: Mutex::new(Vec::new()),
             reusable: Mutex::new(Vec::new()),
         })
     }
@@ -43,20 +45,48 @@ impl EpochQuarantine {
         self.current.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    pub(crate) fn retire(&self, handle: HandleId) {
+    pub(crate) fn retire_handle(&self, handle: HandleId) {
         let epoch = self.current.load(Ordering::SeqCst);
-        self.retired.lock().push(RetiredHandle { handle, epoch });
+        self.retired_handles
+            .lock()
+            .push(RetiredHandle { handle, epoch });
     }
 
-    pub(crate) fn take_reclaimable(&self) -> Vec<HandleId> {
+    pub(crate) fn retire_allocation(&self, start: u64, bytes: u64) {
+        let epoch = self.current.load(Ordering::SeqCst);
+        self.retired_allocations.lock().push(RetiredAllocation {
+            start,
+            bytes,
+            epoch,
+        });
+    }
+
+    pub(crate) fn take_reclaimable_handles(&self) -> Vec<HandleId> {
         let safe_epoch = self.safe_epoch();
-        let mut retired = self.retired.lock();
+        let mut retired = self.retired_handles.lock();
         let mut pending = Vec::with_capacity(retired.len());
         let mut reclaimed = Vec::new();
 
         for entry in retired.drain(..) {
             if entry.epoch < safe_epoch {
                 reclaimed.push(entry.handle);
+            } else {
+                pending.push(entry);
+            }
+        }
+        *retired = pending;
+        reclaimed
+    }
+
+    pub(crate) fn take_reclaimable_allocations(&self) -> Vec<(u64, u64)> {
+        let safe_epoch = self.safe_epoch();
+        let mut retired = self.retired_allocations.lock();
+        let mut pending = Vec::with_capacity(retired.len());
+        let mut reclaimed = Vec::new();
+
+        for entry in retired.drain(..) {
+            if entry.epoch < safe_epoch {
+                reclaimed.push((entry.start, entry.bytes));
             } else {
                 pending.push(entry);
             }
@@ -87,6 +117,12 @@ impl EpochQuarantine {
 
 struct RetiredHandle {
     handle: HandleId,
+    epoch: u64,
+}
+
+struct RetiredAllocation {
+    start: u64,
+    bytes: u64,
     epoch: u64,
 }
 

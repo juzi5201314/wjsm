@@ -8,12 +8,10 @@
 //!
 //! 保守策略：任何非上述模式的使用（Call、Return、StoreVar、Phi、LoadVar 等）→ 逃逸。
 
-use std::collections::{HashMap, HashSet};
-use wjsm_ir::{
-    Constant, FunctionId, Instruction, Module, Terminator, ValueId, BasicBlockId,
-};
 use super::cfg_fold::terminator_successors;
-use super::direct_call::{instr_uses, terminator_uses, collect_uses};
+use super::direct_call::{collect_uses, instr_uses, terminator_uses};
+use std::collections::{HashMap, HashSet};
+use wjsm_ir::{BasicBlockId, Constant, FunctionId, Instruction, Module, Terminator, ValueId};
 
 /// 计算函数的支配集（迭代数据流，O(n²) 可接受，块数 ≤512）。
 ///
@@ -90,10 +88,7 @@ fn can_forward_var(
 }
 
 /// 查找函数内唯一的 `StoreVar(name)` 位置。
-fn find_store_pos(
-    function: &wjsm_ir::Function,
-    name: &str,
-) -> Option<(BasicBlockId, usize)> {
+fn find_store_pos(function: &wjsm_ir::Function, name: &str) -> Option<(BasicBlockId, usize)> {
     for block in function.blocks() {
         for (idx, ins) in block.instructions().iter().enumerate() {
             if let Instruction::StoreVar { name: n, .. } = ins {
@@ -137,7 +132,7 @@ fn analyze_candidate(
     const_strings: &HashMap<ValueId, String>,
     dom: &[HashSet<BasicBlockId>],
 ) -> (
-    Vec<(String, ValueId)>,
+    Vec<(String, ValueId, ValueId)>,
     Vec<(String, ValueId)>,
     bool,
     Option<String>,
@@ -146,24 +141,25 @@ fn analyze_candidate(
     let mut escapes = false;
     // 槽位按字符串 key 记录（内联克隆后同一属性名的 SetProp/GetProp 常量
     // ValueId 不同，按 ValueId 匹配会失效）。
-    let mut slot_assignments: Vec<(String, ValueId)> = Vec::new();
+    let mut slot_assignments: Vec<(String, ValueId, ValueId)> = Vec::new();
     let mut slot_reads: Vec<(String, ValueId)> = Vec::new();
     let mut forwarded_var: Option<String> = None;
 
     for use_instr in &uses {
         match use_instr {
-            Instruction::SetProp { object, key, value }
-                if *object == candidate_dest =>
-            {
+            Instruction::SetProp {
+                dest,
+                object,
+                key,
+                value,
+            } if *object == candidate_dest => {
                 if let Some(s) = const_strings.get(key) {
-                    slot_assignments.push((s.clone(), *value));
+                    slot_assignments.push((s.clone(), *value, *dest));
                 } else {
                     escapes = true;
                 }
             }
-            Instruction::GetProp { dest, object, key }
-                if *object == candidate_dest =>
-            {
+            Instruction::GetProp { dest, object, key } if *object == candidate_dest => {
                 if let Some(s) = const_strings.get(key) {
                     slot_reads.push((s.clone(), *dest));
                 } else {
@@ -202,9 +198,7 @@ fn analyze_candidate(
             }
             for use_instr in collect_uses(function, load_dest) {
                 match use_instr {
-                    Instruction::GetProp { dest, object, key }
-                        if *object == load_dest =>
-                    {
+                    Instruction::GetProp { dest, object, key } if *object == load_dest => {
                         if let Some(s) = const_strings.get(key) {
                             slot_reads.push((s.clone(), *dest));
                         } else {
@@ -248,7 +242,9 @@ pub(crate) fn run(module: &mut Module) {
                 for block in function.blocks() {
                     for instruction in block.instructions() {
                         if let Instruction::Const { dest, constant } = instruction {
-                            if let Some(Constant::String(s)) = constants_base.get(constant.0 as usize) {
+                            if let Some(Constant::String(s)) =
+                                constants_base.get(constant.0 as usize)
+                            {
                                 const_strings.insert(*dest, s.clone());
                             }
                         }
@@ -281,12 +277,11 @@ pub(crate) fn run(module: &mut Module) {
 
                     if !escapes && !slot_assignments.is_empty() {
                         let all_reads_have_assignments = slot_reads.iter().all(|(read_key, _)| {
-                            slot_assignments.iter().any(|(k, _)| k == read_key)
+                            slot_assignments.iter().any(|(key, _, _)| key == read_key)
                         });
 
                         if all_reads_have_assignments {
-                            needs_replacement
-                                .push((*candidate_dest, *_def_block, forwarded_var));
+                            needs_replacement.push((*candidate_dest, *_def_block, forwarded_var));
                         }
                     }
                 }
@@ -299,7 +294,9 @@ pub(crate) fn run(module: &mut Module) {
             }
 
             // ── Phase 2: 应用替换 ──
-            let function = module.function_mut(func_id).expect("function id must be valid");
+            let function = module
+                .function_mut(func_id)
+                .expect("function id must be valid");
 
             // 重建常量字符串表
             let mut const_strings: HashMap<ValueId, String> = HashMap::new();
@@ -326,9 +323,12 @@ pub(crate) fn run(module: &mut Module) {
                     continue;
                 }
 
-                // 构建替换映射：GetProp dest → SetProp value
-                let assignment_map: HashMap<String, ValueId> =
-                    slot_assignments.into_iter().collect();
+                // 标量化对象写保持 SetProp 的完成值，并把属性读替换为最后写入值。
+                let mut assignment_map: HashMap<String, ValueId> = HashMap::new();
+                for (key, value, dest) in slot_assignments {
+                    assignment_map.insert(key, value);
+                    all_replacements.insert(dest, value);
+                }
                 for (read_key, read_dest) in &slot_reads {
                     if let Some(assigned_value) = assignment_map.get(read_key) {
                         all_replacements.insert(*read_dest, *assigned_value);
@@ -368,14 +368,10 @@ pub(crate) fn run(module: &mut Module) {
                 for block in function.blocks() {
                     for (idx, instruction) in block.instructions().iter().enumerate() {
                         match instruction {
-                            Instruction::SetProp { object, .. }
-                                if *object == *candidate_dest =>
-                            {
+                            Instruction::SetProp { object, .. } if *object == *candidate_dest => {
                                 delete_targets.push((block.id(), idx));
                             }
-                            Instruction::SetProto { object, .. }
-                                if *object == *candidate_dest =>
-                            {
+                            Instruction::SetProto { object, .. } if *object == *candidate_dest => {
                                 delete_targets.push((block.id(), idx));
                             }
                             Instruction::CallBuiltin { builtin, .. }
@@ -394,7 +390,7 @@ pub(crate) fn run(module: &mut Module) {
 
             // 标量化的 GetProp 指令：dest 已被替换成常量，但指令本身未被删除。
             // 这使其 object 操作数（已删除的 NewObject dest）成为悬空引用，
-            // wasm 后端将其映射到 local0（零值），导致 ic_backfill 和 obj_get
+            // 属性快路径会把悬空对象解析为空值，导致 ic_backfill 和 obj_get
             // 每次都收到空对象，IC 永久退化为 MEGAMORPHIC。
             // 修复：凡 dest 在 all_replacements 中的 GetProp 一律加入删除列表。
             if !all_replacements.is_empty() {
@@ -471,10 +467,7 @@ fn apply_value_replacements(
     changed
 }
 
-fn replace_in_instruction(
-    ins: &mut Instruction,
-    replacements: &HashMap<ValueId, ValueId>,
-) -> bool {
+fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId, ValueId>) -> bool {
     let mut changed = false;
 
     match ins {
@@ -487,95 +480,240 @@ fn replace_in_instruction(
         | Instruction::NewPromise { .. }
         | Instruction::CollectRestArgs { .. }
         | Instruction::DebugCheck { .. } => {}
-        Instruction::Binary { lhs, rhs, .. }
-        | Instruction::Compare { lhs, rhs, .. } => {
-            if let Some(new) = replacements.get(lhs) { *lhs = *new; changed = true; }
-            if let Some(new) = replacements.get(rhs) { *rhs = *new; changed = true; }
+        Instruction::Binary { lhs, rhs, .. } | Instruction::Compare { lhs, rhs, .. } => {
+            if let Some(new) = replacements.get(lhs) {
+                *lhs = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(rhs) {
+                *rhs = *new;
+                changed = true;
+            }
         }
         Instruction::Unary { value, .. } => {
-            if let Some(new) = replacements.get(value) { *value = *new; changed = true; }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+                changed = true;
+            }
         }
         Instruction::StringConcatVa { parts, .. } => {
             for part in parts.iter_mut() {
-                if let Some(new) = replacements.get(part) { *part = *new; changed = true; }
+                if let Some(new) = replacements.get(part) {
+                    *part = *new;
+                    changed = true;
+                }
             }
         }
         Instruction::GetProp { object, key, .. } => {
-            if let Some(new) = replacements.get(object) { *object = *new; changed = true; }
-            if let Some(new) = replacements.get(key) { *key = *new; changed = true; }
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(key) {
+                *key = *new;
+                changed = true;
+            }
         }
-        Instruction::SetProp { object, key, value } => {
-            if let Some(new) = replacements.get(object) { *object = *new; changed = true; }
-            if let Some(new) = replacements.get(key) { *key = *new; changed = true; }
-            if let Some(new) = replacements.get(value) { *value = *new; changed = true; }
+        Instruction::SetProp {
+            dest,
+            object,
+            key,
+            value,
+        } => {
+            if let Some(new) = replacements.get(dest) {
+                *dest = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(key) {
+                *key = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+                changed = true;
+            }
         }
         Instruction::SetProto { object, value } => {
-            if let Some(new) = replacements.get(object) { *object = *new; changed = true; }
-            if let Some(new) = replacements.get(value) { *value = *new; changed = true; }
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+                changed = true;
+            }
         }
         Instruction::GetElem { object, index, .. } => {
-            if let Some(new) = replacements.get(object) { *object = *new; changed = true; }
-            if let Some(new) = replacements.get(index) { *index = *new; changed = true; }
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(index) {
+                *index = *new;
+                changed = true;
+            }
         }
-        Instruction::SetElem { object, index, value, .. } => {
-            if let Some(new) = replacements.get(object) { *object = *new; changed = true; }
-            if let Some(new) = replacements.get(index) { *index = *new; changed = true; }
-            if let Some(new) = replacements.get(value) { *value = *new; changed = true; }
+        Instruction::SetElem {
+            dest,
+            object,
+            index,
+            value,
+        } => {
+            if let Some(new) = replacements.get(dest) {
+                *dest = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(index) {
+                *index = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+                changed = true;
+            }
         }
         Instruction::OptionalGetProp { object, key, .. }
         | Instruction::OptionalGetElem { object, key, .. } => {
-            if let Some(new) = replacements.get(object) { *object = *new; changed = true; }
-            if let Some(new) = replacements.get(key) { *key = *new; changed = true; }
-        }
-        Instruction::OptionalCall { callee, this_val, args, .. }
-        | Instruction::Call { callee, this_val, args, .. }
-        | Instruction::SuperCall { callee, this_val, args, .. } => {
-            if let Some(new) = replacements.get(callee) { *callee = *new; changed = true; }
-            if let Some(new) = replacements.get(this_val) { *this_val = *new; changed = true; }
-            for arg in args.iter_mut() {
-                if let Some(new) = replacements.get(arg) { *arg = *new; changed = true; }
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(key) {
+                *key = *new;
+                changed = true;
             }
         }
-        Instruction::ConstructCall { callee, this_val, args, .. } => {
-            if let Some(new) = replacements.get(callee) { *callee = *new; changed = true; }
-            if let Some(new) = replacements.get(this_val) { *this_val = *new; changed = true; }
+        Instruction::OptionalCall {
+            callee,
+            this_val,
+            args,
+            ..
+        }
+        | Instruction::Call {
+            callee,
+            this_val,
+            args,
+            ..
+        }
+        | Instruction::SuperCall {
+            callee,
+            this_val,
+            args,
+            ..
+        } => {
+            if let Some(new) = replacements.get(callee) {
+                *callee = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(this_val) {
+                *this_val = *new;
+                changed = true;
+            }
             for arg in args.iter_mut() {
-                if let Some(new) = replacements.get(arg) { *arg = *new; changed = true; }
+                if let Some(new) = replacements.get(arg) {
+                    *arg = *new;
+                    changed = true;
+                }
+            }
+        }
+        Instruction::ConstructCall {
+            callee,
+            this_val,
+            args,
+            ..
+        } => {
+            if let Some(new) = replacements.get(callee) {
+                *callee = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(this_val) {
+                *this_val = *new;
+                changed = true;
+            }
+            for arg in args.iter_mut() {
+                if let Some(new) = replacements.get(arg) {
+                    *arg = *new;
+                    changed = true;
+                }
             }
         }
         Instruction::CallBuiltin { args, .. } => {
             for arg in args.iter_mut() {
-                if let Some(new) = replacements.get(arg) { *arg = *new; changed = true; }
+                if let Some(new) = replacements.get(arg) {
+                    *arg = *new;
+                    changed = true;
+                }
             }
         }
         Instruction::DeleteProp { object, key, .. } => {
-            if let Some(new) = replacements.get(object) { *object = *new; changed = true; }
-            if let Some(new) = replacements.get(key) { *key = *new; changed = true; }
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(key) {
+                *key = *new;
+                changed = true;
+            }
         }
         Instruction::PromiseResolve { promise, value }
-        | Instruction::PromiseReject { promise, reason: value } => {
-            if let Some(new) = replacements.get(promise) { *promise = *new; changed = true; }
-            if let Some(new) = replacements.get(value) { *value = *new; changed = true; }
+        | Instruction::PromiseReject {
+            promise,
+            reason: value,
+        } => {
+            if let Some(new) = replacements.get(promise) {
+                *promise = *new;
+                changed = true;
+            }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+                changed = true;
+            }
         }
         Instruction::Suspend { promise, .. } => {
-            if let Some(new) = replacements.get(promise) { *promise = *new; changed = true; }
+            if let Some(new) = replacements.get(promise) {
+                *promise = *new;
+                changed = true;
+            }
         }
         Instruction::GeneratorSuspend { result, .. } => {
-            if let Some(new) = replacements.get(result) { *result = *new; changed = true; }
+            if let Some(new) = replacements.get(result) {
+                *result = *new;
+                changed = true;
+            }
         }
         Instruction::IsException { value, .. }
         | Instruction::EncodeException { value, .. }
         | Instruction::ExceptionToObject { value, .. } => {
-            if let Some(new) = replacements.get(value) { *value = *new; changed = true; }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+                changed = true;
+            }
         }
         Instruction::GuardSameFunction { callee, .. } => {
-            if let Some(new) = replacements.get(callee) { *callee = *new; changed = true; }
+            if let Some(new) = replacements.get(callee) {
+                *callee = *new;
+                changed = true;
+            }
         }
         Instruction::ObjectSpread { source, .. } => {
-            if let Some(new) = replacements.get(source) { *source = *new; changed = true; }
+            if let Some(new) = replacements.get(source) {
+                *source = *new;
+                changed = true;
+            }
         }
         Instruction::StoreVar { value, .. } => {
-            if let Some(new) = replacements.get(value) { *value = *new; changed = true; }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+                changed = true;
+            }
         }
         Instruction::Phi { sources, .. } => {
             for source in sources.iter_mut() {
@@ -590,22 +728,27 @@ fn replace_in_instruction(
     changed
 }
 
-fn replace_in_terminator(
-    terminator: &mut Terminator,
-    replacements: &HashMap<ValueId, ValueId>,
-) {
+fn replace_in_terminator(terminator: &mut Terminator, replacements: &HashMap<ValueId, ValueId>) {
     match terminator {
         Terminator::Return { value: Some(v) } => {
-            if let Some(new) = replacements.get(v) { *v = *new; }
+            if let Some(new) = replacements.get(v) {
+                *v = *new;
+            }
         }
         Terminator::Branch { condition, .. } => {
-            if let Some(new) = replacements.get(condition) { *condition = *new; }
+            if let Some(new) = replacements.get(condition) {
+                *condition = *new;
+            }
         }
         Terminator::Switch { value, .. } => {
-            if let Some(new) = replacements.get(value) { *value = *new; }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+            }
         }
         Terminator::Throw { value } => {
-            if let Some(new) = replacements.get(value) { *value = *new; }
+            if let Some(new) = replacements.get(value) {
+                *value = *new;
+            }
         }
         Terminator::Return { value: None } | Terminator::Jump { .. } | Terminator::Unreachable => {}
     }

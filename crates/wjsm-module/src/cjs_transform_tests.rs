@@ -479,6 +479,47 @@ fn computed_string_property_exports() {
 }
 
 #[test]
+fn named_export_preserves_runtime_exports_assignment() {
+    let module = parse(r#"exports.foo = sideEffect();"#);
+    let transformed = transform(&module);
+
+    let runtime_assignment = transformed.body.iter().any(|item| {
+        let ast::ModuleItem::Stmt(ast::Stmt::Expr(statement)) = item else {
+            return false;
+        };
+        let ast::Expr::Assign(assign) = statement.expr.as_ref() else {
+            return false;
+        };
+        let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) = &assign.left
+        else {
+            return false;
+        };
+        is_exports_ident(&member.obj)
+    });
+
+    assert!(
+        runtime_assignment,
+        "exports.foo must mutate the live exports object"
+    );
+}
+
+#[test]
+fn commonjs_default_export_reads_module_exports() {
+    let module = parse(r#"module.exports = { value: 1 };"#);
+    let transformed = transform(&module);
+
+    let default_reads_module_exports = transformed.body.iter().any(|item| {
+        matches!(
+            item,
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(export))
+                if is_module_exports_member(export.expr.as_ref())
+        )
+    });
+
+    assert!(default_reads_module_exports);
+}
+
+#[test]
 fn computed_non_string_property_not_transformed() {
     let module = parse(r#"let key = 'foo'; exports[key] = 42;"#);
     let transformed = transform(&module);

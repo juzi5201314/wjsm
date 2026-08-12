@@ -387,6 +387,46 @@ impl Lowerer {
         id
     }
 
+    pub(crate) fn emit_set_prop(
+        &mut self,
+        block: BasicBlockId,
+        object: ValueId,
+        key: ValueId,
+        value: ValueId,
+    ) -> ValueId {
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                dest,
+                object,
+                key,
+                value,
+            },
+        );
+        dest
+    }
+
+    pub(crate) fn emit_set_elem(
+        &mut self,
+        block: BasicBlockId,
+        object: ValueId,
+        index: ValueId,
+        value: ValueId,
+    ) -> ValueId {
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetElem {
+                dest,
+                object,
+                index,
+                value,
+            },
+        );
+        dest
+    }
+
     pub(crate) fn alloc_temp_name(&mut self) -> String {
         let name = format!("$tmp.{}", self.next_temp);
         self.next_temp += 1;

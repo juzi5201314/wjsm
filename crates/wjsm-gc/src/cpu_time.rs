@@ -1,19 +1,31 @@
 //! 线程 CPU 时间助手。
 //!
-//! 归一化 GC 性能 gate 统一使用 thread CPU time（spec §18.4）；
-//! wall duration 不得替代 CPU：并发 worker 的 CPU 成本必须按各线程
-//! CPU 时间求和，mutator 线程上的 pause/assist 同样按 CPU 时间计量。
+//! 归一化 GC 性能 gate 统一使用 thread CPU time（spec §18.4）；wall duration
+//! 不得替代 CPU。不同 native OS 使用各自的线程 CPU 时钟实现。
 
-/// 当前线程自启动以来的 CPU 累计纳秒（`CLOCK_THREAD_CPUTIME_ID`）。
-///
-/// 只用于 GC 工作前后的差分；绝对值无意义。
+/// 当前线程自启动以来的 CPU 累计纳秒；只用于 GC 工作前后的差分。
 pub fn thread_cpu_ns() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        return linux_thread_cpu_ns();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return windows_thread_cpu_ns();
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        0
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_thread_cpu_ns() -> u64 {
     let mut ts = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // SAFETY: `ts` 是栈上有效指针；Linux/WSL2 保证 CLOCK_THREAD_CPUTIME_ID 可用，
-    // 失败只可能来自内核缺失，此时 debug 断言暴露，release 返回 0 差分。
+    // SAFETY: `ts` 是栈上有效指针；Linux 提供线程 CPU 时钟。
     let ret = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
     debug_assert_eq!(ret, 0, "CLOCK_THREAD_CPUTIME_ID 必须可用");
     if ret != 0 {
@@ -24,7 +36,38 @@ pub fn thread_cpu_ns() -> u64 {
         .saturating_add(ts.tv_nsec as u64)
 }
 
-#[cfg(test)]
+#[cfg(target_os = "windows")]
+fn windows_thread_cpu_ns() -> u64 {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+
+    let mut creation = windows_sys::Win32::Foundation::FILETIME::default();
+    let mut exit = windows_sys::Win32::Foundation::FILETIME::default();
+    let mut kernel = windows_sys::Win32::Foundation::FILETIME::default();
+    let mut user = windows_sys::Win32::Foundation::FILETIME::default();
+    // SAFETY: FILETIME 指针均指向有效的栈上可写缓冲区；伪句柄只在当前进程内有效。
+    let ok = unsafe {
+        GetThreadTimes(
+            GetCurrentThread(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    if ok == 0 {
+        return 0;
+    }
+    filetime_100ns(kernel)
+        .saturating_add(filetime_100ns(user))
+        .saturating_mul(100)
+}
+
+#[cfg(target_os = "windows")]
+fn filetime_100ns(time: windows_sys::Win32::Foundation::FILETIME) -> u64 {
+    (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
 mod tests {
     use super::thread_cpu_ns;
 

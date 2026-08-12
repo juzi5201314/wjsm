@@ -121,17 +121,17 @@ module {
     bb4:
       %7 = const c22
       %8 = load var $2.next
-      set_prop %2, %7, %8
-      %9 = is_exception %8
-      branch %9, bb6, bb5
+      %9 = set_prop %2, %7, %8
+      %10 = is_exception %9
+      branch %10, bb6, bb5
     bb5:
-      %11 = load var $env
-      %12 = const c23
-      %13 = get_prop %11, %12
-      return %13
+      %12 = load var $env
+      %13 = const c23
+      %14 = get_prop %12, %13
+      return %14
     bb6:
-      %10 = call builtin.exception_value(%8)
-      throw %10
+      %11 = call builtin.exception_value(%9)
+      throw %11
 
   fn @PrivateClosure.empty [home_object=@7.prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
@@ -163,14 +163,14 @@ module {
     bb4:
       %7 = const c27
       %8 = load var $5.next
-      set_prop %2, %7, %8
-      %9 = is_exception %8
-      branch %9, bb6, bb5
+      %9 = set_prop %2, %7, %8
+      %10 = is_exception %9
+      branch %10, bb6, bb5
     bb5:
       return
     bb6:
-      %10 = call builtin.exception_value(%8)
-      throw %10
+      %11 = call builtin.exception_value(%9)
+      throw %11
 
   fn @PrivateClosure.static_get_staticShared [home_object=@7] [captures: $0.privateValue] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
@@ -197,14 +197,14 @@ module {
     bb4:
       %7 = const c30
       %8 = load var $7.next
-      set_prop %2, %7, %8
-      %9 = is_exception %8
-      branch %9, bb6, bb5
+      %9 = set_prop %2, %7, %8
+      %10 = is_exception %9
+      branch %10, bb6, bb5
     bb5:
       return
     bb6:
-      %10 = call builtin.exception_value(%8)
-      throw %10
+      %11 = call builtin.exception_value(%9)
+      throw %11
 
   fn @PrivateClosure.static_read [home_object=@7] [captures: $0.privateValue] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
@@ -357,256 +357,256 @@ module {
       store var $0.$shared_env, %24
       %26 = load var $0.privateValue
       %27 = const c42
-      set_prop %24, %27, %26
-      %28 = call builtin.create_closure(%22, %24)
-      store var $1.$private_function#1_0, %28
-      %29 = const c43
-      store var $1.$private_function#1_1, %29
-      %30 = const c44
-      %31 = call builtin.create_closure(%30, %24)
-      store var $1.$private_function#1_2, %31
-      %32 = const c45
-      %33 = call builtin.create_closure(%32, %24)
-      store var $1.$private_function#1_3, %33
-      %34 = const c46
-      %35 = call builtin.create_closure(%34, %24)
-      %36 = const c47
-      %37 = call builtin.create_closure(%36, %24)
-      %38 = const c48
-      %39 = call builtin.create_closure(%38, %24)
-      %40 = const c49
-      %41 = load var $1.$private_function#1_0
-      %42 = const c50
-      set_prop %24, %42, %41
-      %43 = load var $1.$private_function#1_1
-      %44 = const c51
-      set_prop %24, %44, %43
-      %45 = load var $1.$private_function#1_2
-      %46 = const c52
-      set_prop %24, %46, %45
-      %47 = load var $1.$private_function#1_3
-      %48 = const c53
-      set_prop %24, %48, %47
-      %49 = call builtin.create_closure(%40, %24)
-      %50 = new_object(capacity=7)
-      %51 = const c54
-      set_prop %50, %51, %49
-      %52 = const c55
-      %53 = const c57
-      set_prop %50, %52, %53
-      %54 = const c58
-      %55 = const c60
-      set_prop %50, %54, %55
-      %56 = const c61
-      %57 = const c63
-      set_prop %50, %56, %57
-      %58 = const c64
-      %59 = const c66
-      set_prop %50, %58, %59
-      %60 = const c67
-      %61 = const c69
-      set_prop %49, %60, %61
-      %62 = const c70
-      %63 = const c72
-      set_prop %49, %62, %63
-      %64 = const c73
-      %65 = const c75
-      set_prop %49, %64, %65
-      %66 = const c76
-      call builtin.private_accessor_bind(%49, %66, %35, %37)
-      %67 = const c78
-      call builtin.private_set(%49, %67, %39)
-      %68 = const c79
-      set_prop %49, %68, %50
-      store var $1.PrivateClosure, %49
-      store var $0.PrivateClosure, %49
-      %69 = load var $0.PrivateClosure
-      %70 = new_object(capacity=4)
-      %71 = call builtin.get_prototype_from_constructor(%69)
-      set_proto %70, %71
-      %72 = construct_call %69, this=%70
-      %73 = is_exception %72
-      branch %73, bb1, bb2
+      %28 = set_prop %24, %27, %26
+      %29 = call builtin.create_closure(%22, %24)
+      store var $1.$private_function#1_0, %29
+      %30 = const c43
+      store var $1.$private_function#1_1, %30
+      %31 = const c44
+      %32 = call builtin.create_closure(%31, %24)
+      store var $1.$private_function#1_2, %32
+      %33 = const c45
+      %34 = call builtin.create_closure(%33, %24)
+      store var $1.$private_function#1_3, %34
+      %35 = const c46
+      %36 = call builtin.create_closure(%35, %24)
+      %37 = const c47
+      %38 = call builtin.create_closure(%37, %24)
+      %39 = const c48
+      %40 = call builtin.create_closure(%39, %24)
+      %41 = const c49
+      %42 = load var $1.$private_function#1_0
+      %43 = const c50
+      %44 = set_prop %24, %43, %42
+      %45 = load var $1.$private_function#1_1
+      %46 = const c51
+      %47 = set_prop %24, %46, %45
+      %48 = load var $1.$private_function#1_2
+      %49 = const c52
+      %50 = set_prop %24, %49, %48
+      %51 = load var $1.$private_function#1_3
+      %52 = const c53
+      %53 = set_prop %24, %52, %51
+      %54 = call builtin.create_closure(%41, %24)
+      %55 = new_object(capacity=7)
+      %56 = const c54
+      %57 = set_prop %55, %56, %54
+      %58 = const c55
+      %59 = const c57
+      %60 = set_prop %55, %58, %59
+      %61 = const c58
+      %62 = const c60
+      %63 = set_prop %55, %61, %62
+      %64 = const c61
+      %65 = const c63
+      %66 = set_prop %55, %64, %65
+      %67 = const c64
+      %68 = const c66
+      %69 = set_prop %55, %67, %68
+      %70 = const c67
+      %71 = const c69
+      %72 = set_prop %54, %70, %71
+      %73 = const c70
+      %74 = const c72
+      %75 = set_prop %54, %73, %74
+      %76 = const c73
+      %77 = const c75
+      %78 = set_prop %54, %76, %77
+      %79 = const c76
+      call builtin.private_accessor_bind(%54, %79, %36, %38)
+      %80 = const c78
+      call builtin.private_set(%54, %80, %40)
+      %81 = const c79
+      %82 = set_prop %54, %81, %55
+      store var $1.PrivateClosure, %54
+      store var $0.PrivateClosure, %54
+      %83 = load var $0.PrivateClosure
+      %84 = new_object(capacity=4)
+      %85 = call builtin.get_prototype_from_constructor(%83)
+      set_proto %84, %85
+      %86 = construct_call %83, this=%84
+      %87 = is_exception %86
+      branch %87, bb1, bb2
     bb1:
       jump bb5
     bb2:
-      %74 = call builtin.is_js_object(%72)
-      branch %74, bb3, bb4
+      %88 = call builtin.is_js_object(%86)
+      branch %88, bb3, bb4
     bb3:
       jump bb5
     bb4:
       jump bb5
     bb5:
-      %75 = phi [(bb1, %72), (bb3, %72), (bb4, %70)]
-      %76 = is_exception %75
-      branch %76, bb7, bb6
+      %89 = phi [(bb1, %86), (bb3, %86), (bb4, %84)]
+      %90 = is_exception %89
+      branch %90, bb7, bb6
     bb6:
-      %78 = is_exception %75
-      branch %78, bb9, bb8
+      %92 = is_exception %89
+      branch %92, bb9, bb8
     bb7:
-      %77 = call builtin.exception_value(%75)
-      throw %77
+      %91 = call builtin.exception_value(%89)
+      throw %91
     bb8:
-      store var $0.first, %75
-      %80 = load var $0.PrivateClosure
-      %81 = new_object(capacity=4)
-      %82 = call builtin.get_prototype_from_constructor(%80)
-      set_proto %81, %82
-      %83 = construct_call %80, this=%81
-      %84 = is_exception %83
-      branch %84, bb10, bb11
+      store var $0.first, %89
+      %94 = load var $0.PrivateClosure
+      %95 = new_object(capacity=4)
+      %96 = call builtin.get_prototype_from_constructor(%94)
+      set_proto %95, %96
+      %97 = construct_call %94, this=%95
+      %98 = is_exception %97
+      branch %98, bb10, bb11
     bb9:
-      %79 = call builtin.exception_value(%75)
-      throw %79
+      %93 = call builtin.exception_value(%89)
+      throw %93
     bb10:
       jump bb14
     bb11:
-      %85 = call builtin.is_js_object(%83)
-      branch %85, bb12, bb13
+      %99 = call builtin.is_js_object(%97)
+      branch %99, bb12, bb13
     bb12:
       jump bb14
     bb13:
       jump bb14
     bb14:
-      %86 = phi [(bb10, %83), (bb12, %83), (bb13, %81)]
-      %87 = is_exception %86
-      branch %87, bb16, bb15
-    bb15:
-      %89 = is_exception %86
-      branch %89, bb18, bb17
-    bb16:
-      %88 = call builtin.exception_value(%86)
-      throw %88
-    bb17:
-      store var $0.second, %86
-      %91 = load var $0.first
-      %92 = const c80
-      %93 = get_prop %91, %92
-      %94 = call %93, this=%91
-      %95 = load var $0.second
-      %96 = const c81
-      %97 = get_prop %95, %96
-      %98 = call %97, this=%95
-      %99 = call builtin.strict_eq(%94, %98)
-      %100 = call builtin.console.log(%99)
+      %100 = phi [(bb10, %97), (bb12, %97), (bb13, %95)]
       %101 = is_exception %100
-      branch %101, bb20, bb19
-    bb18:
-      %90 = call builtin.exception_value(%86)
-      throw %90
-    bb19:
-      %103 = load var $0.first
-      %104 = const c82
-      %105 = get_prop %103, %104
-      %106 = call %105, this=%103
-      %107 = load var $0.second
-      %108 = const c83
-      %109 = get_prop %107, %108
-      %110 = call %109, this=%107
-      %111 = call builtin.strict_eq(%106, %110)
-      %112 = call builtin.console.log(%111)
-      %113 = is_exception %112
-      branch %113, bb22, bb21
-    bb20:
+      branch %101, bb16, bb15
+    bb15:
+      %103 = is_exception %100
+      branch %103, bb18, bb17
+    bb16:
       %102 = call builtin.exception_value(%100)
       throw %102
+    bb17:
+      store var $0.second, %100
+      %105 = load var $0.first
+      %106 = const c80
+      %107 = get_prop %105, %106
+      %108 = call %107, this=%105
+      %109 = load var $0.second
+      %110 = const c81
+      %111 = get_prop %109, %110
+      %112 = call %111, this=%109
+      %113 = call builtin.strict_eq(%108, %112)
+      %114 = call builtin.console.log(%113)
+      %115 = is_exception %114
+      branch %115, bb20, bb19
+    bb18:
+      %104 = call builtin.exception_value(%100)
+      throw %104
+    bb19:
+      %117 = load var $0.first
+      %118 = const c82
+      %119 = get_prop %117, %118
+      %120 = call %119, this=%117
+      %121 = load var $0.second
+      %122 = const c83
+      %123 = get_prop %121, %122
+      %124 = call %123, this=%121
+      %125 = call builtin.strict_eq(%120, %124)
+      %126 = call builtin.console.log(%125)
+      %127 = is_exception %126
+      branch %127, bb22, bb21
+    bb20:
+      %116 = call builtin.exception_value(%114)
+      throw %116
     bb21:
-      %115 = load var $0.first
-      %116 = const c84
-      %117 = get_prop %115, %116
-      %118 = const c85
-      %119 = call %117, this=%115, args=[%118]
-      %120 = is_exception %119
-      branch %120, bb24, bb23
+      %129 = load var $0.first
+      %130 = const c84
+      %131 = get_prop %129, %130
+      %132 = const c85
+      %133 = call %131, this=%129, args=[%132]
+      %134 = is_exception %133
+      branch %134, bb24, bb23
     bb22:
-      %114 = call builtin.exception_value(%112)
-      throw %114
+      %128 = call builtin.exception_value(%126)
+      throw %128
     bb23:
-      %122 = load var $0.second
-      %123 = const c86
-      %124 = get_prop %122, %123
-      %125 = call %124, this=%122
-      %126 = const c87
-      %127 = call builtin.strict_eq(%125, %126)
-      %128 = call builtin.console.log(%127)
-      %129 = is_exception %128
-      branch %129, bb26, bb25
+      %136 = load var $0.second
+      %137 = const c86
+      %138 = get_prop %136, %137
+      %139 = call %138, this=%136
+      %140 = const c87
+      %141 = call builtin.strict_eq(%139, %140)
+      %142 = call builtin.console.log(%141)
+      %143 = is_exception %142
+      branch %143, bb26, bb25
     bb24:
-      %121 = call builtin.exception_value(%119)
-      throw %121
+      %135 = call builtin.exception_value(%133)
+      throw %135
     bb25:
-      %131 = load var $0.first
-      %132 = const c88
-      %133 = get_prop %131, %132
-      %134 = call %133, this=%131
-      %135 = is_exception %134
-      branch %135, bb28, bb27
+      %145 = load var $0.first
+      %146 = const c88
+      %147 = get_prop %145, %146
+      %148 = call %147, this=%145
+      %149 = is_exception %148
+      branch %149, bb28, bb27
     bb26:
-      %130 = call builtin.exception_value(%128)
-      throw %130
+      %144 = call builtin.exception_value(%142)
+      throw %144
     bb27:
-      store var $0.captured, %134
-      %137 = const c89
-      %138 = load var $0.captured
-      %139 = const c90
-      %140 = call %138, this=%137, args=[%139]
-      %141 = const c91
-      %142 = call builtin.strict_eq(%140, %141)
-      branch %142, bb29, bb30
+      store var $0.captured, %148
+      %151 = const c89
+      %152 = load var $0.captured
+      %153 = const c90
+      %154 = call %152, this=%151, args=[%153]
+      %155 = const c91
+      %156 = call builtin.strict_eq(%154, %155)
+      branch %156, bb29, bb30
     bb28:
-      %136 = call builtin.exception_value(%134)
-      throw %136
+      %150 = call builtin.exception_value(%148)
+      throw %150
     bb29:
-      %143 = load var $0.second
-      %144 = const c92
-      %145 = get_prop %143, %144
-      %146 = call %145, this=%143
-      %147 = const c93
-      %148 = call builtin.strict_eq(%146, %147)
+      %157 = load var $0.second
+      %158 = const c92
+      %159 = get_prop %157, %158
+      %160 = call %159, this=%157
+      %161 = const c93
+      %162 = call builtin.strict_eq(%160, %161)
       jump bb30
     bb30:
-      %149 = phi [(bb27, %142), (bb29, %148)]
-      %150 = call builtin.console.log(%149)
-      %151 = is_exception %150
-      branch %151, bb32, bb31
+      %163 = phi [(bb27, %156), (bb29, %162)]
+      %164 = call builtin.console.log(%163)
+      %165 = is_exception %164
+      branch %165, bb32, bb31
     bb31:
-      %153 = load var $0.PrivateClosure
-      %154 = const c94
-      %155 = get_prop %153, %154
-      %156 = const c95
-      %157 = call %155, this=%153, args=[%156]
-      %158 = is_exception %157
-      branch %158, bb34, bb33
+      %167 = load var $0.PrivateClosure
+      %168 = const c94
+      %169 = get_prop %167, %168
+      %170 = const c95
+      %171 = call %169, this=%167, args=[%170]
+      %172 = is_exception %171
+      branch %172, bb34, bb33
     bb32:
-      %152 = call builtin.exception_value(%150)
-      throw %152
+      %166 = call builtin.exception_value(%164)
+      throw %166
     bb33:
-      %160 = load var $0.PrivateClosure
-      %161 = const c96
-      %162 = get_prop %160, %161
-      %163 = call %162, this=%160
-      %164 = const c97
-      %165 = call builtin.strict_eq(%163, %164)
-      branch %165, bb35, bb36
+      %174 = load var $0.PrivateClosure
+      %175 = const c96
+      %176 = get_prop %174, %175
+      %177 = call %176, this=%174
+      %178 = const c97
+      %179 = call builtin.strict_eq(%177, %178)
+      branch %179, bb35, bb36
     bb34:
-      %159 = call builtin.exception_value(%157)
-      throw %159
+      %173 = call builtin.exception_value(%171)
+      throw %173
     bb35:
-      %166 = load var $0.PrivateClosure
-      %167 = const c98
-      %168 = get_prop %166, %167
-      %169 = call %168, this=%166
-      %170 = const c99
-      %171 = call builtin.strict_eq(%169, %170)
+      %180 = load var $0.PrivateClosure
+      %181 = const c98
+      %182 = get_prop %180, %181
+      %183 = call %182, this=%180
+      %184 = const c99
+      %185 = call builtin.strict_eq(%183, %184)
       jump bb36
     bb36:
-      %172 = phi [(bb33, %165), (bb35, %171)]
-      %173 = call builtin.console.log(%172)
-      %174 = is_exception %173
-      branch %174, bb38, bb37
+      %186 = phi [(bb33, %179), (bb35, %185)]
+      %187 = call builtin.console.log(%186)
+      %188 = is_exception %187
+      branch %188, bb38, bb37
     bb37:
       return
     bb38:
-      %175 = call builtin.exception_value(%173)
-      throw %175
+      %189 = call builtin.exception_value(%187)
+      throw %189
 }

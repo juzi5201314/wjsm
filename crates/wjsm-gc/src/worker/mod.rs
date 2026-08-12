@@ -54,7 +54,7 @@ pub struct WorkerPoolStats {
 
 type PacketHandler = dyn Fn(usize, GcWorkPacket) + Send + Sync + 'static;
 
-/// Store-free、固定大小的 V2 GC worker pool。
+/// 不持有 agent 状态、固定大小的 V2 GC worker pool。
 pub struct GcWorkerPool {
     shared: Arc<SharedPool>,
     joins: Mutex<Vec<JoinHandle<()>>>,

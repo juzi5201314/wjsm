@@ -230,8 +230,13 @@ pub fn has_remembered_color(value: i64, remembered: u8) -> bool {
 
 pub const BOX_BASE: u64 = MASK_SIGN | MASK_EXPONENT | MASK_QUIET_NAN;
 
+/// 规范化 NaN，避免负 quiet NaN 与运行时 NaN-box 前缀冲突。
 pub fn encode_f64(val: f64) -> i64 {
-    val.to_bits() as i64
+    if val.is_nan() {
+        f64::NAN.to_bits() as i64
+    } else {
+        val.to_bits() as i64
+    }
 }
 
 pub fn decode_f64(val: i64) -> f64 {

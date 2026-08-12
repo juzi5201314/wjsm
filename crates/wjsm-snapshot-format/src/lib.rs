@@ -1,983 +1,665 @@
-//! Startup snapshot binary format: encode/decode + ABI hash.
-//!
-//! The snapshot is a self-describing little-endian binary with header + sections.
-//! The format is designed so that the hot path can bounds-check + slice-copy
-//! directly without heap allocations or JSON parsing.
+//! Native startup snapshot 的确定性 binary schema 与严格校验。
 
-use anyhow::{Result, bail};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::collections::BTreeSet;
 
-use wjsm_ir::constants;
-use wjsm_ir::value;
-mod managed_heap_v2;
+use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
-pub use managed_heap_v2::{
-    ManagedHeapV2ArtifactAbi, ManagedHeapV2Generation, ManagedHeapV2Handle, ManagedHeapV2Layout,
-    ManagedHeapV2Page, ManagedHeapV2Snapshot, decode_managed_heap_v2_artifact_abi,
-    decode_managed_heap_v2_snapshot, encode_managed_heap_v2_artifact_abi,
-    encode_managed_heap_v2_snapshot, managed_heap_v2_snapshot_abi_hash,
-};
+pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMNSP\0";
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
-pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
-/// 格式版本:v10 新增 shape 表段：对象头 +12 只存 shape_id，属性元数据（name_id /
-/// flags / 值槽下标）全部在宿主 `wjsm_gc::ShapeTable`，堆字节与 shape 表必须
-/// 成对捕获/恢复。任何 wire 改动必须递增。
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
-
-/// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
-/// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
-/// 不会与合法 rel 值碰撞，并显式区分「rel == 0（heap 起点）」与「null 句柄」。
-pub const NULL_HANDLE_REL: u32 = u32::MAX;
-
-const HEADER_LEN: usize = 104;
-
-// ── snapshot data types ────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct StartupSnapshotHeader {
-    pub magic: [u8; 8],
-    pub format_version: u32,
-    pub abi_hash: u64,
-    pub heap_used: u32,
-    pub obj_table_count: u32,
-    pub function_props_base: u32,
-    pub immortal_objects_end_rel: u32,
-    pub object_proto_handle: u32,
-    pub array_proto_handle: u32,
-    pub arr_proto_table_base: u32,
-    pub arr_proto_table_len: u32,
-    pub arr_proto_table_hash: u64,
-    pub iterator_prototype: i64,
-    pub generator_prototype: i64,
-    pub async_iterator_prototype: i64,
-    pub async_gen_prototype: i64,
-    pub array_proto_values: i64,
-}
-
-pub type SnapshotRuntimeString = Vec<u16>;
-
-/// Owned snapshot suitable for capture/write to disk.
-#[derive(Debug, Clone)]
-pub struct StartupSnapshotOwned {
-    pub header: StartupSnapshotHeader,
-    pub object_bytes: Vec<u8>,
-    pub handle_rel_offsets: Vec<u32>,
-    pub runtime_strings: Vec<SnapshotRuntimeString>,
-    pub native_callables: Vec<SnapshotNativeCallable>,
-    pub native_callable_methods: Vec<u8>,
-    /// 宿主 `wjsm_gc::ShapeTable` 的 bincode 序列化字节（不透明，本 crate 不解释）。
-    /// 堆字节与 shape 表必须成对存在：对象头 +12 只存 shape_id。
-    pub shape_table_bytes: Vec<u8>,
-}
-
-/// Decoded snapshot view: `object_bytes` 安全借用输入 bytes，
-/// 其余字段 owned 以避免 `unsafe`/`leak`。
-#[derive(Debug, Clone)]
-pub struct StartupSnapshotView<'a> {
-    pub header: StartupSnapshotHeader,
-    pub object_bytes: &'a [u8],
-    pub handle_rel_offsets: Vec<u32>,
-    pub runtime_strings: Vec<SnapshotRuntimeString>,
-    pub native_callables: Vec<SnapshotNativeCallable>,
-    pub native_callable_methods: Vec<u8>,
-    /// 宿主 shape 表的 bincode 字节（与 `object_bytes` 成对）。
-    pub shape_table_bytes: &'a [u8],
-}
-
-// ── SnapshotNativeCallable ─────────────────────────────────────────
-
-/// Stateless primordial NativeCallable 快照子集。
-/// 禁止捕获含运行态 handle/Arc/Mutex 的变体。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum SnapshotNativeCallable {
-    EvalIndirect = 0,
-    AsyncIteratorProtoSymbolAsyncIterator = 1,
-    ArrayProtoValues = 2,
-    ArrayConstructor = 3,
-    ObjectConstructor = 4,
-    ObjectProtoToString = 5,
-    ObjectProtoValueOf = 6,
-    FunctionConstructor = 7,
-    StringConstructor = 8,
-    BooleanConstructor = 9,
-    NumberConstructor = 10,
-    SymbolConstructor = 11,
-    BigIntConstructor = 12,
-    RegExpConstructor = 13,
-    ErrorConstructor = 14,
-    TypeErrorConstructor = 15,
-    RangeErrorConstructor = 16,
-    SyntaxErrorConstructor = 17,
-    ReferenceErrorConstructor = 18,
-    URIErrorConstructor = 19,
-    EvalErrorConstructor = 20,
-    AggregateErrorConstructor = 21,
-    MapConstructor = 22,
-    SetConstructor = 23,
-    WeakMapConstructor = 24,
-    WeakSetConstructor = 25,
-    WeakRefConstructor = 26,
-    FinalizationRegistryConstructor = 27,
-    DateConstructorGlobal = 28,
-    PromiseConstructor = 29,
-    ArrayBufferConstructorGlobal = 30,
-    DataViewConstructorGlobal = 31,
-    BigInt64ArrayConstructor = 32,
-    BigUint64ArrayConstructor = 33,
-    ProxyConstructor = 34,
-    GcCollect = 35,
-    SharedArrayBufferConstructor = 36,
-    AtomicsGlobal = 37,
-    AgentStart = 38,
-    AgentBroadcast = 39,
-    AgentReceiveBroadcast = 40,
-    AgentGetReport = 41,
-    AgentReport = 42,
-    AgentSleep = 43,
-    AgentMonotonicNow = 44,
-    HeadersConstructor = 45,
-    ResponseConstructor = 46,
-    RequestConstructor = 47,
-    AbortControllerConstructor = 48,
-    ReadableStreamConstructor = 49,
-    WritableStreamConstructor = 50,
-    TransformStreamConstructor = 51,
-    CountQueuingStrategyConstructor = 52,
-    ByteLengthQueuingStrategyConstructor = 53,
-    // 预留: 不允许新增运行时状态捕获
-    // 最后几项是运行时杂类（不是 constructor）。
-    StubGlobal = 54,
-    NumberPrimitiveMethod = 55,
-    ArgumentsStrictCalleeGetter = 56,
-    TypedArrayConstructor = 57,
-    BigIntPrimitiveMethod = 58,
-    ErrorProtoToString = 59,
-    SymbolPrimitiveMethod = 60,
-    SymbolProtoDescriptionGetter = 61,
-    SymbolProtoToPrimitive = 62,
-    RegExpPrimitiveMethod = 63,
-    ArrayProtoKeys = 64,
-    ArrayProtoEntries = 65,
-    IteratorProtoSymbolIterator = 66,
-    BufferConstructor = 67,
-    TextEncoderConstructor = 68,
-    TextDecoderConstructor = 69,
-    StructuredClone = 70,
-    Atob = 71,
-    Btoa = 72,
-    QueueMicrotask = 73,
-    PerformanceNow = 74,
-    OsInfo = 75,
-    FsMethod = 76,
-    ZlibMethod = 77,
-    ChildProcessMethod = 78,
-    NetMethod = 79,
-    DgramMethod = 80,
-    TlsMethod = 81,
-    FunctionProtoCall = 82,
-    FunctionProtoApply = 83,
-    FunctionProtoBind = 84,
-    WorkerThreadsMethod = 85,
-    VmMethod = 86,
-    PerfHooksMethod = 87,
-    ArrayProtoToString = 88,
-    GlobalIsNaN = 89,
-    GlobalIsFinite = 90,
-}
-
-impl SnapshotNativeCallable {
-    fn from_discriminant(d: u32) -> Option<Self> {
-        match d {
-            0 => Some(Self::EvalIndirect),
-            1 => Some(Self::AsyncIteratorProtoSymbolAsyncIterator),
-            2 => Some(Self::ArrayProtoValues),
-            3 => Some(Self::ArrayConstructor),
-            4 => Some(Self::ObjectConstructor),
-            5 => Some(Self::ObjectProtoToString),
-            6 => Some(Self::ObjectProtoValueOf),
-            7 => Some(Self::FunctionConstructor),
-            8 => Some(Self::StringConstructor),
-            9 => Some(Self::BooleanConstructor),
-            10 => Some(Self::NumberConstructor),
-            11 => Some(Self::SymbolConstructor),
-            12 => Some(Self::BigIntConstructor),
-            13 => Some(Self::RegExpConstructor),
-            14 => Some(Self::ErrorConstructor),
-            15 => Some(Self::TypeErrorConstructor),
-            16 => Some(Self::RangeErrorConstructor),
-            17 => Some(Self::SyntaxErrorConstructor),
-            18 => Some(Self::ReferenceErrorConstructor),
-            19 => Some(Self::URIErrorConstructor),
-            20 => Some(Self::EvalErrorConstructor),
-            21 => Some(Self::AggregateErrorConstructor),
-            22 => Some(Self::MapConstructor),
-            23 => Some(Self::SetConstructor),
-            24 => Some(Self::WeakMapConstructor),
-            25 => Some(Self::WeakSetConstructor),
-            26 => Some(Self::WeakRefConstructor),
-            27 => Some(Self::FinalizationRegistryConstructor),
-            28 => Some(Self::DateConstructorGlobal),
-            29 => Some(Self::PromiseConstructor),
-            30 => Some(Self::ArrayBufferConstructorGlobal),
-            31 => Some(Self::DataViewConstructorGlobal),
-            32 => Some(Self::BigInt64ArrayConstructor),
-            33 => Some(Self::BigUint64ArrayConstructor),
-            34 => Some(Self::ProxyConstructor),
-            35 => Some(Self::GcCollect),
-            36 => Some(Self::SharedArrayBufferConstructor),
-            37 => Some(Self::AtomicsGlobal),
-            38 => Some(Self::AgentStart),
-            39 => Some(Self::AgentBroadcast),
-            40 => Some(Self::AgentReceiveBroadcast),
-            41 => Some(Self::AgentGetReport),
-            42 => Some(Self::AgentReport),
-            43 => Some(Self::AgentSleep),
-            44 => Some(Self::AgentMonotonicNow),
-            45 => Some(Self::HeadersConstructor),
-            46 => Some(Self::ResponseConstructor),
-            47 => Some(Self::RequestConstructor),
-            48 => Some(Self::AbortControllerConstructor),
-            49 => Some(Self::ReadableStreamConstructor),
-            50 => Some(Self::WritableStreamConstructor),
-            51 => Some(Self::TransformStreamConstructor),
-            52 => Some(Self::CountQueuingStrategyConstructor),
-            53 => Some(Self::ByteLengthQueuingStrategyConstructor),
-            54 => Some(Self::StubGlobal),
-            55 => Some(Self::NumberPrimitiveMethod),
-            56 => Some(Self::ArgumentsStrictCalleeGetter),
-            57 => Some(Self::TypedArrayConstructor),
-            58 => Some(Self::BigIntPrimitiveMethod),
-            59 => Some(Self::ErrorProtoToString),
-            60 => Some(Self::SymbolPrimitiveMethod),
-            61 => Some(Self::SymbolProtoDescriptionGetter),
-            62 => Some(Self::SymbolProtoToPrimitive),
-            63 => Some(Self::RegExpPrimitiveMethod),
-            64 => Some(Self::ArrayProtoKeys),
-            65 => Some(Self::ArrayProtoEntries),
-            66 => Some(Self::IteratorProtoSymbolIterator),
-            67 => Some(Self::BufferConstructor),
-            68 => Some(Self::TextEncoderConstructor),
-            69 => Some(Self::TextDecoderConstructor),
-            70 => Some(Self::StructuredClone),
-            71 => Some(Self::Atob),
-            72 => Some(Self::Btoa),
-            73 => Some(Self::QueueMicrotask),
-            75 => Some(Self::OsInfo),
-            74 => Some(Self::PerformanceNow),
-            76 => Some(Self::FsMethod),
-            77 => Some(Self::ZlibMethod),
-            78 => Some(Self::ChildProcessMethod),
-            79 => Some(Self::NetMethod),
-            80 => Some(Self::DgramMethod),
-            81 => Some(Self::TlsMethod),
-            82 => Some(Self::FunctionProtoCall),
-            83 => Some(Self::FunctionProtoApply),
-            84 => Some(Self::FunctionProtoBind),
-            85 => Some(Self::WorkerThreadsMethod),
-            86 => Some(Self::VmMethod),
-            87 => Some(Self::PerfHooksMethod),
-            88 => Some(Self::ArrayProtoToString),
-            89 => Some(Self::GlobalIsNaN),
-            90 => Some(Self::GlobalIsFinite),
-            _ => None,
-        }
-    }
-}
-
-// ── encode ─────────────────────────────────────────────────────────
-
-const SK_OBJECT_BYTES: u32 = 1;
-const SK_HANDLE_OFFSETS: u32 = 2;
-const SK_RUNTIME_STRINGS: u32 = 3;
-const SK_NATIVE_CALLABLES: u32 = 4;
-const SK_SHAPE_TABLE: u32 = 5;
+const HEADER_BYTES: usize = 220;
+const DIRECTORY_ENTRY_BYTES: usize = 52;
+const CONTENT_HASH_OFFSET: usize = 16;
+const CONTENT_HASH_END: usize = 48;
+const SECTION_TARGET: u16 = 1;
+const SECTION_OBJECT_BYTES: u16 = 2;
+const SECTION_HANDLES: u16 = 3;
+const SECTION_SHAPES: u16 = 4;
+const SECTION_HOST_STATE: u16 = 5;
 const SECTION_COUNT: u32 = 5;
+const HANDLE_BYTES: usize = 13;
 
-pub fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
-    // 两次写入: 先算 offset，再写最终 buf。
-    let header_bytes = build_header_bytes(&snapshot.header);
-
-    // section payloads (pre-serialized)
-    let (obj_payload, ho_payload, rs_payload, nc_payload, st_payload) =
-        build_section_payloads(snapshot);
-
-    // compute offsets
-    let header_size = header_bytes.len() as u32;
-    let st_start = align_up(header_size, 4);
-    let st_size = SECTION_COUNT * 12; // 60
-    let payload_start = align_up(st_start + st_size, 4);
-
-    let mut off = payload_start;
-    let obj_start = off;
-    off += align_up(obj_payload.len() as u32, 4);
-    let ho_start = off;
-    off += align_up(ho_payload.len() as u32, 4);
-    let rs_start = off;
-    off += align_up(rs_payload.len() as u32, 4);
-    let nc_start = off;
-    off += align_up(nc_payload.len() as u32, 4);
-    let st_payload_start = off;
-
-    let total_size = align_up(st_payload_start + st_payload.len() as u32, 4) as usize;
-    let mut buf = Vec::with_capacity(total_size);
-
-    buf.extend_from_slice(&header_bytes);
-    while (buf.len() as u32) < st_start {
-        buf.push(0);
-    }
-
-    // section table
-    write_section_entry(
-        &mut buf,
-        SK_OBJECT_BYTES,
-        obj_start,
-        obj_payload.len() as u32,
-    );
-    write_section_entry(
-        &mut buf,
-        SK_HANDLE_OFFSETS,
-        ho_start,
-        ho_payload.len() as u32,
-    );
-    write_section_entry(
-        &mut buf,
-        SK_RUNTIME_STRINGS,
-        rs_start,
-        rs_payload.len() as u32,
-    );
-    write_section_entry(
-        &mut buf,
-        SK_NATIVE_CALLABLES,
-        nc_start,
-        nc_payload.len() as u32,
-    );
-    write_section_entry(
-        &mut buf,
-        SK_SHAPE_TABLE,
-        st_payload_start,
-        st_payload.len() as u32,
-    );
-
-    while (buf.len() as u32) < payload_start {
-        buf.push(0);
-    }
-
-    // payload
-    append_padded(&mut buf, &obj_payload);
-    append_padded(&mut buf, &ho_payload);
-    append_padded(&mut buf, &rs_payload);
-    append_padded(&mut buf, &nc_payload);
-    append_padded(&mut buf, &st_payload);
-
-    buf
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SnapshotEndian {
+    Little = 1,
+    Big = 2,
 }
 
-fn build_header_bytes(header: &StartupSnapshotHeader) -> Vec<u8> {
-    let mut b = Vec::with_capacity(HEADER_LEN);
-    b.extend_from_slice(&header.magic);
-    b.extend_from_slice(&header.format_version.to_le_bytes());
-    b.extend_from_slice(&header.abi_hash.to_le_bytes());
-    b.extend_from_slice(&header.heap_used.to_le_bytes());
-    b.extend_from_slice(&header.obj_table_count.to_le_bytes());
-    b.extend_from_slice(&header.function_props_base.to_le_bytes());
-    b.extend_from_slice(&header.object_proto_handle.to_le_bytes());
-    b.extend_from_slice(&header.array_proto_handle.to_le_bytes());
-    b.extend_from_slice(&header.arr_proto_table_base.to_le_bytes());
-    b.extend_from_slice(&header.arr_proto_table_len.to_le_bytes());
-    b.extend_from_slice(&header.arr_proto_table_hash.to_le_bytes());
-    b.extend_from_slice(&header.iterator_prototype.to_le_bytes());
-    b.extend_from_slice(&header.generator_prototype.to_le_bytes());
-    b.extend_from_slice(&header.async_iterator_prototype.to_le_bytes());
-    b.extend_from_slice(&header.async_gen_prototype.to_le_bytes());
-    b.extend_from_slice(&header.array_proto_values.to_le_bytes());
-    b.extend_from_slice(&header.immortal_objects_end_rel.to_le_bytes());
-    b.extend_from_slice(&SECTION_COUNT.to_le_bytes());
-    b
-}
-
-fn build_section_payloads(
-    snapshot: &StartupSnapshotOwned,
-) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
-    let obj_payload = snapshot.object_bytes.clone();
-
-    let mut ho_payload = Vec::with_capacity(snapshot.handle_rel_offsets.len() * 4);
-    for off in &snapshot.handle_rel_offsets {
-        ho_payload.extend_from_slice(&off.to_le_bytes());
-    }
-
-    let mut rs_payload = Vec::new();
-    rs_payload.extend_from_slice(&(snapshot.runtime_strings.len() as u32).to_le_bytes());
-    for s in &snapshot.runtime_strings {
-        rs_payload.extend_from_slice(&(s.len() as u32).to_le_bytes());
-        for unit in s {
-            rs_payload.extend_from_slice(&unit.to_le_bytes());
+impl SnapshotEndian {
+    pub const fn current() -> Self {
+        if cfg!(target_endian = "little") {
+            Self::Little
+        } else {
+            Self::Big
         }
     }
 
-    let mut nc_payload = Vec::new();
-    nc_payload.extend_from_slice(&(snapshot.native_callables.len() as u32).to_le_bytes());
-    for (i, nc) in snapshot.native_callables.iter().enumerate() {
-        let method = snapshot
-            .native_callable_methods
-            .get(i)
-            .copied()
-            .unwrap_or(0);
-        let raw: u32 = (*nc as u32) | ((method as u32) << 8);
-        nc_payload.extend_from_slice(&raw.to_le_bytes());
-    }
-
-    // shape 表段：宿主 `wjsm_gc::ShapeTable` 由调用方（host-wasm）用 bincode
-    // 序列化成不透明字节，本 crate 只负责按段搬运。长度由 section 表项给出。
-    let st_payload = snapshot.shape_table_bytes.clone();
-
-    (obj_payload, ho_payload, rs_payload, nc_payload, st_payload)
-}
-
-fn write_section_entry(buf: &mut Vec<u8>, kind: u32, offset: u32, len: u32) {
-    buf.extend_from_slice(&kind.to_le_bytes());
-    buf.extend_from_slice(&offset.to_le_bytes());
-    buf.extend_from_slice(&len.to_le_bytes());
-}
-
-fn append_padded(buf: &mut Vec<u8>, data: &[u8]) {
-    buf.extend_from_slice(data);
-    while !buf.len().is_multiple_of(4) {
-        buf.push(0);
+    fn decode(raw: u8) -> Result<Self> {
+        match raw {
+            1 => Ok(Self::Little),
+            2 => Ok(Self::Big),
+            _ => bail!("native snapshot has invalid endian tag {raw}"),
+        }
     }
 }
 
-// ── decode ─────────────────────────────────────────────────────────
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SnapshotGeneration {
+    Young = 0,
+    Old = 1,
+}
 
-/// Decode a snapshot from bytes. `object_bytes` 安全借用输入 bytes，
-/// 其余字段 owned；不再使用 `unsafe`/`leak`/`from_raw_parts`。
-/// `runtime_strings` 以 UTF-16 code units 返回，调用方直接用于 `RuntimeState`。
-pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
-    if bytes.len() < HEADER_LEN {
-        bail!("snapshot too short: {} bytes", bytes.len());
-    }
-
-    let magic: [u8; 8] = bytes[0..8].try_into()?;
-    if magic != SNAPSHOT_MAGIC {
-        bail!("bad snapshot magic: {:02x?}", magic);
-    }
-
-    let format_version = u32::from_le_bytes(bytes[8..12].try_into()?);
-    if format_version != SNAPSHOT_FORMAT_VERSION {
-        bail!(
-            "unsupported snapshot format version: {} (expected {})",
-            format_version,
-            SNAPSHOT_FORMAT_VERSION
-        );
-    }
-
-    let abi_hash = u64::from_le_bytes(bytes[12..20].try_into()?);
-    let heap_used = u32::from_le_bytes(bytes[20..24].try_into()?);
-    let obj_table_count = u32::from_le_bytes(bytes[24..28].try_into()?);
-    let function_props_base = u32::from_le_bytes(bytes[28..32].try_into()?);
-    let object_proto_handle = u32::from_le_bytes(bytes[32..36].try_into()?);
-    let array_proto_handle = u32::from_le_bytes(bytes[36..40].try_into()?);
-    let arr_proto_table_base = u32::from_le_bytes(bytes[40..44].try_into()?);
-    let arr_proto_table_len = u32::from_le_bytes(bytes[44..48].try_into()?);
-    let arr_proto_table_hash = u64::from_le_bytes(bytes[48..56].try_into()?);
-    let iterator_prototype = i64::from_le_bytes(bytes[56..64].try_into()?);
-    let generator_prototype = i64::from_le_bytes(bytes[64..72].try_into()?);
-    let async_iterator_prototype = i64::from_le_bytes(bytes[72..80].try_into()?);
-    let async_gen_prototype = i64::from_le_bytes(bytes[80..88].try_into()?);
-    let array_proto_values = i64::from_le_bytes(bytes[88..96].try_into()?);
-    let immortal_objects_end_rel = u32::from_le_bytes(bytes[96..100].try_into()?);
-
-    let section_count = u32::from_le_bytes(bytes[100..104].try_into()?) as usize;
-    if section_count > 16 {
-        bail!("too many sections: {}", section_count);
-    }
-
-    let header = StartupSnapshotHeader {
-        magic,
-        format_version,
-        abi_hash,
-        heap_used,
-        immortal_objects_end_rel,
-        obj_table_count,
-        function_props_base,
-        object_proto_handle,
-        array_proto_handle,
-        arr_proto_table_base,
-        arr_proto_table_len,
-        arr_proto_table_hash,
-        iterator_prototype,
-        generator_prototype,
-        async_iterator_prototype,
-        async_gen_prototype,
-        array_proto_values,
-    };
-
-    // section table starts after the fixed-size header.
-    let st_start = HEADER_LEN;
-    if bytes.len() < st_start + section_count * 12 {
-        bail!("section table truncated");
-    }
-
-    let mut object_bytes: &[u8] = &[];
-    let mut handle_rel_offsets: Vec<u32> = Vec::new();
-    let mut runtime_strings: Vec<SnapshotRuntimeString> = Vec::new();
-    let mut native_callables: Vec<SnapshotNativeCallable> = Vec::new();
-    let mut native_callable_methods: Vec<u8> = Vec::new();
-    let mut shape_table_bytes: &[u8] = &[];
-    let mut seen_object = false;
-    let mut seen_handles = false;
-    let mut seen_strings = false;
-    let mut seen_native = false;
-    let mut seen_shape = false;
-
-    for i in 0..section_count {
-        let off = st_start + i * 12;
-        let _kind = u32::from_le_bytes(bytes[off..off + 4].try_into()?);
-        let sect_off = u32::from_le_bytes(bytes[off + 4..off + 8].try_into()?) as usize;
-        let sect_len = u32::from_le_bytes(bytes[off + 8..off + 12].try_into()?) as usize;
-        if sect_off
-            .checked_add(sect_len)
-            .is_none_or(|e| e > bytes.len())
-        {
-            bail!(
-                "section {} offset={} len={} out of bounds",
-                i,
-                sect_off,
-                sect_len
-            );
-        }
-        let data = &bytes[sect_off..sect_off + sect_len];
-
-        match _kind {
-            SK_OBJECT_BYTES => {
-                if seen_object {
-                    bail!("duplicate section kind {}", _kind);
-                }
-                seen_object = true;
-                object_bytes = data;
-            }
-            SK_HANDLE_OFFSETS => {
-                if seen_handles {
-                    bail!("duplicate section kind {}", _kind);
-                }
-                seen_handles = true;
-                if !data.len().is_multiple_of(4) {
-                    bail!(
-                        "handle_rel_offsets data length {} is not a multiple of 4",
-                        data.len()
-                    );
-                }
-                handle_rel_offsets = data
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes(c.try_into().unwrap_or([0; 4])))
-                    .collect();
-                if handle_rel_offsets.len() != header.obj_table_count as usize {
-                    bail!(
-                        "handle_rel_offsets count {} != header.obj_table_count {}",
-                        handle_rel_offsets.len(),
-                        header.obj_table_count
-                    );
-                }
-            }
-            SK_RUNTIME_STRINGS => {
-                if seen_strings {
-                    bail!("duplicate section kind {}", _kind);
-                }
-                seen_strings = true;
-                if data.len() < 4 {
-                    bail!("runtime_strings section too short");
-                }
-                let count = u32::from_le_bytes(data[0..4].try_into()?) as usize;
-                let mut strings: Vec<SnapshotRuntimeString> = Vec::with_capacity(count);
-                let mut pos = 4usize;
-                for _ in 0..count {
-                    if pos + 4 > data.len() {
-                        bail!("runtime_strings entry truncated");
-                    }
-                    let unit_len = u32::from_le_bytes(data[pos..pos + 4].try_into()?) as usize;
-                    pos += 4;
-                    let byte_len = unit_len.checked_mul(2).ok_or_else(|| {
-                        anyhow::anyhow!("runtime_strings entry byte length overflow")
-                    })?;
-                    if pos + byte_len > data.len() {
-                        bail!("runtime_strings entry body truncated");
-                    }
-                    let mut units = Vec::with_capacity(unit_len);
-                    for chunk in data[pos..pos + byte_len].chunks_exact(2) {
-                        units.push(u16::from_le_bytes(chunk.try_into()?));
-                    }
-                    strings.push(units);
-                    pos += byte_len;
-                }
-                runtime_strings = strings;
-            }
-            SK_NATIVE_CALLABLES => {
-                if seen_native {
-                    bail!("duplicate section kind {}", _kind);
-                }
-                seen_native = true;
-                if data.len() < 4 {
-                    bail!("native_callables section too short");
-                }
-                let count = u32::from_le_bytes(data[0..4].try_into()?) as usize;
-                if data.len() < 4 + count * 4 {
-                    bail!("native_callables section truncated");
-                }
-                let mut ncs: Vec<SnapshotNativeCallable> = Vec::with_capacity(count);
-                let mut methods: Vec<u8> = Vec::with_capacity(count);
-                for j in 0..count {
-                    let raw = u32::from_le_bytes(data[4 + j * 4..8 + j * 4].try_into()?);
-                    let d = raw & 0xFF;
-                    let method = (raw >> 8) as u8;
-                    let nc = SnapshotNativeCallable::from_discriminant(d).ok_or_else(|| {
-                        anyhow::anyhow!("unknown native callable discriminant {}", d)
-                    })?;
-                    ncs.push(nc);
-                    methods.push(method);
-                }
-                native_callables = ncs;
-                native_callable_methods = methods;
-            }
-            SK_SHAPE_TABLE => {
-                if seen_shape {
-                    bail!("duplicate section kind {}", _kind);
-                }
-                seen_shape = true;
-                // 不透明字节：由宿主反序列化为 `wjsm_gc::ShapeTableSnapshot`。
-                shape_table_bytes = data;
-            }
-            _ => bail!("unknown snapshot section kind {}", _kind),
+impl SnapshotGeneration {
+    fn decode(raw: u8) -> Result<Self> {
+        match raw {
+            0 => Ok(Self::Young),
+            1 => Ok(Self::Old),
+            _ => bail!("native snapshot has invalid handle generation {raw}"),
         }
     }
+}
 
-    if !seen_object || !seen_handles || !seen_strings || !seen_native || !seen_shape {
-        bail!(
-            "missing required snapshot sections (object={}, handles={}, strings={}, native={}, shape={})",
-            seen_object,
-            seen_handles,
-            seen_strings,
-            seen_native,
-            seen_shape
-        );
-    }
-    if object_bytes.len() != heap_used as usize {
-        bail!(
-            "object_bytes len {} != header.heap_used {}",
-            object_bytes.len(),
-            heap_used
-        );
-    }
-    if immortal_objects_end_rel > heap_used {
-        bail!(
-            "header.immortal_objects_end_rel {} > heap_used {}",
-            immortal_objects_end_rel,
-            heap_used
-        );
-    }
-    for (i, &rel) in handle_rel_offsets.iter().enumerate() {
-        if rel != NULL_HANDLE_REL && rel >= heap_used {
-            bail!(
-                "handle_rel_offsets[{}] rel {} >= heap_used {}",
-                i,
-                rel,
-                heap_used
-            );
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotHandle {
+    pub handle: u32,
+    pub address: u64,
+    pub generation: SnapshotGeneration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeStartupSnapshot {
+    pub bootstrap_hash: [u8; 32],
+    pub lowering_hash: [u8; 32],
+    pub semantic_abi_hash: [u8; 32],
+    pub native_abi_hash: [u8; 32],
+    pub target: String,
+    pub endian: SnapshotEndian,
+    pub object_heap_base: u64,
+    pub object_heap_end: u64,
+    pub next_handle: u64,
+    pub global_object: i64,
+    pub object_bytes: Vec<u8>,
+    pub handles: Vec<SnapshotHandle>,
+    pub shape_table_bytes: Vec<u8>,
+    pub host_state_bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotExpectations<'a> {
+    pub bootstrap_hash: [u8; 32],
+    pub lowering_hash: [u8; 32],
+    pub semantic_abi_hash: [u8; 32],
+    pub native_abi_hash: [u8; 32],
+    pub target: &'a str,
+    pub endian: SnapshotEndian,
+    pub object_heap_base: u64,
+    pub object_heap_capacity_end: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotLimits {
+    pub max_total_bytes: u64,
+    pub max_section_bytes: u64,
+    pub max_handles: u32,
+    pub max_target_bytes: u32,
+}
+
+impl Default for SnapshotLimits {
+    fn default() -> Self {
+        Self {
+            max_total_bytes: 256 * 1024 * 1024,
+            max_section_bytes: 128 * 1024 * 1024,
+            max_handles: 16 * 1024 * 1024,
+            max_target_bytes: 4096,
         }
     }
-    Ok(StartupSnapshotView {
-        header,
+}
+
+pub fn encode_snapshot(snapshot: &NativeStartupSnapshot) -> Result<Vec<u8>> {
+    validate_snapshot(snapshot, &SnapshotLimits::default())?;
+    let sections = encoded_sections(snapshot)?;
+    let directory_bytes = DIRECTORY_ENTRY_BYTES
+        .checked_mul(sections.len())
+        .context("native snapshot directory size overflows")?;
+    let payload_start = HEADER_BYTES
+        .checked_add(directory_bytes)
+        .context("native snapshot payload offset overflows")?;
+    let payload_bytes = sections.iter().try_fold(0_usize, |total, section| {
+        total
+            .checked_add(section.bytes.len())
+            .context("native snapshot payload size overflows")
+    })?;
+    let total_bytes = payload_start
+        .checked_add(payload_bytes)
+        .context("native snapshot size overflows")?;
+    let mut bytes = Vec::with_capacity(total_bytes);
+    encode_header(snapshot, &mut bytes);
+    let mut offset = payload_start;
+    for section in &sections {
+        bytes.extend_from_slice(&section.id.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&u64::try_from(offset)?.to_le_bytes());
+        bytes.extend_from_slice(&u64::try_from(section.bytes.len())?.to_le_bytes());
+        bytes.extend_from_slice(&digest(&section.bytes));
+        offset = offset
+            .checked_add(section.bytes.len())
+            .context("native snapshot section offset overflows")?;
+    }
+    for section in sections {
+        bytes.extend_from_slice(&section.bytes);
+    }
+    debug_assert_eq!(bytes.len(), total_bytes);
+    let content_hash = digest_with_zeroed_content_hash(&bytes);
+    bytes[CONTENT_HASH_OFFSET..CONTENT_HASH_END].copy_from_slice(&content_hash);
+    Ok(bytes)
+}
+
+pub fn decode_snapshot(
+    bytes: &[u8],
+    limits: &SnapshotLimits,
+    expected: &SnapshotExpectations<'_>,
+) -> Result<NativeStartupSnapshot> {
+    if u64::try_from(bytes.len())? > limits.max_total_bytes {
+        bail!("native snapshot exceeds total byte limit")
+    }
+    let header = bytes
+        .get(..HEADER_BYTES)
+        .context("native snapshot is truncated")?;
+    if header[..8] != SNAPSHOT_MAGIC {
+        bail!("native snapshot magic mismatch")
+    }
+    let mut reader = Reader::new(&header[8..]);
+    if reader.u32()? != SNAPSHOT_FORMAT_VERSION {
+        bail!("native snapshot format version mismatch")
+    }
+    if usize::try_from(reader.u32()?)? != HEADER_BYTES {
+        bail!("native snapshot header size mismatch")
+    }
+    let content_hash = reader.array::<32>()?;
+    if content_hash != digest_with_zeroed_content_hash(bytes) {
+        bail!("native snapshot content hash mismatch")
+    }
+    if reader.u32()? != SECTION_COUNT {
+        bail!("native snapshot section count mismatch")
+    }
+    let bootstrap_hash = reader.array::<32>()?;
+    let lowering_hash = reader.array::<32>()?;
+    let semantic_abi_hash = reader.array::<32>()?;
+    let native_abi_hash = reader.array::<32>()?;
+    let endian = SnapshotEndian::decode(reader.u8()?)?;
+    reader.skip(7)?;
+    let object_heap_base = reader.u64()?;
+    let object_heap_end = reader.u64()?;
+    let next_handle = reader.u64()?;
+    let global_object = reader.i64()?;
+    reader.finish()?;
+    require_eq("bootstrap hash", bootstrap_hash, expected.bootstrap_hash)?;
+    require_eq("lowering hash", lowering_hash, expected.lowering_hash)?;
+    require_eq(
+        "semantic ABI hash",
+        semantic_abi_hash,
+        expected.semantic_abi_hash,
+    )?;
+    require_eq("native ABI hash", native_abi_hash, expected.native_abi_hash)?;
+    require_eq("endian", endian, expected.endian)?;
+    require_eq(
+        "object heap base",
+        object_heap_base,
+        expected.object_heap_base,
+    )?;
+
+    let sections = decode_directory(bytes, limits)?;
+    let target = std::str::from_utf8(section(bytes, &sections, SECTION_TARGET)?)
+        .context("native snapshot target is not UTF-8")?
+        .to_owned();
+    require_eq("target", target.as_str(), expected.target)?;
+    if target.len() > limits.max_target_bytes as usize {
+        bail!("native snapshot target exceeds byte limit")
+    }
+    let object_bytes = section(bytes, &sections, SECTION_OBJECT_BYTES)?.to_vec();
+    let restored_object_end = object_heap_base
+        .checked_add(u64::try_from(object_bytes.len())?)
+        .context("native snapshot restored object range overflows")?;
+    if restored_object_end > expected.object_heap_capacity_end {
+        bail!("native snapshot objects exceed runtime heap capacity")
+    }
+    let handles = decode_handles(
+        section(bytes, &sections, SECTION_HANDLES)?,
+        limits.max_handles,
+    )?;
+    let shape_table_bytes = section(bytes, &sections, SECTION_SHAPES)?.to_vec();
+    let host_state_bytes = section(bytes, &sections, SECTION_HOST_STATE)?.to_vec();
+    let snapshot = NativeStartupSnapshot {
+        bootstrap_hash,
+        lowering_hash,
+        semantic_abi_hash,
+        native_abi_hash,
+        target,
+        endian,
+        object_heap_base,
+        object_heap_end,
+        next_handle,
+        global_object,
         object_bytes,
-        handle_rel_offsets,
-        runtime_strings,
-        native_callables,
-        native_callable_methods,
+        handles,
         shape_table_bytes,
-    })
+        host_state_bytes,
+    };
+    validate_snapshot(&snapshot, limits)?;
+    Ok(snapshot)
 }
 
-// ── ABI hash ────────────────────────────────────────────────────────
-
-fn abi_hasher() -> DefaultHasher {
-    let mut hasher = DefaultHasher::new();
-    SNAPSHOT_FORMAT_VERSION.hash(&mut hasher);
-
-    // NaN-box constants
-    value::BOX_BASE.hash(&mut hasher);
-    value::TAG_MASK.hash(&mut hasher);
-    value::TAG_STRING.hash(&mut hasher);
-    value::TAG_UNDEFINED.hash(&mut hasher);
-    value::TAG_NULL.hash(&mut hasher);
-    value::TAG_BOOL.hash(&mut hasher);
-    value::TAG_ITERATOR.hash(&mut hasher);
-    value::TAG_ENUMERATOR.hash(&mut hasher);
-    value::TAG_NATIVE_CALLABLE.hash(&mut hasher);
-    value::TAG_OBJECT.hash(&mut hasher);
-    value::TAG_FUNCTION.hash(&mut hasher);
-    value::TAG_CLOSURE.hash(&mut hasher);
-    value::TAG_ARRAY.hash(&mut hasher);
-    value::TAG_BOUND.hash(&mut hasher);
-    value::TAG_BIGINT.hash(&mut hasher);
-    value::TAG_SYMBOL.hash(&mut hasher);
-    value::TAG_REGEXP.hash(&mut hasher);
-    value::TAG_PROXY.hash(&mut hasher);
-    value::TAG_SCOPE_RECORD.hash(&mut hasher);
-    value::TAG_ARRAY_HOLE.hash(&mut hasher);
-
-    // Heap type tags
-    wjsm_ir::HEAP_TYPE_OBJECT.hash(&mut hasher);
-    wjsm_ir::HEAP_TYPE_ARRAY.hash(&mut hasher);
-    wjsm_ir::HEAP_TYPE_PROMISE.hash(&mut hasher);
-    wjsm_ir::HEAP_TYPE_CONTINUATION.hash(&mut hasher);
-    wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR.hash(&mut hasher);
-    wjsm_ir::HEAP_TYPE_ARGUMENTS.hash(&mut hasher);
-    wjsm_ir::HEAP_TYPE_MODULE_NAMESPACE.hash(&mut hasher);
-
-    // Primordial string table
-    for (offset, s) in constants::primordial_string_offsets() {
-        offset.hash(&mut hasher);
-        s.hash(&mut hasher);
+pub fn snapshot_abi_hash() -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(SNAPSHOT_MAGIC);
+    hasher.update(SNAPSHOT_FORMAT_VERSION.to_le_bytes());
+    hasher.update((HEADER_BYTES as u64).to_le_bytes());
+    hasher.update((DIRECTORY_ENTRY_BYTES as u64).to_le_bytes());
+    hasher.update((HANDLE_BYTES as u64).to_le_bytes());
+    for section in [
+        SECTION_TARGET,
+        SECTION_OBJECT_BYTES,
+        SECTION_HANDLES,
+        SECTION_SHAPES,
+        SECTION_HOST_STATE,
+    ] {
+        hasher.update(section.to_le_bytes());
     }
+    hasher.finalize().into()
+}
 
-    // SnapshotNativeCallable discriminants in order
-    for d in 0u32..=88 {
-        if let Some(_nc) = SnapshotNativeCallable::from_discriminant(d) {
-            // hash the discriminant
-            d.hash(&mut hasher);
+fn validate_snapshot(snapshot: &NativeStartupSnapshot, limits: &SnapshotLimits) -> Result<()> {
+    if snapshot.target.is_empty() {
+        bail!("native snapshot target is empty")
+    }
+    if snapshot.target.len() > limits.max_target_bytes as usize {
+        bail!("native snapshot target exceeds byte limit")
+    }
+    if snapshot.object_heap_base & 7 != 0 || snapshot.object_heap_end < snapshot.object_heap_base {
+        bail!("native snapshot object heap layout is invalid")
+    }
+    let capacity = snapshot.object_heap_end - snapshot.object_heap_base;
+    if u64::try_from(snapshot.object_bytes.len())? > capacity {
+        bail!("native snapshot object bytes exceed heap layout")
+    }
+    if snapshot.next_handle > u64::from(u32::MAX) + 1 {
+        bail!("native snapshot next handle exceeds u32 space")
+    }
+    if snapshot.handles.len() > limits.max_handles as usize {
+        bail!("native snapshot handle count exceeds limit")
+    }
+    for bytes in [
+        snapshot.object_bytes.as_slice(),
+        snapshot.shape_table_bytes.as_slice(),
+        snapshot.host_state_bytes.as_slice(),
+    ] {
+        if u64::try_from(bytes.len())? > limits.max_section_bytes {
+            bail!("native snapshot section exceeds byte limit")
         }
     }
-
-    // 旧属性槽常量（PROP_SLOT_SIZE / *_OFFSET）已随重构删除：新布局由
-    // value_capacity / shape_id / 值槽 8B / shape 阈值常量构成，全部经
-    // `heap_layout_abi_inputs()` 进入哈希（见下），此处不再单独列出。
-    constants::FLAG_CONFIGURABLE.hash(&mut hasher);
-    constants::FLAG_ENUMERABLE.hash(&mut hasher);
-    constants::FLAG_WRITABLE.hash(&mut hasher);
-    constants::FLAG_IS_ACCESSOR.hash(&mut hasher);
-    constants::FLAG_PRIVATE.hash(&mut hasher);
-
-    // Heap / handle-table layout constants
-    for (name, value) in constants::heap_layout_abi_inputs() {
-        name.hash(&mut hasher);
-        value.hash(&mut hasher);
+    let captured_end = snapshot
+        .object_heap_base
+        .checked_add(u64::try_from(snapshot.object_bytes.len())?)
+        .context("native snapshot object range overflows")?;
+    let mut previous = None;
+    for handle in &snapshot.handles {
+        if previous.is_some_and(|previous| previous >= handle.handle) {
+            bail!("native snapshot handles are not strictly sorted")
+        }
+        if u64::from(handle.handle) >= snapshot.next_handle {
+            bail!("native snapshot handle is outside next_handle")
+        }
+        if handle.address & 7 != 0
+            || handle.address < snapshot.object_heap_base
+            || handle.address >= captured_end
+        {
+            bail!("native snapshot handle address is outside captured objects")
+        }
+        previous = Some(handle.handle);
     }
-    // 独立 shadow memory 布局：初始容量 + memory index + 名称。
-    wjsm_ir::SHADOW_STACK_INITIAL_SIZE.hash(&mut hasher);
-    wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE.hash(&mut hasher);
-    wjsm_ir::SHADOW_MEMORY_INDEX.hash(&mut hasher);
-    wjsm_ir::SHADOW_MEMORY_NAME.hash(&mut hasher);
-
-    hasher
+    Ok(())
 }
 
-/// 返回仅由静态 snapshot layout 与 runtime value ABI 决定的哈希。
-pub fn abi_hash() -> u64 {
-    abi_hasher().finish()
+struct EncodedSection {
+    id: u16,
+    bytes: Vec<u8>,
 }
 
-/// 把调用方拥有的 support/builtin/engine fingerprint 显式纳入 ABI 哈希。
-///
-/// 该函数不持有进程全局状态，同一进程内的不同 engine profile 可独立校验。
-pub fn abi_hash_with_external_input(external_input: u64) -> u64 {
-    let mut hasher = abi_hasher();
-    external_input.hash(&mut hasher);
-    hasher.finish()
+fn encoded_sections(snapshot: &NativeStartupSnapshot) -> Result<Vec<EncodedSection>> {
+    let mut handles = Vec::with_capacity(
+        snapshot
+            .handles
+            .len()
+            .checked_mul(HANDLE_BYTES)
+            .context("native snapshot handle payload overflows")?,
+    );
+    for handle in &snapshot.handles {
+        handles.extend_from_slice(&handle.handle.to_le_bytes());
+        handles.extend_from_slice(&handle.address.to_le_bytes());
+        handles.push(handle.generation as u8);
+    }
+    Ok(vec![
+        EncodedSection {
+            id: SECTION_TARGET,
+            bytes: snapshot.target.as_bytes().to_vec(),
+        },
+        EncodedSection {
+            id: SECTION_OBJECT_BYTES,
+            bytes: snapshot.object_bytes.clone(),
+        },
+        EncodedSection {
+            id: SECTION_HANDLES,
+            bytes: handles,
+        },
+        EncodedSection {
+            id: SECTION_SHAPES,
+            bytes: snapshot.shape_table_bytes.clone(),
+        },
+        EncodedSection {
+            id: SECTION_HOST_STATE,
+            bytes: snapshot.host_state_bytes.clone(),
+        },
+    ])
 }
 
-fn align_up(n: u32, align: u32) -> u32 {
-    (n + align - 1) & !(align - 1)
+fn encode_header(snapshot: &NativeStartupSnapshot, bytes: &mut Vec<u8>) {
+    bytes.extend_from_slice(&SNAPSHOT_MAGIC);
+    bytes.extend_from_slice(&SNAPSHOT_FORMAT_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+    bytes.extend_from_slice(&[0; 32]);
+    bytes.extend_from_slice(&SECTION_COUNT.to_le_bytes());
+    bytes.extend_from_slice(&snapshot.bootstrap_hash);
+    bytes.extend_from_slice(&snapshot.lowering_hash);
+    bytes.extend_from_slice(&snapshot.semantic_abi_hash);
+    bytes.extend_from_slice(&snapshot.native_abi_hash);
+    bytes.push(snapshot.endian as u8);
+    bytes.extend_from_slice(&[0; 7]);
+    bytes.extend_from_slice(&snapshot.object_heap_base.to_le_bytes());
+    bytes.extend_from_slice(&snapshot.object_heap_end.to_le_bytes());
+    bytes.extend_from_slice(&snapshot.next_handle.to_le_bytes());
+    bytes.extend_from_slice(&snapshot.global_object.to_le_bytes());
+    debug_assert_eq!(bytes.len(), HEADER_BYTES);
+}
+
+#[derive(Clone, Copy)]
+struct Section {
+    offset: usize,
+    len: usize,
+}
+
+fn decode_directory(bytes: &[u8], limits: &SnapshotLimits) -> Result<Vec<(u16, Section)>> {
+    let directory_end = HEADER_BYTES
+        .checked_add(DIRECTORY_ENTRY_BYTES * SECTION_COUNT as usize)
+        .context("native snapshot directory offset overflows")?;
+    let directory = bytes
+        .get(HEADER_BYTES..directory_end)
+        .context("native snapshot directory is truncated")?;
+    let mut expected_offset = directory_end;
+    let mut previous_id = None;
+    let mut sections = Vec::with_capacity(SECTION_COUNT as usize);
+    for entry in directory.chunks_exact(DIRECTORY_ENTRY_BYTES) {
+        let mut reader = Reader::new(entry);
+        let id = reader.u16()?;
+        if reader.u16()? != 0 {
+            bail!("native snapshot section flags are non-canonical")
+        }
+        if previous_id.is_some_and(|previous| previous >= id) {
+            bail!("native snapshot section IDs are not strictly sorted")
+        }
+        let offset = usize::try_from(reader.u64()?)?;
+        let len = usize::try_from(reader.u64()?)?;
+        let section_hash = reader.array::<32>()?;
+        reader.finish()?;
+        if offset != expected_offset {
+            bail!("native snapshot sections contain a gap or overlap")
+        }
+        if u64::try_from(len)? > limits.max_section_bytes {
+            bail!("native snapshot section exceeds byte limit")
+        }
+        let end = offset
+            .checked_add(len)
+            .context("native snapshot section range overflows")?;
+        let payload = bytes
+            .get(offset..end)
+            .context("native snapshot section is truncated")?;
+        if digest(payload) != section_hash {
+            bail!("native snapshot section hash mismatch")
+        }
+        sections.push((id, Section { offset, len }));
+        previous_id = Some(id);
+        expected_offset = end;
+    }
+    if expected_offset != bytes.len() {
+        bail!("native snapshot has trailing bytes")
+    }
+    let actual = sections.iter().map(|(id, _)| *id).collect::<BTreeSet<_>>();
+    let expected = BTreeSet::from([
+        SECTION_TARGET,
+        SECTION_OBJECT_BYTES,
+        SECTION_HANDLES,
+        SECTION_SHAPES,
+        SECTION_HOST_STATE,
+    ]);
+    if actual != expected {
+        bail!("native snapshot required sections mismatch")
+    }
+    Ok(sections)
+}
+
+fn section<'a>(bytes: &'a [u8], sections: &[(u16, Section)], id: u16) -> Result<&'a [u8]> {
+    let section = sections
+        .iter()
+        .find_map(|(candidate, section)| (*candidate == id).then_some(*section))
+        .context("native snapshot required section is missing")?;
+    Ok(&bytes[section.offset..section.offset + section.len])
+}
+
+fn decode_handles(bytes: &[u8], maximum: u32) -> Result<Vec<SnapshotHandle>> {
+    if !bytes.len().is_multiple_of(HANDLE_BYTES) {
+        bail!("native snapshot handle section length is invalid")
+    }
+    let count = bytes.len() / HANDLE_BYTES;
+    if count > maximum as usize {
+        bail!("native snapshot handle count exceeds limit")
+    }
+    let mut handles = Vec::with_capacity(count);
+    for entry in bytes.chunks_exact(HANDLE_BYTES) {
+        handles.push(SnapshotHandle {
+            handle: u32::from_le_bytes(entry[..4].try_into()?),
+            address: u64::from_le_bytes(entry[4..12].try_into()?),
+            generation: SnapshotGeneration::decode(entry[12])?,
+        });
+    }
+    Ok(handles)
+}
+
+fn require_eq<T>(name: &str, actual: T, expected: T) -> Result<()>
+where
+    T: Eq,
+{
+    if actual != expected {
+        bail!("native snapshot {name} mismatch")
+    }
+    Ok(())
+}
+
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+fn digest_with_zeroed_content_hash(bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes[..CONTENT_HASH_OFFSET]);
+    hasher.update([0; 32]);
+    hasher.update(&bytes[CONTENT_HASH_END..]);
+    hasher.finalize().into()
+}
+
+struct Reader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into()?))
+    }
+
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into()?))
+    }
+
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into()?))
+    }
+
+    fn i64(&mut self) -> Result<i64> {
+        Ok(i64::from_le_bytes(self.take(8)?.try_into()?))
+    }
+
+    fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
+        Ok(self.take(N)?.try_into()?)
+    }
+
+    fn skip(&mut self, len: usize) -> Result<()> {
+        self.take(len).map(|_| ())
+    }
+
+    fn take(&mut self, len: usize) -> Result<&'a [u8]> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .context("native snapshot reader offset overflows")?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .context("native snapshot is truncated")?;
+        self.offset = end;
+        Ok(bytes)
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.offset != self.bytes.len() {
+            bail!("native snapshot field has trailing bytes")
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn expected_static_abi_hash() -> u64 {
-        let mut hasher = DefaultHasher::new();
-        SNAPSHOT_FORMAT_VERSION.hash(&mut hasher);
-
-        value::BOX_BASE.hash(&mut hasher);
-        value::TAG_MASK.hash(&mut hasher);
-        value::TAG_STRING.hash(&mut hasher);
-        value::TAG_UNDEFINED.hash(&mut hasher);
-        value::TAG_NULL.hash(&mut hasher);
-        value::TAG_BOOL.hash(&mut hasher);
-        value::TAG_ITERATOR.hash(&mut hasher);
-        value::TAG_ENUMERATOR.hash(&mut hasher);
-        value::TAG_NATIVE_CALLABLE.hash(&mut hasher);
-        value::TAG_OBJECT.hash(&mut hasher);
-        value::TAG_FUNCTION.hash(&mut hasher);
-        value::TAG_CLOSURE.hash(&mut hasher);
-        value::TAG_ARRAY.hash(&mut hasher);
-        value::TAG_BOUND.hash(&mut hasher);
-        value::TAG_BIGINT.hash(&mut hasher);
-        value::TAG_SYMBOL.hash(&mut hasher);
-        value::TAG_REGEXP.hash(&mut hasher);
-        value::TAG_PROXY.hash(&mut hasher);
-        value::TAG_SCOPE_RECORD.hash(&mut hasher);
-        value::TAG_ARRAY_HOLE.hash(&mut hasher);
-
-        wjsm_ir::HEAP_TYPE_OBJECT.hash(&mut hasher);
-        wjsm_ir::HEAP_TYPE_ARRAY.hash(&mut hasher);
-        wjsm_ir::HEAP_TYPE_PROMISE.hash(&mut hasher);
-        wjsm_ir::HEAP_TYPE_CONTINUATION.hash(&mut hasher);
-        wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR.hash(&mut hasher);
-        wjsm_ir::HEAP_TYPE_ARGUMENTS.hash(&mut hasher);
-        wjsm_ir::HEAP_TYPE_MODULE_NAMESPACE.hash(&mut hasher);
-
-        for (offset, s) in constants::primordial_string_offsets() {
-            offset.hash(&mut hasher);
-            s.hash(&mut hasher);
+    fn snapshot() -> NativeStartupSnapshot {
+        NativeStartupSnapshot {
+            bootstrap_hash: [1; 32],
+            lowering_hash: [2; 32],
+            semantic_abi_hash: [3; 32],
+            native_abi_hash: [4; 32],
+            target: "x86_64-unknown-linux-gnu".into(),
+            endian: SnapshotEndian::Little,
+            object_heap_base: 0x8_0001_0000,
+            object_heap_end: 0x8_0011_0000,
+            next_handle: 2,
+            global_object: -1,
+            object_bytes: vec![0; 64],
+            handles: vec![
+                SnapshotHandle {
+                    handle: 0,
+                    address: 0x8_0001_0000,
+                    generation: SnapshotGeneration::Young,
+                },
+                SnapshotHandle {
+                    handle: 1,
+                    address: 0x8_0001_0020,
+                    generation: SnapshotGeneration::Old,
+                },
+            ],
+            shape_table_bytes: vec![1, 2, 3],
+            host_state_bytes: vec![4, 5, 6],
         }
-
-        for d in 0u32..=88 {
-            if SnapshotNativeCallable::from_discriminant(d).is_some() {
-                d.hash(&mut hasher);
-            }
-        }
-
-        // 与 `abi_hasher()` 保持逐项同步；旧 PROP_SLOT_* 常量已删除。
-        constants::FLAG_CONFIGURABLE.hash(&mut hasher);
-        constants::FLAG_ENUMERABLE.hash(&mut hasher);
-        constants::FLAG_WRITABLE.hash(&mut hasher);
-        constants::FLAG_IS_ACCESSOR.hash(&mut hasher);
-        constants::FLAG_PRIVATE.hash(&mut hasher);
-
-        for (name, value) in constants::heap_layout_abi_inputs() {
-            name.hash(&mut hasher);
-            value.hash(&mut hasher);
-        }
-        wjsm_ir::SHADOW_STACK_INITIAL_SIZE.hash(&mut hasher);
-        wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE.hash(&mut hasher);
-        wjsm_ir::SHADOW_MEMORY_INDEX.hash(&mut hasher);
-        wjsm_ir::SHADOW_MEMORY_NAME.hash(&mut hasher);
-
-        hasher.finish()
     }
 
-    fn snapshot_with_runtime_strings(
-        runtime_strings: Vec<SnapshotRuntimeString>,
-    ) -> StartupSnapshotOwned {
-        StartupSnapshotOwned {
-            header: StartupSnapshotHeader {
-                magic: SNAPSHOT_MAGIC,
-                format_version: SNAPSHOT_FORMAT_VERSION,
-                abi_hash: abi_hash(),
-                heap_used: 0,
-                immortal_objects_end_rel: 0,
-                obj_table_count: 0,
-                function_props_base: 0,
-                object_proto_handle: 0,
-                array_proto_handle: 0,
-                arr_proto_table_base: 0,
-                arr_proto_table_len: 0,
-                arr_proto_table_hash: 0,
-                iterator_prototype: 0,
-                generator_prototype: 0,
-                async_iterator_prototype: 0,
-                async_gen_prototype: 0,
-                array_proto_values: 0,
-            },
-            object_bytes: Vec::new(),
-            handle_rel_offsets: Vec::new(),
-            runtime_strings,
-            native_callables: Vec::new(),
-            native_callable_methods: Vec::new(),
-            shape_table_bytes: Vec::new(),
+    fn expectations(snapshot: &NativeStartupSnapshot) -> SnapshotExpectations<'_> {
+        SnapshotExpectations {
+            bootstrap_hash: snapshot.bootstrap_hash,
+            lowering_hash: snapshot.lowering_hash,
+            semantic_abi_hash: snapshot.semantic_abi_hash,
+            native_abi_hash: snapshot.native_abi_hash,
+            target: &snapshot.target,
+            endian: snapshot.endian,
+            object_heap_base: snapshot.object_heap_base,
+            object_heap_capacity_end: snapshot.object_heap_end,
         }
     }
 
     #[test]
-    fn snapshot_format_version_is_v10_shape_table_boundary() {
-        assert_eq!(SNAPSHOT_FORMAT_VERSION, 10);
+    fn native_snapshot_roundtrips_all_owner_state() {
+        let snapshot = snapshot();
+        let bytes = encode_snapshot(&snapshot).expect("snapshot encodes");
+        let decoded = decode_snapshot(&bytes, &SnapshotLimits::default(), &expectations(&snapshot))
+            .expect("snapshot decodes");
+        assert_eq!(decoded, snapshot);
     }
 
     #[test]
-    fn runtime_string_section_roundtrips_utf16_units() {
-        let snapshot = snapshot_with_runtime_strings(vec![vec![0xD800], vec![0x0041, 0xDFFF]]);
+    fn native_snapshot_rejects_hash_target_and_base_drift() {
+        let snapshot = snapshot();
+        let bytes = encode_snapshot(&snapshot).expect("snapshot encodes");
+        let mut wrong = expectations(&snapshot);
+        wrong.bootstrap_hash = [9; 32];
+        assert!(decode_snapshot(&bytes, &SnapshotLimits::default(), &wrong).is_err());
+        let mut wrong = expectations(&snapshot);
+        wrong.target = "aarch64-unknown-linux-gnu";
+        assert!(decode_snapshot(&bytes, &SnapshotLimits::default(), &wrong).is_err());
+        let mut wrong = expectations(&snapshot);
+        wrong.object_heap_base += 8;
+        assert!(decode_snapshot(&bytes, &SnapshotLimits::default(), &wrong).is_err());
+    }
 
-        let bytes = encode_snapshot(&snapshot);
-        let decoded = decode_snapshot(&bytes).expect("snapshot decodes");
+    #[test]
+    fn native_snapshot_accepts_runtime_capacity_larger_than_captured_heap() {
+        let snapshot = snapshot();
+        let bytes = encode_snapshot(&snapshot).expect("snapshot encodes");
+        let mut larger = expectations(&snapshot);
+        larger.object_heap_capacity_end += 8;
+        decode_snapshot(&bytes, &SnapshotLimits::default(), &larger)
+            .expect("larger runtime heap capacity should accept snapshot");
+    }
 
-        assert_eq!(
-            decoded.runtime_strings,
-            vec![vec![0xD800], vec![0x0041, 0xDFFF]]
+    #[test]
+    fn native_snapshot_rejects_runtime_capacity_smaller_than_object_payload() {
+        let snapshot = snapshot();
+        let bytes = encode_snapshot(&snapshot).expect("snapshot encodes");
+        let mut smaller = expectations(&snapshot);
+        smaller.object_heap_capacity_end = snapshot.object_heap_base
+            + u64::try_from(snapshot.object_bytes.len()).expect("fixture length fits u64")
+            - 1;
+        assert!(decode_snapshot(&bytes, &SnapshotLimits::default(), &smaller).is_err());
+    }
+
+    #[test]
+    fn native_snapshot_rejects_corruption_and_noncanonical_handles() {
+        let snapshot = snapshot();
+        let mut bytes = encode_snapshot(&snapshot).expect("snapshot encodes");
+        *bytes.last_mut().expect("snapshot is non-empty") ^= 1;
+        assert!(
+            decode_snapshot(&bytes, &SnapshotLimits::default(), &expectations(&snapshot),).is_err()
         );
-    }
 
-    #[test]
-    fn immortal_objects_end_header_roundtrips() {
-        let mut snapshot = snapshot_with_runtime_strings(Vec::new());
-        snapshot.header.heap_used = 16;
-        snapshot.header.immortal_objects_end_rel = 12;
-        snapshot.object_bytes = vec![0; 16];
-
-        let bytes = encode_snapshot(&snapshot);
-        let decoded = decode_snapshot(&bytes).expect("snapshot decodes");
-
-        assert_eq!(decoded.header.heap_used, 16);
-        assert_eq!(decoded.header.immortal_objects_end_rel, 12);
-    }
-
-    #[test]
-    fn shape_table_section_roundtrips_opaque_bytes() {
-        // v10 起快照必须携带宿主 ShapeTable 的序列化字节（与堆字节成对）。
-        let mut snapshot = snapshot_with_runtime_strings(Vec::new());
-        snapshot.shape_table_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8];
-
-        let bytes = encode_snapshot(&snapshot);
-        let decoded = decode_snapshot(&bytes).expect("snapshot decodes");
-
-        assert_eq!(decoded.shape_table_bytes, [1, 2, 3, 4, 5, 6, 7, 8]);
-    }
-
-    #[test]
-    fn abi_hash_includes_heap_layout_inputs() {
-        assert_eq!(abi_hash(), expected_static_abi_hash());
-    }
-
-    #[test]
-    fn external_abi_input_is_explicit_and_order_independent() {
-        let first = abi_hash_with_external_input(0x1234_5678_9abc_def0);
-        let second = abi_hash_with_external_input(0xfedc_ba98_7654_3210);
-
-        assert_ne!(first, abi_hash());
-        assert_ne!(first, second);
-        assert_eq!(first, abi_hash_with_external_input(0x1234_5678_9abc_def0));
-    }
-
-    #[test]
-    fn heap_layout_abi_inputs_cover_snapshot_heap_shape() {
-        let inputs = constants::heap_layout_abi_inputs();
-        for required in [
-            "heap_object_header_size",
-            "heap_object_value_capacity_offset",
-            "heap_object_shape_id_offset",
-            "heap_object_value_slot_size",
-            "shape_id_empty",
-            "shape_map_threshold",
-            "dictionary_threshold",
-            "shape_table_budget",
-            // IC 区改变对象堆基址；句柄状态编码是 codegen ↔ 宿主堆的 ABI 契约。
-            "ic_slot_size",
-            "handle_state_stable_min",
-            "heap_array_kind_offset",
-            "heap_array_length_offset",
-            "heap_array_capacity_offset",
-            "heap_array_element_size",
-            "handle_table_entry_size",
-            "handle_table_min_entries",
-            "handle_table_function_entry_factor",
-            "heap_allocation_alignment",
-            "gc_region_size",
-            "gc_card_size",
-            "gc_barrier_event_size",
-            "gc_barrier_event_buffer_size",
-        ] {
-            assert!(
-                inputs.iter().any(|(name, _)| *name == required),
-                "missing heap layout ABI input `{required}`"
-            );
-        }
+        let mut invalid = snapshot.clone();
+        invalid.handles.reverse();
+        assert!(encode_snapshot(&invalid).is_err());
     }
 }

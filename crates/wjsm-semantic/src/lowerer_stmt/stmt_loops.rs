@@ -9,10 +9,7 @@ impl Lowerer {
     }
 
     /// 在头部作用域内声明 `let`/`const` 绑定（`var` 已由 predeclare 提升）。
-    fn declare_for_head_bindings(
-        &mut self,
-        left: &swc_ast::ForHead,
-    ) -> Result<(), LoweringError> {
+    fn declare_for_head_bindings(&mut self, left: &swc_ast::ForHead) -> Result<(), LoweringError> {
         if let swc_ast::ForHead::VarDecl(var_decl) = left
             && var_decl.kind != swc_ast::VarDeclKind::Var
         {
@@ -181,6 +178,7 @@ impl Lowerer {
                 args: vec![iterable],
             },
         );
+        block = self.lower_value_exception_branch(block, iter_handle)?;
 
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
@@ -200,11 +198,12 @@ impl Lowerer {
                 args: vec![iter_handle],
             },
         );
-        // 反转 done 条件：backend 假设 loop condition "true = continue",
+        let condition_block = self.lower_value_exception_branch(header, done_val)?;
+        // 反转 done 条件：backend 假设 loop condition "true = continue"，
         // 但 done_val 是 "true = done = exit"。使用 Not 反转。
         let not_done = self.alloc_value();
         self.current_function.append_instruction(
-            header,
+            condition_block,
             Instruction::Unary {
                 dest: not_done,
                 op: UnaryOp::Not,
@@ -212,7 +211,7 @@ impl Lowerer {
             },
         );
         self.current_function.set_terminator(
-            header,
+            condition_block,
             Terminator::Branch {
                 condition: not_done,
                 true_block: body_block,

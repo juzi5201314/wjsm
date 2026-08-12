@@ -1,8 +1,8 @@
-use wjsm_gc::{GcPacketKind, GcWorkPacket, HeapAddress, NativeHeapMemory};
+use wjsm_gc::{GcPacketKind, GcWorkPacket, HeapAddress, TestHeapMemory};
 
 #[test]
 fn native_heap_memory_keeps_word_and_byte_boundaries_safe() {
-    let memory = NativeHeapMemory::with_base(0x1_0000_0000, 128);
+    let memory = TestHeapMemory::with_base(0x1_0000_0000, 128);
     let word = HeapAddress::new(0x1_0000_0010);
 
     memory.store_word(word, 0x1122_3344_5566_7788).unwrap();

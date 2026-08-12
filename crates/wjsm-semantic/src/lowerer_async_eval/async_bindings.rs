@@ -21,7 +21,7 @@ impl Lowerer {
         scope_chain.reverse();
         // 多个 Module Record 共用 async `$module_main`，但其 Module scope 不是
         // 当前词法链的永久成员。continuation 的 liveness 必须看见所有模块环境，
-        // 否则 await 后仍然 live 的 import/顶层绑定会以未初始化 WASM local 恢复。
+        // 否则 await 后仍然 live 的 import/顶层绑定会以未初始化变量槽恢复。
         if self.async_main_body_entry.is_some() {
             for (scope_id, scope) in self.scopes.arenas.iter().enumerate() {
                 if scope.kind == ScopeKind::Module && !scope_chain.contains(&scope_id) {
@@ -136,6 +136,14 @@ impl Lowerer {
         }
     }
 
+    fn continuation_environment_name(&self) -> String {
+        if self.is_generator_fn && !self.is_async_fn {
+            "$env".to_string()
+        } else {
+            format!("${}.$env", self.async_env_scope_id)
+        }
+    }
+
     /// 在指定 block 的 Suspend 指令之前插入 save 指令序列。
     fn insert_save_before_suspend(&mut self, block_id: BasicBlockId, bindings: &[String]) {
         if bindings.is_empty() {
@@ -165,7 +173,7 @@ impl Lowerer {
         let mut save_instrs = Vec::with_capacity(1 + bindings.len() * 3);
         save_instrs.push(Instruction::LoadVar {
             dest: continuation,
-            name: format!("${}.$env", self.async_env_scope_id),
+            name: self.continuation_environment_name(),
         });
 
         for binding in bindings {
@@ -207,7 +215,7 @@ impl Lowerer {
         let mut restore_instrs = Vec::with_capacity(1 + bindings.len() * 3);
         restore_instrs.push(Instruction::LoadVar {
             dest: continuation,
-            name: format!("${}.$env", self.async_env_scope_id),
+            name: self.continuation_environment_name(),
         });
 
         for binding in bindings {

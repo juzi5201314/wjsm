@@ -5,14 +5,14 @@
 Era 0-2 的 IR 只服务当前 PoC 能力的硬切换：
 
 ```text
-parse -> semantic/lowering -> IR -> backend-wasm -> runtime
+parse -> semantic/lowering -> IR -> backend-native -> runtime
 ```
 
 这个版本不追求“最终优化 IR”，只要求：
 
 1. 与 SWC AST 解耦，不再把 AST 当成 backend 输入契约。
 2. 明确表达 lowered 结果，而不是把语义逻辑散落在 backend 里。
-3. 让 backend-wasm 与后续 backend-jit 都能共享同一份输入结构。
+3. 让 backend-native 与后续优化编译器都能共享同一份输入结构。
 4. 以文本 dump 作为稳定快照格式，给 Era 2 的 parity 工作提供证据。
 
 ## 结构

@@ -150,7 +150,7 @@ fn create_writer_object<E: ExecContext>(ctx: &mut E, handle: u32) -> Value {
     object
 }
 
-pub async fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
+pub fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
     let sink = args
         .first()
         .copied()
@@ -186,7 +186,7 @@ pub async fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
         let start = ctx.read_property_by_string_key(sink, "start");
         if ctx.is_callable(start) {
             let arguments = [controller_object];
-            let _ = ctx.call_js_async(start, sink, &arguments).await;
+            let _ = ctx.call_js(start, sink, &arguments);
         }
         let write = ctx.read_property_by_string_key(sink, "write");
         let close = ctx.read_property_by_string_key(sink, "close");

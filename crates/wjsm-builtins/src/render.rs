@@ -1,7 +1,7 @@
 //! console 值渲染与 JSON.stringify（ES §24.5.2）后端无关实现。
 //!
 //! 算法逻辑通过 `<E: ExecContext>` 泛型单态化，零 vtable 开销。
-//! host-wasm 的 `runtime_render.rs` 仅保留字符串/线性内存原语与薄委托层。
+//! native host 仅保留字符串/调用参数原语与薄委托层。
 
 use crate::number_format::format_number_js;
 use wjsm_host::{ExecContext, Value};
@@ -245,7 +245,10 @@ pub fn write_console_values_impl<E: ExecContext>(
 ) {
     let mut rendered = Vec::new();
     for i in 0..args_count as u32 {
-        let val = ctx.read_shadow_arg(args_base, i);
+        let val = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         rendered.push(render_value_impl(ctx, val));
     }
     let joined = rendered.join(" ");
@@ -340,7 +343,7 @@ fn build_replacer_whitelist<E: ExecContext>(ctx: &mut E, replacer: Value) -> Opt
 }
 
 /// 获取并调用对象的 toJSON 方法（ES §24.5.2 SerializeJSONProperty 步骤 2）。
-async fn get_to_json<E: ExecContext>(ctx: &mut E, key: &str, value: Value) -> Value {
+fn get_to_json<E: ExecContext>(ctx: &mut E, key: &str, value: Value) -> Value {
     if !value::is_object(value) && !value::is_array(value) {
         return value;
     }
@@ -352,8 +355,7 @@ async fn get_to_json<E: ExecContext>(ctx: &mut E, key: &str, value: Value) -> Va
     }
     let key_str = ctx.store_string(key);
     let args = [key_str];
-    ctx.call_js_async(to_json, value, &args)
-        .await
+    ctx.call_js(to_json, value, &args)
         .unwrap_or_else(|_| value::encode_undefined())
 }
 
@@ -374,7 +376,7 @@ fn normalize_negative_zero(x: f64) -> f64 {
 }
 
 /// 完整的 JSON.stringify（ES §24.5.2），返回 boxed JS 值。
-pub async fn json_stringify_full_impl<E: ExecContext>(
+pub fn json_stringify_full_impl<E: ExecContext>(
     ctx: &mut E,
     val: Value,
     replacer: Value,
@@ -401,9 +403,7 @@ pub async fn json_stringify_full_impl<E: ExecContext>(
         &mut stack,
         &gap,
         "",
-    )
-    .await
-    {
+    ) {
         Ok(json) => {
             if json == "undefined" {
                 value::encode_undefined()
@@ -417,7 +417,7 @@ pub async fn json_stringify_full_impl<E: ExecContext>(
 
 /// 序列化 JSON 属性（核心递归 impl，含 cycle、toJSON、replacer、pretty-print）。
 #[allow(clippy::too_many_arguments)]
-async fn serialize_json_property<E: ExecContext>(
+fn serialize_json_property<E: ExecContext>(
     ctx: &mut E,
     key: &str,
     val: Value,
@@ -429,7 +429,7 @@ async fn serialize_json_property<E: ExecContext>(
     gap: &str,
     current_indent: &str,
 ) -> Result<String, Value> {
-    let mut value = get_to_json(ctx, key, val).await;
+    let mut value = get_to_json(ctx, key, val);
     if value::is_exception(value) {
         return Err(value);
     }
@@ -437,7 +437,7 @@ async fn serialize_json_property<E: ExecContext>(
     if let Some(rf) = replacer_fn.filter(|_| replacer_is_fn) {
         let key_str = ctx.store_string(key);
         let args = [key_str, value];
-        match ctx.call_js_async(rf, holder, &args).await {
+        match ctx.call_js(rf, holder, &args) {
             Ok(new_val) => {
                 if value::is_exception(new_val) {
                     return Err(new_val);
@@ -501,7 +501,7 @@ async fn serialize_json_property<E: ExecContext>(
             let elem = ctx
                 .array_elem_at(value, i)
                 .unwrap_or_else(value::encode_undefined);
-            let s = match Box::pin(serialize_json_property(
+            let s = match serialize_json_property(
                 ctx,
                 &i.to_string(),
                 elem,
@@ -512,9 +512,7 @@ async fn serialize_json_property<E: ExecContext>(
                 stack,
                 gap,
                 &next_indent,
-            ))
-            .await
-            {
+            ) {
                 Ok(s) => s,
                 Err(exc) => return Err(exc),
             };
@@ -552,7 +550,7 @@ async fn serialize_json_property<E: ExecContext>(
                     if value::is_undefined(prop_val) {
                         continue;
                     }
-                    let s = match Box::pin(serialize_json_property(
+                    let s = match serialize_json_property(
                         ctx,
                         name,
                         prop_val,
@@ -563,9 +561,7 @@ async fn serialize_json_property<E: ExecContext>(
                         stack,
                         gap,
                         &next_indent,
-                    ))
-                    .await
-                    {
+                    ) {
                         Ok(s) => s,
                         Err(exc) => return Err(exc),
                     };
@@ -581,7 +577,7 @@ async fn serialize_json_property<E: ExecContext>(
                     // Symbol 键或不可反查的 name_id：跳过
                     continue;
                 };
-                let s = match Box::pin(serialize_json_property(
+                let s = match serialize_json_property(
                     ctx,
                     &name,
                     prop_val,
@@ -592,9 +588,7 @@ async fn serialize_json_property<E: ExecContext>(
                     stack,
                     gap,
                     &next_indent,
-                ))
-                .await
-                {
+                ) {
                     Ok(s) => s,
                     Err(exc) => return Err(exc),
                 };

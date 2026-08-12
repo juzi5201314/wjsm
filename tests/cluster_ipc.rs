@@ -13,9 +13,6 @@ fn ensure_cluster_test_env() {
     ENV_INIT.call_once(|| {
         // SAFETY: 测试初始化早期设置一次。
         unsafe {
-            if std::env::var_os("WJSM_COMPILER").is_none() {
-                std::env::set_var("WJSM_COMPILER", "winch");
-            }
             if std::env::var_os("WJSM_CACHE_DIR").is_none() {
                 std::env::set_var("WJSM_CACHE_DIR", "/tmp/wjsm-test-cache");
             }
@@ -32,7 +29,7 @@ fn wjsm_bin() -> PathBuf {
 
 fn write_temp_script(name: &str, source: &str) -> PathBuf {
     ensure_cluster_test_env();
-    // 稳定路径：内容 hash 决定目录，避免每次 pid 不同导致整包 WASM 重编译（1.3MB Winch ~1.5s）。
+    // 稳定路径：内容 hash 决定目录，避免每次 pid 不同导致重复 native image 编译。
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     use std::hash::{Hash, Hasher};
     name.hash(&mut hasher);
@@ -47,16 +44,14 @@ fn write_temp_script(name: &str, source: &str) -> PathBuf {
     path
 }
 
-/// 统一 spawn 父进程：Winch + pipeline/cwasm cache + child_process allow。
+/// 统一 spawn 父进程：native backend + child_process allow。
 fn run_wjsm_script(script: &std::path::Path, extra_env: &[(&str, &str)]) -> std::process::Output {
     ensure_cluster_test_env();
     let cache = std::env::var("WJSM_CACHE_DIR").unwrap_or_else(|_| "/tmp/wjsm-test-cache".into());
-    let compiler = std::env::var("WJSM_COMPILER").unwrap_or_else(|_| "winch".into());
     let mut cmd = Command::new(wjsm_bin());
     cmd.arg("run")
         .arg(script)
         .env("WJSM_CHILD_PROCESS_ALLOW", "*")
-        .env("WJSM_COMPILER", &compiler)
         .env("WJSM_CACHE_DIR", &cache);
     for (k, v) in extra_env {
         cmd.env(*k, *v);

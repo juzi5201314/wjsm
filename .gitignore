@@ -15,6 +15,7 @@ CONTEXT.md
 artifacts/
 .worktrees/
 
+/.work/
 # AtomCode symlinks
 .atomcode/
 .atomcode.md

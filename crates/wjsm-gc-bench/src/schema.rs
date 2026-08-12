@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::resource::HostInfo;
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 2;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 3;
 
 /// 单个样本的原始数据。
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -11,7 +11,7 @@ pub struct SampleReport {
     /// user main() 执行纳秒（不含 compile/instantiate/startup）。
     pub steady_state_ns: u64,
     /// runtime 提供的完整 GC telemetry 快照。
-    pub telemetry: wjsm_runtime::GcTelemetrySnapshot,
+    pub telemetry: wjsm_gc::GcTelemetrySnapshot,
 }
 
 /// 分布统计摘要。
@@ -50,6 +50,8 @@ pub struct DerivedMetrics {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BenchReport {
     pub schema_version: u32,
+    /// `measured` 或 `needs-capability-runner`；后者不得被解释为完整平台门通过。
+    pub evidence_status: String,
     pub config: BenchConfig,
     pub hardware: HostInfo,
     pub samples: Vec<SampleReport>,
@@ -76,5 +78,5 @@ pub struct BenchSummary {
     pub pause_max_ns: Distribution,
     pub metrics: DerivedMetrics,
     /// 所有样本 telemetry 的聚合累计。
-    pub telemetry_totals: wjsm_runtime::GcTelemetrySnapshot,
+    pub telemetry_totals: wjsm_gc::GcTelemetrySnapshot,
 }

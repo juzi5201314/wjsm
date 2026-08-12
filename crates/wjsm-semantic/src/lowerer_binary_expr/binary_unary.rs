@@ -292,65 +292,26 @@ impl Lowerer {
                     },
                 );
             }
-            // < 使用 abstract_compare builtin
-            swc_ast::BinaryOp::Lt => {
+            // 关系比较由 host owner 按原始左右顺序执行 ToPrimitive；reverse 只反转比较方向，
+            // invert 表示 <=/>=，并保留 unordered(NaN/undefined) 必须返回 false 的语义。
+            swc_ast::BinaryOp::Lt
+            | swc_ast::BinaryOp::Gt
+            | swc_ast::BinaryOp::LtEq
+            | swc_ast::BinaryOp::GtEq => {
+                let reverse = self.load_bool_constant(
+                    matches!(bin.op, swc_ast::BinaryOp::Gt | swc_ast::BinaryOp::LtEq),
+                    current_block,
+                );
+                let invert = self.load_bool_constant(
+                    matches!(bin.op, swc_ast::BinaryOp::LtEq | swc_ast::BinaryOp::GtEq),
+                    current_block,
+                );
                 self.current_function.append_instruction(
                     current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::AbstractCompare,
-                        args: vec![lhs, rhs],
-                    },
-                );
-            }
-            // > 相当于 (rhs < lhs)
-            swc_ast::BinaryOp::Gt => {
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::AbstractCompare,
-                        args: vec![rhs, lhs],
-                    },
-                );
-            }
-            // <= 相当于 NOT (rhs < lhs)
-            swc_ast::BinaryOp::LtEq => {
-                let cmp_result = self.alloc_value();
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::CallBuiltin {
-                        dest: Some(cmp_result),
-                        builtin: Builtin::AbstractCompare,
-                        args: vec![rhs, lhs],
-                    },
-                );
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::Unary {
-                        dest,
-                        op: UnaryOp::Not,
-                        value: cmp_result,
-                    },
-                );
-            }
-            // >= 相当于 NOT (lhs < rhs)
-            swc_ast::BinaryOp::GtEq => {
-                let cmp_result = self.alloc_value();
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::CallBuiltin {
-                        dest: Some(cmp_result),
-                        builtin: Builtin::AbstractCompare,
-                        args: vec![lhs, rhs],
-                    },
-                );
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::Unary {
-                        dest,
-                        op: UnaryOp::Not,
-                        value: cmp_result,
+                        args: vec![lhs, rhs, reverse, invert],
                     },
                 );
             }
@@ -403,7 +364,7 @@ impl Lowerer {
         let lhs = self.lower_expr(bin.left.as_ref(), block)?;
         let branch_block = self.resolve_store_block(block);
         // 若 resolve_store_block 返回的 block 含 Phi（来自嵌套逻辑/条件表达式），
-        // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch → WASM codegen 错误。
+        // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch，违反 CFG codegen 契约。
         let branch_block = if self.current_function.block(branch_block).is_some_and(|b| {
             b.instructions()
                 .iter()
@@ -578,6 +539,9 @@ impl Lowerer {
                             .contains_key(&(module_id, name.clone()))
                             || self.import_aliases.contains_key(&(module_id, name.clone()))
                     });
+                    if self.eval_scope_bridge_active() && self.scopes.lookup(&name).is_err() {
+                        return self.lower_eval_typeof_binding(&name, block);
+                    }
                     if !has_module_alias
                         && !self.eval_scope_bridge_active()
                         && name != "eval"
@@ -875,26 +839,15 @@ impl Lowerer {
                 }
             }
             Target::Captured(env_val, key_val) => {
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::SetProp {
-                        object: env_val,
-                        key: key_val,
-                        value: new_val,
-                    },
-                );
+                let write_result = self.emit_set_prop(block, env_val, key_val, new_val);
+                let continue_block = self.lower_value_exception_branch(block, write_result)?;
                 // owner 解析后的 block 必须作为后续语句入口，不能再被入口 Jump 覆盖。
-                self.expr_merge_block = Some(block);
+                self.expr_merge_block = Some(continue_block);
             }
             Target::Member { obj, key } => {
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::SetProp {
-                        object: obj,
-                        key,
-                        value: new_val,
-                    },
-                );
+                let write_result = self.emit_set_prop(block, obj, key, new_val);
+                let continue_block = self.lower_value_exception_branch(block, write_result)?;
+                self.expr_merge_block = Some(continue_block);
             }
         }
 
@@ -1036,17 +989,11 @@ impl Lowerer {
             },
         );
         let (env_num, env_new) = self.append_update_math(env_block, env_old, update.op);
-        self.current_function.append_instruction(
-            env_block,
-            Instruction::SetProp {
-                object: env_val,
-                key: key_val,
-                value: env_new,
-            },
-        );
+        let write_result = self.emit_set_prop(env_block, env_val, key_val, env_new);
+        let env_continue = self.lower_value_exception_branch(env_block, write_result)?;
         let env_result = if update.prefix { env_new } else { env_num };
         self.current_function
-            .set_terminator(env_block, Terminator::Jump { target: merge });
+            .set_terminator(env_continue, Terminator::Jump { target: merge });
 
         let result = self.alloc_value();
         self.current_function.append_instruction(
@@ -1059,7 +1006,7 @@ impl Lowerer {
                         value: local_result,
                     },
                     PhiSource {
-                        predecessor: env_block,
+                        predecessor: env_continue,
                         value: env_result,
                     },
                 ],

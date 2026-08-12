@@ -16,3 +16,12 @@ console.log(5 >= 6);              // false
 console.log(true < 2);            // true (ToNumber(true)=1, 1<2)
 console.log(false < 1);           // true (ToNumber(false)=0, 0<1)
 console.log(3 > true);            // true
+var order = [];
+var left = { valueOf() { order.push("left"); return 2; } };
+var right = { valueOf() { order.push("right"); return 3; } };
+console.log(left < right, order.join(","));
+order.length = 0;
+console.log(left > right, order.join(","));
+console.log(undefined <= 0);
+console.log(0 >= undefined);
+console.log("\u{10000}" < "\uE000");

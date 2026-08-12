@@ -77,7 +77,7 @@ fn create_transform_object<E: ExecContext>(ctx: &mut E, handle: u32) -> Value {
     object
 }
 
-pub async fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
+pub fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
     let transformer = args
         .first()
         .copied()

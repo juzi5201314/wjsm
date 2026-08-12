@@ -422,11 +422,14 @@ impl PlatformCapabilities {
     pub fn detect() -> Self {
         let isa = IsaDispatch::detect().kind();
         let numa = NumaTopology::detect();
+        let (decommit, hard_isolation, large_pages_hint) = platform_vm_flags();
         let mut needs = Vec::new();
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        {
-            needs.push("named-os-backend");
+        if !cfg!(all(
+            target_arch = "x86_64",
+            any(target_os = "linux", target_os = "windows")
+        )) {
+            needs.push("native-x86_64-linux-windows");
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -437,23 +440,15 @@ impl PlatformCapabilities {
                 needs.push("avx2");
             }
         }
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            needs.push("aarch64-neon");
+        if !decommit {
+            needs.push("decommit");
         }
-        #[cfg(not(target_os = "windows"))]
-        {
-            needs.push("windows-x86_64");
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            needs.push("macos-arm64");
+        if !hard_isolation {
+            needs.push("hard-isolation");
         }
         if !numa.multi_node {
             needs.push("multi-numa");
         }
-
-        let (decommit, hard_isolation, large_pages_hint) = platform_vm_flags();
 
         Self {
             os: std::env::consts::OS,
@@ -536,14 +531,28 @@ mod tests {
         assert!(!caps.os.is_empty());
         assert!(!caps.arch.is_empty());
         assert!(caps.page_size >= 4096);
-        // Missing hardware must be listed, never auto-closed.
+        // 缺失硬件能力必须列出，不能自动视为通过。
         assert!(
             caps.needs_capability_runner.contains(&"multi-numa") || caps.numa.multi_node,
             "multi-numa must be covered or listed as needs-capability-runner"
         );
+        let supported_host = caps.arch == "x86_64" && matches!(caps.os, "linux" | "windows");
         assert!(
-            caps.needs_capability_runner.contains(&"aarch64-neon") || caps.arch == "aarch64",
-            "aarch64-neon must stay open without the ISA"
+            supported_host
+                || caps
+                    .needs_capability_runner
+                    .contains(&"native-x86_64-linux-windows"),
+            "非 x86_64 Linux/Windows 主机必须列出 native capability runner"
+        );
+        assert_eq!(
+            caps.needs_capability_runner.contains(&"decommit"),
+            !caps.decommit,
+            "缺失 decommit 时必须请求 capability runner"
+        );
+        assert_eq!(
+            caps.needs_capability_runner.contains(&"hard-isolation"),
+            !caps.hard_isolation,
+            "缺失 hard isolation 时必须请求 capability runner"
         );
     }
 

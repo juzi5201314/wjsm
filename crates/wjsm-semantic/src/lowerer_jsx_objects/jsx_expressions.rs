@@ -244,14 +244,7 @@ impl Lowerer {
                 constant: value_const,
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object,
-                key: key_val,
-                value: value_val,
-            },
-        );
+        self.emit_set_prop(block, object, key_val, value_val);
     }
 
     fn set_import_meta_resolve_property(
@@ -289,14 +282,7 @@ impl Lowerer {
                 args: vec![filename_val],
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object,
-                key: key_val,
-                value: resolve_fn,
-            },
-        );
+        self.emit_set_prop(block, object, key_val, resolve_fn);
     }
     pub(crate) fn lower_tpl(
         &mut self,
@@ -377,14 +363,7 @@ impl Lowerer {
                 constant: value_key,
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: desc_obj_val,
-                key: value_key_val,
-                value: raw_arr,
-            },
-        );
+        self.emit_set_prop(block, desc_obj_val, value_key_val, raw_arr);
         self.current_function.append_instruction(
             block,
             Instruction::CallBuiltin {

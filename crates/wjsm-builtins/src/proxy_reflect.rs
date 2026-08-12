@@ -1,6 +1,6 @@
 //! Reflect + Object 同步属性算法（后端无关）。
 //!
-//! 纯算法在此；host-wasm 仅保留薄包装供未迁移文件（array_object.rs / core.rs）调用。
+//! 纯算法在此；native host 仅保留薄包装供同步属性入口调用。
 
 use wjsm_host::{ExecContext, Value};
 use wjsm_ir::value;
@@ -23,7 +23,7 @@ pub fn alloc_data_property_descriptor<E: ExecContext>(
 
 /// `Reflect.getOwnPropertyDescriptor(target, prop)` 同步路径（非 Proxy）。
 ///
-/// 返回 undefined 或描述符对象。Proxy 路径在 `proxy_reflect_async` 中处理。
+/// 返回 undefined 或描述符对象。Proxy 路径在 `proxy_reflect_reentrant` 中处理。
 pub fn reflect_get_own_property_descriptor_impl<E: ExecContext>(
     ctx: &mut E,
     target: Value,
@@ -64,7 +64,7 @@ pub fn reflect_get_own_property_descriptor_impl<E: ExecContext>(
 
 /// `Reflect.ownKeys(target)` 同步路径（非 Proxy）。
 ///
-/// 返回键数组。Proxy 路径在 `proxy_reflect_async::proxy_own_keys_trap_async` 中处理。
+/// 返回键数组。Proxy 路径在 `proxy_reflect_reentrant::proxy_own_keys_trap` 中处理。
 pub fn reflect_own_keys_impl<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
     ctx.reflect_own_keys(target)
 }

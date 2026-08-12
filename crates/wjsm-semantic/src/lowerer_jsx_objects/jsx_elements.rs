@@ -271,14 +271,7 @@ impl Lowerer {
                             constant: key_const,
                         },
                     );
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::SetProp {
-                            object: obj_dest,
-                            key: key_dest,
-                            value: attr_value,
-                        },
-                    );
+                    self.emit_set_prop(block, obj_dest, key_dest, attr_value);
                 }
                 swc_ast::JSXAttrOrSpread::SpreadElement(spread) => {
                     let source = self.lower_expr(&spread.expr, block)?;

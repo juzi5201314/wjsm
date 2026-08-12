@@ -1,8 +1,6 @@
 //! 后端无关的宿主环境（host environment）抽象。
 //!
-//! 本 crate 定义 JS runtime 的宿主能力 trait，**不依赖** wasmtime 或任何具体后端。
-//! 各后端（wasmtime / native / cranelift）实现这些 trait 即可接入同一套 builtins 与
-//! 动态代码服务（编译编排位于 `wjsm-host-wasm::compile_source`）。
+//! 本 crate 定义 JS runtime 的宿主能力 trait，不依赖具体 native image 实现。
 //!
 //! # 分层
 //!
@@ -16,19 +14,19 @@
 //! ExecContext: HeapContext                          ← builtins 完整能力（泛型单态化）
 //!        │ 后端用自身运行时上下文实现
 //!        ▼
-//! wjsm-host-wasm: WasmExecContext  /  native 后端: NativeExecContext
+//! native 后端的 `NativeExecContext` 实现这些 trait。
 //! ```
 //!
 //! # 设计原则
 //!
-//! - **后端无关**：trait 中不出现 `wasmtime::Caller` / `Store` 等后端特化类型。
-//!   能力的语义实现经 [`HeapContext`] / [`ExecContext`] 落到后端堆/侧表。
+//! - **后端无关**：trait 中不出现执行引擎特化类型。
 //! - **NaN-boxing 单一来源**：值编码常量与编解码函数来自 `wjsm-ir`，本 crate 复用。
 //! - **按需拆分**：`HostRuntime` 由多个 sub-trait 组合，便于后端按能力子集实现。
 //! - **零 vtable builtins**：`wjsm-builtins` 以 `<E: ExecContext>` 泛型实例化，编译期单态化。
 
 mod async_host;
 pub mod backend;
+mod call_args;
 mod console_host;
 mod exec_context;
 mod fetch_types;
@@ -44,13 +42,14 @@ mod stream_types;
 
 pub use async_host::AsyncHost;
 pub use backend::JsBackend;
+pub use call_args::CallArgs;
 pub use console_host::ConsoleHost;
 pub use exec_context::{
-    AtomicsRmwOp, BoundEntry, CapturedScope, ClosureEntry, ExecContext, ExecFuture,
-    IteratorNextStep, NativeCallableRef, PreparedCallback, PromiseCombinatorReactionKind,
-    PromiseEntry, PromiseReaction, PromiseResolvingKind, PromiseSettlement, PromiseState,
-    PropertyLookup, ProxyEntry, QueuingStrategySizeKind, ReactionType, RegExpMatchInfo,
-    ToPrimitiveHintKind, TransformStreamFlushParams, TypedArrayView,
+    AtomicsRmwOp, BoundEntry, CapturedScope, ClosureEntry, ExecContext, IteratorNextStep,
+    NativeCallableRef, PreparedCallback, PromiseCombinatorReactionKind, PromiseEntry,
+    PromiseReaction, PromiseResolvingKind, PromiseSettlement, PromiseState, PropertyLookup,
+    ProxyEntry, QueuingStrategySizeKind, ReactionType, RegExpMatchInfo, ToPrimitiveHintKind,
+    TransformStreamFlushParams, TypedArrayView,
 };
 pub use fetch_types::{
     AbortSignalEntry, FetchRequestEntry, FetchResourceTimingState, FetchResponseEntry,

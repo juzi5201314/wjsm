@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-07-27)
+Superseded by ADR 0014（2026-08-12）；后端无关语义、host 契约与 GC 分层继续有效
 
 ## Context
 

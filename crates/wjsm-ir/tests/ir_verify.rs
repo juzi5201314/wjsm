@@ -14,6 +14,7 @@ fn builtin_display_formats_selected_categories_without_panicking() {
         (Builtin::ObjectDefineProperties, "object.define_properties"),
         (Builtin::ReadableStreamConstructor, "ReadableStream"),
         (Builtin::TransformStreamConstructor, "TransformStream"),
+        (Builtin::StructuredClone, "structuredClone"),
     ];
 
     for (builtin, expected) in cases {
@@ -193,6 +194,29 @@ fn verifier_rejects_super_call_forward_args_with_explicit_args() {
         module_with_existing_module(module, [entry]),
         &["super_call cannot combine forward_args with explicit args"],
     );
+}
+
+#[test]
+fn verifier_treats_object_spread_destination_as_an_operand() {
+    let module = Module::new();
+    let mut entry = BasicBlock::new(BasicBlockId(0));
+    entry.push_instruction(Instruction::NewObject {
+        dest: ValueId(0),
+        capacity: 1,
+    });
+    entry.push_instruction(Instruction::NewObject {
+        dest: ValueId(1),
+        capacity: 1,
+    });
+    entry.push_instruction(Instruction::ObjectSpread {
+        dest: ValueId(0),
+        source: ValueId(1),
+    });
+    entry.set_terminator(Terminator::Return {
+        value: Some(ValueId(0)),
+    });
+
+    assert_verify_ok(module_with_existing_module(module, [entry]));
 }
 
 #[test]

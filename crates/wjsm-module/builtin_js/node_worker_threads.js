@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-// Histogram clone 必须在 workerData/message 反序列化前注册目标 Store prototype。
+// Histogram clone 必须在 workerData/message 反序列化前注册目标 agent prototype。
 import 'node:perf_hooks';
 
 var MessagePort;

@@ -17,7 +17,6 @@ use crate::{
 };
 
 pub const DEFAULT_TIMEOUT_SECS: u64 = 15;
-pub const DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB: u64 = 256;
 pub const DEFAULT_CHILD_MEMORY_LIMIT_MIB: u64 = 5 * 1024;
 pub const DEFAULT_JOB_MEMORY_COST_MIB: u64 = 2 * 1024;
 
@@ -28,8 +27,6 @@ pub struct RunLimits {
     pub timeout: Duration,
     /// Linux：单条子进程虚拟地址空间上限（MiB）；0 表示不设置。
     pub child_memory_limit_mib: u64,
-    /// 传给 wjsm CLI 的 Wasmtime 线性内存虚拟地址预留（MiB）；0 表示使用 Wasmtime 默认值。
-    pub wasmtime_memory_reservation_mib: u64,
     /// 整个 runner 允许并发子进程使用的近似物理内存预算（MiB）；0 表示不限制并发。
     pub memory_budget_mib: u64,
     /// 单个并发 worker 计入预算的估算物理内存成本（MiB）。
@@ -43,7 +40,6 @@ impl Default for RunLimits {
         Self {
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
             child_memory_limit_mib: DEFAULT_CHILD_MEMORY_LIMIT_MIB,
-            wasmtime_memory_reservation_mib: DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB,
             memory_budget_mib: DEFAULT_JOB_MEMORY_COST_MIB,
             job_memory_cost_mib: DEFAULT_JOB_MEMORY_COST_MIB,
             jobs: 1,
@@ -117,11 +113,10 @@ pub struct Failure {
 /// 运行单个测试（带超时与可选内存上限）。
 pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult {
     let source = build_test_source(test, harness);
-    let mut command =
-        match build_wjsm_command(test.is_module(), limits.wasmtime_memory_reservation_mib) {
-            Ok(command) => command,
-            Err(error) => return TestResult::Error(error),
-        };
+    let mut command = match build_wjsm_command(test.is_module()) {
+        Ok(command) => command,
+        Err(error) => return TestResult::Error(error),
+    };
 
     apply_child_memory_limit(&mut command, limits.child_memory_limit_mib);
 
@@ -141,17 +136,9 @@ pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult
     }
 }
 
-fn build_wjsm_command(
-    is_module: bool,
-    wasmtime_memory_reservation_mib: u64,
-) -> Result<Command, String> {
+fn build_wjsm_command(is_module: bool) -> Result<Command, String> {
     let wjsm_binary = find_wjsm_binary()?;
     let mut command = Command::new(&wjsm_binary);
-    if wasmtime_memory_reservation_mib > 0 {
-        command
-            .arg("--wasmtime-memory-reservation")
-            .arg(format!("{wasmtime_memory_reservation_mib}M"));
-    }
     command.args(["run", "-"]);
     if !is_module {
         command.arg("--script");
@@ -290,7 +277,7 @@ fn evaluate_wjsm_output(
 /// wjsm 退出码约定：
 /// - 0：成功
 /// - 1：编译错误（parse/lower/compile），stderr 格式 `Error: {e:#}`
-/// - 2：运行时错误（WASM 执行），stderr 格式 `Runtime error: {e:#}`
+/// - 2：运行时错误（native 执行），stderr 格式 `Runtime error: {e:#}`
 ///
 /// test262 phase 与 wjsm 阶段的对应：
 /// - `Parse` / `Early`：编译期错误（exit 1）。wjsm 编译错误消息不含错误类型名
@@ -555,20 +542,5 @@ mod tests {
 
         assert!(source.contains("var $262 = { gc: gc };"));
         assert!(!source.contains("function gc()"));
-    }
-
-    #[test]
-    fn default_memory_settings_are_test262_friendly() {
-        let limits = RunLimits::default();
-
-        assert_eq!(
-            limits.wasmtime_memory_reservation_mib,
-            DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB
-        );
-        assert_eq!(
-            limits.child_memory_limit_mib,
-            DEFAULT_CHILD_MEMORY_LIMIT_MIB
-        );
-        assert!(limits.child_memory_limit_mib > limits.wasmtime_memory_reservation_mib);
     }
 }

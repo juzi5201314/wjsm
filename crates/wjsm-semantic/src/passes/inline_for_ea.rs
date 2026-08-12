@@ -78,7 +78,11 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
                 source.value.0 += offset;
             }
         }
-        CallBuiltin { dest, args, builtin: _ } => {
+        CallBuiltin {
+            dest,
+            args,
+            builtin: _,
+        } => {
             if let Some(dest) = dest {
                 add(dest);
             }
@@ -142,7 +146,13 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             add(object);
             add(key);
         }
-        SetProp { object, key, value } => {
+        SetProp {
+            dest,
+            object,
+            key,
+            value,
+        } => {
+            add(dest);
             add(object);
             add(key);
             add(value);
@@ -159,12 +169,22 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
         NewArray { dest, .. } => {
             add(dest);
         }
-        GetElem { dest, object, index } => {
+        GetElem {
+            dest,
+            object,
+            index,
+        } => {
             add(dest);
             add(object);
             add(index);
         }
-        SetElem { object, index, value } => {
+        SetElem {
+            dest,
+            object,
+            index,
+            value,
+        } => {
+            add(dest);
             add(object);
             add(index);
             add(value);
@@ -271,7 +291,11 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
                 rep(&mut source.value);
             }
         }
-        CallBuiltin { dest, args, builtin: _ } => {
+        CallBuiltin {
+            dest,
+            args,
+            builtin: _,
+        } => {
             if let Some(dest) = dest {
                 rep(dest);
             }
@@ -329,7 +353,13 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(object);
             rep(key);
         }
-        SetProp { object, key, value } => {
+        SetProp {
+            dest,
+            object,
+            key,
+            value,
+        } => {
+            rep(dest);
             rep(object);
             rep(key);
             rep(value);
@@ -344,12 +374,22 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(value);
         }
         NewArray { dest, .. } => rep(dest),
-        GetElem { dest, object, index } => {
+        GetElem {
+            dest,
+            object,
+            index,
+        } => {
             rep(dest);
             rep(object);
             rep(index);
         }
-        SetElem { object, index, value } => {
+        SetElem {
+            dest,
+            object,
+            index,
+            value,
+        } => {
+            rep(dest);
             rep(object);
             rep(index);
             rep(value);
@@ -758,9 +798,9 @@ fn inline_static_candidate(
     // 跳转 catch 处理块」——否则 throw 编译为 CreateException+Return 直接从
     // 调用者函数返回，绕过语句级 is_exception 分叉（try/catch 失效）。
     let exception_path = if !candidate.is_construct {
-        candidate
-            .dest
-            .and_then(|d| find_exception_path(&module.functions()[func_idx], block_idx, instr_idx, d))
+        candidate.dest.and_then(|d| {
+            find_exception_path(&module.functions()[func_idx], block_idx, instr_idx, d)
+        })
     } else {
         None
     };
@@ -829,7 +869,9 @@ fn inline_static_candidate(
                 value: *value,
             });
         }
-        b_pre.set_terminator(Terminator::Jump { target: clone_entry });
+        b_pre.set_terminator(Terminator::Jump {
+            target: clone_entry,
+        });
     }
 
     // ── 追加克隆块并应用替换 ──
@@ -872,9 +914,13 @@ fn inline_static_candidate(
                             value: resolve_param(*value),
                         });
                     }
-                    b_post
-                        .instructions_mut()
-                        .insert(0, Instruction::Phi { dest: call_dest, sources });
+                    b_post.instructions_mut().insert(
+                        0,
+                        Instruction::Phi {
+                            dest: call_dest,
+                            sources,
+                        },
+                    );
                 }
                 _ => {}
             }
@@ -936,9 +982,10 @@ fn find_exception_path(
 
 /// 块 `t` 是否为回边目标（存在索引更大的块跳转到它，即循环头）。
 fn is_backedge_target(function: &wjsm_ir::Function, t: BasicBlockId) -> bool {
-    function.blocks().iter().any(|b| {
-        b.id().0 > t.0 && terminator_successors(b.terminator()).contains(&t)
-    })
+    function
+        .blocks()
+        .iter()
+        .any(|b| b.id().0 > t.0 && terminator_successors(b.terminator()).contains(&t))
 }
 
 /// 阶段 C 的单轮候选。
@@ -1015,9 +1062,10 @@ fn compute_region(
             Some(b) => b,
             None => continue,
         };
-        let contains_region_instr = block.instructions().iter().any(|ins| {
-            instruction_dest(ins).is_some_and(|d| closure.contains(&d))
-        });
+        let contains_region_instr = block
+            .instructions()
+            .iter()
+            .any(|ins| instruction_dest(ins).is_some_and(|d| closure.contains(&d)));
         if !contains_region_instr {
             continue;
         }
@@ -1247,9 +1295,7 @@ fn speculative_inline_round(module: &mut Module) -> bool {
             let conflict = candidates.iter().enumerate().any(|(j, other)| {
                 i != j
                     && other.func_idx == cand.func_idx
-                    && cand
-                        .region_blocks
-                        .contains(&BasicBlockId(other.block_idx))
+                    && cand.region_blocks.contains(&BasicBlockId(other.block_idx))
             });
             conflict.then_some(i as u32)
         })
@@ -1305,8 +1351,8 @@ fn inline_speculative_candidate(
     //      → 回边由循环豁免；跳板目标**纳入克隆**（克隆跳板仍 Jump 到循环头，
     //      后向边豁免），避免克隆体产生指向非循环头块的后向边（状态机降级 ~2x）。
     //   2. 其他非循环头出口（如 return/throw）→ needs_cfg_dispatch 判定降级为
-    //      cfg 状态机，状态机编译部分形态有栈不平衡缺陷（wasm 校验 values
-    //      remaining）→ 保守跳过该调用点。
+    //      CFG 状态机，部分形态存在栈不平衡缺陷（values remaining）→
+    //      保守跳过该调用点。
     let mut region_blocks = candidate.region_blocks.clone();
     {
         let function = &module.functions()[func_idx];
@@ -1385,14 +1431,19 @@ fn inline_speculative_candidate(
     let callee_offset = module.functions()[func_idx].blocks().len() as u32;
     let fast_entry = BasicBlockId(target_func.entry().0 + callee_offset);
     // 区域克隆入口 = callee 克隆追加后的 blocks.len()。
-    let region_entry =
-        BasicBlockId(module.functions()[func_idx].blocks().len() as u32 + target_func.blocks().len() as u32);
+    let region_entry = BasicBlockId(
+        module.functions()[func_idx].blocks().len() as u32 + target_func.blocks().len() as u32,
+    );
 
     // 快路径 callee 的 Throw（语句级异常传播）改写为「存异常到调用点的 catch
     // 变量 + 跳转 catch 处理块」，否则 throw 编译为 CreateException+Return
     // 直接从调用者函数返回，绕过语句级 is_exception 分叉（try/catch 失效）。
-    let exception_path =
-        find_exception_path(&module.functions()[func_idx], block_idx, instr_idx, candidate.dest);
+    let exception_path = find_exception_path(
+        &module.functions()[func_idx],
+        block_idx,
+        instr_idx,
+        candidate.dest,
+    );
 
     // 参数替换映射（callee params 约定 [$env, $this, ...args]）：
     // 参数 LoadVar 是纯参数读取，克隆时跳过并记录 use 替换（同阶段 A，见
@@ -1459,7 +1510,9 @@ fn inline_speculative_candidate(
                 if let Some(v) = value {
                     ret_mapped = v;
                 }
-                clone.set_terminator(Terminator::Jump { target: region_entry });
+                clone.set_terminator(Terminator::Jump {
+                    target: region_entry,
+                });
             }
             Terminator::Throw { value } => {
                 if let Some((tmp_name, catch_target)) = &exception_path {
@@ -1491,10 +1544,7 @@ fn inline_speculative_candidate(
     }
     // 返回值可能来自参数 LoadVar 的 dest（如 `return x`），经 param_subst 解析
     // 为实参值，否则区域克隆中 R 的 use 会指向悬空值。
-    if let Some((_, resolved)) = param_subst
-        .iter()
-        .find(|(old, _)| *old == ret_mapped)
-    {
+    if let Some((_, resolved)) = param_subst.iter().find(|(old, _)| *old == ret_mapped) {
         ret_mapped = *resolved;
     }
 
@@ -1575,9 +1625,8 @@ fn inline_speculative_candidate(
         for name in var_names {
             let all_in_s = function.blocks().iter().all(|b| {
                 b.instructions().iter().all(|ins| match ins {
-                    Instruction::LoadVar { name: n, .. } | Instruction::StoreVar { name: n, .. } => {
-                        n != name || s_set.contains(&b.id())
-                    }
+                    Instruction::LoadVar { name: n, .. }
+                    | Instruction::StoreVar { name: n, .. } => n != name || s_set.contains(&b.id()),
                     _ => true,
                 })
             });
@@ -1587,7 +1636,6 @@ fn inline_speculative_candidate(
             }
         }
     }
-
 
     let bool_false_id = {
         let mut found = None;

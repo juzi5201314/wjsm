@@ -1,8 +1,13 @@
-// 模块 Bundler：将多个模块编译为单一 WASM 二进制
+// 模块 Bundler：将多个模块 lower 为单一 semantic IR program
 
 use anyhow::{Context, Result, anyhow};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
+use std::path::{Component, Path, PathBuf};
+use wjsm_artifact_format::{
+    ArtifactBuildInput, BuildOptions, ManifestModule, ModuleKind as ArtifactModuleKind,
+    ModuleManifest,
+};
 use wjsm_semantic::{ModuleKind, ModuleLoweringInput, ModuleMetadata};
 
 use super::builtin_modules;
@@ -13,6 +18,7 @@ use wjsm_ir::{ModuleId, Program};
 
 pub struct RuntimeEntryBundle {
     pub program: Program,
+    pub manifest: ModuleManifest,
     pub entry_module_id: ModuleId,
     pub module_id_span: u32,
 }
@@ -127,7 +133,7 @@ impl ModuleBundler {
                         self.emit_debug_checks,
                     )
                     .with_context(|| "Failed to build builtin segment")?;
-                    // 落盘失败不阻塞编译（与 CLI 的 wasm 缓存同一约定：缓存是尽力而为）。
+                    // 落盘失败不阻塞编译：缓存是尽力而为的派生数据。
                     let _ = crate::builtin_cache::store_builtin_segment(dir, &key, &segment);
                     segment
                 }
@@ -189,47 +195,47 @@ impl ModuleBundler {
         .with_context(|| "Failed to lower user modules with builtin seed")
     }
 
-    /// 将入口模块及其依赖 lower 为 IR（不编译 WASM）
+    /// 将入口模块及其依赖 lower 为 IR（不执行 codegen）
     pub fn lower_bundle(&self, entry: &Path) -> Result<wjsm_ir::Program> {
         let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
             .with_context(|| "Failed to build module graph")?;
 
-        let (order, cycles) = graph
-            .topological_order()
-            .with_context(|| "Failed to compute topological order")?;
-        let _ = cycles;
+        lower_graph(&graph, self.emit_debug_checks)
+    }
 
-        let link_result =
-            analyze_module_links(&graph).with_context(|| "Failed to analyze module links")?;
-
-        let mut modules = Vec::new();
-        for &id in &order {
-            let node = graph.get_module(id).unwrap();
-            modules.push(ModuleLoweringInput {
-                id: node.id,
-                ast: node.ast.clone(),
-                metadata: module_metadata_for_node(node)?,
-                source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
-            });
+    /// 将入口模块及其依赖 lower 为 portable artifact 的完整 target-independent 输入。
+    pub fn lower_artifact_input(&self, entry: &Path) -> Result<ArtifactBuildInput> {
+        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
+            .with_context(|| "Failed to build module graph")?;
+        let program = lower_graph(&graph, self.emit_debug_checks)?;
+        let manifest = manifest_for_graph(&graph, &self.root_path, &self.options)?;
+        let mut input = ArtifactBuildInput::new(
+            program,
+            manifest,
+            BuildOptions {
+                include_source_map: self.emit_debug_checks,
+                include_source_text: self.emit_debug_checks,
+            },
+        );
+        if self.emit_debug_checks {
+            input.source_text = graph
+                .get_module(graph.entry_id())
+                .map(|module| std::sync::Arc::from(module.source.as_str()));
         }
-
-        wjsm_semantic::lower_modules_with_debug(
-            modules,
-            &link_result.import_map,
-            &link_result.dynamic_import_targets,
-            &link_result.export_names,
-            &link_result.dynamic_import_specifiers,
-            &link_result.re_export_map,
-            self.emit_debug_checks,
-        )
-        .with_context(|| "Failed to lower modules")
+        Ok(input)
     }
 
     /// 将运行时加载的入口模块 lower 为可实例化 IR，并为入口 ESM 创建命名空间对象。
     pub fn lower_runtime_entry_bundle(&self, entry: &Path) -> Result<RuntimeEntryBundle> {
-        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
-            .with_context(|| "Failed to build module graph")?;
-        lower_runtime_graph(&graph, self.emit_debug_checks)
+        let graph =
+            ModuleGraph::build_runtime_with_options(entry, &self.root_path, self.options.clone())
+                .with_context(|| "Failed to build runtime module graph")?;
+        lower_runtime_graph(
+            &graph,
+            &self.root_path,
+            &self.options,
+            self.emit_debug_checks,
+        )
     }
 
     /// 将 Node 内置模块 lower 为运行时可实例化 ESM bundle。
@@ -240,7 +246,12 @@ impl ModuleBundler {
             self.options.clone(),
         )
         .with_context(|| "Failed to build built-in module graph")?;
-        lower_runtime_graph(&graph, self.emit_debug_checks)
+        lower_runtime_graph(
+            &graph,
+            &self.root_path,
+            &self.options,
+            self.emit_debug_checks,
+        )
     }
 
     /// 解析入口模块 AST（含依赖图构建，用于 dump-ast 等）
@@ -261,7 +272,202 @@ impl ModuleBundler {
     }
 }
 
-fn lower_runtime_graph(graph: &ModuleGraph, emit_debug_checks: bool) -> Result<RuntimeEntryBundle> {
+fn lower_graph(graph: &ModuleGraph, emit_debug_checks: bool) -> Result<Program> {
+    let (order, cycles) = graph
+        .topological_order()
+        .with_context(|| "Failed to compute topological order")?;
+    let _ = cycles;
+    let link_result =
+        analyze_module_links(graph).with_context(|| "Failed to analyze module links")?;
+    let mut modules = Vec::with_capacity(order.len());
+    for id in order {
+        let node = graph.get_module(id).expect("ordered graph node is present");
+        modules.push(ModuleLoweringInput {
+            id: node.id,
+            ast: node.ast.clone(),
+            metadata: module_metadata_for_node(node)?,
+            source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
+        });
+    }
+    wjsm_semantic::lower_modules_with_debug(
+        modules,
+        &link_result.import_map,
+        &link_result.dynamic_import_targets,
+        &link_result.export_names,
+        &link_result.dynamic_import_specifiers,
+        &link_result.re_export_map,
+        emit_debug_checks,
+    )
+    .with_context(|| "Failed to lower modules")
+}
+
+fn manifest_for_graph(
+    graph: &ModuleGraph,
+    root_path: &Path,
+    options: &ResolutionOptions,
+) -> Result<ModuleManifest> {
+    let canonical_root = root_path
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize module root {}", root_path.display()))?;
+    let mut modules = Vec::new();
+    for id in graph.all_module_ids() {
+        let node = graph.get_module(id).expect("graph node is present");
+        let (logical_url, kind) =
+            if let Some(canonical) = builtin_modules::canonical_from_virtual_path(&node.path) {
+                (format!("node:{canonical}"), ArtifactModuleKind::Builtin)
+            } else {
+                let relative = node.path.strip_prefix(&canonical_root).map_err(|_| {
+                    anyhow!(
+                        "module {} is outside build root {}",
+                        node.path.display(),
+                        canonical_root.display()
+                    )
+                })?;
+                let logical_url = logical_url_from_path(relative)?;
+                let kind = if node.is_cjs {
+                    ArtifactModuleKind::CommonJs
+                } else {
+                    ArtifactModuleKind::EsModule
+                };
+                (logical_url, kind)
+            };
+        modules.push(ManifestModule {
+            id: node.id,
+            logical_url,
+            kind,
+            static_dependencies: node.imports.iter().map(|(id, _)| *id).collect(),
+            dynamic_dependencies: node.dynamic_imports.clone(),
+        });
+    }
+    Ok(ModuleManifest {
+        entry: graph.entry_id(),
+        modules,
+        resolution_conditions: options.conditions().to_vec(),
+    })
+}
+
+pub fn logical_url_from_path(path: &Path) -> Result<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(encode_logical_component(part)?),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(anyhow!(
+                    "module path is not root-relative: {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(anyhow!("module logical URL is empty"));
+    }
+    Ok(parts.join("/"))
+}
+
+fn encode_logical_component(component: &OsStr) -> Result<String> {
+    let bytes = logical_component_bytes(component)?;
+    let mut encoded = String::with_capacity(bytes.len());
+    for byte in bytes {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(encoded, "%{byte:02X}").expect("writing to String cannot fail");
+        }
+    }
+    Ok(encoded)
+}
+
+#[cfg(unix)]
+fn logical_component_bytes(component: &OsStr) -> Result<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    Ok(component.as_bytes().to_vec())
+}
+
+#[cfg(not(unix))]
+fn logical_component_bytes(component: &OsStr) -> Result<Vec<u8>> {
+    component
+        .to_str()
+        .map(|text| text.as_bytes().to_vec())
+        .ok_or_else(|| anyhow!("module path component is not valid Unicode: {component:?}"))
+}
+
+pub fn logical_url_path(root: &Path, logical_url: &str) -> Result<PathBuf> {
+    let mut path = root.to_path_buf();
+    for component in logical_url.split('/') {
+        let bytes = decode_logical_component(component)?;
+        let component = logical_component_os_string(bytes)?;
+        let mut components = Path::new(&component).components();
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+            return Err(anyhow!("invalid logical module URL {logical_url:?}"));
+        }
+        path.push(component);
+    }
+    Ok(path)
+}
+
+fn decode_logical_component(component: &str) -> Result<Vec<u8>> {
+    if component.is_empty() {
+        return Err(anyhow!("logical module URL contains an empty component"));
+    }
+    let source = component.as_bytes();
+    let mut decoded = Vec::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        if source[index] != b'%' {
+            if !source[index].is_ascii() {
+                return Err(anyhow!(
+                    "logical module URL contains unescaped non-ASCII bytes"
+                ));
+            }
+            decoded.push(source[index]);
+            index += 1;
+            continue;
+        }
+        let encoded = source
+            .get(index + 1..index + 3)
+            .ok_or_else(|| anyhow!("logical module URL contains truncated percent encoding"))?;
+        let high = decode_hex(encoded[0])?;
+        let low = decode_hex(encoded[1])?;
+        decoded.push((high << 4) | low);
+        index += 3;
+    }
+    Ok(decoded)
+}
+
+fn decode_hex(byte: u8) -> Result<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(anyhow!(
+            "logical module URL contains invalid percent encoding"
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn logical_component_os_string(bytes: Vec<u8>) -> Result<OsString> {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    Ok(OsString::from_vec(bytes))
+}
+
+#[cfg(not(unix))]
+fn logical_component_os_string(bytes: Vec<u8>) -> Result<OsString> {
+    String::from_utf8(bytes)
+        .map(OsString::from)
+        .map_err(|_| anyhow!("logical module URL is not valid UTF-8 on this platform"))
+}
+
+fn lower_runtime_graph(
+    graph: &ModuleGraph,
+    root_path: &Path,
+    options: &ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<RuntimeEntryBundle> {
     let entry_module_id = graph.entry_id();
     let (order, cycles) = graph
         .topological_order()
@@ -299,6 +505,7 @@ fn lower_runtime_graph(graph: &ModuleGraph, emit_debug_checks: bool) -> Result<R
     .with_context(|| "Failed to lower modules")?;
 
     Ok(RuntimeEntryBundle {
+        manifest: manifest_for_graph(graph, root_path, options)?,
         program,
         entry_module_id,
         module_id_span,
@@ -467,8 +674,8 @@ mod tests {
     }
 
     #[test]
-    fn lower_runtime_entry_bundle_keeps_static_dynamic_import_module_ids_offsettable() {
-        let root = create_temp_project("runtime_static_dynamic_import_offset");
+    fn lower_runtime_entry_bundle_keeps_static_dynamic_import_module_ids_local() {
+        let root = create_temp_project("runtime_static_dynamic_import_ids");
         write_type_module_package(&root);
         write_file(
             &root,
@@ -478,7 +685,7 @@ mod tests {
         write_file(&root, "dep.mjs", "export const value = 1;\n");
 
         let bundler = ModuleBundler::new(&root).expect("bundler");
-        let mut bundle = bundler
+        let bundle = bundler
             .lower_runtime_entry_bundle(Path::new("main.mjs"))
             .expect("runtime bundle should lower");
         let module_ids = module_id_constants(&bundle.program);
@@ -489,17 +696,6 @@ mod tests {
             module_ids.contains(&ModuleId(1)),
             "static import() fast path should retain dependency ModuleId constant: {module_ids:?}"
         );
-
-        bundle
-            .program
-            .offset_module_ids(100)
-            .expect("runtime bundle ids should offset");
-        let offset_module_ids = module_id_constants(&bundle.program);
-
-        assert!(!offset_module_ids.contains(&ModuleId(0)));
-        assert!(!offset_module_ids.contains(&ModuleId(1)));
-        assert!(offset_module_ids.contains(&ModuleId(100)));
-        assert!(offset_module_ids.contains(&ModuleId(101)));
     }
 
     fn module_id_constants(program: &Program) -> Vec<ModuleId> {

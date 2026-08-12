@@ -8,7 +8,7 @@ use super::{
     fulfill_byob_read, new_readable_controller, reject_promise_with_type_error,
 };
 
-pub async fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
+pub fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
     let source = args
         .first()
         .copied()
@@ -68,7 +68,7 @@ pub async fn construct<E: ExecContext>(ctx: &mut E, args: &[Value]) -> Value {
         let start = ctx.read_property_by_string_key(source, "start");
         if ctx.is_callable(start) {
             let arguments = [controller_object];
-            let _ = ctx.call_js_async(start, source, &arguments).await;
+            let _ = ctx.call_js(start, source, &arguments);
         }
     }
     let _ = ctx.with_stream_controller(controller_handle, |controller| {

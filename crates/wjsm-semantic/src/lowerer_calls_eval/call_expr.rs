@@ -516,10 +516,9 @@ impl Lowerer {
                             swc_ast::Expr::Lit(swc_ast::Lit::Str(_)) | swc_ast::Expr::Tpl(_)
                         ) || !matches!(
                             prop_ident.sym.as_ref(),
-                            "concat" | "includes" | "indexOf" | "slice"
+                            "concat" | "includes" | "indexOf" | "lastIndexOf" | "slice"
                         ))
                     {
-                        let _ = builtin_call_signature(string_builtin);
                         return self.emit_proto_builtin_call(
                             string_builtin,
                             member_expr,
@@ -966,7 +965,7 @@ impl Lowerer {
             },
         );
 
-        // Store scope_record into $eval_env so the eval module can find it
+        // 将 scope_record 写入 $eval_env，供 eval 模块读取。
         self.current_function.append_instruction(
             eval_block,
             Instruction::StoreVar {
@@ -1211,14 +1210,7 @@ impl Lowerer {
                         .shared_env_value()
                         .expect("shared binding must have materialized env");
                     let key_val = self.append_env_key_const(continue_block, &binding);
-                    self.current_function.append_instruction(
-                        continue_block,
-                        Instruction::SetProp {
-                            object: env_val,
-                            key: key_val,
-                            value,
-                        },
-                    );
+                    self.emit_set_prop(continue_block, env_val, key_val, value);
                 } else {
                     // Direct local var
                     self.current_function.append_instruction(
@@ -1237,14 +1229,7 @@ impl Lowerer {
                     self.resolve_env_binding_owner(continue_block, start_env, &binding);
                 continue_block = owner_block;
                 let key_val = self.append_env_key_const(continue_block, &binding);
-                self.current_function.append_instruction(
-                    continue_block,
-                    Instruction::SetProp {
-                        object: owner_env,
-                        key: key_val,
-                        value,
-                    },
-                );
+                self.emit_set_prop(continue_block, owner_env, key_val, value);
             }
         }
 

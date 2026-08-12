@@ -1,6 +1,6 @@
 # ADR 0012: Host Builtins 后端解耦（wjsm-builtins crate）
 
-**状态**: Accepted
+**状态**: Accepted；其中 Wasmtime 注册层与 async bridge 决策已由 ADR 0014 取代，后端无关 builtins/host 分层继续有效
 **日期**: 2026-07-26
 
 ## 背景

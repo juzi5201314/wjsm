@@ -1,7 +1,7 @@
 //! direct_call pass：标记可直接调用的函数并原地替换绑定读取为 `Const(FunctionRef)`。
 //!
 //! 背景：每次 JS 函数调用默认被编译为全动态语义（callee 求值、类型分派、闭包解包、
-//! new.target 保存等，伴随多次 wasm→host 往返）。本 pass 识别「不可变函数声明绑定」
+//! new.target 保存等，伴随多次 native host 往返）。本 pass 识别「不可变函数声明绑定」
 //! 与「函数体不依赖 env/this/new.target」的函数：
 //!
 //! - 把 `LoadVar("$N.fib")` 与 `GetProp(env, "$N.fib")` 原地替换为 `Const(FunctionRef)`，
@@ -34,13 +34,16 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         Unary { value, .. } => vec![*value],
         StringConcatVa { parts, .. } => parts.clone(),
         GetProp { object, key, .. } => vec![*object, *key],
-        SetProp { object, key, value } => vec![*object, *key, *value],
+        SetProp {
+            object, key, value, ..
+        } => vec![*object, *key, *value],
         SetProto { object, value } => vec![*object, *value],
         GetElem { object, index, .. } => vec![*object, *index],
         SetElem {
             object,
             index,
             value,
+            ..
         } => vec![*object, *index, *value],
         OptionalGetProp { object, key, .. } | OptionalGetElem { object, key, .. } => {
             vec![*object, *key]
@@ -90,7 +93,7 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         | EncodeException { value, .. }
         | ExceptionToObject { value, .. } => vec![*value],
         GuardSameFunction { callee, .. } => vec![*callee],
-        ObjectSpread { source, .. } => vec![*source],
+        ObjectSpread { dest, source } => vec![*dest, *source],
         StoreVar { value, .. } => vec![*value],
         // 无操作数
         Const { .. }
@@ -149,13 +152,14 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | LoadVar { dest, .. }
         | NewObject { dest, .. }
         | GetProp { dest, .. }
+        | SetProp { dest, .. }
         | DeleteProp { dest, .. }
         | NewArray { dest, .. }
         | GetElem { dest, .. }
+        | SetElem { dest, .. }
         | OptionalGetProp { dest, .. }
         | OptionalGetElem { dest, .. }
         | OptionalCall { dest, .. }
-        | ObjectSpread { dest, .. }
         | GetSuperBase { dest }
         | GetSuperConstructor { dest }
         | NewPromise { dest }
@@ -170,9 +174,8 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | ConstructCall { dest, .. } => (*dest)?,
         // 非 producing
         StoreVar { .. }
-        | SetProp { .. }
         | SetProto { .. }
-        | SetElem { .. }
+        | ObjectSpread { .. }
         | PromiseResolve { .. }
         | PromiseReject { .. }
         | Suspend { .. }

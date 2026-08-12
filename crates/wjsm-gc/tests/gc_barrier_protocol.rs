@@ -175,7 +175,7 @@ fn load_barrier_missing_handle_is_invalid() {
 
 #[test]
 fn native_memory_word_store_is_seqcst_visible() {
-    let heap = wjsm_gc::NativeHeapMemory::with_capacity(0, 0, 64);
+    let heap = wjsm_gc::TestHeapMemory::with_capacity(0, 0, 64);
     heap.grow_to(16).unwrap();
     let addr = wjsm_gc::HeapAddress::new(8);
     heap.store_word(addr, 0x1111).unwrap();

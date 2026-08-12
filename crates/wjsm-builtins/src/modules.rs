@@ -51,45 +51,7 @@ pub fn call_cjs_require<E: ExecContext>(
     match require_cache_result(ctx, &resolved) {
         RuntimeModuleRequireResult::Missing => {
             let env = RuntimeInstantiationEnv::new(referrer);
-            match ctx.module_instantiate_sync(&resolved, env) {
-                Ok(instantiated) => {
-                    let exports = instantiated.exports_object;
-                    ctx.module_finish_loaded(resolved.key, instantiated);
-                    exports
-                }
-                Err(error) => module_load_error_exception(ctx, &specifier, error),
-            }
-        }
-        RuntimeModuleRequireResult::Exports(exports) => exports,
-        RuntimeModuleRequireResult::LoadedModule {
-            module_object,
-            exports_object,
-        } => loaded_module_exports(ctx, module_object, exports_object),
-        RuntimeModuleRequireResult::Errored(error) => as_exception(ctx, error),
-    }
-}
-
-pub async fn call_cjs_require_async<E: ExecContext>(
-    ctx: &mut E,
-    referrer: RuntimeModuleReferrer,
-    args: &[Value],
-) -> Value {
-    let specifier = match require_specifier_to_string(ctx, args.first().copied()) {
-        Ok(specifier) => specifier,
-        Err(exception) => return exception,
-    };
-    let resolved = match ctx.module_resolve(
-        referrer.clone(),
-        &specifier,
-        RuntimeModuleResolutionKind::Require,
-    ) {
-        Ok(resolved) => resolved,
-        Err(error) => return module_load_error_exception(ctx, &specifier, error),
-    };
-    match require_cache_result(ctx, &resolved) {
-        RuntimeModuleRequireResult::Missing => {
-            let env = RuntimeInstantiationEnv::new(referrer);
-            match ctx.module_instantiate_async(resolved.clone(), env).await {
+            match ctx.module_instantiate(resolved.clone(), env) {
                 Ok(instantiated) => {
                     let exports = instantiated.exports_object;
                     ctx.module_finish_loaded(resolved.key, instantiated);
@@ -130,7 +92,7 @@ pub fn call_import_meta_resolve<E: ExecContext>(
     }
 }
 
-pub async fn call_runtime_dynamic_import<E: ExecContext>(
+pub fn call_runtime_dynamic_import<E: ExecContext>(
     ctx: &mut E,
     referrer_value: Value,
     specifier_value: Value,
@@ -176,7 +138,7 @@ pub async fn call_runtime_dynamic_import<E: ExecContext>(
         RuntimeModuleImportResult::Errored(error) => reject_with_value(ctx, promise, error),
         RuntimeModuleImportResult::Missing => {
             let env = RuntimeInstantiationEnv::new(referrer);
-            match ctx.module_instantiate_async(resolved.clone(), env).await {
+            match ctx.module_instantiate(resolved.clone(), env) {
                 Ok(instantiated) => {
                     let namespace = instantiated.namespace_object;
                     ctx.module_finish_loaded(resolved.key, instantiated);

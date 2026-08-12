@@ -106,7 +106,12 @@ fn constructor_millis<E: ExecContext>(ctx: &mut E, args: &[Value]) -> f64 {
 
 fn shadow_args<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Vec<Value> {
     (0..args_count.max(0))
-        .map(|index| ctx.read_shadow_arg(args_base, index as u32))
+        .map(|index| {
+            ctx.read_call_arg(
+                wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+                index as u32,
+            )
+        })
         .collect()
 }
 

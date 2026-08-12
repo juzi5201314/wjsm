@@ -18,7 +18,7 @@ enum DataUrlError {
     InvalidBase64(#[from] base64::DecodeError),
 }
 
-pub async fn fetch<E: ExecContext>(ctx: &mut E, input: Value, init: Value) -> Value {
+pub fn fetch<E: ExecContext>(ctx: &mut E, input: Value, init: Value) -> Value {
     let promise = ctx.alloc_promise();
     let request = match resolve_request(ctx, input, init) {
         Ok(request) => request,
@@ -51,17 +51,15 @@ pub async fn fetch<E: ExecContext>(ctx: &mut E, input: Value, init: Value) -> Va
         }
         return promise;
     }
-    let result = ctx
-        .http_fetch_begin(HttpRequestSpec {
-            method: request.method,
-            url: request.url,
-            headers_handle: request.headers_handle,
-            body: request.body,
-            redirect: request.redirect,
-            signal_handle: request.signal_handle,
-            resource_timing: timing,
-        })
-        .await;
+    let result = ctx.http_fetch_begin(HttpRequestSpec {
+        method: request.method,
+        url: request.url,
+        headers_handle: request.headers_handle,
+        body: request.body,
+        redirect: request.redirect,
+        signal_handle: request.signal_handle,
+        resource_timing: timing,
+    });
     match result {
         Ok(response) => ctx.settle_promise(promise, PromiseSettlement::Fulfill(response)),
         Err(error) => reject_type_error(ctx, promise, &error.to_string()),

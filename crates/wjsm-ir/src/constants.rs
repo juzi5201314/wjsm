@@ -252,7 +252,7 @@ pub const HANDLE_TABLE_ENTRY_SIZE: u32 = 8;
 
 // ── handle entry 状态编码（codegen ↔ 宿主堆的 ABI 契约）───────────────────
 // entry = (address << 16) | state；下列判别值必须与 `wjsm_gc::HandleState`
-// 逐一对应。wasm 侧发布对象时写 `HANDLE_STATE_STABLE_YOUNG`，属性访问快链用
+// generated code 发布对象时写 `HANDLE_STATE_STABLE_YOUNG`，属性访问快链用
 // `state >= HANDLE_STATE_STABLE_MIN` 单比较判定「地址可直接使用」。
 //
 // 稳定态刻意排在连续高位区间，使快链省下两次相等比较与两个分支。
@@ -290,10 +290,7 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
             HEAP_OBJECT_VALUE_CAPACITY_OFFSET,
         ),
         ("heap_object_shape_id_offset", HEAP_OBJECT_SHAPE_ID_OFFSET),
-        (
-            "heap_object_value_slot_size",
-            HEAP_OBJECT_VALUE_SLOT_SIZE,
-        ),
+        ("heap_object_value_slot_size", HEAP_OBJECT_VALUE_SLOT_SIZE),
         ("shape_id_empty", SHAPE_ID_EMPTY),
         ("shape_map_threshold", SHAPE_MAP_THRESHOLD),
         ("dictionary_threshold", DICTIONARY_THRESHOLD),

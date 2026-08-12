@@ -25,9 +25,10 @@ module {
     c22 = number(1)
     c23 = bool(true)
     c24 = number(3)
-    c25 = number(1)
-    c26 = string("default")
-    c27 = bool(false)
+    c25 = bool(false)
+    c26 = bool(false)
+    c27 = number(1)
+    c28 = string("default")
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -84,10 +85,10 @@ module {
     bb2:
       jump bb5
     bb3:
-      %39 = const c26
-      %40 = call builtin.console.log(%39)
-      %41 = is_exception %40
-      branch %41, bb13, bb12
+      %41 = const c28
+      %42 = call builtin.console.log(%41)
+      %43 = is_exception %42
+      branch %43, bb13, bb12
     bb4:
       %24 = const c22
       %25 = stricteq %23, %24
@@ -95,33 +96,35 @@ module {
     bb5:
       %27 = load var $0.i
       %28 = const c24
-      %29 = call builtin.abstract_compare(%27, %28)
+      %30 = const c25
+      %31 = const c26
+      %29 = call builtin.abstract_compare(%27, %28, %30, %31)
       branch %29, bb6, bb7
     bb6:
-      %30 = load var $0.i
-      %31 = const c25
-      %32 = add %30, %31
-      store var $0.i, %32
-      %33 = is_exception %32
-      branch %33, bb9, bb8
+      %32 = load var $0.i
+      %33 = const c27
+      %34 = add %32, %33
+      store var $0.i, %34
+      %35 = is_exception %34
+      branch %35, bb9, bb8
     bb7:
-      %35 = load var $0.i
-      %36 = call builtin.console.log(%35)
-      %37 = is_exception %36
-      branch %37, bb11, bb10
+      %37 = load var $0.i
+      %38 = call builtin.console.log(%37)
+      %39 = is_exception %38
+      branch %39, bb11, bb10
     bb8:
       jump bb5
     bb9:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %36 = call builtin.exception_value(%34)
+      throw %36
     bb10:
       jump bb1
     bb11:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %40 = call builtin.exception_value(%38)
+      throw %40
     bb12:
       jump bb1
     bb13:
-      %42 = call builtin.exception_value(%40)
-      throw %42
+      %44 = call builtin.exception_value(%42)
+      throw %44
 }

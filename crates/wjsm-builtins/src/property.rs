@@ -2,14 +2,13 @@ use wjsm_host::{ExecContext, Value};
 use wjsm_ir::value;
 
 /// V2 `[[Get]]`：按规范化 name_id 分派原始值、数组、对象、函数与 Proxy。
-pub async fn get_by_name_id<E: ExecContext>(ctx: &mut E, receiver: Value, name_id: u32) -> Value {
+pub fn get_by_name_id<E: ExecContext>(ctx: &mut E, receiver: Value, name_id: u32) -> Value {
     if value::is_proxy(receiver) {
-        return crate::proxy_reflect_async::proxy_trap_internal_get_async(
+        return crate::proxy_reflect_reentrant::proxy_trap_internal_get(
             ctx,
             receiver,
             name_id as i32,
-        )
-        .await;
+        );
     }
     if value::is_native_callable(receiver) {
         return ctx.native_callable_get_property(receiver, name_id);
@@ -25,21 +24,20 @@ pub async fn get_by_name_id<E: ExecContext>(ctx: &mut E, receiver: Value, name_i
                 .unwrap_or_else(value::encode_undefined);
         }
         if let Some((slot, flags, getter, _)) = ctx.get_own_property_slot(handle, name_id) {
-            return read_property_slot(ctx, receiver, slot, flags, getter).await;
+            return read_property_slot(ctx, receiver, slot, flags, getter);
         }
         match ctx.lookup_property_on_proto(handle, name_id) {
             wjsm_host::PropertyLookup::Slot {
                 value: slot,
                 is_accessor,
                 getter,
-            } => return read_property(ctx, receiver, slot, is_accessor, getter).await,
+            } => return read_property(ctx, receiver, slot, is_accessor, getter),
             wjsm_host::PropertyLookup::Proxy(proxy) => {
-                return crate::proxy_reflect_async::proxy_trap_internal_get_async(
+                return crate::proxy_reflect_reentrant::proxy_trap_internal_get(
                     ctx,
                     proxy,
                     name_id as i32,
-                )
-                .await;
+                );
             }
             wjsm_host::PropertyLookup::Missing => {}
         }
@@ -75,14 +73,13 @@ pub async fn get_by_name_id<E: ExecContext>(ctx: &mut E, receiver: Value, name_i
                     value: slot,
                     is_accessor,
                     getter,
-                } => return read_property(ctx, receiver, slot, is_accessor, getter).await,
+                } => return read_property(ctx, receiver, slot, is_accessor, getter),
                 wjsm_host::PropertyLookup::Proxy(proxy) => {
-                    return crate::proxy_reflect_async::proxy_trap_internal_get_async(
+                    return crate::proxy_reflect_reentrant::proxy_trap_internal_get(
                         ctx,
                         proxy,
                         name_id as i32,
-                    )
-                    .await;
+                    );
                 }
                 wjsm_host::PropertyLookup::Missing => {}
             }
@@ -99,20 +96,19 @@ pub async fn get_by_name_id<E: ExecContext>(ctx: &mut E, receiver: Value, name_i
 }
 
 /// V2 `[[Set]]`：Proxy trap、RegExp side table 与 OrdinarySet 共用单一路径。
-pub async fn set_by_name_id<E: ExecContext>(
+pub fn set_by_name_id<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
     name_id: u32,
     new_value: Value,
 ) {
     if value::is_proxy(receiver) {
-        crate::proxy_reflect_async::proxy_trap_internal_set_async(
+        crate::proxy_reflect_reentrant::proxy_trap_internal_set(
             ctx,
             receiver,
             name_id as i32,
             new_value,
-        )
-        .await;
+        );
         return;
     }
     if value::is_regexp(receiver) {
@@ -128,21 +124,19 @@ pub async fn set_by_name_id<E: ExecContext>(
     {
         return;
     }
-    let _ = crate::proxy_reflect_async::ordinary_set_by_name_id(
+    let _ = crate::proxy_reflect_reentrant::ordinary_set_by_name_id(
         ctx, receiver, receiver, name_id, new_value,
-    )
-    .await;
+    );
 }
 
 /// V2 `[[Delete]]`：Proxy、数组索引 hole 与普通属性删除的统一入口。
-pub async fn delete_by_name_id<E: ExecContext>(ctx: &mut E, target: Value, name_id: u32) -> Value {
+pub fn delete_by_name_id<E: ExecContext>(ctx: &mut E, target: Value, name_id: u32) -> Value {
     if value::is_proxy(target) {
-        return crate::proxy_reflect_async::proxy_trap_internal_delete_async(
+        return crate::proxy_reflect_reentrant::proxy_trap_internal_delete(
             ctx,
             target,
             name_id as i32,
-        )
-        .await;
+        );
     }
     if value::is_array(target)
         && let Some(name) = property_name(ctx, name_id)
@@ -154,7 +148,7 @@ pub async fn delete_by_name_id<E: ExecContext>(ctx: &mut E, target: Value, name_
     crate::proxy_reflect::delete_property_by_name_id(ctx, target, name_id)
 }
 
-async fn read_property_slot<E: ExecContext>(
+fn read_property_slot<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
     slot: Value,
@@ -168,10 +162,9 @@ async fn read_property_slot<E: ExecContext>(
         flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0,
         getter,
     )
-    .await
 }
 
-async fn read_property<E: ExecContext>(
+fn read_property<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
     slot: Value,
@@ -184,8 +177,7 @@ async fn read_property<E: ExecContext>(
     if value::is_undefined(getter) || value::is_null(getter) {
         return value::encode_undefined();
     }
-    ctx.call_js_async(getter, receiver, &[])
-        .await
+    ctx.call_js(getter, receiver, &[])
         .unwrap_or_else(|_| value::encode_undefined())
 }
 

@@ -1,32 +1,35 @@
-//! wjsm CLI - AOT JavaScript/TypeScript to WebAssembly compiler
+//! wjsm CLI - AOT JavaScript/TypeScript to native execution compiler
 //!
 //! Exit codes:
 //! - 0: success
 //! - 1: compile error (parse/lower/compile failure)
-//! - 2: runtime error (WASM execution failure)
+//! - 2: runtime error (native execution failure)
 //! - 3: usage error (invalid arguments)
-
 use anyhow::{Context, Result, bail};
 use clap::CommandFactory;
+use std::cell::RefCell;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Instant;
+use wjsm_artifact_format::{
+    ArtifactBuildInput, ArtifactLimits, BuildOptions, ModuleManifest, PortableArtifact,
+};
 use wjsm_ir::Program;
 use wjsm_parser as parser;
-use wjsm_runtime as runtime;
 use wjsm_semantic as semantic;
 
 mod cli_args;
+mod cli_cache;
 mod cli_config;
 mod cli_install;
 mod cli_lint;
 mod cli_scripts;
 mod ir_output;
 
-mod runtime_loader;
 use cli_args::*;
 use cli_config::parse_cli;
 use cli_lint::lint_module;
@@ -48,319 +51,24 @@ fn module_resolution_options(cli: &Cli) -> wjsm_module::ResolutionOptions {
 }
 
 // ============================================================================
-// Runtime bridge (sync CLI -> async Store)
-// ============================================================================
-
-fn runtime_options_for_file(
-    cli: &Cli,
-    input: &Path,
-    root: Option<&Path>,
-    script_args: &[OsString],
-) -> Result<runtime::RuntimeOptions> {
-    let script = if path_is_stdin(input) {
-        "[stdin]".to_string()
-    } else {
-        input
-            .canonicalize()
-            .with_context(|| {
-                format!(
-                    "failed to canonicalize '{}' for process.argv",
-                    input.display()
-                )
-            })?
-            .to_string_lossy()
-            .into_owned()
-    };
-    let env = runtime_env_snapshot();
-    let sandbox = fs_sandbox_for_file(input, root, &env);
-    let module_loader = runtime_module_loader_for_file(
-        input,
-        root,
-        &sandbox,
-        module_resolution_options(cli),
-        cli.wants_debug_codegen(),
-    )?;
-    let mut options = runtime_options_with_script(cli, script, script_args, env, sandbox)?;
-    options.module_loader = module_loader;
-    Ok(options)
-}
-
-fn runtime_options_for_inline(
-    cli: &Cli,
-    mode_tag: &str,
-    script_args: &[OsString],
-) -> Result<runtime::RuntimeOptions> {
-    let env = runtime_env_snapshot();
-    let sandbox = fs_sandbox_for_inline(&env);
-    runtime_options_with_script(cli, mode_tag.to_string(), script_args, env, sandbox)
-}
-
-fn runtime_options_with_script(
-    cli: &Cli,
-    script: String,
-    script_args: &[OsString],
-    env: Vec<(String, String)>,
-    sandbox: FsSandbox,
-) -> Result<runtime::RuntimeOptions> {
-    let mut argv = Vec::with_capacity(script_args.len() + 2);
-    argv.push(wjsm_argv0());
-    argv.push(script);
-    argv.extend(script_args.iter().map(|arg| os_string_lossy(arg)));
-    runtime_options_with_argv(cli, argv, env, sandbox)
-}
-
-fn runtime_options_with_argv(
-    cli: &Cli,
-    argv: Vec<String>,
-    env: Vec<(String, String)>,
-    sandbox: FsSandbox,
-) -> Result<runtime::RuntimeOptions> {
-    let gc_algorithm = match cli.gc.as_deref() {
-        Some(raw) if !raw.is_empty() => raw.parse().map_err(anyhow::Error::msg)?,
-        _ => runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?,
-    };
-    let inspect = cli.inspect_config().map_err(anyhow::Error::msg)?;
-    let shadow_stack_max = cli
-        .shadow_stack_max
-        .or_else(|| {
-            env.iter()
-                .find(|(k, _)| k == "WJSM_SHADOW_STACK_MAX")
-                .and_then(|(_, v)| parse_shadow_stack_max_env(v))
-        })
-        .unwrap_or(wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize);
-    Ok(runtime::RuntimeOptions {
-        max_heap_size: cli.max_heap_size,
-        shadow_stack_max,
-        wasmtime_memory_reservation: cli.wasmtime_memory_reservation.map(|value| value as u64),
-        gc_algorithm,
-        argv,
-        cwd: runtime_cwd_string(),
-        env,
-        exec_path: Some(wjsm_argv0()),
-        exec_argv: vec!["run".to_string()],
-        pid: std::process::id(),
-        ppid: 0,
-        platform: node_platform(),
-        arch: node_arch(),
-        fs_read_roots: sandbox.read_roots,
-        fs_write_roots: sandbox.write_roots,
-        fs_allow_write_anywhere: sandbox.allow_write_anywhere,
-        inspect,
-        ..runtime::RuntimeOptions::default()
-    })
-}
-
-fn parse_shadow_stack_max_env(raw: &str) -> Option<usize> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return None;
-    }
-    // 复用 CLI 同款后缀解析：纯数字 / K/M/G。
-    crate::cli_args::parse_heap_size(s).ok()
-}
-
-fn runtime_module_loader_for_file(
-    input: &Path,
-    root: Option<&Path>,
-    sandbox: &FsSandbox,
-    resolution_options: wjsm_module::ResolutionOptions,
-    debug_codegen: bool,
-) -> Result<Option<std::sync::Arc<dyn runtime::RuntimeModuleLoader>>> {
-    if path_is_stdin(input) {
-        return Ok(None);
-    }
-    let root = runtime_loader_root(input, root)?;
-    Ok(Some(std::sync::Arc::new(
-        runtime_loader::CliRuntimeModuleLoader::with_debug(
-            root,
-            sandbox.read_roots.clone(),
-            resolution_options,
-            debug_codegen,
-        ),
-    )))
-}
-
-fn runtime_loader_root(input: &Path, root: Option<&Path>) -> Result<PathBuf> {
-    if let Some(root) = root {
-        return root.canonicalize().with_context(|| {
-            format!(
-                "failed to canonicalize runtime loader root '{}'",
-                root.display()
-            )
-        });
-    }
-    let input = input.canonicalize().with_context(|| {
-        format!(
-            "failed to canonicalize '{}' for runtime module loader",
-            input.display()
-        )
-    })?;
-    input.parent().map(Path::to_path_buf).ok_or_else(|| {
-        anyhow::anyhow!(
-            "cannot infer runtime module root from '{}'",
-            input.display()
-        )
-    })
-}
-
-fn wjsm_argv0() -> String {
-    std::env::current_exe()
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "wjsm".to_string())
-}
-
-struct FsSandbox {
-    read_roots: Vec<PathBuf>,
-    write_roots: Vec<PathBuf>,
-    allow_write_anywhere: bool,
-}
-
-fn fs_sandbox_for_file(input: &Path, root: Option<&Path>, env: &[(String, String)]) -> FsSandbox {
-    let mut read_roots = default_project_read_roots(env);
-    if let Some(root_path) = root {
-        push_canonical_root(&mut read_roots, root_path);
-    } else if !path_is_stdin(input)
-        && let Some(parent) = input
-            .canonicalize()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        push_unique_root(&mut read_roots, parent);
-    }
-    fs_sandbox_from_read_roots(read_roots, env)
-}
-
-fn fs_sandbox_for_inline(env: &[(String, String)]) -> FsSandbox {
-    fs_sandbox_from_read_roots(default_project_read_roots(env), env)
-}
-
-fn fs_sandbox_for_in_process(
-    input: &Path,
-    env: &[(String, String)],
-    cwd_override: Option<&Path>,
-) -> FsSandbox {
-    let mut read_roots = Vec::new();
-    if let Some(cwd) = cwd_override {
-        push_canonical_root(&mut read_roots, cwd);
-    } else if let Ok(cwd) = std::env::current_dir() {
-        push_canonical_root(&mut read_roots, &cwd);
-    }
-    if let Some(parent) = input
-        .canonicalize()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        push_unique_root(&mut read_roots, parent);
-    }
-    push_env_read_roots(&mut read_roots, env);
-    fs_sandbox_from_read_roots(read_roots, env)
-}
-
-fn default_project_read_roots(env: &[(String, String)]) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        push_canonical_root(&mut roots, &cwd);
-    }
-    push_env_read_roots(&mut roots, env);
-    roots
-}
-
-fn fs_sandbox_from_read_roots(mut read_roots: Vec<PathBuf>, env: &[(String, String)]) -> FsSandbox {
-    push_unique_root(&mut read_roots, std::env::temp_dir());
-    let write_roots = read_roots.clone();
-    FsSandbox {
-        read_roots,
-        write_roots,
-        allow_write_anywhere: env
-            .iter()
-            .any(|(key, value)| key == "WJSM_FS_ALLOW_WRITE" && value == "1"),
-    }
-}
-
-fn push_env_read_roots(roots: &mut Vec<PathBuf>, env: &[(String, String)]) {
-    for raw in env
-        .iter()
-        .filter_map(|(key, value)| (key == "WJSM_FS_ALLOW_READ").then_some(value))
-    {
-        for path in std::env::split_paths(raw) {
-            push_canonical_root(roots, &path);
-        }
-    }
-}
-
-fn push_canonical_root(roots: &mut Vec<PathBuf>, path: &Path) {
-    if let Ok(canonical) = path.canonicalize() {
-        push_unique_root(roots, canonical);
-    }
-}
-
-fn push_unique_root(roots: &mut Vec<PathBuf>, path: PathBuf) {
-    if !roots.iter().any(|existing| existing == &path) {
-        roots.push(path);
-    }
-}
-fn os_string_lossy(value: &OsStr) -> String {
-    value.to_string_lossy().into_owned()
-}
-
-fn runtime_cwd_string() -> Option<String> {
-    std::env::current_dir()
-        .ok()
-        .map(|cwd| cwd.to_string_lossy().into_owned())
-}
-
-fn runtime_env_snapshot() -> Vec<(String, String)> {
-    std::env::vars_os()
-        .map(|(key, value)| (os_string_lossy(&key), os_string_lossy(&value)))
-        .collect()
-}
-
-fn node_platform() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "darwin",
-        "windows" => "win32",
-        other => other,
-    }
-}
-
-fn node_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "x86" => "ia32",
-        "aarch64" => "arm64",
-        other => other,
-    }
-}
-
-/// 进程内复用的 Tokio multi-thread runtime（避免每个 in-process 测试重建）。
-fn shared_execution_runtime() -> &'static tokio::runtime::Runtime {
-    static RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to create shared Tokio runtime for WASM execution")
-    });
-    &RT
-}
-
-fn block_on_wasm_execute(wasm: &[u8], options: runtime::RuntimeOptions) -> Result<()> {
-    shared_execution_runtime().block_on(runtime::execute_with_options(wasm, options))
-}
-
-fn process_exit_code_from_error(error: &anyhow::Error) -> Option<ExitCode> {
-    runtime::process_exit_code(error).map(|code| ExitCode::from(code as u8))
-}
-
-// ============================================================================
 // Pipeline Types
 // ============================================================================
-
 pub(crate) struct PipelineResult {
     pub(crate) ast: Option<swc_core::ecma::ast::Module>,
     pub(crate) program: Option<Program>,
-    pub(crate) wasm: Option<Vec<u8>>,
+    pub(crate) artifact: Option<PortableArtifact>,
+    pub(crate) module_root: PathBuf,
     pub(crate) timings: PipelineTimings,
+}
+fn source_module_root(filename: Option<&str>) -> PathBuf {
+    let candidate = filename
+        .map(Path::new)
+        .and_then(Path::parent)
+        .filter(|path| !path.as_os_str().is_empty());
+    candidate
+        .and_then(|path| path.canonicalize().ok())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[derive(Default)]
@@ -403,20 +111,7 @@ impl PipelineTimings {
 // Entry Points
 // ============================================================================
 
-fn install_embedded_runtime_artifacts() {
-    // 安装构建期嵌入的 support cwasm；CLI 与 in-process fixture runner
-    // 必须共用同一 runtime artifact 边界，否则相同 WASM 在测试入口会走不同 support 路径。
-    // V1 startup snapshot 自 ManagedHeap V2 起不再随构建产出（恒为空），无需安装。
-    if let Some(bytes) =
-        wjsm_runtime::embedded_support_cwasm_for(wjsm_runtime::GcAlgorithmKind::Zgc)
-    {
-        wjsm_runtime::install_embedded_support_cwasm(bytes);
-    }
-}
-
 pub fn main_entry() -> ExitCode {
-    install_embedded_runtime_artifacts();
-
     let cli = match parse_cli(std::env::args_os()) {
         Ok(c) => c,
         Err(e) => {
@@ -441,6 +136,7 @@ pub fn main_entry() -> ExitCode {
 }
 
 pub fn execute(cli: Cli) -> Result<ExitCode> {
+    cli.inspect_config().map_err(anyhow::Error::msg)?;
     // Handle color configuration
     setup_colors(cli.color, cli.no_color);
 
@@ -449,10 +145,20 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref input,
             ref eval,
             ref output,
+            format,
             stage,
             ref root,
             script,
-        } => cmd_build(&cli, input, eval, output, stage, root.as_deref(), script),
+        } => cmd_build(
+            &cli,
+            input,
+            eval,
+            output,
+            format,
+            stage,
+            root.as_deref(),
+            script,
+        ),
 
         Commands::Run {
             ref input,
@@ -484,12 +190,6 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
                 bail!("Either an input file or -e <code> is required");
             }
         }
-
-        Commands::RunPrecompiled {
-            ref wasm,
-            ref source,
-            ref args,
-        } => cmd_run_precompiled(&cli, wasm, source, args),
 
         Commands::Test {
             ref input,
@@ -540,37 +240,23 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             script,
         } => cmd_dump_ast(&cli, input, eval, root.as_deref(), script),
 
-        Commands::DumpWat {
+        Commands::Validate { ref input } => cmd_validate(&cli, input),
+
+        Commands::DumpClif {
             ref input,
             ref eval,
             ref root,
             script,
-            ref func,
-            skeleton,
-        } => cmd_dump_wat(
-            &cli,
-            input,
-            eval,
-            root.as_deref(),
-            script,
-            func.as_deref(),
-            skeleton,
-        ),
+        } => cmd_dump_clif(&cli, input, eval, root.as_deref(), script),
+
+        Commands::Disasm { ref input } => cmd_disasm(input),
+        Commands::Size { ref input } => cmd_size(input),
+        Commands::Cache { ref dir, command } => {
+            cli_cache::run(command, dir.as_deref(), cli.quiet)?;
+            Ok(ExitCode::from(EXIT_SUCCESS))
+        }
 
         Commands::Fmt { ref input, write } => cmd_fmt(input, write),
-
-        Commands::Validate { ref input } => cmd_validate(input),
-
-        Commands::Size { ref input } => cmd_size(input),
-
-        Commands::Disasm {
-            ref input,
-            ref func,
-            skeleton,
-        } => cmd_disasm(input, func.as_deref(), skeleton),
-
-        Commands::Cache { ref command } => cmd_cache(command),
-
         Commands::Install { ref packages } => {
             cli_install::install_packages(packages)?;
             Ok(ExitCode::from(EXIT_SUCCESS))
@@ -622,13 +308,17 @@ fn cmd_build(
     input: &Option<PathBuf>,
     eval: &Option<String>,
     output: &Path,
+    format: BuildFormat,
     stage: Option<Stage>,
     root: Option<&Path>,
     script: bool,
 ) -> Result<ExitCode> {
     let stage = stage.unwrap_or(Stage::Compile);
+    if format == BuildFormat::NativeExecutable {
+        bail!("native executable output is not implemented");
+    }
 
-    if matches!(stage, Stage::Parse | Stage::Lower) && output != Path::new("out.wasm") {
+    if matches!(stage, Stage::Parse | Stage::Lower) && output != Path::new("out.wjsm") {
         bail!(
             "`-o` / `--output` cannot be used with `--stage parse` or `--stage lower` (output goes to stdout)"
         );
@@ -643,7 +333,6 @@ fn cmd_build(
                     stage,
                     cli.effective_verbose(),
                     cli.time,
-                    cli.target,
                     script,
                     cli.should_verify_ir(),
                     cli.wants_debug_codegen(),
@@ -657,7 +346,6 @@ fn cmd_build(
                             stage,
                             cli.effective_verbose(),
                             cli.time,
-                            cli.target,
                             script,
                             cli.should_verify_ir(),
                             cli.wants_debug_codegen(),
@@ -680,13 +368,13 @@ fn cmd_build(
         Stage::Compile => {
             if path_is_stdout(output) && io::stdout().is_terminal() {
                 bail!(
-                    "refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`"
+                    "refusing to write binary artifact to a terminal; redirect stdout to a file or use `-o <path>`"
                 );
             }
 
             if !cli.quiet
                 && !path_is_stdout(output)
-                && output == Path::new("out.wasm")
+                && output == Path::new("out.wjsm")
                 && output.exists()
             {
                 eprintln!(
@@ -695,32 +383,58 @@ fn cmd_build(
                 );
             }
 
-            let wasm = match resolve_input(input, eval)? {
-                InputSource::Inline(code) => compile_source(
+            let artifact_bytes = compile_cli_artifact(cli, input, eval, root, script)?;
+
+            if path_is_stdout(output) {
+                io::stdout().write_all(&artifact_bytes)?;
+            } else {
+                fs::write(output, &artifact_bytes)?;
+                if cli.verbose_enabled(1) {
+                    eprintln!(
+                        "Wrote {} bytes to {}",
+                        artifact_bytes.len(),
+                        output.display()
+                    );
+                }
+            }
+
+            if cli.stats {
+                eprintln!("Output: {} bytes", artifact_bytes.len());
+            }
+        }
+        Stage::Execute => {
+            if path_is_stdout(output) && io::stdout().is_terminal() {
+                bail!(
+                    "refusing to write binary artifact to a terminal; redirect stdout to a file or use `-o <path>`"
+                );
+            }
+            let result = match resolve_input(input, eval)? {
+                InputSource::Inline(code) => compile_source_to_pipeline_result(
                     &code,
                     None,
-                    cli.target,
                     script,
+                    cli.verbose_enabled(1),
                     cli.should_verify_ir(),
                     cli.wants_debug_codegen(),
                 )?,
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
-                        compile_source(
+                        compile_source_to_pipeline_result(
                             &source,
                             None,
-                            cli.target,
                             script,
+                            cli.verbose_enabled(1),
                             cli.should_verify_ir(),
                             cli.wants_debug_codegen(),
                         )?
                     } else {
-                        compile_from_file_input(
+                        compile_file_input_to_pipeline_result(
                             &path,
                             root,
-                            cli.target,
+                            None,
                             script,
+                            cli.verbose_enabled(1),
                             cli.should_verify_ir(),
                             cli.wants_debug_codegen(),
                             &module_resolution_options(cli),
@@ -728,92 +442,217 @@ fn cmd_build(
                     }
                 }
             };
-
-            if path_is_stdout(output) {
-                io::stdout().write_all(&wasm)?;
-            } else {
-                fs::write(output, &wasm)?;
-                if cli.verbose_enabled(1) {
-                    eprintln!("Wrote {} bytes to {}", wasm.len(), output.display());
-                }
-            }
-
-            if cli.stats {
-                eprintln!("Output: {} bytes", wasm.len());
-            }
-        }
-        Stage::Execute => {
-            if path_is_stdout(output) && io::stdout().is_terminal() {
-                bail!(
-                    "refusing to write binary WASM to a terminal; redirect stdout to a file or use `-o <path>`"
-                );
-            }
-
-            let (result, options) = match resolve_input(input, eval)? {
-                InputSource::Inline(code) => (
-                    compile_source_to_pipeline_result(
-                        &code,
-                        None,
-                        cli.target,
-                        script,
-                        cli.verbose_enabled(1),
-                        cli.should_verify_ir(),
-                        cli.wants_debug_codegen(),
-                    )?,
-                    runtime_options_for_inline(cli, "[run-eval]", &[])?,
-                ),
-                InputSource::File(path) => {
-                    if path_is_stdin(&path) {
-                        let (source, _) = read_input_for_parse(&path)?;
-                        (
-                            compile_source_to_pipeline_result(
-                                &source,
-                                None,
-                                cli.target,
-                                script,
-                                cli.verbose_enabled(1),
-                                cli.should_verify_ir(),
-                                cli.wants_debug_codegen(),
-                            )?,
-                            runtime_options_for_file(cli, &path, root, &[])?,
-                        )
-                    } else {
-                        (
-                            compile_file_input_to_pipeline_result(
-                                &path,
-                                root,
-                                cli.target,
-                                script,
-                                cli.verbose_enabled(1),
-                                cli.should_verify_ir(),
-                                cli.wants_debug_codegen(),
-                                &module_resolution_options(cli),
-                            )?,
-                            runtime_options_for_file(cli, &path, root, &[])?,
-                        )
-                    }
-                }
-            };
-
-            let wasm = result
-                .wasm
+            let output_bytes = result
+                .artifact
                 .as_ref()
-                .context("compile stage produced no WASM")?;
-
+                .context("compile stage produced no portable artifact")?
+                .bytes()
+                .to_vec();
             if path_is_stdout(output) {
-                io::stdout().write_all(wasm)?;
+                io::stdout().write_all(&output_bytes)?;
             } else {
-                fs::write(output, wasm)?;
+                fs::write(output, &output_bytes)?;
                 if cli.verbose_enabled(1) {
-                    eprintln!("Wrote {} bytes to {}", wasm.len(), output.display());
+                    eprintln!("Wrote {} bytes to {}", output_bytes.len(), output.display());
                 }
             }
-
-            return run_compile_then_execute(cli, result, options);
+            return run_compile_then_execute(cli, result);
         }
     }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+fn compile_cli_artifact(
+    cli: &Cli,
+    input: &Option<PathBuf>,
+    eval: &Option<String>,
+    root: Option<&Path>,
+    script: bool,
+) -> Result<Vec<u8>> {
+    match resolve_input(input, eval)? {
+        InputSource::Inline(code) => compile_source(
+            &code,
+            None,
+            script,
+            cli.should_verify_ir(),
+            cli.wants_debug_codegen(),
+        ),
+        InputSource::File(path) => {
+            if path.extension().and_then(|extension| extension.to_str()) == Some("wjsm") {
+                fs::read(&path).with_context(|| {
+                    format!("failed to read portable artifact '{}'", path.display())
+                })
+            } else if path_is_stdin(&path) {
+                let (source, _) = read_input_for_parse(&path)?;
+                compile_source(
+                    &source,
+                    None,
+                    script,
+                    cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
+                )
+            } else {
+                compile_from_file_input(
+                    &path,
+                    root,
+                    script,
+                    cli.should_verify_ir(),
+                    cli.wants_debug_codegen(),
+                    &module_resolution_options(cli),
+                )
+            }
+        }
+    }
+}
+
+fn decode_artifact(path: &Path) -> Result<PortableArtifact> {
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read portable artifact '{}'", path.display()))?;
+    PortableArtifact::decode(bytes.into(), &ArtifactLimits::default())
+        .map_err(|error| anyhow::anyhow!("invalid portable artifact: {error}"))
+}
+
+fn decode_artifact_bytes(bytes: Vec<u8>) -> Result<PortableArtifact> {
+    PortableArtifact::decode(bytes.into(), &ArtifactLimits::default())
+        .map_err(|error| anyhow::anyhow!("invalid portable artifact: {error}"))
+}
+
+fn cmd_validate(cli: &Cli, input: &Path) -> Result<ExitCode> {
+    let artifact = decode_artifact(input)?;
+    if !cli.quiet {
+        println!("valid: {}", hex_digest(artifact.digest()));
+    }
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+fn cmd_dump_clif(
+    cli: &Cli,
+    input: &Option<PathBuf>,
+    eval: &Option<String>,
+    root: Option<&Path>,
+    script: bool,
+) -> Result<ExitCode> {
+    let bytes = compile_cli_artifact(cli, input, eval, root, script)?;
+    let artifact = decode_artifact_bytes(bytes)?;
+    let diagnostics = wjsm_backend_native::NativeCompiler::new()?.diagnostics(&artifact)?;
+    print!("{}", diagnostics.clif);
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+fn cmd_disasm(input: &Path) -> Result<ExitCode> {
+    let artifact = decode_artifact(input)?;
+    let diagnostics = wjsm_backend_native::NativeCompiler::new()?.diagnostics(&artifact)?;
+    print!("{}", diagnostics.disassembly);
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+fn cmd_size(input: &Path) -> Result<ExitCode> {
+    let artifact = decode_artifact(input)?;
+    let diagnostics = wjsm_backend_native::NativeCompiler::new()?.diagnostics(&artifact)?;
+    let blocks = artifact
+        .program()
+        .functions()
+        .iter()
+        .map(|function| function.blocks().len())
+        .sum::<usize>();
+    let instructions = artifact
+        .program()
+        .functions()
+        .iter()
+        .flat_map(|function| function.blocks())
+        .map(|block| block.instructions().len())
+        .sum::<usize>();
+    println!("artifact_bytes: {}", artifact.bytes().len());
+    println!("sections: {}", artifact.metadata().sections.len());
+    println!("ir_functions: {}", artifact.program().functions().len());
+    println!("ir_blocks: {blocks}");
+    println!("ir_instructions: {instructions}");
+    println!("native_object_bytes: {}", diagnostics.object.bytes().len());
+    println!("native_functions: {}", diagnostics.object.function_count());
+    println!(
+        "native_frame_bytes: {}",
+        diagnostics
+            .object
+            .frame_bytes()
+            .iter()
+            .map(|bytes| u64::from(*bytes))
+            .sum::<u64>()
+    );
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+fn hex_digest(bytes: [u8; 32]) -> String {
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+fn create_native_runtime(cli: &Cli) -> Result<wjsm_host_native::NativeRuntime> {
+    let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
+    let mut runtime_config = if let Some(gc_algorithm) = cli.gc {
+        wjsm_host_native::NativeRuntimeConfig {
+            cache_dir,
+            gc_algorithm,
+            max_heap_size: cli.max_heap_size,
+        }
+    } else {
+        wjsm_host_native::NativeRuntimeConfig::from_environment(cache_dir)
+            .map_err(anyhow::Error::msg)?
+            .with_max_heap_size(cli.max_heap_size)
+    };
+    runtime_config.max_heap_size = cli.max_heap_size;
+    let inspector = cli
+        .inspect_config()
+        .map_err(anyhow::Error::msg)?
+        .map(|config| wjsm_host_native::InspectorConfig {
+            host: config.host,
+            port: config.port,
+            break_on_start: config.break_on_start,
+        });
+    let runtime =
+        wjsm_host_native::NativeRuntime::new_with_config_and_inspector(runtime_config, inspector)
+            .context("failed to initialize native runtime")?;
+    if let Some(url) = runtime.inspector_url() {
+        eprintln!("Debugger listening on {url}");
+    }
+    Ok(runtime)
+}
+
+fn run_portable_artifact(
+    cli: &Cli,
+    input: &Path,
+    root: Option<&Path>,
+    script_args: &[OsString],
+) -> Result<ExitCode> {
+    let bytes = fs::read(input)
+        .with_context(|| format!("failed to read portable artifact '{}'", input.display()))?;
+    let artifact = PortableArtifact::decode(
+        bytes.into(),
+        &wjsm_artifact_format::ArtifactLimits::default(),
+    )
+    .map_err(|error| anyhow::anyhow!("invalid portable artifact: {error}"))?;
+    let mut native = create_native_runtime(cli)?;
+    native.configure_process_arguments(
+        script_args
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned()),
+    )?;
+    let module_root = root
+        .map(Path::to_path_buf)
+        .or_else(|| input.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let execution = native
+        .execute(&artifact, &module_root, &working_directory)
+        .context("portable artifact execution failed")?;
+    io::stdout().write_all(&execution.stdout)?;
+    io::stderr().write_all(&execution.stderr)?;
+    if cli.stats {
+        print_native_cache_stats(&execution);
+    }
+    Ok(ExitCode::from(execution.exit_code.rem_euclid(256) as u8))
 }
 
 fn cmd_run(
@@ -823,6 +662,9 @@ fn cmd_run(
     script: bool,
     script_args: &[OsString],
 ) -> Result<ExitCode> {
+    if input.extension().and_then(|extension| extension.to_str()) == Some("wjsm") {
+        return run_portable_artifact(cli, input, root, script_args);
+    }
     let verbose_compile = cli.verbose_enabled(1);
     let result = if path_is_stdin(input) {
         let mut source = String::new();
@@ -830,7 +672,6 @@ fn cmd_run(
         compile_source_to_pipeline_result(
             &source,
             None,
-            cli.target,
             script,
             verbose_compile,
             cli.should_verify_ir(),
@@ -840,7 +681,7 @@ fn cmd_run(
         compile_file_input_to_pipeline_result(
             input,
             root,
-            cli.target,
+            None,
             script,
             verbose_compile,
             cli.should_verify_ir(),
@@ -848,116 +689,26 @@ fn cmd_run(
             &module_resolution_options(cli),
         )?
     };
-    let options = runtime_options_for_file(cli, input, root, script_args)?;
 
-    run_compile_then_execute(cli, result, options)
-}
-
-/// 直接加载预编译 raw WASM 并执行；缺失/损坏返回 compile exit 1，不静默重编译。
-fn cmd_run_precompiled(
-    cli: &Cli,
-    wasm_path: &Path,
-    source: &Path,
-    script_args: &[OsString],
-) -> Result<ExitCode> {
-    let wasm_bytes = match std::fs::read(wasm_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!(
-                "Error: failed to read precompiled wasm {}: {e}",
-                wasm_path.display()
-            );
-            return Ok(ExitCode::from(EXIT_COMPILE_ERROR));
-        }
-    };
-    // 快速 magic/version 头校验；完整校验由 Module 加载失败承接。
-    if wasm_bytes.len() < 8 || &wasm_bytes[0..4] != b"\0asm" || wasm_bytes[4..8] != [1, 0, 0, 0] {
-        eprintln!(
-            "Error: precompiled wasm {} has invalid WASM header",
-            wasm_path.display()
-        );
-        return Ok(ExitCode::from(EXIT_COMPILE_ERROR));
-    }
-
-    let mut options = runtime_options_for_file(cli, source, None, script_args)?;
-    options.current_entry = Some(runtime::PrecompiledEntry {
-        source: source.to_path_buf(),
-        wasm: wasm_path.to_path_buf(),
-    });
-
-    let start = Instant::now();
-    let exec_result = block_on_wasm_execute(&wasm_bytes, options);
-    if cli.time {
-        eprintln!("execute: {}µs", start.elapsed().as_micros());
-    }
-    if let Err(e) = exec_result {
-        if let Some(code) = process_exit_code_from_error(&e) {
-            return Ok(code);
-        }
-        eprintln!("Runtime error: {:#}", e);
-        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
-    }
-    Ok(ExitCode::from(EXIT_SUCCESS))
-}
-
-/// 将 raw WASM 原子写入 `${WJSM_CACHE_DIR}/pipeline/<sha256>.wasm`；返回路径。
-fn write_pipeline_wasm_cache(wasm: &[u8]) -> Option<PathBuf> {
-    use sha2::{Digest, Sha256};
-    let cache_dir = std::env::var_os("WJSM_CACHE_DIR")?;
-    let pipeline_dir = PathBuf::from(cache_dir).join("pipeline");
-    std::fs::create_dir_all(&pipeline_dir).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(wasm);
-    let digest = hasher.finalize();
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    let final_path = pipeline_dir.join(format!("{hex}.wasm"));
-    if final_path.exists() {
-        return Some(final_path);
-    }
-    // create_new temp + rename 原子落盘
-    let tmp_path = pipeline_dir.join(format!(".{hex}.{}.tmp", std::process::id()));
-    {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path)
-            .ok()?;
-        f.write_all(wasm).ok()?;
-        f.sync_all().ok()?;
-    }
-    match std::fs::rename(&tmp_path, &final_path) {
-        Ok(()) => Some(final_path),
-        Err(_) => {
-            // 竞态：另一进程已写好
-            let _ = std::fs::remove_file(&tmp_path);
-            if final_path.exists() {
-                Some(final_path)
-            } else {
-                None
-            }
-        }
-    }
+    run_compile_then_execute_with_args(cli, result, script_args)
 }
 
 fn cmd_run_eval(
     cli: &Cli,
     code: &str,
     script: bool,
-    mode_tag: &str,
-    script_args: &[OsString],
+    _mode_tag: &str,
+    _script_args: &[OsString],
 ) -> Result<ExitCode> {
     let result = compile_source_to_pipeline_result(
         code,
         None,
-        cli.target,
         script,
         cli.verbose_enabled(1),
         cli.should_verify_ir(),
         cli.wants_debug_codegen(),
     )?;
-    let options = runtime_options_for_inline(cli, mode_tag, script_args)?;
-    run_compile_then_execute(cli, result, options)
+    run_compile_then_execute_with_args(cli, result, _script_args)
 }
 
 fn cmd_test(
@@ -1057,7 +808,6 @@ fn cmd_lint(
             Stage::Parse,
             cli.effective_verbose(),
             cli.time,
-            cli.target,
             script,
             cli.should_verify_ir(),
             cli.wants_debug_codegen(),
@@ -1071,7 +821,6 @@ fn cmd_lint(
                     Stage::Parse,
                     cli.effective_verbose(),
                     cli.time,
-                    cli.target,
                     script,
                     cli.should_verify_ir(),
                     cli.wants_debug_codegen(),
@@ -1240,7 +989,6 @@ fn cmd_check(
             Stage::Lower,
             cli.effective_verbose(),
             cli.time,
-            cli.target,
             script,
             cli.should_verify_ir(),
             cli.wants_debug_codegen(),
@@ -1254,7 +1002,6 @@ fn cmd_check(
                     Stage::Lower,
                     cli.effective_verbose(),
                     cli.time,
-                    cli.target,
                     script,
                     cli.should_verify_ir(),
                     cli.wants_debug_codegen(),
@@ -1301,7 +1048,6 @@ fn cmd_dump_ir(
             Stage::Lower,
             cli.effective_verbose(),
             cli.time,
-            cli.target,
             script,
             cli.should_verify_ir(),
             cli.wants_debug_codegen(),
@@ -1315,7 +1061,6 @@ fn cmd_dump_ir(
                     Stage::Lower,
                     cli.effective_verbose(),
                     cli.time,
-                    cli.target,
                     script,
                     cli.should_verify_ir(),
                     cli.wants_debug_codegen(),
@@ -1354,7 +1099,6 @@ fn cmd_dump_ast(
             Stage::Parse,
             cli.effective_verbose(),
             cli.time,
-            cli.target,
             script,
             cli.should_verify_ir(),
             cli.wants_debug_codegen(),
@@ -1368,7 +1112,6 @@ fn cmd_dump_ast(
                     Stage::Parse,
                     cli.effective_verbose(),
                     cli.time,
-                    cli.target,
                     script,
                     cli.should_verify_ir(),
                     cli.wants_debug_codegen(),
@@ -1386,234 +1129,15 @@ fn cmd_dump_ast(
 
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
-
-/// 经 host-wasm 的 wasm 工具输出 WAT 字符串。`name_unnamed(true)` 始终启用，
-/// 使合成函数获得 `$fN` 名称；`skeleton` 为 true 时省略指令体。
-fn print_wat_to_string(wasm: &[u8], skeleton: bool) -> Result<String> {
-    runtime::dump_wat(wasm, skeleton)
-}
-
-/// 从完整 WAT 文本中提取单个函数定义块（按 `$name` 匹配）。
-/// 跟踪括号深度：从 `(func $name` 行开始，深度归零时结束。
-fn filter_wat_func(wat: &str, name: &str) -> Result<String> {
-    let target = format!("${name}");
-    let lines: Vec<&str> = wat.lines().collect();
-    let mut available: Vec<String> = Vec::new();
-
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
-        let rest = match trimmed.strip_prefix("(func ") {
-            Some(r) => r,
-            None => continue,
-        };
-        let token_end = rest
-            .find(|c: char| c.is_whitespace() || c == ')')
-            .unwrap_or(rest.len());
-        let token = &rest[..token_end];
-        if !token.starts_with('$') {
-            continue;
-        }
-        available.push(token.to_string());
-        if token != target {
-            continue;
-        }
-        // 找到目标函数，按括号深度截取完整块
-        let mut result = String::new();
-        let mut depth: i32 = 0;
-        for &l in &lines[i..] {
-            for ch in l.chars() {
-                match ch {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-            }
-            result.push_str(l);
-            result.push('\n');
-            if depth == 0 {
-                return Ok(result);
-            }
-        }
-    }
-
-    bail!(
-        "function '{name}' not found in WAT; available: {}",
-        available.join(", ")
-    );
-}
-
-fn cmd_dump_wat(
-    cli: &Cli,
-    input: &Option<PathBuf>,
-    eval: &Option<String>,
-    root: Option<&Path>,
-    script: bool,
-    func: Option<&str>,
-    skeleton: bool,
-) -> Result<ExitCode> {
-    if func.is_some() && skeleton {
-        bail!("--skeleton and --func are mutually exclusive");
-    }
-
-    let result = match resolve_input(input, eval)? {
-        InputSource::Inline(code) => run_pipeline(
-            &code,
-            None,
-            Stage::Compile,
-            cli.effective_verbose(),
-            cli.time,
-            cli.target,
-            script,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
-        )?,
-        InputSource::File(path) => {
-            if path_is_stdin(&path) {
-                let mut source = String::new();
-                io::stdin().read_to_string(&mut source)?;
-                run_pipeline(
-                    &source,
-                    None,
-                    Stage::Compile,
-                    cli.effective_verbose(),
-                    cli.time,
-                    cli.target,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
-                )?
-            } else {
-                let pipeline = compile_file_input_to_pipeline_result(
-                    &path,
-                    root,
-                    cli.target,
-                    script,
-                    cli.verbose_enabled(1),
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
-                    &module_resolution_options(cli),
-                )?;
-                if cli.time {
-                    pipeline.timings.print(cli.effective_verbose());
-                }
-                pipeline
-            }
-        }
-    };
-
-    if cli.stats {
-        print_stats(&result);
-    }
-
-    if let Some(wasm) = &result.wasm {
-        let wat = print_wat_to_string(wasm, skeleton)?;
-        if let Some(name) = func {
-            println!("{}", filter_wat_func(&wat, name)?);
-        } else {
-            println!("{}", wat);
-        }
-    }
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
-}
-
 fn cmd_fmt(input: &Path, write: bool) -> Result<ExitCode> {
     let source = read_source_file(input)?;
-
     let module = parser::parse_module_with_path(&source, input)?;
     let formatted = emit_js(&module)?;
-
     if write {
         fs::write(input, &formatted)?;
         eprintln!("Formatted {}", input.display());
     } else {
         println!("{}", formatted);
-    }
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
-}
-
-fn cmd_validate(input: &Path) -> Result<ExitCode> {
-    let bytes = fs::read(input)?;
-
-    match runtime::validate_wasm(&bytes) {
-        Ok(_) => {
-            println!("✓ {} is valid WASM", input.display());
-            Ok(ExitCode::from(EXIT_SUCCESS))
-        }
-        Err(e) => {
-            println!("✗ {} is NOT valid WASM", input.display());
-            eprintln!("Validation error: {}", e);
-            Ok(ExitCode::from(EXIT_COMPILE_ERROR))
-        }
-    }
-}
-
-fn cmd_size(input: &Path) -> Result<ExitCode> {
-    let bytes = fs::read(input)?;
-
-    let sizes = runtime::wasm_section_sizes(&bytes)?;
-
-    println!("WASM Size Breakdown for {}", input.display());
-    println!("{}", "─".repeat(50));
-    println!("{:<15} {:>10} {:>10}", "Section", "Bytes", "% Total");
-    println!("{}", "─".repeat(50));
-
-    let total: usize = sizes.iter().map(|(_, s)| s).sum();
-    for (name, size) in &sizes {
-        let pct = if total == 0 {
-            0.0
-        } else {
-            (*size as f64 / total as f64) * 100.0
-        };
-        println!("{:<15} {:>10} {:>9.1}%", name, size, pct);
-    }
-
-    println!("{}", "─".repeat(50));
-    println!("{:<15} {:>10}", "Total", total);
-    println!("{:<15} {:>10}", "File Size", bytes.len());
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
-}
-
-fn cmd_disasm(input: &Path, func: Option<&str>, skeleton: bool) -> Result<ExitCode> {
-    if func.is_some() && skeleton {
-        bail!("--skeleton and --func are mutually exclusive");
-    }
-
-    let bytes = fs::read(input)?;
-    let wat = print_wat_to_string(&bytes, skeleton)?;
-
-    if let Some(name) = func {
-        println!("{}", filter_wat_func(&wat, name)?);
-    } else {
-        println!("{}", wat);
-    }
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
-}
-
-fn cmd_cache(command: &CacheCommand) -> Result<ExitCode> {
-    match command {
-        CacheCommand::Stats => {
-            let stats = runtime::module_cache_stats()?;
-            match stats.path {
-                Some(path) => {
-                    println!("Cache directory: {}", path.display());
-                    println!("Entries: {}", stats.entries);
-                    println!("Bytes: {}", stats.bytes);
-                }
-                None => {
-                    println!("Cache disabled");
-                    println!("Entries: 0");
-                    println!("Bytes: 0");
-                }
-            }
-        }
-        CacheCommand::Clear => {
-            let removed = runtime::clear_module_cache()?;
-            println!("Cleared {removed} cache entries");
-        }
     }
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
@@ -1626,17 +1150,13 @@ fn cmd_completions(shell: clap_complete::Shell) -> Result<ExitCode> {
 }
 
 fn cmd_init(path: &Path, force: bool) -> Result<ExitCode> {
-    let dir = path;
-    let name = dir
+    let name = path
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("Invalid path"))?
         .to_string_lossy();
-
-    fs::create_dir_all(dir)?;
-
-    let main_path = dir.join("main.js");
-    let package_path = dir.join("package.json");
-
+    fs::create_dir_all(path)?;
+    let main_path = path.join("main.js");
+    let package_path = path.join("package.json");
     for file_path in [&main_path, &package_path] {
         if file_path.exists() && !force {
             bail!(
@@ -1645,56 +1165,34 @@ fn cmd_init(path: &Path, force: bool) -> Result<ExitCode> {
             );
         }
     }
-
-    let main_js = format!(
-        r#"// {} - wjsm project
-console.log("Hello from {}!");
-"#,
-        name, name
-    );
-    fs::write(&main_path, main_js)?;
-
+    fs::write(
+        &main_path,
+        format!(
+            "// {} - wjsm project\nconsole.log(\"Hello from {}!\");\n",
+            name, name
+        ),
+    )?;
     let package_json = serde_json::json!({
         "name": name,
         "version": "0.1.0",
         "type": "module",
     });
     fs::write(&package_path, serde_json::to_string_pretty(&package_json)?)?;
-
     println!("Created project at {}", path.display());
     println!();
     println!("To run:");
     println!("  cd {}", path.display());
     println!("  wjsm run main.js");
-
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
 fn cmd_version(verbose: bool) -> Result<ExitCode> {
     println!("wjsm {}", env!("CARGO_PKG_VERSION"));
-
     if verbose {
         println!("  Edition: 2024");
-
-        // Try to get git hash
-        if let Ok(output) = std::process::Command::new("git")
-            .args(["rev-parse", "--short", "HEAD"])
-            .output()
-            && output.status.success()
-        {
-            let hash = String::from_utf8_lossy(&output.stdout);
-            println!("  Git: {}", hash.trim());
-        }
-
-        println!("  Target: wasm");
     }
-
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
-
-// ============================================================================
-// Pipeline Implementation
-// ============================================================================
 
 fn lower_parsed_module(
     source: &str,
@@ -1723,37 +1221,25 @@ fn lower_parsed_module(
     verify_ir_for_pipeline(&program, verify_ir)?;
     Ok(program)
 }
-
-fn compile_program_to_wasm(
+fn build_portable_artifact(
     program: &Program,
-    target: Target,
-    debug_codegen: bool,
-) -> Result<Vec<u8>> {
-    // 静态分发到具体后端；新后端在此 match 接入 `<Backend>.compile`。
-    // `compile`/`artifact_bytes` 经完全限定语法调用，避开 `dyn`。
-    let bytes: Vec<u8> = match target {
-        Target::Wasm => {
-            let a = <runtime::WasmBackend as runtime::JsBackend>::compile(
-                &runtime::WasmBackend,
-                program,
-                debug_codegen,
-            )?;
-            <runtime::WasmBackend as runtime::JsBackend>::artifact_bytes(&a)
-                .map(|b| b.to_vec())
-                .unwrap_or_default()
-        }
-        Target::Jit => {
-            let a = <wjsm_backend_jit::JitBackend as runtime::JsBackend>::compile(
-                &wjsm_backend_jit::JitBackend,
-                program,
-                debug_codegen,
-            )?;
-            <wjsm_backend_jit::JitBackend as runtime::JsBackend>::artifact_bytes(&a)
-                .map(|b| b.to_vec())
-                .unwrap_or_default()
-        }
-    };
-    Ok(bytes)
+    logical_url: impl Into<String>,
+    script: bool,
+    include_source_map: bool,
+    source: Option<&str>,
+) -> Result<PortableArtifact> {
+    PortableArtifact::from_input(&ArtifactBuildInput {
+        program: Arc::new(program.clone()),
+        manifest: Arc::new(ModuleManifest::single(logical_url, script)),
+        options: BuildOptions {
+            include_source_map,
+            include_source_text: include_source_map,
+        },
+        source_text: include_source_map
+            .then(|| source.map(Arc::<str>::from))
+            .flatten(),
+    })
+    .map_err(|error| anyhow::anyhow!("portable artifact encoding failed: {error}"))
 }
 
 fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
@@ -1763,14 +1249,40 @@ fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "pipeline stages share CLI flags")]
 fn run_pipeline(
     source: &str,
     filename: Option<&str>,
     stop_at: Stage,
     verbose: u8,
     time: bool,
-    target: Target,
+    script: bool,
+    verify_ir: bool,
+    debug_codegen: bool,
+) -> Result<PipelineResult> {
+    run_pipeline_with_identity(
+        source,
+        filename,
+        filename.unwrap_or("input.js"),
+        source_module_root(filename),
+        stop_at,
+        verbose,
+        time,
+        script,
+        verify_ir,
+        debug_codegen,
+    )
+}
+
+#[expect(clippy::too_many_arguments, reason = "pipeline stages share CLI flags")]
+fn run_pipeline_with_identity(
+    source: &str,
+    filename: Option<&str>,
+    logical_url: &str,
+    module_root: PathBuf,
+    stop_at: Stage,
+    verbose: u8,
+    time: bool,
     script: bool,
     verify_ir: bool,
     debug_codegen: bool,
@@ -1778,7 +1290,8 @@ fn run_pipeline(
     let mut result = PipelineResult {
         ast: None,
         program: None,
-        wasm: None,
+        artifact: None,
+        module_root,
         timings: PipelineTimings::default(),
     };
 
@@ -1809,7 +1322,7 @@ fn run_pipeline(
         eprintln!("Lowering to IR...");
     }
     let start = Instant::now();
-    let program = lower_parsed_module(
+    let mut program = lower_parsed_module(
         source,
         filename,
         result.ast.take().unwrap(),
@@ -1817,6 +1330,7 @@ fn run_pipeline(
         verify_ir,
         debug_codegen,
     )?;
+    program.set_source_file(logical_url);
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     if verbose >= 2 {
         eprintln!(
@@ -1833,15 +1347,20 @@ fn run_pipeline(
 
     // Compile
     if verbose >= 1 {
-        eprintln!("Compiling to WASM...");
+        eprintln!("Compiling portable artifact...");
     }
     let start = Instant::now();
-    let wasm = compile_program_to_wasm(result.program.as_ref().unwrap(), target, debug_codegen)?;
+    let Some(program) = result.program.as_ref() else {
+        bail!("lower stage produced no program");
+    };
+    result.artifact = Some(build_portable_artifact(
+        program,
+        logical_url,
+        script,
+        debug_codegen,
+        Some(source),
+    )?);
     result.timings.compile_us = start.elapsed().as_micros() as u64;
-    if verbose >= 2 {
-        eprintln!("Compiled WASM bytes: {}", wasm.len());
-    }
-    result.wasm = Some(wasm);
 
     if time {
         result.timings.print(verbose);
@@ -1868,7 +1387,8 @@ fn run_file_input_pipeline(
             let mut result = PipelineResult {
                 ast: None,
                 program: None,
-                wasm: None,
+                artifact: None,
+                module_root: root.clone(),
                 timings: PipelineTimings::default(),
             };
             let resolution_options = module_resolution_options(cli);
@@ -1904,16 +1424,17 @@ fn run_file_input_pipeline(
                     result.program = Some(program);
                 }
                 Stage::Compile | Stage::Execute => {
-                    let wasm = compile_bundle(
+                    let input = lower_bundle_artifact_input(
                         &entry,
                         &root,
-                        cli.target,
-                        cli.should_verify_ir(),
-                        cli.wants_debug_codegen(),
                         &resolution_options,
+                        cli.wants_debug_codegen(),
                     )?;
+                    result.artifact =
+                        Some(PortableArtifact::from_input(&input).map_err(|error| {
+                            anyhow::anyhow!("portable artifact encoding failed: {error}")
+                        })?);
                     result.timings.compile_us = start.elapsed().as_micros() as u64;
-                    result.wasm = Some(wasm);
                 }
             }
             if cli.time {
@@ -1921,13 +1442,20 @@ fn run_file_input_pipeline(
             }
             Ok(result)
         }
-        CompilePlan::SingleSource { source, filename } => run_pipeline(
+        CompilePlan::SingleSource {
+            source,
+            filename,
+            logical_url,
+            source_path: _,
+            module_root,
+        } => run_pipeline_with_identity(
             &source,
             Some(filename.as_str()),
+            &logical_url,
+            module_root,
             stop_at,
             cli.effective_verbose(),
             cli.time,
-            cli.target,
             script,
             cli.should_verify_ir(),
             cli.wants_debug_codegen(),
@@ -2032,8 +1560,17 @@ fn emit_js(module: &swc_core::ecma::ast::Module) -> Result<String> {
 // ============================================================================
 
 enum CompilePlan {
-    Bundle { entry: PathBuf, root: PathBuf },
-    SingleSource { source: String, filename: String },
+    Bundle {
+        entry: PathBuf,
+        root: PathBuf,
+    },
+    SingleSource {
+        source: String,
+        filename: String,
+        logical_url: String,
+        source_path: PathBuf,
+        module_root: PathBuf,
+    },
 }
 
 fn build_compile_plan(input: &Path, root: Option<&Path>) -> Result<CompilePlan> {
@@ -2045,13 +1582,6 @@ fn build_compile_plan(input: &Path, root: Option<&Path>) -> Result<CompilePlan> 
     let module = parser::parse_module_with_path(&source, input)?;
     let is_esm = wjsm_module::is_es_module(&module);
     let is_cjs = wjsm_module::is_commonjs_module(&module);
-
-    if !is_esm && !is_cjs {
-        return Ok(CompilePlan::SingleSource {
-            source,
-            filename: path_to_diagnostic_filename(input),
-        });
-    }
 
     let canonical_input = input.canonicalize().with_context(|| {
         format!(
@@ -2068,6 +1598,16 @@ fn build_compile_plan(input: &Path, root: Option<&Path>) -> Result<CompilePlan> 
             input.display()
         )
     })?;
+
+    if !is_esm && !is_cjs {
+        return Ok(CompilePlan::SingleSource {
+            source,
+            filename: path_to_diagnostic_filename(&canonical_input),
+            logical_url: wjsm_module::logical_url_from_path(Path::new(file_name))?,
+            source_path: canonical_input.clone(),
+            module_root: parent.to_path_buf(),
+        });
+    }
 
     Ok(CompilePlan::Bundle {
         entry: PathBuf::from(file_name),
@@ -2099,53 +1639,96 @@ fn bundle_plan_from_root(input: &Path, root: &Path) -> Result<CompilePlan> {
     })
 }
 
-fn run_compile_then_execute(
+fn run_compile_then_execute(cli: &Cli, result: PipelineResult) -> Result<ExitCode> {
+    run_compile_then_execute_with_args(cli, result, &[])
+}
+
+fn run_compile_then_execute_with_args(
     cli: &Cli,
     mut result: PipelineResult,
-    mut options: runtime::RuntimeOptions,
+    script_args: &[OsString],
 ) -> Result<ExitCode> {
-    let wasm = result
-        .wasm
+    let artifact = result
+        .artifact
         .as_ref()
-        .context("compile stage produced no WASM")?;
-
-    // 同入口 fork AOT：把 raw WASM 写入 pipeline cache 并设置 current_entry。
-    if let Some(source) = options.argv.get(1).map(PathBuf::from)
-        && let Some(wasm_path) = write_pipeline_wasm_cache(wasm)
-    {
-        options.current_entry = Some(runtime::PrecompiledEntry {
-            source,
-            wasm: wasm_path,
-        });
-    }
-
+        .context("compile stage produced no portable artifact")?;
     if cli.stats {
         print_stats(&result);
+        eprintln!("Artifact: {} bytes", artifact.bytes().len());
     }
-
+    let mut native = create_native_runtime(cli)?;
+    native.configure_process_arguments(
+        script_args
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned()),
+    )?;
     let start = Instant::now();
-    let exec_result = block_on_wasm_execute(wasm, options);
+    let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let execution = match native.execute(artifact, &result.module_root, &working_directory) {
+        Ok(execution) => execution,
+        Err(wjsm_host_native::NativeRuntimeError::FatalJavaScript(message)) => {
+            eprintln!("{message}");
+            return Ok(ExitCode::from(EXIT_COMPILE_ERROR));
+        }
+        Err(error) => {
+            io::stdout().write_all(&native.take_output())?;
+            io::stderr().write_all(&native.take_stderr())?;
+            eprintln!("Runtime error: {error:#}");
+            return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
+        }
+    };
     result.timings.execute_us = start.elapsed().as_micros() as u64;
-
+    io::stdout().write_all(&execution.stdout)?;
+    io::stderr().write_all(&execution.stderr)?;
+    if cli.stats {
+        print_native_cache_stats(&execution);
+    }
     if cli.time {
         result.timings.print(cli.effective_verbose());
     }
+    Ok(ExitCode::from(execution.exit_code.rem_euclid(256) as u8))
+}
 
-    if let Err(e) = exec_result {
-        if let Some(code) = process_exit_code_from_error(&e) {
-            return Ok(code);
-        }
-        eprintln!("Runtime error: {:#}", e);
-        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
-    }
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
+fn print_native_cache_stats(execution: &wjsm_host_native::NativeExecution) {
+    eprintln!(
+        "Native cache: entries={}, bytes={}, hits={}, misses={}, invalidated={}",
+        execution.cache_entries,
+        execution.cache_bytes,
+        execution.cache_hit_count,
+        execution.cache_miss_count,
+        execution.cache_invalidated_count,
+    );
 }
 
 fn compile_source_to_pipeline_result(
     source: &str,
     filename: Option<&str>,
-    target: Target,
+    script: bool,
+    verbose: bool,
+    verify_ir: bool,
+    debug_codegen: bool,
+) -> Result<PipelineResult> {
+    compile_source_to_pipeline_result_with_identity(
+        source,
+        filename,
+        filename.unwrap_or("input.js"),
+        source_module_root(filename),
+        script,
+        verbose,
+        verify_ir,
+        debug_codegen,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source identity and pipeline flags are explicit"
+)]
+fn compile_source_to_pipeline_result_with_identity(
+    source: &str,
+    filename: Option<&str>,
+    logical_url: &str,
+    module_root: PathBuf,
     script: bool,
     verbose: bool,
     verify_ir: bool,
@@ -2154,7 +1737,8 @@ fn compile_source_to_pipeline_result(
     let mut result = PipelineResult {
         ast: None,
         program: None,
-        wasm: None,
+        artifact: None,
+        module_root,
         timings: PipelineTimings::default(),
     };
 
@@ -2176,7 +1760,7 @@ fn compile_source_to_pipeline_result(
         eprintln!("Lowering to IR...");
     }
     let start = Instant::now();
-    let program = lower_parsed_module(
+    let mut program = lower_parsed_module(
         source,
         filename,
         result.ast.take().unwrap(),
@@ -2184,25 +1768,31 @@ fn compile_source_to_pipeline_result(
         verify_ir,
         debug_codegen,
     )?;
+    program.set_source_file(logical_url);
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     result.program = Some(program);
 
     if verbose {
-        eprintln!("Compiling to WASM...");
+        eprintln!("Compiling portable artifact...");
     }
-    let start = Instant::now();
-    let wasm = compile_program_to_wasm(result.program.as_ref().unwrap(), target, debug_codegen)?;
-    result.timings.compile_us = start.elapsed().as_micros() as u64;
-    result.wasm = Some(wasm);
+    result.artifact = Some(build_portable_artifact(
+        result
+            .program
+            .as_ref()
+            .context("lower stage produced no program")?,
+        logical_url,
+        script,
+        debug_codegen,
+        Some(source),
+    )?);
 
     Ok(result)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compile_file_input_to_pipeline_result(
     input: &Path,
     root: Option<&Path>,
-    target: Target,
+    logical_root: Option<&Path>,
     script: bool,
     verbose: bool,
     verify_ir: bool,
@@ -2216,40 +1806,61 @@ fn compile_file_input_to_pipeline_result(
                 eprintln!("Bundling modules...");
             }
             let start = Instant::now();
-            let wasm = compile_bundle(
-                &entry,
-                &root,
-                target,
-                verify_ir,
-                debug_codegen,
-                resolution_options,
-            )?;
             let mut result = PipelineResult {
                 ast: None,
                 program: None,
-                wasm: None,
+                artifact: None,
+                module_root: root.clone(),
                 timings: PipelineTimings::default(),
             };
+            let input =
+                lower_bundle_artifact_input(&entry, &root, resolution_options, debug_codegen)?;
+            result.artifact =
+                Some(PortableArtifact::from_input(&input).map_err(|error| {
+                    anyhow::anyhow!("portable artifact encoding failed: {error}")
+                })?);
             result.timings.compile_us = start.elapsed().as_micros() as u64;
-            result.wasm = Some(wasm);
             Ok(result)
         }
-        CompilePlan::SingleSource { source, filename } => compile_source_to_pipeline_result(
-            &source,
-            Some(filename.as_str()),
-            target,
-            script,
-            verbose,
-            verify_ir,
-            debug_codegen,
-        ),
+        CompilePlan::SingleSource {
+            source,
+            filename,
+            logical_url,
+            source_path,
+            module_root,
+        } => {
+            let (logical_url, module_root) = if let Some(root) = logical_root {
+                let root = root.canonicalize().with_context(|| {
+                    format!("Failed to canonicalize logical root '{}'", root.display())
+                })?;
+                let relative = source_path.strip_prefix(&root).map_err(|_| {
+                    anyhow::anyhow!(
+                        "input file '{}' is not under logical root '{}'",
+                        source_path.display(),
+                        root.display()
+                    )
+                })?;
+                (wjsm_module::logical_url_from_path(relative)?, root)
+            } else {
+                (logical_url, module_root)
+            };
+            compile_source_to_pipeline_result_with_identity(
+                &source,
+                Some(filename.as_str()),
+                &logical_url,
+                module_root,
+                script,
+                verbose,
+                verify_ir,
+                debug_codegen,
+            )
+        }
     }
 }
 
 fn compile_from_file_input(
     input: &Path,
     root: Option<&Path>,
-    target: Target,
     script: bool,
     verify_ir: bool,
     debug_codegen: bool,
@@ -2257,18 +1868,25 @@ fn compile_from_file_input(
 ) -> Result<Vec<u8>> {
     let plan = build_compile_plan(input, root)?;
     match plan {
-        CompilePlan::Bundle { entry, root } => compile_bundle(
-            &entry,
-            &root,
-            target,
-            verify_ir,
-            debug_codegen,
-            resolution_options,
-        ),
-        CompilePlan::SingleSource { source, filename } => compile_source(
+        CompilePlan::Bundle { entry, root } => {
+            let input =
+                lower_bundle_artifact_input(&entry, &root, resolution_options, debug_codegen)?;
+            Ok(PortableArtifact::from_input(&input)
+                .map_err(|error| anyhow::anyhow!("portable artifact encoding failed: {error}"))?
+                .bytes()
+                .to_vec())
+        }
+        CompilePlan::SingleSource {
+            source,
+            filename,
+            logical_url,
+            source_path: _,
+            module_root,
+        } => compile_source_with_identity(
             &source,
             Some(filename.as_str()),
-            target,
+            &logical_url,
+            module_root,
             script,
             verify_ir,
             debug_codegen,
@@ -2276,64 +1894,73 @@ fn compile_from_file_input(
     }
 }
 
-fn compile_source(
+fn lower_bundle_artifact_input(
+    entry: &Path,
+    root: &Path,
+    resolution_options: &wjsm_module::ResolutionOptions,
+    debug_codegen: bool,
+) -> Result<ArtifactBuildInput> {
+    wjsm_module::lower_artifact_input_with_options(
+        entry,
+        root,
+        resolution_options.clone(),
+        debug_codegen,
+    )
+    .with_context(|| {
+        format!(
+            "bundle entry {} from root {}",
+            entry.display(),
+            root.display()
+        )
+    })
+}
+
+fn compile_source_with_identity(
     source: &str,
     filename: Option<&str>,
-    target: Target,
+    logical_url: &str,
+    module_root: PathBuf,
     script: bool,
     verify_ir: bool,
     debug_codegen: bool,
 ) -> Result<Vec<u8>> {
-    let module = if script {
-        parser::parse_script_as_module(source)?
-    } else if let Some(filename) = filename {
-        parser::parse_module_with_filename(source, filename)?
-    } else {
-        parser::parse_module(source)?
-    };
-    let program = lower_parsed_module(source, filename, module, script, verify_ir, debug_codegen)?;
-    compile_program_to_wasm(&program, target, debug_codegen)
+    let result = compile_source_to_pipeline_result_with_identity(
+        source,
+        filename,
+        logical_url,
+        module_root,
+        script,
+        false,
+        verify_ir,
+        debug_codegen,
+    )?;
+    Ok(result
+        .artifact
+        .context("compile stage produced no portable artifact")?
+        .bytes()
+        .to_vec())
 }
 
-fn compile_bundle(
-    entry: &Path,
-    root: &Path,
-    target: Target,
+fn compile_source(
+    source: &str,
+    filename: Option<&str>,
+    script: bool,
     verify_ir: bool,
     debug_codegen: bool,
-    resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<Vec<u8>> {
-    // WJSM_CACHE_DIR 存在且未显式禁用时走 builtin 段缓存路径（issue #344）。
-    let program = if std::env::var_os("WJSM_CACHE_DIR").is_some()
-        && std::env::var_os("WJSM_NO_BUILTIN_CACHE").is_none()
-    {
-        wjsm_module::lower_bundle_cached_with_debug(
-            entry,
-            root,
-            resolution_options.clone(),
-            debug_codegen,
-        )
-        .with_context(|| {
-            format!(
-                "bundle entry {} from root {}",
-                entry.display(),
-                root.display()
-            )
-        })?
-    } else {
-        wjsm_module::lower_bundle_with_debug(entry, root, resolution_options.clone(), debug_codegen)
-            .with_context(|| {
-                format!(
-                    "bundle entry {} from root {}",
-                    entry.display(),
-                    root.display()
-                )
-            })?
-    };
-    if verify_ir {
-        verify_ir_for_pipeline(&program, true)?;
-    }
-    compile_program_to_wasm(&program, target, debug_codegen)
+    compile_source_with_identity(
+        source,
+        filename,
+        filename.unwrap_or("input.js"),
+        source_module_root(filename),
+        script,
+        verify_ir,
+        debug_codegen,
+    )
+}
+thread_local! {
+    static IN_PROCESS_SOURCE_RUNTIME: RefCell<Option<wjsm_host_native::NativeRuntime>> =
+        const { RefCell::new(None) };
 }
 
 /// In-process 复现 `wjsm run <file>` 的可观测行为（stdout / stderr / exit_code），
@@ -2342,13 +1969,91 @@ fn compile_bundle(
 ///
 /// 退出码 / stderr 契约必须与 `main_entry` + `cmd_run` 逐字一致：
 /// - 编译错（parse/lower/bundle/compile）→ 退出码 1，stderr = `Error: {e:#}\n`
-/// - 运行时错（WASM 执行失败）→ 退出码 2，stderr = `Runtime error: {e:#}\n`
-/// - 成功 → 退出码 0，stdout = 程序输出，stderr 空
+/// - 运行时错（native 执行失败）→ 退出码 2，stderr = `Runtime error: {e:#}\n`
+/// - 成功 → 退出码 0，stdout 为程序输出，stderr 为空。
 ///
 /// 偏离 CLI 的唯一点：stdout 写入返回的 buffer 而非真实 fd（测试需捕获）。
-/// 与 CLI 默认对齐：target=Wasm、script=false、root 由文件路径推断。
+/// In-process 复现 `wjsm run <file>` 的可观测行为（stdout / stderr / exit_code）。
+///
+/// 测试入口与 CLI 共用同一 portable artifact、native cache 与 `NativeRuntime`，
+/// 避免测试进程绕过生产执行路径。
 pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
     run_file_in_process_with_options(input, &[], &[], None)
+}
+
+/// 在显式 portable build root 下执行 fixture 文件。
+pub fn run_file_in_process_with_root(input: &Path, root: &Path) -> (i32, Vec<u8>, Vec<u8>) {
+    run_file_in_process_with_options_and_root(input, Some(root), &[], &[], None)
+}
+
+/// 在测试进程内执行一段 source，使用与 CLI 相同的 portable artifact/native runtime 路径。
+pub fn run_source_in_process(source: &str) -> (i32, Vec<u8>, Vec<u8>) {
+    let (artifact, module_root) = match compile_source_to_pipeline_result(
+        source, None, false, false, false, false,
+    )
+    .and_then(|result| {
+        let artifact = result
+            .artifact
+            .context("compile stage produced no portable artifact")?;
+        Ok((artifact, result.module_root))
+    }) {
+        Ok(compiled) => compiled,
+        Err(error) => {
+            return (
+                EXIT_COMPILE_ERROR as i32,
+                Vec::new(),
+                format!("Error: {error:#}\n").into_bytes(),
+            );
+        }
+    };
+    execute_artifact_in_process(&artifact, &module_root)
+}
+
+fn execute_artifact_in_process(
+    artifact: &PortableArtifact,
+    module_root: &Path,
+) -> (i32, Vec<u8>, Vec<u8>) {
+    IN_PROCESS_SOURCE_RUNTIME.with(|runtime| {
+        let mut runtime = runtime.borrow_mut();
+        if runtime.is_none() {
+            let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
+            match wjsm_host_native::NativeRuntime::new(cache_dir) {
+                Ok(created) => *runtime = Some(created),
+                Err(error) => {
+                    return (
+                        EXIT_RUNTIME_ERROR as i32,
+                        Vec::new(),
+                        format!("Runtime error: {error}\n").into_bytes(),
+                    );
+                }
+            }
+        }
+        let Some(native) = runtime.as_mut() else {
+            unreachable!("runtime was initialized above")
+        };
+        let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        match native.execute(artifact, module_root, &working_directory) {
+            Ok(execution) => (execution.exit_code, execution.stdout, execution.stderr),
+            Err(wjsm_host_native::NativeRuntimeError::FatalJavaScript(message)) => {
+                runtime_error_result(native, EXIT_COMPILE_ERROR, message)
+            }
+            Err(error) => runtime_error_result(
+                native,
+                EXIT_RUNTIME_ERROR,
+                format!("Runtime error: {error}"),
+            ),
+        }
+    })
+}
+
+fn runtime_error_result(
+    native: &mut wjsm_host_native::NativeRuntime,
+    exit_code: u8,
+    message: impl std::fmt::Display,
+) -> (i32, Vec<u8>, Vec<u8>) {
+    let mut stderr = native.take_stderr();
+    stderr.extend_from_slice(format!("{message}\n").as_bytes());
+    (exit_code.into(), native.take_output(), stderr)
 }
 
 pub fn run_file_in_process_with_options(
@@ -2357,148 +2062,82 @@ pub fn run_file_in_process_with_options(
     env_overrides: &[(&str, &str)],
     cwd_override: Option<&Path>,
 ) -> (i32, Vec<u8>, Vec<u8>) {
-    install_embedded_runtime_artifacts();
+    run_file_in_process_with_options_and_root(input, None, script_args, env_overrides, cwd_override)
+}
 
-    let wasm = match compile_file_input_to_pipeline_result(
+fn run_file_in_process_with_options_and_root(
+    input: &Path,
+    root: Option<&Path>,
+    script_args: &[&str],
+    env_overrides: &[(&str, &str)],
+    cwd_override: Option<&Path>,
+) -> (i32, Vec<u8>, Vec<u8>) {
+    let (artifact, module_root) = match compile_file_input_to_pipeline_result(
         input,
         None,
-        Target::Wasm,
+        root,
         false,
         false,
         false,
         false,
         &wjsm_module::ResolutionOptions::default(),
     )
-    .and_then(|result| result.wasm.context("compile stage produced no WASM"))
-    {
-        Ok(wasm) => wasm,
-        Err(e) => {
+    .and_then(|result| {
+        let artifact = result
+            .artifact
+            .context("compile stage produced no portable artifact")?;
+        Ok((artifact, result.module_root))
+    }) {
+        Ok(compiled) => compiled,
+        Err(error) => {
             return (
                 EXIT_COMPILE_ERROR as i32,
                 Vec::new(),
-                format!("Error: {e:#}\n").into_bytes(),
+                format!("Error: {error:#}\n").into_bytes(),
             );
         }
     };
 
-    let rt = shared_execution_runtime();
-
-    let options =
-        match runtime_options_for_in_process(input, script_args, env_overrides, cwd_override) {
-            Ok(options) => options,
-            Err(e) => {
-                return (
-                    EXIT_RUNTIME_ERROR as i32,
-                    Vec::new(),
-                    format!("Runtime error: {e:#}\n").into_bytes(),
-                );
-            }
-        };
-    let mut stdout: Vec<u8> = Vec::new();
-    match rt.block_on(runtime::execute_with_writer_with_options(
-        &wasm,
-        &mut stdout,
-        options,
-    )) {
-        Ok((_, diagnostics)) => (EXIT_SUCCESS as i32, stdout, diagnostics),
-        Err(e) => {
-            if let Some(code) = runtime::process_exit_code(&e) {
-                let diagnostics = runtime::process_exit_diagnostics(&e)
-                    .map(|bytes| bytes.to_vec())
-                    .unwrap_or_default();
-                return (code, stdout, diagnostics);
-            }
-            (
+    let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
+    let mut native = match wjsm_host_native::NativeRuntime::new(cache_dir) {
+        Ok(native) => native,
+        Err(error) => {
+            return (
                 EXIT_RUNTIME_ERROR as i32,
-                stdout,
-                format!("Runtime error: {e:#}\n").into_bytes(),
-            )
+                Vec::new(),
+                format!("Runtime error: {error}\n").into_bytes(),
+            );
         }
-    }
-}
-
-fn default_in_process_compiler() -> runtime::RuntimeCompiler {
-    #[cfg(target_arch = "aarch64")]
-    {
-        runtime::RuntimeCompiler::Cranelift
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        runtime::RuntimeCompiler::Winch
-    }
-}
-
-fn runtime_options_for_in_process(
-    input: &Path,
-    script_args: &[&str],
-    env_overrides: &[(&str, &str)],
-    cwd_override: Option<&Path>,
-) -> Result<runtime::RuntimeOptions> {
-    let script = input
-        .canonicalize()
-        .unwrap_or_else(|_| input.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-    let mut argv = Vec::with_capacity(script_args.len() + 2);
-    argv.push(wjsm_argv0());
-    argv.push(script);
-    argv.extend(script_args.iter().map(|arg| (*arg).to_string()));
-
-    let mut env = runtime_env_snapshot();
-    for (key, value) in env_overrides {
-        env.retain(|(existing, _)| existing != key);
-        env.push(((*key).to_string(), (*value).to_string()));
-    }
-
-    let gc_algorithm = runtime::gc_algorithm_from_env(&env).map_err(anyhow::Error::msg)?;
-    let sandbox = fs_sandbox_for_in_process(input, &env, cwd_override);
-    let module_loader = runtime_module_loader_for_file(
-        input,
-        None,
-        &sandbox,
-        wjsm_module::ResolutionOptions::default(),
-        false,
-    )?;
-
-    // in-process 测试在支持 threads 的平台保留 Winch；AArch64 使用 Cranelift。
-    let compiler = match env
-        .iter()
-        .rev()
-        .find(|(k, _)| k == "WJSM_COMPILER")
-        .map(|(_, v)| v.as_str())
-    {
-        Some("winch") | Some("Winch") | Some("WINCH") => Some(runtime::RuntimeCompiler::Winch),
-        Some("cranelift") | Some("Cranelift") | Some("CRANELIFT") => {
-            Some(runtime::RuntimeCompiler::Cranelift)
-        }
-        Some(_) => None,
-        None => Some(default_in_process_compiler()),
     };
-
-    Ok(runtime::RuntimeOptions {
-        max_heap_size: None,
-        shadow_stack_max: wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE as usize,
-        gc_algorithm,
-        compiler,
-        argv,
-        cwd: cwd_override
-            .map(|cwd| cwd.to_string_lossy().into_owned())
-            .or_else(runtime_cwd_string),
-        env,
-        exec_path: Some(wjsm_argv0()),
-        exec_argv: vec!["run".to_string()],
-        pid: std::process::id(),
-        ppid: 0,
-        platform: node_platform(),
-        arch: node_arch(),
-        fs_read_roots: sandbox.read_roots,
-        fs_write_roots: sandbox.write_roots,
-        fs_allow_write_anywhere: sandbox.allow_write_anywhere,
-        module_loader,
-        ..runtime::RuntimeOptions::default()
-    })
+    if let Err(error) = native.configure_environment(
+        true,
+        env_overrides
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+    ) {
+        return runtime_error_result(&mut native, EXIT_RUNTIME_ERROR, error);
+    }
+    if let Err(error) = native
+        .configure_process_arguments(script_args.iter().map(|argument| (*argument).to_owned()))
+    {
+        return runtime_error_result(&mut native, EXIT_RUNTIME_ERROR, error);
+    }
+    let working_directory = cwd_override
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    match native.execute(&artifact, &module_root, &working_directory) {
+        Ok(execution) => (execution.exit_code, execution.stdout, execution.stderr),
+        Err(wjsm_host_native::NativeRuntimeError::FatalJavaScript(message)) => {
+            runtime_error_result(&mut native, EXIT_COMPILE_ERROR, message)
+        }
+        Err(error) => runtime_error_result(
+            &mut native,
+            EXIT_RUNTIME_ERROR,
+            format!("Runtime error: {error}"),
+        ),
+    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2559,7 +2198,7 @@ mod tests {
         let cfg = bare.inspect_config().expect("inspect parse");
         assert_eq!(
             cfg,
-            Some(runtime::InspectConfig {
+            Some(InspectConfig {
                 host: "127.0.0.1".into(),
                 port: 9229,
                 break_on_start: false,
@@ -2572,7 +2211,7 @@ mod tests {
         let cfg = custom.inspect_config().expect("inspect parse");
         assert_eq!(
             cfg,
-            Some(runtime::InspectConfig {
+            Some(InspectConfig {
                 host: "0.0.0.0".into(),
                 port: 0,
                 break_on_start: false,
@@ -2583,7 +2222,7 @@ mod tests {
         let cfg = port_only.inspect_config().expect("inspect parse");
         assert_eq!(
             cfg,
-            Some(runtime::InspectConfig {
+            Some(InspectConfig {
                 host: "127.0.0.1".into(),
                 port: 9230,
                 break_on_start: false,
@@ -2597,7 +2236,7 @@ mod tests {
         let cfg = brk.inspect_config().expect("inspect-brk parse");
         assert_eq!(
             cfg,
-            Some(runtime::InspectConfig {
+            Some(InspectConfig {
                 host: "127.0.0.1".into(),
                 port: 9229,
                 break_on_start: true,
@@ -2616,7 +2255,7 @@ mod tests {
         let cfg = both.inspect_config().expect("both flags");
         assert_eq!(
             cfg,
-            Some(runtime::InspectConfig {
+            Some(InspectConfig {
                 host: "127.0.0.1".into(),
                 port: 2222,
                 break_on_start: true,
@@ -2738,6 +2377,58 @@ mod tests {
         assert_eq!(
             execute(custom_cli).expect("custom condition should select custom export"),
             ExitCode::from(EXIT_SUCCESS)
+        );
+    }
+    #[test]
+    fn cli_validates_artifacts_and_rejects_corruption() {
+        let root = TestProject::new("validate_artifact");
+        let artifact = root.join("input.wjsm");
+        fs::write(
+            &artifact,
+            compile_source("console.log(1)", None, false, true, false)
+                .expect("source should compile"),
+        )
+        .expect("artifact should be writable");
+        let input = artifact.to_str().expect("artifact path should be UTF-8");
+        let valid = parse_cli_for_test(&["wjsm", "validate", input]);
+        assert_eq!(
+            execute(valid).expect("valid artifact should pass"),
+            ExitCode::from(EXIT_SUCCESS)
+        );
+
+        fs::write(&artifact, b"corrupt").expect("artifact should be corruptible");
+        let corrupt = parse_cli_for_test(&["wjsm", "validate", input]);
+        let message = format!(
+            "{:#}",
+            execute(corrupt).expect_err("corrupt artifact should fail")
+        );
+        assert!(message.contains("invalid portable artifact"), "{message}");
+    }
+
+    #[test]
+    fn native_executable_rejection_preserves_existing_target() {
+        let root = TestProject::new("native_executable_rejection");
+        let output = root.join("output");
+        fs::write(&output, b"sentinel").expect("target should be writable");
+        let output_path = output.to_str().expect("output path should be UTF-8");
+        let cli = parse_cli_for_test(&[
+            "wjsm",
+            "build",
+            "-e",
+            "console.log(1)",
+            "--format",
+            "native-executable",
+            "-o",
+            output_path,
+        ]);
+        let message = format!(
+            "{:#}",
+            execute(cli).expect_err("native executable output should be rejected")
+        );
+        assert_eq!(message, "native executable output is not implemented");
+        assert_eq!(
+            fs::read(output).expect("target should remain readable"),
+            b"sentinel"
         );
     }
 }

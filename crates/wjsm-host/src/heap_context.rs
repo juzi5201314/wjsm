@@ -1,20 +1,18 @@
 //! 后端无关的堆/侧表上下文。
 //!
-//! 这是多后端解耦的**核心接缝**：`HostRuntime` 的各能力域（console/object/gc/async）
-//! 不直接操作后端状态，而是经 [`HeapContext`] 的最小操作集完成。各后端用自身的
-//! 运行时上下文实现本 trait——wasmtime 后端用 `Caller<RuntimeState>`，
-//! native 后端用其原生堆/侧表。
+//! 这是多后端解耦的核心接缝：`HostRuntime` 的各能力域（console/object/gc/async）
+//! 不直接操作后端状态，而是经 [`HeapContext`] 的最小操作集完成。native 后端用其
+//! 原生堆/侧表实现本 trait。
 //!
 //! # 设计约束
 //!
-//! - **后端无关**：签名只出现 `Value`/`Handle`/字节/`usize`，禁止 `Caller`/`Store`/`Extern`。
+//! - **后端无关**：签名只出现 `CallArgs`、`Value`/`Handle`/字节/`usize`，禁止后端特化类型。
 //! - **最小集**：只覆盖 HostRuntime 能力域真正需要的操作，不做全量 builtins 抽象。
 //! - **对象安全**：方法不泛型，可经 `&mut dyn HeapContext` 使用（HostRuntime 据此委托）。
-//! - **全 `&mut self`**：读操作（如 `read_shadow_arg`/`array_elem`）也取 `&mut self`。
-//!   后端读取堆可能需可变上下文（wasmtime 的 `Memory::data`/`Caller`、或读取触发惰性
-//!   加载/GC），统一 `&mut self` 让后端无需 unsafe/内部可变性即可实现。
+//! - **全 `&mut self`**：堆读取可能触发惰性加载或 GC，统一 `&mut self` 让后端无需
+//!   unsafe/内部可变性即可实现。
 
-use crate::{GcOutcome, Handle, Value};
+use crate::{CallArgs, GcOutcome, Handle, Value};
 
 /// async_hooks 生命周期事件类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +27,8 @@ pub enum AsyncHookEvent {
 /// 后端无关的堆/侧表操作上下文。
 pub trait HeapContext {
     // ── console / 通用读 ──
-    /// 从影子栈读取第 `index` 个 vararg（`args_base` 为槽基址）。
-    fn read_shadow_arg(&mut self, args_base: i32, index: u32) -> Value;
+    /// 从 native call arena 读取第 `index` 个实参；越界返回 `undefined`。
+    fn read_call_arg(&mut self, args: CallArgs, index: u32) -> Value;
     /// 把字符串值渲染为 UTF-8（非字符串值由实现决定回退）。
     fn read_string_utf8(&mut self, val: Value) -> String;
     /// 追加字节到 stdout 输出缓冲。

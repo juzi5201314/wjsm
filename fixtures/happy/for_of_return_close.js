@@ -1,5 +1,8 @@
 let closed = false;
 let iter = {
+  [Symbol.iterator]() {
+    return this;
+  },
   next: () => ({ value: 1, done: false }),
   return: () => {
     closed = true;

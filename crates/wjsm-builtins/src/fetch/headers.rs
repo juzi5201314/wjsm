@@ -92,37 +92,21 @@ pub fn call_method<E: ExecContext>(
             create_iterator(ctx, handle, kind)
         }
         HeadersMethodKind::ForEach => {
-            let _ = (this_value, args);
+            let callback = args.first().copied()?;
+            if !ctx.is_callable(callback) {
+                return Some(value::encode_undefined());
+            }
+            let this_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            let pairs = ctx.with_headers(handle, |entry| entry.pairs.clone())?;
+            for (name, content) in pairs {
+                let name = ctx.store_string_owned(name);
+                let content = ctx.store_string_owned(content);
+                let arguments = [content, name, this_value];
+                ctx.call_js(callback, this_arg, &arguments).ok()?;
+            }
             Some(value::encode_undefined())
         }
     }
-}
-
-pub async fn call_method_async<E: ExecContext>(
-    ctx: &mut E,
-    this_value: Value,
-    handle: u32,
-    kind: HeadersMethodKind,
-    args: &[Value],
-) -> Option<Value> {
-    if !matches!(kind, HeadersMethodKind::ForEach) {
-        return call_method(ctx, this_value, handle, kind, args);
-    }
-    let callback = args.first().copied()?;
-    if !ctx.is_callable(callback) {
-        return Some(value::encode_undefined());
-    }
-    let this_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
-    let pairs = ctx.with_headers(handle, |entry| entry.pairs.clone())?;
-    for (name, content) in pairs {
-        let name = ctx.store_string_owned(name);
-        let content = ctx.store_string_owned(content);
-        let arguments = [content, name, this_value];
-        ctx.call_js_async(callback, this_arg, &arguments)
-            .await
-            .ok()?;
-    }
-    Some(value::encode_undefined())
 }
 
 fn create_iterator<E: ExecContext>(

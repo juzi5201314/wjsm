@@ -99,8 +99,8 @@ module {
     bb1:
       %16 = const c27
       store var $1.$shared_env, %16
-      %72 = load var $1.$state
-      switch %72 [case c42 -> bb2, case c43 -> bb3, case c44 -> bb6, case c45 -> bb11], default bb16, exit bb17
+      %70 = load var $1.$state
+      switch %70 [case c42 -> bb2, case c43 -> bb3, case c44 -> bb6, case c45 -> bb11], default bb16, exit bb17
     bb2:
       %17 = const c28
       %18 = load var $1.input
@@ -109,17 +109,17 @@ module {
       %21 = call builtin.promise.resolve_static(%17, %20)
       %23 = const c30
       %22 = call builtin.promise.resolve_static(%23, %21)
-      %60 = load var $1.$env
-      %61 = const c38
-      %62 = load var $1.input
-      call builtin.continuation.save_var(%60, %61, %62)
+      %58 = load var $1.$env
+      %59 = const c38
+      %60 = load var $1.input
+      call builtin.continuation.save_var(%58, %59, %60)
       suspend %22, state=1
       jump bb5
     bb3:
-      %63 = load var $1.$env
-      %64 = const c39
-      %65 = call builtin.continuation.load_var(%63, %64)
-      store var $1.input, %65
+      %61 = load var $1.$env
+      %62 = const c39
+      %63 = call builtin.continuation.load_var(%61, %62)
+      store var $1.input, %63
       %24 = load var $1.$resume_val
       %25 = load var $1.$is_rejected
       %26 = const c31
@@ -135,17 +135,17 @@ module {
       %30 = load var $1.awaited
       %31 = load var $1.$generator
       %32 = call builtin.async_generator.next(%31, %30)
-      %66 = load var $1.$env
-      %67 = const c40
-      %68 = load var $1.input
-      call builtin.continuation.save_var(%66, %67, %68)
+      %64 = load var $1.$env
+      %65 = const c40
+      %66 = load var $1.input
+      call builtin.continuation.save_var(%64, %65, %66)
       suspend %32, state=2
       jump bb8
     bb6:
-      %69 = load var $1.$env
-      %70 = const c41
-      %71 = call builtin.continuation.load_var(%69, %70)
-      store var $1.input, %71
+      %67 = load var $1.$env
+      %68 = const c41
+      %69 = call builtin.continuation.load_var(%67, %68)
+      store var $1.input, %69
       %33 = load var $1.$resume_val
       %34 = load var $1.$is_rejected
       %35 = const c32
@@ -156,46 +156,44 @@ module {
       call builtin.async_generator.throw(%39, %33)
       return
     bb8:
-      %43 = load var $1.input
-      %44 = const c34
-      %45 = add %43, %44
-      %46 = load var $1.$generator
-      %47 = call builtin.async_generator.next(%46, %45)
-      suspend %47, state=3
+      %42 = load var $1.input
+      %43 = const c34
+      %44 = add %42, %43
+      %45 = load var $1.$generator
+      %46 = call builtin.async_generator.next(%45, %44)
+      suspend %46, state=3
       jump bb13
     bb9:
       %40 = load var $1.$generator
-      %41 = load var $1.$resume_val
-      call builtin.async_generator.return(%40, %41)
+      call builtin.async_generator.return(%40, %33)
       return
     bb10:
       %37 = const c33
       %38 = stricteq %34, %37
       branch %38, bb9, bb8
     bb11:
-      %48 = load var $1.$resume_val
-      %49 = load var $1.$is_rejected
-      %50 = const c35
-      %51 = stricteq %49, %50
-      branch %51, bb12, bb15
+      %47 = load var $1.$resume_val
+      %48 = load var $1.$is_rejected
+      %49 = const c35
+      %50 = stricteq %48, %49
+      branch %50, bb12, bb15
     bb12:
-      %54 = load var $1.$generator
-      call builtin.async_generator.throw(%54, %48)
+      %53 = load var $1.$generator
+      call builtin.async_generator.throw(%53, %47)
       return
     bb13:
-      %58 = load var $1.$generator
-      %59 = const c37
-      call builtin.async_generator.return(%58, %59)
+      %56 = load var $1.$generator
+      %57 = const c37
+      call builtin.async_generator.return(%56, %57)
       return
     bb14:
-      %55 = load var $1.$generator
-      %56 = load var $1.$resume_val
-      call builtin.async_generator.return(%55, %56)
+      %54 = load var $1.$generator
+      call builtin.async_generator.return(%54, %47)
       return
     bb15:
-      %52 = const c36
-      %53 = stricteq %49, %52
-      branch %53, bb14, bb13
+      %51 = const c36
+      %52 = stricteq %48, %51
+      branch %52, bb14, bb13
     bb16:
       return
     bb17:
@@ -210,20 +208,26 @@ module {
       store var $2.arguments, %2
       %6 = const c56
       %7 = const c49
-      set_prop %2, %7, %6
-      %8 = const c50
-      %9 = const c51
-      %10 = const c52
-      %11 = call builtin.continuation.create(%8, %10, %9)
-      %12 = call builtin.async_generator.start(%11)
-      %13 = const c53
-      call builtin.continuation.save_var(%11, %13, %12)
-      %14 = const c54
-      call builtin.continuation.save_var(%11, %14, %10)
-      %15 = load var $2.input
-      %16 = const c55
-      call builtin.continuation.save_var(%11, %16, %15)
-      return %12
+      %8 = set_prop %2, %7, %6
+      %9 = is_exception %8
+      branch %9, bb2, bb1
+    bb1:
+      %11 = const c50
+      %12 = const c51
+      %13 = const c52
+      %14 = call builtin.continuation.create(%11, %13, %12)
+      %15 = call builtin.async_generator.start(%14)
+      %16 = const c53
+      call builtin.continuation.save_var(%14, %16, %15)
+      %17 = const c54
+      call builtin.continuation.save_var(%14, %17, %13)
+      %18 = load var $2.input
+      %19 = const c55
+      call builtin.continuation.save_var(%14, %19, %18)
+      return %15
+    bb2:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.result] [entry=bb0]:
     bb0:

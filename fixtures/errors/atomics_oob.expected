@@ -1,5 +1,4 @@
 exit_code: 2
 --- stdout ---
-Uncaught exception: RangeError: Invalid typed array index
 --- stderr ---
-Runtime error: Uncaught exception: RangeError: Invalid typed array index
+Runtime error: RangeError: Invalid typed array index

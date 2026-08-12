@@ -1,6 +1,6 @@
-//! String.prototype.replace / match / search / split / matchAll（async）。
+//! String.prototype.replace / match / search / split / matchAll 再入方法。
 //!
-//! 替换回调经 `call_js_async`；`@@replace` 等 well-known 方法经 `call_symbol_method_async`。
+//! 替换回调经 `call_js`；`@@replace` 等 well-known 方法经 `call_symbol_method`。
 
 use wjsm_host::{ExecContext, RuntimeString, Value};
 use wjsm_ir::{value, wk_symbol};
@@ -105,7 +105,7 @@ fn replace_callback_result_to_string<E: ExecContext>(ctx: &mut E, result: Value)
     ctx.value_to_display_string(result)
 }
 
-async fn call_replace_func<E: ExecContext>(
+fn call_replace_func<E: ExecContext>(
     ctx: &mut E,
     func: Value,
     s: &str,
@@ -130,8 +130,7 @@ async fn call_replace_func<E: ExecContext>(
     args.push(named_groups_obj);
 
     let result = ctx
-        .call_js_async(func, value::encode_undefined(), &args)
-        .await
+        .call_js(func, value::encode_undefined(), &args)
         .unwrap_or_else(|_| value::encode_undefined());
     replace_callback_result_to_string(ctx, result)
 }
@@ -156,7 +155,7 @@ fn build_groups_obj<E: ExecContext>(
 }
 
 /// 默认 replace 体（无 @@replace 时）。
-pub async fn string_replace_default<E: ExecContext>(
+pub fn string_replace_default<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
     search: Value,
@@ -188,7 +187,6 @@ pub async fn string_replace_default<E: ExecContext>(
                         &mi.captures,
                         groups_obj,
                     )
-                    .await
                 } else {
                     let replace_str_lossy = ctx.read_string_utf8_lossy(replace);
                     process_replacement_from_captures(
@@ -219,7 +217,6 @@ pub async fn string_replace_default<E: ExecContext>(
                 &mi.captures,
                 groups_obj,
             )
-            .await
         } else {
             let replace_str_lossy = ctx.read_string_utf8_lossy(replace);
             process_replacement_from_captures(
@@ -247,18 +244,15 @@ pub async fn string_replace_default<E: ExecContext>(
                 return ctx.store_runtime_string(s);
             };
             let captures = vec![Some(byte_pos..byte_pos + search_lossy.len())];
-            RuntimeString::from_utf8_str(
-                &call_replace_func(
-                    ctx,
-                    replace,
-                    &subject_lossy,
-                    byte_pos,
-                    byte_pos + search_lossy.len(),
-                    &captures,
-                    value::encode_undefined(),
-                )
-                .await,
-            )
+            RuntimeString::from_utf8_str(&call_replace_func(
+                ctx,
+                replace,
+                &subject_lossy,
+                byte_pos,
+                byte_pos + search_lossy.len(),
+                &captures,
+                value::encode_undefined(),
+            ))
         } else {
             ctx.get_runtime_string(replace)
         };
@@ -271,57 +265,47 @@ pub async fn string_replace_default<E: ExecContext>(
     }
 }
 
-pub async fn string_replace<E: ExecContext>(
+pub fn string_replace<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
     search: Value,
     replace: Value,
 ) -> Value {
-    if let Some(result) = ctx
-        .call_symbol_method_async(search, wk_symbol::REPLACE, search, &[receiver, replace])
-        .await
+    if let Some(result) =
+        ctx.call_symbol_method(search, wk_symbol::REPLACE, search, &[receiver, replace])
     {
         return result;
     }
-    string_replace_default(ctx, receiver, search, replace).await
+    string_replace_default(ctx, receiver, search, replace)
 }
 
-pub async fn string_match<E: ExecContext>(ctx: &mut E, receiver: Value, regexp: Value) -> Value {
-    if let Some(result) = ctx
-        .call_symbol_method_async(regexp, wk_symbol::MATCH, regexp, &[receiver])
-        .await
-    {
+pub fn string_match<E: ExecContext>(ctx: &mut E, receiver: Value, regexp: Value) -> Value {
+    if let Some(result) = ctx.call_symbol_method(regexp, wk_symbol::MATCH, regexp, &[receiver]) {
         return result;
     }
     ctx.regexp_string_match_default(receiver, regexp)
 }
 
-pub async fn string_search<E: ExecContext>(ctx: &mut E, receiver: Value, regexp: Value) -> Value {
-    if let Some(result) = ctx
-        .call_symbol_method_async(regexp, wk_symbol::SEARCH, regexp, &[receiver])
-        .await
-    {
+pub fn string_search<E: ExecContext>(ctx: &mut E, receiver: Value, regexp: Value) -> Value {
+    if let Some(result) = ctx.call_symbol_method(regexp, wk_symbol::SEARCH, regexp, &[receiver]) {
         return result;
     }
     ctx.regexp_string_search_default(receiver, regexp)
 }
 
-pub async fn string_split<E: ExecContext>(
+pub fn string_split<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
     sep: Value,
     limit: Value,
 ) -> Value {
-    if let Some(result) = ctx
-        .call_symbol_method_async(sep, wk_symbol::SPLIT, sep, &[receiver, limit])
-        .await
-    {
+    if let Some(result) = ctx.call_symbol_method(sep, wk_symbol::SPLIT, sep, &[receiver, limit]) {
         return result;
     }
     ctx.regexp_string_split_default(receiver, sep, limit)
 }
 
-pub async fn string_match_all<E: ExecContext>(
+pub fn string_match_all<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -333,10 +317,11 @@ pub async fn string_match_all<E: ExecContext>(
         );
         return value::encode_undefined();
     }
-    let regexp = ctx.read_shadow_arg(args_base, 0);
-    if let Some(result) = ctx
-        .call_symbol_method_async(regexp, wk_symbol::MATCH_ALL, regexp, &[this_val])
-        .await
+    let regexp = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
+    if let Some(result) = ctx.call_symbol_method(regexp, wk_symbol::MATCH_ALL, regexp, &[this_val])
     {
         return result;
     }

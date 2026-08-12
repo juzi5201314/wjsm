@@ -20,7 +20,7 @@ pub fn async_function_start<E: ExecContext>(ctx: &mut E, fn_table_idx: Value) ->
 }
 
 /// `env.async_function_resume`。
-pub async fn async_function_resume<E: ExecContext>(
+pub fn async_function_resume<E: ExecContext>(
     ctx: &mut E,
     fn_table_idx: Value,
     continuation: Value,
@@ -36,9 +36,7 @@ pub async fn async_function_resume<E: ExecContext>(
     ctx.continuation_set_var(cont_handle, 1, value::encode_f64(completion as f64));
     // §27.7.5.2：初始调用(state=0)同步执行直至首个 await
     if state_u == 0 {
-        let handled = ctx
-            .async_function_initial_call(resolved, continuation, resume_val)
-            .await;
+        let handled = ctx.async_function_initial_call(resolved, continuation, resume_val);
         if handled {
             return;
         }

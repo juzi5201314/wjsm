@@ -1,15 +1,12 @@
 //! 后端无关的 GC 算法与堆抽象。
 //!
 //! 本 crate 提供 JS runtime 的垃圾回收算法（mark-sweep / G1 / ZGC）与
-//! managed heap / handle table 抽象，**不依赖** wasmtime 或任何具体后端。
+//! managed heap / handle table 抽象；算法不依赖具体执行后端。
 //! 后端经 [`heap::HeapMemory`] / [`heap::GrowableHeapMemory`] trait 提供堆存储，
 //! 算法经泛型单态化于该接口。
 //!
-//! # 与 wjsm-host-wasm 的关系
-//!
-//! GC **算法**（本 crate）与 GC **接合点**（host-wasm 的 `runtime_gc::active_*`、
-//! 根扫描、HeapAccessV2）分离：算法只消费后端无关的 `RootSnapshot` 与
-//! `HeapMemory`，接合点负责从 `RuntimeState`/wasm 内存收集根并驱动算法。
+//! roots、safepoint 与 native frame 的接合由 `wjsm-host-native` 负责；本 crate
+//! 只消费后端无关的 `RootSnapshot` 与 `HeapMemory`。
 
 pub mod api;
 pub mod g1;
@@ -17,6 +14,7 @@ pub mod heap;
 pub mod heap_access;
 pub mod mark_bitmap;
 pub mod mark_sweep;
+pub mod runtime_collector;
 pub mod shape;
 pub mod telemetry;
 pub mod zgc;
@@ -40,13 +38,17 @@ pub use heap::{
     HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN, HandleGeneration, HandleId, HandleState,
     HandleTableError, HandleTableV2, HeapAddress, HeapMemory, HeapMemoryError, ManagedAllocator,
     ManagedHeap, ManagedHeapLayout, NativeHeapMemory, Nlab, ObjectRef, PAGE_GRANULE_BYTES,
+    TestHeapMemory,
 };
-pub use heap_access::{HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property};
+pub use heap_access::{
+    CollectorHeapCapability, HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property,
+};
 pub use mark_bitmap::MarkBitmap;
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;
-pub use shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot, ShapeTransition};
 pub use registry::GcAlgorithmKind;
+pub use runtime_collector::{RuntimeCollector, RuntimeCollectorError, RuntimeGcReport};
+pub use shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot, ShapeTransition};
 pub use telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,
 };

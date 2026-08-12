@@ -4,12 +4,10 @@ use swc_core::common::Spanned;
 use swc_core::ecma::ast as swc_ast;
 use thiserror::Error;
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function, FunctionId,
-    HomeObject, Instruction, MODULE_ENTRY_IR_NAME, Module, PhiSource, Program, SourceSpan,
-    SwitchCaseTarget, Terminator, UnaryOp, ValueId,
+    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, EVAL_SCOPE_ENV_PARAM,
+    Function, FunctionId, HomeObject, Instruction, MODULE_ENTRY_IR_NAME, Module, PhiSource,
+    Program, SourceSpan, SwitchCaseTarget, Terminator, UnaryOp, ValueId,
 };
-
-const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
 
 use wjsm_ir::wk_symbol;
 const WK_SYMBOL_DISPOSE: u32 = wk_symbol::DISPOSE;
@@ -81,13 +79,26 @@ pub fn lower_eval_module_with_scope(
     has_scope_bridge: bool,
     var_writes_to_scope: bool,
 ) -> Result<Program, LoweringError> {
+    lower_eval_module_with_scope_and_strict(module, has_scope_bridge, var_writes_to_scope, false)
+}
+
+pub fn lower_eval_module_with_scope_and_strict(
+    module: swc_ast::Module,
+    has_scope_bridge: bool,
+    var_writes_to_scope: bool,
+    inherited_strict: bool,
+) -> Result<Program, LoweringError> {
     let mut lowerer = Lowerer::new();
     lowerer.eval_mode = true;
     lowerer.eval_has_scope_bridge = has_scope_bridge;
-    lowerer.eval_var_writes_to_scope = var_writes_to_scope;
     lowerer.eval_scope_record = true;
-    lowerer.strict_mode = module_has_use_strict_directive(&module);
+    lowerer.strict_mode = inherited_strict || module_has_use_strict_directive(&module);
+    lowerer.eval_var_writes_to_scope = var_writes_to_scope && !lowerer.strict_mode;
     lowerer.lower_module(&module)
+}
+
+pub fn eval_module_has_use_strict_directive(module: &swc_ast::Module) -> bool {
+    module_has_use_strict_directive(module)
 }
 
 mod lowerer_arrows;

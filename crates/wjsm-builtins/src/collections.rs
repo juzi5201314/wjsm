@@ -1,6 +1,6 @@
 //! Map / Set / WeakMap / WeakSet / ArrayBuffer / Date 算法。
 //!
-//! 表操作走 ExecContext 原语；NativeCallable 枚举留在 host-wasm。
+//! 表操作走 ExecContext 原语；NativeCallable 枚举留在 native host。
 
 use crate::iterable_collect::{collect_constructor_iterable_values, map_entry_pair};
 use wjsm_host::{ExecContext, Value};
@@ -27,9 +27,9 @@ fn install_methods<E: ExecContext>(ctx: &mut E, obj: Value, pairs: &[(&str, &str
 }
 
 /// Map 构造器
-pub async fn map_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
+pub fn map_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
     let handle = ctx.map_table_create();
-    if !fill_map_from_iterable(ctx, handle, arg).await {
+    if !fill_map_from_iterable(ctx, handle, arg) {
         ctx.release_unowned_map_entry(handle);
         return value::encode_undefined();
     }
@@ -74,8 +74,8 @@ pub async fn map_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
 }
 
 /// 从 iterable 填充 Map 表（SameValueZero 去重）。
-async fn fill_map_from_iterable<E: ExecContext>(ctx: &mut E, handle: u32, arg: Value) -> bool {
-    let Some(values) = collect_constructor_iterable_values(ctx, arg).await else {
+fn fill_map_from_iterable<E: ExecContext>(ctx: &mut E, handle: u32, arg: Value) -> bool {
+    let Some(values) = collect_constructor_iterable_values(ctx, arg) else {
         return false;
     };
     for entry_val in values {
@@ -89,9 +89,9 @@ async fn fill_map_from_iterable<E: ExecContext>(ctx: &mut E, handle: u32, arg: V
 }
 
 /// Set 构造器
-pub async fn set_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
+pub fn set_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
     let handle = ctx.set_table_create();
-    if !fill_set_from_iterable(ctx, handle, arg).await {
+    if !fill_set_from_iterable(ctx, handle, arg) {
         ctx.release_unowned_set_entry(handle);
         return value::encode_undefined();
     }
@@ -134,8 +134,8 @@ pub async fn set_constructor<E: ExecContext>(ctx: &mut E, arg: Value) -> Value {
 }
 
 /// 从 iterable 填充 Set 表（SameValueZero 去重）。
-async fn fill_set_from_iterable<E: ExecContext>(ctx: &mut E, handle: u32, arg: Value) -> bool {
-    let Some(values) = collect_constructor_iterable_values(ctx, arg).await else {
+fn fill_set_from_iterable<E: ExecContext>(ctx: &mut E, handle: u32, arg: Value) -> bool {
+    let Some(values) = collect_constructor_iterable_values(ctx, arg) else {
         return false;
     };
     for val in values {
@@ -262,18 +262,24 @@ pub fn map_set_get_size<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value {
     value::encode_f64(0.0)
 }
 
-pub async fn map_set_for_each<E: ExecContext>(
+pub fn map_set_for_each<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
     args_count: i32,
 ) -> Value {
-    let cb = ctx.read_shadow_arg(args_base, 0);
+    let cb = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     if !ctx.is_callable(cb) {
         return value::encode_undefined();
     }
     let this_arg = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -296,7 +302,7 @@ pub async fn map_set_for_each<E: ExecContext>(
         } else {
             [v, k, this_val]
         };
-        if ctx.call_js_async(cb, this_arg, &args).await.is_err() {
+        if ctx.call_js(cb, this_arg, &args).is_err() {
             return value::encode_undefined();
         }
     }
@@ -522,5 +528,5 @@ fn to_rel_index(length: u32, raw: Value, default: i32) -> u32 {
     idx.max(0) as u32
 }
 
-// Date 构造器 / now / parse / utc 含 NativeCallable 方法表，保留在 host-wasm
-// （`collections_buffers::define_collections_buffers`）。纯解析见 `date_parse`。
+// Date 构造器 / now / parse / utc 含 NativeCallable 方法表，保留在 native host。
+// 纯解析见 `date_parse`。

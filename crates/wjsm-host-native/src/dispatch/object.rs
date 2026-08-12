@@ -1,0 +1,1390 @@
+use wjsm_gc::PROTO_NULL_SENTINEL;
+use wjsm_ir::{Builtin, constants, value};
+use wjsm_native_abi::NativeVmContext;
+
+use super::runtime::{
+    fail_dispatch, get_property, iterator_done, iterator_from, iterator_value, object_handle,
+    ordinary_set, property_key, strict_equal, type_error,
+};
+use crate::{NativeAgentState, NativeCallableKind};
+
+const ENUMERABLE: u32 = constants::FLAG_ENUMERABLE as u32;
+const CONFIGURABLE: u32 = constants::FLAG_CONFIGURABLE as u32;
+const WRITABLE: u32 = constants::FLAG_WRITABLE as u32;
+const ACCESSOR: u32 = constants::FLAG_IS_ACCESSOR as u32;
+
+pub(super) fn dispatch_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+) -> Option<i64> {
+    Some(match builtin {
+        Builtin::ObjectKeys => enumerate(ctx, state, args, EnumerationKind::Keys),
+        Builtin::ObjectValues => enumerate(ctx, state, args, EnumerationKind::Values),
+        Builtin::ObjectEntries => enumerate(ctx, state, args, EnumerationKind::Entries),
+        Builtin::ObjectGetOwnPropertyNames => enumerate(ctx, state, args, EnumerationKind::Names),
+        Builtin::ObjectGetOwnPropertySymbols => {
+            let Some(object) = args.first().copied() else {
+                return Some(fail_dispatch(ctx));
+            };
+            let symbols: Vec<_> = if value::is_proxy(object) {
+                match super::proxy::own_keys(ctx, state, object) {
+                    Ok(keys) => keys
+                        .into_iter()
+                        .filter(|key| value::is_symbol(*key))
+                        .collect(),
+                    Err(exception) => return Some(exception),
+                }
+            } else {
+                let Some(properties) = own_keys(state, object, false) else {
+                    return Some(fail_dispatch(ctx));
+                };
+                properties
+                    .into_iter()
+                    .filter_map(|(key, _)| value::is_symbol(key).then_some(key))
+                    .collect()
+            };
+            state
+                .allocate_array_values(&symbols)
+                .unwrap_or_else(|_| fail_dispatch(ctx))
+        }
+        Builtin::ObjectRest => object_rest(ctx, state, args),
+        Builtin::ObjectAssign => assign(ctx, state, args),
+        Builtin::ObjectCreate => create(ctx, state, args),
+        Builtin::ObjectGetPrototypeOf => get_prototype(ctx, state, args),
+        Builtin::ObjectSetPrototypeOf => set_prototype(ctx, state, args),
+        Builtin::ObjectIs => object_is(ctx, state, args),
+        Builtin::GetOwnPropDesc => get_own_property_descriptor(ctx, state, args),
+        Builtin::DefineProperty => define_property(ctx, state, args),
+        Builtin::ObjectGetOwnPropertyDescriptors => get_own_property_descriptors(ctx, state, args),
+        Builtin::ObjectDefineProperties => define_properties(ctx, state, args),
+        Builtin::ObjectPreventExtensions => prevent_extensions(ctx, state, args),
+        Builtin::ObjectIsExtensible => is_extensible(ctx, state, args),
+        Builtin::ObjectSeal => seal_or_freeze(ctx, state, args, false),
+        Builtin::ObjectFreeze => seal_or_freeze(ctx, state, args, true),
+        Builtin::ObjectIsSealed => is_sealed_or_frozen(ctx, state, args, false),
+        Builtin::ObjectFromEntries => from_entries(ctx, state, args),
+        Builtin::ObjectGroupBy => group_by(ctx, state, args),
+        Builtin::ObjectIsFrozen => is_sealed_or_frozen(ctx, state, args, true),
+        _ => return None,
+    })
+}
+
+pub(crate) fn construct_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let input = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_js_object(input) || value::is_regexp(input) {
+        return input;
+    }
+    let Ok(object) = state.allocate_object(0, false) else {
+        return fail_dispatch(ctx);
+    };
+    if !value::is_null(input) && !value::is_undefined(input) {
+        state
+            .boxed_primitives
+            .insert(value::decode_handle(object), input);
+    }
+    object
+}
+
+#[derive(Clone, Copy)]
+enum EnumerationKind {
+    Entries,
+    Keys,
+    Names,
+    Values,
+}
+
+pub(crate) fn own_keys(
+    state: &mut NativeAgentState,
+    encoded: i64,
+    enumerable_only: bool,
+) -> Option<Vec<(i64, i64)>> {
+    if value::is_string(encoded) {
+        let units = state.string(encoded)?.as_utf16_units().to_vec();
+        let mut properties = Vec::with_capacity(units.len());
+        for (index, unit) in units.into_iter().enumerate() {
+            let key = state.intern_text(index.to_string(), value::TAG_STRING)?;
+            let stored = state.intern_runtime_string(
+                wjsm_host::RuntimeString::from_utf16_units(vec![unit]),
+                value::TAG_STRING,
+            )?;
+            properties.push((key, stored));
+        }
+        return Some(properties);
+    }
+    let handle = object_handle(encoded)?;
+    if super::async_generator::is_async_generator(state, encoded) {
+        let mut properties = Vec::with_capacity(4);
+        for (name, builtin) in [
+            ("next", Builtin::AsyncGeneratorNext),
+            ("return", Builtin::AsyncGeneratorReturn),
+            ("throw", Builtin::AsyncGeneratorThrow),
+        ] {
+            let key = state.intern_text(name.into(), value::TAG_STRING)?;
+            let callable = state.native_callable(NativeCallableKind::Builtin(builtin, true))?;
+            properties.push((key, callable));
+        }
+        if !enumerable_only {
+            let key = value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ASYNC_ITERATOR);
+            let callable = state.native_callable(NativeCallableKind::Builtin(
+                Builtin::ObjectProtoValueOf,
+                true,
+            ))?;
+            properties.push((key, callable));
+        }
+        return Some(properties);
+    }
+    if let Some(callable) = super::streams::async_iterator_property(state, encoded) {
+        if enumerable_only {
+            return Some(Vec::new());
+        }
+        let key = value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ASYNC_ITERATOR);
+        let callable = state.native_callable(NativeCallableKind::Stream(callable))?;
+        return Some(vec![(key, callable)]);
+    }
+    if value::is_array(encoded) {
+        let length = state.heap.array_length(handle).ok()?;
+        let named = state
+            .array_property_order
+            .get(&handle)
+            .cloned()
+            .unwrap_or_default();
+        let mut properties =
+            Vec::with_capacity(length as usize + named.len() + usize::from(!enumerable_only));
+        for index in 0..length {
+            let element = state.heap.get_element(handle, index).ok().flatten()? as i64;
+            if value::is_array_hole(element) {
+                continue;
+            }
+            let key = state.intern_text(index.to_string(), value::TAG_STRING)?;
+            properties.push((key, element));
+        }
+        if !enumerable_only {
+            let key = state.intern_text("length".into(), value::TAG_STRING)?;
+            properties.push((key, value::encode_f64(f64::from(length))));
+        }
+        for symbols in [false, true] {
+            for key in named.iter().copied() {
+                if (key & super::runtime::SYMBOL_PROPERTY_KEY_BIT != 0) != symbols {
+                    continue;
+                }
+                let flags = state
+                    .array_property_flags
+                    .get(&(handle, key))
+                    .copied()
+                    .or_else(|| {
+                        state
+                            .array_accessors
+                            .get(&(handle, key))
+                            .map(|(_, _, flags)| *flags)
+                    })?;
+                if enumerable_only && flags & ENUMERABLE == 0 {
+                    continue;
+                }
+                let stored = state
+                    .array_properties
+                    .get(&(handle, key))
+                    .copied()
+                    .unwrap_or_else(value::encode_undefined);
+                properties.push((super::runtime::encoded_property_key(key), stored));
+            }
+        }
+        return Some(properties);
+    }
+    let slots = state.heap.own_property_slots(handle).ok()?;
+    let mut properties = Vec::with_capacity(slots.len());
+    for (key, flags) in slots {
+        if enumerable_only && flags & ENUMERABLE == 0 {
+            continue;
+        }
+        let property = state.heap.get_property_slot(handle, key).ok().flatten()?;
+        properties.push((
+            super::runtime::encoded_property_key(key),
+            property.value as i64,
+        ));
+    }
+    Some(properties)
+}
+
+fn enumerate(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    kind: EnumerationKind,
+) -> i64 {
+    let Some(object) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_proxy(object) {
+        let keys = match super::proxy::own_keys(ctx, state, object) {
+            Ok(keys) => keys,
+            Err(exception) => return exception,
+        };
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
+            let property_value = if matches!(kind, EnumerationKind::Names) {
+                key
+            } else {
+                let descriptor = super::proxy::get_own_property_descriptor(ctx, state, object, key);
+                if value::is_exception(descriptor) {
+                    return descriptor;
+                }
+                if value::is_undefined(descriptor)
+                    || !descriptor_field(state, value::decode_handle(descriptor), "enumerable")
+                        .is_some_and(|value| super::runtime::is_truthy(state, value))
+                {
+                    continue;
+                }
+                if matches!(kind, EnumerationKind::Keys) {
+                    key
+                } else {
+                    super::runtime::get_property(ctx, state, object, key)
+                        .unwrap_or_else(|()| fail_dispatch(ctx))
+                }
+            };
+            match kind {
+                EnumerationKind::Keys | EnumerationKind::Names | EnumerationKind::Values => {
+                    values.push(property_value)
+                }
+                EnumerationKind::Entries => {
+                    let Ok(entry) = state.allocate_array_values(&[key, property_value]) else {
+                        return fail_dispatch(ctx);
+                    };
+                    values.push(entry);
+                }
+            }
+        }
+        return state
+            .allocate_array_values(&values)
+            .unwrap_or_else(|_| fail_dispatch(ctx));
+    }
+    let Some(properties) = own_keys(state, object, !matches!(kind, EnumerationKind::Names)) else {
+        return fail_dispatch(ctx);
+    };
+    let mut values = Vec::with_capacity(properties.len());
+    for (key, property_value) in properties {
+        if value::is_symbol(key) {
+            continue;
+        }
+        match kind {
+            EnumerationKind::Keys | EnumerationKind::Names => values.push(key),
+            EnumerationKind::Values => values.push(property_value),
+            EnumerationKind::Entries => {
+                let Ok(entry) = state.allocate_array_values(&[key, property_value]) else {
+                    return fail_dispatch(ctx);
+                };
+                values.push(entry);
+            }
+        }
+    }
+    state
+        .allocate_array_values(&values)
+        .unwrap_or_else(|_| fail_dispatch(ctx))
+}
+
+fn from_entries(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let Some(source) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    let iterator = iterator_from(ctx, state, &[source]);
+    if value::is_exception(iterator) {
+        return iterator;
+    }
+    let Ok(result) = state.allocate_object(4, false) else {
+        return fail_dispatch(ctx);
+    };
+    loop {
+        let done = iterator_done(ctx, state, &[iterator]);
+        if value::is_exception(done) {
+            return done;
+        }
+        if super::runtime::is_truthy(state, done) {
+            return result;
+        }
+        let entry = iterator_value(ctx, state, &[iterator], true);
+        if value::is_exception(entry) {
+            return entry;
+        }
+        if !(value::is_object(entry) || value::is_array(entry)) {
+            return type_error(
+                ctx,
+                state,
+                "Object.fromEntries iterator value is not an object",
+            );
+        }
+        let key = match get_property(ctx, state, entry, value::encode_f64(0.0)) {
+            Ok(key) => key,
+            Err(()) => return fail_dispatch(ctx),
+        };
+        let stored = match get_property(ctx, state, entry, value::encode_f64(1.0)) {
+            Ok(stored) => stored,
+            Err(()) => return fail_dispatch(ctx),
+        };
+        let Some(key) = property_key(state, key) else {
+            return fail_dispatch(ctx);
+        };
+        if state
+            .heap
+            .set_property(value::decode_handle(result), key, stored as u64)
+            .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+    }
+}
+
+fn group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let [source, callback] = args else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_null(*source) || value::is_undefined(*source) {
+        return type_error(ctx, state, "Cannot group null or undefined");
+    }
+    if !state.is_callable_value(*callback) {
+        return type_error(ctx, state, "callbackfn is not callable");
+    }
+    let iterator = iterator_from(ctx, state, &[*source]);
+    if value::is_exception(iterator) {
+        return iterator;
+    }
+    let Ok(result) = state.allocate_object(4, false) else {
+        return fail_dispatch(ctx);
+    };
+    if state
+        .heap
+        .set_prototype(value::decode_handle(result), PROTO_NULL_SENTINEL)
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    let mut index = 0_u64;
+    loop {
+        let done = iterator_done(ctx, state, &[iterator]);
+        if value::is_exception(done) {
+            return done;
+        }
+        if super::runtime::is_truthy(state, done) {
+            return result;
+        }
+        let stored = iterator_value(ctx, state, &[iterator], true);
+        if value::is_exception(stored) {
+            return stored;
+        }
+        let key = state
+            .invoke_callable(
+                ctx,
+                *callback,
+                value::encode_undefined(),
+                &[stored, value::encode_f64(index as f64)],
+            )
+            .unwrap_or_else(|| fail_dispatch(ctx));
+        if value::is_exception(key) {
+            return key;
+        }
+        let Some(key) = property_key(state, key) else {
+            return fail_dispatch(ctx);
+        };
+        let result_handle = value::decode_handle(result);
+        let group = match state.heap.get_property(result_handle, key) {
+            Ok(Some(group)) => group as i64,
+            Ok(None) => {
+                let Ok(group) = state.allocate_array_values(&[]) else {
+                    return fail_dispatch(ctx);
+                };
+                if state
+                    .heap
+                    .set_property(result_handle, key, group as u64)
+                    .is_err()
+                {
+                    return fail_dispatch(ctx);
+                }
+                group
+            }
+            Err(_) => return fail_dispatch(ctx),
+        };
+        if state
+            .heap
+            .push_element(value::decode_handle(group), stored as u64)
+            .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+        index += 1;
+    }
+}
+
+fn object_rest(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let [source, excluded] = args else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_null(*source) || value::is_undefined(*source) {
+        return type_error(ctx, state, "cannot destructure null or undefined");
+    }
+    if !value::is_array(*excluded) {
+        return fail_dispatch(ctx);
+    }
+    let excluded_handle = value::decode_handle(*excluded);
+    let Ok(excluded_len) = state.heap.array_length(excluded_handle) else {
+        return fail_dispatch(ctx);
+    };
+    let mut excluded_keys = Vec::with_capacity(excluded_len as usize);
+    for index in 0..excluded_len {
+        let Ok(Some(stored)) = state.heap.get_element(excluded_handle, index) else {
+            return fail_dispatch(ctx);
+        };
+        let stored = stored as i64;
+        if !value::is_array_hole(stored) {
+            excluded_keys.push(stored);
+        }
+    }
+    let Ok(result) = state.allocate_object(4, false) else {
+        return fail_dispatch(ctx);
+    };
+    match copy_data_properties(ctx, state, result, *source, &excluded_keys) {
+        Ok(()) => result,
+        Err(exception) => exception,
+    }
+}
+
+pub(crate) fn copy_data_properties(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    destination: i64,
+    source: i64,
+    excluded: &[i64],
+) -> Result<(), i64> {
+    let Some(destination_handle) = object_handle(destination) else {
+        return Err(fail_dispatch(ctx));
+    };
+    let keys = enumerable_own_keys(ctx, state, source)?;
+    for key in keys {
+        if excluded
+            .iter()
+            .any(|excluded_key| strict_equal(state, key, *excluded_key))
+        {
+            continue;
+        }
+        let stored = get_property(ctx, state, source, key).map_err(|()| fail_dispatch(ctx))?;
+        if value::is_exception(stored) {
+            return Err(stored);
+        }
+        let Some(key) = property_key(state, key) else {
+            return Err(fail_dispatch(ctx));
+        };
+        state
+            .heap
+            .set_property(destination_handle, key, stored as u64)
+            .map_err(|_| fail_dispatch(ctx))?;
+    }
+    Ok(())
+}
+
+fn enumerable_own_keys(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    source: i64,
+) -> Result<Vec<i64>, i64> {
+    if value::is_proxy(source) {
+        let keys = super::proxy::own_keys(ctx, state, source)?;
+        let mut enumerable = Vec::with_capacity(keys.len());
+        for key in keys {
+            let descriptor = super::proxy::get_own_property_descriptor(ctx, state, source, key);
+            if value::is_exception(descriptor) {
+                return Err(descriptor);
+            }
+            if value::is_undefined(descriptor) {
+                continue;
+            }
+            let Some(descriptor_handle) = object_handle(descriptor) else {
+                return Err(fail_dispatch(ctx));
+            };
+            if read_descriptor(ctx, state, descriptor_handle)?.enumerable == Some(true) {
+                enumerable.push(key);
+            }
+        }
+        return Ok(enumerable);
+    }
+    if let Some(properties) = own_keys(state, source, true) {
+        return Ok(properties.into_iter().map(|(key, _)| key).collect());
+    }
+    if value::is_null(source) || value::is_undefined(source) {
+        return Err(type_error(
+            ctx,
+            state,
+            "cannot convert null or undefined to object",
+        ));
+    }
+    Ok(Vec::new())
+}
+
+fn assign(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let Some(target) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    if object_handle(target).is_none() {
+        return fail_dispatch(ctx);
+    }
+    for source in &args[1..] {
+        if value::is_null(*source) || value::is_undefined(*source) {
+            continue;
+        }
+        let Some(properties) = own_keys(state, *source, true) else {
+            continue;
+        };
+        for (property, _) in properties {
+            let stored = match get_property(ctx, state, *source, property) {
+                Ok(value) => value,
+                Err(()) => return fail_dispatch(ctx),
+            };
+            if value::is_exception(stored) {
+                return stored;
+            }
+            match ordinary_set(ctx, state, target, property, stored, target) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return type_error(ctx, state, "Object.assign target property is not writable");
+                }
+                Err(exception) => return exception,
+            }
+        }
+    }
+    target
+}
+
+fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let Some(prototype) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    let prototype = if value::is_null(prototype) {
+        PROTO_NULL_SENTINEL
+    } else if let Some(handle) = object_handle(prototype) {
+        handle
+    } else {
+        return type_error(ctx, state, "Object prototype may only be an Object or null");
+    };
+    let Ok(object) = state.allocate_object(4, false) else {
+        return fail_dispatch(ctx);
+    };
+    if state
+        .heap
+        .set_prototype(value::decode_handle(object), prototype)
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    if let Some(descriptors) = args.get(1).copied()
+        && !value::is_undefined(descriptors)
+    {
+        return define_properties(ctx, state, &[object, descriptors]);
+    }
+    object
+}
+
+fn get_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let Some(object) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_regexp(object) {
+        return state.regexp_prototype.unwrap_or_else(|| fail_dispatch(ctx));
+    }
+    if value::is_proxy(object) {
+        return super::proxy::get_prototype(ctx, state, object);
+    }
+    if value::is_callable(object) {
+        return state
+            .callable_prototypes
+            .get(&object)
+            .copied()
+            .unwrap_or_else(value::encode_null);
+    }
+    let Some(handle) = object_handle(object) else {
+        return fail_dispatch(ctx);
+    };
+    match state.heap.prototype(handle) {
+        Ok(PROTO_NULL_SENTINEL) => value::encode_null(),
+        Ok(prototype) if prototype & 0x8000_0000 != 0 => {
+            value::encode_proxy_handle(prototype & 0x7FFF_FFFF)
+        }
+        Ok(prototype)
+            if state.heap.object_type(prototype).ok()
+                == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY)) =>
+        {
+            value::encode_handle(value::TAG_ARRAY, prototype)
+        }
+        Ok(prototype) => value::encode_object_handle(prototype),
+        Err(_) => fail_dispatch(ctx),
+    }
+}
+
+fn set_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let [object, prototype] = args else {
+        return fail_dispatch(ctx);
+    };
+    if !(value::is_null(*prototype)
+        || value::is_object(*prototype)
+        || value::is_array(*prototype)
+        || value::is_callable(*prototype)
+        || value::is_proxy(*prototype))
+    {
+        return type_error(ctx, state, "Object prototype may only be an Object or null");
+    }
+    if value::is_proxy(*object) {
+        let result = super::proxy::set_prototype(ctx, state, *object, *prototype);
+        return if value::is_exception(result) {
+            result
+        } else if super::runtime::is_truthy(state, result) {
+            *object
+        } else {
+            type_error(ctx, state, "Proxy rejected prototype mutation")
+        };
+    }
+    let handle = object_handle(*object);
+    let current = if value::is_callable(*object) {
+        state
+            .callable_prototypes
+            .get(object)
+            .copied()
+            .unwrap_or_else(value::encode_null)
+    } else if let Some(handle) = handle {
+        match state.heap.prototype(handle) {
+            Ok(PROTO_NULL_SENTINEL) => value::encode_null(),
+            Ok(prototype) => value::encode_object_handle(prototype),
+            Err(_) => return fail_dispatch(ctx),
+        }
+    } else {
+        return type_error(ctx, state, "Object.setPrototypeOf target is not an object");
+    };
+    if current == *prototype {
+        return *object;
+    }
+    if handle.is_some_and(|handle| state.non_extensible_objects.contains(&handle)) {
+        return type_error(
+            ctx,
+            state,
+            "Cannot set prototype of a non-extensible object",
+        );
+    }
+    if !value::is_null(*prototype) && state.prototype_chain_contains_value(*prototype, *object) {
+        return type_error(ctx, state, "Cyclic __proto__ value");
+    }
+    if value::is_callable(*object) {
+        state.callable_prototypes.insert(*object, *prototype);
+        return *object;
+    }
+    let prototype = if value::is_null(*prototype) {
+        PROTO_NULL_SENTINEL
+    } else if value::is_proxy(*prototype) {
+        value::decode_proxy_handle(*prototype) | 0x8000_0000
+    } else {
+        value::decode_handle(*prototype)
+    };
+    state
+        .heap
+        .set_prototype(
+            handle.expect("ordinary object handle was checked"),
+            prototype,
+        )
+        .map(|()| *object)
+        .unwrap_or_else(|_| fail_dispatch(ctx))
+}
+
+fn object_is(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+    let [left, right] = args else {
+        return fail_dispatch(ctx);
+    };
+    let equal = if value::is_f64(*left) && value::is_f64(*right) {
+        let left = value::decode_f64(*left);
+        let right = value::decode_f64(*right);
+        (left.is_nan() && right.is_nan())
+            || (left == right
+                && (left != 0.0 || left.is_sign_positive() == right.is_sign_positive()))
+    } else {
+        strict_equal(state, *left, *right)
+    };
+    value::encode_bool(equal)
+}
+
+pub(crate) fn get_own_property_descriptor(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [object, key] = args else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_proxy(*object) {
+        return super::proxy::get_own_property_descriptor(ctx, state, *object, *key);
+    }
+    let encoded_key = *key;
+    let Some(key) = property_key(state, encoded_key) else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_array(*object) {
+        let handle = value::decode_handle(*object);
+        let property = if state.text_matches(encoded_key, "length") {
+            let Ok(length) = state.heap.array_length(handle) else {
+                return fail_dispatch(ctx);
+            };
+            Some(wjsm_gc::HeapAccessV2Property {
+                flags: WRITABLE,
+                value: value::encode_f64(f64::from(length)) as u64,
+                getter: value::encode_undefined() as u64,
+                setter: value::encode_undefined() as u64,
+            })
+        } else if let Some((getter, setter, flags)) =
+            state.array_accessors.get(&(handle, key)).copied()
+        {
+            Some(wjsm_gc::HeapAccessV2Property {
+                flags: flags | ACCESSOR,
+                value: value::encode_undefined() as u64,
+                getter: getter as u64,
+                setter: setter as u64,
+            })
+        } else if let Some(stored) = state.array_properties.get(&(handle, key)).copied() {
+            Some(wjsm_gc::HeapAccessV2Property {
+                flags: state
+                    .array_property_flags
+                    .get(&(handle, key))
+                    .copied()
+                    .unwrap_or(WRITABLE | ENUMERABLE | CONFIGURABLE),
+                value: stored as u64,
+                getter: value::encode_undefined() as u64,
+                setter: value::encode_undefined() as u64,
+            })
+        } else if state.array_prototype == Some(*object) {
+            state
+                .primitive_property(*object, encoded_key)
+                .map(|stored| wjsm_gc::HeapAccessV2Property {
+                    flags: WRITABLE | CONFIGURABLE,
+                    value: stored as u64,
+                    getter: value::encode_undefined() as u64,
+                    setter: value::encode_undefined() as u64,
+                })
+        } else {
+            None
+        };
+        return property.map_or_else(value::encode_undefined, |property| {
+            descriptor_object(ctx, state, property)
+        });
+    }
+    if value::is_callable(*object) {
+        let accessor = state.callable_accessors.get(&(*object, key)).copied();
+        let stored = if accessor.is_none() {
+            state.callable_property(*object, key)
+        } else {
+            None
+        };
+        let flags = state
+            .callable_property_flags
+            .get(&(*object, key))
+            .copied()
+            .unwrap_or_default();
+        let property = if let Some((getter, setter)) = accessor {
+            wjsm_gc::HeapAccessV2Property {
+                flags: flags | ACCESSOR,
+                value: u64::from_ne_bytes(value::encode_undefined().to_ne_bytes()),
+                getter: u64::from_ne_bytes(getter.to_ne_bytes()),
+                setter: u64::from_ne_bytes(setter.to_ne_bytes()),
+            }
+        } else if let Some(stored) = stored {
+            wjsm_gc::HeapAccessV2Property {
+                flags,
+                value: u64::from_ne_bytes(stored.to_ne_bytes()),
+                getter: u64::from_ne_bytes(value::encode_undefined().to_ne_bytes()),
+                setter: u64::from_ne_bytes(value::encode_undefined().to_ne_bytes()),
+            }
+        } else {
+            return value::encode_undefined();
+        };
+        return descriptor_object(ctx, state, property);
+    }
+    let Some(handle) = object_handle(*object) else {
+        return super::runtime::type_error(
+            ctx,
+            state,
+            "Object.getOwnPropertyDescriptor called on non-object",
+        );
+    };
+    let Ok(Some(property)) = state.heap.get_property_slot(handle, key) else {
+        return value::encode_undefined();
+    };
+    descriptor_object(ctx, state, property)
+}
+
+fn descriptor_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    property: wjsm_gc::HeapAccessV2Property,
+) -> i64 {
+    let Ok(descriptor) = state.allocate_object(5, false) else {
+        return fail_dispatch(ctx);
+    };
+    let handle = value::decode_handle(descriptor);
+    let configurable = value::encode_bool(property.flags & CONFIGURABLE != 0);
+    let enumerable = value::encode_bool(property.flags & ENUMERABLE != 0);
+    let fields = if property.flags & ACCESSOR != 0 {
+        vec![
+            ("get", property.getter as i64),
+            ("set", property.setter as i64),
+            ("enumerable", enumerable),
+            ("configurable", configurable),
+        ]
+    } else {
+        vec![
+            ("value", property.value as i64),
+            (
+                "writable",
+                value::encode_bool(property.flags & WRITABLE != 0),
+            ),
+            ("enumerable", enumerable),
+            ("configurable", configurable),
+        ]
+    };
+    for (name, stored) in fields {
+        let Some(key) = state.intern_text((*name).into(), value::TAG_STRING) else {
+            return fail_dispatch(ctx);
+        };
+        if state
+            .heap
+            .set_property(handle, value::decode_handle(key), stored as u64)
+            .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+    }
+    descriptor
+}
+
+fn descriptor_field(state: &mut NativeAgentState, descriptor: u32, name: &str) -> Option<i64> {
+    let key = state.intern_text(name.into(), value::TAG_STRING)?;
+    state
+        .heap
+        .get_property(descriptor, value::decode_handle(key))
+        .ok()
+        .flatten()
+        .map(|stored| stored as i64)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PropertyDescriptor {
+    pub(crate) configurable: Option<bool>,
+    pub(crate) enumerable: Option<bool>,
+    pub(crate) writable: Option<bool>,
+    pub(crate) value: Option<i64>,
+    pub(crate) getter: Option<i64>,
+    pub(crate) setter: Option<i64>,
+}
+
+impl PropertyDescriptor {
+    pub(crate) fn is_accessor(self) -> bool {
+        self.getter.is_some() || self.setter.is_some()
+    }
+
+    pub(crate) fn is_data(self) -> bool {
+        self.value.is_some() || self.writable.is_some()
+    }
+}
+pub(crate) fn read_descriptor(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    descriptor: u32,
+) -> Result<PropertyDescriptor, i64> {
+    let configurable = descriptor_field(state, descriptor, "configurable")
+        .map(|stored| super::runtime::is_truthy(state, stored));
+    let enumerable = descriptor_field(state, descriptor, "enumerable")
+        .map(|stored| super::runtime::is_truthy(state, stored));
+    let writable = descriptor_field(state, descriptor, "writable")
+        .map(|stored| super::runtime::is_truthy(state, stored));
+    let descriptor = PropertyDescriptor {
+        configurable,
+        enumerable,
+        writable,
+        value: descriptor_field(state, descriptor, "value"),
+        getter: descriptor_field(state, descriptor, "get"),
+        setter: descriptor_field(state, descriptor, "set"),
+    };
+    if descriptor.is_accessor() && descriptor.is_data() {
+        return Err(super::runtime::type_error(
+            ctx,
+            state,
+            "Invalid property descriptor: cannot specify accessors and a value or writable attribute",
+        ));
+    }
+    if descriptor
+        .getter
+        .is_some_and(|getter| !value::is_undefined(getter) && !value::is_callable(getter))
+    {
+        return Err(super::runtime::type_error(
+            ctx,
+            state,
+            "property getter must be callable",
+        ));
+    }
+    if descriptor
+        .setter
+        .is_some_and(|setter| !value::is_undefined(setter) && !value::is_callable(setter))
+    {
+        return Err(super::runtime::type_error(
+            ctx,
+            state,
+            "property setter must be callable",
+        ));
+    }
+    Ok(descriptor)
+}
+
+pub(crate) fn complete_descriptor_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    descriptor: PropertyDescriptor,
+) -> i64 {
+    let mut flags = 0;
+    set_flag(
+        &mut flags,
+        CONFIGURABLE,
+        Some(descriptor.configurable.unwrap_or(false)),
+    );
+    set_flag(
+        &mut flags,
+        ENUMERABLE,
+        Some(descriptor.enumerable.unwrap_or(false)),
+    );
+    let property = if descriptor.is_accessor() {
+        wjsm_gc::HeapAccessV2Property {
+            flags: flags | ACCESSOR,
+            value: value::encode_undefined() as u64,
+            getter: descriptor.getter.unwrap_or_else(value::encode_undefined) as u64,
+            setter: descriptor.setter.unwrap_or_else(value::encode_undefined) as u64,
+        }
+    } else {
+        set_flag(
+            &mut flags,
+            WRITABLE,
+            Some(descriptor.writable.unwrap_or(false)),
+        );
+        wjsm_gc::HeapAccessV2Property {
+            flags,
+            value: descriptor.value.unwrap_or_else(value::encode_undefined) as u64,
+            getter: value::encode_undefined() as u64,
+            setter: value::encode_undefined() as u64,
+        }
+    };
+    descriptor_object(ctx, state, property)
+}
+pub(crate) fn descriptor_is_compatible(
+    state: &NativeAgentState,
+    descriptor: PropertyDescriptor,
+    current: PropertyDescriptor,
+) -> bool {
+    if current.configurable == Some(false) {
+        if descriptor.configurable == Some(true)
+            || descriptor
+                .enumerable
+                .is_some_and(|enumerable| Some(enumerable) != current.enumerable)
+            || descriptor.is_accessor() != current.is_accessor()
+                && (descriptor.is_accessor() || descriptor.is_data())
+        {
+            return false;
+        }
+        if current.is_data() && current.writable == Some(false) {
+            if descriptor.writable == Some(true)
+                || descriptor.value.is_some_and(|stored| {
+                    current
+                        .value
+                        .is_none_or(|current| !same_value(state, stored, current))
+                })
+            {
+                return false;
+            }
+        }
+        if current.is_accessor()
+            && (descriptor.getter.is_some_and(|getter| {
+                current
+                    .getter
+                    .is_none_or(|current| !same_value(state, getter, current))
+            }) || descriptor.setter.is_some_and(|setter| {
+                current
+                    .setter
+                    .is_none_or(|current| !same_value(state, setter, current))
+            }))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn define_ordinary_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    handle: u32,
+    key: u32,
+    descriptor_handle: u32,
+) -> i64 {
+    let descriptor = match read_descriptor(ctx, state, descriptor_handle) {
+        Ok(descriptor) => descriptor,
+        Err(exception) => return exception,
+    };
+    let current = match state.heap.get_property_slot(handle, key) {
+        Ok(current) => current,
+        Err(_) => return fail_dispatch(ctx),
+    };
+    if current.is_none() && state.non_extensible_objects.contains(&handle) {
+        return super::runtime::type_error(
+            ctx,
+            state,
+            "Cannot define property on a non-extensible object",
+        );
+    }
+
+    if let Some(current) = current
+        && current.flags & CONFIGURABLE == 0
+    {
+        if descriptor.configurable == Some(true)
+            || descriptor
+                .enumerable
+                .is_some_and(|enumerable| enumerable != (current.flags & ENUMERABLE != 0))
+            || descriptor.is_accessor() != (current.flags & ACCESSOR != 0)
+                && (descriptor.is_accessor() || descriptor.is_data())
+        {
+            return incompatible_descriptor(ctx, state);
+        }
+        if current.flags & ACCESSOR == 0 && current.flags & WRITABLE == 0 {
+            if descriptor.writable == Some(true)
+                || descriptor
+                    .value
+                    .is_some_and(|stored| !same_value(state, stored, current.value as i64))
+            {
+                return incompatible_descriptor(ctx, state);
+            }
+        }
+        if current.flags & ACCESSOR != 0
+            && (descriptor
+                .getter
+                .is_some_and(|getter| !same_value(state, getter, current.getter as i64))
+                || descriptor
+                    .setter
+                    .is_some_and(|setter| !same_value(state, setter, current.setter as i64)))
+        {
+            return incompatible_descriptor(ctx, state);
+        }
+    }
+
+    let current_is_accessor = current.is_some_and(|current| current.flags & ACCESSOR != 0);
+    let use_accessor = if descriptor.is_accessor() {
+        true
+    } else if descriptor.is_data() {
+        false
+    } else {
+        current_is_accessor
+    };
+    let switching_kind = current.is_some() && use_accessor != current_is_accessor;
+    let mut flags = if switching_kind {
+        0
+    } else {
+        current.map_or(0, |current| current.flags & !ACCESSOR)
+    };
+    set_flag(&mut flags, CONFIGURABLE, descriptor.configurable);
+    set_flag(&mut flags, ENUMERABLE, descriptor.enumerable);
+    if use_accessor {
+        let getter = descriptor.getter.unwrap_or_else(|| {
+            current
+                .filter(|current| current.flags & ACCESSOR != 0 && !switching_kind)
+                .map_or_else(value::encode_undefined, |current| current.getter as i64)
+        });
+        let setter = descriptor.setter.unwrap_or_else(|| {
+            current
+                .filter(|current| current.flags & ACCESSOR != 0 && !switching_kind)
+                .map_or_else(value::encode_undefined, |current| current.setter as i64)
+        });
+        state
+            .heap
+            .define_accessor_property_with_flags(handle, key, getter as u64, setter as u64, flags)
+            .map(|()| object)
+            .unwrap_or_else(|_| fail_dispatch(ctx))
+    } else {
+        set_flag(&mut flags, WRITABLE, descriptor.writable);
+        let stored = descriptor.value.unwrap_or_else(|| {
+            current
+                .filter(|current| current.flags & ACCESSOR == 0 && !switching_kind)
+                .map_or_else(value::encode_undefined, |current| current.value as i64)
+        });
+        state
+            .heap
+            .define_data_property(handle, key, stored as u64, flags)
+            .map(|()| object)
+            .unwrap_or_else(|_| fail_dispatch(ctx))
+    }
+}
+
+fn set_flag(flags: &mut u32, bit: u32, update: Option<bool>) {
+    match update {
+        Some(true) => *flags |= bit,
+        Some(false) => *flags &= !bit,
+        None => {}
+    }
+}
+
+fn incompatible_descriptor(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
+    super::runtime::type_error(ctx, state, "Cannot redefine non-configurable property")
+}
+
+fn same_value(state: &NativeAgentState, left: i64, right: i64) -> bool {
+    if value::is_f64(left) && value::is_f64(right) {
+        let left = value::decode_f64(left);
+        let right = value::decode_f64(right);
+        left.is_nan() && right.is_nan()
+            || left == right && (left != 0.0 || left.is_sign_positive() == right.is_sign_positive())
+    } else {
+        strict_equal(state, left, right)
+    }
+}
+
+pub(crate) fn define_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [object, key, descriptor] = args else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_proxy(*object) {
+        return super::proxy::define_property(ctx, state, *object, *key, *descriptor);
+    }
+    let Some(descriptor) = object_handle(*descriptor) else {
+        return fail_dispatch(ctx);
+    };
+    let encoded_key = *key;
+    let Some(key) = property_key(state, encoded_key) else {
+        return fail_dispatch(ctx);
+    };
+    let configurable = descriptor_field(state, descriptor, "configurable")
+        .is_some_and(|value| super::runtime::is_truthy(state, value));
+    let enumerable = descriptor_field(state, descriptor, "enumerable")
+        .is_some_and(|value| super::runtime::is_truthy(state, value));
+    let writable = descriptor_field(state, descriptor, "writable")
+        .is_some_and(|value| super::runtime::is_truthy(state, value));
+    let flags = u32::from(configurable) * CONFIGURABLE
+        | u32::from(enumerable) * ENUMERABLE
+        | u32::from(writable) * WRITABLE;
+    let getter = descriptor_field(state, descriptor, "get");
+    let setter = descriptor_field(state, descriptor, "set");
+    if getter.is_some_and(|getter| !value::is_undefined(getter) && !value::is_callable(getter)) {
+        return type_error(ctx, state, "property getter must be callable");
+    }
+    if setter.is_some_and(|setter| !value::is_undefined(setter) && !value::is_callable(setter)) {
+        return type_error(ctx, state, "property setter must be callable");
+    }
+
+    if value::is_callable(*object) {
+        let getter = getter;
+        let setter = setter;
+        if getter.is_some() || setter.is_some() {
+            let existing = state.callable_accessors.get(&(*object, key)).copied();
+            state.callable_properties.remove(&(*object, key));
+            state.callable_accessors.insert(
+                (*object, key),
+                (
+                    getter
+                        .or_else(|| existing.map(|(getter, _)| getter))
+                        .unwrap_or_else(value::encode_undefined),
+                    setter
+                        .or_else(|| existing.map(|(_, setter)| setter))
+                        .unwrap_or_else(value::encode_undefined),
+                ),
+            );
+        } else if let Some(stored) = descriptor_field(state, descriptor, "value") {
+            state.callable_accessors.remove(&(*object, key));
+            state.callable_properties.insert((*object, key), stored);
+        }
+        state.callable_property_flags.insert((*object, key), flags);
+        return *object;
+    }
+    let Some(handle) = object_handle(*object) else {
+        return fail_dispatch(ctx);
+    };
+    let data_value =
+        descriptor_field(state, descriptor, "value").unwrap_or_else(value::encode_undefined);
+    if value::is_array(*object) {
+        if super::runtime::array_index(state, encoded_key).is_some()
+            && state
+                .heap
+                .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+                .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+        state.note_array_property(handle, key);
+        if getter.is_some() || setter.is_some() {
+            let existing = state.array_accessors.get(&(handle, key)).copied();
+            state.array_properties.remove(&(handle, key));
+            state.array_property_flags.remove(&(handle, key));
+            state.array_accessors.insert(
+                (handle, key),
+                (
+                    getter
+                        .or_else(|| existing.map(|(getter, _, _)| getter))
+                        .unwrap_or_else(value::encode_undefined),
+                    setter
+                        .or_else(|| existing.map(|(_, setter, _)| setter))
+                        .unwrap_or_else(value::encode_undefined),
+                    flags,
+                ),
+            );
+        } else if descriptor_field(state, descriptor, "value").is_some() {
+            state.array_accessors.remove(&(handle, key));
+            state.array_properties.insert((handle, key), data_value);
+            state.array_property_flags.insert((handle, key), flags);
+        }
+        return *object;
+    }
+    define_ordinary_property(ctx, state, *object, handle, key, descriptor)
+}
+
+fn get_own_property_descriptors(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let Some(object) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    let Some(keys) = own_keys(state, object, false) else {
+        return fail_dispatch(ctx);
+    };
+    let Ok(result) = state.allocate_object(keys.len() as u32, false) else {
+        return fail_dispatch(ctx);
+    };
+    let result_handle = value::decode_handle(result);
+    for (key, _) in keys {
+        let descriptor = get_own_property_descriptor(ctx, state, &[object, key]);
+        let Some(property_key) = property_key(state, key) else {
+            return fail_dispatch(ctx);
+        };
+        if value::is_exception(descriptor)
+            || state
+                .heap
+                .set_property(result_handle, property_key, descriptor as u64)
+                .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+    }
+    result
+}
+
+fn define_properties(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let [object, descriptors] = args else {
+        return fail_dispatch(ctx);
+    };
+    let Some(properties) = own_keys(state, *descriptors, true) else {
+        return fail_dispatch(ctx);
+    };
+    for (key, descriptor) in properties {
+        let result = define_property(ctx, state, &[*object, key, descriptor]);
+        if value::is_exception(result) {
+            return result;
+        }
+    }
+    *object
+}
+
+fn prevent_extensions(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let Some(object) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_proxy(object) {
+        let result = super::proxy::prevent_extensions(ctx, state, object);
+        return if value::is_exception(result) {
+            result
+        } else if super::runtime::is_truthy(state, result) {
+            object
+        } else {
+            super::runtime::type_error(
+                ctx,
+                state,
+                "Object.preventExtensions proxy trap returned falsy",
+            )
+        };
+    }
+    let Some(handle) = object_handle(object) else {
+        return fail_dispatch(ctx);
+    };
+    state.non_extensible_objects.insert(handle);
+    object
+}
+
+fn is_extensible(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let Some(object) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_proxy(object) {
+        return super::proxy::is_extensible(ctx, state, object);
+    }
+    let Some(handle) = object_handle(object) else {
+        return fail_dispatch(ctx);
+    };
+    value::encode_bool(!state.non_extensible_objects.contains(&handle))
+}
+
+fn seal_or_freeze(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    freeze: bool,
+) -> i64 {
+    let Some(object) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    let Some(handle) = object_handle(object) else {
+        return fail_dispatch(ctx);
+    };
+    let Ok(properties) = state.heap.own_property_slots(handle) else {
+        return fail_dispatch(ctx);
+    };
+    for (key, flags) in properties {
+        let flags = flags & !CONFIGURABLE & if freeze { !WRITABLE } else { u32::MAX };
+        if state
+            .heap
+            .update_property_flags(handle, key, flags)
+            .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+    }
+    state.non_extensible_objects.insert(handle);
+    object
+}
+
+fn is_sealed_or_frozen(
+    ctx: &mut NativeVmContext,
+    state: &NativeAgentState,
+    args: &[i64],
+    frozen: bool,
+) -> i64 {
+    let Some(handle) = args.first().copied().and_then(object_handle) else {
+        return fail_dispatch(ctx);
+    };
+    if !state.non_extensible_objects.contains(&handle) {
+        return value::encode_bool(false);
+    }
+    let Ok(properties) = state.heap.own_property_slots(handle) else {
+        return fail_dispatch(ctx);
+    };
+    value::encode_bool(properties.into_iter().all(|(_, flags)| {
+        flags & CONFIGURABLE == 0 && (!frozen || flags & ACCESSOR != 0 || flags & WRITABLE == 0)
+    }))
+}

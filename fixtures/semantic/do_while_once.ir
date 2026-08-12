@@ -23,8 +23,9 @@ module {
     c20 = number(10)
     c21 = number(1)
     c22 = number(5)
-    c23 = bool(true)
+    c23 = bool(false)
     c24 = bool(false)
+    c25 = bool(true)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -81,7 +82,9 @@ module {
     bb2:
       %31 = load var $0.x
       %32 = const c22
-      %33 = call builtin.abstract_compare(%31, %32)
+      %34 = const c23
+      %35 = const c24
+      %33 = call builtin.abstract_compare(%31, %32, %34, %35)
       branch %33, bb1, bb3
     bb3:
       return

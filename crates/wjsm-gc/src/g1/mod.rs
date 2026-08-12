@@ -1,6 +1,6 @@
 //! G1 V2：region/card remembered-set 元数据 + 后端无关收集。
 //!
-//! 本算法经 `GrowableHeapMemory` 单态化，不依赖 wasmtime。
+//! 本算法经 `GrowableHeapMemory` 单态化，不依赖具体执行后端。
 
 #[allow(dead_code)]
 mod region;

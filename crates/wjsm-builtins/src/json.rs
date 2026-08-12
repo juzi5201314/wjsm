@@ -536,11 +536,8 @@ pub fn json_parse_to_string_impl<E: ExecContext>(
     Ok(ctx.value_to_display_string(value))
 }
 
-/// JSON.parse 第一参数的异步 ToString（对象再入 toString/valueOf）。
-async fn json_parse_to_string_async<E: ExecContext>(
-    ctx: &mut E,
-    value: Value,
-) -> Result<String, Value> {
+/// JSON.parse 第一参数的同步再入 ToString（对象调用 toString/valueOf）。
+fn json_parse_to_string<E: ExecContext>(ctx: &mut E, value: Value) -> Result<String, Value> {
     if value::is_string(value) {
         return Ok(ctx.get_runtime_string(value).to_utf8_lossy());
     }
@@ -572,14 +569,14 @@ async fn json_parse_to_string_async<E: ExecContext>(
             if !ctx.is_callable(method) {
                 continue;
             }
-            let Ok(result) = ctx.call_js_async(method, value, &[]).await else {
+            let Ok(result) = ctx.call_js(method, value, &[]) else {
                 continue;
             };
             if value::is_exception(result) {
                 return Err(result);
             }
             if !value::is_js_object(result) {
-                return Box::pin(json_parse_to_string_async(ctx, result)).await;
+                return json_parse_to_string(ctx, result);
             }
         }
         return Ok("[object Object]".to_string());
@@ -597,7 +594,7 @@ fn make_json_exception<E: ExecContext>(ctx: &mut E, name: &str, message: &str) -
 // ── reviver ──
 
 /// ES §24.5.1 InternalizeJSONProperty：对已物化对象递归应用 reviver。
-async fn apply_reviver<E: ExecContext>(
+fn apply_reviver<E: ExecContext>(
     ctx: &mut E,
     reviver: Value,
     holder: Value,
@@ -605,7 +602,7 @@ async fn apply_reviver<E: ExecContext>(
     val: Value,
 ) -> Value {
     if value::is_object(val) {
-        return apply_reviver_object(ctx, reviver, val, key).await;
+        return apply_reviver_object(ctx, reviver, val, key);
     }
     if value::is_array(val)
         && let Some(len) = ctx.array_read_length(val)
@@ -614,8 +611,7 @@ async fn apply_reviver<E: ExecContext>(
             let elem_val = ctx
                 .array_elem_at(val, i)
                 .unwrap_or_else(value::encode_undefined);
-            let new_val =
-                Box::pin(apply_reviver(ctx, reviver, val, &i.to_string(), elem_val)).await;
+            let new_val = apply_reviver(ctx, reviver, val, &i.to_string(), elem_val);
             if value::is_exception(new_val) {
                 return new_val;
             }
@@ -628,14 +624,14 @@ async fn apply_reviver<E: ExecContext>(
     }
     let key_str = ctx.store_string(key);
     let args = [key_str, val];
-    match ctx.call_js_async(reviver, holder, &args).await {
+    match ctx.call_js(reviver, holder, &args) {
         Ok(result) => result,
         Err(_) => value::encode_undefined(),
     }
 }
 
 /// 对象分支：遍历 own 槽位递归 internalize，undefined 删除、否则重定义。
-async fn apply_reviver_object<E: ExecContext>(
+fn apply_reviver_object<E: ExecContext>(
     ctx: &mut E,
     reviver: Value,
     object: Value,
@@ -653,7 +649,7 @@ async fn apply_reviver_object<E: ExecContext>(
             // Symbol 键：跳过
             continue;
         };
-        let new_value = Box::pin(apply_reviver(ctx, reviver, object, &name, prop_value)).await;
+        let new_value = apply_reviver(ctx, reviver, object, &name, prop_value);
         if value::is_exception(new_value) {
             return new_value;
         }
@@ -665,7 +661,7 @@ async fn apply_reviver_object<E: ExecContext>(
     }
     let key_str = ctx.store_string(key);
     let args = [key_str, object];
-    match ctx.call_js_async(reviver, object, &args).await {
+    match ctx.call_js(reviver, object, &args) {
         Ok(result) => result,
         Err(_) => value::encode_undefined(),
     }
@@ -674,8 +670,8 @@ async fn apply_reviver_object<E: ExecContext>(
 // ── 入口 ──
 
 /// ES §24.5.1 JSON.parse(text, reviver) — async 完整路径。
-pub async fn json_parse_impl<E: ExecContext>(ctx: &mut E, text: Value, reviver: Value) -> Value {
-    let text_str = match json_parse_to_string_async(ctx, text).await {
+pub fn json_parse_impl<E: ExecContext>(ctx: &mut E, text: Value, reviver: Value) -> Value {
+    let text_str = match json_parse_to_string(ctx, text) {
         Ok(text) => text,
         Err(exception) => return exception,
     };
@@ -688,7 +684,7 @@ pub async fn json_parse_impl<E: ExecContext>(ctx: &mut E, text: Value, reviver: 
                 return make_json_exception(ctx, "SyntaxError", "Unexpected trailing content");
             }
 
-            let wasm_value = ctx.json_materialize(&json_value);
+            let materialized_value = ctx.json_materialize(&json_value);
 
             if ctx.is_callable(reviver) {
                 let root = ctx.alloc_object(1);
@@ -697,14 +693,14 @@ pub async fn json_parse_impl<E: ExecContext>(ctx: &mut E, text: Value, reviver: 
                 ctx.define_data_property_with_flags(
                     root_handle,
                     empty_key,
-                    wasm_value,
+                    materialized_value,
                     (constants::FLAG_CONFIGURABLE
                         | constants::FLAG_ENUMERABLE
                         | constants::FLAG_WRITABLE) as u32,
                 );
-                apply_reviver(ctx, reviver, root, "", wasm_value).await
+                apply_reviver(ctx, reviver, root, "", materialized_value)
             } else {
-                wasm_value
+                materialized_value
             }
         }
         Err(error) => make_json_exception(ctx, "SyntaxError", &error),

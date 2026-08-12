@@ -1,19 +1,13 @@
 //! TypedArray.prototype 再入型方法（map/filter/reduce/sort 等）。
 //!
-//! 元素读写经 `typedarray_read_elem` / `typedarray_write_elem`；回调经 `call_js_async`。
+//! 元素读写经 `typedarray_read_elem` / `typedarray_write_elem`；回调经 `call_js`。
 
 use wjsm_host::{ExecContext, TypedArrayView, Value};
 use wjsm_ir::value;
 
-async fn sort_compare_async<E: ExecContext>(
-    ctx: &mut E,
-    cmp: Value,
-    a: Value,
-    b: Value,
-) -> std::cmp::Ordering {
+fn sort_compare<E: ExecContext>(ctx: &mut E, cmp: Value, a: Value, b: Value) -> std::cmp::Ordering {
     let result = ctx
-        .call_js_async(cmp, value::encode_undefined(), &[a, b])
-        .await
+        .call_js(cmp, value::encode_undefined(), &[a, b])
         .unwrap_or_else(|_| value::encode_f64(0.0));
     let v = value::decode_f64(result);
     if v > 0.0 {
@@ -35,12 +29,18 @@ fn read_cb_and_this<E: ExecContext>(
     args_base: i32,
     args_count: i32,
 ) -> Option<(Value, Value)> {
-    let cb = ctx.read_shadow_arg(args_base, 0);
+    let cb = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     if !ctx.is_callable(cb) {
         return None;
     }
     let this_arg = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -48,7 +48,7 @@ fn read_cb_and_this<E: ExecContext>(
 }
 
 /// TypedArray.prototype.sort
-pub async fn typedarray_proto_sort<E: ExecContext>(
+pub fn typedarray_proto_sort<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -66,16 +66,20 @@ pub async fn typedarray_proto_sort<E: ExecContext>(
     }
 
     let has_cmp = args_count > 0 && {
-        let c = ctx.read_shadow_arg(args_base, 0);
+        let c = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            0,
+        );
         ctx.is_callable(c)
     };
     if has_cmp {
-        let cmp = ctx.read_shadow_arg(args_base, 0);
+        let cmp = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            0,
+        );
         for i in 0..elems.len() {
             for j in i + 1..elems.len() {
-                if sort_compare_async(ctx, cmp, elems[i], elems[j]).await
-                    == std::cmp::Ordering::Greater
-                {
+                if sort_compare(ctx, cmp, elems[i], elems[j]) == std::cmp::Ordering::Greater {
                     elems.swap(i, j);
                 }
             }
@@ -103,7 +107,7 @@ pub async fn typedarray_proto_sort<E: ExecContext>(
 }
 
 /// TypedArray.prototype.forEach
-pub async fn typedarray_proto_for_each<E: ExecContext>(
+pub fn typedarray_proto_for_each<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -119,8 +123,7 @@ pub async fn typedarray_proto_for_each<E: ExecContext>(
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
         if ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
+            .call_js(cb, this_arg, &[elem, idx_val, this_val])
             .is_err()
         {
             return value::encode_undefined();
@@ -130,7 +133,7 @@ pub async fn typedarray_proto_for_each<E: ExecContext>(
 }
 
 /// TypedArray.prototype.map — 返回普通 Array（与现有 host 语义一致）
-pub async fn typedarray_proto_map<E: ExecContext>(
+pub fn typedarray_proto_map<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -149,10 +152,7 @@ pub async fn typedarray_proto_map<E: ExecContext>(
     for i in 0..view.length {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        let mapped = match ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
-        {
+        let mapped = match ctx.call_js(cb, this_arg, &[elem, idx_val, this_val]) {
             Ok(v) => v,
             Err(_) => return value::encode_undefined(),
         };
@@ -163,7 +163,7 @@ pub async fn typedarray_proto_map<E: ExecContext>(
 }
 
 /// TypedArray.prototype.filter
-pub async fn typedarray_proto_filter<E: ExecContext>(
+pub fn typedarray_proto_filter<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -179,10 +179,7 @@ pub async fn typedarray_proto_filter<E: ExecContext>(
     for i in 0..view.length {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        let keep = match ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
-        {
+        let keep = match ctx.call_js(cb, this_arg, &[elem, idx_val, this_val]) {
             Ok(v) => value::is_truthy(v),
             Err(_) => return value::encode_undefined(),
         };
@@ -202,7 +199,7 @@ pub async fn typedarray_proto_filter<E: ExecContext>(
 }
 
 /// TypedArray.prototype.reduce
-pub async fn typedarray_proto_reduce<E: ExecContext>(
+pub fn typedarray_proto_reduce<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -211,13 +208,19 @@ pub async fn typedarray_proto_reduce<E: ExecContext>(
     let Some(view) = ctx.typedarray_resolve(this_val) else {
         return value::encode_undefined();
     };
-    let cb = ctx.read_shadow_arg(args_base, 0);
+    let cb = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     if !ctx.is_callable(cb) {
         return value::encode_undefined();
     }
     let has_init = args_count > 1;
     let init = if has_init {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -233,14 +236,11 @@ pub async fn typedarray_proto_reduce<E: ExecContext>(
     for i in start..view.length {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        acc = match ctx
-            .call_js_async(
-                cb,
-                value::encode_undefined(),
-                &[acc, elem, idx_val, this_val],
-            )
-            .await
-        {
+        acc = match ctx.call_js(
+            cb,
+            value::encode_undefined(),
+            &[acc, elem, idx_val, this_val],
+        ) {
             Ok(v) => v,
             Err(_) => return value::encode_undefined(),
         };
@@ -249,7 +249,7 @@ pub async fn typedarray_proto_reduce<E: ExecContext>(
 }
 
 /// TypedArray.prototype.reduceRight
-pub async fn typedarray_proto_reduce_right<E: ExecContext>(
+pub fn typedarray_proto_reduce_right<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -258,13 +258,19 @@ pub async fn typedarray_proto_reduce_right<E: ExecContext>(
     let Some(view) = ctx.typedarray_resolve(this_val) else {
         return value::encode_undefined();
     };
-    let cb = ctx.read_shadow_arg(args_base, 0);
+    let cb = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     if !ctx.is_callable(cb) {
         return value::encode_undefined();
     }
     let has_init = args_count > 1;
     let init = if has_init {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -287,14 +293,11 @@ pub async fn typedarray_proto_reduce_right<E: ExecContext>(
     for i in (0..=end as u32).rev() {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        acc = match ctx
-            .call_js_async(
-                cb,
-                value::encode_undefined(),
-                &[acc, elem, idx_val, this_val],
-            )
-            .await
-        {
+        acc = match ctx.call_js(
+            cb,
+            value::encode_undefined(),
+            &[acc, elem, idx_val, this_val],
+        ) {
             Ok(v) => v,
             Err(_) => return value::encode_undefined(),
         };
@@ -303,7 +306,7 @@ pub async fn typedarray_proto_reduce_right<E: ExecContext>(
 }
 
 /// TypedArray.prototype.find
-pub async fn typedarray_proto_find<E: ExecContext>(
+pub fn typedarray_proto_find<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -318,9 +321,7 @@ pub async fn typedarray_proto_find<E: ExecContext>(
     for i in 0..view.length {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = ctx.call_js(cb, this_arg, &[elem, idx_val, this_val])
             && value::is_truthy(r)
         {
             return elem;
@@ -330,7 +331,7 @@ pub async fn typedarray_proto_find<E: ExecContext>(
 }
 
 /// TypedArray.prototype.findIndex
-pub async fn typedarray_proto_find_index<E: ExecContext>(
+pub fn typedarray_proto_find_index<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -345,9 +346,7 @@ pub async fn typedarray_proto_find_index<E: ExecContext>(
     for i in 0..view.length {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = ctx.call_js(cb, this_arg, &[elem, idx_val, this_val])
             && value::is_truthy(r)
         {
             return value::encode_f64(i as f64);
@@ -357,7 +356,7 @@ pub async fn typedarray_proto_find_index<E: ExecContext>(
 }
 
 /// TypedArray.prototype.some
-pub async fn typedarray_proto_some<E: ExecContext>(
+pub fn typedarray_proto_some<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -372,9 +371,7 @@ pub async fn typedarray_proto_some<E: ExecContext>(
     for i in 0..view.length {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) = ctx.call_js(cb, this_arg, &[elem, idx_val, this_val])
             && value::is_truthy(r)
         {
             return value::encode_bool(true);
@@ -384,7 +381,7 @@ pub async fn typedarray_proto_some<E: ExecContext>(
 }
 
 /// TypedArray.prototype.every
-pub async fn typedarray_proto_every<E: ExecContext>(
+pub fn typedarray_proto_every<E: ExecContext>(
     ctx: &mut E,
     this_val: Value,
     args_base: i32,
@@ -399,10 +396,7 @@ pub async fn typedarray_proto_every<E: ExecContext>(
     for i in 0..view.length {
         let elem = ta_elem(ctx, &view, i);
         let idx_val = value::encode_f64(i as f64);
-        match ctx
-            .call_js_async(cb, this_arg, &[elem, idx_val, this_val])
-            .await
-        {
+        match ctx.call_js(cb, this_arg, &[elem, idx_val, this_val]) {
             Ok(r) => {
                 if !value::is_truthy(r) {
                     return value::encode_bool(false);

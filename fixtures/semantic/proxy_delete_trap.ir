@@ -83,27 +83,27 @@ module {
       %24 = const c22
       %25 = call builtin.create_closure(%23, %24)
       %26 = const c23
-      set_prop %22, %26, %25
+      %27 = set_prop %22, %26, %25
       store var $0.handler, %22
-      %27 = load var $0.target
-      %28 = load var $0.handler
-      %29 = call builtin.proxy.create(%27, %28)
-      %30 = is_exception %29
-      branch %30, bb2, bb1
+      %28 = load var $0.target
+      %29 = load var $0.handler
+      %30 = call builtin.proxy.create(%28, %29)
+      %31 = is_exception %30
+      branch %31, bb2, bb1
     bb1:
-      store var $0.proxy, %29
-      %32 = load var $0.proxy
-      %33 = const c24
-      %34 = delete_prop %32, %33
-      %35 = call builtin.console.log(%34)
-      %36 = is_exception %35
-      branch %36, bb4, bb3
+      store var $0.proxy, %30
+      %33 = load var $0.proxy
+      %34 = const c24
+      %35 = delete_prop %33, %34
+      %36 = call builtin.console.log(%35)
+      %37 = is_exception %36
+      branch %37, bb4, bb3
     bb2:
-      %31 = call builtin.exception_value(%29)
-      throw %31
+      %32 = call builtin.exception_value(%30)
+      throw %32
     bb3:
       return
     bb4:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }

@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+true
+RangeError
+Maximum call stack size exceeded
+RangeError: Maximum call stack size exceeded
+ at recurse (happy/stack_overflow_catch.js:1:1) (repeated)
+continued
+--- stderr ---

@@ -191,7 +191,10 @@ pub fn array_concat_args<E: ExecContext>(
     let mut items: Vec<Value> = Vec::with_capacity(1 + args_count.max(0) as usize);
     items.push(this_val);
     for i in 0..args_count.max(0) as u32 {
-        items.push(ctx.read_shadow_arg(args_base, i));
+        items.push(ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        ));
     }
     for &e in &items {
         let add = match concat_element_contribution(ctx, e) {
@@ -390,7 +393,10 @@ pub fn arr_proto_push<E: ExecContext>(
         return ctx.make_range_error(ARRAY_LENGTH_RANGE_ERROR);
     }
     for index in 0..count {
-        let argument = ctx.read_shadow_arg(args_base, index);
+        let argument = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            index,
+        );
         let _ = ctx.array_push(this_val, argument);
     }
     value::encode_f64((len + count) as f64)
@@ -421,7 +427,10 @@ pub fn func_bind<E: ExecContext>(
 ) -> Value {
     let mut bound_args = Vec::with_capacity(args_count.max(0) as usize);
     for i in 0..args_count.max(0) as u32 {
-        bound_args.push(ctx.read_shadow_arg(args_base, i));
+        bound_args.push(ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        ));
     }
     ctx.create_bound_function(func, this_val, bound_args)
 }
@@ -441,7 +450,10 @@ pub fn array_of<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) ->
     let count = args_count.max(0) as u32;
     let arr = ctx.alloc_array(count);
     for i in 0..count {
-        let v = ctx.read_shadow_arg(args_base, i);
+        let v = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         ctx.array_write_elem(arr, i, v);
     }
     ctx.array_write_length(arr, count);
@@ -490,7 +502,10 @@ pub fn arr_proto_unshift<E: ExecContext>(
         ctx.array_write_elem(this_val, i + add, elem);
     }
     for i in 0..add {
-        let arg = ctx.read_shadow_arg(args_base, i);
+        let arg = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         ctx.array_write_elem(this_val, i, arg);
     }
     ctx.array_write_length(this_val, new_len);
@@ -509,7 +524,10 @@ pub fn arr_proto_at<E: ExecContext>(
     }
     let len = ctx.array_read_length(this_val).unwrap_or(0) as i32;
     let idx = if args_count > 0 {
-        let i_f64 = value::decode_f64(ctx.read_shadow_arg(args_base, 0));
+        let i_f64 = value::decode_f64(ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            0,
+        ));
         if i_f64.is_nan() {
             0
         } else if i_f64 < 0.0 {
@@ -556,7 +574,10 @@ pub fn arr_proto_with<E: ExecContext>(
     }
     let len = ctx.array_read_length(this_val).unwrap_or(0) as i32;
     let idx = if args_count > 0 {
-        let i_f64 = value::decode_f64(ctx.read_shadow_arg(args_base, 0));
+        let i_f64 = value::decode_f64(ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            0,
+        ));
         if i_f64.is_nan() {
             0
         } else if i_f64 < 0.0 {
@@ -571,7 +592,10 @@ pub fn arr_proto_with<E: ExecContext>(
         return ctx.make_range_error("Invalid index");
     }
     let value_arg = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -603,17 +627,38 @@ pub fn arr_proto_copy_within<E: ExecContext>(
     }
     let len = ctx.array_read_length(this_val).unwrap_or(0) as i32;
     let target = if args_count > 0 {
-        to_integer_index(len, ctx.read_shadow_arg(args_base, 0), 0)
+        to_integer_index(
+            len,
+            ctx.read_call_arg(
+                wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+                0,
+            ),
+            0,
+        )
     } else {
         0
     };
     let start = if args_count > 1 {
-        to_integer_index(len, ctx.read_shadow_arg(args_base, 1), 0)
+        to_integer_index(
+            len,
+            ctx.read_call_arg(
+                wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+                1,
+            ),
+            0,
+        )
     } else {
         0
     };
     let end = if args_count > 2 {
-        to_integer_index(len, ctx.read_shadow_arg(args_base, 2), len)
+        to_integer_index(
+            len,
+            ctx.read_call_arg(
+                wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+                2,
+            ),
+            len,
+        )
     } else {
         len
     };
@@ -654,12 +699,22 @@ pub fn arr_proto_splice<E: ExecContext>(
     }
     let len = ctx.array_read_length(this_val).unwrap_or(0) as i32;
     let start = if args_count > 0 {
-        to_integer_index(len, ctx.read_shadow_arg(args_base, 0), 0)
+        to_integer_index(
+            len,
+            ctx.read_call_arg(
+                wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+                0,
+            ),
+            0,
+        )
     } else {
         0
     };
     let delete_count = if args_count > 1 {
-        let d = value::decode_f64(ctx.read_shadow_arg(args_base, 1));
+        let d = value::decode_f64(ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        ));
         if d.is_nan() || d < 0.0 {
             0
         } else {
@@ -705,7 +760,10 @@ pub fn arr_proto_splice<E: ExecContext>(
         }
     }
     for i in 0..insert_count {
-        let arg = ctx.read_shadow_arg(args_base, 2 + i);
+        let arg = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            2 + i,
+        );
         ctx.array_write_elem(this_val, start as u32 + i, arg);
     }
     ctx.array_write_length(this_val, new_len);
@@ -724,12 +782,22 @@ pub fn arr_proto_to_spliced<E: ExecContext>(
     }
     let len = ctx.array_read_length(this_val).unwrap_or(0) as i32;
     let start = if args_count > 0 {
-        to_integer_index(len, ctx.read_shadow_arg(args_base, 0), 0)
+        to_integer_index(
+            len,
+            ctx.read_call_arg(
+                wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+                0,
+            ),
+            0,
+        )
     } else {
         0
     };
     let delete_count = if args_count > 1 {
-        let d = value::decode_f64(ctx.read_shadow_arg(args_base, 1));
+        let d = value::decode_f64(ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        ));
         if d.is_nan() || d < 0.0 {
             0
         } else {
@@ -753,7 +821,10 @@ pub fn arr_proto_to_spliced<E: ExecContext>(
         w += 1;
     }
     for i in 0..insert_count {
-        let arg = ctx.read_shadow_arg(args_base, 2 + i);
+        let arg = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            2 + i,
+        );
         ctx.array_write_elem(new_arr, w, arg);
         w += 1;
     }
@@ -776,9 +847,15 @@ pub fn arr_proto_last_index_of<E: ExecContext>(
     if !ctx.resolve_array(this_val) {
         return value::encode_f64(-1.0);
     }
-    let search = ctx.read_shadow_arg(args_base, 0);
+    let search = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     let from = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -792,9 +869,15 @@ pub fn arr_proto_includes<E: ExecContext>(
     args_base: i32,
     args_count: i32,
 ) -> Value {
-    let search = ctx.read_shadow_arg(args_base, 0);
+    let search = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     let from = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -808,9 +891,15 @@ pub fn arr_proto_index_of_args<E: ExecContext>(
     args_base: i32,
     args_count: i32,
 ) -> Value {
-    let search = ctx.read_shadow_arg(args_base, 0);
+    let search = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     let from = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -825,7 +914,10 @@ pub fn arr_proto_join_args<E: ExecContext>(
     args_count: i32,
 ) -> Value {
     let sep = if args_count > 0 {
-        ctx.read_shadow_arg(args_base, 0)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            0,
+        )
     } else {
         value::encode_undefined()
     };
@@ -872,12 +964,18 @@ pub fn arr_proto_slice_args<E: ExecContext>(
     args_count: i32,
 ) -> Value {
     let start = if args_count > 0 {
-        ctx.read_shadow_arg(args_base, 0)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            0,
+        )
     } else {
         value::encode_undefined()
     };
     let end = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
@@ -891,14 +989,23 @@ pub fn arr_proto_fill_args<E: ExecContext>(
     args_base: i32,
     args_count: i32,
 ) -> Value {
-    let val = ctx.read_shadow_arg(args_base, 0);
+    let val = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     let start = if args_count > 1 {
-        ctx.read_shadow_arg(args_base, 1)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            1,
+        )
     } else {
         value::encode_undefined()
     };
     let end = if args_count > 2 {
-        ctx.read_shadow_arg(args_base, 2)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            2,
+        )
     } else {
         value::encode_undefined()
     };
@@ -913,7 +1020,10 @@ pub fn arr_proto_flat_args<E: ExecContext>(
     args_count: i32,
 ) -> Value {
     let depth = if args_count > 0 {
-        ctx.read_shadow_arg(args_base, 0)
+        ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            0,
+        )
     } else {
         value::encode_undefined()
     };
@@ -926,9 +1036,9 @@ pub fn arr_proto_reverse<E: ExecContext>(ctx: &mut E, this_val: Value) -> Value 
 }
 
 /// `Array.from(items, mapFn?)`：支持可迭代对象（@@iterator）、类数组、字符串、TypedArray。
-pub async fn array_from_impl<E: ExecContext>(ctx: &mut E, source: Value, map_fn: Value) -> Value {
+pub fn array_from_impl<E: ExecContext>(ctx: &mut E, source: Value, map_fn: Value) -> Value {
     let has_map_fn = ctx.is_callable(map_fn);
-    let Some(values) = crate::iterable_collect::collect_array_from_values(ctx, source).await else {
+    let Some(values) = crate::iterable_collect::collect_array_from_values(ctx, source) else {
         ctx.set_last_error(
             "TypeError: Array.from requires an array-like or iterable object".to_string(),
         );
@@ -940,10 +1050,7 @@ pub async fn array_from_impl<E: ExecContext>(ctx: &mut E, source: Value, map_fn:
     for (i, raw) in values.into_iter().enumerate() {
         let mapped = if has_map_fn {
             let idx_val = value::encode_f64(i as f64);
-            match ctx
-                .call_js_async(map_fn, value::encode_undefined(), &[raw, idx_val])
-                .await
-            {
+            match ctx.call_js(map_fn, value::encode_undefined(), &[raw, idx_val]) {
                 Ok(v) => {
                     if value::is_exception(v) {
                         return v;

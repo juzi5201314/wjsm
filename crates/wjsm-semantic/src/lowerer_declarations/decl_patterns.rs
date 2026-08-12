@@ -283,6 +283,7 @@ impl Lowerer {
                 args: vec![src_val],
             },
         );
+        block = self.lower_value_exception_branch(block, iter_handle)?;
 
         let mut saw_rest = false;
 

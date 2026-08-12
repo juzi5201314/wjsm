@@ -298,7 +298,7 @@ fn timeout<E: ExecContext>(ctx: &mut E, input: Value) -> Result<f64, Value> {
     }
 }
 
-pub async fn wait<E: ExecContext>(
+pub fn wait<E: ExecContext>(
     ctx: &mut E,
     typed_array: Value,
     index: Value,
@@ -318,7 +318,6 @@ pub async fn wait<E: ExecContext>(
         Err(exception) => return exception,
     };
     ctx.atomics_wait_sync(access.view, access.byte_offset, expected, timeout)
-        .await
         .unwrap_or_else(|_| value::encode_undefined())
 }
 
@@ -351,7 +350,7 @@ pub fn notify<E: ExecContext>(
     value::encode_f64(ctx.atomics_notify(&access.view, access.byte_offset, count) as f64)
 }
 
-pub async fn wait_async<E: ExecContext>(
+pub fn wait_async<E: ExecContext>(
     ctx: &mut E,
     typed_array: Value,
     index: Value,
@@ -372,7 +371,6 @@ pub async fn wait_async<E: ExecContext>(
     };
     let result = ctx
         .atomics_wait_async_op(access.view, access.byte_offset, expected, timeout)
-        .await
         .unwrap_or_else(|_| value::encode_undefined());
     let object = ctx.alloc_object(2);
     let is_async = ctx.is_promise_value(result);

@@ -50,52 +50,45 @@ pub fn transform_with_prefix(module: &ast::Module, export_prefix: &str) -> ast::
         direct_imports,
         hoistable_require_sites: hoistable_sites,
         export_names: Vec::new(),
-        has_default_export: false,
         export_prefix: export_prefix.to_string(),
     };
     let mut new_module = transformer.transform_module(module);
 
-    // 处理命名导出
-    if !transformer.export_names.is_empty() {
-        if transformer.has_default_export {
-            // 两者并存：除了已有的 export default，也为属性生成命名导出
-            // 这样 `import { VERSION } from './mod'` 也能工作
-            for (prop_name, var_name) in &transformer.export_names {
-                let export_spec = ast::ExportNamedSpecifier {
-                    span: DUMMY_SP,
-                    orig: ast::ModuleExportName::Ident(ast::Ident::new(
-                        var_name.clone().into(),
-                        DUMMY_SP,
-                        SyntaxContext::default(),
-                    )),
-                    exported: Some(ast::ModuleExportName::Ident(ast::Ident::new(
-                        prop_name.clone().into(),
-                        DUMMY_SP,
-                        SyntaxContext::default(),
-                    ))),
-                    is_type_only: false,
-                };
-                new_module
-                    .body
-                    .push(ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportNamed(
-                        ast::NamedExport {
-                            span: DUMMY_SP,
-                            specifiers: vec![ast::ExportSpecifier::Named(export_spec)],
-                            src: None,
-                            type_only: false,
-                            with: None,
-                        },
-                    )));
-            }
-        } else {
-            // 只有命名导出：生成合成默认导出
-            let default_export_expr = create_synthetic_default_export(&transformer.export_names);
-            new_module.body.push(ast::ModuleItem::ModuleDecl(
-                ast::ModuleDecl::ExportDefaultExpr(ast::ExportDefaultExpr {
-                    span: DUMMY_SP,
-                    expr: Box::new(default_export_expr),
-                }),
-            ));
+    // CommonJS 的默认导出始终是执行结束时的 `module.exports`；属性赋值同时保留为
+    // 真实运行时写入，确保 require()、循环依赖和 require.cache 观察同一对象。
+    if is_commonjs_module(module) {
+        new_module.body.push(ast::ModuleItem::ModuleDecl(
+            ast::ModuleDecl::ExportDefaultExpr(ast::ExportDefaultExpr {
+                span: DUMMY_SP,
+                expr: Box::new(create_module_exports_expr()),
+            }),
+        ));
+        for (prop_name, var_name) in &transformer.export_names {
+            let export_spec = ast::ExportNamedSpecifier {
+                span: DUMMY_SP,
+                orig: ast::ModuleExportName::Ident(ast::Ident::new(
+                    var_name.clone().into(),
+                    DUMMY_SP,
+                    SyntaxContext::default(),
+                )),
+                exported: Some(ast::ModuleExportName::Ident(ast::Ident::new(
+                    prop_name.clone().into(),
+                    DUMMY_SP,
+                    SyntaxContext::default(),
+                ))),
+                is_type_only: false,
+            };
+            new_module
+                .body
+                .push(ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportNamed(
+                    ast::NamedExport {
+                        span: DUMMY_SP,
+                        specifiers: vec![ast::ExportSpecifier::Named(export_spec)],
+                        src: None,
+                        type_only: false,
+                        with: None,
+                    },
+                )));
         }
     }
 
@@ -177,7 +170,6 @@ struct CjsTransformer {
     direct_imports: HashSet<String>,
     hoistable_require_sites: HashSet<RequireSiteKey>,
     export_names: Vec<(String, String)>,
-    has_default_export: bool,
     export_prefix: String,
 }
 
@@ -483,16 +475,17 @@ impl CjsTransformer {
             return None;
         };
 
-        // module.exports = value → export default value
+        // `module.exports = value` 必须保留为运行时写入；默认导出在模块尾读取
+        // `module.exports`，因此 RHS 仍只求值一次且覆盖语义与 Node 一致。
         if is_module_exports_member_no_prop(&member.obj, &member.prop) {
-            let value = self.transform_expr(&assign.right);
-            self.has_default_export = true;
-            return Some(vec![ast::ModuleItem::ModuleDecl(
-                ast::ModuleDecl::ExportDefaultExpr(ast::ExportDefaultExpr {
+            let mut runtime_assign = assign.clone();
+            runtime_assign.right = Box::new(self.transform_expr(&assign.right));
+            return Some(vec![ast::ModuleItem::Stmt(ast::Stmt::Expr(
+                ast::ExprStmt {
                     span: DUMMY_SP,
-                    expr: Box::new(value),
-                }),
-            )]);
+                    expr: Box::new(ast::Expr::Assign(runtime_assign)),
+                },
+            ))]);
         }
 
         // module.exports.x = value → let {prefix}__cjs_x = value
@@ -519,7 +512,19 @@ impl CjsTransformer {
         let var_name = format!("{}__cjs_{}", self.export_prefix, prop_name);
         self.export_names.push((prop_name, var_name.clone()));
         let decl = create_let_decl(&var_name, value);
-        Some(vec![ast::ModuleItem::Stmt(ast::Stmt::Decl(decl))])
+        let mut runtime_assign = assign.clone();
+        runtime_assign.right = Box::new(ast::Expr::Ident(ast::Ident::new(
+            var_name.into(),
+            DUMMY_SP,
+            SyntaxContext::default(),
+        )));
+        Some(vec![
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(decl)),
+            ast::ModuleItem::Stmt(ast::Stmt::Expr(ast::ExprStmt {
+                span: DUMMY_SP,
+                expr: Box::new(ast::Expr::Assign(runtime_assign)),
+            })),
+        ])
     }
 
     fn transform_var_decl(&mut self, var_decl: &ast::VarDecl) -> ast::VarDecl {
@@ -894,23 +899,15 @@ fn create_import_default_decl(specifier: &str, local_name: &str) -> ast::ImportD
     }
 }
 
-fn create_synthetic_default_export(export_names: &[(String, String)]) -> ast::Expr {
-    let props: Vec<ast::PropOrSpread> = export_names
-        .iter()
-        .map(|(prop_name, var_name)| {
-            ast::PropOrSpread::Prop(Box::new(ast::Prop::KeyValue(ast::KeyValueProp {
-                key: ast::PropName::Ident(ast::IdentName::new(prop_name.clone().into(), DUMMY_SP)),
-                value: Box::new(ast::Expr::Ident(ast::Ident::new(
-                    var_name.clone().into(),
-                    DUMMY_SP,
-                    SyntaxContext::default(),
-                ))),
-            })))
-        })
-        .collect();
-    ast::Expr::Object(ast::ObjectLit {
+fn create_module_exports_expr() -> ast::Expr {
+    ast::Expr::Member(ast::MemberExpr {
         span: DUMMY_SP,
-        props,
+        obj: Box::new(ast::Expr::Ident(ast::Ident::new(
+            "module".into(),
+            DUMMY_SP,
+            SyntaxContext::default(),
+        ))),
+        prop: ast::MemberProp::Ident(ast::IdentName::new("exports".into(), DUMMY_SP)),
     })
 }
 

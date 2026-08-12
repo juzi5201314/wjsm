@@ -31,10 +31,9 @@ pub enum HandleGeneration {
 
 /// 与 memory64 ABI 对齐的低 16-bit handle entry 状态。
 ///
-/// 判别值刻意让**稳定态成为连续高值区间**（>= [`HANDLE_STATE_STABLE_MIN`]）：
-/// wasm 侧的属性访问快链每次都要判断「这个句柄现在可以直接读地址吗」，
-/// 连续区间把三次相等比较（`state==StableYoung | state==StableOld |
-/// state==PinnedOld`）压成一次 `i32.ge_u`，省下 4 条指令与 2 个分支。
+/// 判别值刻意让稳定态成为连续高值区间（>= [`HANDLE_STATE_STABLE_MIN`]），
+/// 让生成代码可用一次无符号比较判断句柄是否可直接访问。
+///
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum HandleState {
@@ -47,20 +46,16 @@ pub enum HandleState {
     StableOld = 5,
     PinnedOld = 6,
 }
-
-/// 稳定态判别值下界；wasm 快链用 `state >= HANDLE_STATE_STABLE_MIN` 单比较判定。
+/// 稳定态判别值下界；生成代码用 `state >= HANDLE_STATE_STABLE_MIN` 单比较判定。
 pub const HANDLE_STATE_STABLE_MIN: u16 = HandleState::StableYoung as u16;
 
-// 状态编码是 codegen（`wjsm_ir::constants::HANDLE_STATE_*`，wasm 发布对象时写入）
-// 与本模块（宿主解析 entry）之间的 ABI 契约。两处必须逐一相等，否则 wasm 分配的
-// 对象会被宿主判为非稳定态而整体不可解析——用编译期断言钉死，禁止靠人工同步。
+// 状态编码是 codegen（`wjsm_ir::constants::HANDLE_STATE_*`）与本模块之间的 ABI 契约。
+// 两处必须逐一相等，否则生成代码会把对象判为非稳定态；用编译期断言钉死。
 const _: () = {
     use wjsm_ir::constants as abi;
     assert!(HandleState::Free as u16 as u32 == abi::HANDLE_STATE_FREE);
     assert!(HandleState::Retired as u16 as u32 == abi::HANDLE_STATE_RETIRED);
-    assert!(
-        HandleState::RelocatingYoung as u16 as u32 == abi::HANDLE_STATE_RELOCATING_YOUNG
-    );
+    assert!(HandleState::RelocatingYoung as u16 as u32 == abi::HANDLE_STATE_RELOCATING_YOUNG);
     assert!(HandleState::RelocatingOld as u16 as u32 == abi::HANDLE_STATE_RELOCATING_OLD);
     assert!(HandleState::StableYoung as u16 as u32 == abi::HANDLE_STATE_STABLE_YOUNG);
     assert!(HandleState::StableOld as u16 as u32 == abi::HANDLE_STATE_STABLE_OLD);
@@ -160,7 +155,13 @@ pub enum HandleTableError {
     AddressOutsideObjectHeap {
         address: u64,
     },
+    DuplicateRestoreHandle {
+        handle: HandleId,
+    },
     HandleExhausted,
+    UnallocatedHandle {
+        handle: HandleId,
+    },
     InvalidTransition {
         handle: HandleId,
         expected: HandleState,
@@ -170,6 +171,11 @@ pub enum HandleTableError {
         object_heap_end: u64,
     },
     LayoutOverflow,
+    RestoreHandleOutOfRange {
+        handle: HandleId,
+        next_handle: u64,
+    },
+    RestoreRequiresEmpty,
     UnalignedAddress {
         address: u64,
     },
@@ -187,6 +193,11 @@ impl fmt::Display for HandleTableError {
             Self::AddressOutsideObjectHeap { address } => {
                 write!(formatter, "address {address:#x} is outside object heap")
             }
+            Self::DuplicateRestoreHandle { handle } => write!(
+                formatter,
+                "snapshot contains duplicate handle {}",
+                handle.get()
+            ),
             Self::HandleExhausted => formatter.write_str("handle table is exhausted"),
             Self::InvalidTransition {
                 handle,
@@ -202,10 +213,28 @@ impl fmt::Display for HandleTableError {
                 "object heap end {object_heap_end:#x} exceeds 48-bit ABI"
             ),
             Self::LayoutOverflow => formatter.write_str("managed heap layout overflows u64"),
+            Self::RestoreHandleOutOfRange {
+                handle,
+                next_handle,
+            } => write!(
+                formatter,
+                "snapshot handle {} is outside next_handle {next_handle}",
+                handle.get()
+            ),
+            Self::RestoreRequiresEmpty => {
+                formatter.write_str("snapshot restore requires an empty handle table")
+            }
             Self::UnalignedAddress { address } => write!(
                 formatter,
                 "handle address {address:#x} is not 8-byte aligned"
             ),
+            Self::UnallocatedHandle { handle } => {
+                write!(
+                    formatter,
+                    "handle {} was not allocated by HandleTableV2",
+                    handle.get()
+                )
+            }
             Self::VirtualReservation { detail } => {
                 write!(
                     formatter,

@@ -418,7 +418,10 @@ function installHistogram() {
     perfHost.registerHistogramPrototypes(
       Histogram.prototype,
       RecordableHistogram.prototype,
-      ELDHistogram.prototype
+      ELDHistogram.prototype,
+      kHistogramBrand,
+      kHistogramKind,
+      kHistogramMap,
     );
   }
 }

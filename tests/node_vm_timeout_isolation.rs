@@ -1,7 +1,7 @@
-//! 验证同一 Engine 上一个 Store 的 vm timeout 不会中断另一个 Store。
+//! 验证同一进程内一个 runtime 的 vm timeout 不会中断另一个 runtime。
 //!
 //! 断言只看可观察行为（exit code / stdout 内容），不依赖墙钟上限。
-//! A 的 timeout 语义由 vm 的 deadline 保证；B 必须完整算完，证明 epoch 不跨 Store 误杀。
+//! A 的 timeout 语义由 vm 的 deadline 保证；B 必须完整算完，证明 deadline 不跨 runtime 误杀。
 
 use std::fs;
 use std::path::PathBuf;
@@ -47,15 +47,11 @@ console.log('B:' + s);
     // 并发启动：不 sleep 协调时序；正确性只要求最终结果。
     let handle_a = {
         let p = path_a.clone();
-        thread::spawn(move || {
-            wjsm_cli::run_file_in_process_with_options(&p, &[], &[("WJSM_COMPILER", "winch")], None)
-        })
+        thread::spawn(move || wjsm_cli::run_file_in_process_with_options(&p, &[], &[], None))
     };
     let handle_b = {
         let p = path_b.clone();
-        thread::spawn(move || {
-            wjsm_cli::run_file_in_process_with_options(&p, &[], &[("WJSM_COMPILER", "winch")], None)
-        })
+        thread::spawn(move || wjsm_cli::run_file_in_process_with_options(&p, &[], &[], None))
     };
 
     let (code_a, out_a, err_a) = handle_a.join().expect("join A");

@@ -142,21 +142,11 @@ function wireChild(child, created) {
 }
 
 export function spawnSync(command, args, options) {
-  if (!Array.isArray(args)) {
-    options = args;
-    args = [];
-  }
-  const normalized = normalizeOptions(options);
-  const result = getHost().spawnSync(String(command), args || [], normalized);
-  result.stdout = decodeOutput(result.stdout, normalized.encoding);
-  result.stderr = decodeOutput(result.stderr, normalized.encoding);
-  return result;
+  throw new Error('child_process execution is disabled');
 }
 
 export function execSync(command, options) {
-  const normalized = normalizeOptions(options);
-  const out = getHost().execSync(String(command), normalized);
-  return decodeOutput(out, normalized.encoding);
+  throw new Error('child_process execution is disabled');
 }
 
 export function spawn(command, args, options) {

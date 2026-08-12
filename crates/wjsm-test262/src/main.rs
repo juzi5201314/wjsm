@@ -28,29 +28,19 @@
 //!
 //! ## 内存与并发模型
 //!
-//! Wasmtime 43 在 64-bit 默认给 wasm32 linear memory 预留 `4GiB` 虚拟地址空间，
-//! 另有 guard 区域和 growth reservation。它主要消耗虚拟地址空间，不等同于真实 RSS，
-//! 但 Linux `RLIMIT_AS` 会按虚拟地址空间计数，因此不能直接把子进程地址空间上限
-//! 当成并发物理内存成本。
-//!
-//! 这里把两个概念拆开：
+//! runner 通过 Linux `RLIMIT_AS` 保护单条 native 子进程的虚拟地址空间，
+//! 并通过独立的并发预算控制 worker 数量；native image/cache 的映射由 wjsm
+//! 自身按当前宿主能力管理。
 //!
 //! - `--memory-limit-mib` / `WJSM_TEST262_MEMORY_LIMIT_MIB`：Linux 子进程地址空间保护。
-//!   默认 `5120MiB`，给 Rust runtime、Cranelift、线程栈、mmap 和 Wasmtime 预留留出余量。
-//! - `--wasmtime-memory-reservation-mib` /
-//!   `WJSM_TEST262_WASMTIME_MEMORY_RESERVATION_MIB`：传给 `wjsm` 的 Wasmtime 线性内存
-//!   预留。默认 `256MiB`，runner 会通过 `--wasmtime-memory-reservation 256M` 降低
-//!   Test262 子进程的虚拟地址压力。
 //! - `--memory-budget-mib` / `WJSM_TEST262_MEMORY_BUDGET_MIB`：runner 允许并发 worker
-//!   使用的近似物理内存预算。默认取宿主内存的一半，并限制在 `1GiB..32GiB`。
-//! - `--job-memory-mib` / `WJSM_TEST262_JOB_MEMORY_MIB`：单个 worker 计入预算的估算
-//!   物理内存成本，默认 `2048MiB`。实际并发为 `min(--jobs, budget / job_memory)`。
-//! - `--jobs` / `WJSM_TEST262_JOBS`：期望并发数；不传时取可用 CPU 数，再按内存预算收敛。
+//!   使用的近似物理内存预算。
+//! - `--job-memory-mib` / `WJSM_TEST262_JOB_MEMORY_MIB`：单个 worker 计入预算的估算成本。
+//! - `--jobs` / `WJSM_TEST262_JOBS`：期望并发数，最终按预算收敛。
 //!
-//! 例：`--jobs 32 --memory-budget-mib 8192 --job-memory-mib 2048` 最终会跑 `4` 个 worker。
+//! 例：`--jobs 32 --memory-budget-mib 8192 --job-memory-mib 2048` 最终会运行 4 个 worker。
 //! 如果机器开始 swap 或 WSL 报 OOM，优先降低 `--memory-budget-mib`，或提高
-//! `--job-memory-mib` 让同一预算下的并发更保守；如果子进程启动时报 `mmap failed` /
-//! `memory allocation failed`，优先提高 `--memory-limit-mib`，而不是盲目降低并发。
+//! `--job-memory-mib` 让同一预算下的并发更保守。
 //!
 //! ## 相关实现边界
 //!
@@ -78,8 +68,8 @@ mod read;
 
 use config::should_run_test;
 use exec::{
-    DEFAULT_CHILD_MEMORY_LIMIT_MIB, DEFAULT_JOB_MEMORY_COST_MIB, DEFAULT_TIMEOUT_SECS,
-    DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB, RunLimits, Statistics, SuiteResults, TestResult,
+    DEFAULT_CHILD_MEMORY_LIMIT_MIB, DEFAULT_JOB_MEMORY_COST_MIB, DEFAULT_TIMEOUT_SECS, RunLimits,
+    Statistics, SuiteResults, TestResult,
 };
 use read::{read_harness, read_suite, read_test};
 
@@ -89,7 +79,6 @@ const ENV_TIMEOUT_SECS: &str = "WJSM_TEST262_TIMEOUT_SECS";
 const ENV_CHILD_MEMORY_LIMIT_MIB: &str = "WJSM_TEST262_MEMORY_LIMIT_MIB";
 const ENV_MEMORY_BUDGET_MIB: &str = "WJSM_TEST262_MEMORY_BUDGET_MIB";
 const ENV_JOB_MEMORY_COST_MIB: &str = "WJSM_TEST262_JOB_MEMORY_MIB";
-const ENV_WASMTIME_MEMORY_RESERVATION_MIB: &str = "WJSM_TEST262_WASMTIME_MEMORY_RESERVATION_MIB";
 const ENV_JOBS: &str = "WJSM_TEST262_JOBS";
 const DEFAULT_MEMORY_BUDGET_MAX_MIB: u64 = 32 * 1024;
 
@@ -128,13 +117,9 @@ enum Commands {
         #[arg(long, value_name = "SECS")]
         timeout_secs: Option<u64>,
 
-        /// Linux：单条子进程虚拟地址空间上限（MiB）；0 表示不限制。默认按 Wasmtime 预留量推导。
+        /// Linux：单条 native 子进程虚拟地址空间上限（MiB）；0 表示不限制。
         #[arg(long, value_name = "MIB")]
         memory_limit_mib: Option<u64>,
-
-        /// 单条用例的 Wasmtime 线性内存虚拟地址预留（MiB）；0 表示使用 Wasmtime 默认值。
-        #[arg(long, value_name = "MIB")]
-        wasmtime_memory_reservation_mib: Option<u64>,
 
         /// 整个 runner 的并发物理内存预算（MiB）；0 表示不按内存预算压低 jobs。也可用 WJSM_TEST262_MEMORY_BUDGET_MIB。
         #[arg(long, value_name = "MIB")]
@@ -165,7 +150,6 @@ fn main() -> Result<()> {
             no_parallel,
             timeout_secs,
             memory_limit_mib,
-            wasmtime_memory_reservation_mib,
             memory_budget_mib,
             job_memory_mib,
             jobs,
@@ -175,7 +159,6 @@ fn main() -> Result<()> {
                 no_parallel,
                 timeout_secs,
                 memory_limit_mib,
-                wasmtime_memory_reservation_mib,
                 memory_budget_mib,
                 job_memory_mib,
                 jobs,
@@ -189,7 +172,6 @@ fn resolve_run_limits(
     no_parallel: bool,
     timeout_secs: Option<u64>,
     memory_limit_mib: Option<u64>,
-    wasmtime_memory_reservation_mib: Option<u64>,
     memory_budget_mib: Option<u64>,
     job_memory_mib: Option<u64>,
     jobs: Option<usize>,
@@ -197,12 +179,9 @@ fn resolve_run_limits(
     let timeout_secs = timeout_secs
         .or(parse_env_u64(ENV_TIMEOUT_SECS)?)
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
-    let wasmtime_memory_reservation_mib = wasmtime_memory_reservation_mib
-        .or(parse_env_u64(ENV_WASMTIME_MEMORY_RESERVATION_MIB)?)
-        .unwrap_or(DEFAULT_WASMTIME_MEMORY_RESERVATION_MIB);
     let child_memory_limit_mib = memory_limit_mib
         .or(parse_env_u64(ENV_CHILD_MEMORY_LIMIT_MIB)?)
-        .unwrap_or_else(|| default_child_memory_limit_mib(wasmtime_memory_reservation_mib));
+        .unwrap_or(DEFAULT_CHILD_MEMORY_LIMIT_MIB);
     let memory_budget_mib = memory_budget_mib
         .or(parse_env_u64(ENV_MEMORY_BUDGET_MIB)?)
         .unwrap_or_else(default_memory_budget_mib);
@@ -220,7 +199,6 @@ fn resolve_run_limits(
     Ok(RunLimits {
         timeout: Duration::from_secs(timeout_secs),
         child_memory_limit_mib,
-        wasmtime_memory_reservation_mib,
         memory_budget_mib,
         job_memory_cost_mib,
         jobs: if no_parallel {
@@ -249,16 +227,6 @@ fn cap_jobs_by_memory_budget(
     let max_by_memory = (memory_budget_mib / child_cost_mib).max(1);
     let max_by_memory = usize::try_from(max_by_memory).unwrap_or(usize::MAX);
     requested_jobs.min(max_by_memory)
-}
-
-fn default_child_memory_limit_mib(wasmtime_memory_reservation_mib: u64) -> u64 {
-    if wasmtime_memory_reservation_mib == 0 {
-        8 * 1024
-    } else {
-        wasmtime_memory_reservation_mib
-            .saturating_add(2 * 1024)
-            .max(DEFAULT_CHILD_MEMORY_LIMIT_MIB)
-    }
 }
 
 fn default_requested_jobs() -> usize {
@@ -365,9 +333,8 @@ fn run_test262(
     if verbose > 0 {
         println!("Running tests...");
         println!(
-            "Limits: timeout={}s, wasmtime_memory_reservation_mib={}, child_memory_limit_mib={}, memory_budget_mib={}, job_memory_mib={}, jobs={}",
+            "Limits: timeout={}s, child_memory_limit_mib={}, memory_budget_mib={}, job_memory_mib={}, jobs={}",
             limits.timeout.as_secs(),
-            limits.wasmtime_memory_reservation_mib,
             limits.child_memory_limit_mib,
             limits.memory_budget_mib,
             limits.job_memory_cost_mib,

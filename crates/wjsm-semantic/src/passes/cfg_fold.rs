@@ -273,7 +273,9 @@ pub(crate) fn run(module: &mut Module) {
                     collapses.into_iter().map(|(idx, _, _)| idx).collect();
                 collapse_idxs.sort_unstable_by(|a, b| b.cmp(a));
                 for idx in collapse_idxs {
-                    function.blocks_mut()[block_idx].instructions_mut().remove(idx);
+                    function.blocks_mut()[block_idx]
+                        .instructions_mut()
+                        .remove(idx);
                 }
             }
             any_change |= phi_folded;
@@ -355,17 +357,6 @@ mod tests {
         const_id_or_add(module, Constant::Number(n))
     }
 
-    /// 构建一个 entry 块 + 若干辅助块的单函数模块。
-    fn single_function_module(entry: BasicBlock) -> (Module, FunctionId) {
-        let mut module = Module::new();
-        let mut function = Function::new("test_fn", BasicBlockId(0));
-        function.set_has_eval(false);
-        function.set_params(vec![]);
-        function.push_block(entry);
-        let fid = module.push_function(function);
-        (module, fid)
-    }
-
     fn block(id: u32) -> BasicBlock {
         BasicBlock::new(BasicBlockId(id))
     }
@@ -381,7 +372,10 @@ mod tests {
             dest: obj,
             capacity: 4,
         });
-        b1.push_instruction(Instruction::IsException { dest: ex, value: obj });
+        b1.push_instruction(Instruction::IsException {
+            dest: ex,
+            value: obj,
+        });
         b1.set_terminator(Terminator::Return { value: Some(ex) });
         module.push_function({
             let mut f = Function::new("ctor", BasicBlockId(1));
@@ -452,19 +446,39 @@ mod tests {
         let mut b3 = block(3);
         let mut b4 = block(4);
         let mut b5 = block(5);
-        b0.set_terminator(Terminator::Jump { target: BasicBlockId(1) });
-        b1.push_instruction(Instruction::Const { dest: v, constant: c });
+        b0.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+        b1.push_instruction(Instruction::Const {
+            dest: v,
+            constant: c,
+        });
         b1.set_terminator(Terminator::Branch {
             condition: ValueId(9),
             true_block: BasicBlockId(3),
             false_block: BasicBlockId(4),
         });
-        b2.push_instruction(Instruction::Const { dest: v, constant: c });
-        b2.set_terminator(Terminator::Jump { target: BasicBlockId(5) });
-        b3.push_instruction(Instruction::Const { dest: v, constant: c });
-        b3.set_terminator(Terminator::Jump { target: BasicBlockId(5) });
-        b4.push_instruction(Instruction::Const { dest: v, constant: c });
-        b4.set_terminator(Terminator::Jump { target: BasicBlockId(5) });
+        b2.push_instruction(Instruction::Const {
+            dest: v,
+            constant: c,
+        });
+        b2.set_terminator(Terminator::Jump {
+            target: BasicBlockId(5),
+        });
+        b3.push_instruction(Instruction::Const {
+            dest: v,
+            constant: c,
+        });
+        b3.set_terminator(Terminator::Jump {
+            target: BasicBlockId(5),
+        });
+        b4.push_instruction(Instruction::Const {
+            dest: v,
+            constant: c,
+        });
+        b4.set_terminator(Terminator::Jump {
+            target: BasicBlockId(5),
+        });
         b5.push_instruction(Instruction::Phi {
             dest: phi,
             sources: vec![
@@ -499,7 +513,10 @@ mod tests {
 
         let text = module.dump_text();
         assert!(!text.contains("= phi"), "phi 未塌缩:\n{text}");
-        assert!(text.contains("return %0"), "phi dest 应替换为唯一值:\n{text}");
+        assert!(
+            text.contains("return %0"),
+            "phi dest 应替换为唯一值:\n{text}"
+        );
     }
 
     #[test]
@@ -516,7 +533,9 @@ mod tests {
         let mut b4 = block(4);
         let cond = ValueId(2);
         let c_false = bool_false_id(&mut module);
-        b0.set_terminator(Terminator::Jump { target: BasicBlockId(1) });
+        b0.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
         b1.push_instruction(Instruction::Const {
             dest: cond,
             constant: c_false,
@@ -526,8 +545,13 @@ mod tests {
             true_block: BasicBlockId(4),
             false_block: BasicBlockId(2),
         });
-        b2.push_instruction(Instruction::Const { dest: v, constant: c });
-        b2.set_terminator(Terminator::Jump { target: BasicBlockId(3) });
+        b2.push_instruction(Instruction::Const {
+            dest: v,
+            constant: c,
+        });
+        b2.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
         // bb3 的 phi 有两个 source：来自 bb2（活）与 bb4（死）。
         b3.push_instruction(Instruction::Phi {
             dest: phi,
@@ -574,7 +598,10 @@ mod tests {
         let mut b2 = block(2);
         let mut b3 = block(3);
         let mut b4 = block(4);
-        b1.push_instruction(Instruction::Const { dest: v, constant: c2 });
+        b1.push_instruction(Instruction::Const {
+            dest: v,
+            constant: c2,
+        });
         b1.set_terminator(Terminator::Switch {
             value: v,
             cases: vec![

@@ -251,30 +251,14 @@ impl Lowerer {
                 // 简单赋值: obj.x = value 或 arr[computed] = value
                 let value_val =
                     self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
-                match &member_expr.prop {
+                let result = match &member_expr.prop {
                     swc_ast::MemberProp::Computed(_) => {
-                        self.current_function.append_instruction(
-                            current_block,
-                            Instruction::SetElem {
-                                object: obj_val,
-                                index: key,
-                                value: value_val,
-                            },
-                        );
+                        self.emit_set_elem(current_block, obj_val, key, value_val)
                     }
-                    _ => {
-                        self.current_function.append_instruction(
-                            current_block,
-                            Instruction::SetProp {
-                                object: obj_val,
-                                key,
-                                value: value_val,
-                            },
-                        );
-                    }
-                }
+                    _ => self.emit_set_prop(current_block, obj_val, key, value_val),
+                };
                 self.expr_merge_block = Some(current_block);
-                return Ok(value_val);
+                return Ok(result);
             }
 
             // 逻辑复合赋值需要短路求值，走专用路径
@@ -323,24 +307,14 @@ impl Lowerer {
                 },
             );
 
-            let instr = if is_computed {
-                Instruction::SetElem {
-                    object: obj_val,
-                    index: key,
-                    value: dest,
-                }
+            let result = if is_computed {
+                self.emit_set_elem(current_block, obj_val, key, dest)
             } else {
-                Instruction::SetProp {
-                    object: obj_val,
-                    key,
-                    value: dest,
-                }
+                self.emit_set_prop(current_block, obj_val, key, dest)
             };
-            self.current_function
-                .append_instruction(current_block, instr);
             self.expr_merge_block = Some(current_block);
 
-            return Ok(dest);
+            return Ok(result);
         }
 
         let name = match &assign.left {
@@ -400,15 +374,8 @@ impl Lowerer {
                         },
                     );
                     let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::SetProp {
-                            object: global_obj,
-                            key: key_val,
-                            value: rhs,
-                        },
-                    );
-                    return Ok(rhs);
+                    let result = self.emit_set_prop(block, global_obj, key_val, rhs);
+                    return Ok(result);
                 }
                 if self.strict_mode && !self.eval_scope_bridge_active() {
                     // strict script/module: 对未声明变量赋值 → ReferenceError
@@ -533,7 +500,8 @@ impl Lowerer {
                 // 追踪所有续接块并更新 current_block，确保后续的 Binary + StoreVar
                 // 插入到 RHS 求值完成后的正确续接块，而非被分裂前的原始块。
                 let mut current_block = block;
-                let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
+                let rhs =
+                    self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
 
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
@@ -586,14 +554,7 @@ impl Lowerer {
                 self.ensure_shared_env(store_block, std::slice::from_ref(binding), span)?;
             store_block = self.resolve_store_block(store_block);
             let key_val = self.append_env_key_const(store_block, binding);
-            self.current_function.append_instruction(
-                store_block,
-                Instruction::SetProp {
-                    object: env_val,
-                    key: key_val,
-                    value,
-                },
-            );
+            self.emit_set_prop(store_block, env_val, key_val, value);
         }
         Ok(store_block)
     }

@@ -1,8 +1,7 @@
 //! 后端无关的堆内存与 handle 抽象。
 //!
-//! 本模块是 GC 算法与后端堆之间的接缝。`HeapMemory`/`GrowableHeapMemory`
-//! 由后端实现（wasm 后端 = wasmtime shared memory64；native 后端 = 原生堆）。
-//! 算法经泛型 `M: HeapMemory` 单态化，不绑定具体后端。
+//! 本模块是 GC 算法与 native host 堆之间的接缝。`HeapMemory`/
+//! `GrowableHeapMemory` 由 native 后端实现，算法经泛型单态化，不绑定具体后端。
 
 // 以下子模块是 GC 算法层（HandleTableV2 / MarkSweepV2 / G1V2 / ZgcV2）的预留依赖；
 // 算法层迁完后它们被完全使用。当前仅 heap 纯模块落地，故暂允 dead_code。
@@ -27,14 +26,14 @@ mod word;
 
 pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, RelocationReserve};
 pub use epoch::EpochParticipant;
-pub use handle::{HandleRegionBackend, HandleTableV2, PlatformHandleRegion};
+pub use handle::{HandleRegionBackend, HandleTableV2, PlatformHandleRegion, RestoredHandleEntry};
 pub use handle_entry::{
     ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN,
     HandleGeneration, HandleId, HandleState, HandleTableError,
 };
 pub use layout::ManagedHeapLayout;
 pub use memory::{GrowableHeapMemory, HeapMemory};
-pub use native_memory::NativeHeapMemory;
+pub use native_memory::{NativeHeapMemory, TestHeapMemory};
 pub use object_map::PageObjectIter;
 pub use page::{AllocationClass, ObjectRef, PAGE_GRANULE_BYTES, PageId, PageRange};
 pub use platform::{

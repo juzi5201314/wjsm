@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::cli_args::{Cli, ColorChoice, Commands, Target};
+use crate::cli_args::{Cli, ColorChoice, Commands};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -17,10 +17,8 @@ struct CliConfig {
     verify_ir: Option<bool>,
     color: Option<ColorChoice>,
     no_color: Option<bool>,
-    target: Option<Target>,
     browser: Option<bool>,
     condition: Option<Vec<String>>,
-    max_heap_size: Option<usize>,
     root: Option<PathBuf>,
     script: Option<bool>,
 }
@@ -118,11 +116,6 @@ fn apply_global_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &CliCo
     {
         cli.verify_ir = verify_ir;
     }
-    if let Some(target) = config.target
-        && !command_line_global(matches, "target")
-    {
-        cli.target = target;
-    }
     if let Some(browser) = config.browser
         && !command_line_global(matches, "browser")
     {
@@ -132,11 +125,6 @@ fn apply_global_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &CliCo
         && !command_line_global(matches, "condition")
     {
         cli.condition = condition.clone();
-    }
-    if let Some(max_heap_size) = config.max_heap_size
-        && !command_line_global(matches, "max_heap_size")
-    {
-        cli.max_heap_size = Some(max_heap_size);
     }
     if let Some(color) = config.color
         && !command_line_global(matches, "color")
@@ -165,18 +153,17 @@ fn apply_command_config(command: &mut Commands, matches: &clap::ArgMatches, conf
         | Commands::Lint { root, script, .. }
         | Commands::DumpIr { root, script, .. }
         | Commands::DumpAst { root, script, .. }
-        | Commands::DumpWat { root, script, .. } => {
+        | Commands::DumpClif { root, script, .. } => {
             apply_root(root, matches, config);
             apply_script(script, matches, config);
         }
         Commands::Repl { script, .. } => apply_script(script, matches, config),
         Commands::Eval { .. }
-        | Commands::RunPrecompiled { .. }
-        | Commands::Fmt { .. }
         | Commands::Validate { .. }
-        | Commands::Size { .. }
         | Commands::Disasm { .. }
+        | Commands::Size { .. }
         | Commands::Cache { .. }
+        | Commands::Fmt { .. }
         | Commands::Completions { .. }
         | Commands::Install { .. }
         | Commands::Init { .. }

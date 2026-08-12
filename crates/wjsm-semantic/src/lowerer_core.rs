@@ -562,7 +562,7 @@ impl Lowerer {
     }
 
     /// 在函数 entry block (bb0) 将 `$shared_env` 初始化为 undefined。
-    /// 非 async 函数的闭包捕获 fallback 依赖此 init（WASM local 未 init 为 0，非 undefined）。
+    /// 非 async 函数的闭包捕获 fallback 依赖此 init（native 变量槽零值并非 undefined）。
     /// async 函数不在 bb0 init —— 其 `$shared_env` 由 continuation slot save/restore 跨 suspend 维持，
     /// bb0 init 会在每次 resume 时覆盖 restore 的值（A14）。
     pub(crate) fn initialize_shared_env_slot(&mut self) {
@@ -793,10 +793,10 @@ impl Lowerer {
     ///
     /// = `is_async || is_generator || function_references_arguments(...)`。
     ///
-    /// **为何对 async / generator 一律保留**：async 函数体编译为单个 `main$async` wasm 函数 +
-    /// resume 状态机，其跨 `suspend` 的 save/restore 由后向 liveness + relooper 生成，对 IR 的
-    /// 块/值布局极其敏感（见 wjsm async 异常通道笔记）。消除 arguments 物化会改变布局并使状态机
-    /// 误编译。而 async / generator 必然 emit `new_promise` / `continuation.create`（直接 may-GC），
+    /// **为何对 async / generator 一律保留**：async 函数体编译为单个 `main$async`
+    /// native 函数与 resume 状态机；跨 `suspend` 的 save/restore 由后向 liveness 与 CFG
+    /// lowering 生成，对 IR 的块/值布局极其敏感（见 wjsm async 异常通道笔记）。
+    /// async / generator 必然 emit `new_promise` / `continuation.create`（直接 may-GC），
     /// 永远不可能是 no-GC——对它们消除 arguments 对 Layer 3 call-spill 省略**零收益**。故安全且无损地
     /// 将本优化限定在普通（非 async / 非 generator）函数。
     pub(crate) fn function_needs_arguments_object(func: &swc_ast::Function) -> bool {

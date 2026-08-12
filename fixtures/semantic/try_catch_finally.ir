@@ -74,46 +74,50 @@ module {
       jump bb1
     bb1:
       %21 = const c20
-      store var $tmp.0, %21
+      store var $2.$abrupt_completion_1, %21
+      %22 = load var $2.$abrupt_completion_1
+      store var $tmp.0, %22
       jump bb4
     bb2:
-      %31 = const c22
-      %32 = call builtin.console.log(%31)
-      %33 = is_exception %32
-      branch %33, bb10, bb9
+      %33 = const c22
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb10, bb9
     bb3:
-      %35 = const c23
-      %36 = call builtin.console.log(%35)
-      %37 = is_exception %36
-      branch %37, bb12, bb11
+      %37 = const c23
+      %38 = call builtin.console.log(%37)
+      %39 = is_exception %38
+      branch %39, bb12, bb11
     bb4:
-      %22 = load var $tmp.0
-      store var $3.e, %22
-      %23 = load var $3.e
-      %24 = call builtin.console.log(%23)
-      %25 = is_exception %24
-      branch %25, bb6, bb5
+      %23 = load var $tmp.0
+      store var $3.e, %23
+      %24 = load var $3.e
+      %25 = call builtin.console.log(%24)
+      %26 = is_exception %25
+      branch %26, bb6, bb5
     bb5:
       jump bb2
     bb6:
-      %26 = call builtin.exception_value(%24)
-      %27 = const c21
-      %28 = call builtin.console.log(%27)
-      %29 = is_exception %28
-      branch %29, bb8, bb7
+      %27 = call builtin.exception_value(%25)
+      store var $4.$abrupt_completion_2, %27
+      %28 = const c21
+      %29 = call builtin.console.log(%28)
+      %30 = is_exception %29
+      branch %30, bb8, bb7
     bb7:
-      throw %26
+      %32 = load var $4.$abrupt_completion_2
+      throw %32
     bb8:
-      %30 = call builtin.exception_value(%28)
-      throw %30
+      %31 = call builtin.exception_value(%29)
+      throw %31
     bb9:
       jump bb3
     bb10:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %36 = call builtin.exception_value(%34)
+      throw %36
     bb11:
       return
     bb12:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %40 = call builtin.exception_value(%38)
+      throw %40
 }

@@ -1,6 +1,6 @@
 //! Proxy trap 基础解析（后端无关）。
 //!
-//! 算法在此，host-wasm 仅保留薄包装供未迁移文件（core.rs / reentrant_proxy_async.rs）调用。
+//! 算法在此，native host 仅保留薄包装供属性入口调用。
 
 use wjsm_host::{ExecContext, Value};
 use wjsm_ir::value;

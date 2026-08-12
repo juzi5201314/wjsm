@@ -1,14 +1,10 @@
 //! 后端无关执行上下文：覆盖 host builtins 所需的全部操作。
 //!
-//! 各后端用自身运行时上下文实现本 trait。wasmtime 后端用 `WasmExecContext`，
-//! native 后端用 `NativeExecContext`。builtins 代码以 `<E: ExecContext>` 泛型实例化，
-//! 编译期单态化，零 vtable 开销。
+//! native 后端用 `NativeExecContext` 实现本 trait。builtins 代码以
+//! `<E: ExecContext>` 泛型实例化，编译期单态化，零 vtable 开销。
 //!
 //! `ExecContext` 是 [`HeapContext`](crate::HeapContext) 的超集：堆读写等基础操作
 //! 继承自 HeapContext；本 trait 补齐再入回调、属性键、Promise、枚举器等 builtins 能力。
-
-use std::future::Future;
-use std::pin::Pin;
 
 use crate::{
     Handle, HeapContext, JsonValue, ReadableStreamByobRequestMethodKind,
@@ -19,14 +15,11 @@ use crate::{
 };
 use wjsm_ir::value;
 
-/// 异步回调返回类型（BoxFuture）。默认产出 `anyhow::Result<Value>`。
-pub type ExecFuture<'a, T = anyhow::Result<Value>> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
 /// 预解析的回调调用目标：跨多次调用复用，跳过每次调用时的目标解析
 /// （closure/function 表查找、Proxy apply 链遍历、Mutex 加锁）。
 ///
-/// 快路径仅覆盖直接 wasm 函数（closure / 普通函数）；其余类型（Proxy trap、
-/// bound、native callable）回退到 `call_js_async` 原路径，语义不变。
+/// 快路径仅覆盖直接 native 函数（closure / 普通函数）；其余类型（Proxy trap、
+/// bound、native callable）回退到通用同步调用路径。
 #[derive(Clone, Copy)]
 pub struct PreparedCallback {
     /// 原始函数值（回退路径使用）。
@@ -35,12 +28,12 @@ pub struct PreparedCallback {
     func_idx: u32,
     /// 快路径：闭包 env（普通函数为 undefined）。
     env_obj: Value,
-    /// 是否为可直接表调用的 wasm 函数。
+    /// 是否为可直接表调用的 native 函数。
     direct: bool,
 }
 
 impl PreparedCallback {
-    /// 快路径：直接经函数表索引调用 wasm 函数。
+    /// 快路径：直接经函数表索引调用 native 函数。
     pub fn direct(func: Value, func_idx: u32, env_obj: Value) -> Self {
         Self {
             func,
@@ -223,8 +216,7 @@ pub struct CapturedScope {
 /// NativeCallable 引用（后端自有枚举的不透明引用）。
 ///
 /// 后端通过 `create_native_callable` 将此引用实例化为 NaN-boxed 值。
-/// `NativeCallableRef` 在 `wjsm-host` 中只定义后端无关的子集（QueuingStrategySize 等
-/// builtins 直接创建的变体）；完整枚举留在 `wjsm-host-wasm` types.rs。
+/// `NativeCallableRef` 只定义后端无关的子集，由 native host 提供完整实现。
 #[derive(Clone, Debug)]
 pub enum NativeCallableRef {
     QueuingStrategySize {
@@ -358,38 +350,32 @@ pub trait ExecContext: HeapContext {
     /// 将属性值转为 name_id（可能需读内存/查表）。
     fn property_value_to_name_id(&mut self, prop: Value, allow_symbol: bool) -> Option<u32>;
 
-    // ═══ 再入回调 ═══
+    // ═══ 同步再入回调 ═══
 
-    /// 同步调用 JS 函数（后端自行决定桥接策略；语义上等同 `call_js_async` 的阻塞等价物）。
+    /// 同步调用 JS 函数。
     fn call_js(&mut self, func: Value, this: Value, args: &[Value]) -> anyhow::Result<Value>;
-    /// 异步调用 JS 函数。
-    fn call_js_async<'a>(
-        &'a mut self,
-        func: Value,
-        this: Value,
-        args: &'a [Value],
-    ) -> ExecFuture<'a>;
     /// 判断值是否可调用（含 Proxy apply trap 链）。
     fn is_callable(&mut self, val: Value) -> bool;
 
     /// 预解析可调用目标（closure/普通函数走直接函数表快路径；
     /// Proxy trap/bound/native 回退到通用路径）。不可调用返回 None。
     ///
-    /// 结果可跨多次 `call_prepared_async` 复用，避免每次调用重复解析
-    /// （closure 表 Mutex 加锁 + 类型分派 + Proxy apply 链遍历）。
+    /// 结果可跨多次 `call_prepared` 复用，避免每次调用重复解析
+    /// （closure 表查找 + 类型分派 + Proxy apply 链遍历）。
     fn prepare_callback(&mut self, func: Value) -> Option<PreparedCallback> {
         self.is_callable(func)
             .then(|| PreparedCallback::generic(func))
     }
-    /// 用预解析目标调用 JS 函数；语义等同 `call_js_async`。
+
+    /// 用预解析目标同步调用 JS 函数。
     /// `prepared` 必须来自 `prepare_callback`（或 None 对应值本身可调用）。
-    fn call_prepared_async<'a>(
-        &'a mut self,
-        prepared: &'a PreparedCallback,
+    fn call_prepared(
+        &mut self,
+        prepared: &PreparedCallback,
         this: Value,
-        args: &'a [Value],
-    ) -> ExecFuture<'a> {
-        self.call_js_async(prepared.func(), this, args)
+        args: &[Value],
+    ) -> anyhow::Result<Value> {
+        self.call_js(prepared.func(), this, args)
     }
 
     // ═══ 状态表访问 ═══
@@ -651,7 +637,7 @@ pub trait ExecContext: HeapContext {
     /// 从主 memory 读取 name 指针处的字节（primordial 属性名等）。
     fn read_memory_string_bytes(&mut self, ptr: u32) -> Vec<u8>;
 
-    // ═══ NativeCallable 领域方法（枚举留在 host-wasm）═══
+    // ═══ NativeCallable 领域方法（枚举由 native host 实现）═══
 
     /// Number 原始值原型方法（0=toString … 4=toPrecision）。
     fn create_number_primitive_method(&mut self, method: u8) -> Value;
@@ -682,7 +668,7 @@ pub trait ExecContext: HeapContext {
     );
     /// 将 name_id 转为属性键值（symbol 路径）；失败返回 None。
     fn name_id_to_property_key_value(&mut self, name_id: u32) -> Option<Value>;
-    /// Reflect.get 同步路径（含 Proxy trap；后端自行 block_on）。
+    /// Reflect.get 同步路径（含 Proxy trap）。
     fn reflect_get_sync(&mut self, target: Value, prop: Value, receiver: Value) -> Value;
     /// 判定函数值是否为当前 realm 的 `%Array.prototype.join%`。
     fn is_array_prototype_join(&mut self, candidate: Value) -> bool;
@@ -781,39 +767,33 @@ pub trait ExecContext: HeapContext {
         completion: u8,
     );
     /// state==0 时执行 async 函数体直至首个 await；返回 true 表示已直接跑完（无需再入队）。
-    fn async_function_initial_call<'a>(
-        &'a mut self,
+    fn async_function_initial_call(
+        &mut self,
         fn_table_idx: u32,
         continuation: Value,
         resume_val: Value,
-    ) -> ExecFuture<'a, bool>;
+    ) -> bool;
     /// await suspend：挂起 continuation 到 promise reactions。
     fn async_function_suspend(&mut self, continuation: Value, awaited_promise: Value, state: Value);
     /// 分配 iterator result 对象 `{value, done}`。
     fn alloc_iterator_result(&mut self, value: Value, done: bool) -> Value;
 
-    // ═══ Object async（Proxy 感知；实现可委托未迁移的 proxy_reflect）═══
+    // ═══ Object（Proxy 感知）═══
 
-    fn object_get_prototype_of_async<'a>(&'a mut self, obj: Value) -> ExecFuture<'a, Value>;
-    fn object_is_extensible_async<'a>(&'a mut self, obj: Value) -> ExecFuture<'a, bool>;
-    fn object_prevent_extensions_async<'a>(&'a mut self, obj: Value) -> ExecFuture<'a, bool>;
-    fn object_keys_async<'a>(&'a mut self, obj: Value) -> ExecFuture<'a, Value>;
-    fn object_entries_async<'a>(&'a mut self, obj: Value) -> ExecFuture<'a, Value>;
-    fn object_values_async<'a>(&'a mut self, obj: Value) -> ExecFuture<'a, Value>;
-    fn object_get_own_property_names_async<'a>(&'a mut self, obj: Value) -> ExecFuture<'a, Value>;
-    fn object_get_own_property_symbols_async<'a>(&'a mut self, obj: Value)
-    -> ExecFuture<'a, Value>;
-    fn object_assign_async<'a>(
-        &'a mut self,
-        target: Value,
-        args_base: i32,
-        args_count: i32,
-    ) -> ExecFuture<'a, Value>;
+    fn object_get_prototype_of(&mut self, obj: Value) -> Value;
+    fn object_is_extensible(&mut self, obj: Value) -> bool;
+    fn object_prevent_extensions(&mut self, obj: Value) -> bool;
+    fn object_keys(&mut self, obj: Value) -> Value;
+    fn object_entries(&mut self, obj: Value) -> Value;
+    fn object_values(&mut self, obj: Value) -> Value;
+    fn object_get_own_property_names(&mut self, obj: Value) -> Value;
+    fn object_get_own_property_symbols(&mut self, obj: Value) -> Value;
+    fn object_assign(&mut self, target: Value, args_base: i32, args_count: i32) -> Value;
 
     // ═══ Inspector ═══
 
-    /// CDP debug_break 暂停循环（无 inspector 时立即返回）。
-    fn debug_break<'a>(&'a mut self, line: i32, col: i32, flags: i32) -> ExecFuture<'a, ()>;
+    /// CDP debug_break 协作式暂停（无 inspector 时立即返回）。
+    fn debug_break(&mut self, line: i32, col: i32, flags: i32);
 
     // ═══ RuntimeString I/O（UTF-16 完整保留）═══
 
@@ -825,8 +805,7 @@ pub trait ExecContext: HeapContext {
     /// 单缓冲 UTF-16 拼接：parts 全部为可廉价转 UTF-16 的原始值
     /// （string / f64 / undefined / null / bool）时，一次分配直接拼接，
     /// 免逐段中间 Vec 与多次拷贝（模板字符串主路径）。
-    /// 含不支持类型时返回 None，调用方回退通用慢路径。
-    /// 默认实现直接回退；wasm 后端覆盖为单缓冲实现。
+    /// 默认实现返回 None；native 后端可提供单缓冲拼接实现。
     fn concat_utf16_va(&mut self, _parts: &[Value]) -> Option<crate::RuntimeString> {
         None
     }
@@ -886,12 +865,6 @@ pub trait ExecContext: HeapContext {
     fn array_ensure_capacity(&mut self, arr: Value, needed: u32) -> bool;
     /// ArraySpeciesCreate 同步路径（原生 Array 快速路径）。
     fn array_species_create(&mut self, exemplar: Value, length: u32) -> Value;
-    /// ArraySpeciesCreate 异步路径（可再入自定义构造器）。
-    fn array_species_create_async<'a>(
-        &'a mut self,
-        exemplar: Value,
-        length: u32,
-    ) -> ExecFuture<'a, Value>;
 
     // ═══ TypedArray 低层原语 ═══
 
@@ -1033,20 +1006,20 @@ pub trait ExecContext: HeapContext {
         byte_offset: u64,
         count: Option<u32>,
     ) -> u32;
-    fn atomics_wait_async_op<'a>(
-        &'a mut self,
+    fn atomics_wait_async_op(
+        &mut self,
         view: TypedArrayView,
         byte_offset: u64,
         expected: i64,
         timeout_ms: f64,
-    ) -> ExecFuture<'a>;
-    fn atomics_wait_sync<'a>(
-        &'a mut self,
+    ) -> anyhow::Result<Value>;
+    fn atomics_wait_sync(
+        &mut self,
         view: TypedArrayView,
         byte_offset: u64,
         expected: i64,
         timeout_ms: f64,
-    ) -> ExecFuture<'a>;
+    ) -> anyhow::Result<Value>;
 
     /// DataView 表：挂到 buffer 上；`buffer_object` 为可选 identity 引用。
     fn dataview_create(
@@ -1079,7 +1052,7 @@ pub trait ExecContext: HeapContext {
     fn reflect_own_keys(&mut self, target: Value) -> Value;
 
     /// 创建集合/缓冲原型方法 NativeCallable。
-    /// kind 字符串约定见 WasmExecContext 实现。
+    /// kind 字符串约定由 native host 实现。
     fn create_collection_method(&mut self, kind: &str) -> Value;
 
     /// Date 原型方法 NativeCallable（kind 字符串与 DateMethodKind 同名 snake）。
@@ -1136,16 +1109,11 @@ pub trait ExecContext: HeapContext {
         &mut self,
         key: &crate::RuntimeModuleKey,
     ) -> crate::RuntimeModuleImportResult;
-    fn module_instantiate_sync(
+    fn module_instantiate(
         &mut self,
-        resolved: &crate::RuntimeResolvedModule,
-        env: crate::RuntimeInstantiationEnv,
-    ) -> Result<crate::RuntimeInstantiatedModule, crate::RuntimeModuleLoadError>;
-    fn module_instantiate_async<'a>(
-        &'a mut self,
         resolved: crate::RuntimeResolvedModule,
         env: crate::RuntimeInstantiationEnv,
-    ) -> ExecFuture<'a, Result<crate::RuntimeInstantiatedModule, crate::RuntimeModuleLoadError>>;
+    ) -> Result<crate::RuntimeInstantiatedModule, crate::RuntimeModuleLoadError>;
     fn module_finish_loaded(
         &mut self,
         key: crate::RuntimeModuleKey,
@@ -1236,13 +1204,13 @@ pub trait ExecContext: HeapContext {
     /// 值转显示字符串（含 ToString 路径）。
     fn value_to_display_string(&mut self, val: Value) -> String;
     /// 调用 well-known symbol 方法；无方法返回 None，有方法返回 Some(结果)。
-    fn call_symbol_method_async<'a>(
-        &'a mut self,
+    fn call_symbol_method(
+        &mut self,
         target: Value,
         symbol_idx: u32,
         this_arg: Value,
-        args: &'a [Value],
-    ) -> ExecFuture<'a, Option<Value>>;
+        args: &[Value],
+    ) -> Option<Value>;
     /// RegExp 匹配信息（Send-safe，无 Match 引用）。
     fn regexp_collect_matches(
         &mut self,
@@ -1293,7 +1261,7 @@ pub trait ExecContext: HeapContext {
         handle: u32,
         f: impl FnOnce(&mut crate::AbortSignalEntry) -> R,
     ) -> Option<R>;
-    fn http_fetch_begin<'a>(&'a mut self, request: crate::HttpRequestSpec) -> ExecFuture<'a>;
+    fn http_fetch_begin(&mut self, request: crate::HttpRequestSpec) -> anyhow::Result<Value>;
     fn create_arraybuffer_from_bytes(&mut self, bytes: &[u8]) -> Value;
     fn consume_fetch_body_to_bytes(
         &mut self,
@@ -1432,7 +1400,7 @@ pub trait ExecContext: HeapContext {
     );
     /// 同步可决的 IteratorDone；需回调时返回 None。
     fn iterator_done_sync(&mut self, handle: Value) -> Option<bool>;
-    /// ObjectIter 的 (iterator, next) 以便异步推进 done。
+    /// ObjectIter 的 (iterator, next) 以便同步推进。
     fn iterator_object_next_pair(&mut self, handle: Value) -> Option<(Value, Value)>;
     /// ObjectIter 的 (iterator, return_method)；已 done 或不存在返回 None。
     fn iterator_object_return_pair(&mut self, handle: Value) -> Option<(Value, Option<Value>)>;
@@ -1445,7 +1413,7 @@ pub trait ExecContext: HeapContext {
     /// 从 AsyncFromSyncNext native callable 读取条目索引。
     fn async_from_sync_native_handle(&mut self, next: Value) -> Option<u32>;
     /// 推进 async-from-sync 状态机，返回其 promise/IteratorResult。
-    fn advance_async_from_sync<'a>(&'a mut self, afs: u32) -> ExecFuture<'a, Value>;
+    fn advance_async_from_sync(&mut self, afs: u32) -> Value;
     /// IteratorValue（当前项）。
     fn iterator_current_value(&mut self, handle: Value) -> Value;
     /// 异常 → rejected promise。

@@ -74,6 +74,7 @@ pub struct ModuleResolver {
     next_id: u32,
     visited: HashMap<PathBuf, ModuleId>,
     modules: HashMap<ModuleId, ResolvedModule>,
+    runtime_commonjs_entry: Option<PathBuf>,
 }
 
 pub(crate) enum ResolvedSpecifier {
@@ -88,6 +89,16 @@ impl ModuleResolver {
 
     pub(crate) fn with_options(root_path: &Path, options: ResolutionOptions) -> Self {
         Self::with_options_and_id_base(root_path, options, 0)
+    }
+    pub(crate) fn with_runtime_entry_options(
+        root_path: &Path,
+        options: ResolutionOptions,
+        entry: &Path,
+    ) -> Self {
+        let mut resolver = Self::with_options_and_id_base(root_path, options, 0);
+        resolver.runtime_commonjs_entry =
+            Some(entry.canonicalize().unwrap_or_else(|_| entry.to_path_buf()));
+        resolver
     }
 
     /// 同 [`ModuleResolver::with_options`]，但模块 ID 从 `base` 起分配。
@@ -109,6 +120,7 @@ impl ModuleResolver {
             next_id: base,
             visited: HashMap::new(),
             modules: HashMap::new(),
+            runtime_commonjs_entry: None,
         }
     }
 
@@ -807,7 +819,7 @@ impl ModuleResolver {
         if is_cjs {
             Self::validate_commonjs_goal_syntax(&ast, &path)?;
         }
-        let ast = if is_cjs {
+        let ast = if is_cjs && self.runtime_commonjs_entry.as_deref() != Some(path.as_path()) {
             let prefix = format!("_{}_", self.next_id);
             crate::cjs_transform::transform_with_prefix(&ast, &prefix)
         } else {

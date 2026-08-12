@@ -9,11 +9,6 @@ function callFunction(fn, receiver, args) {
   return fn.call(receiver, args[0], args[1], args[2], args[3], args[4], args[5]);
 }
 
-function copyEnumerableProperties(target, source) {
-  if (!source || typeof source !== 'object') return;
-  const keys = Object.keys(source);
-  for (let i = 0; i < keys.length; i = i + 1) target[keys[i]] = source[keys[i]];
-}
 
 function collectDefinedArgs(a, b, c, d, e, f) {
   const args = [];
@@ -31,29 +26,9 @@ export function inherits(constructor, superConstructor) {
     throw new TypeError('The "constructor" and "superConstructor" arguments must be functions');
   }
   constructor.super_ = superConstructor;
-  const proto = {};
-  copyEnumerableProperties(proto, superConstructor.prototype);
+  const proto = Object.create(superConstructor.prototype);
   proto.constructor = constructor;
   constructor.prototype = proto;
-
-  const marker = '__wjsm_inherits_' + (constructor.name || 'anonymous');
-  const originalCall = superConstructor.call;
-  superConstructor.call = function inheritedSuperCall(receiver, a, b, c, d, e, f) {
-    const result = callFunction(originalCall, superConstructor, [receiver].concat(collectDefinedArgs(a, b, c, d, e, f)));
-    if (receiver && (typeof receiver === 'object' || typeof receiver === 'function')) {
-      receiver[marker] = true;
-      copyEnumerableProperties(receiver, superConstructor.prototype);
-    }
-    return result;
-  };
-
-  const previousHasInstance = superConstructor[Symbol.hasInstance];
-  superConstructor[Symbol.hasInstance] = function inheritedHasInstance(obj) {
-    if (obj && obj[marker]) return true;
-    if (obj && obj.constructor === constructor) return true;
-    if (typeof previousHasInstance === 'function') return previousHasInstance.call(this, obj);
-    return false;
-  };
 }
 
 export function inspect(obj, opts) {
@@ -111,7 +86,7 @@ export function format(fmt, a, b, c, d, e, f) {
     const arg = args[index];
     index = index + 1;
     if (code === 's') out = out + String(arg);
-    else if (code === 'd' || code === 'i') out = out + parseInt(arg, 10);
+    else if (code === 'd' || code === 'i') out = out + Number(arg);
     else if (code === 'f') out = out + Number(arg);
     else if (code === 'j') {
       try { out = out + JSON.stringify(arg); } catch (err) { out = out + '[Circular]'; }

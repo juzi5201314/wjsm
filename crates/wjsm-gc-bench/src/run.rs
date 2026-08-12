@@ -17,7 +17,7 @@ pub(crate) fn run_bench(args: &RunArgs) -> Result<BenchReport> {
         args.objects,
     );
     let hardware = HostInfo::detect();
-    let driver = WjsmDriver::compile(&scenario)?;
+    let mut driver = WjsmDriver::compile(&scenario)?;
     let duration = Duration::from_secs(args.duration);
 
     let mut samples = Vec::with_capacity(args.samples);
@@ -33,6 +33,7 @@ pub(crate) fn run_bench(args: &RunArgs) -> Result<BenchReport> {
     let summary = build_summary(&samples);
     Ok(BenchReport {
         schema_version: BENCHMARK_SCHEMA_VERSION,
+        evidence_status: hardware.evidence_status().into(),
         config: BenchConfig {
             gc: args.gc.as_str().into(),
             heap_bytes: args.common.heap,
@@ -71,8 +72,8 @@ fn build_summary(samples: &[SampleReport]) -> BenchSummary {
 }
 
 /// 将所有样本的 telemetry 累计值求和。
-fn aggregate_telemetry(samples: &[SampleReport]) -> wjsm_runtime::GcTelemetrySnapshot {
-    let mut agg = wjsm_runtime::GcTelemetrySnapshot::default();
+fn aggregate_telemetry(samples: &[SampleReport]) -> wjsm_gc::GcTelemetrySnapshot {
+    let mut agg = wjsm_gc::GcTelemetrySnapshot::default();
     for sample in samples {
         let t = &sample.telemetry;
         agg.cycles = agg.cycles.saturating_add(t.cycles);
@@ -110,7 +111,7 @@ fn add_opt(acc: Option<u64>, val: Option<u64>) -> Option<u64> {
 
 fn derive_metrics(
     samples: &[SampleReport],
-    totals: &wjsm_runtime::GcTelemetrySnapshot,
+    totals: &wjsm_gc::GcTelemetrySnapshot,
 ) -> DerivedMetrics {
     let total_steady_ns: u64 = samples.iter().map(|s| s.steady_state_ns).sum();
     let total_steady_sec = total_steady_ns as f64 / 1e9;

@@ -74,18 +74,11 @@ impl Lowerer {
             swc_ast::AssignOp::Assign => {
                 let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
                 let store_block = self.resolve_store_block(current_block);
-                self.current_function.append_instruction(
-                    store_block,
-                    Instruction::SetProp {
-                        object: env_val,
-                        key: key_val,
-                        value: rhs,
-                    },
-                );
+                let result = self.emit_set_prop(store_block, env_val, key_val, rhs);
                 // 把后续异常分叉/语句接续钉在 owner 解析后的 store_block，
                 // 避免 resolve_store_block 沿着入口 Jump 误入 header 并覆盖 terminator。
                 self.expr_merge_block = Some(store_block);
-                Ok(rhs)
+                Ok(result)
             }
             op => {
                 // 逻辑复合赋值需短路求值 → 走专用路径
@@ -130,16 +123,9 @@ impl Lowerer {
                 );
                 // 写回 env 对象
                 let key_val2 = self.append_env_key_const(current_block, binding);
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::SetProp {
-                        object: env_val,
-                        key: key_val2,
-                        value: dest,
-                    },
-                );
+                let result = self.emit_set_prop(current_block, env_val, key_val2, dest);
                 self.expr_merge_block = Some(current_block);
-                Ok(dest)
+                Ok(result)
             }
         }
     }
@@ -200,14 +186,7 @@ impl Lowerer {
         let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
         let assign_end = self.resolve_store_block(assign_block);
         let key_val2 = self.append_env_key_const(assign_end, binding);
-        self.current_function.append_instruction(
-            assign_end,
-            Instruction::SetProp {
-                object: env_val,
-                key: key_val2,
-                value: rhs,
-            },
-        );
+        let write_result = self.emit_set_prop(assign_end, env_val, key_val2, rhs);
         self.current_function
             .set_terminator(assign_end, Terminator::Jump { target: merge });
 
@@ -223,7 +202,7 @@ impl Lowerer {
                     },
                     PhiSource {
                         predecessor: assign_end,
-                        value: rhs,
+                        value: write_result,
                     },
                 ],
             },
@@ -483,14 +462,7 @@ impl Lowerer {
         // 4. 在 assign_block 中降低右值并写回 (SetProp)
         let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
         let assign_end = self.resolve_store_block(assign_block);
-        self.current_function.append_instruction(
-            assign_end,
-            Instruction::SetProp {
-                object: obj_val,
-                key,
-                value: rhs,
-            },
-        );
+        let write_result = self.emit_set_prop(assign_end, obj_val, key, rhs);
         self.current_function
             .set_terminator(assign_end, Terminator::Jump { target: merge });
 
@@ -507,7 +479,7 @@ impl Lowerer {
                     },
                     PhiSource {
                         predecessor: assign_end,
-                        value: rhs,
+                        value: write_result,
                     },
                 ],
             },

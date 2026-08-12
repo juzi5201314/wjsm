@@ -78,36 +78,38 @@ module {
       %23 = is_exception %22
       branch %23, bb5, bb4
     bb2:
-      %29 = const c22
-      %30 = call builtin.console.log(%29)
-      %31 = is_exception %30
-      branch %31, bb9, bb8
+      %30 = const c22
+      %31 = call builtin.console.log(%30)
+      %32 = is_exception %31
+      branch %32, bb9, bb8
     bb3:
-      %33 = const c23
-      %34 = call builtin.console.log(%33)
-      %35 = is_exception %34
-      branch %35, bb11, bb10
+      %34 = const c23
+      %35 = call builtin.console.log(%34)
+      %36 = is_exception %35
+      branch %36, bb11, bb10
     bb4:
       jump bb2
     bb5:
       %24 = call builtin.exception_value(%22)
+      store var $1.$abrupt_completion_1, %24
       %25 = const c21
       %26 = call builtin.console.log(%25)
       %27 = is_exception %26
       branch %27, bb7, bb6
     bb6:
-      throw %24
+      %29 = load var $1.$abrupt_completion_1
+      throw %29
     bb7:
       %28 = call builtin.exception_value(%26)
       throw %28
     bb8:
       jump bb3
     bb9:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %33 = call builtin.exception_value(%31)
+      throw %33
     bb10:
       return
     bb11:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      %37 = call builtin.exception_value(%35)
+      throw %37
 }

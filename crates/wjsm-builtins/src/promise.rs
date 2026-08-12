@@ -2,7 +2,7 @@
 //! 后端无关算法实现。
 //!
 //! 算法逻辑通过 `<E: ExecContext>` 泛型单态化，零 vtable 开销。
-//! host-wasm 注册层仅做 `WasmExecContext::new(caller)` + 委托调用。
+//! native host 注册层仅做上下文适配并委托调用。
 
 use wjsm_host::{ExecContext, PromiseEntry, PromiseReaction, PromiseState, ReactionType, Value};
 use wjsm_ir::value;

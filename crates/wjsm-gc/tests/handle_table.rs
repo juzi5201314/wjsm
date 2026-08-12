@@ -1,6 +1,6 @@
 use wjsm_gc::{
     HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HandleGeneration, HandleId, HandleState,
-    HandleTableV2, ManagedHeapLayout,
+    HandleTableV2, ManagedHeapLayout, heap::RestoredHandleEntry,
 };
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -28,7 +28,14 @@ fn handle_table_addresses_high_u32_handle_and_resolves_single_live_entry() {
     let address = layout.object_heap_base() + 64;
 
     table
-        .publish(handle, address, HandleGeneration::Young)
+        .restore_snapshot(
+            &[RestoredHandleEntry {
+                handle,
+                address,
+                generation: HandleGeneration::Young,
+            }],
+            u64::from(u32::MAX) + 1,
+        )
         .unwrap();
     assert_eq!(table.committed_bytes(), table.block_bytes());
     assert_eq!(

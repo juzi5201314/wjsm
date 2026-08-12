@@ -1,5 +1,5 @@
 exit_code: 2
 --- stdout ---
 --- stderr ---
-Runtime error: Uncaught WASM trap: wasm trap: call stack exhausted
-    at recurse (errors/stack_overflow_backtrace.js:2:1) (repeated)
+Runtime error: RangeError: Maximum call stack size exceeded
+ at recurse (errors/stack_overflow_backtrace.js:2:1) (repeated)

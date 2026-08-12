@@ -414,6 +414,7 @@ impl Lowerer {
             );
 
             self.emit_throw_value(reject_block, resume_val)?;
+            let return_slot = self.preserve_suspending_completion(return_block, resume_val);
 
             match self.lower_pending_finalizers(return_block)? {
                 StmtFlow::Open(after_finally) => {
@@ -425,13 +426,10 @@ impl Lowerer {
                             name: format!("${}.$generator", self.async_generator_scope_id),
                         },
                     );
-                    let return_value = self.alloc_value();
-                    self.current_function.append_instruction(
+                    let return_value = self.reload_suspending_completion(
                         after_finally,
-                        Instruction::LoadVar {
-                            dest: return_value,
-                            name: format!("${}.$resume_val", self.async_resume_val_scope_id),
-                        },
+                        resume_val,
+                        return_slot.as_deref(),
                     );
                     self.current_function.append_instruction(
                         after_finally,
@@ -573,6 +571,7 @@ impl Lowerer {
             );
 
             self.emit_throw_value(reject_block, resume_val)?;
+            let return_slot = self.preserve_suspending_completion(return_block, resume_val);
 
             match self.lower_pending_finalizers(return_block)? {
                 StmtFlow::Open(after_finally) => {
@@ -584,13 +583,10 @@ impl Lowerer {
                             name: format!("${}.$generator", self.async_generator_scope_id),
                         },
                     );
-                    let return_value = self.alloc_value();
-                    self.current_function.append_instruction(
+                    let return_value = self.reload_suspending_completion(
                         after_finally,
-                        Instruction::LoadVar {
-                            dest: return_value,
-                            name: format!("${}.$resume_val", self.async_resume_val_scope_id),
-                        },
+                        resume_val,
+                        return_slot.as_deref(),
                     );
                     let final_result = self.alloc_value();
                     self.current_function.append_instruction(

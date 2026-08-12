@@ -1,274 +1,188 @@
-# 新后端实现指南
+# Direct Cranelift 后端实现指南
 
-本文档说明如何为 wjsm 实现一个新的执行后端（如 native / C / cranelift-direct / llvm），
-使 JS 代码能在非 wasmtime 环境中编译并执行。wjsm 已完成多后端完全支撑：
-
-- **所有 JS 语义算法**位于 `wjsm-builtins`，以 `<E: ExecContext>` 泛型单态化，零 `dyn`
-- **对象模型 `HeapAccessV2<M>`** 位于 `wjsm-gc`，泛型 `M: GrowableHeapMemory`
-- **`JsBackend` trait** 位于 `wjsm-host`，定义 IR → 制品 → 执行的编译后端契约
-- **CLI `Target` enum** 静态分发到具体后端，零 vtable 开销
+本文档描述 wjsm 当前唯一生产执行后端的边界、数据流与维护规则。它不是多后端接入教程：Wasm/Wasmtime backend、JIT stub、CLI backend selector 与兼容 fallback 已删除。若未来重新引入其他执行后端，必须先以新的 ADR 定义完整 artifact、runtime ownership 与语义验证契约。
 
 ## 架构概览
 
-```
-wjsm-host          后端无关宿主能力 trait
-                   ├ HostRuntime        ← 历史 marker（blanket impl），真实接缝是 ExecContext
-                   ├ HeapContext        ← 堆/侧表最小操作集（18 方法）
-                   ├ ExecContext        ← builtins 完整能力（~330 方法，按域分组）
-                   └ JsBackend          ← 编译后端契约（compile/execute，静态分发）
-
-wjsm-gc            后端无关 GC 算法 + 对象模型
-                   ├ MarkSweepV2/G1V2/ZgcV2  （泛型 <M: GrowableHeapMemory>）
-                   ├ HandleTableV2            （8-byte atomic handle 表）
-                   ├ HeapMemory/GrowableHeapMemory trait
-                   └ HeapAccessV2<M>          ← 对象模型（property slots/proto chain，1093 行）
-
-wjsm-builtins      后端无关 JS 语义算法（<E: ExecContext> 泛型单态化）
-                   ├ promise/promise_combinators/proxy_reflect_async
-                   ├ render/json/core/core_async
-                   ├ atomics/streams/fetch/modules
-                   └ collections_buffers/gc/array_object/...
-
-wjsm-host-wasm     wasmtime 后端（当前唯一生产后端）
-                   ├ WasmBackend               （JsBackend 实现）
-                   ├ WasmExecContext            （ExecContext 实现，~5491 行按域拆分为 17 子模块）
-                   ├ SharedHeapMemory           （GrowableHeapMemory 实现，wasmtime shared memory64）
-                   ├ compile_source             （编译编排：parse → lower → compile）
-                   └ host I/O 桥               （fetch_http / streams_fetch_body / reentrant_async）
-
-wjsm-backend-jit   JIT 后端 stub（JsBackend 实现，compile/execute 均 bail!）
-wjsm-backend-wasm  IR → WASM 字节 codegen（被 host-wasm 依赖）
-
-你的新后端          实现 HeapMemory + ExecContext + JsBackend 即可接入
+```text
+JS / TS source
+  -> wjsm-parser                 SWC AST
+  -> wjsm-semantic               verified semantic IR
+  -> wjsm-module                 module graph + portable manifest
+  -> wjsm-artifact-format        portable .wjsm
+  -> wjsm-backend-native         IR -> CLIF -> relocatable object -> native image
+  -> wjsm-host-native            NativeRuntime + ManagedHeap + host APIs
 ```
 
-## 六步接入法
+| Crate | 唯一职责 |
+| --- | --- |
+| `wjsm-ir` | 后端无关 semantic IR、builtin/runtime operation IDs 与 value ABI 常量 |
+| `wjsm-semantic` | SWC AST 到 verified IR 的 lowering |
+| `wjsm-module` | ESM/CJS graph、resolution 与 portable module manifest |
+| `wjsm-artifact-format` | `.wjsm` canonical encode/decode、limits、hash、semantic ABI 与 verification |
+| `wjsm-native-abi` | compiler/runtime 共用的 fixed-width vmctx、host symbol、call/root/source frame contract |
+| `wjsm-backend-native` | 当前宿主 ISA、CLIF lowering、object emission、strict relocation、W^X/unwind、native image/cache |
+| `wjsm-host-native` | pinned vmctx、agent/runtime、ManagedHeap/GC、scheduler、modules、snapshot、inspector 与 host APIs |
+| `wjsm-builtins` | 后端无关 ECMAScript/Web/Node 语义算法 |
+| `wjsm-host` | 后端无关 host/heap/exec 契约；不得拥有 native runtime state |
+| `wjsm-gc` | ManagedHeap、HandleTableV2、object access、collector 与平台虚拟内存抽象 |
 
-### 步骤 1：实现 `HeapMemory` + `GrowableHeapMemory` trait
+## 1. Portable artifact 边界
 
-`wjsm-gc` 的 GC 算法通过这两个 trait 访问堆内存。你的后端提供一个 `M: GrowableHeapMemory` 实现：
+`PortableArtifact::from_input` 是构建边界。输入由 `ArtifactBuildInput` 组成：
+
+- `Arc<Program>`：已 lowering、可再次 verification 的 semantic IR；
+- `Arc<ModuleManifest>`：canonical logical URL 与 module graph；
+- `BuildOptions`：是否携带 source map/source text；
+- 可选 source text。
+
+编码前必须验证 program/manifest。容器包含 manifest、program、required builtins 与可选 source metadata，并记录 section hash、semantic ABI hash 和整件 digest。
+
+不可信字节只通过：
 
 ```rust
-use wjsm_gc::heap::{HeapMemory, HeapAddress, HeapMemoryError, GrowableHeapMemory};
-
-pub struct NativeHeap {
-    // 你的堆内存存储（如 Box<[AtomicU64]> 或 mmap 区域）
-}
-
-impl HeapMemory for NativeHeap {
-    fn byte_len(&self) -> u64 { /* 当前已提交字节数 */ }
-    fn load_word(&self, addr: HeapAddress) -> Result<u64, HeapMemoryError> { /* 原子读 8 字节 */ }
-    fn store_word(&self, addr: HeapAddress, val: u64) -> Result<(), HeapMemoryError> { /* 原子写 8 字节 */ }
-    fn copy_from(&self, addr: HeapAddress, bytes: &[u8]) -> Result<(), HeapMemoryError> { /* 写字节 */ }
-    fn copy_to(&self, addr: HeapAddress, len: u64) -> Result<Vec<u8>, HeapMemoryError> { /* 读字节 */ }
-    fn read_c_string(&self, addr: HeapAddress) -> Result<Vec<u8>, HeapMemoryError> {
-        // 默认实现按 copy_to 分块扫描；可用 memchr 快路径覆写
-    }
-}
-
-impl GrowableHeapMemory for NativeHeap {
-    fn maximum_byte_len(&self) -> u64 { /* 最大可增长字节数 */ }
-    fn grow_to(&self, byte_len: u64) -> Result<(), String> { /* 增长堆 */ }
-}
+PortableArtifact::decode(bytes, &ArtifactLimits::default())
 ```
 
-`NativeHeapMemory`（`wjsm-gc` 内置）是参考实现，用 `Box<[AtomicU64]>` 模拟内存。
-`SharedHeapMemory`（`wjsm-host-wasm`）是 wasmtime shared memory64 的实现。
+进入 runtime。decoder 必须在分配前应用总大小、section、module、function、block、instruction、string 与 cross-reference limits；decode 成功后再次验证 IR、manifest 和 required builtin set。
 
-### 步骤 2：装配 `HeapAccessV2<M>` 对象模型
+`.wjsm` 中禁止出现：
 
-`HeapAccessV2<M: GrowableHeapMemory>`（`wjsm-gc/src/heap_access.rs`）是 wjsm 的对象模型 owner：
-property slots、proto chain、element 存储、handle 解析。它泛型化于堆内存类型，
-不在 `wjsm-host-wasm` 中了。
+- Cranelift object 或 executable bytes；
+- native relocation、宿主 pointer、runtime/image ID；
+- native cache key、cache path 或 startup snapshot 私有地址；
+- target/CPU 专属机器码。
 
-```rust
-use wjsm_gc::heap_access::HeapAccessV2;
+## 2. Direct IR → CLIF compiler
 
-let heap_access = HeapAccessV2::<NativeHeap>::with_heap_limit(
-    NativeHeap::new(max_bytes),
-    handle_table_base,
-    object_heap_base,
-);
-// 用 heap_access.alloc_object / obj_get / obj_set / read_property_slot 等
-```
+`NativeCompiler::new()` 只为当前宿主构造 ISA。当前 production capability 是 64-bit x86_64 Linux/Windows；不支持的 target 立即返回 `UnsupportedTargetCapability`，不回退到其他 backend、解释器或 test heap。
 
-wasmtime 后端的类型别名在 `crates/wjsm-host-wasm/src/runtime_gc/mod.rs`:
-```rust
-pub type HeapAccessV2 = wjsm_gc::heap_access::HeapAccessV2<crate::heap::SharedHeapMemory>;
-```
+`NativeCompiler::compile(&PortableArtifact)` 直接消费 artifact 中的 `Program`：
 
-### 步骤 3：装配 GC 算法
+1. verifier 保证 CFG、Phi、ValueId、builtin 与 module cross-reference 有效；
+2. 每个 IR function 降为 CLIF；Phi 变为 block arguments；
+3. ECMAScript 动态语义调用具名 host/runtime operation；
+4. may-GC 点按 liveness spill boxed roots 并发布 `NativeRootFrame`；
+5. exception、stack budget、termination 走显式 return/status 协议；
+6. production code 不允许 Cranelift trap、tail call 或 unchecked trapping conversion；
+7. 每个函数必须产生 target-matching unwind metadata；
+8. object emission 后由 strict loader 校验 section、symbol、relocation、range 与 alignment，再发布 RX mapping。
 
-```rust
-use wjsm_gc::{MarkSweepV2, G1V2, ZgcV2, ManagedHeapLayout, RootSnapshot};
+`NATIVE_ABI_HASH` 覆盖 generated code 可见的 vmctx/CallArgs/frame layout、host/runtime operation signatures 与 value constants。任何布局或协议变化都必须改变 hash，并使旧 native cache miss。
 
-let layout = ManagedHeapLayout::new(max_heap_size, control_reserved)?;
-let heap = NativeHeap::new(...);
+## 3. Native image 与 cache
 
-// MarkSweep
-let mut gc = MarkSweepV2::new(heap, layout)?;
-let roots = RootSnapshot::new(epoch, live_handles);
-let report = gc.collect(&roots, |handle| { /* 清理侧表 */ })?;
+`NativeImageRepository` 是进程内 image 与磁盘 cache 的唯一 owner。`NativeCacheKey` 绑定：
 
-// G1
-let mut g1 = G1V2::new(heap, layout, worker_count)?;
-let report = g1.collect_full(&roots, |handle| { /* 清理侧表 */ })?;
+- portable artifact digest；
+- native ABI hash；
+- native codegen source hash；
+- 当前 target；
+- Cranelift 版本；
+- codegen/ISA settings。
 
-// ZGC
-let mut zgc = ZgcV2::new(heap, layout)?;
-let outcome = zgc.safepoint_step(&roots, budget, |handle| { /* 清理侧表 */ })?;
-```
+同 key 的并发 prepare 由 in-flight gate 合并；repository 只保存 `Weak<CompiledImage>`，调用方持有的 `Arc` 决定 image 生命周期。磁盘 cache header/object/hash 或权限校验失败时计为 invalidated 并重新编译，绝不能执行损坏 bytes。
 
-### 步骤 4：实现 `ExecContext` trait（真实接缝）
+`CompiledImage` 拥有 executable mappings、entry table、source metadata 与 unwind registration。drop 顺序必须先注销 unwind，再释放 mapping；function table 中不得永久缓存裸 code pointer。
 
-**这是最重要的步骤**。`ExecContext`（`crates/wjsm-host/src/exec_context.rs`）定义了
-builtins 调用的全部宿主能力，约 330 个方法，按域分组。用以下命令生成分组清单：
+## 4. NativeRuntime ownership
+
+`NativeRuntime` 包含：
+
+- owner-thread 约束与 pinned `NativeVmContext`；
+- 一个 `NativeAgentState`；
+- 一个 `NativeImageRepository`；
+- 一个 production ManagedHeap/HandleTableV2；
+- 启动时固定的 Mark-Sweep、G1 或 ZGC collector；
+- module、Promise、continuation、worker、scheduler、snapshot、inspector 与 host side tables。
+
+`NativeRuntime::execute` 的顺序是：
+
+1. 校验 owner thread，重置输出并恢复 startup snapshot；
+2. 由 repository 对 artifact 执行 cache hit/load 或 direct compile；
+3. 配置 module manifest、program/image registry 与 source metadata；
+4. 发布当前 image 与 call/root/source frame；
+5. 调用 typed native entry；
+6. drain Promise/microtask/external event loop；
+7. materialize/传播 JS exception，关闭 child resources；
+8. 返回 stdout/stderr/exit code/cache stats。
+
+每个 worker/test262 agent 创建独立 runtime/heap/scheduler。跨 agent 仅通过 structured clone、SAB/Atomics 与 IPC 传递；不得读取另一 agent 的 handle 或共享 mutable runtime table。
+
+## 5. ManagedHeap 与 GC 接合
+
+Production heap 只有一个 owner：同一 layout、`HandleTableV2`、`HeapAccessV2<NativeHeapMemory>` 与 `RuntimeCollector`。host side table 只保存 stable handle/generation，不保存可跨 safepoint 的 raw address。
+
+Generated code 在 may-GC edge 发布 live boxed roots。runtime collector 的 strong closure合并：
+
+- native root frames；
+- active call arena/activation/continuation；
+- variables、intrinsics 与 host roots；
+- object side-table internal slots；
+- WeakMap ephemeron fixed point。
+
+collection 后按 retired handle 清理 weak/side-table state。allocation pressure 只在 cooperative safepoint、root frame 已发布且 raw access region 为空时触发。collector 选择在 runtime 初始化后不可切换。
+
+## 6. 添加或修改运行时语义
+
+按 owning layer 修改，禁止并行实现第二套路径：
+
+1. 语言 lowering/early error：`wjsm-semantic`，同步 IR snapshot；
+2. backend-independent 算法：`wjsm-builtins`/`wjsm-host`；
+3. native object/Promise/module/I/O 状态：`wjsm-host-native` 对应 domain dispatcher；
+4. generated-code ABI/lowering：`wjsm-native-abi` + `wjsm-backend-native`；
+5. heap/handle/barrier/collector：`wjsm-gc`；
+6. observable CLI contract：`wjsm-cli` + fixture。
+
+新增 builtin/runtime operation 时，保持 wire ID 稳定、更新 required builtin/ABI hash 覆盖，并在 host dispatcher 实现完整异常与 reentry 语义。不能用 `fail_dispatch`、no-op、ignored fixture 或 fallback 代替缺失实现。
+
+## 7. 平台实现规则
+
+当前公开 production support：
+
+- x86_64 Linux；
+- x86_64 Windows。
+
+平台模块负责 virtual memory、W^X、instruction-cache coherence 与 unwind register/unregister。交叉编译只证明 cfg/source 能编译，不等于真实执行通过。缺少实际 runner、AVX-512、大内存或多 NUMA 时，能力报告使用 `needs-capability-runner`。
+
+本项目当前不配置 native GitHub Actions CI；平台证据来自真实宿主命令和 capability JSON。既有 mdBook 发布 workflow 与 native runtime 验证无关。
+
+## 8. Native executable 与安全边界
+
+`wjsm build --format native-executable` 当前稳定返回 `native executable output is not implemented`、退出码 1，且不创建或覆盖目标文件。runtime 私有 relocatable object/image 不得包装成伪 executable。
+
+Direct native code 不提供 Wasm sandbox。artifact verifier、checked lowering、strict relocation、symbol allowlist 与 W^X 是编译/加载 TCB，不是同进程不受信任代码隔离。运行不受信任程序必须使用独立 OS process、权限与资源限制。
+
+## 9. 诊断与验证
+
+先确定失败阶段：parse → lower → artifact → CLIF/object → image load/cache → host/runtime。
 
 ```bash
-rg -n 'fn ' crates/wjsm-host/src/exec_context.rs | sort -t: -k3
+cargo run -- dump-ast -e 'const x = 1'
+cargo run -- dump-ir -e 'const x = 1'
+cargo run -- dump-clif -e 'const x = 1'
+cargo run -- build -e 'console.log(1)' -o /tmp/hello.wjsm
+cargo run -- validate /tmp/hello.wjsm
+cargo run -- run /tmp/hello.wjsm
 ```
 
-你的后端实现 `ExecContext` + `HeapContext`（后者是前者的 super-trait，18 个堆/侧表原语）：
+提交前至少执行与改动 owner 对应的窄测试。终态门包括：
 
-```rust
-use wjsm_host::{ExecContext, HeapContext, Value, Handle, /* ... */};
-
-pub struct NativeExecContext<'a> {
-    // 你的运行时上下文（heap access、side tables、caller state 等）
-}
-
-impl HeapContext for NativeExecContext<'_> {
-    fn read_shadow_arg(&mut self, args_base: i32, index: u32) -> Value { /* ... */ }
-    fn write_output(&mut self, bytes: &[u8]) { /* ... */ }
-    fn resolve_handle(&mut self, handle: Handle) -> bool { /* ... */ }
-    fn alloc_object(&mut self, capacity: u32) -> Value { /* ... */ }
-    fn alloc_array(&mut self, capacity: u32) -> Value { /* ... */ }
-    fn gc_collect(&mut self) -> GcOutcome { /* ... */ }
-    // ... 共 18 个
-}
-
-impl ExecContext for NativeExecContext<'_> {
-    fn store_string(&mut self, s: &str) -> Value { /* ... */ }
-    fn call_js(&mut self, func: Value, this: Value, args: &[Value]) -> anyhow::Result<Value> { /* ... */ }
-    fn alloc_promise(&mut self) -> Value { /* ... */ }
-    // ... 约 330 个方法
-}
+```bash
+cargo fmt --check
+cargo check --workspace
+cargo nextest run --workspace
+cargo tree --workspace --edges normal,build
 ```
 
-**参考实现**：`crates/wjsm-host-wasm/src/exec_context_impl/`（按域拆分为 17 子模块，
-用 `macro_rules!` + `include!` 组织为单个 `impl ExecContext` 块）。
-
-**关键约束**：
-- **零 `dyn ExecContext`**：全仓不得出现 `dyn ExecContext`。builtins 以 `<E: ExecContext>`
-  泛型实例化，编译期单态化。你的后端直接 `impl ExecContext for NativeExecContext` 即可。
-- **`call_js` 是同步再入桥**：builtins 内同步再入一律走 `ctx.call_js(func, this, args)`，
-  由后端实现桥接（wasm 后端用 `Func::wrap` 闭包 + wasmtime call；native 后端可用函数指针表）。
-- **async 方法返回 `ExecFuture<'c, T>`**：后端用 `Box::pin(async move { ... })` 实现；
-  CLI 侧 `block_on` 单线程驱动。
-
-### 步骤 5：实现 `JsBackend` trait
-
-`JsBackend`（`crates/wjsm-host/src/backend.rs`）定义编译后端契约：
-
-```rust
-use wjsm_host::JsBackend;
-use wjsm_ir::Program;
-
-pub struct NativeBackend;
-
-impl JsBackend for NativeBackend {
-    type Artifact = Vec<u8>;        // 或 native 镜像 / C 源码包
-    type ExecOptions = NativeExecOptions;
-
-    fn name(&self) -> &'static str { "native" }
-
-    fn compile(&self, program: &Program, debug: bool) -> anyhow::Result<Self::Artifact> {
-        // IR → 你的制品（native 镜像 / C 源码 / 其他）
-    }
-
-    fn artifact_bytes(artifact: &Self::Artifact) -> Option<&[u8]> {
-        // 制品的持久化字节（build -o 写盘）；不可序列化返回 None
-    }
-
-    fn execute<'a, W: std::io::Write + 'a>(
-        &'a self, artifact: &'a Self::Artifact, options: Self::ExecOptions, writer: W,
-    ) -> impl Future<Output = anyhow::Result<(W, Vec<u8>)>> + 'a {
-        // 执行制品，输出到 writer，返回 (writer, diagnostics)
-    }
-}
-```
-
-**参考实现**：
-- `crates/wjsm-host-wasm/src/backend_impl.rs`：`WasmBackend`（Artifact = Vec<u8>，ExecOptions = RuntimeOptions）
-- `crates/wjsm-backend-jit/src/lib.rs`：`JitBackend`（stub，compile/execute 均 bail!）
-
-### 步骤 6：CLI `Target` enum 接线
-
-在 `crates/wjsm-cli/src/cli_args.rs` 的 `Target` enum 添加你的后端变体，
-然后在 `crates/wjsm-cli/src/lib.rs::compile_program_to_wasm` 的 match 接入：
-
-```rust
-let bytes: Vec<u8> = match target {
-    Target::Wasm => {
-        let a = <runtime::WasmBackend as runtime::JsBackend>::compile(
-            &runtime::WasmBackend, program, debug_codegen)?;
-        <runtime::WasmBackend as runtime::JsBackend>::artifact_bytes(&a)
-            .map(|b| b.to_vec()).unwrap_or_default()
-    }
-    Target::Jit => {
-        let a = <wjsm_backend_jit::JitBackend as runtime::JsBackend>::compile(
-            &wjsm_backend_jit::JitBackend, program, debug_codegen)?;
-        // ...
-    }
-    Target::Native => {
-        let a = <wjsm_backend_native::NativeBackend as runtime::JsBackend>::compile(
-            &wjsm_backend_native::NativeBackend, program, debug_codegen)?;
-        // ...
-    }
-};
-```
-
-执行路径同理：`block_on_wasm_execute` 或等效函数按 `Target` 分发到 `<Backend>::execute`。
-
-## 后端职责清单（明确归属）
-
-以下四类功能**不迁入 `wjsm-builtins`**，是各后端各自的实现职责：
-
-1. **Bootstrap / 全局对象安装**：`create_global_object`、全局对象 wiring、NativeCallable 索引、
-   Node web globals 安装。一次性冷路径，每个后端自行组织。
-2. **再入基础设施**：`reentrant_async/mod.rs` 是 `call_js_async` 的实现基底（wasmtime 后端用
-   `Func::wrap` 闭包 + wasmtime call；native 后端需自行实现 async 再入桥）。**不迁**。
-3. **I/O 实现**：`fetch_http.rs`（reqwest 客户端）、`streams_fetch_body.rs`（tokio spawn body 桥）
-   是 wasm 后端的 I/O 实现。native 后端需自行实现 `http_fetch_begin` / `http_body_pull` 等
-   trait 方法的 I/O 桥。
-4. **模块 instantiate 流程**：`RuntimeModuleInstantiationContext`、`Module::new`/`Linker`/
-   `instantiate_async` 是 wasm 后端 loader 的私有实现。native 后端需自行实现
-   `module_instantiate_sync` / `module_instantiate_async`。
-
-## HostRuntime 是历史 marker
-
-`HostRuntime`（`wjsm-host/src/runtime_trait.rs`）是 marker + blanket impl：
-```rust
-pub trait HostRuntime: ConsoleHost + ObjectHost + GcHost + AsyncHost {}
-impl<T> HostRuntime for T where T: ConsoleHost + ObjectHost + GcHost + AsyncHost {}
-```
-
-它是 ADR 0011 时期的设计遗留，**真实接缝是 `ExecContext`**。新后端只需实现
-`ExecContext` + `JsBackend`，无需实现 `HostRuntime`。`HostRuntime` 保留为 facade 公共 API
-（`wjsm-runtime` re-export），不影响新后端接入。
-
-## 不变量（必须保持）
-
-- `rg -n 'wasmtime|Caller|WasmEnv' crates/wjsm-builtins/src/` → **0 匹配**
-- `rg -n 'tokio|reqwest|block_in_place' crates/wjsm-builtins/src/` → **0 匹配**
-- `rg -n 'dyn ExecContext' crates/` → **0 匹配**
-- `rg -n 'wasmtime' crates/wjsm-gc/src/ | rg -v '^\S+:\s*\d+:\s*//'` → **0 匹配**（注释豁免）
+Lowering 变化需要 semantic IR snapshots；observable 行为需要 happy/errors/modules fixture。生成内容必须审阅，不得通过修改 expected 隐藏错误。
 
 ## 参考
 
-- `crates/wjsm-host/src/exec_context.rs` — ExecContext trait 全貌（~330 方法）
-- `crates/wjsm-host-wasm/src/exec_context_impl/` — WasmExecContext 按域拆分实现
-- `crates/wjsm-gc/src/heap_access.rs` — HeapAccessV2 对象模型
-- `crates/wjsm-host/src/backend.rs` — JsBackend trait
-- `crates/wjsm-host-wasm/src/backend_impl.rs` — WasmBackend 参考
-- `docs/adr/0013-multi-backend-contract.md` — 多后端契约 ADR
+- [ADR 0010](adr/0010-generational-zgc-managed-heap.md)
+- [ADR 0014](adr/0014-direct-cranelift-portable-artifact.md)
+- `crates/wjsm-artifact-format/src/lib.rs`
+- `crates/wjsm-backend-native/src/lib.rs`
+- `crates/wjsm-backend-native/src/cache.rs`
+- `crates/wjsm-host-native/src/lib.rs`
+- `crates/wjsm-native-abi/src/lib.rs`

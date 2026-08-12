@@ -1,13 +1,13 @@
 use wjsm_gc::{
     ConcurrentRelocator, GrowableHeapMemory, HandleGeneration, HandleTableV2, HeaderLayout,
-    ManagedHeapLayout, NativeHeapMemory, RelocationDescriptor,
+    ManagedHeapLayout, RelocationDescriptor, TestHeapMemory,
 };
 
 const PAGE: u64 = 64 * 1024;
 
-fn heap() -> (NativeHeapMemory, ManagedHeapLayout, HandleTableV2) {
+fn heap() -> (TestHeapMemory, ManagedHeapLayout, HandleTableV2) {
     let layout = ManagedHeapLayout::new(PAGE * 16, PAGE).unwrap();
-    let heap = NativeHeapMemory::for_layout(&layout);
+    let heap = TestHeapMemory::for_layout(&layout);
     heap.grow_to(layout.object_heap_base() + PAGE * 8).unwrap();
     let table = HandleTableV2::new(layout.clone()).unwrap();
     (heap, layout, table)

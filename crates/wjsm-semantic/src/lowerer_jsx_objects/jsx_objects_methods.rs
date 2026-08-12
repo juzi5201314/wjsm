@@ -43,14 +43,7 @@ impl Lowerer {
                                 constant: key_const,
                             },
                         );
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::SetProp {
-                                object: obj_dest,
-                                key: key_dest,
-                                value: val_dest,
-                            },
-                        );
+                        self.emit_set_prop(block, obj_dest, key_dest, val_dest);
                     }
                     swc_ast::Prop::Getter(getter) => {
                         let key_dest = self.lower_prop_name(&getter.key, block)?;
@@ -145,14 +138,7 @@ impl Lowerer {
                             method.function.span,
                         )?;
                         block = continuation;
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::SetProp {
-                                object: obj_dest,
-                                key: key_dest,
-                                value: fn_value,
-                            },
-                        );
+                        self.emit_set_prop(block, obj_dest, key_dest, fn_value);
                     }
                     _ => {
                         return Err(
@@ -241,14 +227,7 @@ impl Lowerer {
         } else {
             let key_dest = self.lower_prop_name(key, *block)?;
             *block = self.resolve_store_block(*block);
-            self.current_function.append_instruction(
-                *block,
-                Instruction::SetProp {
-                    object: obj_dest,
-                    key: key_dest,
-                    value: val_dest,
-                },
-            );
+            self.emit_set_prop(*block, obj_dest, key_dest, val_dest);
         }
         Ok(())
     }
@@ -286,14 +265,7 @@ impl Lowerer {
                 constant: home_key,
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: env,
-                key: home_key_value,
-                value: home_object,
-            },
-        );
+        self.emit_set_prop(block, env, home_key_value, home_object);
         env
     }
 
@@ -585,14 +557,7 @@ impl Lowerer {
                 constant: key_const,
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: desc_dest,
-                key: key_dest,
-                value: fn_value,
-            },
-        );
+        self.emit_set_prop(block, desc_dest, key_dest, fn_value);
 
         // descriptor.enumerable
         let enum_key = self
@@ -615,14 +580,7 @@ impl Lowerer {
                 constant: enum_const,
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: desc_dest,
-                key: enum_key_dest,
-                value: enum_val_dest,
-            },
-        );
+        self.emit_set_prop(block, desc_dest, enum_key_dest, enum_val_dest);
 
         // descriptor.configurable
         let conf_key = self
@@ -645,14 +603,7 @@ impl Lowerer {
                 constant: conf_const,
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: desc_dest,
-                key: conf_key_dest,
-                value: conf_val_dest,
-            },
-        );
+        self.emit_set_prop(block, desc_dest, conf_key_dest, conf_val_dest);
 
         Ok(desc_dest)
     }

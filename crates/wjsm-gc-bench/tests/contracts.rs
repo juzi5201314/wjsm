@@ -23,6 +23,29 @@ fn cli_parses_info() {
 }
 
 #[test]
+fn host_info_never_hides_missing_platform_capabilities() {
+    let info = wjsm_gc_bench::resource::HostInfo::detect();
+    assert_eq!(
+        info.evidence_status(),
+        if info.needs_capability_runner.is_empty() {
+            "measured"
+        } else {
+            "needs-capability-runner"
+        }
+    );
+    assert_eq!(
+        info.needs_capability_runner
+            .contains(&"decommit".to_owned()),
+        !info.decommit
+    );
+    assert_eq!(
+        info.needs_capability_runner
+            .contains(&"hard-isolation".to_owned()),
+        !info.hard_isolation
+    );
+}
+
+#[test]
 fn scenario_deterministic() {
     let a = Scenario::build(ScenarioKind::Churn, 42, 32 * 1024 * 1024, 50, None);
     let b = Scenario::build(ScenarioKind::Churn, 42, 32 * 1024 * 1024, 50, None);

@@ -2,37 +2,6 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 use std::{ffi::OsString, path::PathBuf};
 
-pub(crate) fn parse_heap_size(raw: &str) -> Result<usize, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("heap size must not be empty".to_string());
-    }
-    let split_at = trimmed
-        .find(|ch: char| !ch.is_ascii_digit())
-        .unwrap_or(trimmed.len());
-    let (digits, suffix) = trimmed.split_at(split_at);
-    if digits.is_empty() {
-        return Err(format!("invalid heap size `{raw}`"));
-    }
-    let value = digits
-        .parse::<usize>()
-        .map_err(|_| format!("invalid heap size `{raw}`"))?;
-    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
-        "" | "b" => 1,
-        "k" | "kb" | "kib" => 1024,
-        "m" | "mb" | "mib" => 1024 * 1024,
-        "g" | "gb" | "gib" => 1024 * 1024 * 1024,
-        _ => return Err(format!("unsupported heap size suffix `{suffix}`")),
-    };
-    let bytes = value
-        .checked_mul(multiplier)
-        .ok_or_else(|| format!("heap size `{raw}` is too large"))?;
-    if bytes == 0 {
-        return Err("heap size must be greater than zero".to_string());
-    }
-    Ok(bytes)
-}
-
 /// 解析 Node 风格 inspector 地址。
 ///
 /// - `"9229"` → `127.0.0.1:9229`
@@ -81,6 +50,31 @@ pub(crate) fn parse_inspect_address(raw: &str) -> Result<(String, u16), String> 
 
 const DEFAULT_INSPECT_ADDR: &str = "127.0.0.1:9229";
 
+const DEFAULT_MAX_HEAP_SIZE: u64 = 64 * 1024 * 1024;
+
+pub(crate) fn parse_heap_size(input: &str) -> Result<u64, String> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let (number, scale) = normalized
+        .strip_suffix('g')
+        .map(|number| (number, 1024_u64.pow(3)))
+        .or_else(|| {
+            normalized
+                .strip_suffix('m')
+                .map(|number| (number, 1024_u64.pow(2)))
+        })
+        .or_else(|| normalized.strip_suffix('k').map(|number| (number, 1024)))
+        .unwrap_or((normalized.as_str(), 1));
+    let bytes = number
+        .parse::<u64>()
+        .map_err(|error| format!("invalid heap size `{input}`: {error}"))?
+        .checked_mul(scale)
+        .ok_or_else(|| format!("heap size `{input}` overflows u64"))?;
+    if bytes == 0 {
+        return Err("heap size must be greater than zero".into());
+    }
+    Ok(bytes)
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
@@ -103,7 +97,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub(crate) time: bool,
 
-    /// Show statistics after build (constants, functions, blocks, instructions, WASM size)
+    /// Show statistics after build (constants, functions, blocks, instructions, artifact size)
     #[arg(long, global = true)]
     pub(crate) stats: bool,
 
@@ -119,10 +113,6 @@ pub struct Cli {
     #[arg(long, global = true, conflicts_with = "color")]
     pub(crate) no_color: bool,
 
-    /// Target backend (wasm or jit)
-    #[arg(long, default_value = "wasm", global = true)]
-    pub(crate) target: Target,
-
     /// Enable the explicit browser package condition and browser field mappings
     #[arg(long, global = true)]
     pub(crate) browser: bool,
@@ -131,21 +121,19 @@ pub struct Cli {
     #[arg(long = "condition", value_name = "NAME", global = true)]
     pub(crate) condition: Vec<String>,
 
-    /// Limit JavaScript heap allocations (bytes, or K/M/G suffixes)
-    #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
-    pub(crate) max_heap_size: Option<usize>,
+    /// 选择垃圾回收器；优先于 WJSM_TEST_GC/WJSM_GC。
+    #[arg(long, value_name = "mark-sweep|g1|zgc", global = true)]
+    pub(crate) gc: Option<wjsm_runtime::GcAlgorithmKind>,
 
-    /// 影子栈软上限（字节，或 K/M/G 后缀；默认 16M，可用 env `WJSM_SHADOW_STACK_MAX`）
-    #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
-    pub(crate) shadow_stack_max: Option<usize>,
-
-    /// 覆盖 Wasmtime 线性内存虚拟地址预留（字节，或 K/M/G 后缀）
-    #[arg(long, value_name = "SIZE", global = true, value_parser = parse_heap_size)]
-    pub(crate) wasmtime_memory_reservation: Option<usize>,
-
-    /// Select JavaScript GC algorithm (mark-sweep, g1, or zgc). Overrides WJSM_GC/WJSM_TEST_GC.
-    #[arg(long, value_name = "GC", global = true)]
-    pub(crate) gc: Option<String>,
+    /// JavaScript 对象堆容量上限，支持 K、M、G 后缀。
+    #[arg(
+        long,
+        value_name = "SIZE",
+        global = true,
+        default_value_t = DEFAULT_MAX_HEAP_SIZE,
+        value_parser = parse_heap_size
+    )]
+    pub(crate) max_heap_size: u64,
 
     /// 启用 CDP inspector（可选 `=HOST:PORT`，默认 127.0.0.1:9229）。
     /// 必须用 `=` 传参（`--inspect=9229`），避免吞掉后续子命令名。
@@ -188,13 +176,20 @@ impl Cli {
     pub(crate) fn wants_debug_codegen(&self) -> bool {
         self.inspect.is_some() || self.inspect_brk.is_some()
     }
+}
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct InspectConfig {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) break_on_start: bool,
+}
 
-    /// 合并 inspect / inspect-brk 为 runtime 配置。
-    /// `inspect-brk` 优先于 `inspect`（含地址），并强制 `break_on_start`。
-    pub(crate) fn inspect_config(&self) -> Result<Option<wjsm_runtime::InspectConfig>, String> {
+impl Cli {
+    /// 合并 inspect / inspect-brk 为 CLI 调试配置。
+    pub(crate) fn inspect_config(&self) -> Result<Option<InspectConfig>, String> {
         if let Some(raw) = self.inspect_brk.as_deref() {
             let (host, port) = parse_inspect_address(raw)?;
-            return Ok(Some(wjsm_runtime::InspectConfig {
+            return Ok(Some(InspectConfig {
                 host,
                 port,
                 break_on_start: true,
@@ -202,7 +197,7 @@ impl Cli {
         }
         if let Some(raw) = self.inspect.as_deref() {
             let (host, port) = parse_inspect_address(raw)?;
-            return Ok(Some(wjsm_runtime::InspectConfig {
+            return Ok(Some(InspectConfig {
                 host,
                 port,
                 break_on_start: false,
@@ -264,6 +259,25 @@ mod inspect_address_tests {
     }
 }
 
+#[cfg(test)]
+mod heap_size_tests {
+    use super::parse_heap_size;
+
+    #[test]
+    fn parses_binary_heap_size_suffixes() {
+        assert_eq!(parse_heap_size("64M").unwrap(), 64 * 1024 * 1024);
+        assert_eq!(parse_heap_size("2g").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(parse_heap_size("4096").unwrap(), 4096);
+    }
+
+    #[test]
+    fn rejects_zero_invalid_and_overflowing_heap_sizes() {
+        assert!(parse_heap_size("0").is_err());
+        assert!(parse_heap_size("invalid").is_err());
+        assert!(parse_heap_size("18446744073709551615G").is_err());
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ColorChoice {
@@ -273,13 +287,6 @@ pub(crate) enum ColorChoice {
     Always,
     /// Never use colors
     Never,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum Target {
-    Wasm,
-    Jit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
@@ -294,23 +301,45 @@ pub(crate) enum Stage {
     Parse,
     /// Lower to IR and print
     Lower,
-    /// Compile to WASM and write output
+    /// Compile to portable native artifact and write output
     Compile,
     /// Compile and execute (default for run)
     Execute,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum BuildFormat {
+    /// Portable semantic-IR artifact
+    Wjsm,
+    /// Platform executable output（当前明确不支持）
+    NativeExecutable,
+}
+
+#[derive(Clone, Copy, Debug, Subcommand)]
+pub(crate) enum CacheCommand {
+    /// Print native image cache entry and byte counts
+    Stats,
+    /// Remove every native image cache entry
+    Clear,
+    /// Remove oldest entries until the cache fits the byte limit
+    Prune {
+        #[arg(long, value_name = "BYTES")]
+        max_bytes: u64,
+    },
+}
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Build a JS/TS file to WebAssembly
+    /// Build a JS/TS file to a portable semantic-IR artifact
     Build {
         /// The input file to compile, or - for stdin. Optional when -e is used.
         input: Option<PathBuf>,
 
-        /// The output .wasm file, or - for stdout
-        #[arg(short, long, default_value = "out.wasm")]
+        /// The output .wjsm file, or - for stdout
+        #[arg(short, long, default_value = "out.wjsm")]
         output: PathBuf,
-
+        /// Output artifact format
+        #[arg(long, value_enum, default_value_t = BuildFormat::Wjsm)]
+        format: BuildFormat,
         /// Stop at a specific pipeline stage
         #[arg(long, value_name = "STAGE")]
         stage: Option<Stage>,
@@ -354,19 +383,6 @@ pub(crate) enum Commands {
         args: Vec<OsString>,
     },
 
-    /// 内部：直接执行预编译 raw WASM（同入口 fork AOT handoff）
-    #[command(name = "__run-precompiled", hide = true)]
-    RunPrecompiled {
-        /// 预编译 raw WASM 路径
-        wasm: PathBuf,
-        /// 对应源入口路径（用于 argv / module-loader / sandbox）
-        source: PathBuf,
-        /// 用户参数（透传 process.argv）
-        #[arg(last = true)]
-        args: Vec<OsString>,
-    },
-
-    /// Run JS/TS test files or an inline test snippet
     Test {
         /// File or directory to test. Directories run *.test.js/*.test.ts and *_test.js/*_test.ts.
         input: Option<PathBuf>,
@@ -481,30 +497,50 @@ pub(crate) enum Commands {
         eval: Option<String>,
     },
 
-    /// Dump WAT (WebAssembly Text) for a compiled JS/TS file
-    DumpWat {
-        /// The input file, or - for stdin. Optional when -e is used.
+    /// Validate a portable .wjsm artifact without executing it
+    Validate {
+        /// Portable artifact to validate
+        input: PathBuf,
+    },
+
+    /// Dump native Cranelift IR for a JS/TS input or portable artifact
+    DumpClif {
+        /// The input file, portable artifact, or - for stdin. Optional when -e is used.
         input: Option<PathBuf>,
 
         /// The root directory for module resolution
         #[arg(long)]
         root: Option<PathBuf>,
 
-        /// Parse as script instead of module (allows await as identifier)
+        /// Parse as script instead of module
         #[arg(long)]
         script: bool,
 
         /// Evaluate inline code string instead of a file
         #[arg(short, long = "eval")]
         eval: Option<String>,
+    },
 
-        /// Dump only the function with this name
-        #[arg(long, value_name = "NAME")]
-        func: Option<String>,
+    /// Disassemble current-host native code for a portable artifact
+    Disasm {
+        /// Portable artifact to compile and disassemble
+        input: PathBuf,
+    },
 
-        /// Print function signatures only, no instruction bodies
-        #[arg(long)]
-        skeleton: bool,
+    /// Report portable artifact and current-host native image sizes
+    Size {
+        /// Portable artifact to inspect
+        input: PathBuf,
+    },
+
+    /// Manage the current-host native image cache
+    Cache {
+        /// Cache directory; defaults to WJSM_CACHE_DIR
+        #[arg(long, value_name = "PATH")]
+        dir: Option<PathBuf>,
+
+        #[command(subcommand)]
+        command: CacheCommand,
     },
 
     /// Format a JS/TS file using SWC codegen
@@ -515,38 +551,6 @@ pub(crate) enum Commands {
         /// Write formatted output back to the file
         #[arg(short, long)]
         write: bool,
-    },
-
-    /// Validate a .wasm file
-    Validate {
-        /// The .wasm file to validate
-        input: PathBuf,
-    },
-
-    /// Show size breakdown of WASM sections
-    Size {
-        /// The .wasm file to analyze
-        input: PathBuf,
-    },
-
-    /// Disassemble a .wasm file with detailed output
-    Disasm {
-        /// The .wasm file to disassemble
-        input: PathBuf,
-
-        /// Disassemble only the function with this name
-        #[arg(long, value_name = "NAME")]
-        func: Option<String>,
-
-        /// Print function signatures only, no instruction bodies
-        #[arg(long)]
-        skeleton: bool,
-    },
-
-    /// Inspect or clear the compiled WASM cache
-    Cache {
-        #[command(subcommand)]
-        command: CacheCommand,
     },
 
     /// Generate shell completions
@@ -577,12 +581,4 @@ pub(crate) enum Commands {
         #[arg(long)]
         extended: bool,
     },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum CacheCommand {
-    /// Show compiled WASM cache location and size
-    Stats,
-    /// Remove compiled WASM cache entries
-    Clear,
 }

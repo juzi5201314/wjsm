@@ -8,8 +8,10 @@ members = [
     "crates/wjsm-parser",
     "crates/wjsm-semantic",
     "crates/wjsm-ir",
-    "crates/wjsm-backend-wasm",
-    "crates/wjsm-backend-jit",
+    "crates/wjsm-artifact-format",
+    "crates/wjsm-native-abi",
+    "crates/wjsm-backend-native",
+    "crates/wjsm-host-native",
     "crates/wjsm-runtime",
     "crates/wjsm-cli",
     "crates/wjsm-test262",
@@ -18,7 +20,6 @@ members = [
     "crates/wjsm-bench",
     "crates/wjsm-snapshot-format",
     "crates/wjsm-host",
-    "crates/wjsm-host-wasm",
     "crates/wjsm-builtins",
     "crates/wjsm-gc",
 ]
@@ -30,33 +31,20 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
+cranelift-codegen = { version = "=0.134.3", default-features = false, features = ["std", "host-arch", "unwind"] }
+cranelift-control = { version = "=0.134.3", default-features = false }
+cranelift-frontend = { version = "=0.134.3", default-features = false, features = ["std"] }
+cranelift-module = { version = "=0.134.3", default-features = false, features = ["std"] }
+cranelift-native = { version = "=0.134.3", default-features = false }
+cranelift-object = { version = "=0.134.3", default-features = false, features = ["unwind"] }
 clap_complete = "4.6.0"
 swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common", "ecma_visit", "ecma_ast_serde", "ecma_codegen"] }
 thiserror = "2.0.18"
-wasm-encoder = "0.246.2"
-# 只启用 wjsm 实际消费的 Wasmtime 能力，避免默认引入 component model、
-# stack switching、profiling、pooling allocator、coredump 与内置 cache。
-wasmtime = { version = "=43.0.2", default-features = false, features = [
-    "addr2line",
-    "anyhow",
-    "async",
-    "backtrace",
-    "cranelift",
-    "debug",
-    "demangle",
-    "gc",
-    "gc-drc",
-    "gc-null",
-    "parallel-compilation",
-    "runtime",
-    "std",
-    "threads",
-    "wat",
-    "winch",
-] }
+libc = "0.2"
+object = { version = "=0.39.0", default-features = false, features = ["read_core", "elf", "macho", "pe", "coff", "std"] }
+target-lexicon = "=0.13.5"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_SystemInformation"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "io-util", "process"] }
-tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake", "connect"] }
-futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 rayon = "1.10"
@@ -64,8 +52,7 @@ walkdir = "2"
 comfy-table = "7"
 colored = "2"
 notify = "8.0"
-wasmprinter = "0.245"
-wasmparser = "0.246"
+mio = { version = "1", features = ["net", "os-poll"] }
 sha2 = "0.10"
 regress = "0.11"
 regex = "1"
@@ -74,13 +61,13 @@ toml = "0.9.12"
 reqwest = { version = "0.12", default-features = false, features = [
     "charset",
     "http2",
-    "rustls-tls",
     "stream",
     "system-proxy",
 ] }
 proptest = "1.9.0"
 url = "2"
 encoding_rs = "0.8"
+unicode-normalization = "0.1"
 get_if_addrs = "0.5.3"
 sysinfo = "0.39.5"
 hdrhistogram = { version = "7.5.4", default-features = false }
@@ -94,6 +81,9 @@ flate2 = "1"
 brotli = "8"
 tar = "0.4"
 wait-timeout = "0.2"
+# 与 cranelift-codegen/cranelift-object 的 unwind 特性锁定的同一版本，用于本地
+# 生成 Mach-O `.eh_frame`（Windows `.pdata` 不经过 gimli）。必须保持 `=0.33.1`。
+gimli = { version = "=0.33.1", default-features = false, features = ["write"] }
 [dependencies]
 anyhow = { workspace = true }
 wjsm-cli = { path = "crates/wjsm-cli" }
@@ -107,16 +97,12 @@ proptest = { workspace = true }
 tokio = { workspace = true }
 wjsm-runtime = { path = "crates/wjsm-runtime" }
 
-# 仅对 wasmtime/cranelift 这类编译密集型依赖启用优化，
-# 保持本仓库自身 crate 仍走快速 debug 编译。
-# 测试时每个 fixture 都会用 Cranelift 把 WASM 编译成本机码，
-# 未优化的 Cranelift 是 fixture 执行 ~290ms 开销的主因。
+# 仅对 Cranelift 这类编译密集型依赖启用优化，保持本仓库自身 crate 仍走快速 debug 编译。
+# Native image 编译的未优化依赖是执行基线的主要开销。
 [profile.dev]
 debug = "line-tables-only"
 
 [profile.dev.package.cranelift-codegen]
-opt-level = 3
-[profile.dev.package.wasmtime-internal-cranelift]
 opt-level = 3
 [profile.dev.package.cranelift-frontend]
 opt-level = 3
@@ -124,20 +110,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.cranelift-assembler-x64]
 opt-level = 3
-[profile.dev.package.wasmtime-internal-core]
-opt-level = 3
-[profile.dev.package.wasmtime-environ]
-opt-level = 3
 [profile.dev.package.wjsm-runtime]
 opt-level = 3
 # memchr 的 SIMD 子串搜索（find_memory_c_string 用）在未优化 debug 下
 # 带大量 UB 检查 + 未内联，实测占 bootstrap ~35% 指令；opt 后大幅收缩。
 [profile.dev.package.memchr]
-opt-level = 3
-# dev 补上 Wasmtime 本体与 Winch 后端。
-[profile.dev.package.wasmtime]
-opt-level = 3
-[profile.dev.package.wasmtime-internal-winch]
-opt-level = 3
-[profile.dev.package.winch-codegen]
 opt-level = 3

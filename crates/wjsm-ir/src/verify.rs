@@ -377,7 +377,6 @@ fn verify_instruction_uses(
         }
         Instruction::Unary { value, .. }
         | Instruction::StoreVar { value, .. }
-        | Instruction::ObjectSpread { source: value, .. }
         | Instruction::PromiseResolve { value, .. }
         | Instruction::PromiseReject { reason: value, .. }
         | Instruction::Suspend { promise: value, .. }
@@ -386,6 +385,10 @@ fn verify_instruction_uses(
         | Instruction::EncodeException { value, .. }
         | Instruction::ExceptionToObject { value, .. } => {
             verify_value_use(function, definitions, *value, site, dominance)?;
+        }
+        Instruction::ObjectSpread { dest, source } => {
+            verify_value_use(function, definitions, *dest, site, dominance)?;
+            verify_value_use(function, definitions, *source, site, dominance)?;
         }
         Instruction::GuardSameFunction { callee, .. } => {
             verify_value_use(function, definitions, *callee, site, dominance)?;
@@ -439,11 +442,14 @@ fn verify_instruction_uses(
             verify_value_use(function, definitions, *object, site, dominance)?;
             verify_value_use(function, definitions, *key, site, dominance)?;
         }
-        Instruction::SetProp { object, key, value }
+        Instruction::SetProp {
+            object, key, value, ..
+        }
         | Instruction::SetElem {
             object,
             index: key,
             value,
+            ..
         } => {
             verify_value_use(function, definitions, *object, site, dominance)?;
             verify_value_use(function, definitions, *key, site, dominance)?;
@@ -691,13 +697,14 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::LoadVar { dest, .. }
         | Instruction::NewObject { dest, .. }
         | Instruction::GetProp { dest, .. }
+        | Instruction::SetProp { dest, .. }
         | Instruction::DeleteProp { dest, .. }
         | Instruction::NewArray { dest, .. }
         | Instruction::GetElem { dest, .. }
+        | Instruction::SetElem { dest, .. }
         | Instruction::OptionalGetProp { dest, .. }
         | Instruction::OptionalGetElem { dest, .. }
         | Instruction::OptionalCall { dest, .. }
-        | Instruction::ObjectSpread { dest, .. }
         | Instruction::GetSuperBase { dest }
         | Instruction::GetSuperConstructor { dest }
         | Instruction::NewPromise { dest }
@@ -711,9 +718,8 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::SuperCall { dest, .. }
         | Instruction::ConstructCall { dest, .. } => *dest,
         Instruction::StoreVar { .. }
-        | Instruction::SetProp { .. }
+        | Instruction::ObjectSpread { .. }
         | Instruction::SetProto { .. }
-        | Instruction::SetElem { .. }
         | Instruction::PromiseResolve { .. }
         | Instruction::PromiseReject { .. }
         | Instruction::Suspend { .. }

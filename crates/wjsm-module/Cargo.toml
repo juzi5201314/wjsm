@@ -12,6 +12,7 @@ sha2 = { workspace = true }
 swc_core = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
+wjsm-artifact-format = { path = "../wjsm-artifact-format" }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-ir = { path = "../wjsm-ir" }

@@ -12,7 +12,7 @@ use crate::number_format::format_number_js;
 use wjsm_host::{ExecContext, RuntimeString, ToPrimitiveHintKind, Value};
 use wjsm_ir::value;
 
-/// JavaScript remainder（与原 WASM import 的 raw f64 bits 契约一致）。
+/// JavaScript remainder（与 native ABI 的 raw f64 bits 契约一致）。
 #[inline]
 pub fn f64_mod(a: Value, b: Value) -> Value {
     let a = value::decode_f64(a);
@@ -20,7 +20,7 @@ pub fn f64_mod(a: Value, b: Value) -> Value {
     (a - b * (a / b).trunc()).to_bits() as Value
 }
 
-/// JavaScript exponentiation（与原 WASM import 的 raw f64 bits 契约一致）。
+/// JavaScript exponentiation（与 native ABI 的 raw f64 bits 契约一致）。
 #[inline]
 pub fn f64_pow(a: Value, b: Value) -> Value {
     value::decode_f64(a).powf(value::decode_f64(b)).to_bits() as Value
@@ -67,15 +67,6 @@ pub fn to_number<E: ExecContext>(ctx: &mut E, input: Value) -> Value {
 #[inline]
 pub fn iterator_value<E: ExecContext>(ctx: &mut E, handle: Value) -> Value {
     ctx.iterator_current_value(handle)
-}
-
-/// 兼容旧 WASM import 的未捕获异常报告路径。
-pub fn legacy_throw<E: ExecContext>(ctx: &mut E, val: Value) {
-    ctx.throw_exception(val);
-    let rendered = ctx.render_value(val);
-    let message = format!("Uncaught exception: {rendered}");
-    ctx.write_output(format!("{message}\n").as_bytes());
-    ctx.set_last_error(message);
 }
 
 pub fn create_exception<E: ExecContext>(ctx: &mut E, thrown_value: Value) -> Value {
@@ -312,7 +303,10 @@ pub fn string_concat_va<E: ExecContext>(ctx: &mut E, args_base: i32, args_count:
     let mut parts: Vec<Value> = Vec::with_capacity(args_count as usize);
     let mut all_cheap = true;
     for index in 0..args_count as u32 {
-        let arg = ctx.read_shadow_arg(args_base, index);
+        let arg = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            index,
+        );
         if !(value::is_string(arg)
             || value::is_f64(arg)
             || value::is_undefined(arg)
@@ -334,7 +328,7 @@ pub fn string_concat_va<E: ExecContext>(ctx: &mut E, args_base: i32, args_count:
     ctx.store_string_owned(String::from_utf8(bytes).unwrap_or_default())
 }
 
-/// 非 Proxy `in` 路径。Proxy trap 编排位于 `core_async::op_in`。
+/// 非 Proxy `in` 路径。Proxy trap 编排位于 `core_reentrant::op_in`。
 pub fn ordinary_has_property<E: ExecContext>(ctx: &mut E, object: Value, prop: Value) -> Value {
     if !value::is_js_object(object) {
         return ctx.make_type_error("cannot use 'in' operator on non-object");
@@ -391,7 +385,7 @@ pub fn define_property_impl<E: ExecContext>(
     }
 }
 
-/// 同步 `get_own_prop_desc` import；回调通过 `call_js` 同步桥保持原签名。
+/// `get_own_prop_desc` import；回调通过 `call_js` 保持同步签名。
 pub fn get_own_prop_desc<E: ExecContext>(ctx: &mut E, object: Value, name_id: i32) -> Value {
     let prop = crate::proxy_traps::proxy_trap_property_key_value(ctx, name_id);
     if value::is_proxy(object) {
@@ -410,13 +404,13 @@ pub fn get_own_prop_desc<E: ExecContext>(ctx: &mut E, object: Value, name_id: i3
                 ctx, target, prop,
             );
         };
-        // 同步 import 契约：仅 NativeCallable trap 可同步调用；JS trap 由异步路径承载。
+        // import 入口只直接调用 NativeCallable；JS trap 由同步再入入口处理。
         if !value::is_native_callable(trap) {
             return value::encode_undefined();
         }
         let descriptor = ctx.call_native_callable(trap, handler, &[target, prop]);
         if let Err(error) =
-            crate::proxy_reflect_async::validate_proxy_get_own_property_descriptor_result(
+            crate::proxy_reflect_reentrant::validate_proxy_get_own_property_descriptor_result(
                 ctx,
                 target,
                 Some(name_id as u32),

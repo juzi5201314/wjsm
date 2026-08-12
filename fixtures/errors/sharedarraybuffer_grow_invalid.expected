@@ -1,5 +1,4 @@
 exit_code: 2
 --- stdout ---
-Uncaught exception: TypeError: SharedArrayBuffer.prototype.grow can only be used with growable SharedArrayBuffers
 --- stderr ---
-Runtime error: Uncaught exception: TypeError: SharedArrayBuffer.prototype.grow can only be used with growable SharedArrayBuffers
+Runtime error: TypeError: SharedArrayBuffer.prototype.grow can only be used with growable SharedArrayBuffers

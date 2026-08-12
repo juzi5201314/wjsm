@@ -23,10 +23,11 @@ module {
     c20 = number(0)
     c21 = bool(true)
     c22 = number(5)
-    c23 = number(1)
-    c24 = number(2)
-    c25 = number(4)
-    c26 = bool(false)
+    c23 = bool(false)
+    c24 = bool(false)
+    c25 = number(1)
+    c26 = number(2)
+    c27 = number(4)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -78,43 +79,45 @@ module {
     bb1:
       %23 = load var $0.i
       %24 = const c22
-      %25 = call builtin.abstract_compare(%23, %24)
+      %26 = const c23
+      %27 = const c24
+      %25 = call builtin.abstract_compare(%23, %24, %26, %27)
       branch %25, bb2, bb3
     bb2:
-      %26 = load var $0.i
-      %27 = const c23
-      %28 = add %26, %27
-      store var $0.i, %28
-      %29 = is_exception %28
-      branch %29, bb5, bb4
+      %28 = load var $0.i
+      %29 = const c25
+      %30 = add %28, %29
+      store var $0.i, %30
+      %31 = is_exception %30
+      branch %31, bb5, bb4
     bb3:
       return
     bb4:
-      %31 = load var $0.i
+      %33 = load var $0.i
       jump bb9
     bb5:
-      %30 = call builtin.exception_value(%28)
-      throw %30
+      %32 = call builtin.exception_value(%30)
+      throw %32
     bb6:
-      %36 = load var $0.i
-      %37 = call builtin.console.log(%36)
-      %38 = is_exception %37
-      branch %38, bb12, bb11
+      %38 = load var $0.i
+      %39 = call builtin.console.log(%38)
+      %40 = is_exception %39
+      branch %40, bb12, bb11
     bb7:
       jump bb1
     bb8:
       jump bb1
     bb9:
-      %32 = const c24
-      %33 = stricteq %31, %32
-      branch %33, bb7, bb10
+      %34 = const c26
+      %35 = stricteq %33, %34
+      branch %35, bb7, bb10
     bb10:
-      %34 = const c25
-      %35 = stricteq %31, %34
-      branch %35, bb8, bb6
+      %36 = const c27
+      %37 = stricteq %33, %36
+      branch %37, bb8, bb6
     bb11:
       jump bb1
     bb12:
-      %39 = call builtin.exception_value(%37)
-      throw %39
+      %41 = call builtin.exception_value(%39)
+      throw %41
 }

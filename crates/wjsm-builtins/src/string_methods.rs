@@ -4,6 +4,8 @@ use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed}
 use wjsm_host::{ExecContext, RuntimeString, Value};
 use wjsm_ir::value;
 
+pub const INVALID_NORMALIZATION_FORM_MESSAGE: &str =
+    "The normalization form should be one of NFC, NFD, NFKC, NFKD";
 fn is_high_surrogate(unit: u16) -> bool {
     (0xD800..=0xDBFF).contains(&unit)
 }
@@ -28,7 +30,7 @@ fn normalize_string_by_form(s: &str, form: &str) -> Result<String, &'static str>
         "NFKD" => Ok(DecomposingNormalizerBorrowed::new_nfkd()
             .normalize(s)
             .into_owned()),
-        _ => Err("The normalization form should be one of NFC, NFD, NFKC, NFKD"),
+        _ => Err(INVALID_NORMALIZATION_FORM_MESSAGE),
     }
 }
 
@@ -167,7 +169,7 @@ fn repeat_units_to_len(source: &RuntimeString, len: usize) -> RuntimeString {
     RuntimeString::from_utf16_units(out)
 }
 
-/// 供 host-wasm string_replace_all 同步路径复用。
+/// 供 native host string_replace_all 同步路径复用。
 pub fn replace_all_units(
     haystack: &RuntimeString,
     search: &RuntimeString,
@@ -347,7 +349,10 @@ pub fn string_proto_concat<E: ExecContext>(
     }
     let mut result = ctx.get_runtime_string(this_val);
     for i in 0..args_count as u32 {
-        let arg = ctx.read_shadow_arg(args_base, i);
+        let arg = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         let part = concat_arg_to_string(ctx, arg);
         result.push_units_from(&part);
     }
@@ -540,7 +545,7 @@ pub fn string_replace_all<E: ExecContext>(
     ctx.store_runtime_string(replace_all_units(&s, &search_str, &replace_str))
 }
 
-/// replaceAll + RegExp(g)：同步路径，替换回调经 `call_js`（非 block_on 异步体）。
+/// replaceAll + RegExp(g)：同步路径，替换回调经 `call_js`。
 fn string_replace_all_regexp<E: ExecContext>(
     ctx: &mut E,
     receiver: Value,
@@ -755,7 +760,10 @@ pub fn string_from_char_code<E: ExecContext>(
 ) -> Value {
     let mut units = Vec::with_capacity(args_count.max(0) as usize);
     for i in 0..args_count as u32 {
-        let arg = ctx.read_shadow_arg(args_base, i);
+        let arg = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         units.push(to_uint16_ctx(ctx, arg));
     }
     ctx.store_runtime_string(RuntimeString::from_utf16_units(units))
@@ -768,7 +776,10 @@ pub fn string_from_code_point<E: ExecContext>(
 ) -> Value {
     let mut result = RuntimeString::empty();
     for i in 0..args_count as u32 {
-        let arg = ctx.read_shadow_arg(args_base, i);
+        let arg = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            i,
+        );
         let code = to_uint32_ctx(ctx, arg);
         if !is_valid_code_point(code) {
             return ctx.make_range_error("Invalid code point");

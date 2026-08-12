@@ -7,18 +7,6 @@ edition.workspace = true
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
 [dependencies]
-wjsm-host = { path = "../wjsm-host" }
-wjsm-host-wasm = { path = "../wjsm-host-wasm" }
 wjsm-gc = { path = "../wjsm-gc" }
+wjsm-host-native = { path = "../wjsm-host-native" }
 
-[dev-dependencies]
-anyhow = { workspace = true }
-tokio = { workspace = true }
-loom = "0.7"
-wjsm-ir = { path = "../wjsm-ir" }
-serde_json = { workspace = true }
-futures-util = { workspace = true }
-tokio-tungstenite = { workspace = true }
-wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }
-wjsm-parser = { path = "../wjsm-parser" }
-wjsm-semantic = { path = "../wjsm-semantic" }

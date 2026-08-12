@@ -23,11 +23,12 @@ module {
     c20 = number(0)
     c21 = number(0)
     c22 = number(5)
-    c23 = number(1)
-    c24 = number(3)
+    c23 = bool(false)
+    c24 = bool(false)
     c25 = number(1)
-    c26 = bool(true)
-    c27 = bool(false)
+    c26 = number(3)
+    c27 = number(1)
+    c28 = bool(true)
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -81,48 +82,50 @@ module {
     bb1:
       %23 = load var $1.i
       %24 = const c22
-      %25 = call builtin.abstract_compare(%23, %24)
+      %26 = const c23
+      %27 = const c24
+      %25 = call builtin.abstract_compare(%23, %24, %26, %27)
       branch %25, bb2, bb4
     bb2:
-      %26 = load var $1.i
-      %27 = const c23
-      %28 = call builtin.strict_eq(%26, %27)
-      branch %28, bb5, bb6
+      %28 = load var $1.i
+      %29 = const c25
+      %30 = call builtin.strict_eq(%28, %29)
+      branch %30, bb5, bb6
     bb3:
-      %37 = load var $1.i
-      %38 = const c25
-      %39 = add %37, %38
-      store var $1.i, %39
+      %39 = load var $1.i
+      %40 = const c27
+      %41 = add %39, %40
+      store var $1.i, %41
       jump bb1
     bb4:
-      %40 = load var $0.total
-      %41 = call builtin.console.log(%40)
-      %42 = is_exception %41
-      branch %42, bb12, bb11
+      %42 = load var $0.total
+      %43 = call builtin.console.log(%42)
+      %44 = is_exception %43
+      branch %44, bb12, bb11
     bb5:
       jump bb3
     bb6:
-      %29 = load var $1.i
-      %30 = const c24
-      %31 = call builtin.strict_eq(%29, %30)
-      branch %31, bb7, bb8
+      %31 = load var $1.i
+      %32 = const c26
+      %33 = call builtin.strict_eq(%31, %32)
+      branch %33, bb7, bb8
     bb7:
       jump bb4
     bb8:
-      %32 = load var $0.total
-      %33 = load var $1.i
-      %34 = add %32, %33
-      store var $0.total, %34
-      %35 = is_exception %34
-      branch %35, bb10, bb9
+      %34 = load var $0.total
+      %35 = load var $1.i
+      %36 = add %34, %35
+      store var $0.total, %36
+      %37 = is_exception %36
+      branch %37, bb10, bb9
     bb9:
       jump bb3
     bb10:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      %38 = call builtin.exception_value(%36)
+      throw %38
     bb11:
       return
     bb12:
-      %43 = call builtin.exception_value(%41)
-      throw %43
+      %45 = call builtin.exception_value(%43)
+      throw %45
 }

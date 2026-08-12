@@ -125,6 +125,15 @@ fn resolve_file_module(
     root: &Path,
     path: PathBuf,
 ) -> Result<RuntimeResolvedModule> {
+    if matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("ts" | "tsx" | "jsx")
+    ) {
+        bail!(
+            "runtime loader does not compile TypeScript/JSX modules: {}",
+            path.display()
+        );
+    }
     if !path.starts_with(root) {
         bail!(
             "Module '{}' resolves outside root '{}': {}",
@@ -152,15 +161,25 @@ fn resolve_file_module(
 }
 
 fn runtime_module_format(resolver: &ModuleResolver, path: &Path) -> Result<RuntimeModuleFormat> {
-    if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    if extension == Some("json") {
         return Ok(RuntimeModuleFormat::Json);
     }
 
     let package = resolver.find_nearest_package(path)?;
-    Ok(match detect_module_format(path, package.as_ref(), false) {
-        ModuleFormat::Esm => RuntimeModuleFormat::Esm,
-        ModuleFormat::CommonJs => RuntimeModuleFormat::CommonJs,
-    })
+    let ast_is_cjs = if matches!(extension, Some("mjs" | "cjs")) || package.is_some() {
+        false
+    } else {
+        let source = std::fs::read_to_string(path)?;
+        let ast = wjsm_parser::parse_module_with_path(&source, path)?;
+        crate::is_commonjs_module(&ast)
+    };
+    Ok(
+        match detect_module_format(path, package.as_ref(), ast_is_cjs) {
+            ModuleFormat::Esm => RuntimeModuleFormat::Esm,
+            ModuleFormat::CommonJs => RuntimeModuleFormat::CommonJs,
+        },
+    )
 }
 
 fn file_url(path: &Path) -> Result<String> {

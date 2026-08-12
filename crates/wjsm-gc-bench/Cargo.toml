@@ -16,5 +16,8 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
-tokio = { workspace = true }
-wjsm-runtime = { path = "../wjsm-runtime" }
+wjsm-artifact-format = { path = "../wjsm-artifact-format" }
+wjsm-host-native = { path = "../wjsm-host-native" }
+wjsm-parser = { path = "../wjsm-parser" }
+wjsm-semantic = { path = "../wjsm-semantic" }
+wjsm-gc = { path = "../wjsm-gc" }

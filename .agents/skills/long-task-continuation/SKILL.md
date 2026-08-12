@@ -1,259 +1,208 @@
 ---
 name: long-task-continuation
-description: Use when a task is multi-step, may span context resets or sessions, uses subagents, or risks losing state before completion.
+description: Use when 工作可能跨越当前上下文或会话、恢复中断任务，或需要在代理、会话、机器之间交接准确状态与证据。
 ---
 
-# Long Task Continuation
+# 长任务续作
 
-## Overview
+## 目标
 
-Use this skill to keep long tasks checkpointed, resumable, drift-aware, and evidence-gated.
+让进行中的任务在上下文压缩、会话中断或执行者交接后继续推进，同时避免重做、漂移和虚假完成。
 
-This is a protocol skill. It does not execute plans, dispatch subagents, run tests, or grant completion authority.
+核心原则：**检查点是导航，不是事实源。** 当前用户意图、项目规则、当前工作区和可复现证据共同决定真实状态。
 
-## Authority Boundary
+本技能完全自包含，不要求其他技能、守护进程、workspace helper、sidecar 或专有门禁。
 
-Current owner:
+## 边界
 
-- Method Pack protocol discipline
+本技能只负责连续性状态：任务现在在哪里、哪些结论有证据、哪里受阻、下一步是什么。
 
-Not owned here:
+它不替代：
 
-- plan execution
-- subagent dispatch
-- host daemon / watchdog / automatic retry
-- authoritative `GateDecision`
-- evidence sufficiency final judgment
-- completion authority
+- 用户请求、项目规则和已有计划；
+- 当前会话的 todo 系统；
+- 调试、实现、测试、评审或发布流程；
+- 子代理调度与完成判定。
 
-## When To Use
+不要因为任务“有多个步骤”就自动启用。仅在状态确实可能跨越当前上下文、会话或执行者时使用。
 
-Use this skill when any of these are true:
+## 状态位置与版本控制
 
-- the task has multiple phases or more than one meaningful work slice
-- the task may be interrupted, compacted, resumed, or handed off
-- the task uses subagents
-- the user explicitly asks for long-task continuity, resume safety, or avoiding drift
-- the task changes architecture, contracts, shared workflows, or verification gates
+连续性状态是执行期数据，不是默认的项目文档。
 
-For short direct answers or one-command checks, do not force this protocol.
+按以下顺序选择 `<state-root>`：
 
-## Required Artifacts
+1. 使用用户或项目明确指定、且已被版本控制忽略的状态目录；
+2. 否则使用仓库内现有的忽略目录；
+3. 若仓库没有合适位置，使用宿主提供的本地状态目录；
+4. 本仓库默认使用 `.work/long-tasks/<task-slug>/`。
 
-Maintain artifacts under `docs/aegis/work/YYYY-MM-DD-<slug>/`:
+写入前确认 `<state-root>` 不会被版本控制收录。不要为了方便自动创建或使用 `docs/work/`、`docs/aegis/work/` 等受跟踪目录。
 
-| Artifact | File | When |
-|----------|------|------|
-| TaskIntentDraft | `10-intent.md` and optional `task-intent-draft.json` | Start protocol |
-| BaselineReadSetHint | `10-intent.md` (inline) | Start protocol |
-| BaselineUsageDraft | `10-intent.md` (inline) and optional `baseline-usage-draft.json` | Start protocol and when baseline usage changes |
-| ImpactStatementDraft | `10-intent.md` (inline) | Start protocol |
-| TodoCheckpointDraft | `20-checkpoint.md` and optional `todo-checkpoint-draft.json` | Each checkpoint |
-| ResumeStateHint | `20-checkpoint.md` (inline) | Each pause/handoff |
-| DriftCheckDraft | `20-checkpoint.md` (inline) and optional `drift-check-draft.json` | Per-slice protocol |
-| EvidenceBundleDraft | `90-evidence.md` and optional `evidence-bundle-draft.json` | Per-slice protocol |
-| Reflection | `99-reflection.md` | Completion candidate |
+| 内容 | 默认位置 | 提交策略 |
+|------|----------|----------|
+| 当前状态与检查点 | `<state-root>/state.md` | 不提交、不暂存、不推送 |
+| 原始日志、临时笔记、完整聊天 | 本地/外部工件存储 | 不提交；状态中只引用必要证据 |
+| 跨机器交接摘要 | 项目认可的文档位置 | 仅在用户或团队明确需要共享时提交 |
+| ADR、规范、稳定操作说明 | 项目既有正式位置 | 按项目规则提交 |
 
-For medium+ complexity tasks only. Low-complexity tasks skip work/.
+已经被 ADR、规范或发布记录引用的历史 work 工件保持原位。不要在普通续作中批量搬迁或删除它们；历史清理是独立迁移任务。
 
-Planless Slice Lane:
+### 发布交接摘要
 
-- Use this lane when a parent plan or parent spec already owns the long-task
-  workstream and the current micro-slice only executes or refines one bounded
-  parent task.
-- Record a compact Slice Card instead of creating another durable plan/spec:
+只有版本库确实是跨机器或跨团队交接通道时，才发布精炼的 `handoff.md`。它应包含任务契约、当前状态、精确版本/分支、已改文件、证据、阻塞和下一步。不要包含：
 
-  ```text
-  Slice Card:
-  - Goal:
-  - Parent plan/spec:
-  - Files:
-  - Boundary:
-  - Verification:
-  - Stop:
-  ```
+交接摘要必须自包含：接收方无需取得发送方本地的 `state.md` 或原始日志，就能核对基线并执行下一步；外部工件只能是补充材料，不能承载恢复所需的唯一信息。
 
-- Slice Card `Goal` anchors slice-level completeness only.
-- It does not by itself grant whole-task completion.
-- Final completion still requires `verification-before-completion` Goal Closure
-  against the parent plan/spec and any active goal frame.
+- 原始命令日志或大段终端输出；
+- 临时推理、完整聊天或逐轮检查点；
+- 密钥、令牌、内部地址、用户目录绝对路径；
+- 已由正式 ADR、计划或 issue 持有的重复内容。
 
-- Do not create new plan/spec files for micro-slices that stay inside the
-  parent plan, existing compatibility boundary, and known verification path.
-- Update the existing checkpoint, evidence, and drift records when persistent
-  state is needed.
-- Escalate out of this lane only when a new owner, contract, schema, public API,
-  architecture boundary, migration, persistence, security/permission,
-  distribution/release surface, or unclear verification boundary appears.
+## 单一状态文件
 
-When durable architecture decisions are in scope, these work records are the
-preferred ADR Auto Backfill source. Preserve ADR signals, source refs,
-alternatives, compatibility boundaries, drift checks, retirement notes, and
-baseline-sync questions in the work record instead of relying on memory at
-completion time.
+每个任务维护一个可覆盖更新的 `state.md`，避免多个名称不同但内容相互冲突的状态文件。
 
-These are draft / hint / projection inputs. They are not authoritative runtime records.
+```markdown
+# <任务名称>
 
-## Workspace Helper Protocol
+- Updated: <时间或会话标识>
+- Status: active | partial | blocked | needs-user-decision | needs-verification | complete
 
-When configured Aegis workspace support or installed Aegis workspace support is
-available, use it for the target project workspace and lifecycle records:
+## Contract
+- Request:
+- Success evidence:
+- Scope:
+- Non-goals:
+- Authoritative references:
 
-1. Initialize before writing work records:
+## Execution
+- Current slice:
+- Todo status:
+- Files changed by this task:
+- Relevant pre-existing changes:
+- Decisions and reasons:
 
-   ```bash
-   python <aegis-workspace-helper> init --root <target-project-root>
-   ```
+## Evidence
+- <command/manual check> → <observed result>；covers: <criterion>
 
-2. For a new medium+ task process trail, prefer helper-backed lifecycle
-   creation over hand-created files:
+## Risks and blockers
+- <risk/blocker> → <owner or unblock condition>
 
-   ```bash
-   python <aegis-workspace-helper> new-work --root <target-project-root> --date YYYY-MM-DD --slug <slug> --title "<title>" --requested-outcome "<outcome>" --scope "<scope>" --change-kind <kind>
-   ```
+## Resume
+- First read:
+- Exact next action:
+- First verification:
+- Do not repeat:
+```
 
-3. After each slice, update checkpoint, evidence, and drift through the helper:
+只记录恢复所需信息。命令证据包含命令、观察结果和覆盖的验收条件；长日志保存到外部工件并引用其稳定路径。
 
-   ```bash
-   python <aegis-workspace-helper> add-checkpoint --root <target-project-root> --work YYYY-MM-DD-<slug> ...
-   python <aegis-workspace-helper> add-baseline-usage --root <target-project-root> --work YYYY-MM-DD-<slug> ...
-   python <aegis-workspace-helper> add-evidence --root <target-project-root> --work YYYY-MM-DD-<slug> ...
-   python <aegis-workspace-helper> add-drift-check --root <target-project-root> --work YYYY-MM-DD-<slug> ...
-   ```
+## 建立状态
 
-4. Before pause, handoff, or completion candidate, assemble a structural proof
-   bundle and check the workspace:
+开始可能跨上下文的工作时：
 
-   ```bash
-   python <aegis-workspace-helper> bundle --root <target-project-root> --work YYYY-MM-DD-<slug>
-   python <aegis-workspace-helper> check --root <target-project-root>
-   ```
+1. 从当前用户请求和已有权威文件记录任务契约，不发明额外计划或成功标准；
+2. 记录当前切片、todo 状态、相关文件和已知的既有改动；
+3. 记录下一项可执行动作及其验证方式；
+4. 写入 `state.md` 后继续工作。建立检查点本身不是暂停或请求许可的理由。
 
-These helper checks validate workspace structure, index coverage, and JSON
-sidecar shape only. They do not determine evidence sufficiency, do not produce
-authoritative `GateDecision`, and do not grant completion authority.
+## 更新时机
 
-## Start Protocol
+在以下边界覆盖更新 `state.md`：
 
-Before long-task execution:
+- 一个有意义的切片完成并已有证据；
+- 目标、范围、决定、风险或阻塞发生变化；
+- 子代理结果已经由主任务接收并核对；
+- 即将上下文压缩、暂停、会话结束或交接；
+- 完成声明前，验收状态与证据已经收口。
 
-1. State the requested outcome, scope, non-goals, and risk hints.
-2. If goal framing exists, restate goal, success evidence, stop condition, and
-   non-goals. Stop condition must allow done, blocked, needs-verification, and
-   scope-exceeded outcomes.
-3. Identify baseline refs that must be read before changing files.
-4. Record baseline usage state:
-   - required baseline refs
-   - optionally delivered context refs when the host can project them
-   - acknowledged before plan refs
-   - cited in plan refs
-   - missing refs
-5. Create or update the todo map.
-6. Create the first checkpoint:
-   - current todo
-   - active slice
-   - completed todos
-   - evidence refs
-   - blocked-on items
-   - next step
-7. If baseline refs are missing, pause in `needs-baseline-readback`.
-8. If the workspace helper is available, use `aegis-workspace.py new-work` to
-   create/index the first `docs/aegis/work/` files and run `check --root
-   <target-project-root>` before continuing.
+不要在每次工具调用后更新。一个合格检查点应让新执行者立即回答：为什么做、做到哪里、证据是什么、哪里受阻、下一步是什么。
 
-## Per-Slice Protocol
+## 恢复协议
 
-Before each work slice, restate:
+恢复时绝不只凭记忆或检查点继续：
 
-1. current goal
-2. current todo
-3. intended edits
-4. explicit non-edits
-5. verification command or manual check
+1. 重读当前用户请求、项目规则、权威计划/issue（若存在）和 `state.md`；
+2. 只读检查当前工作区、相关文件、todo 与可用证据；
+3. 将检查点声明与当前事实对照：
+   - 一致：继续下一动作；
+   - 出现不重叠的新改动：保留并适配；
+   - 检查点落后但工具可还原事实：自行还原并更新状态；
+   - 用户意图、所有权或不可逆操作存在无法从工具消解的实质冲突：标记 `needs-user-decision` 并提问；
+4. 对输入已变化的旧证据重新执行相关验证，不机械重跑无关套件；
+5. 更新 `state.md`，然后立即执行已确认的下一动作。
 
-For micro-slices under an existing parent plan, use the Planless Slice Lane and
-state the Slice Card instead of opening a new planning/specification artifact.
+恢复核对必须是只读的。**禁止为了得到“干净基线”而 stash、reset、checkout、revert、删除或覆盖不属于本任务的改动。** 工作区较脏不是破坏他人工作的授权。
 
-After each work slice, update:
+## 子代理与并行切片
 
-1. completed todos
-2. evidence refs
-3. baseline usage if newly required refs were acknowledged, cited, or found missing
-4. blockers
-5. next step
-6. drift check
-7. helper-backed JSON sidecars through `aegis-workspace.py add-checkpoint`,
-   `aegis-workspace.py add-baseline-usage`, `aegis-workspace.py add-evidence`, and `aegis-workspace.py add-drift-check`
-   when available
+本技能不要求使用子代理。任务已经并行时：
 
-If no fresh evidence exists, the state is `needs-verification` or `partial`.
+- 主执行者是 `state.md` 的唯一写入者；
+- 每个切片返回状态、改动文件、观察证据、风险和未完成项；
+- “子代理已完成”不等于结果已集成或已验证；
+- 失败或失联切片保持未完成，记录已有产物、失败事实和下一动作；
+- 只有接收并核对后的结果才能写入已完成列表。
 
-## Resume Protocol
+## 漂移检查
 
-When resuming:
+每个重要边界回答：
 
-1. Read latest checkpoint.
-2. Read latest resume hint if present.
-3. Re-read original task intent.
-4. Re-read required baseline refs.
-5. Compare current worktree state with checkpoint claims.
-6. If checkpoint, baseline, and worktree disagree, pause and ask for direction.
+- 当前工作仍服务原始请求和成功证据吗？
+- 是否越过范围、所有权或兼容边界？
+- 是否出现新的事实源、重复实现或未计划的回退路径？
+- 已完成声明是否仍由当前代码和证据支持？
+- 下一动作是否仍是通向交付的直接步骤？
 
-Never resume from memory alone.
+可从仓库和工具消解的漂移由执行者处理；只有需要产品取舍、权限或不可逆决定的冲突才上交用户。
 
-## Drift Check
+## 完成与清理
 
-Answer these after each slice:
+完成声明遵循当前项目的验收和验证规则，不依赖某个外部技能：
 
-- Does the current work still serve the original task intent?
-- Does the current work still serve the goal and stop condition?
-- Did the slice stay inside the compatibility boundary?
-- Did any new owner, fallback, adapter, or branch appear?
-- Is the retirement track still explicit?
-- Did the evidence bundle grow enough to support the next claim?
+1. 每个 todo 都有最终状态；
+2. 每项成功标准都有当前、可复现的证据；
+3. 阻塞已解决，或明确说明任务仍为 partial/blocked；
+4. 工作区中的相关改动已按用户视角核对；
+5. `state.md` 反映真实最终状态，而不是预期结果。
 
-Allowed decisions:
+任务交付且确认无需恢复后，把稳定决策、接口约束和操作说明提升到项目正式文档；确认没有唯一信息遗留后，清理本地状态和原始日志。不要把执行期流水账永久化为项目历史。
 
-- `continue`
-- `pause-for-user`
-- `needs-baseline-readback`
-- `needs-verification`
-- `blocked`
+## 快速参考
 
-Forbidden decisions:
+| 事件 | 动作 |
+|------|------|
+| 即将压缩/暂停 | 更新状态、证据、阻塞、下一动作 |
+| 恢复任务 | 重读契约与状态，只读核对当前事实 |
+| 发现工作区漂移 | 保留他人改动，自行消解可验证差异 |
+| 子代理返回 | 接收、核对后再更新切片状态 |
+| 需要跨机器共享 | 发布精炼交接摘要，不提交原始状态 |
+| 任务完成 | 验证验收条件，提升稳定知识，清理本地状态 |
 
-- `gate-passed`
-- `completion-granted`
-- `authoritatively-safe`
+## 常见错误
 
-## Completion Candidate Protocol
+- 把所有多步骤任务都当成长任务，制造不必要工件；
+- 把检查点当成当前代码事实，盲目续跑；
+- 默认把 `docs/work` 当成本地缓存并提交；
+- 复制完整聊天、日志或每轮命令，掩盖真正的恢复信息；
+- 为了恢复而清理、暂存或回退他人的工作区改动；
+- 遇到任何差异都停下来问用户，而不先用工具还原事实；
+- 把部分切片完成、子代理退出或旧测试记录当作整体完成；
+- 引用不存在的技能、helper、门禁或旧工作流术语。
 
-Before saying work is complete:
+## 对外状态格式
 
-1. Use aegis:verification-before-completion.
-2. Confirm every todo has a status.
-3. Confirm blockers are resolved or externalized.
-4. Confirm evidence refs cover the acceptance criteria.
-5. Confirm drift check has no blocking state.
-6. Run `python <aegis-workspace-helper> bundle --root <target-project-root>
-   --work YYYY-MM-DD-<slug>` if the helper is available and a work record
-   exists.
-7. Run `python <aegis-workspace-helper> check --root <target-project-root>`
-   if the helper is available and the task wrote `docs/aegis/` records.
-8. Treat the generated `GateInputPack` as future-runtime input only.
-9. If durable architecture decisions were in scope, pass the work record,
-   proof bundle, drift checks, evidence refs, and ADR signals into
-   aegis:verification-before-completion for ADR Backfill Check.
+长任务进度更新保持紧凑：
 
-Method Pack output is verified evidence and advisory judgment only. It is not authoritative completion.
+```text
+续作状态：
+- 状态：
+- 已完成：
+- 当前证据：
+- 风险/阻塞：
+- 下一步：
+- 本地状态：<state.md path>
+```
 
-## Minimal Reporting Shape
-
-Use this shape for long-task updates:
-
-- `TodoCheckpointDraft`: current todo, completed todos, active slice, next step
-- `BaselineUsageDraft`: required refs, acknowledged refs, cited refs, missing refs, decision
-- `Evidence`: commands, files, logs, or manual checks
-- `DriftCheckDraft`: scope, compatibility, retirement, decision
-- `Risk / Unknown`: unresolved blockers or missing evidence
-- `Next`: the next smallest safe action
+状态更新用于协作，不是停工点；只要仍有可执行工作，就继续推进。

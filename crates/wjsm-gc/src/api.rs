@@ -4,8 +4,8 @@
 //! - INV-C1：JS 值层引用是 handle；`obj_table[h]` 是唯一 ptr truth。
 //! - INV-C2：raw ptr 不跨潜在 moving/collect GC 点；跨越必须重新 resolve。
 //!
-//! 本模块只含算法可消费的后端无关类型。绑 wasmtime 的 `GcContext` /
-//! `RootProvider` 留在 host-wasm 接合层。
+//! 本模块只含算法可消费的后端无关类型；collector capability 与 root provider
+//! 留在 native host 接合层。
 
 // ── 基础别名 ──
 /// 对象 handle（obj_table 下标）。NaN-boxed 值的低 32 位。

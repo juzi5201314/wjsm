@@ -85,8 +85,8 @@ module {
     bb1:
       %14 = const c26
       store var $1.$shared_env, %14
-      %30 = load var $1.$state
-      switch %30 [case c31 -> bb2, case c32 -> bb3], default bb8, exit bb9
+      %29 = load var $1.$state
+      switch %29 [case c31 -> bb2, case c32 -> bb3], default bb8, exit bb9
     bb2:
       %15 = const c27
       %16 = load var $1.$generator
@@ -104,14 +104,13 @@ module {
       call builtin.async_generator.throw(%24, %18)
       return
     bb5:
-      %28 = const c30
-      %29 = load var $1.$generator
-      call builtin.async_generator.return(%29, %28)
+      %27 = const c30
+      %28 = load var $1.$generator
+      call builtin.async_generator.return(%28, %27)
       return
     bb6:
       %25 = load var $1.$generator
-      %26 = load var $1.$resume_val
-      call builtin.async_generator.return(%25, %26)
+      call builtin.async_generator.return(%25, %18)
       return
     bb7:
       %22 = const c29
@@ -131,17 +130,23 @@ module {
       store var $2.arguments, %2
       %6 = const c42
       %7 = const c36
-      set_prop %2, %7, %6
-      %8 = const c37
-      %9 = const c38
-      %10 = const c39
-      %11 = call builtin.continuation.create(%8, %10, %9)
-      %12 = call builtin.async_generator.start(%11)
-      %13 = const c40
-      call builtin.continuation.save_var(%11, %13, %12)
-      %14 = const c41
-      call builtin.continuation.save_var(%11, %14, %10)
-      return %12
+      %8 = set_prop %2, %7, %6
+      %9 = is_exception %8
+      branch %9, bb2, bb1
+    bb1:
+      %11 = const c37
+      %12 = const c38
+      %13 = const c39
+      %14 = call builtin.continuation.create(%11, %13, %12)
+      %15 = call builtin.async_generator.start(%14)
+      %16 = const c40
+      call builtin.continuation.save_var(%14, %16, %15)
+      %17 = const c41
+      call builtin.continuation.save_var(%14, %17, %13)
+      return %15
+    bb2:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.result] [entry=bb0]:
     bb0:

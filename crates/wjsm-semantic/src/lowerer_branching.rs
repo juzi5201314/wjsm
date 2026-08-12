@@ -24,7 +24,7 @@ impl Lowerer {
         };
         let target = self.label_stack[target_index].break_target;
         if let StmtFlow::Open(after) =
-            self.emit_unwind_for_abrupt(block, target_index as isize, None, true)?
+            self.emit_unwind_for_abrupt(block, target_index as isize, None, true, None)?
         {
             self.current_function
                 .set_terminator(after, Terminator::Jump { target });
@@ -55,7 +55,7 @@ impl Lowerer {
             .continue_target
             .expect("continue target checked above");
         if let StmtFlow::Open(after) =
-            self.emit_unwind_for_abrupt(block, target_index as isize, None, false)?
+            self.emit_unwind_for_abrupt(block, target_index as isize, None, false, None)?
         {
             self.current_function
                 .set_terminator(after, Terminator::Jump { target });
@@ -149,6 +149,7 @@ impl Lowerer {
         exit_below: isize,
         completion: Option<ValueId>,
         include_target_iterator: bool,
+        completion_slot: Option<&str>,
     ) -> Result<StmtFlow, LoweringError> {
         let mut items: Vec<(i64, i64, UnwindStep)> = Vec::new();
         for (i, ctx) in self.label_stack.iter().enumerate() {
@@ -197,7 +198,20 @@ impl Lowerer {
                     // finally 内部的 abrupt completion 只继续展开更外层 finalizer。
                     self.active_finalizers = saved[..fi].to_vec();
                     match self.lower_block_body(&fin_block, StmtFlow::Open(current))? {
-                        StmtFlow::Open(after) => current = after,
+                        StmtFlow::Open(after) => {
+                            current = after;
+                            if let Some(name) = completion_slot {
+                                let restored = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    current,
+                                    Instruction::LoadVar {
+                                        dest: restored,
+                                        name: name.to_string(),
+                                    },
+                                );
+                                completion = Some(restored);
+                            }
+                        }
                         StmtFlow::Terminated => {
                             self.active_finalizers = saved;
                             return Ok(StmtFlow::Terminated);
@@ -282,12 +296,23 @@ impl Lowerer {
         value: ValueId,
     ) -> Result<StmtFlow, LoweringError> {
         let throw_block = self.resolve_store_block(block);
-        if self.emit_throw_to_nearest_catch(throw_block, value, false)? {
+        let completion_slot = self.preserve_suspending_completion(throw_block, value);
+        if self.emit_throw_to_nearest_catch(
+            throw_block,
+            value,
+            false,
+            completion_slot.as_deref(),
+        )? {
             return Ok(StmtFlow::Terminated);
         }
 
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
+                let value = self.reload_suspending_completion(
+                    after_finally,
+                    value,
+                    completion_slot.as_deref(),
+                );
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
                     self.current_function.append_instruction(
@@ -410,6 +435,51 @@ impl Lowerer {
         Ok(after)
     }
 
+    pub(crate) fn preserve_suspending_completion(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Option<String> {
+        if self.active_finalizers.is_empty() {
+            return None;
+        }
+        let name = format!("$abrupt_completion_{}", self.next_temp);
+        self.next_temp += 1;
+        let scope_id = self
+            .scopes
+            .declare(&name, VarKind::Let, true)
+            .expect("generated abrupt completion binding is unique");
+        let ir_name = format!("${scope_id}.{name}");
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: ir_name.clone(),
+                value,
+            },
+        );
+        Some(ir_name)
+    }
+
+    pub(crate) fn reload_suspending_completion(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+        slot: Option<&str>,
+    ) -> ValueId {
+        let Some(name) = slot else {
+            return value;
+        };
+        let restored = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: restored,
+                name: name.to_string(),
+            },
+        );
+        restored
+    }
+
     // ── return ──────────────────────────────────────────────────────────────
 
     pub(crate) fn lower_return(
@@ -426,9 +496,19 @@ impl Lowerer {
                 self.alloc_undefined_value(block)
             };
             let return_block = self.resolve_store_block(block);
-            if let StmtFlow::Open(after_close) =
-                self.emit_unwind_for_abrupt(return_block, -1, Some(value), false)?
-            {
+            let completion_slot = self.preserve_suspending_completion(return_block, value);
+            if let StmtFlow::Open(after_close) = self.emit_unwind_for_abrupt(
+                return_block,
+                -1,
+                Some(value),
+                false,
+                completion_slot.as_deref(),
+            )? {
+                let value = self.reload_suspending_completion(
+                    after_close,
+                    value,
+                    completion_slot.as_deref(),
+                );
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
                     self.current_function.append_instruction(
@@ -476,9 +556,19 @@ impl Lowerer {
                 self.alloc_undefined_value(block)
             };
             let return_block = self.resolve_store_block(block);
-            if let StmtFlow::Open(after_close) =
-                self.emit_unwind_for_abrupt(return_block, -1, Some(value), false)?
-            {
+            let completion_slot = self.preserve_suspending_completion(return_block, value);
+            if let StmtFlow::Open(after_close) = self.emit_unwind_for_abrupt(
+                return_block,
+                -1,
+                Some(value),
+                false,
+                completion_slot.as_deref(),
+            )? {
+                let value = self.reload_suspending_completion(
+                    after_close,
+                    value,
+                    completion_slot.as_deref(),
+                );
                 let gen_val = self.alloc_value();
                 self.current_function.append_instruction(
                     after_close,
@@ -513,7 +603,7 @@ impl Lowerer {
 
         let return_block = self.resolve_store_block(block);
         if let StmtFlow::Open(after_close) =
-            self.emit_unwind_for_abrupt(return_block, -1, value, false)?
+            self.emit_unwind_for_abrupt(return_block, -1, value, false, None)?
         {
             self.current_function
                 .set_terminator(after_close, Terminator::Return { value });
@@ -737,6 +827,7 @@ impl Lowerer {
         block: BasicBlockId,
         value: ValueId,
         close_iterators: bool,
+        completion_slot: Option<&str>,
     ) -> Result<bool, LoweringError> {
         let Some((target_index, catch_entry, exc_var, label_depth)) = self.nearest_catch_context()
         else {
@@ -745,6 +836,8 @@ impl Lowerer {
         let keep_len = self.finalizer_keep_len_for_try_context(target_index);
         match self.lower_pending_finalizers_after(block, keep_len)? {
             StmtFlow::Open(after_finally) => {
+                let value =
+                    self.reload_suspending_completion(after_finally, value, completion_slot);
                 self.current_function.append_instruction(
                     after_finally,
                     Instruction::StoreVar {
@@ -776,12 +869,18 @@ impl Lowerer {
         value: ValueId,
     ) -> Result<StmtFlow, LoweringError> {
         let throw_block = self.resolve_store_block(block);
-        if self.emit_throw_to_nearest_catch(throw_block, value, true)? {
+        let completion_slot = self.preserve_suspending_completion(throw_block, value);
+        if self.emit_throw_to_nearest_catch(throw_block, value, true, completion_slot.as_deref())? {
             return Ok(StmtFlow::Terminated);
         }
 
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
+                let value = self.reload_suspending_completion(
+                    after_finally,
+                    value,
+                    completion_slot.as_deref(),
+                );
                 let iterator_cleanups = self.active_iterator_cleanups();
                 let after_close =
                     self.emit_iterator_closes(after_finally, &iterator_cleanups, value)?;

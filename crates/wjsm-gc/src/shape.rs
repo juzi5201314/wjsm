@@ -3,7 +3,7 @@
 //! # 为什么属性元数据不在堆里
 //!
 //! 重构前每个属性占 32 字节堆内槽（name_id | flags | value | getter | setter），
-//! 属性查找是「线性扫 name_id」；wasm 快链只能展开固定槽数，属性多了就落宿主。
+//! 属性查找是线性扫 name_id；旧实现只能展开固定槽数，属性多了就落宿主。
 //! 现在堆内只留**紧凑值数组**（每槽 8 字节 boxed i64，与数组元素完全同构），
 //! name_id / flags / 值槽下标全部搬到本模块的 [`ShapeTable`]：
 //!
@@ -19,8 +19,8 @@
 //!
 //! 这带来三个直接后果：
 //!
-//! 1. **wasm 侧属性读退化为「u32 shape 比较 + 常量偏移 load」**，不需要在 wasm 里
-//!    遍历任何 shape 结构（IC 槽里存的是编译期无关的 `shape_id` + `value_index`）。
+//! 1. **属性读退化为「u32 shape 比较 + 常量偏移 load」**，不需要遍历任何 shape
+//!    结构（IC 槽里存的是编译期无关的 `shape_id` + `value_index`）。
 //! 2. **GC / handle remap / ZGC 重定位 / 快照恢复统统按 `16 + capacity*8` 走**，
 //!    每槽当作一个 boxed i64，与数组元素同一套公式——不再需要「每槽 trace 三个字
 //!    并按 flags 区分 accessor」的分支。未使用的值槽恒为 0（即 `+0.0`），不是句柄，
@@ -62,8 +62,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use wjsm_ir::constants::{
-    DICTIONARY_THRESHOLD, FLAG_IS_ACCESSOR, SHAPE_ID_EMPTY, SHAPE_MAP_THRESHOLD,
-    SHAPE_TABLE_BUDGET,
+    DICTIONARY_THRESHOLD, FLAG_IS_ACCESSOR, SHAPE_ID_EMPTY, SHAPE_MAP_THRESHOLD, SHAPE_TABLE_BUDGET,
 };
 
 /// 单个属性在 shape 中的描述。`index` 是**值槽下标**，不是属性序号：
@@ -271,12 +270,7 @@ impl ShapeTable {
 
     /// 收紧已存在属性的 flags（`Object.freeze` / `seal` / 描述符收紧）。
     /// 属性不存在时返回 `None`。
-    pub fn update_flags(
-        &self,
-        shape_id: u32,
-        name_id: u32,
-        flags: u32,
-    ) -> Option<ShapeTransition> {
+    pub fn update_flags(&self, shape_id: u32, name_id: u32, flags: u32) -> Option<ShapeTransition> {
         let mut inner = self.inner.write();
         let shape = inner.shapes.get(shape_id as usize)?;
         shape.find(name_id)?;
@@ -709,7 +703,10 @@ mod tests {
         restored.import(table.export());
         assert_eq!(restored.shape_count(), table.shape_count());
         assert_eq!(restored.proto_generation(), 1);
-        assert_eq!(restored.lookup(ab.shape_id, 2), table.lookup(ab.shape_id, 2));
+        assert_eq!(
+            restored.lookup(ab.shape_id, 2),
+            table.lookup(ab.shape_id, 2)
+        );
         // transition 边被保留 → 恢复后同结构对象仍复用同一 shape，不产生新 id。
         let again = restored.transition_add(a.shape_id, 2, ACCESSOR);
         assert_eq!(again.shape_id, ab.shape_id);

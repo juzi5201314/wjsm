@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use super::collector_context::CollectorContext;
 use super::mutator::MutatorContext;
 
-/// V2 collector/mutator 协调的共享 owner；本任务不持有 heap、Store 或 collector 算法。
+/// V2 collector/mutator 协调的共享 owner；不持有 heap 或 collector 算法。
 pub struct GcRuntimeV2 {
     requested_epoch: AtomicU64,
     next_mutator_id: AtomicU32,
@@ -62,7 +62,7 @@ impl GcRuntimeV2 {
     }
 }
 
-/// collector 只能消费不可变、handle-only 的 root snapshot，不能回持 mutator Store。
+/// collector 只能消费不可变、handle-only 的 root snapshot，不能回持 mutator 状态。
 #[derive(Clone)]
 pub struct RootSnapshot {
     epoch: u64,

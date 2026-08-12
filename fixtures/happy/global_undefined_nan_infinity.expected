@@ -3,4 +3,6 @@ exit_code: 0
 undefined
 NaN
 Infinity
+NaN
+NaN
 --- stderr ---

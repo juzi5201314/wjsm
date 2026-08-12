@@ -313,26 +313,12 @@ impl Lowerer {
                 },
             );
             let super_key_dest = self.emit_string_const(block, "__super_constructor__");
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: ctor_dest,
-                    key: super_key_dest,
-                    value: super_ctor,
-                },
-            );
+            self.emit_set_prop(block, ctor_dest, super_key_dest, super_ctor);
         }
 
         // 设置 prototype.constructor = ctor（ECMAScript: ClassDefinitionEvaluation）
         let ctor_key_dest = self.emit_string_const(block, "constructor");
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: proto_dest,
-                key: ctor_key_dest,
-                value: ctor_dest,
-            },
-        );
+        self.emit_set_prop(block, proto_dest, ctor_key_dest, ctor_dest);
 
         // ── 成员处理 ──
         let mut block = block;
@@ -398,14 +384,7 @@ impl Lowerer {
         self.emit_static_private_member_binds(block, ctor_dest, &private_members);
 
         let proto_key_dest = self.emit_string_const(block, "prototype");
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: ctor_dest,
-                key: proto_key_dest,
-                value: proto_dest,
-            },
-        );
+        self.emit_set_prop(block, ctor_dest, proto_key_dest, proto_dest);
 
         let direct_constructor = class.decorators.is_empty().then_some(ctor_function_id);
         let (block, ctor_dest) =
@@ -464,14 +443,7 @@ impl Lowerer {
                             },
                         )?;
                     }
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::SetProp {
-                            object: target,
-                            key: m_key_dest,
-                            value: method_value,
-                        },
-                    );
+                    self.emit_set_prop(block, target, m_key_dest, method_value);
                     return Ok(block);
                 }
 
@@ -500,14 +472,7 @@ impl Lowerer {
                         },
                     )?;
                 }
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::SetProp {
-                        object: target,
-                        key: m_key_dest,
-                        value: m_dest,
-                    },
-                );
+                self.emit_set_prop(block, target, m_key_dest, m_dest);
                 Ok(block)
             }
             swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter => {

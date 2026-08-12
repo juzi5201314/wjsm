@@ -70,7 +70,7 @@ impl Lowerer {
             entry,
             Instruction::LoadVar {
                 dest: cont_val,
-                name: format!("${env_scope_id}.$env"),
+                name: "$env".to_string(),
             },
         );
         for (slot, name) in [
@@ -312,7 +312,7 @@ impl Lowerer {
                 wrapper_after_inits,
                 Instruction::LoadVar {
                     dest: env_val,
-                    name: format!("${wrapper_env_scope_id}.$env"),
+                    name: "$env".to_string(),
                 },
             );
             let closure_val = self.alloc_value();

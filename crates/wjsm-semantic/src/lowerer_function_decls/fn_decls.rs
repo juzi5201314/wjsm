@@ -172,14 +172,7 @@ impl Lowerer {
                 .shared_env_value()
                 .expect("shared binding must have materialized env");
             let key_val = self.append_env_key_const(block, &binding);
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: env_val,
-                    key: key_val,
-                    value: callee_val,
-                },
-            );
+            self.emit_set_prop(block, env_val, key_val, callee_val);
         }
 
         self.append_eval_var_leak_if_needed(name, VarKind::Var, callee_val, block)

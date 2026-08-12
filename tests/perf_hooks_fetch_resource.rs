@@ -5,9 +5,8 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::runtime::Builder;
 use wjsm_runtime::{
-    RuntimeCompiler, RuntimeOptions, compile_source, execute_with_writer_with_options,
+    RuntimeInput, RuntimeOptions, compile_source, execute_with_writer_with_options,
 };
 
 fn spawn_http_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
@@ -68,16 +67,14 @@ fn respond_to_request(stream: &mut std::net::TcpStream) {
 }
 
 fn run_source(source: &str, base_url: &str) -> Result<(String, String)> {
-    let wasm = compile_source(source)?;
-    let runtime = Builder::new_current_thread().enable_all().build()?;
+    let artifact = compile_source(source)?;
     let options = RuntimeOptions {
-        compiler: Some(RuntimeCompiler::Winch),
         env: vec![("WJSM_TEST_URL".to_string(), base_url.to_string())],
         ..RuntimeOptions::default()
     };
-    let (stdout, diagnostics) = runtime
-        .block_on(async { execute_with_writer_with_options(&wasm, Vec::new(), options).await })?;
-    Ok((String::from_utf8(stdout)?, String::from_utf8(diagnostics)?))
+    let mut stdout = Vec::new();
+    execute_with_writer_with_options(RuntimeInput::Artifact(&artifact), &mut stdout, options)?;
+    Ok((String::from_utf8(stdout)?, String::new()))
 }
 
 #[test]

@@ -5,16 +5,16 @@ use std::process::Command;
 
 use crate::work_dir::repo_root;
 
-/// 与 `crates/wjsm-host-wasm/src/engine_config.rs` 的 `WASMTIME_VERSION` 同步。
-pub const WASMTIME_VERSION: &str = "43.0.2";
+/// 当前 native image compiler 使用的 Cranelift 版本。
+pub const CRANELIFT_VERSION: &str = wjsm_backend_native::CRANELIFT_VERSION;
 
 /// 主机与工具链快照。
 #[derive(Clone, Debug, Serialize)]
 pub struct EnvironmentSnapshot {
     pub node_version: Option<String>,
     pub wjsm_version: Option<String>,
-    /// 硬编码，与 engine_config.rs 的 WASMTIME_VERSION 同步。
-    pub wasmtime_version: String,
+    /// Cranelift 版本，用于解释 native image/cache 的可比性。
+    pub cranelift_version: String,
     pub hyperfine_version: Option<String>,
     pub os: String,
     pub arch: String,
@@ -24,7 +24,7 @@ pub struct EnvironmentSnapshot {
     pub physical_memory_bytes: u64,
     pub available_memory_bytes: u64,
     pub wjsm_gc: String,
-    pub wjsm_compiler: String,
+    pub wjsm_backend: String,
     pub git_rev: Option<String>,
 }
 
@@ -71,7 +71,7 @@ pub fn detect(node_bin: &str, wjsm_bin: &str) -> EnvironmentSnapshot {
     EnvironmentSnapshot {
         node_version: first_line(Command::new(node_bin).arg("--version")),
         wjsm_version: first_line(Command::new(wjsm_bin).arg("--version")),
-        wasmtime_version: WASMTIME_VERSION.to_owned(),
+        cranelift_version: CRANELIFT_VERSION.to_owned(),
         hyperfine_version: first_line(Command::new("hyperfine").arg("--version")),
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
@@ -81,7 +81,7 @@ pub fn detect(node_bin: &str, wjsm_bin: &str) -> EnvironmentSnapshot {
         physical_memory_bytes: system.total_memory(),
         available_memory_bytes: system.available_memory(),
         wjsm_gc: std::env::var("WJSM_GC").unwrap_or_else(|_| "zgc".into()),
-        wjsm_compiler: std::env::var("WJSM_COMPILER").unwrap_or_else(|_| "cranelift".into()),
+        wjsm_backend: "cranelift-native".to_owned(),
         git_rev: git_rev(),
     }
 }

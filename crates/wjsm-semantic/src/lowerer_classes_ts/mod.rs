@@ -313,14 +313,7 @@ impl Lowerer {
         value: ValueId,
     ) {
         let key = self.emit_string_const(block, key);
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: context,
-                key,
-                value,
-            },
-        );
+        self.emit_set_prop(block, context, key, value);
     }
 
     fn emit_decorator_context(

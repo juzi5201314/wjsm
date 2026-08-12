@@ -363,6 +363,61 @@ impl Lowerer {
                 args: vec![func_ref_val, promise_val, count_val],
             },
         );
+        // slot 0: 初始状态为入口状态 0
+        let initial_state_slot_const = self.module.add_constant(Constant::Number(0.0));
+        let initial_state_slot = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: initial_state_slot,
+                constant: initial_state_slot_const,
+            },
+        );
+        let initial_state_value_const = self.module.add_constant(Constant::Number(0.0));
+        let initial_state_value = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: initial_state_value,
+                constant: initial_state_value_const,
+            },
+        );
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, initial_state_slot, initial_state_value],
+            },
+        );
+
+        // slot 1: 初始完成状态为 fulfilled
+        let initial_rejected_slot_const = self.module.add_constant(Constant::Number(1.0));
+        let initial_rejected_slot = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: initial_rejected_slot,
+                constant: initial_rejected_slot_const,
+            },
+        );
+        let initial_rejected_value_const = self.module.add_constant(Constant::Bool(false));
+        let initial_rejected_value = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: initial_rejected_value,
+                constant: initial_rejected_value_const,
+            },
+        );
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, initial_rejected_slot, initial_rejected_value],
+            },
+        );
 
         // ContinuationSaveVar slot 2 = promise
         let save_slot2_const = self.module.add_constant(Constant::Number(2.0));

@@ -366,7 +366,7 @@ impl Lowerer {
                 wrapper_after_inits,
                 Instruction::LoadVar {
                     dest: env_val,
-                    name: format!("${wrapper_env_scope_id}.$env"),
+                    name: "$env".to_string(),
                 },
             );
             let closure_val = self.alloc_value();

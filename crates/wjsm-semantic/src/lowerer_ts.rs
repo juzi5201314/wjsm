@@ -65,14 +65,7 @@ impl Lowerer {
                     constant: key_const,
                 },
             );
-            self.current_function.append_instruction(
-                block,
-                Instruction::SetProp {
-                    object: obj_dest,
-                    key: key_dest,
-                    value: member_value,
-                },
-            );
+            self.emit_set_prop(block, obj_dest, key_dest, member_value);
 
             // 反向映射：obj[value] = memberName（数字值 → 成员名）
             let reverse_key_str = if let Some(init_expr) = &member.init {
@@ -140,14 +133,7 @@ impl Lowerer {
                 constant: rev_val_const,
             },
         );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: obj_dest,
-                key: rev_key_dest,
-                value: rev_val_dest,
-            },
-        );
+        self.emit_set_prop(block, obj_dest, rev_key_dest, rev_val_dest);
     }
 
     pub(crate) fn lower_ts_module(
@@ -257,14 +243,7 @@ impl Lowerer {
                             constant: key_const,
                         },
                     );
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::SetProp {
-                            object: obj_dest,
-                            key: key_dest,
-                            value: nested_obj,
-                        },
-                    );
+                    self.emit_set_prop(block, obj_dest, key_dest, nested_obj);
                 }
             }
         }
@@ -319,14 +298,7 @@ impl Lowerer {
                         constant: key_const,
                     },
                 );
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::SetProp {
-                        object: obj_dest,
-                        key: key_dest,
-                        value: val,
-                    },
-                );
+                self.emit_set_prop(block, obj_dest, key_dest, val);
             }
         }
         Ok(())

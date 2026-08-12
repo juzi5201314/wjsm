@@ -99,7 +99,7 @@ pub(crate) fn builtin_cache_key(
 ///
 /// 不做 `program.verify()` 门禁：部分 builtin 闭包（events/path/perf_hooks）在基线上
 /// 就存在死块校验告警（block has instructions but terminator is unreachable），运行时
-/// 与 wasm 编译均容忍；若把 verify 当命中条件，这些闭包的缓存永远不命中。
+/// 与 native 编译均容忍；若把 verify 当命中条件，这些闭包的缓存永远不命中。
 /// 段与 plain 路径同源（同一 lowerer），结构合法由 bincode 解码 + 版本号保证。
 pub(crate) fn load_builtin_segment(dir: &Path, key: &str) -> Option<BuiltinSegmentCacheFile> {
     let path = dir.join(format!("{key}.bin"));

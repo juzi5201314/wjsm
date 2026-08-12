@@ -68,14 +68,9 @@ impl Lowerer {
         block: BasicBlockId,
         builtin: Builtin,
     ) -> Result<ValueId, LoweringError> {
-        let (name, min_args) = builtin_call_signature(builtin);
-        if call.args.len() < min_args {
-            return Err(self.error(
-                call.span(),
-                format!("{name} requires at least {min_args} argument"),
-            ));
+        if builtin == Builtin::ConsoleLog && call.args.is_empty() {
+            return Err(self.error(call.span, "console.log requires at least 1 argument"));
         }
-
         let mut call_block = block;
         let (effective_builtin, args) = if builtin == Builtin::MathMax
             && Self::call_args_have_spread(&call.args)

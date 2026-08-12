@@ -23,7 +23,7 @@ pub fn create_revocable_proxy<E: ExecContext>(ctx: &mut E, target: Value, handle
     result
 }
 
-pub async fn reflect_delete_property<E: ExecContext>(
+pub fn reflect_delete_property<E: ExecContext>(
     ctx: &mut E,
     target: Value,
     property: Value,
@@ -38,7 +38,7 @@ pub async fn reflect_delete_property<E: ExecContext>(
         };
     if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "deleteProperty")
     {
-        return match ctx.call_js_async(trap, handler, &[target, property]).await {
+        return match ctx.call_js(trap, handler, &[target, property]) {
             Ok(result) => value::encode_bool(value::is_truthy(result)),
             Err(_) => value::encode_bool(false),
         };
@@ -46,7 +46,7 @@ pub async fn reflect_delete_property<E: ExecContext>(
     crate::proxy_reflect::reflect_delete_property_impl(ctx, target, property)
 }
 
-pub async fn reflect_apply<E: ExecContext>(
+pub fn reflect_apply<E: ExecContext>(
     ctx: &mut E,
     target: Value,
     this_arg: Value,
@@ -55,18 +55,17 @@ pub async fn reflect_apply<E: ExecContext>(
     if !ctx.is_callable(target) {
         return ctx.make_type_error("TypeError: Reflect.apply target must be callable");
     }
-    let args = match crate::proxy_reflect_async::extract_array_like_elements(ctx, args_array).await
-    {
+    let args = match crate::proxy_reflect_reentrant::extract_array_like_elements(ctx, args_array) {
         Ok(args) => args,
         Err(error) => {
             ctx.set_last_error(error);
             return value::encode_undefined();
         }
     };
-    crate::proxy_reflect_async::reflect_apply_impl_async(ctx, target, this_arg, &args).await
+    crate::proxy_reflect_reentrant::reflect_apply_impl(ctx, target, this_arg, &args)
 }
 
-pub async fn reflect_construct<E: ExecContext>(
+pub fn reflect_construct<E: ExecContext>(
     ctx: &mut E,
     target: Value,
     args_array: Value,
@@ -82,26 +81,25 @@ pub async fn reflect_construct<E: ExecContext>(
             "TypeError: Reflect.construct target and newTarget must be constructors",
         );
     }
-    let args = match crate::proxy_reflect_async::extract_array_like_elements(ctx, args_array).await
-    {
+    let args = match crate::proxy_reflect_reentrant::extract_array_like_elements(ctx, args_array) {
         Ok(args) => args,
         Err(error) => {
             ctx.set_last_error(error);
             return value::encode_undefined();
         }
     };
-    crate::proxy_reflect_async::reflect_construct_impl_async(ctx, target, &args, new_target).await
+    crate::proxy_reflect_reentrant::reflect_construct_impl(ctx, target, &args, new_target)
 }
 
-pub async fn reflect_get_prototype_of<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
+pub fn reflect_get_prototype_of<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
     if !is_object_like(target) && !value::is_regexp(target) {
         ctx.set_last_error("TypeError: Reflect.getPrototypeOf called on non-object".to_string());
         return value::encode_undefined();
     }
-    crate::proxy_reflect_async::reflect_get_prototype_of_async(ctx, target).await
+    crate::proxy_reflect_reentrant::reflect_get_prototype_of(ctx, target)
 }
 
-pub async fn reflect_set_prototype_of<E: ExecContext>(
+pub fn reflect_set_prototype_of<E: ExecContext>(
     ctx: &mut E,
     target: Value,
     prototype: Value,
@@ -116,10 +114,10 @@ pub async fn reflect_set_prototype_of<E: ExecContext>(
         );
         return value::encode_bool(false);
     }
-    crate::proxy_reflect_async::reflect_set_prototype_of_fn_impl(ctx, target, prototype).await
+    crate::proxy_reflect_reentrant::reflect_set_prototype_of_fn_impl(ctx, target, prototype)
 }
 
-pub async fn reflect_is_extensible<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
+pub fn reflect_is_extensible<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
     if !is_object_like(target) {
         ctx.set_last_error("TypeError: Reflect.isExtensible called on non-object".to_string());
         return value::encode_bool(false);
@@ -133,7 +131,7 @@ pub async fn reflect_is_extensible<E: ExecContext>(ctx: &mut E, target: Value) -
             Err(exception) => return exception,
         };
     if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "isExtensible") {
-        return match ctx.call_js_async(trap, handler, &[target]).await {
+        return match ctx.call_js(trap, handler, &[target]) {
             Ok(result) => value::encode_bool(value::is_truthy(result)),
             Err(_) => value::encode_bool(false),
         };
@@ -141,7 +139,7 @@ pub async fn reflect_is_extensible<E: ExecContext>(ctx: &mut E, target: Value) -
     value::encode_bool(ctx.is_extensible(target))
 }
 
-pub async fn reflect_prevent_extensions<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
+pub fn reflect_prevent_extensions<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
     if !is_object_like(target) {
         ctx.set_last_error("TypeError: Reflect.preventExtensions called on non-object".to_string());
         return value::encode_bool(false);
@@ -157,7 +155,7 @@ pub async fn reflect_prevent_extensions<E: ExecContext>(ctx: &mut E, target: Val
     if let Some(trap) =
         crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "preventExtensions")
     {
-        return match ctx.call_js_async(trap, handler, &[target]).await {
+        return match ctx.call_js(trap, handler, &[target]) {
             Ok(result) => value::encode_bool(value::is_truthy(result)),
             Err(_) => value::encode_bool(false),
         };
@@ -165,7 +163,7 @@ pub async fn reflect_prevent_extensions<E: ExecContext>(ctx: &mut E, target: Val
     value::encode_bool(ctx.prevent_extensions(target))
 }
 
-pub async fn reflect_define_property<E: ExecContext>(
+pub fn reflect_define_property<E: ExecContext>(
     ctx: &mut E,
     target: Value,
     property: Value,
@@ -181,10 +179,7 @@ pub async fn reflect_define_property<E: ExecContext>(
         };
     if let Some(trap) = crate::proxy_traps::proxy_trap_handler_trap(ctx, handler, "defineProperty")
     {
-        return match ctx
-            .call_js_async(trap, handler, &[target, property, descriptor])
-            .await
-        {
+        return match ctx.call_js(trap, handler, &[target, property, descriptor]) {
             Ok(result) => value::encode_bool(value::is_truthy(result)),
             Err(_) => value::encode_bool(false),
         };
@@ -192,15 +187,15 @@ pub async fn reflect_define_property<E: ExecContext>(
     value::encode_bool(ctx.define_property_or_throw(target, property, descriptor))
 }
 
-pub async fn reflect_own_keys<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
+pub fn reflect_own_keys<E: ExecContext>(ctx: &mut E, target: Value) -> Value {
     if value::is_proxy(target) {
-        crate::proxy_reflect_async::proxy_own_keys_trap_async(ctx, target).await
+        crate::proxy_reflect_reentrant::proxy_own_keys_trap(ctx, target)
     } else {
         crate::proxy_reflect::reflect_own_keys_impl(ctx, target)
     }
 }
 
-pub async fn proxy_apply<E: ExecContext>(
+pub fn proxy_apply<E: ExecContext>(
     ctx: &mut E,
     proxy: Value,
     this_value: Value,
@@ -224,10 +219,7 @@ pub async fn proxy_apply<E: ExecContext>(
     let trap = ctx.read_data_property(entry.handler, "apply");
     if !value::is_undefined(trap) && !value::is_null(trap) {
         let args_array = args_array(ctx, &args);
-        return match ctx
-            .call_js_async(trap, entry.handler, &[entry.target, this_value, args_array])
-            .await
-        {
+        return match ctx.call_js(trap, entry.handler, &[entry.target, this_value, args_array]) {
             Ok(result) => result,
             Err(_) => {
                 ctx.set_last_error("TypeError: Proxy apply trap failed".to_string());
@@ -235,10 +227,10 @@ pub async fn proxy_apply<E: ExecContext>(
             }
         };
     }
-    crate::proxy_reflect_async::reflect_apply_impl_async(ctx, entry.target, this_value, &args).await
+    crate::proxy_reflect_reentrant::reflect_apply_impl(ctx, entry.target, this_value, &args)
 }
 
-pub async fn proxy_construct<E: ExecContext>(
+pub fn proxy_construct<E: ExecContext>(
     ctx: &mut E,
     proxy: Value,
     args_base: i32,
@@ -261,10 +253,7 @@ pub async fn proxy_construct<E: ExecContext>(
     let trap = ctx.read_data_property(entry.handler, "construct");
     if !value::is_undefined(trap) && !value::is_null(trap) {
         let args_array = args_array(ctx, &args);
-        return match ctx
-            .call_js_async(trap, entry.handler, &[entry.target, args_array, proxy])
-            .await
-        {
+        return match ctx.call_js(trap, entry.handler, &[entry.target, args_array, proxy]) {
             Ok(result) if value::is_js_object(result) => result,
             Ok(_) => {
                 ctx.set_last_error(
@@ -278,7 +267,7 @@ pub async fn proxy_construct<E: ExecContext>(
             }
         };
     }
-    crate::proxy_reflect_async::reflect_construct_impl_async(ctx, entry.target, &args, proxy).await
+    crate::proxy_reflect_reentrant::reflect_construct_impl(ctx, entry.target, &args, proxy)
 }
 
 fn is_object_like(value: Value) -> bool {
@@ -290,7 +279,12 @@ fn is_object_like(value: Value) -> bool {
 
 fn shadow_args<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) -> Vec<Value> {
     (0..args_count.max(0))
-        .map(|index| ctx.read_shadow_arg(args_base, index as u32))
+        .map(|index| {
+            ctx.read_call_arg(
+                wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+                index as u32,
+            )
+        })
         .collect()
 }
 

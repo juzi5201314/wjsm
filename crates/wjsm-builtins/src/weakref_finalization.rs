@@ -9,7 +9,10 @@ pub fn weakref_constructor<E: ExecContext>(ctx: &mut E, args_base: i32, args_cou
         let error_obj = ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
         return value::encode_exception(value::decode_object_handle(error_obj));
     }
-    let target = ctx.read_shadow_arg(args_base, 0);
+    let target = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     if !value::is_js_object(target) {
         let msg_val = ctx.store_string("TypeError: WeakRef: target must be an object");
         let error_obj = ctx.create_error_object("TypeError", msg_val, value::encode_undefined());
@@ -57,7 +60,10 @@ pub fn finalization_registry_constructor<E: ExecContext>(
         );
         return value::encode_undefined();
     }
-    let callback = ctx.read_shadow_arg(args_base, 0);
+    let callback = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
     if !ctx.is_callable(callback) {
         ctx.set_last_error(
             "TypeError: FinalizationRegistry: callback must be callable".to_string(),
@@ -88,10 +94,19 @@ pub fn finalization_registry_proto_register<E: ExecContext>(
     if args_count < 2 {
         return value::encode_undefined();
     }
-    let target = ctx.read_shadow_arg(args_base, 0);
-    let held_value = ctx.read_shadow_arg(args_base, 1);
+    let target = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        0,
+    );
+    let held_value = ctx.read_call_arg(
+        wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+        1,
+    );
     let unregister_token = if args_count >= 3 {
-        let token = ctx.read_shadow_arg(args_base, 2);
+        let token = ctx.read_call_arg(
+            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            2,
+        );
         if value::is_js_object(token) || value::is_symbol(token) {
             Some(token)
         } else {

@@ -1,0 +1,10 @@
+[package]
+name = "wjsm-native-abi"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sha2 = { workspace = true }
+wjsm-artifact-format = { path = "../wjsm-artifact-format" }
+wjsm-host = { path = "../wjsm-host" }
+wjsm-ir = { path = "../wjsm-ir" }

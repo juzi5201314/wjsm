@@ -2,4 +2,8 @@ exit_code: 0
 --- stdout ---
 2
 3
+1 2 a,b
+visible undefined
+3 4 1
+1 2 get:a,keys,desc:a,desc:b,get:b
 --- stderr ---
