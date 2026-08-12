@@ -7,9 +7,12 @@ use cranelift_codegen::ir::{
     StackSlotData, StackSlotKind, UserFuncName, types,
 };
 use cranelift_codegen::isa::CallConv;
+use cranelift_codegen::isa::unwind::UnwindInfo;
 use cranelift_control::ControlPlane;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+use cranelift_module::{
+    DataDescription, DataId, FuncId, Linkage, Module, ModuleDeclarations, ModuleReloc,
+};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use wjsm_ir::{
     BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, EVAL_SCOPE_ENV_PARAM, FunctionId,
@@ -19,6 +22,8 @@ use wjsm_native_abi::{
     NativeHostSymbol, NativeRootFrame, NativeRuntimeOp, NativeVmContext, native_variable_names,
 };
 
+use rayon::prelude::*;
+
 use crate::root_plan::RootPlan;
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::{NativeCompileError, NativeObject};
@@ -27,22 +32,37 @@ const HOST_OPERATION_SYMBOL: NativeHostSymbol = NativeHostSymbol::HostOperationD
 const DYNAMIC_BINARY_BASE: u32 = 0x1_0000;
 const DYNAMIC_UNARY_BASE: u32 = 0x1_0100;
 const DYNAMIC_COMPARE_BASE: u32 = 0x1_0200;
+/// 共享 host 参数区的下限尺寸；无 host 调用的函数也保留一个合法槽。
+const ARENA_MIN_BYTES: u32 = 8;
 
-struct RootFrameLowering {
-    frame_slot: StackSlot,
-    roots_slot: StackSlot,
+/// 一个 generated function 栈帧上的固定资源：GC root frame 与 host 调用参数区。
+///
+/// 三个 base 指针在入口块一次性物化；入口块支配其余所有块，因此它们可以在任意块里
+/// 直接以 `store base + 常量 offset` 使用，无需每次重算 `stack_addr`。
+struct FrameLowering {
     bitmap_by_root_count: Vec<ir::GlobalValue>,
     capacity: usize,
     published_roots: usize,
-    next_safepoint_id: u32,
+    bitmap_published: bool,
+    /// 块内各 root 槽当前持有的 ValueId；跨块必须清空（前驱可能发布了不同内容）。
+    published_slots: Vec<Option<ValueId>>,
+    /// 入口块一次性物化的基址，被所有块支配后可跨块复用。
+    frame_base: ir::Value,
+    roots_base: ir::Value,
+    /// 全函数共用的 host 调用参数区：参数在写入前已全部物化，写完立即被同一条
+    /// `call` 消费，调用返回后即为死数据，因此各调用点不会重叠使用。
+    arena_slot: StackSlot,
+    arena_base: ir::Value,
+    arena_bytes: u32,
 }
 
-impl RootFrameLowering {
+impl FrameLowering {
+    /// 必须在入口块内调用：本方法物化的基址值被其余所有块支配，供跨块复用。
     fn new(
         builder: &mut FunctionBuilder<'_>,
-        module: &ObjectModule,
-        bitmaps: &[DataId],
+        bitmaps: &[DeclaredData],
         capacity: usize,
+        ctx: ir::Value,
     ) -> Result<Self> {
         let frame_bytes = u32::try_from(size_of::<NativeRootFrame>())
             .context("native root frame size exceeds u32")?;
@@ -60,50 +80,63 @@ impl RootFrameLowering {
             root_bytes,
             3,
         ));
+        // 参数区尺寸在 lower 过程中按最大 arity 增长，[`Self::finish`] 写回最终值。
+        let arena_slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            ARENA_MIN_BYTES,
+            3,
+        ));
         let bitmap_by_root_count = bitmaps
             .iter()
-            .map(|bitmap| module.declare_data_in_func(*bitmap, builder.func))
+            .map(|bitmap| bitmap.import(builder.func))
             .collect();
+        let pointer_type = builder.func.dfg.value_type(ctx);
+        let frame_base = builder.ins().stack_addr(pointer_type, frame_slot, 0);
+        let roots_base = builder.ins().stack_addr(pointer_type, roots_slot, 0);
+        let arena_base = builder.ins().stack_addr(pointer_type, arena_slot, 0);
         Ok(Self {
-            frame_slot,
-            roots_slot,
             bitmap_by_root_count,
             capacity,
             published_roots: 0,
-            next_safepoint_id: 1,
+            bitmap_published: false,
+            published_slots: Vec::new(),
+            frame_base,
+            roots_base,
+            arena_slot,
+            arena_base,
+            arena_bytes: ARENA_MIN_BYTES,
         })
+    }
+
+    /// 为一次 host 调用预留 `bytes` 字节参数区，返回共享参数区基址。
+    fn reserve_arena(&mut self, bytes: u32) -> ir::Value {
+        self.arena_bytes = self.arena_bytes.max(bytes);
+        self.arena_base
+    }
+
+    /// lower 结束、`finalize` 之前写回参数区实际尺寸。
+    fn finish(&self, builder: &mut FunctionBuilder<'_>) {
+        builder.func.sized_stack_slots[self.arena_slot].size = self.arena_bytes;
     }
 
     fn link(&self, builder: &mut FunctionBuilder<'_>, ctx: ir::Value) -> Result<()> {
         let pointer_type = builder.func.dfg.value_type(ctx);
-        let undefined = builder.ins().iconst(types::I64, value::encode_undefined());
-        for index in 0..self.capacity {
-            builder.ins().stack_store(
-                pointer_type,
-                undefined,
-                self.roots_slot,
-                slot_offset(index, "native root initialization")?,
-            );
-        }
-
-        let frame = builder.ins().stack_addr(pointer_type, self.frame_slot, 0);
         let previous = builder.ins().load(
             pointer_type,
             MemFlagsData::trusted(),
             ctx,
             vmctx_offset(offset_of!(NativeVmContext, root_frame_head))?,
         );
-        let roots = builder.ins().stack_addr(pointer_type, self.roots_slot, 0);
         builder.ins().store(
             MemFlagsData::trusted(),
             previous,
-            frame,
+            self.frame_base,
             frame_offset(offset_of!(NativeRootFrame, previous))?,
         );
         builder.ins().store(
             MemFlagsData::trusted(),
-            roots,
-            frame,
+            self.roots_base,
+            self.frame_base,
             frame_offset(offset_of!(NativeRootFrame, slots))?,
         );
         let empty_bitmap = builder
@@ -112,21 +145,15 @@ impl RootFrameLowering {
         builder.ins().store(
             MemFlagsData::trusted(),
             empty_bitmap,
-            frame,
+            self.frame_base,
             frame_offset(offset_of!(NativeRootFrame, bitmap_words))?,
         );
         let zero = builder.ins().iconst(types::I32, 0);
         builder.ins().store(
             MemFlagsData::trusted(),
             zero,
-            frame,
+            self.frame_base,
             frame_offset(offset_of!(NativeRootFrame, bitmap_word_count))?,
-        );
-        builder.ins().store(
-            MemFlagsData::trusted(),
-            zero,
-            frame,
-            frame_offset(offset_of!(NativeRootFrame, safepoint_id))?,
         );
         let head = builder.ins().iadd_imm_s(
             ctx,
@@ -137,7 +164,7 @@ impl RootFrameLowering {
             MemFlagsData::trusted(),
             AtomicRmwOp::Xchg,
             head,
-            frame,
+            self.frame_base,
         );
         Ok(())
     }
@@ -150,95 +177,78 @@ impl RootFrameLowering {
         temporaries: &[ir::Value],
     ) -> Result<()> {
         let root_count = roots.len() + temporaries.len();
-        let pointer_type = builder.func.dfg.value_type(
-            builder.block_params(
-                builder
-                    .func
-                    .layout
-                    .entry_block()
-                    .context("native function is missing entry block")?,
-            )[0],
-        );
+        let pointer_type = builder.func.dfg.value_type(self.roots_base);
         if root_count > self.capacity {
             bail!("native root plan exceeds frame capacity");
         }
+        if self.published_slots.len() < root_count {
+            self.published_slots.resize(root_count, None);
+        }
         for (index, root) in roots.iter().enumerate() {
+            // IR 是 SSA：块内直线执行时同一 ValueId 的运行时值不会变，槽里已经是它就无需重写。
+            if self.published_slots[index] == Some(*root) {
+                continue;
+            }
             let value = use_value(builder, variables, *root)?;
-            builder.ins().stack_store(
-                pointer_type,
+            builder.ins().store(
+                MemFlagsData::trusted(),
                 value,
-                self.roots_slot,
+                self.roots_base,
                 slot_offset(index, "native root spill")?,
             );
+            self.published_slots[index] = Some(*root);
         }
         for (index, temporary) in temporaries.iter().enumerate() {
-            builder.ins().stack_store(
-                pointer_type,
+            let slot = roots.len() + index;
+            builder.ins().store(
+                MemFlagsData::trusted(),
                 *temporary,
-                self.roots_slot,
-                slot_offset(roots.len() + index, "native temporary root spill")?,
+                self.roots_base,
+                slot_offset(slot, "native temporary root spill")?,
             );
+            self.published_slots[slot] = None;
         }
-        if self.published_roots > root_count {
-            let undefined = builder.ins().iconst(types::I64, value::encode_undefined());
-            for index in root_count..self.published_roots {
-                builder.ins().stack_store(
-                    pointer_type,
-                    undefined,
-                    self.roots_slot,
-                    slot_offset(index, "native dead root clear")?,
-                );
-            }
+        if root_count != self.published_roots || !self.bitmap_published {
+            let bitmap = builder
+                .ins()
+                .symbol_value(pointer_type, self.bitmap_by_root_count[root_count]);
+            builder.ins().store(
+                MemFlagsData::trusted(),
+                bitmap,
+                self.frame_base,
+                frame_offset(offset_of!(NativeRootFrame, bitmap_words))?,
+            );
+            let bitmap_word_count = root_count.div_ceil(u64::BITS as usize);
+            let bitmap_word_count = u32::try_from(bitmap_word_count)
+                .context("native root bitmap word count exceeds u32")?;
+            let bitmap_word_count = builder
+                .ins()
+                .iconst(types::I32, i64::from(bitmap_word_count));
+            builder.ins().store(
+                MemFlagsData::trusted(),
+                bitmap_word_count,
+                self.frame_base,
+                frame_offset(offset_of!(NativeRootFrame, bitmap_word_count))?,
+            );
+            self.bitmap_published = true;
         }
-
-        let frame = builder.ins().stack_addr(pointer_type, self.frame_slot, 0);
-        let bitmap = builder
-            .ins()
-            .symbol_value(pointer_type, self.bitmap_by_root_count[root_count]);
-        builder.ins().store(
-            MemFlagsData::trusted(),
-            bitmap,
-            frame,
-            frame_offset(offset_of!(NativeRootFrame, bitmap_words))?,
-        );
-        let bitmap_word_count = root_count.div_ceil(u64::BITS as usize);
-        let bitmap_word_count = u32::try_from(bitmap_word_count)
-            .context("native root bitmap word count exceeds u32")?;
-        let bitmap_word_count = builder
-            .ins()
-            .iconst(types::I32, i64::from(bitmap_word_count));
-        builder.ins().store(
-            MemFlagsData::trusted(),
-            bitmap_word_count,
-            frame,
-            frame_offset(offset_of!(NativeRootFrame, bitmap_word_count))?,
-        );
-        let id = builder
-            .ins()
-            .iconst(types::I32, i64::from(self.next_safepoint_id));
-        let id_address = builder.ins().iadd_imm_s(
-            frame,
-            i64::from(frame_offset(offset_of!(NativeRootFrame, safepoint_id))?),
-        );
-        builder.ins().atomic_rmw(
-            types::I32,
-            MemFlagsData::trusted(),
-            AtomicRmwOp::Xchg,
-            id_address,
-            id,
-        );
         self.published_roots = root_count;
-        self.next_safepoint_id = self.next_safepoint_id.wrapping_add(1).max(1);
         Ok(())
+    }
+
+    /// 进入新块：root 槽内容与 bitmap 状态只在块内直线执行时可复用，
+    /// 跨块（前驱不唯一 / 前驱发布内容不同）必须全部重新发布。
+    fn enter_block(&mut self) {
+        self.bitmap_published = false;
+        self.published_slots.clear();
     }
 
     fn unlink(&self, builder: &mut FunctionBuilder<'_>, ctx: ir::Value) -> Result<()> {
         let pointer_type = builder.func.dfg.value_type(ctx);
-        let frame = builder.ins().stack_addr(pointer_type, self.frame_slot, 0);
         let previous = builder.ins().load(
             pointer_type,
             MemFlagsData::trusted(),
-            frame,
+            self.frame_base,
             frame_offset(offset_of!(NativeRootFrame, previous))?,
         );
         let head = builder.ins().iadd_imm_s(
@@ -342,6 +352,85 @@ pub(crate) fn compile_program_diagnostics(
     compile_program_inner(isa, program, true)
 }
 
+/// 一个函数的并行 codegen 产物；合并阶段串行喂进 `ObjectModule`。
+struct CompiledFunction {
+    alignment: u64,
+    bytes: Vec<u8>,
+    relocs: Vec<ModuleReloc>,
+    frame_bytes: u32,
+    code_len: u64,
+    unwind: UnwindInfo,
+    clif: String,
+    disassembly: String,
+}
+
+/// 并行 worker 需要的 module 声明快照。
+///
+/// worker 线程不持有 `ObjectModule`（它不是 `Sync`），只带走 import 一个已声明
+/// 函数 / 数据对象所需的全部信息，等价于 `Module::declare_{func,data}_in_func`。
+struct DeclaredFunction {
+    id: FuncId,
+    signature: Signature,
+    colocated: bool,
+}
+
+struct DeclaredData {
+    id: DataId,
+    colocated: bool,
+    tls: bool,
+}
+
+impl DeclaredFunction {
+    fn snapshot(declarations: &ModuleDeclarations, id: FuncId) -> Self {
+        let decl = declarations.get_function_decl(id);
+        Self {
+            id,
+            signature: decl.signature.clone(),
+            colocated: decl.linkage.is_final(),
+        }
+    }
+
+    /// 等价于 `Module::declare_func_in_func`，但只依赖快照。
+    fn import(&self, func: &mut Function) -> ir::FuncRef {
+        let signature = func.import_signature(self.signature.clone());
+        let user_name_ref = func.declare_imported_user_function(ir::UserExternalName {
+            namespace: 0,
+            index: self.id.as_u32(),
+        });
+        func.import_function(ir::ExtFuncData {
+            name: ir::ExternalName::user(user_name_ref),
+            signature,
+            colocated: self.colocated,
+            patchable: false,
+        })
+    }
+}
+
+impl DeclaredData {
+    fn snapshot(declarations: &ModuleDeclarations, id: DataId) -> Self {
+        let decl = declarations.get_data_decl(id);
+        Self {
+            id,
+            colocated: decl.linkage.is_final(),
+            tls: decl.tls,
+        }
+    }
+
+    /// 等价于 `Module::declare_data_in_func`，但只依赖快照。
+    fn import(&self, func: &mut Function) -> ir::GlobalValue {
+        let user_name_ref = func.declare_imported_user_function(ir::UserExternalName {
+            namespace: 1,
+            index: self.id.as_u32(),
+        });
+        func.create_global_value(ir::GlobalValueData::Symbol {
+            name: ir::ExternalName::user(user_name_ref),
+            offset: ir::immediates::Imm64::new(0),
+            colocated: self.colocated,
+            tls: self.tls,
+        })
+    }
+}
+
 fn compile_program_inner(
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     program: &Program,
@@ -352,18 +441,15 @@ fn compile_program_inner(
         .map_err(|error| NativeCompileError::InvalidIr(error.to_string()))?;
     let module_isa = isa;
     let unwind_policy = UnwindPolicy::for_triple(module_isa.triple())?;
-    let mut builder = ObjectBuilder::new(
+    // unwind 产出三平台统一归 `unwind` 模块所有：cranelift-object 的内置
+    // `.eh_frame` 只在 `define_function_with_control_plane` 里被喂数据，而 codegen
+    // 走并行 compile + `define_function_bytes`，内置路径拿不到 FDE。
+    let builder = ObjectBuilder::new(
         module_isa.clone(),
         b"wjsm-native-image".to_vec(),
         Box::new(libcall_name),
     )
     .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?;
-    // 仅 Linux 走 cranelift-object 内置 `.eh_frame`（Mach-O 上其 pcrel
-    // relocation 未实现，finish 会 panic；Windows 是静默 no-op）。macOS/Windows
-    // 统一由本地 unwind 模块在 finish 后产出，ISA 级 `unwind_info` flag 仍保留。
-    if unwind_policy == UnwindPolicy::SystemVObject {
-        builder.unwind_info(true);
-    }
     let mut module = ObjectModule::new(builder);
     let signature = slow_entry_signature(module.isa().default_call_conv());
     let function_ids = declare_functions(&mut module, program, &signature)?;
@@ -372,7 +458,7 @@ fn compile_program_inner(
     let variable_slots = collect_variable_slots(program)?;
     let root_plans: Vec<_> = program
         .functions()
-        .iter()
+        .par_iter()
         .enumerate()
         .map(|(index, function)| {
             let f64_values = inferred_f64
@@ -391,106 +477,74 @@ fn compile_program_inner(
         .collect();
     let max_roots = root_capacities.iter().copied().max().unwrap_or(0);
     let root_bitmaps = declare_root_bitmaps(&mut module, max_roots)?;
-    let mut context = module.make_context();
-    let mut builder_context = FunctionBuilderContext::new();
+
+    let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
+    let bitmap_decls: Vec<DeclaredData> = root_bitmaps
+        .iter()
+        .map(|bitmap| DeclaredData::snapshot(module.declarations(), *bitmap))
+        .collect();
+    let target_config = module.target_config();
+
+    // 每个函数的 lower + Cranelift compile 相互独立，只读上面的声明快照；
+    // 合并进 object 的写入阶段仍然串行，保证 relocation / 符号表顺序确定。
+    let compiled: Vec<CompiledFunction> = program
+        .functions()
+        .par_iter()
+        .enumerate()
+        .map(|(index, function)| {
+            compile_one_function(
+                &module_isa,
+                target_config,
+                program,
+                function,
+                index,
+                &signature,
+                function_ids[index],
+                &dispatcher_decl,
+                &bitmap_decls,
+                inferred_f64
+                    .get(&FunctionId(
+                        u32::try_from(index).expect("function index fits u32"),
+                    ))
+                    .expect("analysis covers every function"),
+                &variable_slots,
+                &root_plans[index],
+                root_capacities[index],
+                collect_diagnostics,
+            )
+        })
+        .collect::<Result<Vec<_>, NativeCompileError>>()?;
+
     let mut frame_bytes = Vec::with_capacity(program.functions().len());
     let mut unwind_records: Vec<UnwindRecord> = Vec::with_capacity(program.functions().len());
     let mut clif = String::new();
     let mut disassembly = String::new();
 
-    for (index, function) in program.functions().iter().enumerate() {
-        let function_index =
-            u32::try_from(index).map_err(|_| NativeCompileError::Capacity("function IDs"))?;
-        context.clear();
-        context.set_disasm(collect_diagnostics);
-        context.func.signature = signature.clone();
-        context.func.name = UserFuncName::user(0, function_index);
-        lower_function(
-            &mut context.func,
-            &mut builder_context,
-            &mut module,
-            function,
-            function_index,
-            program.constants(),
-            host_dispatcher,
-            inferred_f64
-                .get(&FunctionId(function_index))
-                .expect("analysis covers every function"),
-            &variable_slots,
-            &root_plans[index],
-            root_capacities[index],
-            &root_bitmaps,
-        )
-        .map_err(|error| NativeCompileError::Lowering {
-            function: FunctionId(function_index),
-            message: error.to_string(),
-        })?;
-        if collect_diagnostics {
-            clif.push_str(&format!(
-                ";; function {index}: {}\n{}\n",
-                function.name(),
-                context.func.display()
-            ));
-        }
+    for (index, output) in compiled.into_iter().enumerate() {
         let function_id = function_ids[index];
         module
-            .define_function_with_control_plane(
-                function_id,
-                &mut context,
-                &mut ControlPlane::default(),
-            )
+            .define_function_bytes(function_id, output.alignment, &output.bytes, &output.relocs)
             .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?;
-        let compiled = context
-            .compiled_code()
-            .ok_or_else(|| NativeCompileError::CompilerInvariant("missing compiled code".into()))?;
-        if !compiled.buffer.traps().is_empty() {
-            return Err(NativeCompileError::CompilerInvariant(format!(
-                "function {index} contains a machine trap"
-            )));
-        }
-        if collect_diagnostics {
-            disassembly.push_str(&format!(";; function {index}: {}\n", function.name()));
-            disassembly.push_str(compiled.vcode.as_deref().unwrap_or(""));
-            disassembly.push('\n');
-        }
-        let frame_size = compiled
-            .buffer
-            .frame_layout()
-            .ok_or_else(|| {
-                NativeCompileError::CompilerInvariant(format!(
-                    "function {index} is missing frame metadata"
-                ))
-            })?
-            .frame_to_fp_offset;
-        frame_bytes.push(frame_size);
-        let unwind_info = compiled
-            .create_unwind_info(module.isa())
-            .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?
-            .ok_or(NativeCompileError::MissingUnwindInfo(FunctionId(
-                function_index,
-            )))?;
-        validate_unwind_info(
-            module.isa().triple(),
-            &unwind_info,
-            FunctionId(function_index),
-        )?;
+        frame_bytes.push(output.frame_bytes);
         unwind_records.push(UnwindRecord {
             function: function_id,
-            code_len: u64::from(compiled.buffer.total_size()),
-            info: unwind_info,
+            code_len: output.code_len,
+            info: output.unwind,
         });
-        module.clear_context(&mut context);
+        if collect_diagnostics {
+            clif.push_str(&output.clif);
+            disassembly.push_str(&output.disassembly);
+        }
     }
 
-    let product = module.finish();
-    let systemv_cie = if unwind_policy == UnwindPolicy::MachOAbsolute {
+    let mut product = module.finish();
+    let systemv_cie = if unwind_policy == UnwindPolicy::WindowsPdata {
+        None
+    } else {
         Some(module_isa.create_systemv_cie().ok_or_else(|| {
             NativeCompileError::CompilerInvariant("ISA cannot create a System V CIE".into())
         })?)
-    } else {
-        None
     };
-    let mut product = product;
     write_object_unwind(
         &mut product,
         unwind_policy,
@@ -508,6 +562,117 @@ fn compile_program_inner(
             function_count: u32::try_from(program.functions().len())
                 .map_err(|_| NativeCompileError::Capacity("function count"))?,
         },
+        clif,
+        disassembly,
+    })
+}
+
+/// 单个函数的完整 codegen：IR → CLIF → 机器码 + relocation + unwind info。
+/// 不接触 `ObjectModule`，可安全并行执行。
+#[allow(clippy::too_many_arguments)]
+fn compile_one_function(
+    isa: &cranelift_codegen::isa::OwnedTargetIsa,
+    target_config: cranelift_codegen::isa::TargetFrontendConfig,
+    program: &Program,
+    ir_function: &wjsm_ir::Function,
+    index: usize,
+    signature: &Signature,
+    function_id: FuncId,
+    dispatcher: &DeclaredFunction,
+    root_bitmaps: &[DeclaredData],
+    f64_values: &HashSet<ValueId>,
+    variable_slots: &HashMap<String, u32>,
+    root_plan: &RootPlan,
+    root_capacity: usize,
+    collect_diagnostics: bool,
+) -> Result<CompiledFunction, NativeCompileError> {
+    let function_index =
+        u32::try_from(index).map_err(|_| NativeCompileError::Capacity("function IDs"))?;
+    let mut context = cranelift_codegen::Context::new();
+    let mut builder_context = FunctionBuilderContext::new();
+    context.set_disasm(collect_diagnostics);
+    context.func.signature = signature.clone();
+    context.func.name = UserFuncName::user(0, function_index);
+    lower_function(
+        &mut context.func,
+        &mut builder_context,
+        target_config,
+        ir_function,
+        function_index,
+        program.constants(),
+        dispatcher,
+        f64_values,
+        variable_slots,
+        root_plan,
+        root_capacity,
+        root_bitmaps,
+    )
+    .map_err(|error| NativeCompileError::Lowering {
+        function: FunctionId(function_index),
+        message: error.to_string(),
+    })?;
+    let clif = if collect_diagnostics {
+        format!(
+            ";; function {index}: {}\n{}\n",
+            ir_function.name(),
+            context.func.display()
+        )
+    } else {
+        String::new()
+    };
+
+    context
+        .compile(isa.as_ref(), &mut ControlPlane::default())
+        .map_err(|error| NativeCompileError::Cranelift(error.inner.to_string()))?;
+    let compiled = context
+        .compiled_code()
+        .ok_or_else(|| NativeCompileError::CompilerInvariant("missing compiled code".into()))?;
+    if !compiled.buffer.traps().is_empty() {
+        return Err(NativeCompileError::CompilerInvariant(format!(
+            "function {index} contains a machine trap"
+        )));
+    }
+    let disassembly = if collect_diagnostics {
+        format!(
+            ";; function {index}: {}\n{}\n",
+            ir_function.name(),
+            compiled.vcode.as_deref().unwrap_or("")
+        )
+    } else {
+        String::new()
+    };
+    let frame_bytes = compiled
+        .buffer
+        .frame_layout()
+        .ok_or_else(|| {
+            NativeCompileError::CompilerInvariant(format!(
+                "function {index} is missing frame metadata"
+            ))
+        })?
+        .frame_to_fp_offset;
+    let unwind = compiled
+        .create_unwind_info(isa.as_ref())
+        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?
+        .ok_or(NativeCompileError::MissingUnwindInfo(FunctionId(
+            function_index,
+        )))?;
+    validate_unwind_info(isa.triple(), &unwind, FunctionId(function_index))?;
+    let alignment = u64::from(compiled.buffer.alignment);
+    let code_len = u64::from(compiled.buffer.total_size());
+    let bytes = compiled.buffer.data().to_vec();
+    let relocs: Vec<ModuleReloc> = compiled
+        .buffer
+        .relocs()
+        .iter()
+        .map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, function_id))
+        .collect();
+    Ok(CompiledFunction {
+        alignment,
+        bytes,
+        relocs,
+        frame_bytes,
+        code_len,
+        unwind,
         clif,
         disassembly,
     })
@@ -562,19 +727,20 @@ fn slow_entry_signature(call_conv: CallConv) -> Signature {
     signature
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_function(
     function: &mut Function,
     builder_context: &mut FunctionBuilderContext,
-    module: &mut ObjectModule,
+    target_config: cranelift_codegen::isa::TargetFrontendConfig,
     ir_function: &wjsm_ir::Function,
     function_index: u32,
     constants: &[Constant],
-    host_dispatcher: FuncId,
+    host_dispatcher: &DeclaredFunction,
     f64_values: &HashSet<ValueId>,
     variable_slots: &HashMap<String, u32>,
     root_plan: &RootPlan,
     root_capacity: usize,
-    root_bitmaps: &[DataId],
+    root_bitmaps: &[DeclaredData],
 ) -> Result<()> {
     let slow_call_signature = function.signature.clone();
     let mut builder = FunctionBuilder::new(function, builder_context);
@@ -593,25 +759,26 @@ fn lower_function(
         variables.insert(value_id, builder.declare_var(types::I64));
     }
     let phi_edges = collect_phi_edges(ir_function);
-    let dispatcher_ref = module.declare_func_in_func(host_dispatcher, builder.func);
+    let dispatcher_ref = host_dispatcher.import(builder.func);
     let slow_call_signature = builder.import_signature(slow_call_signature);
     let ctx_value = builder.block_params(entry)[0];
-    let mut root_frame = RootFrameLowering::new(&mut builder, module, root_bitmaps, root_capacity)?;
+    // root frame 的基址值必须在入口块物化：入口块支配其余所有块，基址可跨块复用。
+    builder.switch_to_block(entry);
+    let mut root_frame = FrameLowering::new(&mut builder, root_bitmaps, root_capacity, ctx_value)?;
+    root_frame.link(&mut builder, ctx_value)?;
+    lower_function_parameters(
+        &mut builder,
+        ir_function,
+        variable_slots,
+        dispatcher_ref,
+        ctx_value,
+        &mut root_frame,
+    )?;
 
     for block in ir_function.blocks() {
         let clif_block = blocks[&block.id()];
         builder.switch_to_block(clif_block);
-        if clif_block == entry {
-            root_frame.link(&mut builder, ctx_value)?;
-            lower_function_parameters(
-                &mut builder,
-                ir_function,
-                variable_slots,
-                dispatcher_ref,
-                ctx_value,
-                &mut root_frame,
-            )?;
-        }
+        root_frame.enter_block();
         let has_suspend = block.instructions().iter().any(|instruction| {
             matches!(
                 instruction,
@@ -658,11 +825,12 @@ fn lower_function(
             &phi_edges,
             dispatcher_ref,
             ctx_value,
-            &root_frame,
+            &mut root_frame,
         )?;
     }
+    root_frame.finish(&mut builder);
     builder.seal_all_blocks();
-    builder.finalize(module.target_config());
+    builder.finalize(target_config);
     Ok(())
 }
 
@@ -672,7 +840,7 @@ fn lower_function_parameters(
     variable_slots: &HashMap<String, u32>,
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
-    root_frame: &mut RootFrameLowering,
+    root_frame: &mut FrameLowering,
 ) -> Result<()> {
     let native_params = builder
         .block_params(builder.current_block().context("missing entry block")?)
@@ -729,6 +897,7 @@ fn lower_function_parameters(
                 );
                 call_dispatcher(
                     builder,
+                    root_frame,
                     dispatcher,
                     ctx,
                     NativeRuntimeOp::LoadArgument.id(),
@@ -739,6 +908,7 @@ fn lower_function_parameters(
         let slot = builder.ins().iconst(types::I64, i64::from(slot));
         let _ = call_dispatcher(
             builder,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::StoreVar.id(),
@@ -758,7 +928,7 @@ fn lower_instruction(
     f64_values: &HashSet<ValueId>,
     slow_call_signature: ir::SigRef,
     variable_slots: &HashMap<String, u32>,
-    root_frame: &mut RootFrameLowering,
+    root_frame: &mut FrameLowering,
     roots: &[ValueId],
 ) -> Result<()> {
     match instruction {
@@ -784,6 +954,7 @@ fn lower_instruction(
                     let index = builder.ins().iconst(types::I64, i64::from(function.0));
                     call_dispatcher(
                         builder,
+                        root_frame,
                         dispatcher,
                         ctx,
                         NativeRuntimeOp::MaterializeFunction.id(),
@@ -805,7 +976,7 @@ fn lower_instruction(
                     };
                     let index = builder.ins().iconst(types::I64, i64::from(constant_id.0));
                     let result =
-                        call_dispatcher(builder, dispatcher, ctx, operation.id(), &[index])?;
+                        call_dispatcher(builder, root_frame, dispatcher, ctx, operation.id(), &[index])?;
                     if matches!(constant, Constant::RegExp { .. }) {
                         return_if_exception(builder, result, root_frame, ctx)?;
                     }
@@ -840,7 +1011,7 @@ fn lower_instruction(
             define_value(builder, variables, *dest, result)
         }
         Instruction::Binary { dest, op, lhs, rhs } => {
-            lower_dynamic_binary(builder, variables, dispatcher, ctx, *dest, *op, *lhs, *rhs)
+            lower_dynamic_binary(builder, variables, root_frame, dispatcher, ctx, *dest, *op, *lhs, *rhs)
         }
         Instruction::Unary { dest, op, value } => {
             if f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) {
@@ -858,7 +1029,7 @@ fn lower_instruction(
             } else {
                 let operation = DYNAMIC_UNARY_BASE + u32::from(unary_tag(*op));
                 let input = use_value(builder, variables, *value)?;
-                let result = call_dispatcher(builder, dispatcher, ctx, operation, &[input])?;
+                let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[input])?;
                 define_value(builder, variables, *dest, result)
             }
         }
@@ -866,7 +1037,7 @@ fn lower_instruction(
             let operation = DYNAMIC_COMPARE_BASE + u32::from(compare_tag(*op));
             let lhs = use_value(builder, variables, *lhs)?;
             let rhs = use_value(builder, variables, *rhs)?;
-            let result = call_dispatcher(builder, dispatcher, ctx, operation, &[lhs, rhs])?;
+            let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
             define_value(builder, variables, *dest, result)
         }
         Instruction::CallBuiltin {
@@ -880,6 +1051,7 @@ fn lower_instruction(
             }
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 u32::from(builtin.wire_id()),
@@ -976,6 +1148,7 @@ fn lower_instruction(
         Instruction::StringConcatVa { dest, parts } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::StringConcat,
@@ -985,6 +1158,7 @@ fn lower_instruction(
         Instruction::NewPromise { dest } => {
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 Builtin::PromiseCreate.wire_id().into(),
@@ -996,6 +1170,7 @@ fn lower_instruction(
             let capacity = builder.ins().iconst(types::I64, i64::from(*capacity));
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::NewObject.id(),
@@ -1006,6 +1181,7 @@ fn lower_instruction(
         Instruction::GetProp { dest, object, key } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::GetProp,
@@ -1020,6 +1196,7 @@ fn lower_instruction(
         } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::SetProp,
@@ -1029,6 +1206,7 @@ fn lower_instruction(
         Instruction::DeleteProp { dest, object, key } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::DeleteProp,
@@ -1038,6 +1216,7 @@ fn lower_instruction(
         Instruction::SetProto { object, value } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::SetProto,
@@ -1048,6 +1227,7 @@ fn lower_instruction(
             let capacity = builder.ins().iconst(types::I64, i64::from(*capacity));
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::NewArray.id(),
@@ -1062,6 +1242,7 @@ fn lower_instruction(
         } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::GetElem,
@@ -1076,6 +1257,7 @@ fn lower_instruction(
         } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::SetElem,
@@ -1085,6 +1267,7 @@ fn lower_instruction(
         Instruction::OptionalGetProp { dest, object, key } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::OptionalGetProp,
@@ -1094,6 +1277,7 @@ fn lower_instruction(
         Instruction::OptionalGetElem { dest, object, key } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::OptionalGetElem,
@@ -1103,6 +1287,7 @@ fn lower_instruction(
         Instruction::GetSuperBase { dest } => {
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::GetSuperBase.id(),
@@ -1113,6 +1298,7 @@ fn lower_instruction(
         Instruction::GetSuperConstructor { dest } => {
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::GetSuperConstructor.id(),
@@ -1123,6 +1309,7 @@ fn lower_instruction(
         Instruction::ObjectSpread { dest, source } => lower_value_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             NativeRuntimeOp::ObjectSpread,
@@ -1138,6 +1325,7 @@ fn lower_instruction(
             let function = builder.ins().iconst(types::I64, i64::from(function.0));
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::GuardSameFunction.id(),
@@ -1149,6 +1337,7 @@ fn lower_instruction(
             let skip = builder.ins().iconst(types::I64, i64::from(*skip));
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::CollectRestArguments.id(),
@@ -1168,6 +1357,7 @@ fn lower_instruction(
             let input = use_value(builder, variables, *input)?;
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::CreateException.id(),
@@ -1178,6 +1368,7 @@ fn lower_instruction(
         Instruction::PromiseResolve { promise, value } => lower_builtin_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             Builtin::PromiseInstanceResolve,
@@ -1186,6 +1377,7 @@ fn lower_instruction(
         Instruction::PromiseReject { promise, reason } => lower_builtin_operation(
             builder,
             variables,
+            root_frame,
             dispatcher,
             ctx,
             Builtin::PromiseInstanceReject,
@@ -1195,6 +1387,7 @@ fn lower_instruction(
             let input = use_value(builder, variables, *input)?;
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::ExceptionValue.id(),
@@ -1211,6 +1404,7 @@ fn lower_instruction(
             let value = use_value(builder, variables, *value)?;
             let _ = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::StoreVar.id(),
@@ -1226,6 +1420,7 @@ fn lower_instruction(
             let slot = builder.ins().iconst(types::I64, i64::from(slot));
             let value = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::LoadVar.id(),
@@ -1240,6 +1435,7 @@ fn lower_instruction(
                 .iconst(types::I64, value::encode_f64(f64::from(*state)));
             let result = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 Builtin::AsyncFunctionSuspend.wire_id().into(),
@@ -1253,6 +1449,7 @@ fn lower_instruction(
             let result = use_value(builder, variables, *result)?;
             let continuation = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::LoadCallEnv.id(),
@@ -1265,6 +1462,7 @@ fn lower_instruction(
                 .iconst(types::I64, value::encode_f64(f64::from(*state)));
             let _ = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 Builtin::ContinuationSaveVar.wire_id().into(),
@@ -1280,6 +1478,7 @@ fn lower_instruction(
             let col = builder.ins().iconst(types::I64, i64::from(*col));
             let _ = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::DebugCheck.id(),
@@ -1303,7 +1502,7 @@ fn lower_call_instruction(
     args: &[ValueId],
     operation: NativeRuntimeOp,
     forward_args: bool,
-    root_frame: &mut RootFrameLowering,
+    root_frame: &mut FrameLowering,
     roots: &[ValueId],
 ) -> Result<()> {
     let callee = use_value(builder, variables, callee)?;
@@ -1315,7 +1514,7 @@ fn lower_call_instruction(
             call_args.push(use_value(builder, variables, *argument)?);
         }
     }
-    let entry = call_dispatcher(builder, dispatcher, ctx, operation.id(), &call_args)?;
+    let entry = call_dispatcher(builder, root_frame, dispatcher, ctx, operation.id(), &call_args)?;
     let args_len = if forward_args {
         let entry_block = builder
             .func
@@ -1339,6 +1538,7 @@ fn lower_call_instruction(
     let args_base = builder.ins().isub(active_len, args_len);
     let env = call_dispatcher(
         builder,
+        root_frame,
         dispatcher,
         ctx,
         NativeRuntimeOp::LoadCallEnv.id(),
@@ -1353,6 +1553,7 @@ fn lower_call_instruction(
     root_frame.publish(builder, variables, roots, &[result])?;
     let _ = call_dispatcher(
         builder,
+        root_frame,
         dispatcher,
         ctx,
         NativeRuntimeOp::FinishCall.id(),
@@ -1374,12 +1575,13 @@ fn lower_optional_call_instruction(
     callee: ValueId,
     this_value: ValueId,
     args: &[ValueId],
-    root_frame: &mut RootFrameLowering,
+    root_frame: &mut FrameLowering,
     roots: &[ValueId],
 ) -> Result<()> {
     let encoded_callee = use_value(builder, variables, callee)?;
     let nullish = call_dispatcher(
         builder,
+        root_frame,
         dispatcher,
         ctx,
         NativeRuntimeOp::UnaryIsNullish.id(),
@@ -1429,6 +1631,7 @@ fn lower_optional_call_instruction(
 fn lower_builtin_operation(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
+    root_frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
     builtin: Builtin,
@@ -1438,7 +1641,7 @@ fn lower_builtin_operation(
         .iter()
         .map(|value| use_value(builder, variables, *value))
         .collect::<Result<Vec<_>>>()?;
-    let result = call_dispatcher(builder, dispatcher, ctx, builtin.wire_id().into(), &args)?;
+    let result = call_dispatcher(builder, root_frame, dispatcher, ctx, builtin.wire_id().into(), &args)?;
     if builtin == Builtin::PromiseInstanceResolve || builtin == Builtin::PromiseInstanceReject {
         return Ok(());
     }
@@ -1449,6 +1652,7 @@ fn lower_builtin_operation(
 fn lower_dynamic_binary(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
+    root_frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
     dest: ValueId,
@@ -1459,13 +1663,14 @@ fn lower_dynamic_binary(
     let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
     let lhs = use_value(builder, variables, lhs)?;
     let rhs = use_value(builder, variables, rhs)?;
-    let result = call_dispatcher(builder, dispatcher, ctx, operation, &[lhs, rhs])?;
+    let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
     define_value(builder, variables, dest, result)
 }
 
 fn lower_value_operation(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
+    root_frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
     operation: NativeRuntimeOp,
@@ -1476,7 +1681,7 @@ fn lower_value_operation(
         .iter()
         .map(|value| use_value(builder, variables, *value))
         .collect::<Result<Vec<_>>>()?;
-    let result = call_dispatcher(builder, dispatcher, ctx, operation.id(), &args)?;
+    let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation.id(), &args)?;
     if let Some(destination) = destination {
         define_value(builder, variables, destination, result)?;
     }
@@ -1485,6 +1690,7 @@ fn lower_value_operation(
 
 fn call_dispatcher(
     builder: &mut FunctionBuilder<'_>,
+    frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
     operation: u32,
@@ -1499,11 +1705,7 @@ fn call_dispatcher(
     let args_pointer = if args.is_empty() {
         builder.ins().iconst(pointer_type, 0)
     } else {
-        let slot = builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            byte_len,
-            3,
-        ));
+        let base = frame.reserve_arena(byte_len);
         for (index, value) in args.iter().enumerate() {
             let offset = index
                 .checked_mul(size_of::<i64>())
@@ -1511,9 +1713,9 @@ fn call_dispatcher(
                 .context("host operation stack slot offset exceeds i32")?;
             builder
                 .ins()
-                .stack_store(pointer_type, *value, slot, offset);
+                .store(MemFlagsData::trusted(), *value, base, offset);
         }
-        builder.ins().stack_addr(pointer_type, slot, 0)
+        base
     };
     let operation = builder.ins().iconst(types::I32, i64::from(operation));
     let count = builder.ins().iconst(
@@ -1540,7 +1742,7 @@ fn lower_terminator(
     phi_edges: &HashMap<(BasicBlockId, BasicBlockId), Vec<(ValueId, ValueId)>>,
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
-    root_frame: &RootFrameLowering,
+    root_frame: &mut FrameLowering,
 ) -> Result<()> {
     match terminator {
         Terminator::Return { value } => {
@@ -1569,6 +1771,7 @@ fn lower_terminator(
             let condition = use_value(builder, variables, *condition)?;
             let condition = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::IsTruthy.id(),
@@ -1645,6 +1848,7 @@ fn lower_terminator(
             let value = use_value(builder, variables, *value)?;
             let exception = call_dispatcher(
                 builder,
+                root_frame,
                 dispatcher,
                 ctx,
                 NativeRuntimeOp::CreateException.id(),
@@ -1684,7 +1888,7 @@ fn emit_is_exception(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir:
 fn return_if_exception(
     builder: &mut FunctionBuilder<'_>,
     result: ir::Value,
-    root_frame: &RootFrameLowering,
+    root_frame: &mut FrameLowering,
     ctx: ir::Value,
 ) -> Result<()> {
     let is_exception = emit_is_exception(builder, result);
@@ -1704,10 +1908,11 @@ fn lower_cooperative_poll(
     builder: &mut FunctionBuilder<'_>,
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
-    root_frame: &RootFrameLowering,
+    root_frame: &mut FrameLowering,
 ) -> Result<()> {
     let result = call_dispatcher(
         builder,
+        root_frame,
         dispatcher,
         ctx,
         NativeRuntimeOp::CooperativePoll.id(),

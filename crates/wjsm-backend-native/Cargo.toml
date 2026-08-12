@@ -16,6 +16,7 @@ cranelift-frontend = { workspace = true }
 cranelift-module = { workspace = true }
 cranelift-native = { workspace = true }
 cranelift-object = { workspace = true }
+rayon = { workspace = true }
 gimli = { workspace = true }
 libc = { workspace = true }
 object = { workspace = true }

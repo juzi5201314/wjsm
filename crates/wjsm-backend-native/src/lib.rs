@@ -54,6 +54,31 @@ pub struct NativeCompiler {
     settings_key: Arc<str>,
 }
 
+/// Cranelift `opt_level`：默认 `speed`（AOT 产出质量优先）。
+/// `WJSM_OPT_LEVEL=none` 用 codegen 速度换生成码质量，供测试套件等只验证语义的场景使用。
+/// 取值进入 [`NativeCompiler::settings_key`]，不同档位的 native cache 条目互不复用。
+fn configured_opt_level() -> Result<&'static str, NativeCompileError> {
+    match std::env::var("WJSM_OPT_LEVEL").as_deref() {
+        Err(_) => Ok("speed"),
+        Ok("speed") => Ok("speed"),
+        Ok("none") => Ok("none"),
+        Ok("speed_and_size") => Ok("speed_and_size"),
+        Ok(other) => Err(NativeCompileError::UnsupportedTargetCapability(format!(
+            "WJSM_OPT_LEVEL={other:?} 无效（可选 none / speed / speed_and_size）"
+        ))),
+    }
+}
+
+/// CLIF verifier 默认开启：本仓库自己产出 CLIF，verifier 是 lowering bug 的门禁。
+/// `WJSM_VERIFY_CLIF=0` 关闭，换约 20% codegen 时间。verifier 不改变生成码，
+/// 因此不进入 native cache 键。
+fn clif_verifier_enabled() -> bool {
+    !matches!(
+        std::env::var("WJSM_VERIFY_CLIF").as_deref(),
+        Ok("0") | Ok("false") | Ok("FALSE")
+    )
+}
+
 /// 全局 compiler 缓存，避免重复初始化 CPU 密集的 ISA builder。
 /// 测试套件中所有 compile 调用共享同一个 ISA 配置。
 static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> =
@@ -74,11 +99,20 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> =
             )));
         }
 
+        let opt_level = configured_opt_level()?;
         let mut flag_builder = settings::builder();
-        set_flag(&mut flag_builder, "opt_level", "speed")?;
+        set_flag(&mut flag_builder, "opt_level", opt_level)?;
         set_flag(&mut flag_builder, "is_pic", "true")?;
         set_flag(&mut flag_builder, "unwind_info", "true")?;
-        set_flag(&mut flag_builder, "enable_verifier", "true")?;
+        set_flag(
+            &mut flag_builder,
+            "enable_verifier",
+            if clif_verifier_enabled() {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
         set_flag(&mut flag_builder, "enable_nan_canonicalization", "true")?;
         set_flag(&mut flag_builder, "use_colocated_libcalls", "false")?;
         set_flag(&mut flag_builder, "probestack_strategy", "inline")?;
@@ -109,7 +143,7 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> =
             }
         };
         let settings_key = format!(
-            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=canonical;opt=speed;probestack=inline:4096",
+            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=canonical;opt={opt_level};probestack=inline:4096",
             isa.triple(),
             CRANELIFT_VERSION,
             1,
@@ -185,7 +219,7 @@ pub enum NativeCompileError {
 
 #[cfg(test)]
 mod capability_tests {
-    use super::{NativeCompileError, NativeCompiler};
+    use super::{NativeCompileError, NativeCompiler, configured_opt_level};
 
     #[test]
     fn native_compiler_matches_declared_host_matrix() {
@@ -202,6 +236,22 @@ mod capability_tests {
                 Err(NativeCompileError::UnsupportedTargetCapability(_))
             ));
         }
+    }
+
+    /// opt_level 改变生成码，必须体现在 native cache 键里，否则不同档位会互相复用镜像。
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    ))]
+    #[test]
+    fn settings_key_tracks_configured_opt_level() {
+        let compiler = NativeCompiler::new().expect("declared native host must initialize");
+        let opt_level = configured_opt_level().expect("测试环境的 WJSM_OPT_LEVEL 必须合法");
+        assert!(
+            compiler.settings_key().contains(&format!("opt={opt_level}")),
+            "settings_key {:?} 未体现 opt_level {opt_level}",
+            compiler.settings_key()
+        );
     }
 }
 

@@ -104,15 +104,46 @@ debug = "line-tables-only"
 
 [profile.dev.package.cranelift-codegen]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.cranelift-frontend]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.cranelift-codegen-meta]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.cranelift-assembler-x64]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.wjsm-runtime]
 opt-level = 3
 # memchr 的 SIMD 子串搜索（find_memory_c_string 用）在未优化 debug 下
 # 带大量 UB 检查 + 未内联，实测占 bootstrap ~35% 指令；opt 后大幅收缩。
+[profile.dev.package.regalloc2]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.cranelift-bitset]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.cranelift-module]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.cranelift-object]
+opt-level = 3
+debug-assertions = false
+
 [profile.dev.package.memchr]
 opt-level = 3

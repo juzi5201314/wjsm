@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, AtomicU32};
+use std::sync::atomic::AtomicPtr;
 
 use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
@@ -15,7 +15,7 @@ use wjsm_ir::{Builtin, Instruction, Program};
 
 pub const NATIVE_ABI_VERSION: u32 = 5;
 pub const CALL_GATE_VERSION: u32 = 1;
-pub const ROOT_FRAME_VERSION: u32 = 1;
+pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
 pub const BARRIER_VERSION: u32 = 1;
 
@@ -143,6 +143,11 @@ pub struct NativeCallFrame {
     pub table_base: u32,
 }
 
+/// Generated code 每个 safepoint 发布的 root 视图。
+///
+/// GC 扫描（`native_root_values`）只读 `previous / slots / bitmap_words /
+/// bitmap_word_count`：`bitmap_words[..bitmap_word_count]` 中恰好置位 `0..root_count`，
+/// 因此 `slots` 中索引 ≥ root_count 的槽永远不会被读取，generated code 无需清理它们。
 #[derive(Debug)]
 #[repr(C)]
 pub struct NativeRootFrame {
@@ -150,7 +155,6 @@ pub struct NativeRootFrame {
     pub slots: *mut i64,
     pub bitmap_words: *const u64,
     pub bitmap_word_count: u32,
-    pub safepoint_id: AtomicU32,
 }
 
 #[derive(Debug)]

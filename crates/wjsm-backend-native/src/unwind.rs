@@ -124,13 +124,12 @@ pub(crate) fn write_object_unwind(
     }
     match policy {
         UnwindPolicy::SystemVObject => {
-            // cranelift-object 已在 finish 时写出 `.eh_frame`；这里补标准终止项
-            // （length=0），保证 libgcc 遍历整段时能安全停止。
-            let eh_frame = product.object.section_id(StandardSection::EhFrame);
-            product
-                .object
-                .append_section_data(eh_frame, &[0, 0, 0, 0], 1);
-            Ok(())
+            let cie = systemv_cie.ok_or_else(|| {
+                NativeCompileError::CompilerInvariant(
+                    "missing System V CIE for systemv .eh_frame".into(),
+                )
+            })?;
+            write_gimli_eh_frame(product, records, cie, endian, FdeAddressing::SystemV)
         }
         UnwindPolicy::MachOAbsolute => {
             let cie = systemv_cie.ok_or_else(|| {
@@ -138,28 +137,44 @@ pub(crate) fn write_object_unwind(
                     "missing System V CIE for macho-absolute .eh_frame".into(),
                 )
             })?;
-            write_macho_eh_frame(product, records, cie, endian)
+            write_gimli_eh_frame(product, records, cie, endian, FdeAddressing::MachOAbsolute)
         }
         UnwindPolicy::WindowsPdata => write_windows_pdata(product, records),
     }
 }
 
-/// 本地生成 Mach-O `__TEXT,__eh_frame`。
+/// `.eh_frame` FDE initial_location 的编码方式。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FdeAddressing {
+    /// ELF：沿用 ISA CIE 的默认编码（pcrel/sdata4），relocation 按 `eh_pe` 翻译。
+    SystemV,
+    /// Mach-O：强制 `DW_EH_PE_absptr`，避开未实现的 pcrel SUBTRACTOR 对。
+    MachOAbsolute,
+}
+
+/// 本地生成 `.eh_frame`（ELF 与 Mach-O 共用）。
 ///
-/// CIE 使用 `DW_EH_PE_absptr`（即无 'R' augmentation 时的默认编码），每个 FDE
-/// 的 initial_location 以 `Address::Symbol` 记录并转成 Absolute/Generic/64
-/// relocation，避免 Mach-O pcrel SUBTRACTOR。gimli 的 `RelocateWriter` 对
-/// `Address::Symbol` 写 0 占位并记录 relocation，loader 应用后即函数地址。
-fn write_macho_eh_frame(
+/// 每个 FDE 的 initial_location 以 `Address::Symbol` 记录；gimli 的 `RelocateWriter`
+/// 写 0 占位并记录 relocation，loader 应用后即函数地址。ELF 沿用 ISA CIE 默认的
+/// pcrel/sdata4 编码；Mach-O 改成 `DW_EH_PE_absptr` + Absolute/Generic/64，
+/// 因为 cranelift-object 的 Mach-O pcrel SUBTRACTOR relocation 尚未实现。
+///
+/// 三个平台的 unwind 产出都归本模块所有，`ObjectBuilder::unwind_info` 保持关闭：
+/// cranelift-object 只在 `define_function_with_control_plane` 内部喂它的 unwind
+/// builder，而 codegen 走的是并行 compile + `define_function_bytes`。
+fn write_gimli_eh_frame(
     product: &mut ObjectProduct,
     records: Vec<UnwindRecord>,
     mut cie: gimli::write::CommonInformationEntry,
     endian: gimli::RunTimeEndian,
+    addressing: FdeAddressing,
 ) -> Result<(), NativeCompileError> {
-    cie.fde_address_encoding = gimli::constants::DW_EH_PE_absptr;
+    if addressing == FdeAddressing::MachOAbsolute {
+        cie.fde_address_encoding = gimli::constants::DW_EH_PE_absptr;
+    }
     let mut frame_table = FrameTable::default();
     let cie_id = frame_table.add_cie(cie);
-    let mut writer = MachOEhFrameWriter {
+    let mut writer = EhFrameWriter {
         writer: EndianVec::new(endian),
         relocations: Vec::new(),
         symbols: Vec::new(),
@@ -167,7 +182,7 @@ fn write_macho_eh_frame(
     for record in &records {
         let UnwindInfo::SystemV(sysv) = &record.info else {
             return Err(NativeCompileError::CompilerInvariant(
-                "macho-absolute requires SystemV unwind info".into(),
+                ".eh_frame requires SystemV unwind info".into(),
             ));
         };
         let symbol_index = writer.symbols.len();
@@ -184,7 +199,7 @@ fn write_macho_eh_frame(
     frame_table
         .write_eh_frame(&mut eh_frame)
         .map_err(|error| NativeCompileError::Object(error.to_string()))?;
-    let MachOEhFrameWriter {
+    let EhFrameWriter {
         mut writer,
         relocations,
         symbols,
@@ -201,16 +216,21 @@ fn write_macho_eh_frame(
             RelocationTarget::Symbol(index) => symbols[index],
             RelocationTarget::Section(_) => {
                 return Err(NativeCompileError::CompilerInvariant(
-                    "unexpected section-relative relocation in Mach-O .eh_frame".into(),
+                    "unexpected section-relative relocation in .eh_frame".into(),
                 ));
             }
         };
-        if relocation.eh_pe != Some(gimli::constants::DW_EH_PE_absptr) {
-            return Err(NativeCompileError::CompilerInvariant(
-                "macho-absolute received a non-absptr eh_frame relocation".into(),
-            ));
-        }
-        let flags = absolute_flags(relocation.size)?;
+        let flags = match addressing {
+            FdeAddressing::MachOAbsolute => {
+                if relocation.eh_pe != Some(gimli::constants::DW_EH_PE_absptr) {
+                    return Err(NativeCompileError::CompilerInvariant(
+                        "macho-absolute received a non-absptr eh_frame relocation".into(),
+                    ));
+                }
+                absolute_flags(relocation.size)?
+            }
+            FdeAddressing::SystemV => eh_pe_flags(relocation.eh_pe, relocation.size)?,
+        };
         let offset = u64::try_from(relocation.offset).map_err(|_| {
             NativeCompileError::CompilerInvariant("eh_frame relocation offset overflow".into())
         })?;
@@ -346,13 +366,13 @@ fn write_windows_pdata(
 }
 
 /// 收集 gimli FDE 写入过程中的符号 relocation，写出时转成 object relocation。
-struct MachOEhFrameWriter {
+struct EhFrameWriter {
     writer: EndianVec<gimli::RunTimeEndian>,
     relocations: Vec<Relocation>,
     symbols: Vec<SymbolId>,
 }
 
-impl RelocateWriter for MachOEhFrameWriter {
+impl RelocateWriter for EhFrameWriter {
     type Writer = EndianVec<gimli::RunTimeEndian>;
 
     fn writer(&self) -> &Self::Writer {
@@ -366,6 +386,54 @@ impl RelocateWriter for MachOEhFrameWriter {
     fn relocate(&mut self, relocation: Relocation) {
         self.relocations.push(relocation);
     }
+}
+
+/// 按 gimli 请求的 `DW_EH_PE_*` 编码翻译成 object relocation flags（ELF 路径）。
+///
+/// `eh_pe` 为 `None` 表示非指针 relocation，按请求宽度的绝对指针处理。
+fn eh_pe_flags(
+    eh_pe: Option<gimli::constants::DwEhPe>,
+    size: u8,
+) -> Result<RelocationFlags, NativeCompileError> {
+    use gimli::constants::{
+        DW_EH_PE_absptr, DW_EH_PE_pcrel, DW_EH_PE_sdata2, DW_EH_PE_sdata4, DW_EH_PE_sdata8,
+        DW_EH_PE_udata2, DW_EH_PE_udata4, DW_EH_PE_udata8,
+    };
+
+    let Some(pe) = eh_pe else {
+        return absolute_flags(size);
+    };
+    let application = pe.application();
+    let kind = if application == DW_EH_PE_absptr {
+        RelocationKind::Absolute
+    } else if application == DW_EH_PE_pcrel {
+        RelocationKind::Relative
+    } else {
+        return Err(NativeCompileError::CompilerInvariant(format!(
+            "unsupported eh_frame pointer application {application:?}"
+        )));
+    };
+    let format = pe.format();
+    let size_bits = if format == DW_EH_PE_absptr {
+        u8::try_from(usize::from(size) * 8).map_err(|_| {
+            NativeCompileError::CompilerInvariant(format!("eh_frame pointer width {size} overflow"))
+        })?
+    } else if format == DW_EH_PE_udata2 || format == DW_EH_PE_sdata2 {
+        16
+    } else if format == DW_EH_PE_udata4 || format == DW_EH_PE_sdata4 {
+        32
+    } else if format == DW_EH_PE_udata8 || format == DW_EH_PE_sdata8 {
+        64
+    } else {
+        return Err(NativeCompileError::CompilerInvariant(format!(
+            "unsupported eh_frame pointer format {format:?}"
+        )));
+    };
+    Ok(RelocationFlags::Generic {
+        kind,
+        encoding: RelocationEncoding::Generic,
+        size: size_bits,
+    })
 }
 
 fn absolute_flags(size: u8) -> Result<RelocationFlags, NativeCompileError> {
