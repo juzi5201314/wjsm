@@ -25,7 +25,7 @@ use wjsm_host::RuntimeString;
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
     MAX_NATIVE_ROOT_BITMAP_WORDS, NativeHostSymbol, NativeRuntimeOp, NativeSlowEntry,
-    NativeVmContext, PendingExceptionKind, native_variable_names,
+    NativeVmContext, PendingExceptionKind, native_variable_names, native_variable_slots_for_segments,
 };
 mod dispatch;
 mod inspector;
@@ -46,6 +46,109 @@ pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERA
     | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_PROTOTYPE_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_METADATA_FLAGS: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
+
+fn is_module_scope_var(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('$') else {
+        return false;
+    };
+    let Some((scope, _)) = rest.split_once('.') else {
+        return false;
+    };
+    scope.bytes().all(|b| b.is_ascii_digit()) && scope != "0"
+}
+
+fn slot_table_len(slots: &HashMap<String, u32>) -> usize {
+    slots
+        .values()
+        .copied()
+        .max()
+        .map_or(0, |slot| usize::try_from(slot).expect("槽号在 usize 内") + 1)
+}
+
+fn function_slots_for_program(
+    program: &wjsm_ir::Program,
+    variable_slots: &HashMap<String, u32>,
+    shared_module_slots: &HashSet<&str>,
+) -> Vec<Vec<usize>> {
+    program
+        .functions()
+        .iter()
+        .map(|function| {
+            let mut slots = Vec::new();
+            let captured_names = function
+                .captured_names()
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            let uses_canonical_this = function.blocks().iter().any(|block| {
+                block.instructions().iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                            if name == "$this"
+                    )
+                })
+            });
+            for (index, name) in function.params().iter().enumerate() {
+                let storage_name = if index == 0
+                    && (function.name().ends_with("$async")
+                        || function.name().ends_with("$asyncgen")
+                        || name == wjsm_ir::EVAL_SCOPE_ENV_PARAM)
+                {
+                    name.as_str()
+                } else if index == 0 {
+                    "$env"
+                } else if index == 1
+                    && uses_canonical_this
+                    && !function.name().ends_with("$async")
+                    && !function.name().ends_with("$asyncgen")
+                {
+                    "$this"
+                } else {
+                    name.as_str()
+                };
+                if let Some(slot) = variable_slots.get(storage_name).copied() {
+                    slots.push(usize::try_from(slot).expect("槽号在 usize 内"));
+                }
+            }
+            for block in function.blocks() {
+                for instruction in block.instructions() {
+                    let name = match instruction {
+                        Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => {
+                            name
+                        }
+                        _ => continue,
+                    };
+                    if shared_module_slots.contains(name.as_str()) {
+                        continue;
+                    }
+                    if !name.starts_with("$0.")
+                        && !captured_names.contains(name.as_str())
+                        && let Some(slot) = variable_slots.get(name.as_str()).copied()
+                    {
+                        slots.push(usize::try_from(slot).expect("槽号在 usize 内"));
+                    }
+                }
+            }
+            slots.sort_unstable();
+            slots.dedup();
+            slots
+        })
+        .collect()
+}
+
+fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String, u32> {
+    native_variable_names(program)
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            (
+                name,
+                u32::try_from(index).expect("整包变量槽数在 u32 内"),
+            )
+        })
+        .collect()
+}
 
 fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u32)> {
     match kind {
@@ -686,7 +789,6 @@ struct NativeFunctionRef {
 }
 
 struct NativeProgramState {
-    variables: Vec<i64>,
     constants: Vec<Constant>,
     materialized_constants: Vec<Option<i64>>,
     function_slots: Vec<Vec<usize>>,
@@ -715,6 +817,14 @@ struct NativeAgentState {
     collector: RuntimeCollector,
     runtime_config: NativeRuntimeConfig,
     variables: Vec<i64>,
+    shared_variable_slots: HashMap<String, usize>,
+    isolated_variable_images: HashSet<u64>,
+    isolated_variable_tables: HashMap<u64, Vec<i64>>,
+    isolated_variable_active: Option<u64>,
+    shared_variables_backup: Option<Vec<i64>>,
+    builtin_image_id: Option<u64>,
+    user_image_id: Option<u64>,
+    user_function_count: Option<u32>,
     constants: Vec<Constant>,
     materialized_constants: Vec<Option<i64>>,
     function_slots: Vec<Vec<usize>>,
@@ -872,6 +982,14 @@ impl NativeAgentState {
             runtime_config: config.clone(),
             collector: RuntimeCollector::new(config.gc_algorithm),
             variables: Vec::new(),
+            shared_variable_slots: HashMap::new(),
+            isolated_variable_images: HashSet::new(),
+            isolated_variable_tables: HashMap::new(),
+            isolated_variable_active: None,
+            shared_variables_backup: None,
+            builtin_image_id: None,
+            user_image_id: None,
+            user_function_count: None,
             constants: Vec::new(),
             materialized_constants: Vec::new(),
             function_slots: Vec::new(),
@@ -986,80 +1104,20 @@ impl NativeAgentState {
             native_callable_ids: HashMap::from([(eval_callable, 0)]),
         })
     }
-    fn program_state(program: &wjsm_ir::Program) -> NativeProgramState {
-        let variable_names = native_variable_names(program);
-        let variable_slots: HashMap<&str, usize> = variable_names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| (name.as_str(), index))
-            .collect();
-        let function_slots = program
-            .functions()
-            .iter()
-            .map(|function| {
-                let mut slots = Vec::new();
-                let captured_names = function
-                    .captured_names()
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<HashSet<_>>();
-                let uses_canonical_this = function.blocks().iter().any(|block| {
-                    block.instructions().iter().any(|instruction| {
-                        matches!(
-                            instruction,
-                            Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
-                                if name == "$this"
-                        )
-                    })
-                });
-                for (index, name) in function.params().iter().enumerate() {
-                    let storage_name = if index == 0
-                        && (function.name().ends_with("$async")
-                            || function.name().ends_with("$asyncgen")
-                            || name == wjsm_ir::EVAL_SCOPE_ENV_PARAM)
-                    {
-                        name.as_str()
-                    } else if index == 0 {
-                        "$env"
-                    } else if index == 1
-                        && uses_canonical_this
-                        && !function.name().ends_with("$async")
-                        && !function.name().ends_with("$asyncgen")
-                    {
-                        "$this"
-                    } else {
-                        name.as_str()
-                    };
-                    if let Some(slot) = variable_slots.get(storage_name).copied() {
-                        slots.push(slot);
-                    }
-                }
-                for block in function.blocks() {
-                    for instruction in block.instructions() {
-                        let name = match instruction {
-                            Instruction::LoadVar { name, .. }
-                            | Instruction::StoreVar { name, .. } => name,
-                            _ => continue,
-                        };
-                        if !name.starts_with("$0.")
-                            && !captured_names.contains(name.as_str())
-                            && let Some(slot) = variable_slots.get(name.as_str()).copied()
-                        {
-                            slots.push(slot);
-                        }
-                    }
-                }
-                slots.sort_unstable();
 
-                slots.dedup();
-                slots
-            })
-            .collect();
+    fn program_state(
+        program: &wjsm_ir::Program,
+        variable_slots: &HashMap<String, u32>,
+        shared_module_slots: &HashSet<&str>,
+    ) -> NativeProgramState {
         NativeProgramState {
-            variables: vec![value::encode_undefined(); variable_names.len()],
             constants: program.constants().to_vec(),
             materialized_constants: vec![None; program.constants().len()],
-            function_slots,
+            function_slots: function_slots_for_program(
+                program,
+                variable_slots,
+                shared_module_slots,
+            ),
             function_needs_prototype: program
                 .functions()
                 .iter()
@@ -1090,8 +1148,81 @@ impl NativeAgentState {
         }
     }
 
+    fn install_shared_variables(
+        &mut self,
+        builtin_slots: &HashMap<String, u32>,
+        user_slots: &HashMap<String, u32>,
+    ) {
+        let len = slot_table_len(user_slots).max(slot_table_len(builtin_slots));
+        self.variables = vec![value::encode_undefined(); len];
+        self.shared_variable_slots = user_slots
+            .iter()
+            .map(|(name, slot)| (name.clone(), usize::try_from(*slot).expect("槽号在 usize 内")))
+            .collect();
+        self.isolated_variable_images.clear();
+        self.isolated_variable_tables.clear();
+        self.isolated_variable_active = None;
+        self.shared_variables_backup = None;
+    }
+
+    fn install_whole_program_variables(&mut self, program: &wjsm_ir::Program) {
+        let names = native_variable_names(program);
+        self.variables = vec![value::encode_undefined(); names.len()];
+        self.shared_variable_slots = names
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| (name, index))
+            .collect();
+        self.isolated_variable_images.clear();
+        self.isolated_variable_tables.clear();
+        self.isolated_variable_active = None;
+        self.shared_variables_backup = None;
+    }
+
+    fn install_isolated_program(
+        &mut self,
+        image: Arc<CompiledImage>,
+        program: &wjsm_ir::Program,
+    ) {
+        let slots = whole_program_slots(program);
+        let image_id = image.image_id();
+        self.install_program(image, program, &slots, &HashSet::new());
+        self.isolated_variable_images.insert(image_id);
+        self.isolated_variable_tables.insert(
+            image_id,
+            vec![value::encode_undefined(); slot_table_len(&slots)],
+        );
+    }
+
+    fn swap_isolated_variables(&mut self, image_id: u64) {
+        if self.isolated_variable_active == Some(image_id) {
+            return;
+        }
+        if let Some(previous) = self.isolated_variable_active.take() {
+            self.isolated_variable_tables
+                .insert(previous, std::mem::take(&mut self.variables));
+            if let Some(shared) = self.shared_variables_backup.take() {
+                self.variables = shared;
+            }
+        }
+        if !self.isolated_variable_images.contains(&image_id) {
+            return;
+        }
+        self.shared_variables_backup = Some(std::mem::take(&mut self.variables));
+        self.variables = self
+            .isolated_variable_tables
+            .remove(&image_id)
+            .unwrap_or_default();
+        self.isolated_variable_active = Some(image_id);
+    }
+
     fn reset_execution(&mut self) {
         self.variables.clear();
+        self.shared_variable_slots.clear();
+        self.isolated_variable_images.clear();
+        self.isolated_variable_tables.clear();
+        self.isolated_variable_active = None;
+        self.shared_variables_backup = None;
         self.constants.clear();
         self.materialized_constants.clear();
         self.function_slots.clear();
@@ -1101,6 +1232,9 @@ impl NativeAgentState {
         self.function_names.clear();
         self.function_source_spans.clear();
         self.current_image_id = 0;
+        self.builtin_image_id = None;
+        self.user_image_id = None;
+        self.user_function_count = None;
         self.programs.clear();
         self.images.clear();
         self.image_source_files.clear();
@@ -1109,6 +1243,7 @@ impl NativeAgentState {
         self.process_entry = None;
         self.requested_exit_code = None;
         self.functions.clear();
+        self.function_ids.clear();
         self.runtime_modules.clear();
         self.scope_records.clear();
         self.strings.clear();
@@ -1206,7 +1341,6 @@ impl NativeAgentState {
 
     fn take_program_state(&mut self) -> NativeProgramState {
         NativeProgramState {
-            variables: std::mem::take(&mut self.variables),
             constants: std::mem::take(&mut self.constants),
             function_lengths: std::mem::take(&mut self.function_lengths),
             function_names: std::mem::take(&mut self.function_names),
@@ -1219,7 +1353,6 @@ impl NativeAgentState {
     }
 
     fn set_program_state(&mut self, state: NativeProgramState) {
-        self.variables = state.variables;
         self.constants = state.constants;
         self.materialized_constants = state.materialized_constants;
         self.function_slots = state.function_slots;
@@ -1230,10 +1363,19 @@ impl NativeAgentState {
         self.function_home_objects = state.function_home_objects;
     }
 
-    fn install_program(&mut self, image: Arc<CompiledImage>, program: &wjsm_ir::Program) {
+    fn install_program(
+        &mut self,
+        image: Arc<CompiledImage>,
+        program: &wjsm_ir::Program,
+        variable_slots: &HashMap<String, u32>,
+        shared_module_slots: &HashSet<&str>,
+    ) {
         let image_id = image.image_id();
         self.images.insert(image_id, image);
-        self.programs.insert(image_id, Self::program_state(program));
+        self.programs.insert(
+            image_id,
+            Self::program_state(program, variable_slots, shared_module_slots),
+        );
         if let Some(source_file) = program.source_file() {
             self.image_source_files
                 .insert(image_id, source_file.to_owned());
@@ -1250,6 +1392,7 @@ impl NativeAgentState {
             self.set_program_state(next);
             self.current_image_id = image_id;
         }
+        self.swap_isolated_variables(image_id);
         let image = self.images.get(&image_id)?;
         ctx.function_table = image.entries().as_ptr();
         ctx.function_table_len = u32::try_from(image.entries().len()).ok()?;
@@ -1294,11 +1437,24 @@ impl NativeAgentState {
         Ok(encoded)
     }
     fn materialize_function(&mut self, function_index: u32) -> Option<i64> {
-        let key = (self.current_image_id, function_index);
+        if let (Some(builtin_id), Some(user_id), Some(user_count)) = (
+            self.builtin_image_id,
+            self.user_image_id,
+            self.user_function_count,
+        ) && self.current_image_id == user_id
+            && function_index >= user_count
+        {
+            return self.materialize_function_in(builtin_id, function_index - user_count);
+        }
+        self.materialize_function_in(self.current_image_id, function_index)
+    }
+
+    fn materialize_function_in(&mut self, image_id: u64, function_index: u32) -> Option<i64> {
+        let key = (image_id, function_index);
         if let Some(environment) = self.call_environment()
             && let Some(closure) = self
                 .function_closures
-                .get(&(self.current_image_id, function_index, environment))
+                .get(&(image_id, function_index, environment))
                 .copied()
         {
             return Some(closure);
@@ -1310,13 +1466,27 @@ impl NativeAgentState {
             return Some(value::encode_function_idx(function_id));
         }
         let local_index = usize::try_from(function_index).ok()?;
+        let (needs_prototype, home_object, source_span) = if image_id == self.current_image_id {
+            (
+                *self.function_needs_prototype.get(local_index)?,
+                *self.function_home_objects.get(local_index)?,
+                *self.function_source_spans.get(local_index)?,
+            )
+        } else {
+            let program = self.programs.get(&image_id)?;
+            (
+                *program.function_needs_prototype.get(local_index)?,
+                *program.function_home_objects.get(local_index)?,
+                *program.function_source_spans.get(local_index)?,
+            )
+        };
         let function_id = u32::try_from(self.functions.len()).ok()?;
         let function = NativeFunctionRef {
-            image_id: self.current_image_id,
+            image_id,
             function_index,
-            needs_prototype: *self.function_needs_prototype.get(local_index)?,
-            home_object: *self.function_home_objects.get(local_index)?,
-            source_span: *self.function_source_spans.get(local_index)?,
+            needs_prototype,
+            home_object,
+            source_span,
         };
         self.functions.push(function);
         self.function_ids.insert(key, function_id);
@@ -3840,25 +4010,95 @@ impl NativeRuntime {
         self.state.working_directory = working_directory
             .canonicalize()
             .unwrap_or_else(|_| working_directory.to_path_buf());
-        let image = self
-            .state
-            .repository
-            .prepare(artifact, &NativeHostRegistry)?;
-        let entry_index = artifact
-            .program()
-            .functions()
-            .iter()
-            .position(|function| is_module_entry_ir_function(function.name()))
-            .unwrap_or(0);
-        let entry = image
-            .entries()
-            .get(entry_index)
-            .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
-            .slow_entry;
-        let image_id = image.image_id();
-        dispatch::modules::configure(&mut self.state, module_root, image_id, artifact.manifest())
-            .map_err(NativeRuntimeError::Invariant)?;
-        self.state.install_program(image, artifact.program());
+        let (entry, image_id) = match artifact.program().split_builtin_segment() {
+            Some((builtin_program, user_program)) => {
+                let (builtin_slots, user_slots) =
+                    native_variable_slots_for_segments(&builtin_program, &user_program);
+                let builtin_image = self.state.repository.prepare_program_with_slots(
+                    &builtin_program,
+                    &builtin_slots,
+                    &NativeHostRegistry,
+                )?;
+                let user_image = self.state.repository.prepare_program_with_slots(
+                    &user_program,
+                    &user_slots,
+                    &NativeHostRegistry,
+                )?;
+                self.state
+                    .install_shared_variables(&builtin_slots, &user_slots);
+                let builtin_image_id = builtin_image.image_id();
+                let user_image_id = user_image.image_id();
+                let shared_module_slots = builtin_slots
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|name| is_module_scope_var(name))
+                    .collect::<HashSet<_>>();
+                self.state.install_program(
+                    builtin_image,
+                    &builtin_program,
+                    &builtin_slots,
+                    &shared_module_slots,
+                );
+                self.state.install_program(
+                    user_image.clone(),
+                    &user_program,
+                    &user_slots,
+                    &shared_module_slots,
+                );
+                self.state.builtin_image_id = Some(builtin_image_id);
+                self.state.user_image_id = Some(user_image_id);
+                self.state.user_function_count =
+                    u32::try_from(user_program.functions().len()).ok();
+                let entry_index = user_program
+                    .functions()
+                    .iter()
+                    .position(|function| is_module_entry_ir_function(function.name()))
+                    .unwrap_or(0);
+                let entry = user_image
+                    .entries()
+                    .get(entry_index)
+                    .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+                    .slow_entry;
+                dispatch::modules::configure(
+                    &mut self.state,
+                    module_root,
+                    user_image_id,
+                    artifact.manifest(),
+                )
+                .map_err(NativeRuntimeError::Invariant)?;
+                (entry, user_image_id)
+            }
+            None => {
+                let image = self
+                    .state
+                    .repository
+                    .prepare(artifact, &NativeHostRegistry)?;
+                let slots = whole_program_slots(artifact.program());
+                self.state.install_whole_program_variables(artifact.program());
+                let entry_index = artifact
+                    .program()
+                    .functions()
+                    .iter()
+                    .position(|function| is_module_entry_ir_function(function.name()))
+                    .unwrap_or(0);
+                let entry = image
+                    .entries()
+                    .get(entry_index)
+                    .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+                    .slow_entry;
+                let image_id = image.image_id();
+                dispatch::modules::configure(
+                    &mut self.state,
+                    module_root,
+                    image_id,
+                    artifact.manifest(),
+                )
+                .map_err(NativeRuntimeError::Invariant)?;
+                self.state
+                    .install_program(image, artifact.program(), &slots, &HashSet::new());
+                (entry, image_id)
+            }
+        };
         if let Some(inspector) = self.state.inspector.as_mut() {
             inspector.register_script(artifact);
         }
@@ -4009,6 +4249,99 @@ mod tests {
                 std::path::Path::new("."),
             )
             .expect("source should execute")
+    }
+
+    fn empty_fn(name: &str) -> wjsm_ir::Function {
+        let mut function = wjsm_ir::Function::new(name, wjsm_ir::BasicBlockId(0));
+        let mut block = wjsm_ir::BasicBlock::new(wjsm_ir::BasicBlockId(0));
+        block.set_terminator(wjsm_ir::Terminator::Return { value: None });
+        function.push_block(block);
+        function
+    }
+
+    fn dual_image_program(user_marker: f64) -> PortableArtifact {
+        let mut program = wjsm_ir::Program::new();
+        let forty_two = program.add_constant(wjsm_ir::Constant::Number(42.0));
+        let marker = program.add_constant(wjsm_ir::Constant::Number(user_marker));
+        let builtin_ref = program.add_constant(wjsm_ir::Constant::FunctionRef(wjsm_ir::FunctionId(1)));
+        let undefined = program.add_constant(wjsm_ir::Constant::Undefined);
+
+        program.push_function(empty_fn("builtin_helper"));
+
+        let mut builtin_main = wjsm_ir::Function::new("$builtin_main", wjsm_ir::BasicBlockId(0));
+        let mut builtin_block = wjsm_ir::BasicBlock::new(wjsm_ir::BasicBlockId(0));
+        builtin_block.push_instruction(wjsm_ir::Instruction::Const {
+            dest: wjsm_ir::ValueId(0),
+            constant: forty_two,
+        });
+        builtin_block.push_instruction(wjsm_ir::Instruction::StoreVar {
+            name: "$1.answer".into(),
+            value: wjsm_ir::ValueId(0),
+        });
+        builtin_block.set_terminator(wjsm_ir::Terminator::Return { value: None });
+        builtin_main.push_block(builtin_block);
+        program.push_function(builtin_main);
+
+        let mut module_main = wjsm_ir::Function::new("$module_main", wjsm_ir::BasicBlockId(0));
+        let mut user_block = wjsm_ir::BasicBlock::new(wjsm_ir::BasicBlockId(0));
+        user_block.push_instruction(wjsm_ir::Instruction::Const {
+            dest: wjsm_ir::ValueId(0),
+            constant: builtin_ref,
+        });
+        user_block.push_instruction(wjsm_ir::Instruction::Const {
+            dest: wjsm_ir::ValueId(1),
+            constant: undefined,
+        });
+        user_block.push_instruction(wjsm_ir::Instruction::Call {
+            dest: Some(wjsm_ir::ValueId(2)),
+            callee: wjsm_ir::ValueId(0),
+            this_val: wjsm_ir::ValueId(1),
+            args: Vec::new(),
+        });
+        user_block.push_instruction(wjsm_ir::Instruction::LoadVar {
+            dest: wjsm_ir::ValueId(3),
+            name: "$1.answer".into(),
+        });
+        user_block.push_instruction(wjsm_ir::Instruction::Const {
+            dest: wjsm_ir::ValueId(4),
+            constant: marker,
+        });
+        user_block.set_terminator(wjsm_ir::Terminator::Return {
+            value: Some(wjsm_ir::ValueId(3)),
+        });
+        module_main.push_block(user_block);
+        program.push_function(module_main);
+
+        PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("dual-image artifact should encode")
+    }
+
+    #[test]
+    fn shared_variables_survive_builtin_call_and_reuse_image() {
+        let first = dual_image_program(1.0);
+        let second = dual_image_program(2.0);
+        let mut runtime = NativeRuntime::new(None).expect("native runtime should initialize");
+        let first_execution = runtime
+            .execute(&first, std::path::Path::new("."), std::path::Path::new("."))
+            .expect("first dual-image program should execute");
+        assert_eq!(wjsm_ir::value::decode_f64(first_execution.value), 42.0);
+        let second_execution = runtime
+            .execute(
+                &second,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .expect("second dual-image program should execute");
+        assert_eq!(wjsm_ir::value::decode_f64(second_execution.value), 42.0);
+        assert!(
+            runtime.state.repository.stats().hits >= 1,
+            "同一 builtin 段第二次 execute 必须命中 native image cache"
+        );
     }
 
     #[test]

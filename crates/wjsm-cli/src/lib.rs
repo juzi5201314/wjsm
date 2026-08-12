@@ -1403,22 +1403,11 @@ fn run_file_input_pipeline(
                     result.ast = Some(ast);
                 }
                 Stage::Lower => {
-                    // WJSM_CACHE_DIR 存在且未显式禁用时走 builtin 段缓存路径（issue #344）。
-                    let program = if std::env::var_os("WJSM_CACHE_DIR").is_some()
-                        && std::env::var_os("WJSM_NO_BUILTIN_CACHE").is_none()
-                    {
-                        wjsm_module::lower_bundle_cached_with_options(
-                            &entry,
-                            &root,
-                            resolution_options.clone(),
-                        )?
-                    } else {
-                        wjsm_module::lower_bundle_with_options(
-                            &entry,
-                            &root,
-                            resolution_options.clone(),
-                        )?
-                    };
+                    let program = wjsm_module::lower_bundle_cached_with_options(
+                        &entry,
+                        &root,
+                        resolution_options.clone(),
+                    )?;
                     verify_ir_for_pipeline(&program, cli.should_verify_ir())?;
                     result.timings.lower_us = start.elapsed().as_micros() as u64;
                     result.program = Some(program);

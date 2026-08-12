@@ -4,6 +4,7 @@ mod lower;
 mod root_plan;
 mod unwind;
 
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use cranelift_codegen::settings::{self, Configurable};
@@ -165,14 +166,38 @@ impl NativeCompiler {
     }
 
     pub fn compile(&self, artifact: &PortableArtifact) -> Result<NativeObject, NativeCompileError> {
-        lower::compile_program(Arc::clone(&self.isa), artifact.program())
+        self.compile_program(artifact.program())
+    }
+
+    pub fn compile_program(
+        &self,
+        program: &wjsm_ir::Program,
+    ) -> Result<NativeObject, NativeCompileError> {
+        let slots = lower::slots_from_program(program)?;
+        self.compile_program_with_slots(program, &slots)
+    }
+
+    pub fn compile_program_with_slots(
+        &self,
+        program: &wjsm_ir::Program,
+        variable_slots: &HashMap<String, u32>,
+    ) -> Result<NativeObject, NativeCompileError> {
+        lower::compile_program(Arc::clone(&self.isa), program, variable_slots)
     }
 
     pub fn diagnostics(
         &self,
         artifact: &PortableArtifact,
     ) -> Result<NativeCompilationDiagnostics, NativeCompileError> {
-        lower::compile_program_diagnostics(Arc::clone(&self.isa), artifact.program())
+        self.diagnostics_program(artifact.program())
+    }
+
+    pub fn diagnostics_program(
+        &self,
+        program: &wjsm_ir::Program,
+    ) -> Result<NativeCompilationDiagnostics, NativeCompileError> {
+        let slots = lower::slots_from_program(program)?;
+        lower::compile_program_diagnostics(Arc::clone(&self.isa), program, &slots)
     }
 }
 
@@ -435,6 +460,70 @@ mod tests {
             .expect("corrupt cache should be recompiled");
         assert_eq!(third.stats().invalidated, 1);
         assert_eq!(third.stats().misses, 1);
+        let _ = std::fs::remove_dir_all(&cache_dir);
+    }
+
+    #[test]
+    fn native_cache_hits_same_builtin_program_across_users() {
+        let cache_dir = std::env::temp_dir().join(format!(
+            "wjsm_native_cache_segment_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        let builtin = {
+            let mut program = Program::new();
+            let mut function = Function::new("$builtin_main", BasicBlockId(0));
+            let mut block = BasicBlock::new(BasicBlockId(0));
+            block.set_terminator(Terminator::Return { value: None });
+            function.push_block(block);
+            program.push_function(function);
+            program
+        };
+        let user_a = {
+            let mut program = Program::new();
+            let mut function = Function::new("$module_main", BasicBlockId(0));
+            let mut block = BasicBlock::new(BasicBlockId(0));
+            block.set_terminator(Terminator::Return { value: None });
+            function.push_block(block);
+            program.push_function(function);
+            program
+        };
+        let user_b = {
+            let mut program = Program::new();
+            let one = program.add_constant(Constant::Number(1.0));
+            let mut function = Function::new("$module_main", BasicBlockId(0));
+            let mut block = BasicBlock::new(BasicBlockId(0));
+            block.push_instruction(Instruction::Const {
+                dest: ValueId(0),
+                constant: one,
+            });
+            block.set_terminator(Terminator::Return {
+                value: Some(ValueId(0)),
+            });
+            function.push_block(block);
+            program.push_function(function);
+            program
+        };
+        let empty_slots = std::collections::HashMap::new();
+        let segmented = cache::NativeImageRepository::new(
+            NativeCompiler::new().expect("host ISA should be supported"),
+            Some(cache_dir.clone()),
+        );
+        segmented
+            .prepare_program_with_slots(&builtin, &empty_slots, &NoSymbols)
+            .expect("builtin 段首次 prepare 应 miss");
+        segmented
+            .prepare_program_with_slots(&user_a, &empty_slots, &NoSymbols)
+            .expect("用户段 A 应独立编译");
+        let before = segmented.stats();
+        segmented
+            .prepare_program_with_slots(&builtin, &empty_slots, &NoSymbols)
+            .expect("同一 builtin 段第二次 prepare 应 hit");
+        segmented
+            .prepare_program_with_slots(&user_b, &empty_slots, &NoSymbols)
+            .expect("用户段 B 应独立编译");
+        let after = segmented.stats();
+        assert!(after.hits > before.hits, "builtin 段必须按 Program digest 复用");
         let _ = std::fs::remove_dir_all(cache_dir);
     }
 }

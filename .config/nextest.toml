@@ -41,9 +41,3 @@ test-group = 'runtime-cache-delete'
 filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/)'
 threads-required = 'num-cpus'
 
-# perf_hooks fixture 每例都要 codegen 完整 builtin 闭包（约 236 个函数），单独跑
-# 约 1.0s；codegen 本身已并行吃满多核，与其它同型 fixture 并发时会越过 3s 门禁。
-# 同样只要求独占执行槽。builtin 段 native 镜像复用（见 docs/adr）落地后可移除。
-[[profile.default.overrides]]
-filter = 'test(/happy__node_builtin_perf_hooks_/)'
-threads-required = 'num-cpus'

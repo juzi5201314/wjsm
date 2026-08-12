@@ -744,7 +744,7 @@ fn execute_module_bundle(
         .slow_entry;
     let image_id = image.image_id();
     let caller_image_id = state.current_image_id;
-    state.install_program(image, artifact.program());
+    state.install_isolated_program(image, artifact.program());
     register_manifest(state, image_id, &manifest).map_err(ModuleLoadFailure::Message)?;
     state
         .runtime_modules
@@ -1258,7 +1258,7 @@ fn execute_vm_program(
         .slow_entry;
     let image_id = image.image_id();
     let caller_image_id = state.current_image_id;
-    state.install_program(image, artifact.program());
+    state.install_isolated_program(image, artifact.program());
     state
         .activate_image(ctx, image_id)
         .ok_or(VmExecutionError::Invariant("script image is missing"))?;

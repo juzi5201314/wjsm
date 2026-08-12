@@ -460,6 +460,16 @@ fn strong_reachable(
     queue.extend(frame_roots);
     queue.extend(state.variables.iter().copied());
     queue.extend(
+        state
+            .isolated_variable_tables
+            .values()
+            .flatten()
+            .copied(),
+    );
+    if let Some(shared) = &state.shared_variables_backup {
+        queue.extend(shared.iter().copied());
+    }
+    queue.extend(
         state.call_arena[..usize::try_from(ctx.call_arena_active_len).unwrap_or(0)]
             .iter()
             .copied(),

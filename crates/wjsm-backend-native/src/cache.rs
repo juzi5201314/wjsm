@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -16,13 +16,13 @@ use crate::{
 };
 
 const CACHE_MAGIC: &[u8; 8] = b"WJSMNAT\0";
-const CACHE_SCHEMA: u32 = 1;
+const CACHE_SCHEMA: u32 = 2;
 const MAX_CACHE_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_CACHE_FUNCTIONS: u32 = 4_000_000;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct NativeCacheKey {
-    pub artifact_digest: [u8; 32],
+    pub program_digest: [u8; 32],
     pub native_abi_hash: [u8; 32],
     pub codegen_hash: [u8; 32],
     pub target: Arc<str>,
@@ -31,9 +31,9 @@ pub struct NativeCacheKey {
 }
 
 impl NativeCacheKey {
-    pub fn new(artifact: &PortableArtifact, compiler: &NativeCompiler) -> Self {
+    pub fn for_program(program: &wjsm_ir::Program, compiler: &NativeCompiler) -> Self {
         Self {
-            artifact_digest: artifact.digest(),
+            program_digest: program_digest(program),
             native_abi_hash: wjsm_native_abi::native_abi_hash(),
             codegen_hash: NATIVE_CODEGEN_HASH,
             target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS).into(),
@@ -42,10 +42,14 @@ impl NativeCacheKey {
         }
     }
 
+    pub fn new(artifact: &PortableArtifact, compiler: &NativeCompiler) -> Self {
+        Self::for_program(artifact.program(), compiler)
+    }
+
     pub fn digest(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(CACHE_SCHEMA.to_le_bytes());
-        hasher.update(self.artifact_digest);
+        hasher.update(self.program_digest);
         hasher.update(self.native_abi_hash);
         hasher.update(self.codegen_hash);
         hash_string(&mut hasher, &self.target);
@@ -82,13 +86,13 @@ struct AtomicCacheStats {
 pub struct NativeImageRepository {
     compiler: NativeCompiler,
     cache_dir: Option<PathBuf>,
-    state: Mutex<RepositoryState>,
+    state: Arc<Mutex<RepositoryState>>,
     stats: AtomicCacheStats,
 }
 
 #[derive(Default)]
 struct RepositoryState {
-    images: HashMap<NativeCacheKey, Weak<CompiledImage>>,
+    images: HashMap<NativeCacheKey, Arc<CompiledImage>>,
     inflight: HashMap<NativeCacheKey, Arc<InflightGate>>,
 }
 
@@ -98,12 +102,20 @@ struct InflightGate {
     ready: Condvar,
 }
 
+static SHARED_IMAGE_STATE: std::sync::LazyLock<Arc<Mutex<RepositoryState>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(RepositoryState::default())));
+
 impl NativeImageRepository {
     pub fn new(compiler: NativeCompiler, cache_dir: Option<PathBuf>) -> Self {
+        let state = if cache_dir.is_some() {
+            Arc::new(Mutex::new(RepositoryState::default()))
+        } else {
+            Arc::clone(&SHARED_IMAGE_STATE)
+        };
         Self {
             compiler,
             cache_dir,
-            state: Mutex::new(RepositoryState::default()),
+            state,
             stats: AtomicCacheStats::default(),
         }
     }
@@ -113,14 +125,32 @@ impl NativeImageRepository {
         artifact: &PortableArtifact,
         resolver: &dyn NativeSymbolResolver,
     ) -> Result<Arc<CompiledImage>, NativeCacheError> {
-        let key = NativeCacheKey::new(artifact, &self.compiler);
+        self.prepare_program(artifact.program(), resolver)
+    }
+
+    pub fn prepare_program(
+        &self,
+        program: &wjsm_ir::Program,
+        resolver: &dyn NativeSymbolResolver,
+    ) -> Result<Arc<CompiledImage>, NativeCacheError> {
+        let slots = crate::lower::slots_from_program(program)?;
+        self.prepare_program_with_slots(program, &slots, resolver)
+    }
+
+    pub fn prepare_program_with_slots(
+        &self,
+        program: &wjsm_ir::Program,
+        variable_slots: &HashMap<String, u32>,
+        resolver: &dyn NativeSymbolResolver,
+    ) -> Result<Arc<CompiledImage>, NativeCacheError> {
+        let key = NativeCacheKey::for_program(program, &self.compiler);
         loop {
             let (gate, leader) = {
                 let mut state = self
                     .state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Some(image) = state.images.get(&key).and_then(Weak::upgrade) {
+                if let Some(image) = state.images.get(&key).cloned() {
                     self.stats.hits.fetch_add(1, Ordering::Relaxed);
                     return Ok(image);
                 }
@@ -146,7 +176,7 @@ impl NativeImageRepository {
                 continue;
             }
 
-            let prepared = self.prepare_leader(&key, artifact, resolver);
+            let prepared = self.prepare_leader(&key, program, variable_slots, resolver);
             {
                 let mut state = self
                     .state
@@ -154,7 +184,7 @@ impl NativeImageRepository {
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.inflight.remove(&key);
                 if let Ok(image) = &prepared {
-                    state.images.insert(key.clone(), Arc::downgrade(image));
+                    state.images.insert(key.clone(), Arc::clone(image));
                 }
             }
             let mut done = gate
@@ -185,7 +215,8 @@ impl NativeImageRepository {
     fn prepare_leader(
         &self,
         key: &NativeCacheKey,
-        artifact: &PortableArtifact,
+        program: &wjsm_ir::Program,
+        variable_slots: &HashMap<String, u32>,
         resolver: &dyn NativeSymbolResolver,
     ) -> Result<Arc<CompiledImage>, NativeCacheError> {
         if let Some(directory) = &self.cache_dir {
@@ -204,7 +235,9 @@ impl NativeImageRepository {
             }
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
-        let object = self.compiler.compile(artifact)?;
+        let object = self
+            .compiler
+            .compile_program_with_slots(program, variable_slots)?;
         let image = CompiledImage::load(&object, key.image_id(), resolver)?;
         if let Some(directory) = &self.cache_dir {
             store_cache_entry(directory, key, &object)?;
@@ -282,7 +315,7 @@ fn encode_cache_entry(
     let mut bytes = Vec::new();
     bytes.extend_from_slice(CACHE_MAGIC);
     bytes.extend_from_slice(&CACHE_SCHEMA.to_le_bytes());
-    bytes.extend_from_slice(&key.artifact_digest);
+    bytes.extend_from_slice(&key.program_digest);
     bytes.extend_from_slice(&key.native_abi_hash);
     bytes.extend_from_slice(&key.codegen_hash);
     encode_string(&mut bytes, &key.target)?;
@@ -314,7 +347,7 @@ fn decode_cache_entry(
         return Err(NativeCacheError::Invalid("cache schema mismatch".into()));
     }
     let key = NativeCacheKey {
-        artifact_digest: decoder.hash()?,
+        program_digest: decoder.hash()?,
         native_abi_hash: decoder.hash()?,
         codegen_hash: decoder.hash()?,
         target: decoder.string()?.into(),
@@ -423,6 +456,12 @@ fn encode_string(bytes: &mut Vec<u8>, value: &str) -> Result<(), NativeCacheErro
     );
     bytes.extend_from_slice(value.as_bytes());
     Ok(())
+}
+
+fn program_digest(program: &wjsm_ir::Program) -> [u8; 32] {
+    let bytes = wjsm_artifact_format::encode_program_bytes(program)
+        .expect("verified/lowered Program 必须能编码");
+    Sha256::digest(&bytes).into()
 }
 
 fn hash_string(hasher: &mut Sha256, value: &str) {

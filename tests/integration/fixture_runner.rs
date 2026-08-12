@@ -21,8 +21,19 @@ fn ensure_test_env() {
             env::set_var("TZ", "UTC");
             // 默认禁用 child_process，避免会话环境污染 fixture 期望。
             env::remove_var("WJSM_CHILD_PROCESS_ALLOW");
+            if env::var_os("WJSM_CACHE_DIR").is_none() {
+                // 跨 nextest 进程共享 native / builtin IR 缓存，让同一 frontier
+                // 的后续 fixture 命中已编好的 builtin 段。
+                env::set_var("WJSM_CACHE_DIR", fixture_cache_dir());
+            }
         }
     });
+}
+
+fn fixture_cache_dir() -> PathBuf {
+    let dir = env::temp_dir().join("wjsm-fixture-native-cache");
+    let _ = fs::create_dir_all(&dir);
+    dir
 }
 
 pub struct FixtureRunner {

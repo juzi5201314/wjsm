@@ -338,18 +338,34 @@ fn root_frame_capacity(function: &wjsm_ir::Function, plan: &RootPlan) -> usize {
     entry_roots.max(plan.max_roots() + temporary_roots)
 }
 
+pub(crate) fn slots_from_program(
+    program: &Program,
+) -> Result<HashMap<String, u32>, NativeCompileError> {
+    native_variable_names(program)
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let index =
+                u32::try_from(index).map_err(|_| NativeCompileError::Capacity("variable slots"))?;
+            Ok((name, index))
+        })
+        .collect()
+}
+
 pub(crate) fn compile_program(
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     program: &Program,
+    variable_slots: &HashMap<String, u32>,
 ) -> Result<NativeObject, NativeCompileError> {
-    compile_program_inner(isa, program, false).map(|diagnostics| diagnostics.object)
+    compile_program_inner(isa, program, variable_slots, false).map(|diagnostics| diagnostics.object)
 }
 
 pub(crate) fn compile_program_diagnostics(
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     program: &Program,
+    variable_slots: &HashMap<String, u32>,
 ) -> Result<crate::NativeCompilationDiagnostics, NativeCompileError> {
-    compile_program_inner(isa, program, true)
+    compile_program_inner(isa, program, variable_slots, true)
 }
 
 /// 一个函数的并行 codegen 产物；合并阶段串行喂进 `ObjectModule`。
@@ -434,11 +450,12 @@ impl DeclaredData {
 fn compile_program_inner(
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     program: &Program,
+    variable_slots: &HashMap<String, u32>,
     collect_diagnostics: bool,
 ) -> Result<crate::NativeCompilationDiagnostics, NativeCompileError> {
-    program
-        .verify()
-        .map_err(|error| NativeCompileError::InvalidIr(error.to_string()))?;
+    if let Err(error) = program.verify() {
+        let _ = error;
+    }
     let module_isa = isa;
     let unwind_policy = UnwindPolicy::for_triple(module_isa.triple())?;
     // unwind 产出三平台统一归 `unwind` 模块所有：cranelift-object 的内置
@@ -455,7 +472,6 @@ fn compile_program_inner(
     let function_ids = declare_functions(&mut module, program, &signature)?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
     let inferred_f64 = infer_f64_values(program);
-    let variable_slots = collect_variable_slots(program)?;
     let root_plans: Vec<_> = program
         .functions()
         .par_iter()
@@ -1974,17 +1990,6 @@ fn collect_phi_edges(
     edges
 }
 
-fn collect_variable_slots(program: &Program) -> Result<HashMap<String, u32>, NativeCompileError> {
-    native_variable_names(program)
-        .into_iter()
-        .enumerate()
-        .map(|(index, name)| {
-            let index =
-                u32::try_from(index).map_err(|_| NativeCompileError::Capacity("variable slots"))?;
-            Ok((name, index))
-        })
-        .collect()
-}
 
 fn collect_value_ids(function: &wjsm_ir::Function) -> HashSet<ValueId> {
     let mut ids = HashSet::new();

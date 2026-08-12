@@ -191,14 +191,13 @@ pub fn lower_modules_with_debug_meta(
 ///   `${scope_id}.{name}` 在合并程序中依然成立；
 /// - builtin 段 Program 预装（段函数在前、用户函数在后）+ export_map /
 ///   module_export_names / module_scopes 注入；
-/// - **段入口函数体 inline 进用户 `$module_main` 入口块**（builtin 顶层先于所有
-///   用户模块初始化执行，与 plain 路径拓扑序一致）。不采用跨函数 entry Call：
-///   LoadVar/StoreVar 在后端 Normal 模式按函数分配变量槽，builtin 段函数的
-///   store 与用户函数的 load 无法共享；inline 后 builtin 的模块作用域变量写入与用户
-///   的读取落在同一函数（同一批 local），语义与 plain 路径完全一致（含异常：builtin
-///   顶层未捕获 throw 自然传播为 `$module_main` 的异常返回）。
+/// - **用户 `$module_main` 入口块头部插入对 `$builtin_main` 的 Call**（builtin
+///   顶层先于所有用户模块初始化执行）。`$builtin_main` 函数体保留在段函数里，
+///   不再 inline。runtime 用共享 `variables` 表让 `$N.x` 跨 image 可见。
+///   `$builtin_main` 顶层未捕获 throw 经这次 Call 的异常路径从 `$module_main` 传出。
 ///
 /// `modules` 只含用户模块；`builtin` 段必须无 TLA（builtin 段构建时保证）。
+/// 生产路径遇用户 TLA 会回退整包 lower，不会走进本函数。
 pub fn lower_modules_with_builtin_seed(
     modules: Vec<ModuleLoweringInput>,
     import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
@@ -249,148 +248,52 @@ pub fn lower_modules_with_builtin_seed(
 
     let flow = lower_module_bodies(&mut lowerer, &modules)?;
 
-    // builtin 顶层先执行：把段入口函数体 inline 进用户 $module_main 入口块。
-    let flow = inline_builtin_entry(&mut lowerer, &builtin, flow)?;
+    // builtin 顶层先执行：用户入口块头部 Call `$builtin_main`。
+    emit_builtin_entry_call(&mut lowerer, &builtin);
 
     finalize_multi_module(&mut lowerer, flow, has_tla)?;
 
     Ok(lowerer.module)
 }
 
-/// 将 builtin 段入口函数体 inline 进用户 `$module_main` 入口块（hydration 的
-/// "builtin 顶层先于用户模块初始化执行"步骤）。
+/// 在用户 `$module_main`（或 TLA 的 async body entry）入口块头部插入
+/// `Const FunctionRef($builtin_main)` + `Const Undefined` + `Call`。
 ///
-/// 不做跨函数 entry Call：后端 Normal 模式下 LoadVar/StoreVar 按函数分配变量槽，
-/// 段函数对模块作用域变量（`$N.x`）的 store 对用户函数不可见；inline 后两者落在
-/// 同一函数，与 plain 路径语义完全一致。
-///
-/// 拼接手术：
-/// - 用户入口块原有内容整体搬入新 `cont_block`（builtin 顶层完成后接续）；
-/// - 段入口函数的 ValueId 整体加 `next_value` 偏移，块 id 重映射
-///   （段块 0 → 用户入口块；段块 i>0 → 追加块 `block_base + i`）；
-/// - 段入口块（块 0）指令拼进用户入口块首部，其终止器（已重映射）成为入口块终止器；
-///   其余段块按序追加为新区块；
-/// - 段入口函数的所有 `Return` 终止器改写为 `Jump(cont_block)`（模块顶层正常完成
-///   返回 undefined，直接落入用户初始化）；未捕获 `Throw` 保留原样——在 $module_main
-///   内自然传播为异常返回（与 plain 路径一致）；
-/// - 合并 `has_eval` / `known_callee_vars`（变量名作用域前缀互斥，无冲突）；
-///   `next_value` 推进到段函数最大 ValueId 之后。
-///
-/// 变量名（`${scope_id}.{name}`）零改动：builtin scope id < scope_count ≤ 用户
-/// scope id，天然不相交。入口块为 TLA 时的 async main body entry，否则为 bb0。
-/// `flow` 若 Open 在原入口块（典型无控制流场景）则改指 `cont_block`，避免
-/// finalize 覆盖其终止器。
-fn inline_builtin_entry(
-    lowerer: &mut Lowerer,
-    builtin: &BuiltinSegment,
-    flow: StmtFlow,
-) -> Result<StmtFlow, LoweringError> {
+/// 终止器不动。Call 的异常语义走现有 lowering：顶层未捕获 throw 变成这次
+/// Call 的异常返回，再从 `$module_main` 传出。
+fn emit_builtin_entry_call(lowerer: &mut Lowerer, builtin: &BuiltinSegment) {
     let entry_block = lowerer.async_main_body_entry.unwrap_or(BasicBlockId(0));
-    let entry_block_idx = usize::try_from(entry_block.0).expect("BasicBlockId 索引在 usize 内");
-    let entry_fn_idx = usize::try_from(builtin.entry_function_id.0)
-        .expect("builtin 段入口函数 id 索引在 usize 内");
-    let entry_fn = &builtin.program.functions()[entry_fn_idx];
-
-    // ── 基线：用户 main 当前的 ValueId / 块计数 ──
-    let value_base = lowerer.next_value;
-    let block_base =
-        u32::try_from(lowerer.current_function.blocks.len()).expect("用户 main 块数在 u32 内");
-
-    // 取走用户入口块原有指令与终止器（内容整体搬进新 cont_block）。
-    let original_instructions =
-        std::mem::take(lowerer.current_function.blocks[entry_block_idx].instructions_mut());
-    let original_terminator = lowerer.current_function.blocks[entry_block_idx]
-        .terminator()
-        .clone();
-    let cont_block = lowerer.current_function.new_block();
-    for instruction in original_instructions {
-        lowerer
-            .current_function
-            .append_instruction(cont_block, instruction);
-    }
-    lowerer
-        .current_function
-        .set_terminator(cont_block, original_terminator);
-
-    // ── 重映射闭包：ValueId 加偏移；段块 0 → 用户入口块，段块 i>0 → 追加块 ──
-    let mut builtin_max_value: u32 = 0;
-    let mut remap_value = |value: wjsm_ir::ValueId| {
-        builtin_max_value = builtin_max_value.max(value.0);
-        wjsm_ir::ValueId(value.0 + value_base)
-    };
-    let mut remap_block = |block: BasicBlockId| {
-        if block.0 == 0 {
-            entry_block
-        } else {
-            BasicBlockId(block_base + block.0)
-        }
-    };
-
-    // ── 逐块拼接段入口函数 ──
-    for (block_index, block) in entry_fn.blocks().iter().enumerate() {
-        let rewritten_instructions: Vec<Instruction> = block
-            .instructions()
-            .iter()
-            .map(|instruction| {
-                let mut instruction = instruction.clone();
-                instruction.remap_values(&mut remap_value);
-                instruction.remap_blocks(&mut remap_block);
-                instruction
-            })
-            .collect();
-        // 模块顶层正常完成（Return）→ 落入用户初始化（cont_block）；
-        // 未捕获 Throw 原样保留（在 $module_main 内自然传播）。
-        let terminator = if matches!(block.terminator(), Terminator::Return { .. }) {
-            Terminator::Jump { target: cont_block }
-        } else {
-            let mut terminator = block.terminator().clone();
-            terminator.remap_values(&mut remap_value);
-            terminator.remap_blocks(&mut remap_block);
-            terminator
-        };
-
-        if block_index == 0 {
-            // 段入口块：指令拼进用户入口块首部，终止器成为入口块终止器。
-            for instruction in rewritten_instructions {
-                lowerer
-                    .current_function
-                    .append_instruction(entry_block, instruction);
-            }
-            lowerer
-                .current_function
-                .set_terminator(entry_block, terminator);
-        } else {
-            let new_block = lowerer.current_function.new_block();
-            for instruction in rewritten_instructions {
-                lowerer
-                    .current_function
-                    .append_instruction(new_block, instruction);
-            }
-            lowerer
-                .current_function
-                .set_terminator(new_block, terminator);
-        }
-    }
-
-    // ── 推进 ValueId 计数，避免与段函数数值冲突 ──
-    lowerer.next_value = value_base + builtin_max_value + 1;
-
-    // ── 合并函数元数据（段入口若有 eval / known callee）──
-    if entry_fn.has_eval() {
-        lowerer.current_function.mark_has_eval();
-    }
-    for (ir_name, function_id) in entry_fn.known_callee_vars() {
-        lowerer
-            .current_function
-            .record_known_callee(ir_name.clone(), *function_id);
-    }
-
-    // ── 修正 flow：若原本 Open 在入口块，改指 cont_block ──
-    let flow = match flow {
-        StmtFlow::Open(block) if block == entry_block => StmtFlow::Open(cont_block),
-        other => other,
-    };
-    Ok(flow)
+    let entry_block_idx =
+        usize::try_from(entry_block.0).expect("BasicBlockId 索引在 usize 内");
+    let callee = lowerer.alloc_value();
+    let this_val = lowerer.alloc_value();
+    let dest = lowerer.alloc_value();
+    let fn_const = lowerer
+        .module
+        .add_constant(Constant::FunctionRef(builtin.entry_function_id));
+    let undef_const = lowerer.module.add_constant(Constant::Undefined);
+    let original = std::mem::take(
+        lowerer.current_function.blocks[entry_block_idx].instructions_mut(),
+    );
+    let prefix = [
+        Instruction::Const {
+            dest: callee,
+            constant: fn_const,
+        },
+        Instruction::Const {
+            dest: this_val,
+            constant: undef_const,
+        },
+        Instruction::Call {
+            dest: Some(dest),
+            callee,
+            this_val,
+            args: Vec::new(),
+        },
+    ];
+    let instructions = lowerer.current_function.blocks[entry_block_idx].instructions_mut();
+    instructions.extend(prefix);
+    instructions.extend(original);
 }
 
 /// 设置多模块 lowerer 的初始状态

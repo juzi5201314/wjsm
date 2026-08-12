@@ -39,7 +39,7 @@ JS/TS source
 
 ### 3. Native image 与 cache 是 runtime 私有派生数据
 
-`NativeImageRepository` 以 artifact digest、native ABI hash、native codegen source hash、target、Cranelift 版本和 codegen settings 组成 key。进程内 repository 共享 immutable image，磁盘 cache 只保存当前宿主派生对象；校验失败的 cache 被 invalidated 后重编译，不能执行损坏字节。
+`NativeImageRepository` 以 artifact digest、native ABI hash、native codegen source hash、target、Cranelift 版本和 codegen settings 组成 key。进程内 repository 共享 immutable image，磁盘 cache 只保存当前宿主派生对象；校验失败的 cache 被 invalidated 后重编译，不能执行损坏字节。当合并 Program 含 `$builtin_main` 时，runtime 派生两份 image（builtin 段按 frontier IR digest，用户段按用户函数子 Program digest）。
 
 ### 4. `NativeRuntime` 是唯一运行时 owner
 

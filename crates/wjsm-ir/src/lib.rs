@@ -59,6 +59,71 @@ impl Module {
         self.functions.extend(other.functions.iter().cloned());
     }
 
+    /// 定位 `$builtin_main`。没有则 `None`（无 builtin 段 / TLA 回退整包）。
+    pub fn builtin_entry_function_id(&self) -> Option<FunctionId> {
+        self.functions
+            .iter()
+            .position(|function| is_builtin_entry_ir_function(function.name()))
+            .and_then(|index| u32::try_from(index).ok())
+            .map(FunctionId)
+    }
+
+    /// 切出两段独立 Program，供分别 codegen。
+    ///
+    /// 前置：`self.functions()` 前 `split` 个函数是 builtin 段（`split` =
+    /// `builtin_entry_function_id().0 + 1`，因为 `$builtin_main` 是段内最后一个函数，
+    /// 由 `build_builtin_segment` 的 `finalize` 保证）。
+    ///
+    /// - builtin 段：函数 `[0, split)`、常量全量拷贝（段内 FunctionRef / 字符串常量下标不变）。
+    /// - 用户段：函数 `[split, len)`。用户函数体内的 `Constant::FunctionRef(id)`：
+    ///   - `id.0 >= split`：改写成 `FunctionId(id.0 - split)`，因为用户 image 的
+    ///     `wjsm_function_{i}` 从 0 编号；
+    ///   - `id.0 < split`：改写成 `FunctionId(user_count + id.0)`，让跨 image 引用
+    ///     落在 `function_index >= user_function_count`，runtime 再映射回 builtin image。
+    ///   用户段常量表仍是合并 Program 的全量常量拷贝，这样 `MaterializeString` 等
+    ///   下标不用重映射。
+    pub fn split_builtin_segment(&self) -> Option<(Program, Program)> {
+        let entry_id = self.builtin_entry_function_id()?;
+        let entry_index = usize::try_from(entry_id.0).ok()?;
+        if self
+            .functions
+            .get(entry_index)
+            .is_none_or(|function| !is_builtin_entry_ir_function(function.name()))
+        {
+            return None;
+        }
+        let split = entry_index.checked_add(1)?;
+        if split > self.functions.len() {
+            return None;
+        }
+        let split_id = entry_id.0.checked_add(1)?;
+
+        let builtin_used = max_constant_id_in(&self.functions[..split]);
+        let builtin_constants = match builtin_used {
+            Some(max) => self.constants[..=max].to_vec(),
+            None => Vec::new(),
+        };
+        let builtin = Program {
+            constants: builtin_constants,
+            functions: self.functions[..split].to_vec(),
+            script_mode: self.script_mode,
+            source_file: None,
+        };
+        let user_count = u32::try_from(self.functions.len() - split).ok()?;
+        let user = Program {
+            constants: self
+                .constants
+                .iter()
+                .cloned()
+                .map(|constant| remap_user_function_ref(constant, split_id, user_count))
+                .collect(),
+            functions: self.functions[split..].to_vec(),
+            script_mode: self.script_mode,
+            source_file: self.source_file.clone(),
+        };
+        Some((builtin, user))
+    }
+
     pub fn function_mut(&mut self, id: FunctionId) -> Option<&mut Function> {
         self.functions.get_mut(id.0 as usize)
     }
@@ -270,6 +335,59 @@ mod tests {
         let json = serde_json::to_string(&module).expect("module 应可序列化为 JSON");
         let restored: Program = serde_json::from_str(&json).expect("JSON 应可反序列化为 Program");
         assert_eq!(module, restored);
+    }
+
+    fn empty_function(name: &str) -> Function {
+        let mut function = Function::new(name, BasicBlockId(0));
+        let mut entry = BasicBlock::new(BasicBlockId(0));
+        entry.set_terminator(Terminator::Return { value: None });
+        function.push_block(entry);
+        function
+    }
+
+    #[test]
+    fn split_builtin_segment_remaps_user_function_refs() {
+        let mut program = Module::new();
+        program.set_script_mode(true);
+        program.set_source_file("user.js");
+        program.add_constant(Constant::FunctionRef(FunctionId(0)));
+        program.add_constant(Constant::FunctionRef(FunctionId(2)));
+        program.add_constant(Constant::String("keep".into()));
+        program.push_function(empty_function("builtin_helper"));
+        program.push_function(empty_function(BUILTIN_ENTRY_IR_NAME));
+        program.push_function(empty_function(MODULE_ENTRY_IR_NAME));
+
+        let (builtin, user) = program
+            .split_builtin_segment()
+            .expect("含 $builtin_main 的合并 Program 必须能切段");
+
+        assert_eq!(builtin.functions().len(), 2);
+        assert_eq!(builtin.functions()[0].name(), "builtin_helper");
+        assert_eq!(builtin.functions()[1].name(), BUILTIN_ENTRY_IR_NAME);
+        assert!(builtin.source_file().is_none());
+        assert!(builtin.script_mode());
+        assert!(builtin.constants().is_empty());
+
+        assert_eq!(user.functions().len(), 1);
+        assert_eq!(user.functions()[0].name(), MODULE_ENTRY_IR_NAME);
+        assert_eq!(user.source_file(), Some("user.js"));
+        assert!(user.script_mode());
+        assert_eq!(
+            user.constants(),
+            &[
+                Constant::FunctionRef(FunctionId(1)),
+                Constant::FunctionRef(FunctionId(0)),
+                Constant::String("keep".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_builtin_segment_returns_none_without_entry() {
+        let mut program = Module::new();
+        program.push_function(empty_function(MODULE_ENTRY_IR_NAME));
+        assert!(program.split_builtin_segment().is_none());
+        assert!(program.builtin_entry_function_id().is_none());
     }
 }
 
@@ -1247,6 +1365,45 @@ impl Terminator {
 
 /// 合成模块顶层入口的 IR 函数名（与用户声明的 `main` 区分，避免入口约定冲突）。
 pub const MODULE_ENTRY_IR_NAME: &str = "$module_main";
+
+/// 合成 builtin 段入口的 IR 函数名（由 `build_builtin_segment` 把 `$module_main` 改名而来）。
+pub const BUILTIN_ENTRY_IR_NAME: &str = "$builtin_main";
+
+/// 是否为编译器合成的 builtin 段入口函数。
+pub fn is_builtin_entry_ir_function(name: &str) -> bool {
+    name == BUILTIN_ENTRY_IR_NAME
+}
+
+fn remap_user_function_ref(constant: Constant, split: u32, user_count: u32) -> Constant {
+    match constant {
+        Constant::FunctionRef(FunctionId(id)) if id >= split => {
+            Constant::FunctionRef(FunctionId(id - split))
+        }
+        Constant::FunctionRef(FunctionId(id)) => Constant::FunctionRef(FunctionId(user_count + id)),
+        other => other,
+    }
+}
+
+fn max_constant_id_in(functions: &[Function]) -> Option<usize> {
+    let mut max = None;
+    for function in functions {
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Instruction::Const { constant, .. } = instruction {
+                    let index = usize::try_from(constant.0).ok()?;
+                    max = Some(max.map_or(index, |current: usize| current.max(index)));
+                }
+            }
+            if let Terminator::Switch { cases, .. } = block.terminator() {
+                for case in cases {
+                    let index = usize::try_from(case.constant.0).ok()?;
+                    max = Some(max.map_or(index, |current: usize| current.max(index)));
+                }
+            }
+        }
+    }
+    max
+}
 
 /// 是否为编译器合成的模块入口函数（非用户 `function main()`）。
 pub fn is_module_entry_ir_function(name: &str) -> bool {

@@ -103,11 +103,8 @@ impl ModuleBundler {
         }
 
         // 3.5) 用户程序含 top-level await（TLA）→ 回退现状 lower。
-        // builtin 顶层代码 inline 进用户 async 状态机（main$async）后，其模块变量
-        // （如 `$2.match`）跨 await 存活所需的 ContinuationSaveVar/load_var 对不会
-        // 重新生成（save_var 由语义层 async 编译时基于当时的 IR 生成，inline 是
-        // IR 级后处理），恢复路径会读到未恢复的 local——TLA 程序的 builtin 缓存
-        // 路径在语义上不等价。非 TLA 程序（含全部 perf_hooks fixture）不受影响。
+        // TLA 会把用户入口编成 async 状态机；#344 起约定 TLA / WJSM_NO_BUILTIN_CACHE /
+        // 无 frontier 走整包单 image。双 image 路径不覆盖 TLA。
         let user_tla = graph.all_module_ids().any(|id| {
             let node = graph.get_module(id).expect("graph node missing");
             !builtin_modules::is_builtin_virtual_path(&node.path)
@@ -122,9 +119,25 @@ impl ModuleBundler {
         let cache_dir = std::env::var_os("WJSM_CACHE_DIR")
             .map(PathBuf::from)
             .map(|root| root.join("builtin_ir"));
-        let segment = match cache_dir.as_deref() {
-            Some(dir) => match crate::builtin_cache::load_builtin_segment(dir, &key) {
-                Some(segment) => segment,
+        let segment = if let Some(segment) = crate::builtin_cache::load_memory_segment(&key) {
+            segment
+        } else {
+            match cache_dir.as_deref() {
+                Some(dir) => match crate::builtin_cache::load_builtin_segment(dir, &key) {
+                    Some(segment) => segment,
+                    None => {
+                        let segment = crate::builtin_cache::build_builtin_segment(
+                            &frontier,
+                            &self.root_path,
+                            &self.options,
+                            self.emit_debug_checks,
+                        )
+                        .with_context(|| "Failed to build builtin segment")?;
+                        let _ = crate::builtin_cache::store_builtin_segment(dir, &key, &segment);
+                        crate::builtin_cache::remember_builtin_segment(&key, &segment);
+                        segment
+                    }
+                },
                 None => {
                     let segment = crate::builtin_cache::build_builtin_segment(
                         &frontier,
@@ -133,18 +146,10 @@ impl ModuleBundler {
                         self.emit_debug_checks,
                     )
                     .with_context(|| "Failed to build builtin segment")?;
-                    // 落盘失败不阻塞编译：缓存是尽力而为的派生数据。
-                    let _ = crate::builtin_cache::store_builtin_segment(dir, &key, &segment);
+                    crate::builtin_cache::remember_builtin_segment(&key, &segment);
                     segment
                 }
-            },
-            None => crate::builtin_cache::build_builtin_segment(
-                &frontier,
-                &self.root_path,
-                &self.options,
-                self.emit_debug_checks,
-            )
-            .with_context(|| "Failed to build builtin segment")?,
+            }
         };
 
         // 5) 重建 canonical 闭包图（确定性纯解析，id 布局与段一致），共享节点进用户图。
@@ -205,9 +210,9 @@ impl ModuleBundler {
 
     /// 将入口模块及其依赖 lower 为 portable artifact 的完整 target-independent 输入。
     pub fn lower_artifact_input(&self, entry: &Path) -> Result<ArtifactBuildInput> {
+        let program = self.lower_bundle_cached(entry)?;
         let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
             .with_context(|| "Failed to build module graph")?;
-        let program = lower_graph(&graph, self.emit_debug_checks)?;
         let manifest = manifest_for_graph(&graph, &self.root_path, &self.options)?;
         let mut input = ArtifactBuildInput::new(
             program,

@@ -3,7 +3,7 @@
 //! 本 crate 只定义 generated-code-visible layout、symbol ID 与 signature；具体 runtime
 //! 状态和 thunk 实现归 `wjsm-host-native`。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::sync::OnceLock;
@@ -334,6 +334,30 @@ pub fn native_variable_names(program: &Program) -> Vec<String> {
     names.into_iter().collect()
 }
 
+/// 按段分区编号：builtin 名字占据 `0..B`，用户独有名字从 `B` 起。
+///
+/// 用户独有名字不能按全局字典序插到 builtin 名字中间，否则旧 builtin image 的槽号会后移。
+pub fn native_variable_slots_for_segments(
+    builtin: &Program,
+    user: &Program,
+) -> (HashMap<String, u32>, HashMap<String, u32>) {
+    let builtin_names = native_variable_names(builtin);
+    let mut user_names = native_variable_names(user);
+    user_names.retain(|name| !builtin_names.iter().any(|existing| existing == name));
+    let mut builtin_slots = HashMap::new();
+    for (index, name) in builtin_names.iter().enumerate() {
+        let slot = u32::try_from(index).expect("builtin 变量槽数在 u32 内");
+        builtin_slots.insert(name.clone(), slot);
+    }
+    let base = u32::try_from(builtin_names.len()).expect("builtin 变量槽数在 u32 内");
+    let mut user_slots = builtin_slots.clone();
+    for (offset, name) in user_names.into_iter().enumerate() {
+        let slot = base + u32::try_from(offset).expect("用户独有变量槽数在 u32 内");
+        user_slots.insert(name, slot);
+    }
+    (builtin_slots, user_slots)
+}
+
 /// Compiler 自有、不进入 portable artifact 的 libcall。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
@@ -603,5 +627,42 @@ mod tests {
         let op = NativeHostOp::from_builtin(Builtin::ConsoleLog);
         assert_eq!(NativeHostOp::from_id(op.id()), Some(op));
         assert_eq!(op.name(), "console.log");
+    }
+
+    fn named_var_program(names: &[&str]) -> Program {
+        let mut program = Program::new();
+        let mut function = wjsm_ir::Function::new("vars", wjsm_ir::BasicBlockId(0));
+        let mut block = wjsm_ir::BasicBlock::new(wjsm_ir::BasicBlockId(0));
+        for (index, name) in names.iter().enumerate() {
+            let dest = wjsm_ir::ValueId(u32::try_from(index).expect("测试变量数在 u32 内"));
+            block.push_instruction(wjsm_ir::Instruction::LoadVar {
+                dest,
+                name: (*name).to_string(),
+            });
+        }
+        block.set_terminator(wjsm_ir::Terminator::Return { value: None });
+        function.push_block(block);
+        program.push_function(function);
+        program
+    }
+
+    #[test]
+    fn native_variable_slots_for_segments_keeps_builtin_indices_stable() {
+        let builtin = named_var_program(&["$1.x", "$3.y"]);
+        let user = named_var_program(&["$1.x", "$2.foo"]);
+        let (builtin_slots, user_slots) = native_variable_slots_for_segments(&builtin, &user);
+        assert_eq!(builtin_slots.get("$1.x").copied(), Some(0));
+        assert_eq!(builtin_slots.get("$3.y").copied(), Some(1));
+        assert_eq!(user_slots.get("$1.x").copied(), Some(0));
+        assert_eq!(user_slots.get("$3.y").copied(), Some(1));
+        assert_eq!(user_slots.get("$2.foo").copied(), Some(2));
+
+        let other_user = named_var_program(&["$0.bar"]);
+        let (again_builtin, other_user_slots) =
+            native_variable_slots_for_segments(&builtin, &other_user);
+        assert_eq!(again_builtin, builtin_slots);
+        assert_eq!(other_user_slots.get("$1.x").copied(), Some(0));
+        assert_eq!(other_user_slots.get("$3.y").copied(), Some(1));
+        assert_eq!(other_user_slots.get("$0.bar").copied(), Some(2));
     }
 }

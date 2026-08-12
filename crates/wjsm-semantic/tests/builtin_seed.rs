@@ -3,10 +3,9 @@
 //! 覆盖 [`wjsm_semantic::lower_modules_with_builtin_seed`] 与
 //! [`wjsm_semantic::lower_modules_with_debug_meta`]：
 //! - 段函数/常量预装（段函数在前、用户函数在后）；
-//! - **段入口函数体 inline 进用户 `$module_main` 入口块**：builtin 模块作用域变量
-//!   （`$N.x`）的 StoreVar 与用户 LoadVar 落在同一函数（同一批 native 变量槽），
-//!   跨函数可见性与 plain 路径一致（Normal 模式的变量槽不跨函数共享，
-//!   故不做 entry Call）；
+//! - **用户 `$module_main` 入口块头部 Call `$builtin_main`**：builtin 模块作用域
+//!   变量（`$N.x`）的 StoreVar 留在 `$builtin_main`，用户 LoadVar 留在
+//!   `$module_main`，同槽名跨函数共享；
 //! - 注入的 export_map 让用户 import 解析命中 builtin 导出。
 
 use std::collections::{BTreeSet, HashMap};
@@ -92,33 +91,57 @@ fn builtin_import_map() -> HashMap<ModuleId, Vec<ImportBinding>> {
     import_map
 }
 
-/// 断言 `function` 内同时出现对 `var_name` 的 StoreVar（builtin 初始化写入）与
-/// LoadVar（用户 import 读取）——跨函数可见性修复的核心不变量。
-fn assert_same_function_store_and_load(function: &Function, var_name: &str) {
-    let mut stores = 0;
-    let mut loads = 0;
-    for block in function.blocks() {
-        for instruction in block.instructions() {
-            match instruction {
-                Instruction::StoreVar { name, .. } if name == var_name => stores += 1,
-                Instruction::LoadVar { name, .. } if name == var_name => loads += 1,
-                _ => {}
-            }
+fn function_has_store(function: &Function, var_name: &str) -> bool {
+    function.blocks().iter().flat_map(|block| block.instructions()).any(
+        |instruction| matches!(instruction, Instruction::StoreVar { name, .. } if name == var_name),
+    )
+}
+
+fn function_has_load(function: &Function, var_name: &str) -> bool {
+    function.blocks().iter().flat_map(|block| block.instructions()).any(
+        |instruction| matches!(instruction, Instruction::LoadVar { name, .. } if name == var_name),
+    )
+}
+
+fn assert_entry_calls_builtin(program: &wjsm_ir::Program, function: &Function, entry_id: FunctionId) {
+    let instructions = function
+        .blocks()
+        .iter()
+        .map(|block| block.instructions())
+        .find(|instructions| {
+            matches!(
+                instructions.first(),
+                Some(Instruction::Const { constant, .. })
+                    if program.constants()[usize::try_from(constant.0).expect("ConstantId 索引在 usize 内")]
+                        == Constant::FunctionRef(entry_id)
+            )
+        })
+        .expect("用户入口函数必须含 FunctionRef($builtin_main) 前缀块");
+    assert!(
+        instructions.len() >= 3,
+        "用户入口块至少含 FunctionRef + Undefined + Call"
+    );
+    match &instructions[1] {
+        Instruction::Const { constant, .. } => {
+            let idx = usize::try_from(constant.0).expect("ConstantId 索引在 usize 内");
+            assert_eq!(
+                program.constants()[idx],
+                Constant::Undefined,
+                "入口块第二条应为 Const Undefined"
+            );
         }
+        other => panic!("入口块第二条应为 Const Undefined，实际 {other:?}"),
     }
     assert!(
-        stores >= 1,
-        "{var_name} 应在 {function:?} 内有 builtin 初始化的 StoreVar"
-    );
-    assert!(
-        loads >= 1,
-        "{var_name} 应在 {function:?} 内有用户 import 的 LoadVar"
+        matches!(&instructions[2], Instruction::Call { args, .. } if args.is_empty()),
+        "入口块第三条应为无参 Call"
     );
 }
 
 #[test]
-fn seed_lower_inlines_builtin_entry_into_user_main() {
+fn seed_lower_calls_builtin_entry_from_user_main() {
     let builtin = minimal_builtin_segment();
+    let entry_function_id = builtin.entry_function_id;
 
     let program = lower_modules_with_builtin_seed(
         vec![esm_input(
@@ -139,54 +162,26 @@ fn seed_lower_inlines_builtin_entry_into_user_main() {
     program.verify().expect("merged program should verify");
 
     let functions = program.functions();
-    // builtin 段函数在前（保持段内顺序），入口 $builtin_main 是 functions[0]（死代码保留）
-    assert_eq!(functions[0].name(), "$builtin_main");
-    // 用户函数在后，最后一个函数是用户 $module_main
+    let builtin_main = functions
+        .iter()
+        .find(|function| function.name() == "$builtin_main")
+        .expect("合并程序必须保留 $builtin_main");
+    assert!(function_has_store(builtin_main, "$1.answer"));
+
     let main_fn = functions.last().expect("合并程序至少含用户 $module_main");
     assert_eq!(main_fn.name(), wjsm_ir::MODULE_ENTRY_IR_NAME);
     assert!(functions.len() >= 2);
-
-    // 入口块首部即 builtin 初始化（Const 42 → StoreVar $1.answer），随后才是用户内容。
-    let bb0 = &main_fn.blocks()[0];
-    let instructions = bb0.instructions();
-    assert!(instructions.len() >= 2);
-    match &instructions[0] {
-        Instruction::Const { constant, .. } => {
-            let idx = usize::try_from(constant.0).expect("ConstantId 索引在 usize 内");
-            assert_eq!(program.constants()[idx], Constant::Number(42.0));
-        }
-        other => panic!("入口块首条应为 builtin 的 Const，实际 {other:?}"),
-    }
-    assert!(matches!(&instructions[1], Instruction::StoreVar { name, .. } if name == "$1.answer"));
-
-    // 核心不变量：builtin 导出的 StoreVar 与用户 LoadVar 在同一函数。
-    assert_same_function_store_and_load(main_fn, "$1.answer");
-
-    // 无 entry Call：inline 取代了跨函数调用，用户 $module_main 不应再有 Call。
-    let has_any_call = main_fn
-        .blocks()
-        .iter()
-        .flat_map(|b| b.instructions())
-        .any(|i| matches!(i, Instruction::Call { .. }));
-    assert!(
-        !has_any_call,
-        "inline 后用户 $module_main 不应再有 Call（含 entry Call）"
-    );
-
-    // 注入的 export_map 生效：console.log(answer) 解析为读取 builtin 导出 `$1.answer`。
-    let reads_builtin_export = main_fn
-        .blocks()
-        .iter()
-        .flat_map(|b| b.instructions())
-        .any(|i| matches!(i, Instruction::LoadVar { name, .. } if name == "$1.answer"));
-    assert!(reads_builtin_export);
+    assert_entry_calls_builtin(&program, main_fn, entry_function_id);
+    assert!(function_has_load(main_fn, "$1.answer"));
+    assert!(!function_has_store(main_fn, "$1.answer"));
 }
 
 /// 用户模块含顶层 await（TLA）时，入口块是 async main body entry（非 bb0）：
-/// inline 的 builtin 初始化必须落在 body entry 首部，StoreVar/LoadVar 同在 main$async。
+/// Call `$builtin_main` 必须落在 body entry 首部；StoreVar 仍在 `$builtin_main`。
 #[test]
-fn seed_lower_with_tla_inlines_into_async_body_entry() {
+fn seed_lower_with_tla_calls_builtin_from_async_body_entry() {
     let builtin = minimal_builtin_segment();
+    let entry_function_id = builtin.entry_function_id;
 
     let program = lower_modules_with_builtin_seed(
         vec![esm_input(
@@ -207,29 +202,19 @@ fn seed_lower_with_tla_inlines_into_async_body_entry() {
     program.verify().expect("merged TLA program should verify");
 
     let functions = program.functions();
-    assert_eq!(functions[0].name(), "$builtin_main");
-    assert_eq!(
-        functions.last().unwrap().name(),
-        wjsm_ir::MODULE_ENTRY_IR_NAME,
-        "用户 $module_main 应为合并程序最后一个函数"
-    );
+    let builtin_main = functions
+        .iter()
+        .find(|function| function.name() == "$builtin_main")
+        .expect("合并程序必须保留 $builtin_main");
+    assert!(function_has_store(builtin_main, "$1.answer"));
 
-    // TLA 形态：$module_main 是 wrapper；实际 inline 体在 main$async。
     let async_fn = functions
         .iter()
-        .find(|f| f.name() == "main$async")
+        .find(|function| function.name() == "main$async")
         .unwrap_or_else(|| panic!("TLA 种子 lower 应生成 main$async"));
-
-    // 跨函数可见性不变量：builtin 导出 var 的 StoreVar 与用户 LoadVar 同在 main$async。
-    assert_same_function_store_and_load(async_fn, "$1.answer");
-
-    // 用户代码经注入的 export_map 读取 builtin 导出。
-    let reads_builtin_export = async_fn
-        .blocks()
-        .iter()
-        .flat_map(|b| b.instructions())
-        .any(|i| matches!(i, Instruction::LoadVar { name, .. } if name == "$1.answer"));
-    assert!(reads_builtin_export);
+    assert_entry_calls_builtin(&program, async_fn, entry_function_id);
+    assert!(function_has_load(async_fn, "$1.answer"));
+    assert!(!function_has_store(async_fn, "$1.answer"));
 }
 
 /// round-trip：用真实 multi-module lower 的产物构造 builtin 段（模拟 A2b 的
@@ -326,16 +311,21 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
         .verify()
         .expect("merged round-trip program should verify");
 
-    // 3) 跨函数可见性：builtin 段的模块作用域变量在用户 $module_main 内 store+load 同函数。
-    //    段内模块作用域 id 来自 meta.module_scopes（seg_a 的顶层作用域）。
+    // 3) 跨函数、同槽名：builtin 段 StoreVar `$1.base`，用户 `$module_main` LoadVar 同名。
+    let builtin_main = program
+        .functions()
+        .iter()
+        .find(|function| function.name() == "$builtin_main")
+        .expect("应保留 $builtin_main");
     let main_fn = program
         .functions()
         .iter()
-        .find(|f| f.name() == wjsm_ir::MODULE_ENTRY_IR_NAME)
+        .find(|function| function.name() == wjsm_ir::MODULE_ENTRY_IR_NAME)
         .unwrap_or_else(|| panic!("应生成用户 $module_main"));
-    // 导出 base 的 IR 变量名来自注入的 export_map（seg_a 模块顶层作用域）。
-    let base_ir_name = "$1.base".to_string();
-    assert_same_function_store_and_load(main_fn, &base_ir_name);
+    let base_ir_name = "$1.base";
+    assert!(function_has_store(builtin_main, base_ir_name));
+    assert!(function_has_load(main_fn, base_ir_name));
+    assert!(!function_has_store(main_fn, base_ir_name));
 }
 
 #[test]

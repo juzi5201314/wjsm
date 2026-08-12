@@ -207,6 +207,11 @@ impl PortableArtifact {
     }
 }
 
+/// 把 Program 编成 portable artifact 使用的确定字节，供 native cache key 计算。
+pub fn encode_program_bytes(program: &Program) -> Result<Vec<u8>, ArtifactFormatError> {
+    wire_v1::encode_program(program)
+}
+
 pub fn semantic_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {

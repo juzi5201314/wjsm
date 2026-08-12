@@ -19,8 +19,9 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::{Arc, LazyLock, Mutex};
 use wjsm_ir::{FunctionId, ModuleId, Program};
 
 use crate::builtin_modules;
@@ -33,7 +34,7 @@ use wjsm_semantic::ModuleLoweringInput;
 use crate::builtin_modules::canonical_from_virtual_path;
 
 /// 缓存格式语义版本。builtin_js 源码 / lowerer / IR 布局变化时必须手动 bump。
-pub(crate) const BUILTIN_CACHE_VERSION: u64 = 1;
+pub(crate) const BUILTIN_CACHE_VERSION: u64 = 2;
 
 /// builtin 段中每个模块的布局记录（与 lower 时的 ModuleId / 作用域布局一致）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -102,6 +103,9 @@ pub(crate) fn builtin_cache_key(
 /// 与 native 编译均容忍；若把 verify 当命中条件，这些闭包的缓存永远不命中。
 /// 段与 plain 路径同源（同一 lowerer），结构合法由 bincode 解码 + 版本号保证。
 pub(crate) fn load_builtin_segment(dir: &Path, key: &str) -> Option<BuiltinSegmentCacheFile> {
+    if let Some(segment) = memory_get(key) {
+        return Some(segment);
+    }
     let path = dir.join(format!("{key}.bin"));
     let bytes = std::fs::read(path).ok()?;
     let (segment, _consumed): (BuiltinSegmentCacheFile, usize) =
@@ -109,7 +113,34 @@ pub(crate) fn load_builtin_segment(dir: &Path, key: &str) -> Option<BuiltinSegme
     if segment.version != BUILTIN_CACHE_VERSION {
         return None;
     }
+    memory_put(key, &segment);
     Some(segment)
+}
+
+pub(crate) fn load_memory_segment(key: &str) -> Option<BuiltinSegmentCacheFile> {
+    memory_get(key)
+}
+
+pub(crate) fn remember_builtin_segment(key: &str, segment: &BuiltinSegmentCacheFile) {
+    memory_put(key, segment);
+}
+
+static MEMORY_SEGMENTS: LazyLock<Mutex<HashMap<String, Arc<BuiltinSegmentCacheFile>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn memory_get(key: &str) -> Option<BuiltinSegmentCacheFile> {
+    MEMORY_SEGMENTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(key)
+        .map(|segment| (**segment).clone())
+}
+
+fn memory_put(key: &str, segment: &BuiltinSegmentCacheFile) {
+    MEMORY_SEGMENTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key.to_owned(), Arc::new(segment.clone()));
 }
 
 /// 原子写入 `${dir}/<key>.bin`：先写同目录临时文件再 rename，避免半截文件被读到。
