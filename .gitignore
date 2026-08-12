@@ -32,3 +32,6 @@ tests/gen/generated_fixtures.rs
 # test262 submodule — excluded from codegraph indexing (55k+ files)
 /test262/
 out.wasm
+
+# mdBook build output
+/book/
