@@ -16,7 +16,7 @@
 | Portable artifact | `.wjsm` 文件 | verified semantic IR |
 ## 二进制内嵌
 
-`wjsm-host-wasm/src/lib.rs` 通过 `include_bytes!` 把 `OUT_DIR` 下的 cwasm 嵌入二进制。运行时通过 `embedded_support_cwasm_for(kind)` 返回 `&'static [u8]`。
+`wjsm-host-native/src/lib.rs` 通过 `include_bytes!` 把 `OUT_DIR` 下的 native image 嵌入二进制。运行时通过 `embedded_support_cwasm_for(kind)` 返回 `&'static [u8]`。
 
 ## 运行时缓存
 
@@ -30,8 +30,8 @@
 
 | 命令 | 产物 |
 | --- | --- |
-| `wjsm build -o /tmp/out.wasm` | WASM 模块 |
-| `wjsm dump-wat` | WAT 文本 |
+| `wjsm build -o /tmp/out.wjsm` | portable .wjsm |
+| `wjsm dump-clif` | Cranelift IR 文本 |
 | `wjsm dump-ast` | SWC AST 文本 |
 | `wjsm dump-ir` | 语义 IR 文本 |
 

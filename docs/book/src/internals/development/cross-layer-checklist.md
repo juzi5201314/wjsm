@@ -20,19 +20,19 @@
 
 - [ ] 新指令有 `Display` 实现，输出格式稳定。
 - [ ] IR 验证 pass 添加了类型规则。
-- [ ] codegen 实现了新指令的 WASM 生成。
+- [ ] codegen 实现了新指令的 CLIF 生成。
 
 ## 后端改动
 
-- [ ] `wjsm-backend-wasm` 的 codegen 改动有 `dump-wat` / `disasm` 验证。
+- [ ] `wjsm-backend-native` 的 codegen 改动有 `dump-clif` / `disasm` 验证。
 - [ ] ABI 常量在 `wjsm-ir` 定义，不在后端硬编码。
-- [ ] support module 改动后 build.rs 重新生成 cwasm。
+- [ ] native image 改动后重新编译验证。
 
 ## Host / 运行时改动
 
 - [ ] host import 函数是薄包装，语义逻辑在 `wjsm-builtins`。
-- [ ] wasmtime 依赖只在 `wjsm-host-wasm`。
-- [ ] 新的 env global 在 `WasmEnv` 和 `extract_wasm_env` 更新。
+- [ ] Cranelift 依赖只在 `wjsm-backend-native` 和 `wjsm-host-native`。
+- [ ] 新的 vmctx 布局在 `wjsm-native-abi` 和 `wjsm-host-native` 更新。
 
 ## GC 改动
 

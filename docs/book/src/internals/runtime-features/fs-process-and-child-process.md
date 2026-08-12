@@ -4,7 +4,7 @@
 
 ## node:fs
 
-`crates/wjsm-host-wasm/src/runtime_node_fs.rs` 实现 `node:fs` 模块。提供同步和异步 API：
+`crates/wjsm-host-native/src/runtime_node_fs.rs` 实现 `node:fs` 模块。提供同步和异步 API：
 
 | API | 行为 |
 | --- | --- |
@@ -19,7 +19,7 @@
 
 ## node:child_process
 
-`crates/wjsm-host-wasm/src/runtime_node_child_process/` 实现子进程：
+`crates/wjsm-host-native/src/runtime_node_child_process/` 实现子进程：
 
 | 文件 | 内容 |
 | --- | --- |

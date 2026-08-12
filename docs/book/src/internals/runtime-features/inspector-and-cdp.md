@@ -4,7 +4,7 @@
 
 ## 模块组织
 
-`crates/wjsm-host-wasm/src/inspector/` 实现 CDP 调试器：
+`crates/wjsm-host-native/src/inspector/` 实现 CDP 调试器：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -33,7 +33,7 @@ CDP 是 Chrome DevTools 使用的协议，wjsm 实现了其中与 JavaScript 调
 
 ## 暂停机制
 
-wjsm 通过 wasmtime 的 epoch interruption 实现暂停。`--inspect` 启用时，epoch interruption 开启，调试器在断点处 `increment_epoch` 触发中断。WASM 代码在 safepoint 检查 epoch，如果过期则进入暂停处理。
+wjsm 通过 epoch interruption 实现暂停。`--inspect` 启用时，epoch interruption 开启，调试器在断点处 `increment_epoch` 触发中断。generated code 在 safepoint 检查 epoch，如果过期则进入暂停处理。
 
 ## 远程对象
 

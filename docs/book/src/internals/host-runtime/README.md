@@ -21,6 +21,6 @@ engine 统一管理 GC flavor、shadow memory、artifact 路径，启动时一�
 
 ## 深入了解
 
-- [ExecContext 与 builtins 分离设计](exec-context-and-builtins.md)
-- [backend/多后端边界](../backend/multi-backend-boundary.md)
-- [engine 配置、启动流程](startup/README.md)
+- [ExecContext 与 Builtins 的解耦设计](exec-context-and-builtins.md)
+- [多后端边界与 JsBackend 契约](../backend/multi-backend-boundary.md)
+- [Engine 配置与实例池](engine-configuration.md)

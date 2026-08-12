@@ -7,8 +7,8 @@
 1. **解析器**：`wjsm-parser` 检查 SWC 是否已支持该语法。SWC 通常支持已标准化的语法，但提案阶段语法可能需要额外配置。如果 SWC 支持，只需在 parser 边界暴露它。
 2. **语义 Lowering**：`wjsm-semantic` 添加对新语法的 lowering。如果是表达式/语句，在 `expressions.rs` / `statements.rs` 添加处理；如果是声明，在 `declarations.rs` 添加。
 3. **IR**：如果新语法需要新的 IR 指令，在 `wjsm-ir` 添加（见[新增或修改 IR](changing-ir.md)）。
-4. **后端**：`wjsm-backend-wasm` 添加新 IR 指令的 codegen（如果需要）。
-5. **运行时**：如果新语法需要运行时支持（如 `Symbol` 的 well-known symbol），在 `wjsm-builtins` 或 host-wasm 添加。
+4. **后端**：`wjsm-backend-native` 添加新 IR 指令的 codegen（如果需要）。
+5. **运行时**：如果新语法需要运行时支持（如 `Symbol` 的 well-known symbol），在 `wjsm-builtins` 或 `wjsm-host-native` 添加。
 6. **测试**：添加 fixture 验证行为，添加 IR 快照验证 lowering。
 
 ## 示例：添加 `??=` 空值赋值

@@ -30,9 +30,9 @@ SWC 解析边界。
 | value | NaN-box 值编码（`BOX_BASE`、`TAG_*`） |
 | constants | ABI 常量（`SHADOW_MEMORY_NAME` 等） |
 
-## wjsm-backend-wasm
+## wjsm-backend-native
 
-WASM 代码生成。
+native 代码生成。
 
 | 导出 | 用途 |
 | --- | --- |
@@ -57,7 +57,7 @@ JIT 后端边界（未实现的扩展点）。
 
 ## wjsm-cli
 
-命令行接口。subcommand：run、build、test、check、lint、eval、repl、fmt、install、cache、completions、init、version、dump-ast、dump-ir、dump-wat、validate、size、disasm。
+命令行接口。subcommand：run、build、test、check、lint、eval、repl、fmt、install、cache、completions、init、version、dump-ast、dump-ir、dump-clif、validate、size、disasm。
 
 ## wjsm-test262
 

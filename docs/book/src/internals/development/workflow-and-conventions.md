@@ -12,7 +12,7 @@
 
 ## 工作流
 
-1. **诊断阶段**：parse → lower → module graph → codegen → host/runtime，用 `dump-ast`、`dump-ir`、`dump-wat`、`disasm` 比较相邻阶段。
+1. **诊断阶段**：parse → lower → module graph → codegen → host/runtime，用 `dump-ast`、`dump-ir`、`dump-clif`、`disasm` 比较相邻阶段。
 2. **修改**：在 owning 层修改，删除旧路径，不保留兼容层。
 3. **测试**：lowering 改动跑 IR 快照；行为改动用 fixture；模块行为用 `fixtures/modules`。
 4. **审查**：审查 fixture/snapshot 变更，不要通过修改测试来避开正确逻辑。
@@ -22,7 +22,7 @@
 ```bash
 cargo build
 cargo run -- run -e 'console.log(1 + 2)'
-cargo run -- build -e 'console.log(1)' -o /tmp/out.wasm
+cargo run -- build -e 'console.log(1)' -o /tmp/out.wjsm
 cargo nextest run --workspace
 WJSM_UPDATE_FIXTURES=1 cargo nextest run -E 'test(happy__<name>)'
 WJSM_UPDATE_SNAPSHOTS=1 cargo nextest run -p wjsm-semantic -- lowering_snapshots

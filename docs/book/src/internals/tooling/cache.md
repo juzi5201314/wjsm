@@ -11,7 +11,7 @@
 | `cache stats` | 显示缓存目录、条目数与总字节数 |
 | `cache clear` | 清除所有缓存文件并报告删除数量 |
 
-`module_cache_stats` 和 `clear_module_cache` 是 `wjsm-host-wasm` 暴露的公开 API。
+`module_cache_stats` 和 `clear_module_cache` 是 `wjsm-host-native` 暴露的公开 API。
 
 ## 缓存目录
 
@@ -25,11 +25,11 @@
 
 ## 缓存 key
 
-缓存 key 是 WASM 字节内容的 SipHash，前缀 `wasmtime-43`：
+缓存 key 是 native image 内容的 SipHash，前缀 `native-cache-key`：
 
 ```rust
-"wasmtime-43".hash(&mut hasher);
-wasm_bytes.hash(&mut hasher);
+"native-cache-key".hash(&mut hasher);
+artifact_bytes.hash(&mut hasher);
 ```
 
 key 不受文件 mtime 影响。命中时 `Module::deserialize_file` 走 mmap 零拷贝加载，跳过 Cranelift 编译。
@@ -40,7 +40,7 @@ key 不受文件 mtime 影响。命中时 `Module::deserialize_file` 走 mmap �
 
 | 机制 | 缓存对象 | 触发时机 |
 | --- | --- | --- |
-| 编译缓存 | 用户 WASM 的 cwasm | 每次编译用户代码 |
+| 编译缓存 | 用户代码的 native image | 每次编译用户代码 |
 | 启动快照 | bootstrap 后的堆状态 | 进程启动时 |
 
 两者都加速启动，但对象不同。编译缓存跳过用户代码的编译，启动快照跳过 builtin JS 的执行。

@@ -9,8 +9,8 @@
 | 层 | crate | 职责 |
 | --- | --- | --- |
 | 语义拦截 | `wjsm-semantic` | 识别已知调用形态，发射 `CallBuiltin` |
-| codegen | `wjsm-backend-wasm` | `Builtin` → WASM function index |
-| 运行时 | `wjsm-builtins` / `wjsm-host-wasm` | 实现算法，注册到 Linker |
+| codegen | `wjsm-backend-native` | `Builtin` → host operation wire ID |
+| 运行时 | `wjsm-builtins` / `wjsm-host-native` | 实现算法，注册到 host dispatcher |
 
 ## 步骤
 

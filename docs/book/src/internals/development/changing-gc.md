@@ -14,11 +14,11 @@
 ## 改动步骤
 
 1. **GC 算法**：`wjsm-gc/src/heap/` 的对应文件（`allocator.rs`、`bitmap.rs`、`page.rs` 等）修改算法。
-2. **屏障**：如果新算法需要不同的屏障，`barriers.rs`（如果有）或 host-wasm 的屏障调用更新。
+2. **屏障**：如果新算法需要不同的屏障，`barriers.rs` 或 `wjsm-host-native` 的屏障调用更新。
 3. **注册表**：`wjsm-gc/src/registry.rs` 如果新增算法，`GcAlgorithmKind` 添加 variant，`FromStr` 和 `as_str` 更新。
-4. **support module**：`wjsm-backend-wasm/src/support_module.rs` 为新 flavor 添加 support 函数。如果是修改现有算法，更新对应 flavor 的 support。
-5. **build.rs**：如果新增 flavor，`build.rs` 的 flavor 列表添加新 flavor，生成对应 cwasm。
-6. **WasmEnv**：如果 env global 变化（如新的 GC 状态 global），`wasm_env.rs` 和 `extract_wasm_env` 更新。
+4. **Native ABI**：`wjsm-native-abi` 为新 flavor 更新 GC 相关的 vmctx 布局（如果 env global 变化）。
+5. **build.rs**：如果新增 flavor，更新构建配置。
+6. **vmctx**：如果 env global 变化（如新的 GC 状态 global），`wjsm-native-abi` 和 `wjsm-host-native` 的 vmctx 初始化更新。
 7. **测试**：`crates/wjsm-gc/` 的单元测试，`gc-benchmarks` 的基准测试，fixture 验证行为。
 
 ## 统一 ManagedHeap

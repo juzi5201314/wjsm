@@ -6,7 +6,7 @@
 
 1. **注册 specifier**：`wjsm-module/src/builtin_modules.rs` 的内置模块表添加新模块名。`lookup` 在 strip `node:` 前缀后查表。
 2. **选择实现位置**：
-   - Rust 实现的模块：在 `wjsm-host-wasm/src/` 添加 `runtime_node_<module>.rs`。
+   - Rust 实现的模块：在 `wjsm-host-native/src/` 添加 `runtime_node_<module>.rs`。
    - JS polyfill：在 `wjsm-module/builtin_js/` 添加 `node_<module>.js`。
    - 混合：Rust 提供核心能力，JS polyfill 包装 API。
 3. **实现 API**：按 Node.js 官方文档实现模块的 API。可以参考 Node.js 源码，但 wjsm 的实现基于自身运行时能力，不是 Node.js 的移植。

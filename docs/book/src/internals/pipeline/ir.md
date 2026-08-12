@@ -4,7 +4,7 @@ IR 不是独立的执行阶段，而是 lowering 的产物与后端的唯一输�
 
 ## 位置
 
-`wjsm-ir` 是零依赖 crate（6 个文件，约 3754 行），不引用 SWC、不引用 wasm-encoder。它定义的类型同时被 `wjsm-semantic`（生产者）、`wjsm-backend-wasm`（消费者）、`wjsm-module`（bundling 时合并多个 `Program`）、`wjsm-gc` 与 `wjsm-host` 引用。
+`wjsm-ir` 是零依赖 crate（6 个文件，约 3754 行），不引用 SWC、不引用 Cranelift。它定义的类型同时被 `wjsm-semantic`（生产者）、`wjsm-backend-native`（消费者）、`wjsm-module`（bundling 时合并多个 `Program`）、`wjsm-gc` 与 `wjsm-host` 引用。
 
 `Program` 是 `Module` 的类型别名：
 

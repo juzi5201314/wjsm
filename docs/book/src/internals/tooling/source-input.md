@@ -20,8 +20,8 @@
 
 1. 解析 CLI 参数，合并配置。
 2. 读取源码输入。
-3. 调用 `wjsm-host-wasm` 的 `compile_source` 编译为 WASM。
-4. 调用 `execute_with_options` 执行 WASM。
+3. 调用 `wjsm-host-native` 的 `compile_source` 编译为 portable .wjsm。
+4. 调用 `execute_with_options` 执行 native image。
 
 不同 subcommand 在步骤 3/4 之间有差异：`build` 只编译不执行，`check` 只到 semantic IR，`dump-*` 在不同阶段输出。
 

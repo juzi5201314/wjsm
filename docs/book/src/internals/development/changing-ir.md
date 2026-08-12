@@ -16,7 +16,7 @@
 2. **显示格式**：实现 `Display`，确保稳定输出（快照依赖）。
 3. **类型检查**：在 IR 验证 pass 添加新指令的类型规则。
 4. **code lower**：`wjsm-semantic` 的 lowering 发射新指令。
-5. **codegen**：`wjsm-backend-wasm` 为新指令添加 WASM 生成。
+5. **codegen**：`wjsm-backend-native` 为新指令添加 CLIF 生成。
 6. **快照**：更新 IR 快照，审查 diff。
 7. **测试**：添加 fixture 和 IR 快照测试。
 

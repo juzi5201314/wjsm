@@ -4,7 +4,7 @@
 
 ## 模块组织
 
-`crates/wjsm-host-wasm/src/runtime_node_worker_threads/` 实现 Worker Threads：
+`crates/wjsm-host-native/src/runtime_node_worker_threads/` 实现 Worker Threads：
 
 | 文件 | 内容 |
 | --- | --- |

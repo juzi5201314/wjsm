@@ -39,5 +39,5 @@ Direct native code 不提供 Wasm sandbox。artifact verification、checked lowe
 ## 权威来源
 
 - [ADR 0014](../../../../adr/0014-direct-cranelift-portable-artifact.md)
-- [Direct Cranelift 后端实现指南](../../../backend-implementation-guide.md)
+- [Direct Cranelift 后端实现指南](../../../../backend-implementation-guide.md)
 - [Workspace crate 地图](crate-map.md)

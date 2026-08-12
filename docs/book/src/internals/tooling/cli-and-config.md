@@ -4,7 +4,7 @@
 
 ## 参数模型
 
-`crates/wjsm-cli/src/cli_args.rs` 定义 CLI 参数模型。顶层命令枚举包含 `run`、`build`、`test`、`check`、`lint`、`eval`、`repl`、`fmt`、`install`、`cache`、`completions`、`init`、`version`、`dump-ast`、`dump-ir`、`dump-wat`、`validate`、`size`、`disasm` 等 subcommand。
+`crates/wjsm-cli/src/cli_args.rs` 定义 CLI 参数模型。顶层命令枚举包含 `run`、`build`、`test`、`check`、`lint`、`eval`、`repl`、`fmt`、`install`、`cache`、`completions`、`init`、`version`、`dump-ast`、`dump-ir`、`dump-clif`、`validate`、`size`、`disasm` 等 subcommand。
 
 每个 subcommand 有自己的参数集，通过 `clap` derive 宏定义。全局选项（`--gc`、`--inspect`、`--color` 等）在顶层 `Cli` 结构上。
 
@@ -17,7 +17,7 @@
 3. 项目配置文件（`wjsm.toml` / `wjsm.json`）
 4. 默认值
 
-合并后的配置传给 `wjsm-host-wasm` 的 `RuntimeOptions`。
+合并后的配置传给 `wjsm-host-native` 的 `RuntimeOptions`。
 
 ## 退出码
 

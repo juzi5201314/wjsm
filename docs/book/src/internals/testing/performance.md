@@ -14,7 +14,7 @@
 
 ## runtime_bench
 
-`crates/wjsm-host-wasm/src/runtime_bench.rs` 提供基准框架。它利用 `embedded_startup_snapshot_view` 等 API 确保基准测试在一致的状态下运行。
+`crates/wjsm-host-native/src/runtime_bench.rs` 提供基准框架。它利用 `embedded_startup_snapshot_view` 等 API 确保基准测试在一致的状态下运行。
 
 ## WASMTIME_VERSION
 

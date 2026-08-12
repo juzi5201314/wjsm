@@ -38,24 +38,23 @@ let bytes: Vec<u8> = match target {
 
 ## 后端侧入口
 
-`wjsm-backend-wasm` 暴露的编译入口按用途分开：
+`wjsm-backend-native` 暴露的编译入口按用途分开：
 
 | 函数 | 用途 |
 | --- | --- |
-| `compile` / `compile_with_options` | Normal 模式，产出独立 `Vec<u8>` |
-| `compile_runtime_module_at` / `_with_options` | Normal 模式，指定 `data_base` / `table_base`，返回 `RuntimeCompiledModule` |
-| `compile_eval` / `compile_eval_at_data_base` | Eval 模式，导入父实例的内存、global 与函数表 |
+| `compile` / `compile_with_options` | Normal 模式，产出 native image |
+| `compile_runtime_module_at` / `_with_options` | Normal 模式，指定 `data_base` / `table_base`，返回 `CompiledImage` |
+| `compile_eval` / `compile_eval_at_data_base` | Eval 模式，共享当前 realm 的 vmctx |
 
-Normal 模式与 eval 模式的差别不只是入口不同：normal 模式从 `wjsm_support` 导入 10 个 helper，eval 模式没有独立 support instance，走内联 helper 路径（ADR 0004）。
+Normal 模式与 eval 模式的差别不只是入口不同：normal 模式有独立 vmctx，eval 模式共享当前 realm 的 vmctx，走内联 helper 路径。
 
 ## debug 插桩的传递
 
-`--inspect` / `--inspect-brk` 会让 `Cli::wants_debug_codegen()` 为 true，该标记同时传给 lowering（发射 `DebugCheck`）和 codegen（生成 `wjsm_debug` 段与 `debug_break` 调用）。两侧必须同时开启，否则断点无法映射回源码位置。
+`--inspect` / `--inspect-brk` 会让 `Cli::wants_debug_codegen()` 为 true，该标记同时传给 lowering（发射 `DebugCheck`）和 codegen（生成 debug 段与 epoch interruption 检查）。两侧必须同时开启，否则断点无法映射回源码位置。
 
 ## 深入了解
 
-- [WASM 编译器的内部结构](../backend/compiler-architecture.md)
-- [Normal 与 Eval 两种编译模式的差异](../backend/normal-and-eval-modes.md)
-- [Support 模块与导入的 helper 集合](../backend/support-module.md)
+- [编译器内部结构](../backend/compiler-architecture.md)
+- [Normal 与 Eval 编译模式](../backend/normal-and-eval-modes.md)
+- [Import、Export 与 ABI](../backend/imports-exports-and-abi.md)
 - [多后端边界与 JsBackend 契约](../backend/multi-backend-boundary.md)
-- [JIT 后端当前的 stub 形态](../backend/jit-backend.md)

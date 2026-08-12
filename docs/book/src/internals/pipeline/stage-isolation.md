@@ -10,9 +10,9 @@
 | --- | --- | --- |
 | `--stage parse` / `dump-ast` | SWC AST（JSON） | `serde_json::to_string_pretty(ast)` |
 | `--stage lower` / `dump-ir` | 语义 IR 文本 | `Program::dump_text` |
-| `dump-wat` | 生成的 WAT | `wasmprinter` |
-| `--stage compile` | WASM 字节 | 写文件或 stdout |
-| `disasm` | 已有 `.wasm` 的 WAT | 与 `dump-wat` 共用打印器 |
+| `dump-clif` | Cranelift IR | CLIF 文本输出 |
+| `--stage compile` | portable `.wjsm` | 写文件或 stdout |
+| `disasm` | 已验证 `.wjsm` 的机器码 | 反汇编 native image |
 
 这条约定的价值在于：定位问题时先确定哪一段的输出开始不对，而不是在整条链上猜。这也是 `AGENTS.md` 要求「诊断先定位失败阶段」的原因。
 
@@ -33,7 +33,7 @@ Timing: parse=285µs, lower=326µs, compile=1844µs, execute=…    # -v
 
 ## 不要用日志替代阶段出口
 
-生产代码里不加临时日志是硬性约定。原因是这些出口已经覆盖了绝大多数需求：AST 不对看 `dump-ast`，IR 不对看 `dump-ir`，codegen 不对看 `dump-wat`，运行期不对用 `--inspect`。只有当这些路径都无法暴露问题时，才考虑其他手段。
+生产代码里不加临时日志是硬性约定。原因是这些出口已经覆盖了绝大多数需求：AST 不对看 `dump-ast`，IR 不对看 `dump-ir`，codegen 不对看 `dump-clif`，运行期不对用 `--inspect`。只有当这些路径都无法暴露问题时，才考虑其他手段。
 
 > <details><summary>「不写临时日志」是不是过度约束？</summary>
 >
@@ -41,7 +41,7 @@ Timing: parse=285µs, lower=326µs, compile=1844µs, execute=…    # -v
 >
 > 但实际工程里「临时日志」有个通病：它留下来就删不掉。理由是「调试还没结束，再多打一点」「这个 warning 也许以后用得上」。半年后代码里满是「以前调试用」的日志，没人记得哪条是关键的，PR review 时也懒得删。
 >
-> 阶段出口的替代思路：把「看内部状态」从「改代码加日志、运行、看输出、删日志」变成「运行 dump-* 命令、看输出」。不需要改代码，没有删除负担，输出有标准化格式（json、IR 文本、WAT）。
+> 阶段出口的替代思路：把「看内部状态」从「改代码加日志、运行、看输出、删日志」变成「运行 dump-* 命令、看输出」。不需要改代码，没有删除负担，输出有标准化格式（json、IR 文本、CLIF）。
 >
 > 短期成本：dump 命令的输出比临时日志啰嗦，你需要写点小脚本过滤。
 >

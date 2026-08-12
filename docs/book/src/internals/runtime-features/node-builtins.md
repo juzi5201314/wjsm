@@ -10,7 +10,7 @@
 
 | 位置 | 内容 |
 | --- | --- |
-| `wjsm-host-wasm/src/runtime_node_*.rs` | Rust 实现的模块（fs、child_process 等） |
+| `wjsm-host-native/src/runtime_node_*.rs` | Rust 实现的模块（fs、child_process 等） |
 | `wjsm-module/builtin_js/*.js` | JS polyfill（worker_threads 等） |
 | `wjsm-builtins/src/` | 共享算法（fetch、streams 等） |
 
