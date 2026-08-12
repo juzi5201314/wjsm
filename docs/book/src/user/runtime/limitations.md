@@ -81,29 +81,6 @@ function f() {
 
 类名引用在方法体内可用（延迟成员），但在静态字段初始值和 `extends` 等类定义期求值的位置仍报 TDZ。
 
-## 构造器参数属性
-
-TypeScript 的构造器参数属性（`constructor(public a: number)`）不生成字段赋值：
-
-```ts
-class Foo {
-  constructor(public a: number) {}
-}
-const f = new Foo(42);
-console.log(f.a);    // undefined，字段未生成
-```
-
-需要显式赋值：
-
-```ts
-class Foo {
-  a: number;
-  constructor(a: number) {
-    this.a = a;
-  }
-}
-```
-
 ## Intl 未实现
 
 `Intl` 对象未实现，依赖它的方法会 trap。`Date.prototype.toLocaleString`、`Number.prototype.toLocaleString` 等 locale 敏感方法不提供 locale 定制，返回默认格式。

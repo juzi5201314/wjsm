@@ -60,7 +60,7 @@ wjsm dump-ir -e 'function outer(){ let a = 1; return () => a }'
 - 构造器名形如 `<Class>.constructor`，可在 `dump-ir` 中直接看到。
 - `super()` 只允许出现在派生类构造器中，否则报 `super() is only valid inside derived constructors`；`super.x` 在非方法上下文报 `super is only valid inside methods`。
 
-TypeScript 构造器参数属性（`constructor(public a)`）目前不生成字段赋值，`class_body.rs` 在收集形参时对 `ParamOrTsParamProp::TsParamProp` 返回 `None`。用户侧影响记录在[限制章](../../user/runtime/limitations.md)。
+TypeScript 构造器参数属性（`constructor(public a)`）会归一成普通形参参与形参处理，并记录字段名后在 `super()` 之后、实例字段初始化器之前发射 `this.<name> = <name>`。实现位于 `class_body.rs` 的形参收集逻辑与 `decl_misc.rs` 的 `emit_param_prop_fields`。
 
 ## 深入了解
 

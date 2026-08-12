@@ -22,7 +22,7 @@ ECMAScript 是子集，不是完整实现。已覆盖作用域与 TDZ、闭包�
 
 ## TypeScript
 
-TypeScript 语法参与解析与 lowering，类型注解、`interface`、类型别名、泛型、`as` 断言、`satisfies`、装饰器、`enum`、JSX/TSX 都能编译；类型本身不做检查——这是 `tsc` 的职责。少数形态（如构造器参数属性 `constructor(public a)`）不可用，需显式赋值。
+TypeScript 语法参与解析与 lowering，类型注解、`interface`、类型别名、泛型、`as` 断言、`satisfies`、装饰器、`enum`、构造器参数属性、JSX/TSX 都能编译；类型本身不做检查——这是 `tsc` 的职责。
 
 ## 怎么判断某个 API 能不能用
 
