@@ -4128,6 +4128,7 @@ dependencies = [
  "walkdir",
  "wjsm-artifact-format",
  "wjsm-backend-native",
+ "wjsm-gc",
  "wjsm-host-native",
  "wjsm-ir",
  "wjsm-module",

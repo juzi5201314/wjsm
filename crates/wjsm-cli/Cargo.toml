@@ -15,6 +15,7 @@ wjsm-backend-native = { path = "../wjsm-backend-native" }
 wjsm-host-native = { path = "../wjsm-host-native" }
 wjsm-ir = { path = "../wjsm-ir" }
 wjsm-parser = { path = "../wjsm-parser" }
+wjsm-gc = { path = "../wjsm-gc" }
 wjsm-runtime = { path = "../wjsm-runtime" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-module = { path = "../wjsm-module" }

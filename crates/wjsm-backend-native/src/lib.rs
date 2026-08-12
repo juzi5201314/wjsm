@@ -4,7 +4,7 @@ mod lower;
 mod root_plan;
 mod unwind;
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use cranelift_codegen::settings::{self, Configurable};
 use thiserror::Error;
@@ -48,13 +48,16 @@ pub struct NativeCompilationDiagnostics {
     pub disassembly: String,
 }
 
+#[derive(Clone)]
 pub struct NativeCompiler {
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     settings_key: Arc<str>,
 }
 
-impl NativeCompiler {
-    pub fn new() -> Result<Self, NativeCompileError> {
+/// 全局 compiler 缓存，避免重复初始化 CPU 密集的 ISA builder。
+/// 测试套件中所有 compile 调用共享同一个 ISA 配置。
+static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> =
+    LazyLock::new(|| {
         if cfg!(not(target_pointer_width = "64")) {
             return Err(NativeCompileError::UnsupportedTargetCapability(
                 "direct native backend requires a 64-bit host".into(),
@@ -73,7 +76,6 @@ impl NativeCompiler {
 
         let mut flag_builder = settings::builder();
         set_flag(&mut flag_builder, "opt_level", "speed")?;
-        // production capability 只覆盖 x86_64 Linux/Windows，均使用 PIC。
         set_flag(&mut flag_builder, "is_pic", "true")?;
         set_flag(&mut flag_builder, "unwind_info", "true")?;
         set_flag(&mut flag_builder, "enable_verifier", "true")?;
@@ -114,7 +116,14 @@ impl NativeCompiler {
             unwind_policy.settings_name(),
         )
         .into();
-        Ok(Self { isa, settings_key })
+        Ok(NativeCompiler { isa, settings_key })
+    });
+
+
+impl NativeCompiler {
+    /// 返回全局缓存的 compiler 的 clone（isa 内部是 Arc，clone 成本低）。
+    pub fn new() -> Result<Self, NativeCompileError> {
+        CACHED_COMPILER.clone()
     }
 
     pub fn settings_key(&self) -> &str {
@@ -143,7 +152,7 @@ fn set_flag(
         .map_err(|error| NativeCompileError::Cranelift(format!("invalid {name}={value}: {error}")))
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum NativeCompileError {
     #[error("unsupported native target capability: {0}")]
     UnsupportedTargetCapability(String),
