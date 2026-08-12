@@ -10,7 +10,8 @@
 pub(crate) struct PipelineResult {
     pub(crate) ast: Option<swc_core::ecma::ast::Module>,
     pub(crate) program: Option<Program>,
-    pub(crate) wasm: Option<Vec<u8>>,
+    pub(crate) artifact: Option<PortableArtifact>,
+    pub(crate) module_root: PathBuf,
     pub(crate) timings: PipelineTimings,
 }
 ```
@@ -37,7 +38,13 @@ pub(crate) struct PipelineResult {
 ```rust
 enum CompilePlan {
     Bundle { entry: PathBuf, root: PathBuf },
-    SingleSource { source: String, filename: String },
+    SingleSource {
+        source: String,
+        filename: String,
+        logical_url: String,
+        source_path: PathBuf,
+        module_root: PathBuf,
+    },
 }
 ```
 
@@ -50,24 +57,15 @@ enum CompilePlan {
 
 这解释了一个可观察行为：不带 `--root` 运行含 `import` 的文件也能工作，因为入口目录被自动当作 root。
 
-## 后端静态分发
+## Native 编译入口
 
-`compile_program_to_wasm` 通过完全限定语法调用 `JsBackend`，避免 `dyn`：
-
-```rust
-match target {
-    Target::Wasm => <runtime::WasmBackend as runtime::JsBackend>::compile(...),
-    Target::Jit => <wjsm_backend_jit::JitBackend as runtime::JsBackend>::compile(...),
-}
-```
-
-`JitBackend::compile` 直接 `bail!`，所以 `--target jit` 的错误来自后端本身而非 CLI 的前置检查。新增后端就是在这个 `match` 里加一个分支。
+CLI 不再按 `Target::Wasm` / `Target::Jit` 分发。pipeline 产出 `PortableArtifact` 后，执行路径把 artifact 交给 `NativeImageRepository::prepare`：未设置 `WJSM_CACHE_DIR` 时直接 `NativeCompiler::compile`，设置后才读写 `.wnat`。
 
 ## 执行入口
 
-`block_on_wasm_execute` 在进程级共享的 Tokio multi-thread runtime 上 `block_on`。共享用 `LazyLock`，避免每次 in-process 测试重建 runtime。
+`run_compile_then_execute` 取出 `PipelineResult.artifact`，经 `create_native_runtime` 构造 `NativeRuntime`，再调用 `NativeRuntime::execute`。`cache_dir` 只来自 `WJSM_CACHE_DIR`；未设置时每次从 IR 编译，没有 pipeline WASM 落盘，也没有 fork AOT handoff。
 
-`run_compile_then_execute` 在执行前把 raw WASM 写入 pipeline cache 并设置 `current_entry`，供同入口 fork AOT handoff 复用；执行错误先经 `process_exit_code_from_error` 判定是否为 `process.exit`，是则透传退出码，否则输出 `Runtime error:` 并返回 2。
+执行错误里 `FatalJavaScript` 记为退出码 1；其余运行时错误打印 `Runtime error:` 并返回 2；`process.exit(n)` 的退出码由 `NativeExecution.exit_code` 透传。
 
 ## 相关章节
 

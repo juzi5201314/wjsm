@@ -175,7 +175,7 @@
   - [CLI 与开发工具](internals/tooling/README.md)
     - [CLI 参数模型与配置合并](internals/tooling/cli-and-config.md)
     - [源码输入与编译编排](internals/tooling/source-input.md)
-    - [隐藏命令与预编译执行](internals/tooling/precompiled-execution.md)
+    - [预编译执行与磁盘缓存](internals/tooling/precompiled-execution.md)
     - [IR、AST 与反汇编工具](internals/tooling/dump-and-disassembly.md)
     - [Artifact 校验与尺寸分析](internals/tooling/validation-and-size.md)
     - [缓存实现](internals/tooling/cache.md)

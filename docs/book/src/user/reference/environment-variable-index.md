@@ -16,10 +16,10 @@ GC 选择优先级：`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。非法
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_CACHE_DIR` | native image cache 目录 | `$HOME/.cache/wjsm` |
+| `WJSM_CACHE_DIR` | native image 与 builtin IR 段缓存目录 | 未设置（磁盘缓存关闭） |
 | `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段缓存 | 未设置 |
 
-`WJSM_CACHE_DIR=`（空值）不禁用缓存，回落到默认目录。cache 是可重建的派生数据，损坏或 stale 的条目会被 invalidated 而非执行。
+未设置或空的 `WJSM_CACHE_DIR` 都关闭磁盘缓存，不会回落到 `$HOME/.cache/wjsm`。cache 是可重建的派生数据，损坏或 stale 的条目会被 invalidated 而非执行。
 
 ## 启动
 

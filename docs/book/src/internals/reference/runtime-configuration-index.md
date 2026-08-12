@@ -9,8 +9,7 @@
 | `--gc` | GC 算法 | `zgc` |
 | `--inspect` / `--inspect-brk` | 启用 CDP 调试器 | 关闭 |
 | `--color` | 输出颜色 | auto |
-| `--precompiled` | 加载预编译 WASM | 关闭 |
-| `--max-realms` | 最大 realm 数 | 1024 |
+| `--max-heap-size` | ManagedHeap 上限 | 64 MiB |
 
 ## 环境变量
 
@@ -43,10 +42,10 @@
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_CACHE_DIR` | 编译缓存目录 | `$HOME/.cache/wjsm` |
+| `WJSM_CACHE_DIR` | native image 与 builtin IR 段缓存目录 | 未设置（磁盘缓存关闭） |
 | `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段缓存 | 未设置 |
 
-`WJSM_CACHE_DIR=`（空值）不禁用缓存，回落到 `$HOME/.cache/wjsm`。
+未设置或空的 `WJSM_CACHE_DIR` 都关闭磁盘缓存，不会回落到 `$HOME/.cache/wjsm`。`wjsm cache` 这时必须传 `--dir`。
 
 ### 编译优化
 

@@ -18,7 +18,7 @@
 - native cache key / path
 - startup snapshot 私有地址
 
-因此同一 `.wjsm` 可以在支持平台间携带。运行时验证 artifact 后，以其 digest、native ABI、codegen hash、target、Cranelift 版本和 settings 查找 native cache；miss 时直接从 IR 编译。
+因此同一 `.wjsm` 可以在支持平台间携带。运行时验证 artifact 后，由当前宿主把 IR 编译为 native image。设置了 `WJSM_CACHE_DIR` 时才会按 digest、native ABI、codegen hash、target、Cranelift 版本和 settings 查找或写入磁盘缓存。
 
 ## 宿主平台要求
 
@@ -46,7 +46,7 @@ wjsm validate /tmp/app.wjsm
 wjsm run /tmp/app.wjsm
 ```
 
-`run` 接受 `.wjsm` artifact 作为输入。运行时先验证 artifact，再查找 native cache（以 artifact digest、native ABI hash、codegen hash、target、Cranelift 版本和 settings 为 key），miss 时从 IR 编译为当前宿主的 native image，最后执行。
+`run` 接受 `.wjsm` artifact 作为输入。运行时先验证 artifact，再由当前宿主编译为 native image 并执行。设置了 `WJSM_CACHE_DIR` 时才会按 artifact digest、native ABI hash、codegen hash、target、Cranelift 版本和 settings 查找磁盘缓存。
 
 ## 未实现的格式
 

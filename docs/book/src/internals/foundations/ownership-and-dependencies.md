@@ -66,8 +66,8 @@ ADR 0014 确立了三条硬边界：
 | --- | --- |
 | CLI 参数模型 | `wjsm-cli/src/cli_args.rs` |
 | 配置文件合并与优先级 | `wjsm-cli/src/cli_config.rs` |
-| GC 算法选择 | `wjsm-host-native/src/lib.rs::gc_algorithm_from_env` |
-| 缓存目录解析 | `wjsm-host-native/src/runtime_startup.rs::module_cache_dir` |
+| GC 算法选择 | `wjsm-host-native/src/lib.rs::NativeRuntimeConfig::from_environment` |
+| 缓存目录 | 调用方传入的 `cache_dir`；CLI 只读 `WJSM_CACHE_DIR`，无默认目录 |
 | NaN-boxing 标签 | `wjsm-ir/src/value.rs` |
 | 影子栈默认值 | `wjsm-ir/src/lib.rs` 的 `SHADOW_STACK_*` 常量 |
 | Node 内置模块清单 | `wjsm-module/src/builtin_modules.rs` |

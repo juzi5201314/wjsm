@@ -35,7 +35,7 @@
 | `WJSM_GC` | GC 算法 | `zgc` |
 | `WJSM_TEST_GC` | 测试专用 GC 覆盖 | 未设置 |
 | `WJSM_GC_LOG` | GC 回收日志（仅认 `1`） | 关闭 |
-| `WJSM_CACHE_DIR` | native cache 目录 | `$HOME/.cache/wjsm` |
+| `WJSM_CACHE_DIR` | native / builtin 缓存目录 | 未设置（关闭） |
 | `WJSM_NO_BUILTIN_CACHE` | 禁用 builtin IR 段缓存 | 未设置 |
 | `WJSM_STARTUP_SNAPSHOT` | 启动快照（`0`/`false`/`off` 禁用） | 开启 |
 | `WJSM_STARTUP_SNAPSHOT_DEBUG` | 快照调试诊断 | 关闭 |

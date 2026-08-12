@@ -32,12 +32,14 @@ SWC 解析边界。
 
 ## wjsm-backend-native
 
-native 代码生成。
+native 代码生成与磁盘 image cache。
 
 | 导出 | 用途 |
 | --- | --- |
-| emit_support_module | 生成 support module WASM |
-| GcFlavor | GC flavor 枚举 |
+| NativeCompiler | IR → 当前宿主 object / CLIF |
+| NativeImageRepository | 进程内 image 池与可选 `.wnat` 磁盘缓存 |
+| NativeCacheKey / NativeCacheStats | cache 键与统计 |
+| CompiledImage | 已加载的可执行 image |
 
 ## wjsm-backend-jit
 
@@ -45,15 +47,15 @@ JIT 后端边界（未实现的扩展点）。
 
 ## wjsm-runtime
 
-兼容 facade。
+兼容 facade，只 re-export `wjsm-host-native` / `wjsm-gc`。
 
 | 导出 | 用途 |
 | --- | --- |
-| execute / execute_with_options | 执行 WASM |
-| compile_source / compile_source_with_debug | 编译源码 |
-| RuntimeOptions / InspectConfig / PrecompiledEntry | 配置 |
-| module_cache_stats / clear_module_cache | 缓存管理 |
-| validate_artifact / artifact_metadata | Artifact 工具 |
+| NativeRuntime / NativeRuntimeConfig | 运行时与 `cache_dir` 配置 |
+| execute_with_writer_with_options | 执行入口 |
+| compile_source / compile_source_with_options | 源码 → portable artifact |
+| RuntimeOptions / SourceCompileOptions | 执行与编译选项 |
+| NativeExecution | stdout / stderr / exit / cache stats |
 
 ## wjsm-cli
 
@@ -95,16 +97,17 @@ GC 基准。
 | ExecContext / HeapContext / JsBackend | trait 契约 |
 | Value / Handle | 值与句柄 |
 
-
 ## wjsm-host-native
 
 Cranelift 后端实现。
 
 | 导出 | 用途 |
 | --- | --- |
-| execute_with_options | 执行入口 |
-| process_exit_code / process_exit_diagnostics | 退出码 |
-| CRANELIFT_VERSION | Cranelift 版本常量 |
+| NativeRuntime / NativeRuntimeConfig | 运行时；`cache_dir: None` 关闭磁盘缓存 |
+| execute / execute_with_writer_with_options | 执行入口 |
+| RuntimeOptions / SourceCompileOptions | 配置 |
+| NativeExecution | 可观察输出与 cache 统计 |
+
 ## wjsm-builtins
 
 JavaScript builtins 算法。按域组织：object、collections、array、typedarray、string、promise、async、proxy、json、date、fetch、weakref、modules、inspector、render、core。

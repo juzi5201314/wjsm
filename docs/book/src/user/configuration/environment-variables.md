@@ -20,10 +20,10 @@ GC 选择优先级：`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_CACHE_DIR` | 编译缓存目录 | `$HOME/.cache/wjsm` |
+| `WJSM_CACHE_DIR` | native image 与 builtin IR 段缓存目录 | 未设置（磁盘缓存关闭） |
 | `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段缓存 | 未设置 |
 
-`WJSM_CACHE_DIR=`（空值）不禁用缓存，回落到默认目录。
+磁盘缓存是 opt-in。只有 `WJSM_CACHE_DIR` 被设置时，`wjsm run` 才会读写 `${WJSM_CACHE_DIR}/*.wnat`，多文件项目才会把 builtin IR 段落到 `${WJSM_CACHE_DIR}/builtin_ir/`。未设置或空值都不会回落到 `$HOME/.cache/wjsm`；`wjsm cache` 这时也需要 `--dir`。
 
 ## 启动快照
 

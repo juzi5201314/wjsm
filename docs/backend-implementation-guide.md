@@ -72,7 +72,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 ## 3. Native image 与 cache
 
-`NativeImageRepository` 是进程内 image 与磁盘 cache 的唯一 owner。`NativeCacheKey` 绑定：
+`NativeImageRepository` 是进程内 image 与磁盘 cache 的唯一 owner。磁盘路径来自调用方传入的 `cache_dir`；CLI / in-process 入口只在 `WJSM_CACHE_DIR` 有值时打开，没有 `$HOME/.cache/wjsm` 回落。`NativeCacheKey` 绑定：
 
 - portable artifact digest；
 - native ABI hash；
@@ -81,7 +81,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 - Cranelift 版本；
 - codegen/ISA settings。
 
-同 key 的并发 prepare 由 in-flight gate 合并；repository 只保存 `Weak<CompiledImage>`，调用方持有的 `Arc` 决定 image 生命周期。磁盘 cache header/object/hash 或权限校验失败时计为 invalidated 并重新编译，绝不能执行损坏 bytes。
+同 key 的并发 prepare 由 in-flight gate 合并；repository 只保存 `Weak<CompiledImage>`，调用方持有的 `Arc` 决定 image 生命周期。未打开磁盘缓存时 miss 只编译不落盘。打开后 header/object/hash 或权限校验失败计为 invalidated 并重新编译，绝不能执行损坏 bytes。
 
 `CompiledImage` 拥有 executable mappings、entry table、source metadata 与 unwind registration。drop 顺序必须先注销 unwind，再释放 mapping；function table 中不得永久缓存裸 code pointer。
 
@@ -99,7 +99,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 `NativeRuntime::execute` 的顺序是：
 
 1. 校验 owner thread，重置输出并恢复 startup snapshot；
-2. 由 repository 对 artifact 执行 cache hit/load 或 direct compile；
+2. 由 repository 对 artifact 执行进程内命中、可选磁盘 load 或 direct compile；
 3. 配置 module manifest、program/image registry 与 source metadata；
 4. 发布当前 image 与 call/root/source frame；
 5. 调用 typed native entry；

@@ -25,7 +25,7 @@ NativeRuntime::execute(artifact, options)
 
 ## Image 加载
 
-`NativeImageRepository` 是 image 与磁盘 cache 的唯一 owner。`NativeCacheKey` 绑定：
+`NativeImageRepository` 是 image 与磁盘 cache 的唯一 owner。磁盘路径来自 `NativeRuntimeConfig.cache_dir`；CLI / in-process 入口只在 `WJSM_CACHE_DIR` 有值时传入，默认 `None`。`NativeCacheKey` 绑定：
 
 - portable artifact digest；
 - native ABI hash；
@@ -34,7 +34,7 @@ NativeRuntime::execute(artifact, options)
 - Cranelift 版本；
 - codegen/ISA settings。
 
-命中时直接加载已有 image；miss 时由 `NativeCompiler::compile` 从 IR 编译。同 key 的并发 prepare 由 in-flight gate 合并。
+未打开磁盘缓存时每次 `prepare` 都从 IR 编译（进程内 Weak 命中除外）。打开后命中则加载 `.wnat`，miss 则编译并写入该目录。同 key 的并发 prepare 由 in-flight gate 合并。
 
 ## 事件循环 drain
 

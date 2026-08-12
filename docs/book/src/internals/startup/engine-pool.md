@@ -19,10 +19,10 @@
 `NativeImageRepository` 是进程内 image 与磁盘 cache 的唯一 owner。它持有：
 
 - `Weak<CompiledImage>` 列表——调用方持 `Arc` 决定 image 生命周期；
-- 磁盘 cache 目录——由 `WJSM_CACHE_DIR` 或 `$HOME/.cache/wjsm` 决定；
+- 可选磁盘 cache 目录——仅当调用方传入 `cache_dir`（CLI 读 `WJSM_CACHE_DIR`）时启用，没有 `$HOME/.cache/wjsm` 回落；
 - in-flight gate——同 key 的并发 prepare 只编译一次。
 
-repository 只保存 `Weak` 引用，image 的生命周期由调用方持有的 `Arc` 决定。这意味着没有活跃引用的 image 可以被回收，下次使用时重新从磁盘 cache 加载或重新编译。
+repository 只保存 `Weak` 引用，image 的生命周期由调用方持有的 `Arc` 决定。没有活跃引用的 image 可以被回收；下次使用时，打开了磁盘缓存就从 `.wnat` 加载，否则重新编译。
 
 ## CompiledImage 生命周期
 

@@ -46,7 +46,19 @@ Timing: parse=6ms, lower=10ms, compile=6ms, execute=67ms
 
 `-v` 让计时用微秒单位，同时打印阶段进入信息。`execute` 只在实际执行的命令里出现；`build --stage compile --time` 只会看到前三段。
 
-`--stats` 输出常量数、函数数、基本块数、指令数和 artifact 字节数，用于判断 IR 规模是否膨胀。
+`--stats` 输出常量数、函数数、基本块数、指令数和 artifact 字节数，用于判断 IR 规模是否膨胀。若设置了 `WJSM_CACHE_DIR`，还会额外打印 native cache 的 entries / hits / misses。
+
+## 打开磁盘缓存
+
+`wjsm run` 默认不读写硬盘缓存，每次都从 IR 重新 codegen。重复执行同一份源码或 `.wjsm` 时，显式设置目录即可复用 native image 和 builtin IR 段：
+
+```bash
+export WJSM_CACHE_DIR=~/.cache/wjsm
+wjsm run app.ts
+wjsm cache stats
+```
+
+测试套件默认也不设这个变量。空值不会回落到 `$HOME/.cache/wjsm`。
 
 ## Benchmark 时的 LICM 禁用
 

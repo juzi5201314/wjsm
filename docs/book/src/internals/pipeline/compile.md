@@ -1,40 +1,20 @@
-# WASM 编译阶段
+# Native 编译阶段
 
-这一章说明 IR 到 WASM 字节的转换如何被调用，以及后端在此处如何静态分发。
+这一章说明 verified portable artifact 如何变成当前宿主的 native image，以及磁盘缓存何时介入。
 
-## 静态分发入口
+## 编译入口
 
-`compile_program_to_wasm`（`crates/wjsm-cli/src/lib.rs`）是唯一的后端选择点：
+CLI 不再按 `Target::Wasm` / `Target::Jit` 分发。`run` / `run_file_in_process` 把已验证的 `PortableArtifact` 交给 `NativeImageRepository::prepare`：
 
-```rust
-let bytes: Vec<u8> = match target {
-    Target::Wasm => {
-        let a = <runtime::WasmBackend as runtime::JsBackend>::compile(
-            &runtime::WasmBackend, program, debug_codegen,
-        )?;
-        <runtime::WasmBackend as runtime::JsBackend>::artifact_bytes(&a)
-            .map(|b| b.to_vec()).unwrap_or_default()
-    }
-    Target::Jit => { /* JitBackend，同形状 */ }
-};
-```
+1. 用 `NativeCacheKey` 查进程内 Weak 池；
+2. 若 `cache_dir` 有值，再查 `${WJSM_CACHE_DIR}/<digest>.wnat`；
+3. 都未命中则 `NativeCompiler::compile(artifact)`，从 IR 直接生成当前宿主 object。
 
-两点值得注意：
+`NativeCompiler::compile` 在 `wjsm-backend-native`：输入是 artifact 里的 `Program`，输出是 `NativeObject`。没有 `compile_program_to_wasm`，也没有 Wasmtime deserialize。
 
-- 用完全限定语法调用 trait 方法，没有 `dyn JsBackend`，没有 vtable。
-- `Target::Jit` 不是特殊分支：它走完全相同的 `compile` + `artifact_bytes` 形状，只是 `JitBackend::compile` 内部 `bail!("JIT backend is not implemented yet")`。新后端在此 match 加一个分支即可接入，这是 ADR 0013 的契约。
+## 磁盘缓存
 
-> <details><summary>完全限定语法调用 trait 有什么副作用？</summary>
->
-> `<WasmBackend as JsBackend>::compile` 形式的调用在 Rust 里是「单态化」——编译器为每个后端生成专门的代码，没有 vtable 查表，调用是直接的函数调用。
->
-> 与之相对的是 `dyn JsBackend`——编译时不知道具体类型，运行时通过 vtable 查函数。性能上每次调用多一次间接跳转，且 vtable 占空间、不能内联。
->
-> 对于 wjsm 这种每条指令都可能调 builtin 的场景，「避免 vtable」是值得的：性能更好、编译器能内联更激进。
->
-> 代价是失去一些动态性——必须编译时知道所有后端类型。但 wjsm 只需要 wasm + jit 两个，加一个后端是显式的代码改动，不是动态加载。
->
-> </details>
+`cache_dir` 来自 `NativeRuntimeConfig`。CLI 与 in-process 测试只在 `WJSM_CACHE_DIR` 有值时传入；默认 `None`，编译产物不落盘。打开后 miss 写入 `.wnat`，损坏 / stale / 权限不安全的条目 invalidated 后重编译。
 
 ## 后端侧入口
 
@@ -42,11 +22,11 @@ let bytes: Vec<u8> = match target {
 
 | 函数 | 用途 |
 | --- | --- |
-| `compile` / `compile_with_options` | Normal 模式，产出 native image |
-| `compile_runtime_module_at` / `_with_options` | Normal 模式，指定 `data_base` / `table_base`，返回 `CompiledImage` |
-| `compile_eval` / `compile_eval_at_data_base` | Eval 模式，共享当前 realm 的 vmctx |
+| `NativeCompiler::compile` | Normal 模式，产出 `NativeObject` |
+| `NativeImageRepository::prepare` | 进程内池 + 可选磁盘 cache + compile |
+| `dump-clif` / `disasm` | 诊断：CLIF 文本或当前宿主反汇编 |
 
-Normal 模式与 eval 模式的差别不只是入口不同：normal 模式有独立 vmctx，eval 模式共享当前 realm 的 vmctx，走内联 helper 路径。
+Normal 模式与 eval 模式的差别不只是入口不同：normal 模式有独立 image，eval 模式共享当前 realm 的 vmctx。
 
 ## debug 插桩的传递
 
@@ -55,6 +35,7 @@ Normal 模式与 eval 模式的差别不只是入口不同：normal 模式有独
 ## 深入了解
 
 - [编译器内部结构](../backend/compiler-architecture.md)
+- [编译缓存](../startup/compilation-cache.md)
 - [Normal 与 Eval 编译模式](../backend/normal-and-eval-modes.md)
 - [Import、Export 与 ABI](../backend/imports-exports-and-abi.md)
 - [多后端边界与 JsBackend 契约](../backend/multi-backend-boundary.md)

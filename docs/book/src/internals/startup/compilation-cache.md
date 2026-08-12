@@ -21,8 +21,9 @@ native image cache 由 `NativeImageRepository` 管理。cache key 绑定六个�
 
 | 情况 | 行为 |
 | --- | --- |
-| 命中 | 从磁盘加载 image，跳过编译 |
-| Miss | 由 `NativeCompiler::compile` 从 IR 编译，写入磁盘 |
+| 未设置 `WJSM_CACHE_DIR` | 只走进程内 Weak 池；miss 后编译但不落盘 |
+| 磁盘命中 | 从 `${WJSM_CACHE_DIR}/<digest>.wnat` 加载 image，跳过编译 |
+| 磁盘 Miss | 由 `NativeCompiler::compile` 从 IR 编译，写入磁盘 |
 | 并发同 key | in-flight gate 合并，只编译一次 |
 
 磁盘 cache 校验失败（header/object/hash/权限）时计为 invalidated 并重新编译。
@@ -33,9 +34,9 @@ native image cache 由 `NativeImageRepository` 管理。cache key 绑定六个�
 
 | 条件 | 行为 |
 | --- | --- |
-| `WJSM_CACHE_DIR` 可用且 `WJSM_NO_BUILTIN_CACHE` 未设 | 走缓存路径 |
+| `WJSM_CACHE_DIR` 已设置且 `WJSM_NO_BUILTIN_CACHE` 未设 | 走缓存路径并落盘 |
 | `WJSM_NO_BUILTIN_CACHE` 非空 | 整体跳过缓存 |
-| `WJSM_CACHE_DIR` 不可用 | 构建段但不落盘 |
+| `WJSM_CACHE_DIR` 未设置或为空 | 构建段但不落盘 |
 
 缓存键是 `sha256(BUILTIN_CACHE_VERSION ‖ emit_debug_checks ‖ 每个 builtin canonical 与其源码 SHA-256)`。`BUILTIN_CACHE_VERSION` 在 builtin 源码、lowerer 或 IR 布局变化时必须手动 bump。
 

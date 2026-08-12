@@ -1,44 +1,41 @@
-# WASM 校验与尺寸分析
+# Artifact 校验与尺寸分析
 
 这一章说明 `validate` 和 `size` 命令的内部实现。
 
 ## validate
 
-`validate` 命令校验 WASM 模块是否符合规范。它使用 `wasmparser::Validator` 验证 WASM 字节：
+`validate` 解码并校验 portable `.wjsm`，不执行、不生成当前宿主机器码，也不碰 native cache：
 
-```rust
-wasmparser::Validator::new()
-    .validate_all(&wasm)
-    .map_err(|error| ...)?;
+```bash
+wjsm validate /tmp/app.wjsm
 ```
 
-`validate` 不执行模块，只检查结构合法性。它用于：
+校验覆盖容器 magic/version、header/section 长度与哈希、section 重叠和重复、资源上限、module manifest、required builtins、cross-reference、semantic ABI 与 IR invariants。通过后打印 `valid: <sha256>`。
 
-- 验证 `build` 产出的 WASM 是否合法。
-- 验证 support module 的 WASM（build.rs 在生成后验证）。
-- 调试 WASM 生成问题——如果 `validate` 失败，问题在 codegen 阶段。
-
-公开 API `validate_wasm` 暴露这个能力给嵌入者。
+没有 `validate_wasm` / `wasmparser::Validator`。输入损坏、截断、超限或与当前 semantic ABI 不兼容时返回退出码 1。
 
 ## size
 
-`size` 命令分析 WASM 模块的尺寸。它报告：
+`size` 先验证 `.wjsm`，再按当前宿主 ISA 做一次 `NativeCompiler::diagnostics`，报告 portable 与派生 native object 的规模：
 
-- 总字节数。
-- 各 section 的尺寸（code、data、memory、function、table 等）。
-- 函数数量、导入/导出数量等。
+```text
+artifact_bytes
+sections
+ir_functions / ir_blocks / ir_instructions
+native_object_bytes
+native_functions
+native_frame_bytes
+```
 
-`wasm_section_sizes` 是公开 API，返回 section 级的尺寸明细。它用于：
-
-- 监控 WASM 产物大小变化（回归检测）。
-- 优化 codegen——找到最大的 section，优化目标明确。
+native image 不会写回 artifact，也不会写入 `WJSM_CACHE_DIR`。比较跨平台制品时看 `.wjsm` 字节数与 digest；比较当前宿主 codegen 时在同一 target / Cranelift settings 下看 native object。
 
 ## 与 build 的关系
 
-`build` 命令在生成 WASM 后内部调用 `validate`，确保产物合法。`size` 是独立命令，需要先 `build` 得到 WASM，再 `size` 分析。
+`build` 产出 portable `.wjsm`。`validate` / `size` 都吃这份制品：前者只做 target-independent 校验，后者额外编译当前宿主 object 做尺寸对照。
 
 ## 深入了解
 
 - [源码输入与编译编排](source-input.md)
-- [IR、AST、WAT 与反汇编工具](dump-and-disassembly.md)
+- [IR、AST 与反汇编工具](dump-and-disassembly.md)
 - [用户侧的 validate](../../user/cli/validate.md)
+- [用户侧的 size](../../user/cli/size.md)

@@ -22,6 +22,6 @@ wjsm run /tmp/app.wjsm
 - native cache key/path；
 - startup snapshot 私有地址。
 
-因此同一 `.wjsm` 可以在支持平台间携带。运行时验证 artifact 后，以其 digest、native ABI、codegen hash、target、Cranelift 版本和 settings 查找 native cache；miss 时直接从 IR 编译。
+因此同一 `.wjsm` 可以在支持平台间携带。运行时验证 artifact 后，由当前宿主把 IR 编译为 native image。设置了 `WJSM_CACHE_DIR` 时才会按 digest、native ABI、codegen hash、target、Cranelift 版本和 settings 查找或写入磁盘缓存。
 
 `--format native-executable` 当前明确未实现。runtime 私有 native image 不能当作可分发 executable。

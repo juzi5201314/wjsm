@@ -2,23 +2,17 @@
 
 这一章汇总构建系统生成的工件。
 
-## build.rs 生成（`embedded` feature 开启时）
-
 ## 构建期生成
 
-开发构建当前不生成嵌入工件；native cache 按需在运行时生成。
+开发构建当前不生成嵌入工件；native cache 只在设置了 `WJSM_CACHE_DIR` 时按需落盘。
 
 ## 运行时缓存
 
 | 工件 | 位置 | 键 |
 | --- | --- | --- |
-| 编译缓存 | `$WJSM_CACHE_DIR` 或 `$HOME/.cache/wjsm` | artifact hash + native ABI + codegen source hash + target |
+| Native image cache | `$WJSM_CACHE_DIR/*.wnat`（未设置则关闭） | artifact digest + native ABI + codegen source hash + target + Cranelift + settings |
+| Builtin IR 段缓存 | `$WJSM_CACHE_DIR/builtin_ir/`（未设置则不落盘） | sha256(version ‖ debug ‖ builtin source hashes) |
 | Portable artifact | `.wjsm` 文件 | verified semantic IR |
-## 二进制内嵌
-
-`wjsm-host-native/src/lib.rs` 通过 `include_bytes!` 把 `OUT_DIR` 下的 native image 嵌入二进制。运行时通过 `embedded_support_cwasm_for(kind)` 返回 `&'static [u8]`。
-
-## 运行时缓存
 
 ## 测试生成
 

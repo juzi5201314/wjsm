@@ -64,5 +64,5 @@ wjsm run --script -e 'var await = 1; console.log(await)'
 ## 深入了解
 
 - [编译到执行的完整编排路径](../../internals/pipeline/orchestration.md)
-- [同入口 fork AOT 与预编译执行通道](../../internals/tooling/precompiled-execution.md)
+- [编译缓存](../../internals/startup/compilation-cache.md)
 - [实例化与执行生命周期](../../internals/host-runtime/instantiation-and-lifecycle.md)

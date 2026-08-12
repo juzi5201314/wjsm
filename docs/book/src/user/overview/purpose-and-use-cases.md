@@ -24,7 +24,7 @@ wjsm 是一个 AOT 编译的 JavaScript/TypeScript 运行时，整条执行链�
 - **CLI 工具**。需要快速启动、稳定退出码、低内存占用的命令行程序。
 - **嵌入式 JS 引擎**。把 `.wjsm` 作为制品分发，宿主加载后由 NativeRuntime 执行，不引入 V8 体积。
 - **批量测试**。`wjsm test` 逐文件编译执行，启动开销低，适合 CI 里跑大量小用例。
-- **CI 流水线**。portable 制品可跨构建节点复用，native cache 加速重复执行，`--time` / `--stats` 给出各阶段耗时。
+- **CI 流水线**。portable 制品可跨构建节点复用；设置 `WJSM_CACHE_DIR` 后 native cache 能加速重复执行，`--time` / `--stats` 给出各阶段耗时。
 - **运行时开发与验证**。参与 portable AOT / native runtime 方案验证，跑已覆盖的 fixtures 与 Test262 子集。
 
 ## 不适用场景

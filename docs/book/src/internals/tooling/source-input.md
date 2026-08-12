@@ -16,18 +16,16 @@
 
 ## 编译编排
 
-`lib.rs` 的 `run` 函数编排编译：
+`lib.rs` 的 `cmd_run` 编排编译：
 
 1. 解析 CLI 参数，合并配置。
 2. 读取源码输入。
-3. 调用 `wjsm-host-native` 的 `compile_source` 编译为 portable .wjsm。
-4. 调用 `execute_with_options` 执行 native image。
+3. 调用 pipeline 编出 portable `.wjsm`。
+4. `create_native_runtime` 后执行 `NativeRuntime::execute`。
 
-不同 subcommand 在步骤 3/4 之间有差异：`build` 只编译不执行，`check` 只到 semantic IR，`dump-*` 在不同阶段输出。
+`create_native_runtime` 只在 `WJSM_CACHE_DIR` 有值时打开磁盘缓存。不同 subcommand 在步骤 3/4 之间有差异：`build` 只编译不执行，`check` 只到 semantic IR，`dump-*` 在不同阶段输出。
 
-## 预编译入口
-
-`PrecompiledEntry` 是预编译 handoff 结构，记录源码路径和 WASM 路径。`--precompiled` 选项让同入口 fork 时子进程直接加载 raw WASM，跳过再编译。详见[隐藏命令与预编译执行](precompiled-execution.md)。
+没有 `PrecompiledEntry` / `--precompiled`。要跨进程复用机器码，设置 `WJSM_CACHE_DIR` 走 native image cache。详见[预编译执行与磁盘缓存](precompiled-execution.md)。
 
 ## 多文件入口
 
@@ -36,5 +34,5 @@
 ## 深入了解
 
 - [CLI 参数模型与配置合并](cli-and-config.md)
-- [隐藏命令与预编译执行](precompiled-execution.md)
+- [预编译执行与磁盘缓存](precompiled-execution.md)
 - [编译编排入口](../pipeline/orchestration.md)
