@@ -1,26 +1,15 @@
 # 用户手册
 
-这本手册讲怎么把 wjsm 装上、跑起来、让它干活——安装、运行代码、编译成 WebAssembly、调配置、查命令参数、定位报错。
+wjsm 是不依赖 V8 的 AOT JavaScript/TypeScript runtime。源码先被解析并降为 verified semantic IR；`build` 生成跨支持平台携带的 portable `.wjsm`，`run` 在当前宿主把 IR 直接编译为 CLIF/native image，再由 `NativeRuntime` 执行。
 
-wjsm 把 JavaScript/TypeScript 提前编译成 WebAssembly，再由内置的 Wasmtime 宿主执行，整条链路里没有 V8 参与。当前版本 `0.1.0`，ECMAScript 和 Node.js 兼容层都还只是子集——具体支持到什么程度以 `fixtures/` 目录里的 1300+ 行为用例和 Test262 的实际通过情况为准。
+当前版本是 `0.1.0`，ECMAScript、Web API 与 Node.js 兼容层仍是子集。真实支持范围以仓库 fixture、Test262 和命令行 `--help` 为准。
 
-## 怎么用这本手册
+## 从这里开始
 
-| 你的目标 | 去哪一章 |
-| --- | --- |
-| 先搞清楚 wjsm 是什么、和 Node 有什么不同 | [认识 wjsm](overview/index.html) |
-| 装好并跑第一段代码 | [入门](getting-started/index.html) |
-| 查某个子命令的参数 | [命令行](cli/index.html) |
-| 组织多文件项目、用 npm 包 | [项目、模块与包](projects/index.html) |
-| 确认某个语言特性或 Node API 能不能用 | [语言与运行时](runtime/index.html) |
-| 调 GC、堆上限、快照、Inspector | [配置](configuration/index.html) |
-| 照着可复现的步骤做一件事 | [常用工作流](workflows/index.html) |
-| 理解 `.wasm` 产物、退出码、权限边界 | [输出与运行环境](output/index.html) |
-| 有报错要定位 | [故障排查](troubleshooting/index.html) |
-| 查表 | [用户参考](reference/index.html) |
+- 想运行代码：[`run`](cli/run.md)。
+- 想构建可携带制品：[`build`](cli/build.md) 与 [Portable `.wjsm` 制品](output/portable-artifacts.md)。
+- 想定位阶段错误：`dump-ast` → `dump-ir` → `dump-clif` → `disasm`。
+- 想嵌入 Rust 进程： [作为 Rust 库嵌入](workflows/embedding.md)。
+- 想确认隔离承诺： [安全与资源边界](output/security-and-resources.md)。
 
-## 几个贯穿全书的约定
-
-- 命令示例统一写成 `wjsm ...`。如果你还没把二进制放进 `PATH`，把它换成 `./target/debug/wjsm` 或 `cargo run --` 就行。
-- 标注「未实现」的能力不要在生产路径上依赖——比如 `--target jit` 传了会直接报错退出。
-- 章末的「深入了解」链到[内部手册](../internals/index.html)，讲的是实现机制。用 wjsm 不需要读那一半；想了解「为什么这样设计」再去翻。
+命令示例统一写成 `wjsm ...`。未安装到 `PATH` 时，可替换为 `cargo run -- ...` 或 `target/debug/wjsm ...`。

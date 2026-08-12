@@ -22,17 +22,21 @@ ADR 0010 确立：
 
 ## 后端边界
 
-ADR 0011–0013：
+ADR 0014：
 
-- wasmtime 依赖只在 `wjsm-host-wasm` 和 `wjsm-backend-wasm`。
+- Cranelift 依赖只在 `wjsm-backend-native` 和 `wjsm-host-native`。
 - `wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 后端无关。
-- 包装层（host import 函数）只做类型转换，不做语义决策。
+- 包装层（host call）只做类型转换，不做语义决策。
 - GC 算法通过 `GcContext` / `RootProvider` 接合层访问内存。
 
-## Engine owner
+## Cranelift ISA owner
 
-`wjsm-host-wasm/src/engine_config.rs` 是唯一构造和 mutation wasmtime `Config` 的地方。所有 profile 固定开启 `threads` / `shared-memory` / `memory64` / `multi-memory` / `bulk-memory`。
+`wjsm-backend-native/src/isa_config.rs` 是唯一构造和 mutation Cranelift ISA/flags 的地方。所有 codegen 路径使用 `cranelift_native::builder()` 初始化当前宿主 target。
 
+## Portable artifact 格式
+
+- `ARTIFACT_FORMAT_VERSION` 任何 wire 改动必须递增。
+- Portable `.wjsm` 是跨平台、不可执行的 semantic-IR artifact；native cache key 绑定 artifact hash、native ABI、codegen source hash、target/CPU、Cranelift 版本和 compiler flags。
 ## 快照格式
 
 - `SNAPSHOT_FORMAT_VERSION` 任何 wire 改动必须递增。
@@ -44,7 +48,6 @@ ADR 0011–0013：
 - NaN-boxed 值（`i64`），标签在 bits 32-37。
 - 两阶段 lowering（预声明 + lower），保证 TDZ + hoisting。
 - 作用域名 `$scope_id.name`。
-- 启动快照默认开启，ABI hash 校验。
 
 ## 深入了解
 

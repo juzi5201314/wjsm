@@ -8,15 +8,14 @@
 
 1. **当前源码**。owner 层的实现是行为的事实，注释和文档都可能过期。
 2. **测试证据**。`fixtures/happy`、`fixtures/errors`、`fixtures/modules`、`fixtures/semantic` 与 crate 测试锁定的是已验证行为。
-3. **生效的 ADR**。`docs/adr/` 记录架构决策，被取代的部分只用于理解历史（如 ADR 0005 已被 0010 取代）。
-4. **官方规范**。ECMAScript、WHATWG、WebAssembly、Wasmtime 文档。
-5. **真实引擎实现**。规范文本仍不足以决断时，看 V8/JSC 的实际行为。
+3. **生效的 ADR**。`docs/adr/` 记录架构决策，被取代的部分只用于理解历史（如 ADR 0005 已被 0010 取代，0011/0013 已被 0014 取代）。
+4. **官方规范**。ECMAScript、WHATWG、Cranelift 文档。
 
 ## 核心原则
 
 **单一 owner。** 每个事实只有一个权威定义点。GC 算法解析在 `gc_algorithm_from_env`，影子栈默认值在 `wjsm_ir::SHADOW_STACK_DEFAULT_MAX_SIZE`，缓存目录在 `runtime_startup::module_cache_dir`。其他位置引用，不复制。
 
-**后端边界不可越。** Wasm 与 wasmtime 依赖只允许出现在 `wjsm-backend-wasm` 和 `wjsm-host-wasm`。`wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 保持后端无关（ADR 0011–0013）。
+**后端边界不可越。** Cranelift 依赖只允许出现在 `wjsm-backend-native` 和 `wjsm-host-native`。`wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 保持后端无关（ADR 0014）。
 
 **泛型单态化而非 dyn。** `ExecContext` 的实现通过 `<E: ExecContext>` 泛型传播，编译期内联，无 vtable 开销。`HeapAccessV2<M>` 同理。
 
@@ -34,7 +33,7 @@
 >
 > 「彻底切换」的做法是：迁移期间用 `git log` 保留旧实现（可回滚），但代码里不保留。新实现稳定后，旧代码可以 git 抛弃。
 >
-> wjsm 的几个例子：ManagedHeap 取代 memory32 对象堆时直接删了旧堆；JavaScript Builtins 拆出后语义层不再持有 `Caller<RuntimeState>`。这些决定都让代码更简单，代价是回滚成本稍高——可接受。
+> wjsm 的几个例子：ManagedHeap 取代 memory32 对象堆时直接删了旧堆；JavaScript Builtins 拆出后语义层不再持有后端专有状态；Direct Cranelift 切换时删除整个 Wasmtime/Wasm 生产路径。这些决定都让代码更简单，代价是回滚成本稍高——可接受。
 >
 > </details>
 

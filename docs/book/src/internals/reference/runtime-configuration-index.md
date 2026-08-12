@@ -27,10 +27,10 @@
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_COMPILER` | 编译器（cranelift / winch） | cranelift |
+| `WJSM_COMPILER` | 编译器（已移除，保留兼容） | cranelift |
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级（none / speed_and_size / default） | default |
 
-`--inspect` 强制 Cranelift（Winch 不支持调试）。
+`WJSM_COMPILER` 仅为兼容保留；当前唯一编译器是 Cranelift。
 
 ### 启动
 

@@ -1,14 +1,39 @@
 # 编译与执行流水线
 
-流水线是 wjsm 的主干：源码经过解析、语义 lowering、可选的模块 bundling，编译为 WASM，最后由 Wasmtime 宿主实例化执行。
+```mermaid
+flowchart LR
+    source["JS / TS"] --> parse["parse: SWC AST"]
+    parse --> lower["lower: verified IR"]
+    lower --> bundle["bundle: module manifest + Program"]
+    bundle --> artifact["artifact: canonical .wjsm"]
+    artifact --> clif["native: CLIF + image"]
+    clif --> runtime["NativeRuntime"]
+    runtime --> result["stdout / stderr / exit"]
+```
 
-阶段之间只通过明确的数据结构交接：AST（`swc_ast::Module`）、IR（`wjsm_ir::Program`）、WASM 字节（`Vec<u8>`）。这个边界让每个阶段可以单独 dump 和测试。
+阶段之间只交接明确数据：AST、`Program`、`ModuleManifest`、`PortableArtifact`、`CompiledImage`。CLI 负责输入/config/输出编排；各 owner 负责自己的验证和生命周期。
 
-- [编译编排入口](orchestration.md)
-- [解析阶段](parse.md)
-- [语义 Lowering 阶段](lower.md)
-- [IR 阶段](ir.md)
-- [模块图与 Bundling 阶段](bundle.md)
-- [WASM 编译阶段](compile.md)
-- [实例化与执行阶段](execute.md)
-- [阶段隔离与诊断输出](stage-isolation.md)
+## 阶段与诊断出口
+
+| 阶段 | 输出 | 诊断命令 |
+| --- | --- | --- |
+| parse | SWC AST | `dump-ast` |
+| lower | semantic IR | `dump-ir` |
+| bundle | Program + module manifest | `dump-ir --root ...` |
+| artifact | canonical `.wjsm` | `build` / `validate` |
+| native codegen | CLIF / current-host image | `dump-clif` / `disasm` |
+| execute | observable output/status | `run` / fixtures |
+
+`run` 从 source 或 `.wjsm` 输入开始，artifact 经过 bounded decode/verification 后才进入 native compiler/runtime。native cache 是 image 的派生加速数据，不改变 artifact source of truth。
+
+## 失败定位
+
+先用 `dump-ast`、`dump-ir`、`dump-clif` 找到第一个不一致的边界，再检查 image loader/cache 或 `NativeRuntime`。不要用临时生产日志掩盖 owning layer 的错误。
+
+## 相关 owner
+
+- parser/semantic/module：`wjsm-parser`、`wjsm-semantic`、`wjsm-module`；
+- artifact：`wjsm-artifact-format`；
+- CLIF/image：`wjsm-backend-native`；
+- runtime/host：`wjsm-host-native`、`wjsm-builtins`、`wjsm-host`；
+- heap/GC：`wjsm-gc`。

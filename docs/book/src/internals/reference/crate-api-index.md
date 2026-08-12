@@ -53,8 +53,7 @@ JIT 后端边界（未实现的扩展点）。
 | compile_source / compile_source_with_debug | 编译源码 |
 | RuntimeOptions / InspectConfig / PrecompiledEntry | 配置 |
 | module_cache_stats / clear_module_cache | 缓存管理 |
-| embedded_support_cwasm_for | 嵌入工件访问 |
-| validate_wasm / wasm_section_sizes | WASM 工具 |
+| validate_artifact / artifact_metadata | Artifact 工具 |
 
 ## wjsm-cli
 
@@ -96,18 +95,16 @@ GC 基准。
 | ExecContext / HeapContext / JsBackend | trait 契约 |
 | Value / Handle | 值与句柄 |
 
-## wjsm-host-wasm
 
-wasmtime 后端实现。
+## wjsm-host-native
+
+Cranelift 后端实现。
 
 | 导出 | 用途 |
 | --- | --- |
-| WasmBackend | JsBackend 实现 |
-| build_embedded_startup_snapshot_bytes | 构建时快照 |
-| install_embedded_startup_snapshot / install_embedded_support_cwasm | 注入工件 |
+| execute_with_options | 执行入口 |
 | process_exit_code / process_exit_diagnostics | 退出码 |
-| WASMTIME_VERSION | wasmtime 版本常量 |
-
+| CRANELIFT_VERSION | Cranelift 版本常量 |
 ## wjsm-builtins
 
 JavaScript builtins 算法。按域组织：object、collections、array、typedarray、string、promise、async、proxy、json、date、fetch、weakref、modules、inspector、render、core。

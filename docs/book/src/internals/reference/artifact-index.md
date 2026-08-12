@@ -4,22 +4,21 @@
 
 ## build.rs 生成（`embedded` feature 开启时）
 
-| 工件 | 路径 | 内容 |
-| --- | --- | --- |
-| support cwasm × 3 | `OUT_DIR/wjsm_support_{flavor}.cwasm` | 三种 GC flavor 的 support module 预编译产物 |
-| artifact ABI | `OUT_DIR/wjsm_managed_heap_v2_artifact_abi.bin` | engine fingerprint + support ABI hash |
-| embeds.rs | `OUT_DIR/embeds.rs` | 历史保留占位 |
+## 构建期生成
 
+开发构建当前不生成嵌入工件；native cache 按需在运行时生成。
+
+## 运行时缓存
+
+| 工件 | 位置 | 键 |
+| --- | --- | --- |
+| 编译缓存 | `$WJSM_CACHE_DIR` 或 `$HOME/.cache/wjsm` | artifact hash + native ABI + codegen source hash + target |
+| Portable artifact | `.wjsm` 文件 | verified semantic IR |
 ## 二进制内嵌
 
 `wjsm-host-wasm/src/lib.rs` 通过 `include_bytes!` 把 `OUT_DIR` 下的 cwasm 嵌入二进制。运行时通过 `embedded_support_cwasm_for(kind)` 返回 `&'static [u8]`。
 
 ## 运行时缓存
-
-| 缓存 | 位置 | key |
-| --- | --- | --- |
-| 编译缓存 | `$WJSM_CACHE_DIR` 或 `$HOME/.cache/wjsm` | `wasmtime-43` + WASM 字节 SipHash |
-| 启动快照 | 进程内 `OnceLock` | ABI 哈希校验 |
 
 ## 测试生成
 

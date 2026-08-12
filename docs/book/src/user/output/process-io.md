@@ -1,53 +1,32 @@
 # 标准输出、标准错误与退出码
 
-判断脚本成败要看退出码，不要靠 grep 输出流。这一章给出两者的确切规则。
+## stdout
 
-## 流分配
+程序主动产生的输出写 stdout，例如 `console.log`、`process.stdout.write` 和 `wjsm eval` 的求值结果。`build -o -` 也写 stdout，但只允许重定向到非终端目标，避免 portable artifact 二进制污染终端。
 
-程序自己的输出全部进 stdout，包括所有 `console` 方法。级别前缀由运行时添加：
+## stderr
+
+CLI 与 runtime 诊断写 stderr：
+
+- parse/lower/artifact/native compile 错误；
+- 未捕获 JavaScript exception 摘要；
+- `--verbose`、`--time`、`--stats` 输出；
+- `out.wjsm` 覆盖警告与 watch 状态。
+
+因此可独立重定向程序输出与诊断：
 
 ```bash
-wjsm run -e 'console.log("L"); console.error("E"); console.warn("W")'
+wjsm run app.ts >program.out 2>diagnostics.log
 ```
-
-```text
-L
-[error] E
-[warn] W
-```
-
-`console.error` / `warn` / `info` / `debug` / `trace` 分别加 `[error]`、`[warn]`、`[info]`、`[debug]`、`[trace]` 前缀，但仍在 stdout。把 stdout 重定向到文件时，这些行会一起被重定向。
-
-stderr 只承载 wjsm 自己的诊断：
-
-- 编译错误（`Error: error: ...` 加源码片段）。
-- 运行时错误摘要（`Runtime error: ...`）。
-- `--verbose`、`--time`、`--stats` 的输出。
-- `out.wasm` 覆盖警告、`--watch` 状态行。
-
-未捕获异常会同时出现在两个流：stdout 收到运行时打印的 `Uncaught exception: ...`，stderr 收到 CLI 的 `Runtime error: ...` 摘要。
 
 ## 退出码
 
-| 码 | 触发条件 |
+| 码 | 含义 |
 | --- | --- |
-| `0` | 正常结束 |
-| `1` | 编译失败：解析、Lowering、codegen 错误，`validate` 校验不通过，`lint` 报出问题，`test` 有失败项 |
-| `2` | 运行时未捕获异常 |
-| `3` | 命令行用法错误：未知子命令、非法参数值 |
-| 其他 | `process.exit(n)` 指定的值原样透出 |
+| `0` | 成功 |
+| `1` | parse/lower/build/artifact validation 等编译侧失败 |
+| `2` | 未捕获 runtime 错误 |
+| `3` | CLI 参数用法错误 |
+| 其他 | `process.exit(n)` 请求的状态 |
 
-`wjsm run -e 'process.exit(5)'` 退出码为 5。缺少输入参数（既无文件也无 `-e`）属于编译阶段错误，退出码为 1；子命令拼写错误由 Clap 拒绝，退出码为 3。
-
-> <details><summary>为什么「编译错误」和「运行时错误」要分开？</summary>
->
-> 同样的答案出现在不同地方，所以只强调核心：CI 流水线靠退出码判断失败类型。代码合到主分支后跑 `wjsm test` 失败 = 退出码 1，是代码 bug；服务跑着跑着崩了 = 退出码 2，是运行时问题。两种失败的处理方式不同：前者阻塞 PR，后者该发报警。
->
-> 这也影响 debug 工具的设计：trace、log、错误信息都按这个分类组织。看到 `Runtime error:` 你知道是运行时问题；看到 `Error: error: ...` 你知道是代码里有语法或语义 bug。
->
-> </details>
-
-## 深入了解
-
-- [标准流与退出码在 host 侧的 owner](../../internals/host-runtime/instantiation-and-lifecycle.md)
-- [`process` 对象与退出诊断的实现](../../internals/runtime-features/fs-process-and-child-process.md)
+`--format native-executable` 当前属于编译侧 NotImplemented contract，返回 1，且不会创建或覆盖目标文件。

@@ -43,8 +43,7 @@
 
 ## 约个 507 个 host import
 
-`env.*` 函数，通过 `wasmtime::Linker` 注册。按域分组的规格文件在 `host_import_registry/specs_part*.rs`。
-
+`env.*` 函数，通过 native host 注册。按域分组的规格文件在 `host_call_registry/specs_part*.rs`。
 Type 12 是函数调用约定：`(i64, i64, i32, i32) -> i64`（receiver, arg, arg_count, flags → result）。
 
 ## 导出

@@ -1,55 +1,38 @@
-# 面向使用者的架构概览
-
-这章的目的只有一个：让你在报错信息、`--time` 输出和手册后文里看到组件名时知道它负责什么。实现层面的依赖方向和 crate 关系见[内部手册](../../internals/foundations/architecture.md)。
+# 架构与执行模型
 
 ## 数据流
 
 ```mermaid
 flowchart TD
-    src["JS / TS 源码"] --> parser["wjsm-parser<br/>SWC 解析"]
-    parser --> semantic["wjsm-semantic<br/>作用域分析 + IR 降级"]
-    module["wjsm-module<br/>ESM / CJS 模块图"] --> semantic
-    semantic --> backend["wjsm-backend-wasm<br/>IR → WebAssembly"]
-    backend --> host["wjsm-host-wasm<br/>Wasmtime + 宿主函数 + ManagedHeap"]
-    host --> out["程序输出"]
+    source["JS / TS 源码"] --> parser["wjsm-parser<br/>SWC AST"]
+    parser --> semantic["wjsm-semantic<br/>verified semantic IR"]
+    module["wjsm-module<br/>ESM / CJS graph"] --> semantic
+    semantic --> artifact["wjsm-artifact-format<br/>portable .wjsm"]
+    artifact --> backend["wjsm-backend-native<br/>IR → CLIF → native image"]
+    backend --> runtime["wjsm-host-native<br/>NativeRuntime + ManagedHeap"]
+    runtime --> output["stdout / stderr / exit code"]
 ```
 
-多文件项目会先经过 `wjsm-module` 构建模块图并把整个依赖图 bundle 成单个 IR Program，再走同一条编译路径。
+多文件项目先由 `wjsm-module` 构建依赖图和 portable manifest，再进入相同的 artifact/native 路径。`.wjsm` 只保存 target-independent semantic IR 与 module/source metadata，不保存机器码、宿主 pointer 或 native relocation。
 
-## 各组件的可观察职责
+## 编译在前，执行在后
 
-| 组件 | 你会在什么时候遇到它 |
-| --- | --- |
-| `wjsm-parser` | 语法错误。诊断带文件名、行列和源码片段 |
-| `wjsm-semantic` | 早期错误（重复声明、TDZ、非法 `await`）和 `dump-ir` 的输出 |
-| `wjsm-module` | 模块解析失败、找不到包、条件导出没命中 |
-| `wjsm-backend-wasm` | `dump-wat` 的输出、`.wasm` 体积、编译阶段的内部错误 |
-| `wjsm-host-wasm` | 运行时错误、`console` 输出、GC 行为、Inspector 连接 |
-| `wjsm-cli` | 参数解析、配置文件合并、`--time` / `--stats` 报告 |
+`wjsm run app.ts` 依次完成：
 
-其余 crate 你一般不会直接遇到：`wjsm-ir` 定义 IR 数据结构，`wjsm-host` 定义宿主契约，`wjsm-builtins` 实现与后端无关的语义算法，`wjsm-gc` 提供 GC 算法，`wjsm-runtime` 是对外的 facade。
+1. 解析源码；
+2. 作用域分析、early error 与 semantic lowering；
+3. 构造并验证 portable artifact；
+4. native cache 命中，或由当前宿主把 IR 直接编译为 CLIF/native image；
+5. `NativeRuntime` 调用入口并排空 Promise、微任务与外部事件。
 
-## 两块内存
+解析与 early error 在执行前完成，因此失败的程序不会产生先行副作用。
 
-运行时有两块相互独立的线性内存，`--max-heap-size` 和 `--shadow-stack-max` 分别对应它们：
+## 值、对象与 GC
 
-- **对象堆（ManagedHeap）**：所有 JavaScript 对象、数组、字符串、Promise 都在这里，由所选 GC 算法管理。
-- **影子栈（shadow stack）**：`env.__shadow_memory`，用于传递变长参数和 GC safepoint 溢出。冷启动 64 KiB，按需增长，软上限默认 16 MiB。
+JavaScript 值使用固定宽度 NaN-boxing。对象、数组、字符串与 Promise 存在统一 ManagedHeap 中；值保存 stable handle，而不是可跨 safepoint 的 raw address。每个 agent 拥有独立 heap、collector、scheduler 与 runtime tables，可在启动时选择 Mark-Sweep、G1 或 ZGC。
 
-两者上限分开配置，调错了会看到不相干的失败，参见[堆、影子栈与内存预留](../configuration/memory.md)。
+## 平台与安全
 
-> <details><summary>为什么「对象堆」和「影子栈」要分开？</summary>
->
-> 影子栈的存在不是历史遗留——它和对象堆有完全不同的访问模式。影子栈在 GC 触发时（safepoint）要快速被扫描，记录所有还活着的对象句柄；如果把它和对象堆混在一起，每条 GC 指令都要担心越界访问和对象移动带来的指针失效。
->
-> 分成两块独立内存后，影子栈里的数据只有「句柄」一种语义，扫描时只需要把这些句柄告诉 GC 就行，不需要考虑里面有什么对象布局。代价是多用一块内存、调用约定里多一个 i32 参数（影子栈参数基址），换来的是 GC 实现的简化。
->
-> 用户的可观察影响：`--max-heap-size` 限制的是对象堆，`--shadow-stack-max` 限制的是影子栈。深递归程序碰到的是影子栈上限（报 `RangeError: Maximum call stack size exceeded`），大对象程序碰到的是堆上限（报 `JavaScript heap budget exhausted`）。
->
-> </details>
+当前 production capability 只承诺 x86_64 Linux 与 x86_64 Windows。不支持的宿主在 native compiler 初始化时 fail-closed，不切换到另一 backend。
 
-## 深入了解
-
-- [端到端架构](../../internals/foundations/architecture.md)：各 crate 的依赖方向与数据交接点。
-- [Workspace crate 地图](../../internals/foundations/crate-map.md)：每个 crate 的职责边界和公共 API。
-- [ManagedHeap 架构](../../internals/gc/managed-heap.md)：统一对象堆的组织方式。
+Direct native code 不提供进程内 sandbox。artifact verifier、checked lowering、strict relocation、symbol allowlist 与 W^X 是受信编译/加载边界；运行不受信任代码必须使用独立 OS process、权限隔离和资源限制。
