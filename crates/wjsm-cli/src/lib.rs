@@ -1959,9 +1959,7 @@ fn compile_source(
     )
 }
 thread_local! {
-    /// Thread-local runtime 实例，供所有 in-process 测试路径共享。
-    /// 每次 execute 前自动恢复 startup snapshot，确保测试隔离。
-    static IN_PROCESS_RUNTIME: RefCell<Option<wjsm_host_native::NativeRuntime>> =
+    static IN_PROCESS_SOURCE_RUNTIME: RefCell<Option<wjsm_host_native::NativeRuntime>> =
         const { RefCell::new(None) };
 }
 
@@ -2011,15 +2009,11 @@ pub fn run_source_in_process(source: &str) -> (i32, Vec<u8>, Vec<u8>) {
     execute_artifact_in_process(&artifact, &module_root)
 }
 
-/// 通用的 artifact 执行入口，支持配置 env/args/cwd 并重用 thread_local runtime。
-fn execute_artifact_in_process_with_config(
+fn execute_artifact_in_process(
     artifact: &PortableArtifact,
     module_root: &Path,
-    script_args: &[&str],
-    env_overrides: &[(&str, &str)],
-    cwd_override: Option<&Path>,
 ) -> (i32, Vec<u8>, Vec<u8>) {
-    IN_PROCESS_RUNTIME.with(|runtime| {
+    IN_PROCESS_SOURCE_RUNTIME.with(|runtime| {
         let mut runtime = runtime.borrow_mut();
         if runtime.is_none() {
             let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
@@ -2027,7 +2021,7 @@ fn execute_artifact_in_process_with_config(
                 Ok(created) => *runtime = Some(created),
                 Err(error) => {
                     return (
-                        EXIT_RUNTIME_ERROR.into(),
+                        EXIT_RUNTIME_ERROR as i32,
                         Vec::new(),
                         format!("Runtime error: {error}\n").into_bytes(),
                     );
@@ -2037,30 +2031,7 @@ fn execute_artifact_in_process_with_config(
         let Some(native) = runtime.as_mut() else {
             unreachable!("runtime was initialized above")
         };
-        
-        // 配置 env 和 args（空切片时跳过，避免清空已有配置）
-        if !env_overrides.is_empty() {
-            if let Err(error) = native.configure_environment(
-                true,
-                env_overrides
-                    .iter()
-                    .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
-            ) {
-                return runtime_error_result(native, EXIT_RUNTIME_ERROR, error);
-            }
-        }
-        if !script_args.is_empty() {
-            if let Err(error) = native
-                .configure_process_arguments(script_args.iter().map(|argument| (*argument).to_owned()))
-            {
-                return runtime_error_result(native, EXIT_RUNTIME_ERROR, error);
-            }
-        }
-        
-        let working_directory = cwd_override
-            .map(Path::to_path_buf)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
+        let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         match native.execute(artifact, module_root, &working_directory) {
             Ok(execution) => (execution.exit_code, execution.stdout, execution.stderr),
             Err(wjsm_host_native::NativeRuntimeError::FatalJavaScript(message)) => {
@@ -2073,14 +2044,6 @@ fn execute_artifact_in_process_with_config(
             ),
         }
     })
-}
-
-/// 简化版：无配置的 artifact 执行，供 run_source_in_process 使用。
-fn execute_artifact_in_process(
-    artifact: &PortableArtifact,
-    module_root: &Path,
-) -> (i32, Vec<u8>, Vec<u8>) {
-    execute_artifact_in_process_with_config(artifact, module_root, &[], &[], None)
 }
 
 fn runtime_error_result(
@@ -2128,19 +2091,52 @@ fn run_file_in_process_with_options_and_root(
         Ok(compiled) => compiled,
         Err(error) => {
             return (
-                EXIT_COMPILE_ERROR.into(),
+                EXIT_COMPILE_ERROR as i32,
                 Vec::new(),
                 format!("Error: {error:#}\n").into_bytes(),
             );
         }
     };
-    execute_artifact_in_process_with_config(
-        &artifact,
-        &module_root,
-        script_args,
-        env_overrides,
-        cwd_override,
-    )
+
+    let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
+    let mut native = match wjsm_host_native::NativeRuntime::new(cache_dir) {
+        Ok(native) => native,
+        Err(error) => {
+            return (
+                EXIT_RUNTIME_ERROR as i32,
+                Vec::new(),
+                format!("Runtime error: {error}\n").into_bytes(),
+            );
+        }
+    };
+    if let Err(error) = native.configure_environment(
+        true,
+        env_overrides
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+    ) {
+        return runtime_error_result(&mut native, EXIT_RUNTIME_ERROR, error);
+    }
+    if let Err(error) = native
+        .configure_process_arguments(script_args.iter().map(|argument| (*argument).to_owned()))
+    {
+        return runtime_error_result(&mut native, EXIT_RUNTIME_ERROR, error);
+    }
+    let working_directory = cwd_override
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    match native.execute(&artifact, &module_root, &working_directory) {
+        Ok(execution) => (execution.exit_code, execution.stdout, execution.stderr),
+        Err(wjsm_host_native::NativeRuntimeError::FatalJavaScript(message)) => {
+            runtime_error_result(&mut native, EXIT_COMPILE_ERROR, message)
+        }
+        Err(error) => runtime_error_result(
+            &mut native,
+            EXIT_RUNTIME_ERROR,
+            format!("Runtime error: {error}"),
+        ),
+    }
 }
 #[cfg(test)]
 mod tests {
