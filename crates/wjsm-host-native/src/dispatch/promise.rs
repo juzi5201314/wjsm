@@ -159,7 +159,9 @@ fn mark_promise_handled(state: &mut NativeAgentState, promise: u32) {
         p.handled = true;
     }
     // 从待报告列表中移除（如果存在）
-    state.pending_unhandled_rejections.retain(|(h, _)| *h != promise);
+    state
+        .pending_unhandled_rejections
+        .retain(|(h, _)| *h != promise);
 }
 pub(crate) fn observe(
     state: &mut NativeAgentState,
@@ -583,7 +585,9 @@ pub(crate) fn settle_promise(
     // 必须立即格式化，因为后续 GC 可能回收 reason 对应的对象（如 Error）
     if rejected && promise.report_unhandled && !promise.handled {
         let reason_text = super::modules::exception_text(state, value);
-        state.pending_unhandled_rejections.push((handle, reason_text));
+        state
+            .pending_unhandled_rejections
+            .push((handle, reason_text));
     }
     let reactions = state.promise_reactions.remove(&handle).unwrap_or_default();
     super::node_async_hooks::promise_settled(state, handle);
@@ -1092,14 +1096,14 @@ fn report_unhandled_rejections(state: &mut NativeAgentState) {
             }
         })
         .collect();
-    
+
     for text in reasons {
         state
             .stderr
             .borrow_mut()
             .extend_from_slice(format!("UnhandledPromiseRejectionWarning: {text}\n").as_bytes());
     }
-    
+
     // 报告完成后清空列表
     state.pending_unhandled_rejections.clear();
 }

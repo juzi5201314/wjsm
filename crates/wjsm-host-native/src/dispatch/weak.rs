@@ -459,13 +459,7 @@ fn strong_reachable(
     let mut queue = VecDeque::new();
     queue.extend(frame_roots);
     queue.extend(state.variables.iter().copied());
-    queue.extend(
-        state
-            .isolated_variable_tables
-            .values()
-            .flatten()
-            .copied(),
-    );
+    queue.extend(state.isolated_variable_tables.values().flatten().copied());
     if let Some(shared) = &state.shared_variables_backup {
         queue.extend(shared.iter().copied());
     }
