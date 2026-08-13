@@ -19,26 +19,26 @@ enum AsyncGeneratorStatus {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum RequestKind {
+pub(crate) enum RequestKind {
     Next,
     Return,
     Throw,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct AsyncGeneratorRequest {
-    kind: RequestKind,
-    value: i64,
-    promise: i64,
+pub(crate) struct AsyncGeneratorRequest {
+    pub(crate) kind: RequestKind,
+    pub(crate) value: i64,
+    pub(crate) promise: i64,
 }
 
 #[derive(Debug)]
 pub(crate) struct NativeAsyncGenerator {
-    continuation: i64,
+    pub(crate) continuation: i64,
     status: AsyncGeneratorStatus,
-    active: Option<AsyncGeneratorRequest>,
-    queue: VecDeque<AsyncGeneratorRequest>,
-    resume_promise: Option<i64>,
+    pub(crate) active: Option<AsyncGeneratorRequest>,
+    pub(crate) queue: VecDeque<AsyncGeneratorRequest>,
+    pub(crate) resume_promise: Option<i64>,
 }
 
 pub(super) fn dispatch_async_generator(

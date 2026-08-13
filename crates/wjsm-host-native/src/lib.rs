@@ -30,6 +30,7 @@ use wjsm_native_abi::{
 };
 mod dispatch;
 mod inspector;
+mod side_tables;
 mod snapshot;
 
 pub use inspector::InspectorConfig;
@@ -848,6 +849,7 @@ struct NativeAgentState {
     scope_records: HashMap<u32, dispatch::modules::NativeScopeRecord>,
     strings: Vec<RuntimeString>,
     string_ids: HashMap<RuntimeString, u32>,
+    string_free: Vec<u32>,
     activations: Vec<NativeActivation>,
     pending_stack_trace: Option<String>,
     maps: HashMap<u32, Vec<(i64, i64)>>,
@@ -882,15 +884,18 @@ struct NativeAgentState {
     iterator_next: HashMap<u32, u32>,
     array_properties: HashMap<(u32, u32), i64>,
     array_property_order: HashMap<u32, Vec<u32>>,
-    closures: Vec<NativeClosure>,
-    bound_functions: Vec<NativeBoundFunction>,
+    closures: Vec<Option<NativeClosure>>,
+    closure_free: Vec<u32>,
+    bound_functions: Vec<Option<NativeBoundFunction>>,
+    bound_free: Vec<u32>,
     next_ticks: VecDeque<dispatch::promise::NativeScheduledMicrotask>,
     immediates: VecDeque<dispatch::promise::NativeScheduledMicrotask>,
     timers: BinaryHeap<dispatch::promise::NativeTimer>,
     timer_now_ms: u64,
     next_timer_sequence: u64,
     cancelled_timers: HashSet<u32>,
-    exceptions: Vec<i64>,
+    exceptions: Vec<Option<i64>>,
+    exception_free: Vec<u32>,
     fatal_exception: Option<i64>,
     callable_prototypes: HashMap<i64, i64>,
     private_slots: HashMap<(i64, u32), NativePrivateSlot>,
@@ -910,7 +915,8 @@ struct NativeAgentState {
     error_prototypes: HashMap<String, i64>,
     process_object: Option<i64>,
     process_env_object: Option<i64>,
-    proxies: Vec<NativeProxy>,
+    proxies: Vec<Option<NativeProxy>>,
+    proxy_free: Vec<u32>,
     array_constructor: Option<i64>,
     global_object: Option<i64>,
     object_prototype: Option<i64>,
@@ -920,7 +926,8 @@ struct NativeAgentState {
     console_object: Option<i64>,
     native_callables: Vec<NativeCallableKind>,
     node_fs_bridge: Option<i64>,
-    regexps: Vec<NativeRegExp>,
+    regexps: Vec<Option<NativeRegExp>>,
+    regexp_free: Vec<u32>,
     node_crypto: dispatch::node_crypto::NodeCryptoState,
     node_async_hooks: dispatch::node_async_hooks::NodeAsyncHooksState,
     node_dgram: dispatch::node_dgram::NodeDgramState,
@@ -1014,6 +1021,7 @@ impl NativeAgentState {
             scope_records: HashMap::new(),
             strings: Vec::new(),
             string_ids: HashMap::new(),
+            string_free: Vec::new(),
             activations: Vec::new(),
             maps: HashMap::new(),
             sets: HashMap::new(),
@@ -1046,8 +1054,11 @@ impl NativeAgentState {
             array_properties: HashMap::new(),
             array_property_order: HashMap::new(),
             closures: Vec::new(),
+            closure_free: Vec::new(),
             bound_functions: Vec::new(),
+            bound_free: Vec::new(),
             exceptions: Vec::new(),
+            exception_free: Vec::new(),
             fatal_exception: None,
             callable_properties: HashMap::new(),
             callable_prototypes: HashMap::new(),
@@ -1066,6 +1077,7 @@ impl NativeAgentState {
             next_timer_sequence: 0,
             cancelled_timers: HashSet::new(),
             proxies: Vec::new(),
+            proxy_free: Vec::new(),
             global_object: None,
             object_prototype: None,
             array_prototype: None,
@@ -1099,6 +1111,7 @@ impl NativeAgentState {
             process_object: None,
             process_env_object: None,
             regexps: Vec::new(),
+            regexp_free: Vec::new(),
             symbol_registry: HashMap::new(),
             symbol_descriptions: HashMap::new(),
             next_symbol_handle: FIRST_USER_SYMBOL_HANDLE,
@@ -1253,13 +1266,17 @@ impl NativeAgentState {
         self.array_properties.clear();
         self.array_property_order.clear();
         self.string_ids.clear();
+        self.string_free.clear();
         self.array_accessors.clear();
         self.array_property_flags.clear();
         self.activations.clear();
         self.pending_stack_trace = None;
         self.closures.clear();
+        self.closure_free.clear();
         self.bound_functions.clear();
+        self.bound_free.clear();
         self.exceptions.clear();
+        self.exception_free.clear();
         self.fatal_exception = None;
         self.object_prototype = None;
         self.array_prototype = None;
@@ -1318,7 +1335,9 @@ impl NativeAgentState {
         self.iterator_next.clear();
         self.node_vm = dispatch::node_vm::NodeVmState::default();
         self.regexps.clear();
+        self.regexp_free.clear();
         self.proxies.clear();
+        self.proxy_free.clear();
         self.next_ticks.clear();
         self.immediates.clear();
         self.timers.clear();
@@ -1454,16 +1473,20 @@ impl NativeAgentState {
 
     fn materialize_function_in(&mut self, image_id: u64, function_index: u32) -> Option<i64> {
         let key = (image_id, function_index);
-        if let Some(environment) = self.call_environment()
-            && let Some(closure) = self
-                .function_closures
-                .get(&(image_id, function_index, environment))
-                .copied()
-        {
-            return Some(closure);
+        if let Some(environment) = self.call_environment() {
+            let closure_key = (image_id, function_index, environment);
+            if let Some(closure) = self.function_closures.get(&closure_key).copied() {
+                if self.closure_is_alive(closure) {
+                    return Some(closure);
+                }
+                self.function_closures.remove(&closure_key);
+            }
         }
         if let Some(closure) = self.latest_function_closures.get(&key).copied() {
-            return Some(closure);
+            if self.closure_is_alive(closure) {
+                return Some(closure);
+            }
+            self.latest_function_closures.remove(&key);
         }
         if let Some(function_id) = self.function_ids.get(&key).copied() {
             return Some(value::encode_function_idx(function_id));
@@ -1515,8 +1538,14 @@ impl NativeAgentState {
             .collect();
         let compiled = regress::Regex::with_flags(&pattern, engine_flags.as_str())
             .map_err(NativeRegExpError::InvalidPattern)?;
-        let handle = u32::try_from(self.regexps.len()).map_err(NativeRegExpError::Capacity)?;
-        self.regexps.push(NativeRegExp {
+        let handle = match self.regexp_free.pop() {
+            Some(handle) => handle,
+            None => u32::try_from(self.regexps.len()).map_err(NativeRegExpError::Capacity)?,
+        };
+        if (handle as usize) == self.regexps.len() {
+            self.regexps.push(None);
+        }
+        self.regexps[handle as usize] = Some(NativeRegExp {
             pattern,
             flags,
             compiled,
@@ -1530,6 +1559,7 @@ impl NativeAgentState {
             .then(|| value::decode_regexp_handle(encoded))
             .and_then(|handle| usize::try_from(handle).ok())
             .and_then(|handle| self.regexps.get(handle))
+            .and_then(|regexp| regexp.as_ref())
     }
 
     fn regexp_mut(&mut self, encoded: i64) -> Option<&mut NativeRegExp> {
@@ -1537,6 +1567,7 @@ impl NativeAgentState {
             .then(|| value::decode_regexp_handle(encoded))
             .and_then(|handle| usize::try_from(handle).ok())
             .and_then(|handle| self.regexps.get_mut(handle))
+            .and_then(|regexp| regexp.as_mut())
     }
 
     fn string(&self, encoded: i64) -> Option<&RuntimeString> {
@@ -1603,7 +1634,8 @@ impl NativeAgentState {
             value::decode_function_idx(callable)
         } else if value::is_closure(callable) {
             self.closures
-                .get(usize::try_from(value::decode_closure_idx(callable)).ok()?)?
+                .get(usize::try_from(value::decode_closure_idx(callable)).ok()?)
+                .and_then(|closure| closure.as_ref())?
                 .function_id
         } else {
             return None;
@@ -1611,6 +1643,16 @@ impl NativeAgentState {
         self.functions
             .get(usize::try_from(function_id).ok()?)
             .copied()
+    }
+
+    /// 闭包槽是否仍存活（GC 后 tombstone 的槽为 None）。
+    fn closure_is_alive(&self, closure: i64) -> bool {
+        value::is_closure(closure)
+            && self
+                .closures
+                .get(usize::try_from(value::decode_closure_idx(closure)).unwrap_or(usize::MAX))
+                .and_then(|closure| closure.as_ref())
+                .is_some()
     }
 
     fn native_callable(&mut self, kind: NativeCallableKind) -> Option<i64> {
@@ -2567,6 +2609,7 @@ impl NativeAgentState {
         }
         self.proxies
             .get(value::decode_proxy_handle(value) as usize)
+            .and_then(|proxy| proxy.as_ref())
             .is_some_and(|proxy| !proxy.revoked && self.is_callable_value(proxy.target))
     }
 
@@ -2584,14 +2627,16 @@ impl NativeAgentState {
         } else if value::is_closure(callee) {
             let closure = *self
                 .closures
-                .get(usize::try_from(value::decode_closure_idx(callee)).ok()?)?;
+                .get(usize::try_from(value::decode_closure_idx(callee)).ok()?)
+                .and_then(|closure| closure.as_ref())?;
             let function = self.callable_function(callee)?;
             let entry = self.compiled_entry(function)?;
             (Some(function), closure.environment, entry)
         } else if value::is_proxy(callee) {
             let proxy = self
                 .proxies
-                .get(usize::try_from(value::decode_proxy_handle(callee)).ok()?)?;
+                .get(usize::try_from(value::decode_proxy_handle(callee)).ok()?)
+                .and_then(|proxy| proxy.as_ref())?;
             if !self.is_callable_value(proxy.target) {
                 return None;
             }
@@ -2808,6 +2853,7 @@ impl NativeAgentState {
         let environment = if value::is_closure(callee) {
             self.closures
                 .get(usize::try_from(value::decode_closure_idx(callee)).ok()?)
+                .and_then(|closure| closure.as_ref())
                 .map(|closure| closure.environment)?
         } else {
             self.call_environment()
@@ -2834,6 +2880,7 @@ impl NativeAgentState {
         let environment = if value::is_closure(callee) {
             self.closures
                 .get(usize::try_from(value::decode_closure_idx(callee)).ok()?)
+                .and_then(|closure| closure.as_ref())
                 .map(|closure| closure.environment)?
         } else {
             self.call_environment()
@@ -2916,14 +2963,23 @@ impl NativeAgentState {
             value::decode_function_idx(*function)
         } else if value::is_closure(*function) {
             self.closures
-                .get(usize::try_from(value::decode_closure_idx(*function)).ok()?)?
+                .get(usize::try_from(value::decode_closure_idx(*function)).ok()?)
+                .and_then(|closure| closure.as_ref())?
                 .function_id
         } else {
             return None;
         };
         let function_ref = *self.functions.get(function_id as usize)?;
-        let index = u32::try_from(self.closures.len()).ok()?;
-        self.closures.push(NativeClosure {
+        // 优先复用空闲槽；无空闲才扩表。扩表时先填 None 占位，下标稳定。
+        let index = match self.closure_free.pop() {
+            Some(index) => index,
+            None => {
+                let index = u32::try_from(self.closures.len()).ok()?;
+                self.closures.push(None);
+                index
+            }
+        };
+        self.closures[index as usize] = Some(NativeClosure {
             function_id,
             environment: *environment,
         });
@@ -3131,8 +3187,15 @@ impl NativeAgentState {
     }
 
     fn create_exception(&mut self, value: i64) -> Option<i64> {
-        let index = u32::try_from(self.exceptions.len()).ok()?;
-        self.exceptions.push(value);
+        let index = match self.exception_free.pop() {
+            Some(index) => index,
+            None => {
+                let index = u32::try_from(self.exceptions.len()).ok()?;
+                self.exceptions.push(None);
+                index
+            }
+        };
+        self.exceptions[index as usize] = Some(value);
         Some(value::encode_handle(value::TAG_EXCEPTION, index))
     }
 
@@ -3140,7 +3203,7 @@ impl NativeAgentState {
         value::is_exception(exception)
             .then(|| value::decode_handle(exception))
             .and_then(|index| self.exceptions.get(index as usize))
-            .copied()
+            .and_then(|stored| *stored)
     }
 
     fn load_argument(&self, args: &[i64]) -> Option<i64> {
@@ -3183,11 +3246,19 @@ impl NativeAgentState {
         {
             return Some(value::encode_handle(tag, handle));
         }
-        let handle = u32::try_from(self.strings.len()).ok()?;
+        // 复用空闲槽；无空闲才扩表。TAG_STRING 写入反向映射，TAG_BIGINT 不进 string_ids。
+        let handle = match self.string_free.pop() {
+            Some(handle) => handle,
+            None => {
+                let handle = u32::try_from(self.strings.len()).ok()?;
+                self.strings.push(RuntimeString::empty());
+                handle
+            }
+        };
         if tag == value::TAG_STRING {
             self.string_ids.insert(text.clone(), handle);
         }
-        self.strings.push(text);
+        self.strings[handle as usize] = text;
         Some(value::encode_handle(tag, handle))
     }
 
@@ -3355,13 +3426,14 @@ impl NativeAgentState {
         ctx: &NativeVmContext,
     ) -> Result<wjsm_gc::RuntimeGcReport, NativeRuntimeError> {
         let frame_roots = native_root_values(ctx)?;
-        let reachable = dispatch::weak::collect(ctx, self, frame_roots);
+        let (reachable, live) = dispatch::weak::collect(ctx, self, frame_roots);
         self.reset_object_nlab();
         self.allocated_bytes_since_gc.set(0);
         let report = self
             .collector
             .collect(self.heap.collector_capability(), &reachable)?;
         self.cleanup_retired_handles(&report.retired_handles);
+        self.sweep_host_index_tables(&report.retired_handles, &live);
         Ok(report)
     }
 
@@ -3398,6 +3470,12 @@ impl NativeAgentState {
             .retain(|(handle, _), _| is_live(handle));
         self.array_property_flags
             .retain(|(handle, _), _| is_live(handle));
+        self.scope_records.retain(|handle, _| is_live(handle));
+        self.async_from_sync_iterators
+            .retain(|handle, _| is_live(handle));
+        self.async_generator_resume_completions
+            .retain(|handle, _| is_live(handle));
+        self.promise_reactions.retain(|handle, _| is_live(handle));
     }
 }
 
@@ -3559,7 +3637,12 @@ unsafe extern "C" fn native_callable_call(
     };
     match kind {
         NativeCallableKind::Bound(bound) => {
-            let Some(bound) = state.bound_functions.get(bound as usize).cloned() else {
+            let Some(bound) = state
+                .bound_functions
+                .get(bound as usize)
+                .and_then(|bound| bound.as_ref())
+                .cloned()
+            else {
                 return dispatch::fail_dispatch(ctx);
             };
             let mut combined = Vec::with_capacity(bound.arguments.len() + arguments.len());
@@ -3676,6 +3759,7 @@ unsafe extern "C" fn native_callable_call(
             let Some(proxy) = usize::try_from(proxy)
                 .ok()
                 .and_then(|proxy| state.proxies.get_mut(proxy))
+                .and_then(|proxy| proxy.as_mut())
             else {
                 ctx.pending_exception_kind = PendingExceptionKind::InternalInvariant;
                 return value::encode_handle(value::TAG_EXCEPTION, 0);
@@ -4177,6 +4261,31 @@ impl NativeRuntime {
         std::mem::take(self.state.stderr.get_mut())
     }
 
+    #[cfg(test)]
+    fn collect_garbage_now(&mut self) -> Result<wjsm_gc::RuntimeGcReport, NativeRuntimeError> {
+        self.assert_owner_thread()?;
+        let ctx = Pin::as_mut(&mut self.vmctx).get_mut();
+        self.state.collect_garbage(ctx)
+    }
+
+    #[cfg(test)]
+    fn host_side_table_stats(&self) -> crate::host_table_reclaim::HostSideTableStats {
+        crate::host_table_reclaim::HostSideTableStats {
+            live_closures: self.state.closures.iter().filter(|c| c.is_some()).count(),
+            closure_slots: self.state.closures.len(),
+            function_closures: self.state.function_closures.len(),
+            latest_function_closures: self.state.latest_function_closures.len(),
+            live_strings: self
+                .state
+                .strings
+                .iter()
+                .filter(|string| !string.is_empty())
+                .count(),
+            string_ids: self.state.string_ids.len(),
+            scope_records: self.state.scope_records.len(),
+        }
+    }
+
     fn assert_owner_thread(&self) -> Result<(), NativeRuntimeError> {
         if self.owner_thread == std::thread::current().id() {
             Ok(())
@@ -4217,6 +4326,9 @@ pub enum NativeRuntimeError {
     #[error("source compilation failed: {0}")]
     SourceCompile(String),
 }
+
+#[cfg(test)]
+mod host_table_reclaim;
 
 #[cfg(test)]
 mod tests {

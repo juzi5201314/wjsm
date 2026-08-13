@@ -13,6 +13,7 @@ fn cli_parses_defaults() {
     assert!(!cli.quick);
     assert_eq!(cli.window_ms, 1000);
     assert_eq!(cli.warmup_ms, 500);
+    assert_eq!(cli.iterations, 200);
     assert_eq!(cli.output, None);
 }
 
@@ -25,7 +26,8 @@ fn quick_expands_smoke_config() {
             runs: 3,
             warmup: 1,
             window_ms: 200,
-            warmup_ms: 500
+            warmup_ms: 500,
+            iterations: 50
         }
     );
 }
@@ -47,9 +49,17 @@ fn explicit_flags_win_without_quick() {
             runs: 5,
             warmup: 2,
             window_ms: 400,
-            warmup_ms: 500
+            warmup_ms: 500,
+            iterations: 200
         }
     );
+}
+
+#[test]
+fn iterations_flag_parses() {
+    let cli = Cli::parse_from(["wjsm-bench", "--iterations", "80"]);
+    assert_eq!(cli.iterations, 80);
+    assert_eq!(cli.effective().iterations, 80);
 }
 
 #[test]
@@ -68,7 +78,8 @@ fn quick_overrides_explicit_flags() {
             runs: 3,
             warmup: 1,
             window_ms: 200,
-            warmup_ms: 500
+            warmup_ms: 500,
+            iterations: 50
         }
     );
 }

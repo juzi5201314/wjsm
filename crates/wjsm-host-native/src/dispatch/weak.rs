@@ -4,8 +4,9 @@ use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::modules;
-use super::promise::{self, NativeMicrotask};
+use super::promise::{self, NativeMicrotask, NativePromiseReaction, PromiseState};
 use super::runtime::fail_dispatch;
+use crate::side_tables::HostLiveSet;
 use crate::{NativeAgentState, NativeCallableKind};
 
 #[derive(Clone, Copy)]
@@ -410,9 +411,10 @@ pub(crate) fn collect(
     ctx: &NativeVmContext,
     state: &mut NativeAgentState,
     frame_roots: impl IntoIterator<Item = i64>,
-) -> HashSet<u32> {
-    let mut reachable = strong_reachable(ctx, state, frame_roots);
-    close_ephemerons(state, &mut reachable);
+) -> (HashSet<u32>, HostLiveSet) {
+    let mut live = HostLiveSet::default();
+    let mut reachable = strong_reachable(ctx, state, frame_roots, &mut live);
+    close_ephemerons(state, &mut reachable, &mut live);
     for target in state.weak.weak_refs.values_mut() {
         if target.is_some_and(|target| !target_is_reachable(&reachable, target)) {
             *target = None;
@@ -448,13 +450,14 @@ pub(crate) fn collect(
             },
         );
     }
-    reachable
+    (reachable, live)
 }
 
 fn strong_reachable(
     ctx: &NativeVmContext,
     state: &NativeAgentState,
     frame_roots: impl IntoIterator<Item = i64>,
+    live: &mut HostLiveSet,
 ) -> HashSet<u32> {
     let mut queue = VecDeque::new();
     queue.extend(frame_roots);
@@ -491,13 +494,185 @@ fn strong_reachable(
         queue.push_back(activation.new_target);
         queue.extend(activation.saved_variables.iter().map(|(_, stored)| *stored));
     }
+    // materialized_constants 持有的字符串/闭包下标必须在回收后保持存活，
+    // 否则槽位复用后常量别名到错误值。当前 image 的常量在 state 上，其余已加载
+    // image 的常量在 programs 里，都要钉扎。
+    queue.extend(state.materialized_constants.iter().copied().flatten());
+    for program in state.programs.values() {
+        queue.extend(program.materialized_constants.iter().copied().flatten());
+    }
+    // 宿主侧持久的 JS 值（微任务/计时器/挂起 promise/continuation/回调等）同样
+    // 是根：下标表回收后，仍被这些结构引用的闭包/字符串不得被 tombstone。
+    extend_host_roots(state, &mut queue);
 
     let mut reachable = HashSet::new();
-    trace_queue(state, &mut queue, &mut reachable);
+    trace_queue(state, &mut queue, &mut reachable, live);
     reachable
 }
 
-fn trace_queue(state: &NativeAgentState, queue: &mut VecDeque<i64>, reachable: &mut HashSet<u32>) {
+/// 把宿主侧持久 JS 值（微任务、计时器、挂起 promise、continuation、generator、
+/// async hooks / perf hooks 回调等）并入根队列。它们经 i64 下标/值引用闭包与
+/// 字符串，回收前必须钉扎。
+fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
+    for scheduled in state
+        .microtasks
+        .iter()
+        .chain(state.next_ticks.iter())
+        .chain(state.immediates.iter())
+    {
+        extend_microtask_roots(&scheduled.task, queue);
+    }
+    for timer in &state.timers {
+        extend_microtask_roots(&timer.scheduled.task, queue);
+    }
+    for promise in state.promises.values() {
+        match promise.state {
+            PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
+                queue.push_back(value);
+            }
+            PromiseState::Pending => {}
+        }
+    }
+    for reactions in state.promise_reactions.values() {
+        for scheduled in reactions {
+            extend_reaction_roots(&scheduled.reaction, queue);
+        }
+    }
+    for combinator in &state.promise_combinators {
+        queue.extend(combinator.values.iter().copied());
+    }
+    for continuation in state.continuations.values() {
+        queue.push_back(continuation.function);
+        queue.push_back(continuation.outer_promise);
+        queue.extend(continuation.vars.iter().copied());
+    }
+    for generator in state.generators.values() {
+        queue.push_back(generator.continuation);
+    }
+    for generator in state.async_generators.values() {
+        queue.push_back(generator.continuation);
+        if let Some(request) = &generator.active {
+            queue.push_back(request.value);
+            queue.push_back(request.promise);
+        }
+        for request in &generator.queue {
+            queue.push_back(request.value);
+            queue.push_back(request.promise);
+        }
+        queue.extend(generator.resume_promise);
+    }
+    queue.extend(state.async_from_sync_iterators.values().copied());
+    queue.extend(state.fatal_exception);
+    queue.extend(state.node_perf_hooks.observer_callback);
+    queue.extend(state.node_perf_hooks.native_entries.iter().copied());
+    queue.extend(state.node_async_hooks.defaults.values().copied());
+    for frame in &state.node_async_hooks.captured_frames {
+        if let Some(stores) = frame {
+            queue.extend(stores.values().copied());
+        }
+    }
+    queue.push_back(state.node_async_hooks.top_resource);
+    if let Some(stores) = &state.node_async_hooks.current.stores {
+        queue.extend(stores.values().copied());
+    }
+    queue.push_back(state.node_async_hooks.current.resource);
+    for snapshot in &state.node_async_hooks.execution_stack {
+        if let Some(stores) = &snapshot.stores {
+            queue.extend(stores.values().copied());
+        }
+        queue.push_back(snapshot.resource);
+    }
+    for resource in state.node_async_hooks.resources.values() {
+        queue.push_back(resource.resource);
+        if let Some(stores) = &resource.stores {
+            queue.extend(stores.values().copied());
+        }
+    }
+    for hook in &state.node_async_hooks.hooks {
+        queue.push_back(hook.init);
+        queue.push_back(hook.before);
+        queue.push_back(hook.after);
+        queue.push_back(hook.destroy);
+        queue.push_back(hook.promise_resolve);
+    }
+    for event in &state.node_async_hooks.pending_events {
+        queue.extend(event.args.iter().copied());
+    }
+}
+
+fn extend_microtask_roots(task: &NativeMicrotask, queue: &mut VecDeque<i64>) {
+    match task {
+        NativeMicrotask::Callback {
+            callback,
+            arguments,
+            resource,
+            ..
+        } => {
+            queue.push_back(*callback);
+            queue.extend(arguments.iter().copied());
+            queue.extend(*resource);
+        }
+        NativeMicrotask::PromiseReaction { reaction, value, .. } => {
+            extend_reaction_roots(reaction, queue);
+            queue.push_back(*value);
+        }
+        NativeMicrotask::DynamicImport { .. } => {}
+        NativeMicrotask::AsyncResume {
+            continuation,
+            state,
+            value,
+            ..
+        } => {
+            queue.push_back(*continuation);
+            queue.push_back(*state);
+            queue.push_back(*value);
+        }
+        NativeMicrotask::ResolveThenable { thenable, then, .. } => {
+            queue.push_back(*thenable);
+            queue.push_back(*then);
+        }
+        NativeMicrotask::Stream(stream) => {
+            if let super::streams::StreamTask::Write { chunk, .. } = stream {
+                queue.push_back(*chunk);
+            }
+        }
+    }
+}
+
+fn extend_reaction_roots(reaction: &NativePromiseReaction, queue: &mut VecDeque<i64>) {
+    match reaction {
+        NativePromiseReaction::Handler {
+            on_fulfilled,
+            on_rejected,
+            ..
+        } => {
+            queue.push_back(*on_fulfilled);
+            queue.push_back(*on_rejected);
+        }
+        NativePromiseReaction::AsyncResume {
+            continuation,
+            state,
+        } => {
+            queue.push_back(*continuation);
+            queue.push_back(*state);
+        }
+        NativePromiseReaction::CombinatorElement { .. } => {}
+        NativePromiseReaction::Finally { callback, .. } => {
+            queue.push_back(*callback);
+        }
+        NativePromiseReaction::FinallyResult { original, .. } => {
+            queue.push_back(*original);
+        }
+        NativePromiseReaction::Stream(_) => {}
+    }
+}
+
+fn trace_queue(
+    state: &NativeAgentState,
+    queue: &mut VecDeque<i64>,
+    reachable: &mut HashSet<u32>,
+    live: &mut HostLiveSet,
+) {
     while let Some(encoded) = queue.pop_front() {
         if value::is_object(encoded) || value::is_array(encoded) {
             let handle = value::decode_handle(encoded);
@@ -545,21 +720,38 @@ fn trace_queue(state: &NativeAgentState, queue: &mut VecDeque<i64>, reachable: &
                 queue.push_back(*primitive);
             }
         } else if value::is_closure(encoded) {
-            if let Some(closure) = state.closures.get(value::decode_handle(encoded) as usize) {
+            let index = value::decode_closure_idx(encoded);
+            live.closures.insert(index);
+            if let Some(closure) = state
+                .closures
+                .get(index as usize)
+                .and_then(|closure| closure.as_ref())
+            {
                 queue.push_back(closure.environment);
             }
         } else if value::is_bound(encoded) {
+            let index = value::decode_bound_idx(encoded);
+            live.bound.insert(index);
             if let Some(bound) = state
                 .bound_functions
-                .get(value::decode_handle(encoded) as usize)
+                .get(index as usize)
+                .and_then(|bound| bound.as_ref())
             {
                 queue.extend([bound.target, bound.this_value]);
                 queue.extend(bound.arguments.iter().copied());
             }
         } else if value::is_proxy(encoded) {
-            if let Some(proxy) = state.proxies.get(value::decode_handle(encoded) as usize) {
+            let index = value::decode_proxy_handle(encoded);
+            live.proxies.insert(index);
+            if let Some(proxy) = state
+                .proxies
+                .get(index as usize)
+                .and_then(|proxy| proxy.as_ref())
+            {
                 queue.extend([proxy.target, proxy.handler]);
             }
+        } else if value::is_regexp(encoded) {
+            live.regexps.insert(value::decode_regexp_handle(encoded));
         } else if value::is_native_callable(encoded) {
             queue.extend(
                 state
@@ -579,15 +771,25 @@ fn trace_queue(state: &NativeAgentState, queue: &mut VecDeque<i64>, reachable: &
                 queue.push_back(*prototype);
             }
             if let Some(kind) = state.native_callable_kind(encoded) {
-                trace_native_callable(state, kind, queue);
+                trace_native_callable(state, kind, live, queue);
             }
-        } else if value::is_exception(encoded)
-            && let Some(exception) = state
+        } else if value::is_exception(encoded) {
+            let index = value::decode_handle(encoded);
+            live.exceptions.insert(index);
+            if let Some(exception) = state
                 .exceptions
-                .get(value::decode_handle(encoded) as usize)
-                .copied()
-        {
-            queue.push_back(exception);
+                .get(index as usize)
+                .and_then(|exception| *exception)
+            {
+                queue.push_back(exception);
+            }
+        } else if value::is_string(encoded) || value::is_bigint(encoded) {
+            // 运行时字符串/bigint 句柄：低 32 位是 intern 表下标。typeof 用的
+            // encode_string_ptr 小偏移若碰巧落进表内只是多钉几个槽，不影响正确性。
+            let index = value::decode_handle(encoded);
+            if (index as usize) < state.strings.len() {
+                live.strings.insert(index);
+            }
         }
     }
 }
@@ -595,11 +797,17 @@ fn trace_queue(state: &NativeAgentState, queue: &mut VecDeque<i64>, reachable: &
 fn trace_native_callable(
     state: &NativeAgentState,
     kind: NativeCallableKind,
+    live: &mut HostLiveSet,
     queue: &mut VecDeque<i64>,
 ) {
     match kind {
         NativeCallableKind::Bound(index) => {
-            if let Some(bound) = state.bound_functions.get(index as usize) {
+            live.bound.insert(index);
+            if let Some(bound) = state
+                .bound_functions
+                .get(index as usize)
+                .and_then(|bound| bound.as_ref())
+            {
                 queue.extend([bound.target, bound.this_value]);
                 queue.extend(bound.arguments.iter().copied());
             }
@@ -614,7 +822,11 @@ fn trace_native_callable(
     }
 }
 
-fn close_ephemerons(state: &NativeAgentState, reachable: &mut HashSet<u32>) {
+fn close_ephemerons(
+    state: &NativeAgentState,
+    reachable: &mut HashSet<u32>,
+    live: &mut HostLiveSet,
+) {
     loop {
         let mut queue = VecDeque::new();
         for (owner, entries) in &state.weak.weak_maps {
@@ -628,7 +840,7 @@ fn close_ephemerons(state: &NativeAgentState, reachable: &mut HashSet<u32>) {
             }
         }
         let before = reachable.len();
-        trace_queue(state, &mut queue, reachable);
+        trace_queue(state, &mut queue, reachable, live);
         if reachable.len() == before {
             break;
         }

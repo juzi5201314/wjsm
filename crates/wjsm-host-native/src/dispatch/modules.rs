@@ -232,7 +232,7 @@ pub(crate) fn destroy_scope_record(state: &mut NativeAgentState, record: i64) {
     }
 }
 fn scope_record_is_retained_by_closure(state: &NativeAgentState, target: i64) -> bool {
-    state.closures.iter().any(|closure| {
+    state.closures.iter().flatten().any(|closure| {
         let mut record = closure.environment;
         loop {
             if record == target {

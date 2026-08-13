@@ -56,8 +56,8 @@ pub(crate) enum NativePromiseReaction {
 
 #[derive(Clone)]
 pub(crate) struct NativeScheduledReaction {
-    reaction: NativePromiseReaction,
-    context: super::node_async_hooks::AsyncContextSnapshot,
+    pub(crate) reaction: NativePromiseReaction,
+    pub(crate) context: super::node_async_hooks::AsyncContextSnapshot,
 }
 
 #[derive(Clone, Copy)]
@@ -74,7 +74,7 @@ pub(crate) struct PromiseCombinatorId(u32);
 pub(crate) struct NativePromiseCombinator {
     kind: PromiseCombinatorKind,
     target_promise: u32,
-    values: Vec<i64>,
+    pub(crate) values: Vec<i64>,
     remaining: u32,
     settled: bool,
 }
@@ -119,7 +119,7 @@ pub(crate) struct NativeScheduledMicrotask {
 
 #[derive(Clone)]
 pub(crate) struct NativeTimer {
-    scheduled: NativeScheduledMicrotask,
+    pub(crate) scheduled: NativeScheduledMicrotask,
     due_ms: u64,
     interval_ms: Option<u64>,
     sequence: u64,
@@ -565,7 +565,7 @@ pub(crate) fn settle_promise(
         state
             .exceptions
             .get(value::decode_handle(value) as usize)
-            .copied()
+            .and_then(|stored| *stored)
             .unwrap_or(value)
     } else {
         value

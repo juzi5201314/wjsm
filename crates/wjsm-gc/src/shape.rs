@@ -257,6 +257,20 @@ impl ShapeTable {
             .map_or_else(Vec::new, |shape| shape.props.clone())
     }
 
+    /// 整张表当前所有 shape 的 name_id 并集。
+    ///
+    /// 宿主侧 string intern 表回收用它钉扎「曾作为属性名出现」的 name_id：
+    /// 这些 id 即便对应的对象已死，仍可能被存活 shape 的 transition 引用，复用
+    /// 会把后续属性定义别名到错误的属性名。
+    pub fn all_name_ids(&self) -> HashSet<u32> {
+        let inner = self.inner.read();
+        inner
+            .shapes
+            .iter()
+            .flat_map(|shape| shape.props.iter().map(|prop| prop.name_id))
+            .collect()
+    }
+
     /// 定义/覆盖属性 `name_id` 为 `flags`，返回目标 shape 与值槽下标。
     ///
     /// - 属性已存在且 flags 相同 → 原地返回，无 transition。

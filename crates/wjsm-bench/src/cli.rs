@@ -30,6 +30,9 @@ pub struct Cli {
     /// 场景内预热窗口毫秒（透传 BENCH_WARMUP_MS）。
     #[arg(long, default_value_t = 500)]
     pub warmup_ms: u64,
+    /// 固定迭代测量轮数（透传 BENCH_ITERATIONS，`--quick` 时为 50）。
+    #[arg(long, default_value_t = 200)]
+    pub iterations: u64,
     /// JSON 报告输出路径；默认 /tmp/wjsm-bench-<unix秒>.json。
     #[arg(long)]
     pub output: Option<PathBuf>,
@@ -45,6 +48,7 @@ pub struct EffectiveConfig {
     pub warmup: usize,
     pub window_ms: u64,
     pub warmup_ms: u64,
+    pub iterations: u64,
 }
 
 impl Cli {
@@ -56,6 +60,7 @@ impl Cli {
                 warmup: 1,
                 window_ms: 200,
                 warmup_ms: self.warmup_ms,
+                iterations: 50,
             }
         } else {
             EffectiveConfig {
@@ -63,6 +68,7 @@ impl Cli {
                 warmup: self.warmup,
                 window_ms: self.window_ms,
                 warmup_ms: self.warmup_ms,
+                iterations: self.iterations,
             }
         }
     }

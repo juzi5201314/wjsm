@@ -311,6 +311,11 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         &self.shapes
     }
 
+    /// 整张 ShapeTable 的 name_id 并集，供宿主 string intern 表回收钉扎。
+    pub fn property_name_ids(&self) -> std::collections::HashSet<u32> {
+        self.shapes.all_name_ids()
+    }
+
     /// 导出 ShapeTable（startup snapshot / realm 克隆）。
     /// 堆字节与 shape 表必须成对捕获，否则恢复后 shape_id 指向错误的属性结构。
     pub fn export_shapes(&self) -> ShapeTableSnapshot {

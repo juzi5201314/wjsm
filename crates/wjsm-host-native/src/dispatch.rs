@@ -52,6 +52,7 @@ use num_traits::FromPrimitive;
 
 pub(crate) use self::array::construct as construct_array;
 pub(crate) use self::object::construct_object;
+pub(crate) use self::runtime::SYMBOL_PROPERTY_KEY_BIT;
 pub(crate) use self::runtime::to_number as number_value;
 use self::runtime::{
     PrimitiveHint, abstract_equal, binary_f64, dispatch_runtime, get_property, has_property,
@@ -744,6 +745,7 @@ pub(super) fn dispatch_builtin(
                 state
                     .proxies
                     .get(usize::try_from(value::decode_proxy_handle(input)).unwrap_or(usize::MAX))
+                    .and_then(|proxy| proxy.as_ref())
                     .map_or(input, |proxy| proxy.target)
             } else {
                 input

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::env::EnvironmentSnapshot;
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 1;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 2;
 
 /// 完整基准报告。BTreeMap 保证 JSON 键序稳定（default 在 wjsm_cold 前）。
 #[derive(Clone, Debug, Serialize)]
@@ -29,6 +29,7 @@ pub struct BenchConfig {
     pub warmup: usize,
     pub window_ms: u64,
     pub warmup_ms: u64,
+    pub iterations: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -49,7 +50,10 @@ pub struct RuntimeReport {
     pub wall: Option<WallStats>,
     /// 仅 default 档有值。
     pub ns_per_op: Option<f64>,
+    /// 固定时间窗 RSS（BENCH_WINDOW_MS）。
     pub max_rss_kb: Option<u64>,
+    /// 固定迭代 RSS（BENCH_ITERATIONS）。
+    pub fixed_iter_rss_kb: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]

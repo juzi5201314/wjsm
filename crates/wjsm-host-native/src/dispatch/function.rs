@@ -26,10 +26,17 @@ pub(super) fn dispatch_function(
                 (value::encode_undefined(), &[][..]),
                 |(this_value, arguments)| (*this_value, arguments),
             );
-            let Ok(index) = u32::try_from(state.bound_functions.len()) else {
-                return Some(fail_dispatch(ctx));
+            let index = match state.bound_free.pop() {
+                Some(index) => index,
+                None => {
+                    let Ok(index) = u32::try_from(state.bound_functions.len()) else {
+                        return Some(fail_dispatch(ctx));
+                    };
+                    state.bound_functions.push(None);
+                    index
+                }
             };
-            state.bound_functions.push(NativeBoundFunction {
+            state.bound_functions[index as usize] = Some(NativeBoundFunction {
                 target,
                 this_value,
                 arguments: arguments.to_vec(),

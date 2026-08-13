@@ -90,10 +90,17 @@ fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
     if !is_proxy_target(*target) || !is_proxy_target(*handler) {
         return super::runtime::type_error(ctx, state, "Proxy target and handler must be objects");
     }
-    let Ok(handle) = u32::try_from(state.proxies.len()) else {
-        return fail_dispatch(ctx);
+    let handle = match state.proxy_free.pop() {
+        Some(handle) => handle,
+        None => {
+            let Ok(handle) = u32::try_from(state.proxies.len()) else {
+                return fail_dispatch(ctx);
+            };
+            state.proxies.push(None);
+            handle
+        }
     };
-    state.proxies.push(NativeProxy {
+    state.proxies[handle as usize] = Some(NativeProxy {
         target: *target,
         handler: *handler,
         revoked: false,
@@ -136,6 +143,7 @@ fn entry(state: &NativeAgentState, encoded: i64) -> Option<NativeProxy> {
     usize::try_from(value::decode_proxy_handle(encoded))
         .ok()
         .and_then(|handle| state.proxies.get(handle))
+        .and_then(|proxy| proxy.as_ref())
         .copied()
         .filter(|entry| !entry.revoked)
 }

@@ -82,6 +82,7 @@ pub fn run(cli: Cli) -> Result<i32> {
             warmup: effective.warmup,
             window_ms: effective.window_ms,
             warmup_ms: cli.warmup_ms,
+            iterations: effective.iterations,
         },
         environment,
         regimes,
@@ -176,6 +177,8 @@ fn run_regime(
                     measure_ns_per_op(scenario, *rt, node_bin, wjsm_bin, effective)?;
             }
             runtime.max_rss_kb = measure_rss(scenario, *rt, node_bin, wjsm_bin, effective, cold)?;
+            runtime.fixed_iter_rss_kb =
+                measure_fixed_iter_rss(scenario, *rt, node_bin, wjsm_bin, effective, cold)?;
             match rt {
                 RuntimeKind::Node => scenario_report.node = Some(runtime),
                 RuntimeKind::Wjsm => scenario_report.wjsm = Some(runtime),
@@ -306,6 +309,14 @@ fn measure_wall(
 fn apply_scenario_env(process: &mut Command, effective: &EffectiveConfig) {
     process.env("BENCH_WINDOW_MS", effective.window_ms.to_string());
     process.env("BENCH_WARMUP_MS", effective.warmup_ms.to_string());
+    process.env("BENCH_ITERATIONS", "0");
+}
+
+/// 透传固定迭代测量参数到子进程环境（关闭时间窗与预热）。
+fn apply_fixed_iter_env(process: &mut Command, effective: &EffectiveConfig) {
+    process.env("BENCH_ITERATIONS", effective.iterations.to_string());
+    process.env("BENCH_WINDOW_MS", "0");
+    process.env("BENCH_WARMUP_MS", "0");
 }
 
 #[derive(Deserialize)]
@@ -428,14 +439,15 @@ pub fn parse_ns_per_op(stdout: &str) -> Option<f64> {
 
 static RSS_HINT_PRINTED: AtomicBool = AtomicBool::new(false);
 
-/// RSS：仅 Linux 且存在 /usr/bin/time 时采集；否则 None（提示一次）。
-fn measure_rss(
+/// RSS 测量：`apply_env` 决定时间窗/固定迭代模式。
+fn measure_rss_with_env(
     scenario: &str,
     rt: RuntimeKind,
     node_bin: &str,
     wjsm_bin: &str,
     effective: &EffectiveConfig,
     cold: bool,
+    apply_env: impl Fn(&mut Command, &EffectiveConfig),
 ) -> Result<Option<u64>> {
     let available = cfg!(target_os = "linux") && Path::new("/usr/bin/time").exists();
     if !available {
@@ -452,7 +464,7 @@ fn measure_rss(
         .args(&args)
         .current_dir(repo_root())
         .stdout(Stdio::null());
-    apply_scenario_env(&mut process, effective);
+    apply_env(&mut process, effective);
     if rt == RuntimeKind::Wjsm && cold {
         process.env("WJSM_STARTUP_SNAPSHOT", "0");
         process.env("WJSM_CACHE_DIR", cold_cache_dir());
@@ -473,6 +485,30 @@ fn measure_rss(
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     Ok(parse_max_rss(&stderr))
+}
+
+/// 固定时间窗 RSS（BENCH_WINDOW_MS）。
+fn measure_rss(
+    scenario: &str,
+    rt: RuntimeKind,
+    node_bin: &str,
+    wjsm_bin: &str,
+    effective: &EffectiveConfig,
+    cold: bool,
+) -> Result<Option<u64>> {
+    measure_rss_with_env(scenario, rt, node_bin, wjsm_bin, effective, cold, apply_scenario_env)
+}
+
+/// 固定迭代 RSS（BENCH_ITERATIONS）。
+fn measure_fixed_iter_rss(
+    scenario: &str,
+    rt: RuntimeKind,
+    node_bin: &str,
+    wjsm_bin: &str,
+    effective: &EffectiveConfig,
+    cold: bool,
+) -> Result<Option<u64>> {
+    measure_rss_with_env(scenario, rt, node_bin, wjsm_bin, effective, cold, apply_fixed_iter_env)
 }
 
 /// 从 GNU time -v 的 stderr 提取最大驻留集。
@@ -509,6 +545,8 @@ fn print_table(report: &BenchReport) {
         "ns_per_op wjsm".into(),
         "rss node KB".into(),
         "rss wjsm KB".into(),
+        "iter rss node KB".into(),
+        "iter rss wjsm KB".into(),
     ]];
     for (regime_name, regime) in &report.regimes {
         for (scenario, item) in &regime.scenarios {
@@ -536,6 +574,12 @@ fn print_table(report: &BenchReport) {
                 fmt_f64(wjsm.and_then(|rt| rt.ns_per_op), 1),
                 fmt_u64(node.and_then(|rt| rt.max_rss_kb)),
                 fmt_u64(wjsm.and_then(|rt| rt.max_rss_kb)),
+                fmt_u64(
+                    node.and_then(|rt| rt.fixed_iter_rss_kb),
+                ),
+                fmt_u64(
+                    wjsm.and_then(|rt| rt.fixed_iter_rss_kb),
+                ),
             ]);
         }
     }

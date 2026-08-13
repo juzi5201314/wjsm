@@ -33,24 +33,24 @@ pub(crate) enum NodeAsyncHooksCallable {
 
 #[derive(Clone, Default)]
 pub(crate) struct AsyncContextSnapshot {
-    stores: Option<HashMap<u32, i64>>,
+    pub(crate) stores: Option<HashMap<u32, i64>>,
     execution_async_id: u64,
     trigger_async_id: u64,
-    resource: i64,
+    pub(crate) resource: i64,
 }
 
 pub(crate) struct NodeAsyncHooksState {
     bridge: Option<i64>,
     next_als_key: u32,
-    defaults: HashMap<u32, i64>,
-    current: AsyncContextSnapshot,
-    captured_frames: Vec<Option<HashMap<u32, i64>>>,
-    execution_stack: Vec<AsyncContextSnapshot>,
+    pub(crate) defaults: HashMap<u32, i64>,
+    pub(crate) current: AsyncContextSnapshot,
+    pub(crate) captured_frames: Vec<Option<HashMap<u32, i64>>>,
+    pub(crate) execution_stack: Vec<AsyncContextSnapshot>,
     next_async_id: u64,
-    pending_events: VecDeque<PendingHookEvent>,
-    top_resource: i64,
-    resources: HashMap<u32, AsyncResourceRecord>,
-    hooks: Vec<HookRecord>,
+    pub(crate) pending_events: VecDeque<PendingHookEvent>,
+    pub(crate) top_resource: i64,
+    pub(crate) resources: HashMap<u32, AsyncResourceRecord>,
+    pub(crate) hooks: Vec<HookRecord>,
 }
 
 impl Default for NodeAsyncHooksState {
@@ -77,30 +77,30 @@ impl Default for NodeAsyncHooksState {
 }
 
 #[derive(Clone)]
-struct AsyncResourceRecord {
+pub(crate) struct AsyncResourceRecord {
     async_id: u64,
     trigger_async_id: u64,
-    resource: i64,
-    stores: Option<HashMap<u32, i64>>,
+    pub(crate) resource: i64,
+    pub(crate) stores: Option<HashMap<u32, i64>>,
     destroyed: bool,
     promise: bool,
     gc_destroy: bool,
 }
 
 #[derive(Clone)]
-struct HookRecord {
-    init: i64,
-    before: i64,
-    after: i64,
-    destroy: i64,
-    promise_resolve: i64,
+pub(crate) struct HookRecord {
+    pub(crate) init: i64,
+    pub(crate) before: i64,
+    pub(crate) after: i64,
+    pub(crate) destroy: i64,
+    pub(crate) promise_resolve: i64,
     track_promises: bool,
     enabled: bool,
 }
 
-struct PendingHookEvent {
+pub(crate) struct PendingHookEvent {
     phase: HookPhase,
-    args: Vec<i64>,
+    pub(crate) args: Vec<i64>,
     promise: bool,
 }
 

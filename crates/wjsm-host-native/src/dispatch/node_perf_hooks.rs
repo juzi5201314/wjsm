@@ -51,8 +51,8 @@ pub(crate) struct NodePerfHooksState {
     observer_mask: u32,
     converter: Option<i64>,
     dispatcher: Option<i64>,
-    observer_callback: Option<i64>,
-    native_entries: VecDeque<i64>,
+    pub(crate) observer_callback: Option<i64>,
+    pub(crate) native_entries: VecDeque<i64>,
     histograms: HashMap<u32, HistogramTransfer>,
     histogram_prototypes: [Option<u32>; 3],
     histogram_brand: Option<i64>,
@@ -451,7 +451,8 @@ fn histogram_handle(state: &NativeAgentState, args: &[i64]) -> Option<u32> {
         }
         let proxy = state
             .proxies
-            .get(usize::try_from(value::decode_proxy_handle(receiver)).ok()?)?;
+            .get(usize::try_from(value::decode_proxy_handle(receiver)).ok()?)
+            .and_then(|proxy| proxy.as_ref())?;
         if proxy.revoked {
             return None;
         }

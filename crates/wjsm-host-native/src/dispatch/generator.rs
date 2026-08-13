@@ -14,7 +14,7 @@ enum GeneratorStatus {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NativeGenerator {
-    continuation: i64,
+    pub(crate) continuation: i64,
     status: GeneratorStatus,
 }
 

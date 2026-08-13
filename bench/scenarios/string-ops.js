@@ -18,7 +18,14 @@ function work() {
 
 for (const end = performance.now() + WARMUP_MS; performance.now() < end;) work();
 
-let iterations = 0;
-const t0 = performance.now();
-while (performance.now() - t0 < WINDOW_MS) { work(); iterations++; }
-console.log(`ns_per_op=${((performance.now() - t0) * 1e6 / Math.max(iterations, 1)).toFixed(1)} iterations=${iterations}`);
+const ITERATIONS = Number(process.env.BENCH_ITERATIONS || 0);
+if (ITERATIONS > 0) {
+  const t0 = performance.now();
+  for (let i = 0; i < ITERATIONS; i++) work();
+  console.log(`ns_per_op=${((performance.now() - t0) * 1e6 / Math.max(ITERATIONS, 1)).toFixed(1)} iterations=${ITERATIONS}`);
+} else {
+  let iterations = 0;
+  const t0 = performance.now();
+  while (performance.now() - t0 < WINDOW_MS) { work(); iterations++; }
+  console.log(`ns_per_op=${((performance.now() - t0) * 1e6 / Math.max(iterations, 1)).toFixed(1)} iterations=${iterations}`);
+}

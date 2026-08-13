@@ -839,7 +839,7 @@ fn ordinary_set_key(
     Ok(true)
 }
 
-pub(super) const SYMBOL_PROPERTY_KEY_BIT: u32 = 1 << 31;
+pub(crate) const SYMBOL_PROPERTY_KEY_BIT: u32 = 1 << 31;
 
 pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<u32> {
     if value::is_string(encoded) {
