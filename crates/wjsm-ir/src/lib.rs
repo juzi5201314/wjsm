@@ -6,12 +6,18 @@ mod verify;
 
 pub use builtin::Builtin;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 pub use types::*;
 pub use verify::IrVerificationError;
 
 /// Eval/VM 模块入口通过 native environment 参数接收的 scope bridge slot。
 pub const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
+
+/// 必须走共享 host 槽表的变量：模块级、跨函数协议槽、eval 桥。
+pub fn is_host_shared_variable(name: &str) -> bool {
+    matches!(name, "$this" | "$env" | EVAL_SCOPE_ENV_PARAM) || name.starts_with("$0.")
+}
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Module {
@@ -172,6 +178,77 @@ impl Module {
 
         out.push_str("}\n");
         out
+    }
+
+    /// 函数 `function` 可以提升到 generated SSA 的局部变量。
+    ///
+    /// 跨函数只读/只写的共享槽（例如 builtin 写入、用户读取的 `$1.answer`）
+    /// 必须留在 host 槽表。因内联而在多个函数里各自 StoreVar 的同名局部
+    /// 可以分别提升，互不影响。
+    ///
+    /// `$builtin_main` 的 StoreVar 是段接口：builtin image 按 Program digest
+    /// 缓存、与用户段分开编译，用户 import 的 live binding 只会 LoadVar
+    /// 这些名字。入口函数自身不提升；它写过的名字在本段其它函数里也不提升。
+    pub fn frame_local_variable_names<'a>(&'a self, function: &'a Function) -> BTreeSet<&'a str> {
+        self.functions
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, function))
+            .and_then(|index| {
+                self.frame_local_variable_names_by_function()
+                    .into_iter()
+                    .nth(index)
+            })
+            .unwrap_or_default()
+    }
+
+    /// 一次扫完整包，按函数下标给出可提升的局部名。
+    ///
+    /// 后端 / host 按函数查询时必须走这份表，避免对每个函数再扫一遍整包。
+    pub fn frame_local_variable_names_by_function(&self) -> Vec<BTreeSet<&str>> {
+        let published = self.builtin_entry_published_names();
+        let mut readers: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        let mut owners: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (index, function) in self.functions.iter().enumerate() {
+            for name in function.used_variable_names() {
+                readers.entry(name).or_default().push(index);
+            }
+            for name in function.owned_variable_names() {
+                owners.entry(name).or_default().push(index);
+            }
+        }
+        self.functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| {
+                if is_builtin_entry_ir_function(function.name()) {
+                    return BTreeSet::new();
+                }
+                function
+                    .frame_local_candidate_names()
+                    .into_iter()
+                    .filter(|name| {
+                        !published.contains(name)
+                            && readers.get(name).is_none_or(|users| {
+                                users.iter().all(|user| {
+                                    *user == index
+                                        || owners
+                                            .get(name)
+                                            .is_some_and(|owned| owned.contains(user))
+                                })
+                            })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// `$builtin_main` 写入的绑定，对用户段和缓存复用都是共享槽。
+    fn builtin_entry_published_names(&self) -> BTreeSet<&str> {
+        self.functions
+            .iter()
+            .filter(|function| is_builtin_entry_ir_function(function.name()))
+            .flat_map(Function::stored_variable_names)
+            .collect()
     }
 }
 
@@ -346,6 +423,198 @@ mod tests {
     }
 
     #[test]
+    fn frame_local_variable_names_exclude_shared_and_eval_bindings() {
+        let mut function = Function::new("work", BasicBlockId(0));
+        function.set_params(vec!["$1.$env".into(), "$1.$this".into(), "$1.n".into()]);
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::StoreVar {
+            name: "$1.s".into(),
+            value: ValueId(0),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(1),
+            name: "$1.s".into(),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(2),
+            name: "$1.n".into(),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(3),
+            name: "$0.N".into(),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(4),
+            name: "$this".into(),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(1)),
+        });
+        function.push_block(block);
+        assert_eq!(
+            function
+                .frame_local_variable_names()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["$1.n", "$1.s"]
+        );
+
+        function.set_has_eval(true);
+        assert!(function.frame_local_variable_names().is_empty());
+        function.set_has_eval(false);
+        function.set_captured_names(vec!["$1.s".into()]);
+        assert_eq!(
+            function
+                .frame_local_variable_names()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["$1.n"]
+        );
+    }
+
+    #[test]
+    fn program_frame_locals_keep_cross_function_shared_slots_on_host() {
+        let mut writer = Function::new("writer", BasicBlockId(0));
+        let mut write_block = BasicBlock::new(BasicBlockId(0));
+        write_block.push_instruction(Instruction::StoreVar {
+            name: "$1.answer".into(),
+            value: ValueId(0),
+        });
+        write_block.set_terminator(Terminator::Return { value: None });
+        writer.push_block(write_block);
+
+        let mut reader = Function::new("reader", BasicBlockId(0));
+        let mut read_block = BasicBlock::new(BasicBlockId(0));
+        read_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "$1.answer".into(),
+        });
+        read_block.push_instruction(Instruction::StoreVar {
+            name: "$1.local".into(),
+            value: ValueId(0),
+        });
+        read_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(1),
+            name: "$1.local".into(),
+        });
+        read_block.set_terminator(Terminator::Return {
+            value: Some(ValueId(1)),
+        });
+
+        reader.push_block(read_block);
+
+        let mut program = Module::new();
+        program.push_function(writer);
+        program.push_function(reader);
+        let writer = &program.functions()[0];
+        let reader = &program.functions()[1];
+        assert!(program.frame_local_variable_names(writer).is_empty());
+        assert_eq!(
+            program
+                .frame_local_variable_names(reader)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["$1.local"]
+        );
+    }
+
+    fn store_and_load(name: &str) -> Function {
+        let mut function = Function::new(name, BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::StoreVar {
+            name: "$1.s".into(),
+            value: ValueId(0),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(1),
+            name: "$1.s".into(),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(1)),
+        });
+        function.push_block(block);
+        function
+    }
+
+    #[test]
+    fn independently_owned_inlined_locals_can_promote() {
+        let mut program = Module::new();
+        program.push_function(store_and_load("work"));
+        program.push_function(store_and_load("$module_main"));
+        for function in program.functions() {
+            assert_eq!(
+                program
+                    .frame_local_variable_names(function)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                vec!["$1.s"]
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_entry_published_slots_stay_on_host() {
+        let mut entry = Function::new(BUILTIN_ENTRY_IR_NAME, BasicBlockId(0));
+        let mut entry_block = BasicBlock::new(BasicBlockId(0));
+        entry_block.push_instruction(Instruction::StoreVar {
+            name: "$1.createHash".into(),
+            value: ValueId(0),
+        });
+        entry_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(1),
+            name: "$1.createHash".into(),
+        });
+        entry_block.push_instruction(Instruction::StoreVar {
+            name: "$1.scratch".into(),
+            value: ValueId(1),
+        });
+        entry_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(2),
+            name: "$1.scratch".into(),
+        });
+        entry_block.set_terminator(Terminator::Return { value: None });
+        entry.push_block(entry_block);
+
+        let mut helper = Function::new("createHash", BasicBlockId(0));
+        let mut helper_block = BasicBlock::new(BasicBlockId(0));
+        helper_block.push_instruction(Instruction::StoreVar {
+            name: "$1.createHash".into(),
+            value: ValueId(0),
+        });
+        helper_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(1),
+            name: "$1.createHash".into(),
+        });
+        helper_block.push_instruction(Instruction::StoreVar {
+            name: "$2.n".into(),
+            value: ValueId(1),
+        });
+        helper_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(2),
+            name: "$2.n".into(),
+        });
+        helper_block.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+        helper.push_block(helper_block);
+
+        let mut program = Module::new();
+        program.push_function(helper);
+        program.push_function(entry);
+        let helper = &program.functions()[0];
+        let entry = &program.functions()[1];
+        assert!(program.frame_local_variable_names(entry).is_empty());
+        assert_eq!(
+            program
+                .frame_local_variable_names(helper)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["$2.n"]
+        );
+    }
+
+
+    #[test]
     fn split_builtin_segment_remaps_user_function_refs() {
         let mut program = Module::new();
         program.set_script_mode(true);
@@ -469,6 +738,79 @@ impl Function {
 
     pub fn set_has_eval(&mut self, has_eval: bool) {
         self.has_eval = has_eval;
+    }
+
+    /// 只属于本函数栈帧、不必写入共享 host 槽表的局部变量名。
+    ///
+    /// 排除模块级 `$0.*`、捕获名、eval 可见绑定以及 `$this` / `$env` /
+    /// `$eval_env` 这类跨函数或跨 image 协议槽。跨函数共享槽还要再经
+    /// [`Module::frame_local_variable_names`] 过滤。
+    /// `$builtin_main` 的写入是段接口，本函数一律不提升。
+    pub fn frame_local_candidate_names(&self) -> BTreeSet<&str> {
+        if self.has_eval || is_builtin_entry_ir_function(&self.name) {
+            return BTreeSet::new();
+        }
+        let captured: BTreeSet<&str> = self.captured_names.iter().map(String::as_str).collect();
+        let mut loaded = BTreeSet::new();
+        let mut stored = BTreeSet::new();
+        for param in &self.params {
+            if !is_host_shared_variable(param) && !captured.contains(param.as_str()) {
+                stored.insert(param.as_str());
+            }
+        }
+        for block in &self.blocks {
+            for instruction in block.instructions() {
+                match instruction {
+                    Instruction::LoadVar { name, .. } => {
+                        loaded.insert(name.as_str());
+                    }
+                    Instruction::StoreVar { name, .. } => {
+                        stored.insert(name.as_str());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        loaded
+            .intersection(&stored)
+            .copied()
+            .filter(|name| !is_host_shared_variable(name) && !captured.contains(name))
+            .collect()
+    }
+
+    pub fn frame_local_variable_names(&self) -> BTreeSet<&str> {
+        self.frame_local_candidate_names()
+    }
+
+    fn stored_variable_names(&self) -> BTreeSet<&str> {
+        let mut names = BTreeSet::new();
+        for param in &self.params {
+            names.insert(param.as_str());
+        }
+        for block in &self.blocks {
+            for instruction in block.instructions() {
+                if let Instruction::StoreVar { name, .. } = instruction {
+                    names.insert(name.as_str());
+                }
+            }
+        }
+        names
+    }
+
+    fn owned_variable_names(&self) -> BTreeSet<&str> {
+        self.stored_variable_names()
+    }
+
+    fn used_variable_names(&self) -> BTreeSet<&str> {
+        let mut names = self.owned_variable_names();
+        for block in &self.blocks {
+            for instruction in block.instructions() {
+                if let Instruction::LoadVar { name, .. } = instruction {
+                    names.insert(name.as_str());
+                }
+            }
+        }
+        names
     }
 
     pub fn captured_names(&self) -> &[String] {

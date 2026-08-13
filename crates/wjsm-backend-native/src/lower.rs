@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::mem::{offset_of, size_of};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -54,6 +54,8 @@ struct FrameLowering {
     arena_slot: StackSlot,
     arena_base: ir::Value,
     arena_bytes: u32,
+    /// 提升到 SSA 的 boxed 局部占用 root 槽的尾部，跨 safepoint 常驻。
+    pinned_local_count: usize,
 }
 
 impl FrameLowering {
@@ -105,6 +107,7 @@ impl FrameLowering {
             arena_slot,
             arena_base,
             arena_bytes: ARENA_MIN_BYTES,
+            pinned_local_count: 0,
         })
     }
 
@@ -176,14 +179,18 @@ impl FrameLowering {
         roots: &[ValueId],
         temporaries: &[ir::Value],
     ) -> Result<()> {
-        let root_count = roots.len() + temporaries.len();
+        let live_count = roots.len() + temporaries.len();
+        let root_count = live_count
+            .checked_add(self.pinned_local_count)
+            .context("native root count overflow")?;
         let pointer_type = builder.func.dfg.value_type(self.roots_base);
         if root_count > self.capacity {
             bail!("native root plan exceeds frame capacity");
         }
-        if self.published_slots.len() < root_count {
-            self.published_slots.resize(root_count, None);
+        if self.published_slots.len() < live_count {
+            self.published_slots.resize(live_count, None);
         }
+        let local_base = self.pinned_local_count;
         for (index, root) in roots.iter().enumerate() {
             // IR 是 SSA：块内直线执行时同一 ValueId 的运行时值不会变，槽里已经是它就无需重写。
             if self.published_slots[index] == Some(*root) {
@@ -194,7 +201,7 @@ impl FrameLowering {
                 MemFlagsData::trusted(),
                 value,
                 self.roots_base,
-                slot_offset(index, "native root spill")?,
+                slot_offset(local_base + index, "native root spill")?,
             );
             self.published_slots[index] = Some(*root);
         }
@@ -204,7 +211,7 @@ impl FrameLowering {
                 MemFlagsData::trusted(),
                 *temporary,
                 self.roots_base,
-                slot_offset(slot, "native temporary root spill")?,
+                slot_offset(local_base + slot, "native temporary root spill")?,
             );
             self.published_slots[slot] = None;
         }
@@ -233,6 +240,38 @@ impl FrameLowering {
             self.bitmap_published = true;
         }
         self.published_roots = root_count;
+        Ok(())
+    }
+
+    fn pin_frame_locals(
+        &mut self,
+        builder: &mut FunctionBuilder<'_>,
+        values: &[ir::Value],
+    ) -> Result<()> {
+        self.pinned_local_count = values.len();
+        for (index, value) in values.iter().enumerate() {
+            builder.ins().store(
+                MemFlagsData::trusted(),
+                *value,
+                self.roots_base,
+                slot_offset(index, "native frame-local root")?,
+            );
+        }
+        Ok(())
+    }
+
+    fn update_pinned_local(
+        &self,
+        builder: &mut FunctionBuilder<'_>,
+        index: usize,
+        value: ir::Value,
+    ) -> Result<()> {
+        builder.ins().store(
+            MemFlagsData::trusted(),
+            value,
+            self.roots_base,
+            slot_offset(index, "native frame-local root")?,
+        );
         Ok(())
     }
 
@@ -319,7 +358,7 @@ fn declare_root_bitmaps(
         .collect()
 }
 
-fn root_frame_capacity(function: &wjsm_ir::Function, plan: &RootPlan) -> usize {
+fn root_frame_capacity(function: &wjsm_ir::Function, plan: &RootPlan, boxed_locals: usize) -> usize {
     let entry_roots = function.params().len().min(2);
     let temporary_roots = function
         .blocks()
@@ -335,7 +374,8 @@ fn root_frame_capacity(function: &wjsm_ir::Function, plan: &RootPlan) -> usize {
         })
         .max()
         .unwrap_or(0);
-    entry_roots.max(plan.max_roots() + temporary_roots)
+    // pinned boxed local 与 live SSA roots 同时占用槽位，必须相加而不是取 max。
+    entry_roots.max(plan.max_roots() + temporary_roots) + boxed_locals
 }
 
 pub(crate) fn slots_from_program(
@@ -472,6 +512,16 @@ fn compile_program_inner(
     let function_ids = declare_functions(&mut module, program, &signature)?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
     let inferred_f64 = infer_f64_values(program);
+    let frame_locals = program.frame_local_variable_names_by_function();
+    let boxed_frame_locals: Vec<BTreeSet<&str>> = program
+        .functions()
+        .iter()
+        .enumerate()
+        .zip(&frame_locals)
+        .map(|((index, function), names)| {
+            boxed_frame_local_names(function, names, &inferred_f64, index)
+        })
+        .collect();
     let root_plans: Vec<_> = program
         .functions()
         .par_iter()
@@ -489,7 +539,8 @@ fn compile_program_inner(
         .functions()
         .iter()
         .zip(&root_plans)
-        .map(|(function, plan)| root_frame_capacity(function, plan))
+        .zip(&boxed_frame_locals)
+        .map(|((function, plan), boxed)| root_frame_capacity(function, plan, boxed.len()))
         .collect();
     let max_roots = root_capacities.iter().copied().max().unwrap_or(0);
     let root_bitmaps = declare_root_bitmaps(&mut module, max_roots)?;
@@ -526,6 +577,8 @@ fn compile_program_inner(
                 &variable_slots,
                 &root_plans[index],
                 root_capacities[index],
+                &frame_locals[index],
+                &boxed_frame_locals[index],
                 collect_diagnostics,
             )
         })
@@ -600,6 +653,8 @@ fn compile_one_function(
     variable_slots: &HashMap<String, u32>,
     root_plan: &RootPlan,
     root_capacity: usize,
+    frame_local_names: &BTreeSet<&str>,
+    boxed_local_names: &BTreeSet<&str>,
     collect_diagnostics: bool,
 ) -> Result<CompiledFunction, NativeCompileError> {
     let function_index =
@@ -613,15 +668,17 @@ fn compile_one_function(
         &mut context.func,
         &mut builder_context,
         target_config,
+        program,
         ir_function,
         function_index,
-        program.constants(),
         dispatcher,
         f64_values,
         variable_slots,
         root_plan,
         root_capacity,
         root_bitmaps,
+        frame_local_names,
+        boxed_local_names,
     )
     .map_err(|error| NativeCompileError::Lowering {
         function: FunctionId(function_index),
@@ -748,15 +805,17 @@ fn lower_function(
     function: &mut Function,
     builder_context: &mut FunctionBuilderContext,
     target_config: cranelift_codegen::isa::TargetFrontendConfig,
+    program: &Program,
     ir_function: &wjsm_ir::Function,
     function_index: u32,
-    constants: &[Constant],
     host_dispatcher: &DeclaredFunction,
     f64_values: &HashSet<ValueId>,
     variable_slots: &HashMap<String, u32>,
     root_plan: &RootPlan,
     root_capacity: usize,
     root_bitmaps: &[DeclaredData],
+    frame_local_names: &BTreeSet<&str>,
+    boxed_local_names: &BTreeSet<&str>,
 ) -> Result<()> {
     let slow_call_signature = function.signature.clone();
     let mut builder = FunctionBuilder::new(function, builder_context);
@@ -774,14 +833,26 @@ fn lower_function(
     for value_id in value_ids {
         variables.insert(value_id, builder.declare_var(types::I64));
     }
+    let mut frame_locals = frame_local_variables(frame_local_names);
+    let boxed_local_order = boxed_local_order(boxed_local_names);
+    let boxed_local_indices = frame_local_indices(&boxed_local_order);
     let phi_edges = collect_phi_edges(ir_function);
     let dispatcher_ref = host_dispatcher.import(builder.func);
     let slow_call_signature = builder.import_signature(slow_call_signature);
     let ctx_value = builder.block_params(entry)[0];
+    let constants = program.constants();
     // root frame 的基址值必须在入口块物化：入口块支配其余所有块，基址可跨块复用。
+
     builder.switch_to_block(entry);
     let mut root_frame = FrameLowering::new(&mut builder, root_bitmaps, root_capacity, ctx_value)?;
     root_frame.link(&mut builder, ctx_value)?;
+    initialize_frame_locals(&mut builder, &mut frame_locals);
+    pin_initialized_frame_locals(
+        &mut root_frame,
+        &mut builder,
+        &frame_locals,
+        &boxed_local_order,
+    )?;
     lower_function_parameters(
         &mut builder,
         ir_function,
@@ -789,6 +860,8 @@ fn lower_function(
         dispatcher_ref,
         ctx_value,
         &mut root_frame,
+        &frame_locals,
+        &boxed_local_indices,
     )?;
 
     for block in ir_function.blocks() {
@@ -820,6 +893,8 @@ fn lower_function(
                 variable_slots,
                 &mut root_frame,
                 roots,
+                &frame_locals,
+                &boxed_local_indices,
             )?;
         }
         if has_suspend {
@@ -857,6 +932,8 @@ fn lower_function_parameters(
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
     root_frame: &mut FrameLowering,
+    frame_locals: &HashMap<String, Variable>,
+    frame_local_indices: &HashMap<String, usize>,
 ) -> Result<()> {
     let native_params = builder
         .block_params(builder.current_block().context("missing entry block")?)
@@ -900,9 +977,6 @@ fn lower_function_parameters(
         } else {
             name
         };
-        let Some(slot) = variable_slots.get(storage_name).copied() else {
-            continue;
-        };
         let value = match index {
             0 => env,
             1 => this_value,
@@ -921,6 +995,16 @@ fn lower_function_parameters(
                 )?
             }
         };
+        if let Some(local) = frame_locals.get(storage_name).copied() {
+            builder.def_var(local, value);
+            if let Some(index) = frame_local_indices.get(storage_name).copied() {
+                root_frame.update_pinned_local(builder, index, value)?;
+            }
+            continue;
+        }
+        let Some(slot) = variable_slots.get(storage_name).copied() else {
+            continue;
+        };
         let slot = builder.ins().iconst(types::I64, i64::from(slot));
         let _ = call_dispatcher(
             builder,
@@ -933,6 +1017,7 @@ fn lower_function_parameters(
     }
     Ok(())
 }
+
 fn lower_instruction(
     builder: &mut FunctionBuilder<'_>,
     instruction: &Instruction,
@@ -946,6 +1031,8 @@ fn lower_instruction(
     variable_slots: &HashMap<String, u32>,
     root_frame: &mut FrameLowering,
     roots: &[ValueId],
+    frame_locals: &HashMap<String, Variable>,
+    frame_local_indices: &HashMap<String, usize>,
 ) -> Result<()> {
     match instruction {
         Instruction::Const {
@@ -991,8 +1078,14 @@ fn lower_instruction(
                         _ => unreachable!("guard restricts materialized constants"),
                     };
                     let index = builder.ins().iconst(types::I64, i64::from(constant_id.0));
-                    let result =
-                        call_dispatcher(builder, root_frame, dispatcher, ctx, operation.id(), &[index])?;
+                    let result = call_dispatcher(
+                        builder,
+                        root_frame,
+                        dispatcher,
+                        ctx,
+                        operation.id(),
+                        &[index],
+                    )?;
                     if matches!(constant, Constant::RegExp { .. }) {
                         return_if_exception(builder, result, root_frame, ctx)?;
                     }
@@ -1026,9 +1119,9 @@ fn lower_instruction(
             let result = box_f64_result(builder, result);
             define_value(builder, variables, *dest, result)
         }
-        Instruction::Binary { dest, op, lhs, rhs } => {
-            lower_dynamic_binary(builder, variables, root_frame, dispatcher, ctx, *dest, *op, *lhs, *rhs)
-        }
+        Instruction::Binary { dest, op, lhs, rhs } => lower_dynamic_binary(
+            builder, variables, root_frame, dispatcher, ctx, *dest, *op, *lhs, *rhs,
+        ),
         Instruction::Unary { dest, op, value } => {
             if f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) {
                 let value = use_value(builder, variables, *value)?;
@@ -1045,7 +1138,8 @@ fn lower_instruction(
             } else {
                 let operation = DYNAMIC_UNARY_BASE + u32::from(unary_tag(*op));
                 let input = use_value(builder, variables, *value)?;
-                let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[input])?;
+                let result =
+                    call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[input])?;
                 define_value(builder, variables, *dest, result)
             }
         }
@@ -1053,7 +1147,8 @@ fn lower_instruction(
             let operation = DYNAMIC_COMPARE_BASE + u32::from(compare_tag(*op));
             let lhs = use_value(builder, variables, *lhs)?;
             let rhs = use_value(builder, variables, *rhs)?;
-            let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
+            let result =
+                call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
             define_value(builder, variables, *dest, result)
         }
         Instruction::CallBuiltin {
@@ -1412,12 +1507,19 @@ fn lower_instruction(
             define_value(builder, variables, *dest, result)
         }
         Instruction::StoreVar { name, value } => {
+            let value = use_value(builder, variables, *value)?;
+            if let Some(local) = frame_locals.get(name).copied() {
+                builder.def_var(local, value);
+                if let Some(index) = frame_local_indices.get(name).copied() {
+                    root_frame.update_pinned_local(builder, index, value)?;
+                }
+                return Ok(());
+            }
             let slot = variable_slots
                 .get(name)
                 .copied()
                 .with_context(|| format!("variable slot is missing for {name}"))?;
             let slot = builder.ins().iconst(types::I64, i64::from(slot));
-            let value = use_value(builder, variables, *value)?;
             let _ = call_dispatcher(
                 builder,
                 root_frame,
@@ -1429,6 +1531,10 @@ fn lower_instruction(
             Ok(())
         }
         Instruction::LoadVar { dest, name } => {
+            if let Some(local) = frame_locals.get(name).copied() {
+                let value = builder.use_var(local);
+                return define_value(builder, variables, *dest, value);
+            }
             let slot = variable_slots
                 .get(name)
                 .copied()
@@ -1444,6 +1550,7 @@ fn lower_instruction(
             )?;
             define_value(builder, variables, *dest, value)
         }
+
         Instruction::Suspend { promise, state } => {
             let promise = use_value(builder, variables, *promise)?;
             let suspend_state = builder
@@ -1530,7 +1637,14 @@ fn lower_call_instruction(
             call_args.push(use_value(builder, variables, *argument)?);
         }
     }
-    let entry = call_dispatcher(builder, root_frame, dispatcher, ctx, operation.id(), &call_args)?;
+    let entry = call_dispatcher(
+        builder,
+        root_frame,
+        dispatcher,
+        ctx,
+        operation.id(),
+        &call_args,
+    )?;
     let args_len = if forward_args {
         let entry_block = builder
             .func
@@ -1657,7 +1771,14 @@ fn lower_builtin_operation(
         .iter()
         .map(|value| use_value(builder, variables, *value))
         .collect::<Result<Vec<_>>>()?;
-    let result = call_dispatcher(builder, root_frame, dispatcher, ctx, builtin.wire_id().into(), &args)?;
+    let result = call_dispatcher(
+        builder,
+        root_frame,
+        dispatcher,
+        ctx,
+        builtin.wire_id().into(),
+        &args,
+    )?;
     if builtin == Builtin::PromiseInstanceResolve || builtin == Builtin::PromiseInstanceReject {
         return Ok(());
     }
@@ -1990,7 +2111,6 @@ fn collect_phi_edges(
     edges
 }
 
-
 fn collect_value_ids(function: &wjsm_ir::Function) -> HashSet<ValueId> {
     let mut ids = HashSet::new();
     for block in function.blocks() {
@@ -2023,10 +2143,98 @@ fn collect_instruction_values(instruction: &Instruction, ids: &mut HashSet<Value
     });
 }
 
+fn frame_local_variables(names: &BTreeSet<&str>) -> HashMap<String, Variable> {
+    names
+        .iter()
+        .map(|name| ((*name).to_owned(), Variable::from_u32(0)))
+        .collect()
+}
+
+fn initialize_frame_locals(
+    builder: &mut FunctionBuilder<'_>,
+    locals: &mut HashMap<String, Variable>,
+) {
+    for variable in locals.values_mut() {
+        *variable = builder.declare_var(types::I64);
+        let undefined = builder.ins().iconst(types::I64, value::encode_undefined());
+        builder.def_var(*variable, undefined);
+    }
+}
+
+fn boxed_local_order(names: &BTreeSet<&str>) -> Vec<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
+fn frame_local_indices(order: &[String]) -> HashMap<String, usize> {
+    order
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (name.clone(), index))
+        .collect()
+}
+
+fn pin_initialized_frame_locals(
+    root_frame: &mut FrameLowering,
+    builder: &mut FunctionBuilder<'_>,
+    locals: &HashMap<String, Variable>,
+    order: &[String],
+) -> Result<()> {
+    let values: Vec<ir::Value> = order
+        .iter()
+        .map(|name| {
+            let variable = locals
+                .get(name)
+                .copied()
+                .with_context(|| format!("frame-local variable {name} is missing"))?;
+            Ok(builder.use_var(variable))
+        })
+        .collect::<Result<_>>()?;
+    root_frame.pin_frame_locals(builder, &values)
+}
+
+fn boxed_frame_local_names<'a>(
+    function: &'a wjsm_ir::Function,
+    frame_locals: &BTreeSet<&'a str>,
+    inferred_f64: &HashMap<FunctionId, HashSet<ValueId>>,
+    index: usize,
+) -> BTreeSet<&'a str> {
+    let function_id = FunctionId(u32::try_from(index).expect("function index fits u32"));
+    let Some(f64_values) = inferred_f64.get(&function_id) else {
+        return frame_locals.clone();
+    };
+    let mut f64_locals = BTreeSet::new();
+    let mut mixed_locals = BTreeSet::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let Instruction::StoreVar { name, value } = instruction
+                && frame_locals.contains(name.as_str())
+            {
+                if f64_values.contains(value) {
+                    if !mixed_locals.contains(name.as_str()) {
+                        f64_locals.insert(name.as_str());
+                    }
+                } else {
+                    f64_locals.remove(name.as_str());
+                    mixed_locals.insert(name.as_str());
+                }
+            }
+        }
+    }
+    frame_locals
+        .iter()
+        .copied()
+        .filter(|name| !f64_locals.contains(name))
+        .collect()
+}
+
 fn infer_f64_values(program: &Program) -> HashMap<FunctionId, HashSet<ValueId>> {
+    let frame_locals = program.frame_local_variable_names_by_function();
     let mut result = HashMap::with_capacity(program.functions().len());
     for (index, function) in program.functions().iter().enumerate() {
+        let frame_locals = &frame_locals[index];
         let mut f64_values = HashSet::new();
+        let mut f64_locals: HashSet<&str> = HashSet::new();
+        let mut mixed_locals: HashSet<&str> = HashSet::new();
         let mut changed = true;
         while changed {
             changed = false;
@@ -2039,6 +2247,23 @@ fn infer_f64_values(program: &Program) -> HashMap<FunctionId, HashSet<ValueId>> 
                                 Some(Constant::Number(_))
                             ) =>
                         {
+                            Some(*dest)
+                        }
+                        Instruction::StoreVar { name, value }
+                            if frame_locals.contains(name.as_str())
+                                && !mixed_locals.contains(name.as_str()) =>
+                        {
+                            if f64_values.contains(value) {
+                                if f64_locals.insert(name.as_str()) {
+                                    changed = true;
+                                }
+                            } else if mixed_locals.insert(name.as_str()) {
+                                f64_locals.remove(name.as_str());
+                                changed = true;
+                            }
+                            None
+                        }
+                        Instruction::LoadVar { dest, name } if f64_locals.contains(name.as_str()) => {
                             Some(*dest)
                         }
                         Instruction::Binary { dest, lhs, rhs, .. }

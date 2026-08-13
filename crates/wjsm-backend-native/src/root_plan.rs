@@ -219,7 +219,7 @@ fn terminator_uses(terminator: &Terminator) -> HashSet<ValueId> {
     values
 }
 
-fn terminator_successors(terminator: &Terminator) -> Vec<BasicBlockId> {
+pub(crate) fn terminator_successors(terminator: &Terminator) -> Vec<BasicBlockId> {
     let mut successors = Vec::new();
     match terminator {
         Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}

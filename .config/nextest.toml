@@ -34,10 +34,12 @@ slow-timeout = { period = "3s", terminate-after = 3 }
 filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
 test-group = 'runtime-cache-delete'
 
-# worker_threads / async_local_worker fixture 会在同进程内起第二个 NativeRuntime
-# （worker 源码单独编译 + thread spawn），单独跑约 1.3s 并已吃满多核。要求独占
-# 执行槽，避免与其它 CPU 密集 fixture 争抢后越过 3s 硬门禁；门禁本身不放宽。
+# worker_threads / async_local_worker 会在同进程内起第二个 NativeRuntime
+# （worker 源码单独编译 + thread spawn），单独跑约 2s 并已吃满多核。
+# perf_hooks histogram_clone / native_http 会显式 gc()，并且 lowering 后
+# 的 root frame 更大；和其它 CPU 密集 fixture 争抢后会越过 3s 硬门禁。
+# 要求独占执行槽，门禁本身不放宽。
 [[profile.default.overrides]]
-filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/)'
+filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/) + test(/happy__node_builtin_perf_hooks_(histogram_clone|native_http)/)'
 threads-required = 'num-cpus'
 

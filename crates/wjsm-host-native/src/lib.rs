@@ -25,7 +25,8 @@ use wjsm_host::RuntimeString;
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
     MAX_NATIVE_ROOT_BITMAP_WORDS, NativeHostSymbol, NativeRuntimeOp, NativeSlowEntry,
-    NativeVmContext, PendingExceptionKind, native_variable_names, native_variable_slots_for_segments,
+    NativeVmContext, PendingExceptionKind, native_variable_names,
+    native_variable_slots_for_segments,
 };
 mod dispatch;
 mod inspector;
@@ -58,11 +59,9 @@ fn is_module_scope_var(name: &str) -> bool {
 }
 
 fn slot_table_len(slots: &HashMap<String, u32>) -> usize {
-    slots
-        .values()
-        .copied()
-        .max()
-        .map_or(0, |slot| usize::try_from(slot).expect("槽号在 usize 内") + 1)
+    slots.values().copied().max().map_or(0, |slot| {
+        usize::try_from(slot).expect("槽号在 usize 内") + 1
+    })
 }
 
 fn function_slots_for_program(
@@ -70,10 +69,12 @@ fn function_slots_for_program(
     variable_slots: &HashMap<String, u32>,
     shared_module_slots: &HashSet<&str>,
 ) -> Vec<Vec<usize>> {
+    let frame_locals = program.frame_local_variable_names_by_function();
     program
         .functions()
         .iter()
-        .map(|function| {
+        .zip(&frame_locals)
+        .map(|(function, frame_locals)| {
             let mut slots = Vec::new();
             let captured_names = function
                 .captured_names()
@@ -107,6 +108,9 @@ fn function_slots_for_program(
                 } else {
                     name.as_str()
                 };
+                if frame_locals.contains(storage_name) {
+                    continue;
+                }
                 if let Some(slot) = variable_slots.get(storage_name).copied() {
                     slots.push(usize::try_from(slot).expect("槽号在 usize 内"));
                 }
@@ -119,6 +123,9 @@ fn function_slots_for_program(
                         }
                         _ => continue,
                     };
+                    if frame_locals.contains(name.as_str()) {
+                        continue;
+                    }
                     if shared_module_slots.contains(name.as_str()) {
                         continue;
                     }
@@ -141,12 +148,7 @@ fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String, u32> {
     native_variable_names(program)
         .into_iter()
         .enumerate()
-        .map(|(index, name)| {
-            (
-                name,
-                u32::try_from(index).expect("整包变量槽数在 u32 内"),
-            )
-        })
+        .map(|(index, name)| (name, u32::try_from(index).expect("整包变量槽数在 u32 内")))
         .collect()
 }
 
@@ -1157,7 +1159,12 @@ impl NativeAgentState {
         self.variables = vec![value::encode_undefined(); len];
         self.shared_variable_slots = user_slots
             .iter()
-            .map(|(name, slot)| (name.clone(), usize::try_from(*slot).expect("槽号在 usize 内")))
+            .map(|(name, slot)| {
+                (
+                    name.clone(),
+                    usize::try_from(*slot).expect("槽号在 usize 内"),
+                )
+            })
             .collect();
         self.isolated_variable_images.clear();
         self.isolated_variable_tables.clear();
@@ -1179,11 +1186,7 @@ impl NativeAgentState {
         self.shared_variables_backup = None;
     }
 
-    fn install_isolated_program(
-        &mut self,
-        image: Arc<CompiledImage>,
-        program: &wjsm_ir::Program,
-    ) {
+    fn install_isolated_program(&mut self, image: Arc<CompiledImage>, program: &wjsm_ir::Program) {
         let slots = whole_program_slots(program);
         let image_id = image.image_id();
         self.install_program(image, program, &slots, &HashSet::new());
@@ -4047,8 +4050,7 @@ impl NativeRuntime {
                 );
                 self.state.builtin_image_id = Some(builtin_image_id);
                 self.state.user_image_id = Some(user_image_id);
-                self.state.user_function_count =
-                    u32::try_from(user_program.functions().len()).ok();
+                self.state.user_function_count = u32::try_from(user_program.functions().len()).ok();
                 let entry_index = user_program
                     .functions()
                     .iter()
@@ -4057,7 +4059,9 @@ impl NativeRuntime {
                 let entry = user_image
                     .entries()
                     .get(entry_index)
-                    .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+                    .ok_or_else(|| {
+                        NativeRuntimeError::Invariant("entry function is missing".into())
+                    })?
                     .slow_entry;
                 dispatch::modules::configure(
                     &mut self.state,
@@ -4074,7 +4078,8 @@ impl NativeRuntime {
                     .repository
                     .prepare(artifact, &NativeHostRegistry)?;
                 let slots = whole_program_slots(artifact.program());
-                self.state.install_whole_program_variables(artifact.program());
+                self.state
+                    .install_whole_program_variables(artifact.program());
                 let entry_index = artifact
                     .program()
                     .functions()
@@ -4084,7 +4089,9 @@ impl NativeRuntime {
                 let entry = image
                     .entries()
                     .get(entry_index)
-                    .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+                    .ok_or_else(|| {
+                        NativeRuntimeError::Invariant("entry function is missing".into())
+                    })?
                     .slow_entry;
                 let image_id = image.image_id();
                 dispatch::modules::configure(
@@ -4263,7 +4270,8 @@ mod tests {
         let mut program = wjsm_ir::Program::new();
         let forty_two = program.add_constant(wjsm_ir::Constant::Number(42.0));
         let marker = program.add_constant(wjsm_ir::Constant::Number(user_marker));
-        let builtin_ref = program.add_constant(wjsm_ir::Constant::FunctionRef(wjsm_ir::FunctionId(1)));
+        let builtin_ref =
+            program.add_constant(wjsm_ir::Constant::FunctionRef(wjsm_ir::FunctionId(1)));
         let undefined = program.add_constant(wjsm_ir::Constant::Undefined);
 
         program.push_function(empty_fn("builtin_helper"));
@@ -4742,5 +4750,101 @@ mod tests {
             assert!(telemetry.cycles > 0, "{algorithm:?} should collect");
             assert_eq!(telemetry.collector, algorithm.as_str());
         }
+    }
+
+    #[test]
+    fn recursive_function_keeps_own_frame_locals() {
+        let execution = execute_source(
+            "function fib(n) { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(fib(10));",
+        );
+        assert_eq!(execution.stdout, b"55\n");
+    }
+
+    #[test]
+    fn loop_locals_do_not_leak_across_recursive_calls() {
+        let execution = execute_source(
+            "function walk(n) { let total = 0; for (let i = 0; i < n; i++) { if (n > 1 && i === 0) total += walk(n - 1); total += i; } return total; } console.log(walk(4));",
+        );
+        assert_eq!(execution.stdout, b"10\n");
+    }
+
+    #[test]
+    fn eval_still_reads_and_writes_visible_locals() {
+        let execution = execute_source(
+            "function f() { let x = 1; eval('x = x + 2'); return x; } console.log(f());",
+        );
+        assert_eq!(execution.stdout, b"3\n");
+    }
+
+    #[test]
+    fn mixed_type_local_still_uses_dynamic_add() {
+        let execution = execute_source(
+            "function f(flag) { let x = 1; if (flag) x = 'a'; return x + 1; } console.log(f(false), f(true));",
+        );
+        assert_eq!(execution.stdout, b"2 a1\n");
+    }
+
+    #[test]
+    fn recursive_object_locals_remain_reachable() {
+        let execution = execute_source(
+            "function walk(n) { const o = { n }; if (n === 0) return o.n; return walk(n - 1) + o.n; } console.log(walk(5));",
+        );
+        assert_eq!(execution.stdout, b"15\n");
+    }
+
+    #[test]
+    fn loop_locals_are_selected_as_frame_locals() {
+        let source: Arc<str> = "
+function work() {
+  let s = 0.0;
+  for (let i = 0; i < 3; i++) s += i;
+  return s;
+}
+work();
+"
+        .into();
+        let ast = wjsm_parser::parse_module(&source).expect("source should parse");
+        let program = wjsm_semantic::lower_module_with_source(
+            ast,
+            true,
+            Some(Arc::clone(&source)),
+            "input.js",
+        )
+        .expect("source should lower");
+        let work = program
+            .functions()
+            .iter()
+            .find(|function| function.name() == "work")
+            .expect("work function exists");
+        let names: Vec<_> = program
+            .frame_local_variable_names(work)
+            .into_iter()
+            .collect();
+        assert!(
+            names.contains(&"$1.s") && names.contains(&"$2.i"),
+            "work frame locals were {names:?}"
+        );
+        let compiler = NativeCompiler::new().expect("native compiler should initialize");
+        let compiled = match program.split_builtin_segment() {
+            Some((_, user_program)) => compiler
+                .diagnostics_program(&user_program)
+                .expect("user segment should compile"),
+            None => compiler
+                .diagnostics_program(&program)
+                .expect("loop program should compile"),
+        };
+        let work_clif = compiled
+            .clif
+            .split(";; function")
+            .find(|chunk| chunk.contains(": work"))
+            .expect("work CLIF should exist");
+        let has_host_slots = work_clif.contains("0x0001_0300")
+            || work_clif.contains("0x0001_0301")
+            || work_clif.contains("66304")
+            || work_clif.contains("66305");
+        assert!(
+            !has_host_slots && work_clif.contains("fadd"),
+            "work CLIF should keep loop locals in SSA and emit fadd:\n{work_clif}"
+        );
     }
 }
