@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(unix)]
@@ -395,7 +395,7 @@ fn normalized_stderr(output: &std::process::Output) -> String {
 }
 
 #[cfg(unix)]
-fn unique_temp_dir(name: &str) -> PathBuf {
+fn unique_temp_dir(name: &str) -> TempTestDir {
     let suffix = format!(
         "{}_{}",
         std::process::id(),
@@ -404,7 +404,47 @@ fn unique_temp_dir(name: &str) -> PathBuf {
             .expect("system clock should be after Unix epoch")
             .as_nanos()
     );
-    std::env::temp_dir().join(name).join(suffix)
+    let path = std::env::temp_dir()
+        .join("wjsm-test-cache")
+        .join("cli")
+        .join(format!("{name}-{suffix}"));
+    TempTestDir { path }
+}
+
+/// CLI 集成测试临时目录句柄：测试结束（含 panic）时自动删除。
+#[cfg(unix)]
+struct TempTestDir {
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+impl std::ops::Deref for TempTestDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+#[cfg(unix)]
+impl AsRef<Path> for TempTestDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(unix)]
+impl AsRef<std::ffi::OsStr> for TempTestDir {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.path.as_os_str()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TempTestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 fn resolve_binary_path() -> PathBuf {

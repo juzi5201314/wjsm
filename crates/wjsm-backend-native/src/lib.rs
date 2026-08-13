@@ -416,8 +416,10 @@ mod tests {
 
     #[test]
     fn native_cache_hits_and_invalidates_corruption() {
-        let cache_dir =
-            std::env::temp_dir().join(format!("wjsm_native_cache_test_{}", std::process::id()));
+        let cache_dir = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("backend")
+            .join(format!("native-cache-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&cache_dir);
         let artifact = arithmetic_artifact();
         let first = cache::NativeImageRepository::new(
@@ -465,10 +467,10 @@ mod tests {
 
     #[test]
     fn native_cache_hits_same_builtin_program_across_users() {
-        let cache_dir = std::env::temp_dir().join(format!(
-            "wjsm_native_cache_segment_test_{}",
-            std::process::id()
-        ));
+        let cache_dir = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("backend")
+            .join(format!("native-cache-segment-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&cache_dir);
         let builtin = {
             let mut program = Program::new();

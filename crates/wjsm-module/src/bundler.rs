@@ -581,10 +581,10 @@ mod tests {
     impl TestProject {
         fn new(case: &str) -> Self {
             let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "wjsm_module_bundler_{case}_{}_{id}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join("wjsm-test-cache")
+                .join("module")
+                .join(format!("bundler-{case}-{}-{id}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).expect("temp project dir should be creatable");
             Self { path }
@@ -719,10 +719,10 @@ mod tests {
         use parking_lot::Mutex;
         static CACHE_ENV_LOCK: Mutex<()> = Mutex::new(());
         let guard = CACHE_ENV_LOCK.lock();
-        let cache_dir = std::env::temp_dir().join(format!(
-            "wjsm-builtin-cache-e2e-{}-{tag}",
-            std::process::id()
-        ));
+        let cache_dir = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("module")
+            .join(format!("builtin-cache-e2e-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&cache_dir);
         // SAFETY: 测试进程内独占该 env（Mutex 串行化），与运行无关。
         unsafe { std::env::set_var("WJSM_CACHE_DIR", &cache_dir) };

@@ -269,8 +269,47 @@ fn collect_dynamic_import_specifiers(
 mod tests {
     use super::*;
     use crate::graph::ModuleGraph;
+    use std::ops::Deref;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// 测试项目句柄：测试结束（含 panic）时自动删除临时目录。
+    struct TestProject {
+        path: PathBuf,
+    }
+
+    impl TestProject {
+        fn new(case: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough for tests")
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join("wjsm-test-cache")
+                .join("module")
+                .join(format!("semantic-{case}-{}-{nanos}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("temp project dir should be creatable");
+            Self { path }
+        }
+    }
+
+    impl Deref for TestProject {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.path
+        }
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn create_temp_project(case: &str) -> TestProject {
+        TestProject::new(case)
+    }
 
     #[test]
     fn reports_missing_export() {
@@ -362,20 +401,6 @@ mod tests {
             .get(&dep_id)
             .expect("dep exports should be collected");
         assert!(exports.contains("value"));
-    }
-
-    fn create_temp_project(case: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be monotonic enough for tests")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "wjsm_module_semantic_{case}_{}_{}",
-            std::process::id(),
-            nanos
-        ));
-        std::fs::create_dir_all(&dir).expect("temp project dir should be creatable");
-        dir
     }
 
     fn write_file(root: &Path, relative: &str, content: &str) {

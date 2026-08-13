@@ -404,8 +404,10 @@ mod tests {
             module_export_names: vec![(0, vec!["readFile".to_string()])],
         };
 
-        let dir =
-            std::env::temp_dir().join(format!("wjsm-builtin-cache-test-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("module")
+            .join(format!("builtin-cache-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         store_builtin_segment(&dir, "testkey", &segment).unwrap();
         let loaded = load_builtin_segment(&dir, "testkey").expect("roundtrip 应命中");
@@ -468,8 +470,10 @@ mod tests {
         );
 
         // 段可序列化落盘并读回。
-        let dir =
-            std::env::temp_dir().join(format!("wjsm-builtin-cache-closure-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("module")
+            .join(format!("builtin-cache-closure-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         store_builtin_segment(&dir, "assert", &segment).unwrap();
         let loaded = load_builtin_segment(&dir, "assert").expect("闭包段 roundtrip 应命中");

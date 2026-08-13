@@ -3,7 +3,7 @@
 
 #![cfg(unix)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Once;
 
@@ -14,10 +14,18 @@ fn ensure_cluster_test_env() {
         // SAFETY: 测试初始化早期设置一次。
         unsafe {
             if std::env::var_os("WJSM_CACHE_DIR").is_none() {
-                std::env::set_var("WJSM_CACHE_DIR", "/tmp/wjsm-test-cache");
+                // 与 fixture 测试共享统一缓存根：/tmp/wjsm-test-cache/native。
+                std::env::set_var("WJSM_CACHE_DIR", cluster_cache_dir());
             }
         }
     });
+}
+
+/// 统一 native / builtin IR 缓存根（与 fixture 测试共享同一目录）。
+fn cluster_cache_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join("wjsm-test-cache").join("native");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }
 
 fn wjsm_bin() -> PathBuf {
@@ -27,7 +35,29 @@ fn wjsm_bin() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/wjsm"))
 }
 
-fn write_temp_script(name: &str, source: &str) -> PathBuf {
+/// 测试脚本句柄：测试结束（含 panic）时自动删除脚本目录，避免 /tmp 残留。
+/// 目录名由内容 hash 决定（稳定路径，配合 native cache 复用）；目录删掉后
+/// 下次运行重新写文件，路径仍稳定，native image 缓存继续命中。
+struct TempScript {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempScript {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+impl Drop for TempScript {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn write_temp_script(name: &str, source: &str) -> TempScript {
     ensure_cluster_test_env();
     // 稳定路径：内容 hash 决定目录，避免每次 pid 不同导致重复 native image 编译。
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -35,19 +65,20 @@ fn write_temp_script(name: &str, source: &str) -> PathBuf {
     name.hash(&mut hasher);
     source.hash(&mut hasher);
     let key = format!("{:016x}", hasher.finish());
-    let dir = std::env::temp_dir().join("wjsm-cluster-test").join(&key);
+    let dir = std::env::temp_dir().join("wjsm-test-cache").join("cluster").join(&key);
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{name}.js"));
     if !path.exists() {
         std::fs::write(&path, source).expect("write script");
     }
-    path
+    TempScript { dir, path }
 }
 
 /// 统一 spawn 父进程：native backend + child_process allow。
 fn run_wjsm_script(script: &std::path::Path, extra_env: &[(&str, &str)]) -> std::process::Output {
     ensure_cluster_test_env();
-    let cache = std::env::var("WJSM_CACHE_DIR").unwrap_or_else(|_| "/tmp/wjsm-test-cache".into());
+    let cache = std::env::var("WJSM_CACHE_DIR")
+        .unwrap_or_else(|_| cluster_cache_dir().to_string_lossy().into_owned());
     let mut cmd = Command::new(wjsm_bin());
     cmd.arg("run")
         .arg(script)

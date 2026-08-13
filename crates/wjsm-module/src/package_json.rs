@@ -124,10 +124,10 @@ mod tests {
     impl TestDir {
         fn new(name: &str) -> Self {
             let id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "wjsm_module_package_json_{name}_{}_{id}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join("wjsm-test-cache")
+                .join("module")
+                .join(format!("package-json-{name}-{}-{id}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir(&path).unwrap();
             Self { path }

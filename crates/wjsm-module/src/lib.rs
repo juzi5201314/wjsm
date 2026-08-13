@@ -429,8 +429,10 @@ mod tests {
 
     #[test]
     fn public_bundle_program_function_works() {
-        let root =
-            std::env::temp_dir().join(format!("wjsm_module_public_bundle_{}", std::process::id()));
+        let root = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("module")
+            .join(format!("public-bundle-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("temp project dir should be creatable");
         std::fs::write(root.join("package.json"), r#"{"type":"module"}"#)
@@ -460,10 +462,10 @@ mod tests {
 
     #[test]
     fn artifact_bytes_do_not_depend_on_absolute_build_root() {
-        let temp = std::env::temp_dir();
+        let temp = std::env::temp_dir().join("wjsm-test-cache").join("module");
         let roots = [
-            temp.join(format!("wjsm_artifact_root_a_{}", std::process::id())),
-            temp.join(format!("wjsm_artifact_root_b_{}", std::process::id())),
+            temp.join(format!("artifact-root-a-{}", std::process::id())),
+            temp.join(format!("artifact-root-b-{}", std::process::id())),
         ];
         for root in &roots {
             let _ = std::fs::remove_dir_all(root);

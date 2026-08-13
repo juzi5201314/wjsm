@@ -16,10 +16,10 @@ struct TestProject {
 impl TestProject {
     fn new(case: &str) -> Self {
         let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "wjsm_module_resolver_{case}_{}_{id}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("module")
+            .join(format!("resolver-{case}-{}-{id}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp project dir should be creatable");
         Self { path: dir }

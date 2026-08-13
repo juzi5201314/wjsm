@@ -119,7 +119,11 @@ fn parse_hyperfine_wall_json() {
         }
       ]
     }"#;
-    let path = std::env::temp_dir().join("wjsm-bench-contract-hyperfine.json");
+    let path = std::env::temp_dir()
+        .join("wjsm-test-cache")
+        .join("bench")
+        .join("contract-hyperfine.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, payload).unwrap();
     let commands = vec![
         (

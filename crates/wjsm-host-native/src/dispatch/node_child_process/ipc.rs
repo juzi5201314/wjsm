@@ -177,8 +177,27 @@ impl ParentIpcHandle {
     }
 }
 
+impl Drop for ParentIpcHandle {
+    fn drop(&mut self) {
+        // 仅在 IPC 从未建立连接时清理 socket 文件（accept 超时/失败或从未被连接）。
+        // 已建立连接时文件由 IpcEndpoint::drop 负责删除；删除不影响已建立连接。
+        let never_connected = self
+            .inner
+            .endpoint
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_none();
+        if never_connected {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 pub(super) fn create_parent() -> io::Result<ParentIpcHandle> {
-    let path = std::env::temp_dir().join(format!(
+    // 统一临时根目录（与测试共享 /tmp/wjsm-test-cache），IPC socket 放 ipc/ 子目录。
+    let dir = std::env::temp_dir().join("wjsm-test-cache").join("ipc");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
         "wjsm-ipc-{}-{}.sock",
         std::process::id(),
         std::time::SystemTime::now()

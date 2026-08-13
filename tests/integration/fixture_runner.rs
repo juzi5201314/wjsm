@@ -31,7 +31,8 @@ fn ensure_test_env() {
 }
 
 fn fixture_cache_dir() -> PathBuf {
-    let dir = env::temp_dir().join("wjsm-fixture-native-cache");
+    // 与 cluster IPC 测试共享统一缓存根：/tmp/wjsm-test-cache/native。
+    let dir = env::temp_dir().join("wjsm-test-cache").join("native");
     let _ = fs::create_dir_all(&dir);
     dir
 }

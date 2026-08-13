@@ -15,7 +15,7 @@ use crate::report::{
     BenchConfig, BenchReport, RegimeReport, RuntimeReport, ScenarioReport, WallStats, rfc3339_now,
     write_json,
 };
-use crate::work_dir::{COLD_CACHE_DIR, repo_root, scenarios_dir, work_dir};
+use crate::work_dir::{cold_cache_dir, repo_root, scenarios_dir, work_dir};
 
 /// 运行时种类，顺序即 hyperfine 命令顺序。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,7 +144,10 @@ fn default_output_path() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    PathBuf::from(format!("/tmp/wjsm-bench-{secs}.json"))
+    std::env::temp_dir()
+        .join("wjsm-test-cache")
+        .join("bench")
+        .join(format!("wjsm-bench-{secs}.json"))
 }
 
 /// 采样单个档位：每场景 hyperfine wall + ns_per_op（仅 default）+ RSS（两档）。
@@ -252,7 +255,8 @@ fn measure_wall(
             let prepare = match rt {
                 RuntimeKind::Node => "true".to_owned(),
                 RuntimeKind::Wjsm => {
-                    format!("rm -rf {COLD_CACHE_DIR} && mkdir -p {COLD_CACHE_DIR}")
+                    let dir = cold_cache_dir();
+                    format!("rm -rf {} && mkdir -p {}", dir.display(), dir.display())
                 }
             };
             args.push("-p".to_owned());
@@ -280,7 +284,7 @@ fn measure_wall(
     process.env("WJSM_DISABLE_LICM", "1");
     if cold {
         process.env("WJSM_STARTUP_SNAPSHOT", "0");
-        process.env("WJSM_CACHE_DIR", COLD_CACHE_DIR);
+        process.env("WJSM_CACHE_DIR", cold_cache_dir());
     }
     apply_scenario_env(&mut process, effective);
     let status = process.status().with_context(|| {
@@ -451,7 +455,7 @@ fn measure_rss(
     apply_scenario_env(&mut process, effective);
     if rt == RuntimeKind::Wjsm && cold {
         process.env("WJSM_STARTUP_SNAPSHOT", "0");
-        process.env("WJSM_CACHE_DIR", COLD_CACHE_DIR);
+        process.env("WJSM_CACHE_DIR", cold_cache_dir());
     }
     let output = process.output().with_context(|| {
         format!(

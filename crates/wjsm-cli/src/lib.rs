@@ -2145,10 +2145,10 @@ mod tests {
     impl TestProject {
         fn new(case: &str) -> Self {
             let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "wjsm_cli_browser_conditions_{case}_{}_{id}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join("wjsm-test-cache")
+                .join("cli")
+                .join(format!("browser-{case}-{}-{id}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("test project should be created");
             Self { path }

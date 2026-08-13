@@ -18,9 +18,14 @@ pub fn scenarios_dir() -> PathBuf {
 }
 
 /// 临时工作目录（hyperfine 中间 JSON 等），固定路径，可安全删除。
+/// 与其他 wjsm 测试/工具共享统一临时根：/tmp/wjsm-test-cache。
 pub fn work_dir() -> PathBuf {
-    std::env::temp_dir().join("wjsm-bench-work")
+    std::env::temp_dir().join("wjsm-test-cache").join("bench")
 }
 
 /// cold 档每轮测量前清空重建的 wjsm 编译缓存目录。
-pub const COLD_CACHE_DIR: &str = "/tmp/wjsm-bench-cold-cache";
+pub fn cold_cache_dir() -> PathBuf {
+    std::env::temp_dir()
+        .join("wjsm-test-cache")
+        .join("bench-cold-cache")
+}

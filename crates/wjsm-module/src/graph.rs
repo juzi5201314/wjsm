@@ -572,10 +572,10 @@ mod tests {
     impl TestProject {
         fn new(case: &str) -> Self {
             let id = NEXT_TEST_PROJECT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "wjsm_module_graph_{case}_{}_{id}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join("wjsm-test-cache")
+                .join("module")
+                .join(format!("graph-{case}-{}-{id}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).expect("temp project dir should be creatable");
             Self { path }
