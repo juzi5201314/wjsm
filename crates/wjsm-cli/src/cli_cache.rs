@@ -86,27 +86,45 @@ fn entries(directory: &Path) -> Result<Vec<CacheEntry>> {
         return Ok(Vec::new());
     }
     let mut entries = Vec::new();
+    collect_entries(directory, &mut entries)?;
+    Ok(entries)
+}
+
+/// 递归收集缓存条目：顶层 `*.wnat` + `builtin_ir/*.bin`（wjsm-module 的
+/// lower 产物缓存），与 backend 的自动 LRU 淘汰范围保持一致。
+fn collect_entries(directory: &Path, out: &mut Vec<CacheEntry>) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read native cache '{}'", directory.display()))?
     {
         let entry = entry?;
-        if !entry.file_type()?.is_file()
-            || entry
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                != Some("wnat")
-        {
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            if path.file_name().and_then(|name| name.to_str()) == Some("builtin_ir") {
+                collect_entries(&path, out)?;
+            }
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str());
+        let is_builtin_ir = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            == Some("builtin_ir");
+        let is_cache_file =
+            extension == Some("wnat") || (extension == Some("bin") && is_builtin_ir);
+        if !is_cache_file {
             continue;
         }
         let metadata = entry.metadata()?;
-        entries.push(CacheEntry {
-            path: entry.path(),
+        out.push(CacheEntry {
+            path,
             bytes: metadata.len(),
             modified: modified_key(metadata.modified().unwrap_or(UNIX_EPOCH)),
         });
     }
-    Ok(entries)
+    Ok(())
 }
 
 fn modified_key(time: SystemTime) -> u128 {
@@ -125,11 +143,14 @@ mod tests {
 
     impl TestCache {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "wjsm_cli_cache_{}_{}",
-                std::process::id(),
-                modified_key(SystemTime::now()),
-            ));
+            let path = std::env::temp_dir()
+                .join("wjsm-test-cache")
+                .join("cli")
+                .join(format!(
+                    "cache-{}-{}",
+                    std::process::id(),
+                    modified_key(SystemTime::now()),
+                ));
             fs::create_dir_all(&path).expect("cache directory should be created");
             Self { path }
         }
@@ -146,6 +167,9 @@ mod tests {
         let cache = TestCache::new();
         fs::write(cache.path.join("a.wnat"), [0_u8; 4]).expect("first entry should be written");
         fs::write(cache.path.join("b.wnat"), [0_u8; 6]).expect("second entry should be written");
+        let builtin_ir = cache.path.join("builtin_ir");
+        fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
+        fs::write(builtin_ir.join("c.bin"), [0_u8; 8]).expect("builtin ir entry should be written");
         fs::write(cache.path.join("keep.txt"), b"keep").expect("unrelated file should be written");
 
         prune(&cache.path, 6, true).expect("cache should prune to byte limit");
@@ -160,5 +184,18 @@ mod tests {
                 .is_empty()
         );
         assert!(cache.path.join("keep.txt").exists());
+    }
+
+    #[test]
+    fn stats_and_entries_include_builtin_ir() {
+        let cache = TestCache::new();
+        fs::write(cache.path.join("a.wnat"), [0_u8; 4]).expect("wnat entry should be written");
+        let builtin_ir = cache.path.join("builtin_ir");
+        fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
+        fs::write(builtin_ir.join("c.bin"), [0_u8; 8]).expect("builtin ir entry should be written");
+
+        let all = entries(&cache.path).expect("entries should include builtin_ir");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all.iter().map(|entry| entry.bytes).sum::<u64>(), 12);
     }
 }

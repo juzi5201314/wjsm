@@ -19,6 +19,11 @@ const CACHE_MAGIC: &[u8; 8] = b"WJSMNAT\0";
 const CACHE_SCHEMA: u32 = 2;
 const MAX_CACHE_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_CACHE_FUNCTIONS: u32 = 4_000_000;
+/// 自动淘汰上限：缓存总字节数超过该值后按 mtime 删最旧条目。
+/// 可用 `WJSM_CACHE_MAX_BYTES` 覆盖；`0` 表示禁用自动淘汰。
+const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// 每写入多少条目检查一次目录大小（避免每次 store 都全目录扫描）。
+const LRU_CHECK_INTERVAL: u64 = 32;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct NativeCacheKey {
@@ -82,6 +87,10 @@ struct AtomicCacheStats {
     misses: AtomicU64,
     invalidated: AtomicU64,
 }
+
+/// 写入计数：用于节流 LRU 目录扫描（static 计数跨 repository 共享，
+/// 但淘汰本身按 directory 独立执行，仅用于降低扫描频率）。
+static WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct NativeImageRepository {
     compiler: NativeCompiler,
@@ -305,6 +314,7 @@ fn store_cache_entry(
         let _ = fs::remove_file(&temp_path);
     }
     result?;
+    maybe_evict_lru(directory);
     Ok(())
 }
 
@@ -492,12 +502,28 @@ fn cache_dir_stats(directory: &Path) -> Option<(u64, u64)> {
     let mut bytes = 0_u64;
     for entry in fs::read_dir(directory).ok()? {
         let entry = entry.ok()?;
+        let path = entry.path();
         if entry
-            .path()
-            .extension()
-            .and_then(|extension| extension.to_str())
-            != Some("wnat")
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false)
         {
+            // builtin_ir 子目录（wjsm-module 的 lower 产物缓存）纳入统计与淘汰。
+            if path.file_name().and_then(|name| name.to_str()) == Some("builtin_ir") {
+                let (sub_entries, sub_bytes) = cache_dir_stats(&path)?;
+                entries = entries.saturating_add(sub_entries);
+                bytes = bytes.saturating_add(sub_bytes);
+            }
+            continue;
+        }
+        let path = entry.path();
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str());
+        let is_builtin_ir = is_builtin_ir_path(&path);
+        let is_cache_file = extension == Some("wnat")
+            || (extension == Some("bin") && is_builtin_ir);
+        if !is_cache_file {
             continue;
         }
         let metadata = entry.metadata().ok()?;
@@ -505,6 +531,118 @@ fn cache_dir_stats(directory: &Path) -> Option<(u64, u64)> {
         bytes = bytes.saturating_add(metadata.len());
     }
     Some((entries, bytes))
+}
+
+/// 写入后节流触发的 LRU 淘汰：每 [`LRU_CHECK_INTERVAL`] 次写入扫描一次目录，
+/// 总字节数超过上限（`WJSM_CACHE_MAX_BYTES`，默认 [`DEFAULT_CACHE_MAX_BYTES`]；
+/// `0` 禁用）时按 mtime 删除最旧条目，直到低于上限。
+///
+/// 节流是全局写入计数而非每目录计数：并发 repository（测试多进程）共享目录时
+/// 任一进程的写入都会推进计数，扫描频率只升不降，淘汰始终能覆盖所有写入方。
+/// 删除用 `remove_file` 单文件操作，与 `store_cache_entry` 的 create_new+rename
+/// 原子写入无竞态：已加载进内存的 image 不受影响，删除只影响后续磁盘命中。
+fn maybe_evict_lru(directory: &Path) {
+    let counter = WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    if counter % LRU_CHECK_INTERVAL != 0 {
+        return;
+    }
+    let Some(max_bytes) = cache_max_bytes() else {
+        return;
+    };
+    evict_oldest(directory, max_bytes);
+}
+
+/// 删除目录中最旧的缓存条目（按 mtime 升序），直到总字节数 ≤ `max_bytes`。
+/// 递归覆盖 `builtin_ir/*.bin`。删除是幂等的单文件操作，与并发写入无竞态。
+fn evict_oldest(directory: &Path, max_bytes: u64) {
+    let mut entries = Vec::new();
+    collect_cache_entries(directory, &mut entries);
+    let mut bytes: u64 = entries.iter().map(|entry| entry.bytes).sum();
+    if bytes <= max_bytes {
+        return;
+    }
+    entries.sort_by_key(|entry| (entry.modified, entry.path.clone()));
+    for entry in entries {
+        if bytes <= max_bytes {
+            break;
+        }
+        if fs::remove_file(&entry.path).is_ok() {
+            bytes = bytes.saturating_sub(entry.bytes);
+        }
+    }
+}
+
+/// 上限：`WJSM_CACHE_MAX_BYTES` 解析为 u64；`0` 或缺失/非法时按默认值处理，
+/// 返回 `None` 表示禁用自动淘汰。
+fn cache_max_bytes() -> Option<u64> {
+    parse_cache_max_bytes(std::env::var_os("WJSM_CACHE_MAX_BYTES"))
+}
+
+fn parse_cache_max_bytes(value: Option<std::ffi::OsString>) -> Option<u64> {
+    match value {
+        Some(value) => {
+            let parsed = value.to_str().and_then(|text| text.parse::<u64>().ok());
+            match parsed {
+                Some(0) => None,
+                Some(bytes) => Some(bytes),
+                None => Some(DEFAULT_CACHE_MAX_BYTES),
+            }
+        }
+        None => Some(DEFAULT_CACHE_MAX_BYTES),
+    }
+}
+
+/// 递归收集目录下所有缓存条目（顶层 `.wnat` + `builtin_ir/*.bin`），
+/// 记录路径、字节数与 mtime 纳秒。
+fn collect_cache_entries(directory: &Path, out: &mut Vec<CacheEntry>) {
+    let Ok(read_dir) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if path.file_name().and_then(|name| name.to_str()) == Some("builtin_ir") {
+                collect_cache_entries(&path, out);
+            }
+            continue;
+        }
+        let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+            continue;
+        };
+        let is_cache_file = extension == "wnat" || (extension == "bin" && is_builtin_ir_path(&path));
+        if !is_cache_file {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        out.push(CacheEntry {
+            path,
+            bytes: metadata.len(),
+            modified: metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0),
+        });
+    }
+}
+
+fn is_builtin_ir_path(path: &Path) -> bool {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        == Some("builtin_ir")
+}
+
+struct CacheEntry {
+    path: PathBuf,
+    bytes: u64,
+    modified: u128,
 }
 
 #[cfg(unix)]
@@ -559,4 +697,121 @@ pub enum NativeCacheError {
     Invalid(String),
     #[error("native cache length overflow")]
     LengthOverflow,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_cache_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("backend")
+            .join(format!("lru-{tag}-{}-{}", std::process::id(), nanos_now()));
+        fs::create_dir_all(&dir).expect("cache dir should be created");
+        dir
+    }
+
+    fn nanos_now() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    }
+
+    fn touch(path: &Path, bytes: usize) {
+        fs::write(path, vec![0_u8; bytes]).expect("test cache entry should be written");
+    }
+
+    #[test]
+    fn evict_oldest_removes_oldest_wnat_first() {
+        let dir = temp_cache_dir("oldest");
+        let oldest = dir.join("oldest.wnat");
+        let middle = dir.join("middle.wnat");
+        let newest = dir.join("newest.wnat");
+        touch(&oldest, 10);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        touch(&middle, 10);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        touch(&newest, 10);
+
+        // 上限 25：删掉最旧的 10 字节后剩 20 ≤ 25。
+        evict_oldest(&dir, 25);
+        assert!(!oldest.exists(), "最旧条目应先被淘汰");
+        assert!(middle.exists());
+        assert!(newest.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn evict_oldest_includes_builtin_ir_bin() {
+        let dir = temp_cache_dir("builtin");
+        let builtin_ir = dir.join("builtin_ir");
+        fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
+        let wnat = dir.join("a.wnat");
+        let bin = builtin_ir.join("a.bin");
+        touch(&wnat, 10);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        touch(&bin, 10);
+
+        // 上限 10：两个条目共 20 字节，按 mtime 删 wnat 后剩 10。
+        evict_oldest(&dir, 10);
+        assert!(!wnat.exists(), "builtin_ir 之外的 .wnat 应参与淘汰");
+        assert!(bin.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn evict_oldest_keeps_unrelated_files() {
+        let dir = temp_cache_dir("keep");
+        touch(&dir.join("a.wnat"), 20);
+        fs::write(dir.join("keep.txt"), b"keep").expect("unrelated file should be written");
+
+        evict_oldest(&dir, 0);
+        assert!(
+            dir.join("keep.txt").exists(),
+            "非缓存文件不应被 LRU 删除"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_dir_stats_counts_wnat_and_builtin_ir() {
+        let dir = temp_cache_dir("stats");
+        let builtin_ir = dir.join("builtin_ir");
+        fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
+        touch(&dir.join("a.wnat"), 4);
+        touch(&builtin_ir.join("b.bin"), 6);
+        fs::write(dir.join("ignore.txt"), b"x").expect("unrelated file should be written");
+
+        let (entries, bytes) = cache_dir_stats(&dir).expect("stats should be readable");
+        assert_eq!(entries, 2, "wnat 与 builtin_ir/*.bin 各计一个");
+        assert_eq!(bytes, 10, "统计字节数应覆盖两者");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_max_bytes_parses_override() {
+        use std::ffi::OsString;
+        assert_eq!(
+            parse_cache_max_bytes(None),
+            Some(DEFAULT_CACHE_MAX_BYTES),
+            "未设置时用默认上限"
+        );
+        assert_eq!(
+            parse_cache_max_bytes(Some(OsString::from("1048576"))),
+            Some(1_048_576),
+            "合法字节数应生效"
+        );
+        assert_eq!(
+            parse_cache_max_bytes(Some(OsString::from("0"))),
+            None,
+            "0 表示禁用自动淘汰"
+        );
+        assert_eq!(
+            parse_cache_max_bytes(Some(OsString::from("garbage"))),
+            Some(DEFAULT_CACHE_MAX_BYTES),
+            "非法值回退默认上限"
+        );
+    }
 }

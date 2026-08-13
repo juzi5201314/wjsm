@@ -83,6 +83,8 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 同 key 的并发 prepare 由 in-flight gate 合并；repository 只保存 `Weak<CompiledImage>`，调用方持有的 `Arc` 决定 image 生命周期。未打开磁盘缓存时 miss 只编译不落盘。打开后 header/object/hash 或权限校验失败计为 invalidated 并重新编译，绝不能执行损坏 bytes。
 
+磁盘缓存有自动 LRU 上限：每次 store 后节流检查目录总字节（顶层 `*.wnat` 与 `builtin_ir/*.bin` 一并统计），超过上限按 mtime 删除最旧条目直到低于上限。上限默认 256 MiB，`WJSM_CACHE_MAX_BYTES` 可覆盖；`0` 禁用自动淘汰。手动管理走 `wjsm cache stats / clear / prune --max-bytes N`。淘汰只删条目文件，不触碰同目录下的其它文件；删除与 `create_new + rename` 原子写入无竞态。
+
 `CompiledImage` 拥有 executable mappings、entry table、source metadata 与 unwind registration。drop 顺序必须先注销 unwind，再释放 mapping；function table 中不得永久缓存裸 code pointer。
 
 ## 4. NativeRuntime ownership

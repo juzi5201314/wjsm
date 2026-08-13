@@ -72,7 +72,7 @@ Hello, wjsm: 3
 | `wjsm init <dir>` / `wjsm install [packages...]` | 创建项目或安装 npm 包 |
 | `wjsm dump-ast` / `dump-ir` / `dump-clif` | 查看编译流水线中的 AST、semantic IR 或 Cranelift IR |
 | `wjsm validate` / `size` / `disasm` | 校验 portable 制品，或分析当前宿主的 native image |
-| `wjsm cache stats` / `cache clear` | 查看或清理编译缓存 |
+| `wjsm cache stats` / `clear` / `prune --max-bytes N` | 查看、清空或按旧到新修剪编译缓存 |
 | `wjsm completions <shell>` | 生成 shell 补全脚本 |
 
 所有接收源码的主要命令都支持 `-e <SOURCE>`；文件参数使用 `-` 时从标准输入读取。完整参数以 `wjsm <command> --help` 为准。
