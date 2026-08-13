@@ -42,7 +42,7 @@ wjsm 采用 **Pluggable GC v2** 边界：
 
 ### Positive
 
-- 三算法共享同一 runtime contract；默认 mark-sweep 行为保持，G1/ZGC 通过 registry/support flavor 切换。
+- 三算法共享同一 runtime contract；默认 zgc，mark-sweep/G1 通过 `--gc` / `WJSM_GC` / `WJSM_TEST_GC` 显式切换。
 - moving GC 不再要求更新所有 JS 引用槽；槽内保持 handle，移动只更新 `obj_table`。
 - host 与 WASM 双端 barrier 统一为同一事件语义，G1 与 ZGC 不需要各自重新扫描所有写路径。
 - 三 support cwasm 明确反映算法物理差异，避免 mark-sweep 为 G1/ZGC barrier 付常态成本。

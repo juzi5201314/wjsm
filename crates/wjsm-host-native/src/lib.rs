@@ -199,7 +199,7 @@ impl Default for NativeRuntimeConfig {
     fn default() -> Self {
         Self {
             cache_dir: None,
-            gc_algorithm: GcAlgorithmKind::MarkSweep,
+            gc_algorithm: GcAlgorithmKind::Zgc,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
         }
     }
@@ -213,7 +213,7 @@ impl NativeRuntimeConfig {
             .map(|name| name.parse::<GcAlgorithmKind>())
             .transpose()
             .map_err(NativeRuntimeError::Configuration)?
-            .unwrap_or(GcAlgorithmKind::MarkSweep);
+            .unwrap_or(GcAlgorithmKind::Zgc);
         Ok(Self {
             cache_dir,
             gc_algorithm,
@@ -279,7 +279,7 @@ impl Default for RuntimeOptions {
             working_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             env: Vec::new(),
             inherit_env: true,
-            gc_algorithm: GcAlgorithmKind::MarkSweep,
+            gc_algorithm: GcAlgorithmKind::Zgc,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             compile: SourceCompileOptions::default(),
         }
@@ -4227,6 +4227,20 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn default_gc_algorithm_is_zgc() {
+        assert_eq!(
+            NativeRuntimeConfig::default().gc_algorithm,
+            GcAlgorithmKind::Zgc,
+            "未显式指定时运行时必须默认使用 zgc"
+        );
+        assert_eq!(
+            RuntimeOptions::default().gc_algorithm,
+            GcAlgorithmKind::Zgc,
+            "in-process 执行入口同样默认 zgc"
+        );
+    }
     fn artifact(source: &str) -> PortableArtifact {
         let source: Arc<str> = source.into();
         let ast = wjsm_parser::parse_module(&source).expect("source should parse");
