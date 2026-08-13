@@ -318,25 +318,11 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64], c
             .filter(|stored| !value::is_array_hole(*stored))
             .collect()
     };
-    for index in 1..values.len() {
-        let mut position = index;
-        while position > 0 {
-            let ordering = match compare(
-                ctx,
-                state,
-                comparator,
-                values[position - 1],
-                values[position],
-            ) {
-                Ok(ordering) => ordering,
-                Err(exception) => return exception,
-            };
-            if ordering != Ordering::Greater {
-                break;
-            }
-            values.swap(position - 1, position);
-            position -= 1;
-        }
+    let sorted = super::array_sort::stable_sort_by(&mut values, |left, right| {
+        compare(ctx, state, comparator, left, right)
+    });
+    if let Err(exception) = sorted {
+        return exception;
     }
     if copy {
         state

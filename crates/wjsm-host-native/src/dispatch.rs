@@ -2,6 +2,7 @@ pub(crate) mod agent;
 pub(crate) mod arguments;
 mod array;
 mod array_callbacks;
+mod array_sort;
 pub(crate) mod async_generator;
 pub(crate) mod atomics;
 mod bigint;
