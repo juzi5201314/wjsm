@@ -20,6 +20,7 @@ use wjsm_ir::{
 };
 use wjsm_native_abi::{
     NativeHostSymbol, NativeRootFrame, NativeRuntimeOp, NativeVmContext, native_variable_names,
+    COOPERATIVE_POLL_STEP_BYTES,
 };
 
 use rayon::prelude::*;
@@ -413,7 +414,8 @@ fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
             for instruction in block.instructions() {
                 let (dest, key) = match instruction {
                     Instruction::GetProp { dest, key, .. }
-                    | Instruction::OptionalGetProp { dest, key, .. } => (*dest, *key),
+                    | Instruction::OptionalGetProp { dest, key, .. }
+                    | Instruction::SetProp { dest, key, .. } => (*dest, *key),
                     _ => continue,
                 };
                 let Some(constant_id) = const_defs.get(&key) else {
@@ -1372,16 +1374,33 @@ fn lower_instruction(
             object,
             key,
             value,
-        } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
-            NativeRuntimeOp::SetProp,
-            &[*object, *key, *value],
-            Some(*dest),
-        ),
+        } => {
+            if let Some(slot) = ic_slots.get(dest).copied() {
+                lower_set_prop_ic(
+                    builder,
+                    variables,
+                    root_frame,
+                    dispatcher,
+                    ctx,
+                    *dest,
+                    *object,
+                    *key,
+                    *value,
+                    slot,
+                )
+            } else {
+                lower_value_operation(
+                    builder,
+                    variables,
+                    root_frame,
+                    dispatcher,
+                    ctx,
+                    NativeRuntimeOp::SetProp,
+                    &[*object, *key, *value],
+                    Some(*dest),
+                )
+            }
+        }
         Instruction::DeleteProp { dest, object, key } => lower_value_operation(
             builder,
             variables,
@@ -2055,6 +2074,159 @@ fn lower_get_prop_ic(
     clippy::too_many_arguments,
     reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
 )]
+fn lower_set_prop_ic(
+    builder: &mut FunctionBuilder<'_>,
+    variables: &HashMap<ValueId, Variable>,
+    root_frame: &mut FrameLowering,
+    dispatcher: ir::FuncRef,
+    ctx: ir::Value,
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    value: ValueId,
+    slot: u32,
+) -> Result<()> {
+    let pointer_type = builder.func.dfg.value_type(ctx);
+    let obj = use_value(builder, variables, object)?;
+    let key_value = use_value(builder, variables, key)?;
+    let stored = use_value(builder, variables, value)?;
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+
+    // vmctx 基址：句柄表 region 与当前 image 的 IC 区。
+    let ht_base = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let ic_base = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
+    );
+
+    // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
+    let boxed_bits = builder.ins().band_imm_s(obj, box_base);
+    let is_boxed = builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    let tag = builder.ins().ushr_imm_u(obj, 32);
+    let tag = builder.ins().band_imm_u(
+        tag,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_obj = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_OBJECT).expect("object tag fits i64"),
+    );
+    let tag_ok = builder.ins().band(is_boxed, is_obj);
+
+    // IC 槽指针：基于 ic_base（当前 image 的 IC 区，始终映射），放在本块计算
+    // 以支配所有后续分支（miss 分支需要它作为 SetPropIc 的回填目标）。
+    let ic_ptr = builder.ins().iadd_imm_s(
+        ic_base,
+        i64::from(slot) * i64::from(constants::IC_SLOT_SIZE),
+    );
+
+    // 与 GetProp 相同的三级判定：tag →（稳定句柄 + OWN_DATA kind）→ shape 匹配。
+    let entry_block = builder.create_block();
+    let shape_check_block = builder.create_block();
+    let hit_block = builder.create_block();
+    let miss_block = builder.create_block();
+    let merge_block = builder.create_block();
+    builder
+        .ins()
+        .brif(tag_ok, entry_block, &[], miss_block, &[]);
+
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+    let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
+    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
+    let entry_addr = builder.ins().iadd(ht_base, entry_offset);
+    let entry = builder.ins().load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
+    let state = builder.ins().band_imm_u(entry, 0xFFFF);
+    let stable = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        state,
+        i64::from(constants::HANDLE_STATE_STABLE_MIN),
+    );
+    let addr = builder.ins().ushr_imm_u(entry, 16);
+    let heap_delta = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    let addr = builder.ins().iadd(addr, heap_delta);
+
+    let ic_word0 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
+    let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
+    let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
+    let ic_word1 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
+    let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
+    let kind_own = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        ic_kind,
+        i64::from(constants::IC_KIND_OWN_DATA),
+    );
+    let first_ok = builder.ins().band(stable, kind_own);
+    builder
+        .ins()
+        .brif(first_ok, shape_check_block, &[], miss_block, &[]);
+
+    builder.switch_to_block(shape_check_block);
+    builder.seal_block(shape_check_block);
+    let obj_word = builder.ins().load(types::I64, MemFlagsData::trusted(), addr, 8);
+    let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
+    let shape_match = builder.ins().icmp(
+        ir::condcodes::IntCC::Equal,
+        obj_shape,
+        ic_shape,
+    );
+    builder
+        .ins()
+        .brif(shape_match, hit_block, &[], miss_block, &[]);
+
+    // 命中：`HEAP_OBJECT_HEADER_SIZE + value_index * 8` 处直接 store 写入值；
+    // shape 不可变迁移保证 shape 匹配 ⇔ 该属性是 writable 数据属性，可原地覆写。
+    builder.switch_to_block(hit_block);
+    builder.seal_block(hit_block);
+    let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3); // × 值槽 8 字节
+    let value_offset = builder
+        .ins()
+        .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    let value_addr = builder.ins().iadd(addr, value_offset);
+    builder
+        .ins()
+        .store(MemFlagsData::trusted(), stored, value_addr, 0);
+    define_value(builder, variables, dest, stored)?;
+    builder.ins().jump(merge_block, &[]);
+
+    // miss：宿主完整 [[Set]] + IC 回填；`ic_ptr` 作为回填目标传入。
+    builder.switch_to_block(miss_block);
+    builder.seal_block(miss_block);
+    let result = call_dispatcher(
+        builder,
+        root_frame,
+        dispatcher,
+        ctx,
+        NativeRuntimeOp::SetPropIc.id(),
+        &[obj, key_value, stored, ic_ptr],
+    )?;
+    define_value(builder, variables, dest, result)?;
+    builder.ins().jump(merge_block, &[]);
+
+    builder.switch_to_block(merge_block);
+    builder.seal_block(merge_block);
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
+)]
 fn lower_optional_get_prop_ic(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
@@ -2479,6 +2651,41 @@ fn lower_cooperative_poll(
     ctx: ir::Value,
     root_frame: &mut FrameLowering,
 ) -> Result<()> {
+    let budget_addr = builder.ins().iadd_imm_s(
+        ctx,
+        i64::from(vmctx_offset(offset_of!(NativeVmContext, stack_budget_bytes))?),
+    );
+    let budget = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), budget_addr, 0);
+    let step_i64 = i64::try_from(COOPERATIVE_POLL_STEP_BYTES).expect("poll step fits i64");
+    // 预算已 ≤ 步长（含耗尽的 0）→ 慢路径：进 dispatcher 轮询并重置预算。
+    let exhausted = builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        budget,
+        step_i64,
+    );
+    let slow_block = builder.create_block();
+    let fast_block = builder.create_block();
+    builder
+        .ins()
+        .brif(exhausted, slow_block, &[], fast_block, &[]);
+
+    // 快路径：预算充足，扣减步长后继续回边，不调用 dispatcher。
+    builder.switch_to_block(fast_block);
+    builder.seal_block(fast_block);
+    let step = builder.ins().iconst(types::I64, step_i64);
+    let remaining = builder.ins().isub(budget, step);
+    builder
+        .ins()
+        .store(MemFlagsData::trusted(), remaining, budget_addr, 0);
+    let continue_block = builder.create_block();
+    builder.ins().jump(continue_block, &[]);
+
+    // 慢路径：预算耗尽，进 dispatcher 轮询（inspector / GC / 外部事件 / 期限）；
+    // 宿主在 CooperativePoll 处理中把预算重置回初始值。
+    builder.switch_to_block(slow_block);
+    builder.seal_block(slow_block);
     let result = call_dispatcher(
         builder,
         root_frame,
@@ -2487,7 +2694,12 @@ fn lower_cooperative_poll(
         NativeRuntimeOp::CooperativePoll.id(),
         &[],
     )?;
-    return_if_exception(builder, result, root_frame, ctx)
+    return_if_exception(builder, result, root_frame, ctx)?;
+    builder.ins().jump(continue_block, &[]);
+
+    builder.switch_to_block(continue_block);
+    builder.seal_block(continue_block);
+    Ok(())
 }
 
 fn switch_constant_immediate(constant: &Constant) -> Result<i64> {

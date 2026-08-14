@@ -4028,7 +4028,7 @@ impl NativeRuntime {
             .map_err(|_| NativeRuntimeError::Invariant("call arena exceeds u32".into()))?;
         context.stack_low = stack_pointer.saturating_sub(8 * 1024 * 1024);
         context.stack_high = stack_pointer.saturating_add(1024 * 1024);
-        context.stack_budget_bytes = 8 * 1024 * 1024;
+        context.stack_budget_bytes = wjsm_native_abi::COOPERATIVE_POLL_BUDGET;
         // 句柄表基址：generated code 属性快链用；snapshot 恢复替换 heap 后由
         // `activate_image` 重新同步（每次 execute 必经）。
         context.handle_table_base = state.heap.handle_table_base();

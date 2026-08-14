@@ -520,6 +520,31 @@ pub enum Builtin {
     ToBoolean,
 }
 
+/// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
+///
+/// 展开为对 `builtin` 的穷尽 match：每个变体调用对应的 handler（通常是一个
+/// `dispatch_*` 模块入口，返回 `Option<i64>`），handler 未认领（`None`）时落到
+/// `$fallback` 表达式。`wire_id()` 是枚举判别值（`repr(u16)`、从 0 连续），
+/// 编译器会把该 match 编译成跳表 / 二分，替代逐模块线性探测链。
+///
+/// 穷尽性由编译器保证：新增 `Builtin` 变体而未在表中登记会直接编译失败。
+#[macro_export]
+macro_rules! dispatch_jumptable {
+    ($builtin:ident, ($ctx:ident, $state:ident, $args:ident) $fallback:block => {
+        $($module:path => $($variant:path)|+ $(,)?)+
+    }) => {
+        match $builtin {
+            $($(
+                $variant => {
+                    let result = $module($ctx, $state, $builtin, $args);
+                    if let Some(value) = result { value } else { $fallback }
+                }
+            )+)+
+            _ => $fallback,
+        }
+    };
+}
+
 impl Builtin {
     /// 返回 portable artifact 使用的稳定宽度 builtin ID。
     pub const fn wire_id(self) -> u16 {

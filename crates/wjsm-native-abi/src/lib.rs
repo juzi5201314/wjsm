@@ -19,6 +19,17 @@ pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
 pub const BARRIER_VERSION: u32 = 1;
 
+/// 每次循环回边生成的代码从 `NativeVmContext::stack_budget_bytes` 扣除的字节数。
+///
+/// 回边内联为「load + 饱和减 + 判零」；预算耗尽才真正调用
+/// `NativeRuntimeOp::CooperativePoll`（宿主在其中重置预算并执行 inspector / GC /
+/// 外部事件轮询）。步长越小轮询越频繁；取 64KiB 使 8MiB 初始预算在无外部事件的
+/// 紧循环中约每 128 次回边轮询一次。
+pub const COOPERATIVE_POLL_STEP_BYTES: usize = 64 * 1024;
+/// 宿主 `CooperativePoll` 处理结束后重置到的预算值（见
+/// [`crate::NativeVmContext::stack_budget_bytes`]）。
+pub const COOPERATIVE_POLL_BUDGET: usize = 8 * 1024 * 1024;
+
 /// Gate 无法分配时写入 vmctx 的预分配异常种类。
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(u32)]
@@ -250,6 +261,9 @@ pub enum NativeRuntimeOp {
     GetSuperConstructor = 0x1_050d,
     /// 带 IC 槽回填的 [[Get]]：`[object, key, ic_slot_ptr]`，miss 时回填槽。
     GetPropIc = 0x1_050e,
+    /// 带 IC 槽回填的 [[Set]]：`[object, key, value, ic_slot_ptr]`，miss 时回填槽。
+    /// 成功写入自有数据属性后回填 `(shape_id, value_index)`，其余一律退化 MEGAMORPHIC。
+    SetPropIc = 0x1_050f,
     PrepareCall = 0x1_0600,
     PrepareConstruct = 0x1_0606,
     FinishCall = 0x1_0601,
@@ -310,6 +324,7 @@ impl NativeRuntimeOp {
             0x1_050c => Some(Self::GetSuperBase),
             0x1_050d => Some(Self::GetSuperConstructor),
             0x1_050e => Some(Self::GetPropIc),
+            0x1_050f => Some(Self::SetPropIc),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
@@ -533,8 +548,8 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::UnaryPos,
             NativeRuntimeOp::UnaryBitNot,
             NativeRuntimeOp::UnaryVoid,
-            NativeRuntimeOp::IsTruthy,
             NativeRuntimeOp::UnaryIsNullish,
+            NativeRuntimeOp::IsTruthy,
             NativeRuntimeOp::UnaryDelete,
             NativeRuntimeOp::CompareStrictEq,
             NativeRuntimeOp::CompareStrictNotEq,
@@ -548,16 +563,18 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::NewObject,
             NativeRuntimeOp::GetProp,
             NativeRuntimeOp::SetProp,
-            NativeRuntimeOp::ObjectSpread,
             NativeRuntimeOp::DeleteProp,
             NativeRuntimeOp::SetProto,
+            NativeRuntimeOp::NewArray,
+            NativeRuntimeOp::GetElem,
+            NativeRuntimeOp::SetElem,
+            NativeRuntimeOp::ObjectSpread,
             NativeRuntimeOp::OptionalGetProp,
             NativeRuntimeOp::OptionalGetElem,
             NativeRuntimeOp::GetSuperBase,
             NativeRuntimeOp::GetSuperConstructor,
             NativeRuntimeOp::GetPropIc,
-            NativeRuntimeOp::NewArray,
-            NativeRuntimeOp::GetElem,
+            NativeRuntimeOp::SetPropIc,
             NativeRuntimeOp::PrepareCall,
             NativeRuntimeOp::PrepareConstruct,
             NativeRuntimeOp::FinishCall,

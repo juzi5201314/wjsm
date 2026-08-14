@@ -65,7 +65,7 @@ pub(crate) use self::runtime::{
 };
 pub(crate) use self::symbol::well_known_description;
 use crate::NativeAgentState;
-use wjsm_ir::{Builtin, constants, value};
+use wjsm_ir::{Builtin, constants, value, dispatch_jumptable};
 use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext, PendingExceptionKind};
 
 pub(crate) fn store_bigint(state: &mut NativeAgentState, input: BigInt) -> Option<i64> {
@@ -197,101 +197,64 @@ pub(super) fn dispatch_builtin(
     builtin: Builtin,
     args: &[i64],
 ) -> i64 {
-    if let Some(result) = modules::dispatch_module(ctx, state, builtin, args) {
-        return result;
+    // 跳表：`wire_id()` 是连续判别值，编译器把下面的 match 编译为跳表 / 二分，
+    // 替代原先逐模块的线性探测链。每个变体直达其宿主 handler；handler 未认领
+    // （`None`，目前只有 `IteratorNext` 的非 async 迭代器分支）时落入兜底 match。
+    dispatch_jumptable! {
+        builtin, (ctx, state, args) {
+            match builtin {
+                Builtin::CreateMappedArgumentsObject | Builtin::CreateUnmappedArgumentsObject => {
+                    arguments::create(
+                        ctx,
+                        state,
+                        builtin == Builtin::CreateMappedArgumentsObject,
+                        args,
+                    )
+                }
+                Builtin::PerformanceNow => node_perf_hooks::performance_now(state),
+                _ => dispatch_inline(ctx, state, builtin, args),
+            }
+        } => {
+            modules::dispatch_module => Builtin::CjsCreateRequire | Builtin::CjsRegisterModule | Builtin::DynamicImport | Builtin::DynamicImportRuntime | Builtin::ImportMetaResolve | Builtin::RegisterModuleNamespace,
+            bigint::dispatch_bigint => Builtin::BigIntAdd | Builtin::BigIntBitAnd | Builtin::BigIntBitNot | Builtin::BigIntBitOr | Builtin::BigIntBitXor | Builtin::BigIntCmp | Builtin::BigIntDiv | Builtin::BigIntEq | Builtin::BigIntFromLiteral | Builtin::BigIntMod | Builtin::BigIntMul | Builtin::BigIntNeg | Builtin::BigIntPow | Builtin::BigIntProtoToString | Builtin::BigIntProtoValueOf | Builtin::BigIntShl | Builtin::BigIntShr | Builtin::BigIntSub,
+            typedarray::dispatch_typed_array => Builtin::BigInt64ArrayConstructor | Builtin::BigUint64ArrayConstructor | Builtin::Float32ArrayConstructor | Builtin::Float64ArrayConstructor | Builtin::Int16ArrayConstructor | Builtin::Int32ArrayConstructor | Builtin::Int8ArrayConstructor | Builtin::TypedArrayProtoAt | Builtin::TypedArrayProtoByteLength | Builtin::TypedArrayProtoByteOffset | Builtin::TypedArrayProtoCopyWithin | Builtin::TypedArrayProtoEntries | Builtin::TypedArrayProtoEvery | Builtin::TypedArrayProtoFill | Builtin::TypedArrayProtoFilter | Builtin::TypedArrayProtoFind | Builtin::TypedArrayProtoFindIndex | Builtin::TypedArrayProtoForEach | Builtin::TypedArrayProtoIncludes | Builtin::TypedArrayProtoIndexOf | Builtin::TypedArrayProtoJoin | Builtin::TypedArrayProtoKeys | Builtin::TypedArrayProtoLastIndexOf | Builtin::TypedArrayProtoLength | Builtin::TypedArrayProtoMap | Builtin::TypedArrayProtoReduce | Builtin::TypedArrayProtoReduceRight | Builtin::TypedArrayProtoReverse | Builtin::TypedArrayProtoSet | Builtin::TypedArrayProtoSlice | Builtin::TypedArrayProtoSome | Builtin::TypedArrayProtoSort | Builtin::TypedArrayProtoSubarray | Builtin::TypedArrayProtoToString | Builtin::TypedArrayProtoValues | Builtin::Uint16ArrayConstructor | Builtin::Uint32ArrayConstructor | Builtin::Uint8ArrayConstructor | Builtin::Uint8ClampedArrayConstructor,
+            promise::dispatch_promise => Builtin::AsyncFunctionResume | Builtin::AsyncFunctionStart | Builtin::AsyncFunctionSuspend | Builtin::ContinuationCreate | Builtin::ContinuationLoadVar | Builtin::ContinuationSaveVar | Builtin::DrainMicrotasks | Builtin::IsPromise | Builtin::PromiseAll | Builtin::PromiseAllSettled | Builtin::PromiseAny | Builtin::PromiseCatch | Builtin::PromiseCreate | Builtin::PromiseCreateRejectFunction | Builtin::PromiseCreateResolveFunction | Builtin::PromiseFinally | Builtin::PromiseInstanceReject | Builtin::PromiseInstanceResolve | Builtin::PromiseRace | Builtin::PromiseRejectStatic | Builtin::PromiseResolveStatic | Builtin::PromiseThen | Builtin::PromiseWithResolvers | Builtin::QueueMicrotask,
+            async_generator::dispatch_async_generator => Builtin::AsyncGeneratorNext | Builtin::AsyncGeneratorReturn | Builtin::AsyncGeneratorStart | Builtin::AsyncGeneratorThrow | Builtin::AsyncIteratorFrom | Builtin::IteratorNext,
+            generator::dispatch_generator => Builtin::GeneratorNext | Builtin::GeneratorReturn | Builtin::GeneratorStart | Builtin::GeneratorThrow,
+            streams::dispatch_streams => Builtin::ByteLengthQueuingStrategyConstructor | Builtin::CountQueuingStrategyConstructor | Builtin::ReadableStreamConstructor | Builtin::TransformStreamConstructor | Builtin::WritableStreamConstructor,
+            fetch::dispatch_fetch => Builtin::Fetch | Builtin::HeadersConstructor | Builtin::RequestConstructor | Builtin::ResponseConstructor,
+            buffers::dispatch_buffer => Builtin::ArrayBufferConstructor | Builtin::ArrayBufferProtoByteLength | Builtin::ArrayBufferProtoSlice | Builtin::DataViewConstructor | Builtin::DataViewProtoGetFloat32 | Builtin::DataViewProtoGetFloat64 | Builtin::DataViewProtoGetInt16 | Builtin::DataViewProtoGetInt32 | Builtin::DataViewProtoGetInt8 | Builtin::DataViewProtoGetUint16 | Builtin::DataViewProtoGetUint32 | Builtin::DataViewProtoGetUint8 | Builtin::DataViewProtoSetFloat32 | Builtin::DataViewProtoSetFloat64 | Builtin::DataViewProtoSetInt16 | Builtin::DataViewProtoSetInt32 | Builtin::DataViewProtoSetInt8 | Builtin::DataViewProtoSetUint16 | Builtin::DataViewProtoSetUint32 | Builtin::DataViewProtoSetUint8,
+            sab::dispatch_sab => Builtin::SharedArrayBufferConstructor | Builtin::SharedArrayBufferProtoByteLength | Builtin::SharedArrayBufferProtoGrow | Builtin::SharedArrayBufferProtoGrowable | Builtin::SharedArrayBufferProtoMaxByteLength | Builtin::SharedArrayBufferProtoSlice | Builtin::SharedArrayBufferSpecies,
+            atomics::dispatch_atomics => Builtin::AtomicsAdd | Builtin::AtomicsAnd | Builtin::AtomicsCompareExchange | Builtin::AtomicsExchange | Builtin::AtomicsIsLockFree | Builtin::AtomicsLoad | Builtin::AtomicsNotify | Builtin::AtomicsOr | Builtin::AtomicsPause | Builtin::AtomicsStore | Builtin::AtomicsSub | Builtin::AtomicsWait | Builtin::AtomicsWaitAsync | Builtin::AtomicsXor,
+            enumerator::dispatch_enumerator => Builtin::EnumeratorDone | Builtin::EnumeratorFrom | Builtin::EnumeratorKey | Builtin::EnumeratorNext,
+            collections::dispatch_collection => Builtin::MapConstructor | Builtin::MapGroupBy | Builtin::MapProtoGet | Builtin::MapProtoSet | Builtin::MapSetClear | Builtin::MapSetDelete | Builtin::MapSetEntries | Builtin::MapSetFirstKey | Builtin::MapSetForEach | Builtin::MapSetGetSize | Builtin::MapSetHas | Builtin::MapSetKeys | Builtin::MapSetValues | Builtin::SetConstructor | Builtin::SetProtoAdd | Builtin::SetProtoDelete | Builtin::SetProtoHas,
+            array::dispatch_array => Builtin::ArrayAllocate | Builtin::ArrayAt | Builtin::ArrayConcat | Builtin::ArrayConcatVa | Builtin::ArrayCopyWithin | Builtin::ArrayFill | Builtin::ArrayFlat | Builtin::ArrayFrom | Builtin::ArrayGetLength | Builtin::ArrayHasElement | Builtin::ArrayIncludes | Builtin::ArrayIndexOf | Builtin::ArrayInitLength | Builtin::ArrayIsArray | Builtin::ArrayJoin | Builtin::ArrayLastIndexOf | Builtin::ArrayOf | Builtin::ArrayPop | Builtin::ArrayPush | Builtin::ArrayPushHole | Builtin::ArrayPushSpread | Builtin::ArrayReverse | Builtin::ArrayShift | Builtin::ArraySlice | Builtin::ArraySpliceVa | Builtin::ArrayToReversed | Builtin::ArrayToSplicedVa | Builtin::ArrayUnshiftVa | Builtin::ArrayWith,
+            function::dispatch_function => Builtin::FuncApply | Builtin::FuncBind | Builtin::FuncCall | Builtin::SuperApply,
+            array_callbacks::dispatch_array_callback => Builtin::ArrayEvery | Builtin::ArrayFilter | Builtin::ArrayFind | Builtin::ArrayFindIndex | Builtin::ArrayFindLast | Builtin::ArrayFindLastIndex | Builtin::ArrayFlatMap | Builtin::ArrayForEach | Builtin::ArrayMap | Builtin::ArrayReduce | Builtin::ArrayReduceRight | Builtin::ArraySome | Builtin::ArraySort | Builtin::ArrayToSorted,
+            json::dispatch_json => Builtin::JsonParse | Builtin::JsonStringify,
+            date::dispatch_date => Builtin::DateConstructor | Builtin::DateConstructorNew | Builtin::DateNow | Builtin::DateParse | Builtin::DateUTC,
+            math::dispatch_math => Builtin::MathAbs | Builtin::MathAcos | Builtin::MathAcosh | Builtin::MathAsin | Builtin::MathAsinh | Builtin::MathAtan | Builtin::MathAtan2 | Builtin::MathAtanh | Builtin::MathCbrt | Builtin::MathCeil | Builtin::MathClz32 | Builtin::MathCos | Builtin::MathCosh | Builtin::MathExp | Builtin::MathExpm1 | Builtin::MathFloor | Builtin::MathFround | Builtin::MathHypot | Builtin::MathImul | Builtin::MathLog | Builtin::MathLog10 | Builtin::MathLog1p | Builtin::MathLog2 | Builtin::MathMax | Builtin::MathMaxArray | Builtin::MathMin | Builtin::MathPow | Builtin::MathRandom | Builtin::MathRound | Builtin::MathSign | Builtin::MathSin | Builtin::MathSinh | Builtin::MathSqrt | Builtin::MathTan | Builtin::MathTanh | Builtin::MathTrunc,
+            object::dispatch_object => Builtin::DefineProperty | Builtin::GetOwnPropDesc | Builtin::ObjectAssign | Builtin::ObjectCreate | Builtin::ObjectDefineProperties | Builtin::ObjectEntries | Builtin::ObjectFreeze | Builtin::ObjectFromEntries | Builtin::ObjectGetOwnPropertyDescriptors | Builtin::ObjectGetOwnPropertyNames | Builtin::ObjectGetOwnPropertySymbols | Builtin::ObjectGetPrototypeOf | Builtin::ObjectGroupBy | Builtin::ObjectIs | Builtin::ObjectIsExtensible | Builtin::ObjectIsFrozen | Builtin::ObjectIsSealed | Builtin::ObjectKeys | Builtin::ObjectPreventExtensions | Builtin::ObjectRest | Builtin::ObjectSeal | Builtin::ObjectSetPrototypeOf | Builtin::ObjectValues,
+            private::dispatch_private => Builtin::PrivateAccessorBind | Builtin::PrivateGet | Builtin::PrivateHas | Builtin::PrivateSet,
+            regexp::dispatch_regexp => Builtin::RegExpCreate | Builtin::RegExpExec | Builtin::RegExpProtoMatch | Builtin::RegExpProtoReplace | Builtin::RegExpProtoSearch | Builtin::RegExpProtoSplit | Builtin::RegExpTest,
+            proxy::dispatch_proxy => Builtin::ProxyCreate | Builtin::ProxyRevocable | Builtin::ReflectApply | Builtin::ReflectConstruct | Builtin::ReflectDefineProperty | Builtin::ReflectDeleteProperty | Builtin::ReflectGet | Builtin::ReflectGetOwnPropertyDescriptor | Builtin::ReflectGetPrototypeOf | Builtin::ReflectHas | Builtin::ReflectIsExtensible | Builtin::ReflectOwnKeys | Builtin::ReflectPreventExtensions | Builtin::ReflectSet | Builtin::ReflectSetPrototypeOf,
+            primitive::dispatch_primitive => Builtin::BooleanConstructor | Builtin::BooleanProtoToString | Builtin::BooleanProtoValueOf | Builtin::GlobalIsFinite | Builtin::GlobalIsNaN | Builtin::NumberConstructor | Builtin::NumberIsFinite | Builtin::NumberIsInteger | Builtin::NumberIsNaN | Builtin::NumberIsSafeInteger | Builtin::NumberParseFloat | Builtin::NumberParseInt | Builtin::NumberProtoToExponential | Builtin::NumberProtoToFixed | Builtin::NumberProtoToPrecision | Builtin::NumberProtoToString | Builtin::NumberProtoValueOf | Builtin::ToBoolean,
+            symbol::dispatch_symbol => Builtin::SymbolCreate | Builtin::SymbolFor | Builtin::SymbolKeyFor | Builtin::SymbolProtoToString | Builtin::SymbolProtoValueOf | Builtin::SymbolWellKnown,
+            string::dispatch_string => Builtin::StringAt | Builtin::StringCharAt | Builtin::StringCharCodeAt | Builtin::StringCodePointAt | Builtin::StringConcatVa | Builtin::StringEndsWith | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::StringIncludes | Builtin::StringIndexOf | Builtin::StringLastIndexOf | Builtin::StringMatch | Builtin::StringMatchAll | Builtin::StringNormalize | Builtin::StringPadEnd | Builtin::StringPadStart | Builtin::StringRepeat | Builtin::StringReplace | Builtin::StringReplaceAll | Builtin::StringSearch | Builtin::StringSlice | Builtin::StringSplit | Builtin::StringStartsWith | Builtin::StringSubstring | Builtin::StringToLowerCase | Builtin::StringToString | Builtin::StringToUpperCase | Builtin::StringTrim | Builtin::StringTrimEnd | Builtin::StringTrimStart | Builtin::StringValueOf,
+            weak::dispatch_weak => Builtin::FinalizationRegistryConstructor | Builtin::FinalizationRegistryProtoRegister | Builtin::FinalizationRegistryProtoUnregister | Builtin::WeakMapConstructor | Builtin::WeakMapProtoDelete | Builtin::WeakMapProtoGet | Builtin::WeakMapProtoHas | Builtin::WeakMapProtoSet | Builtin::WeakRefConstructor | Builtin::WeakRefProtoDeref | Builtin::WeakSetConstructor | Builtin::WeakSetProtoAdd | Builtin::WeakSetProtoDelete | Builtin::WeakSetProtoHas,
+        }
     }
-    if let Some(result) = bigint::dispatch_bigint(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = typedarray::dispatch_typed_array(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = promise::dispatch_promise(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = async_generator::dispatch_async_generator(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = generator::dispatch_generator(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = streams::dispatch_streams(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = fetch::dispatch_fetch(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = buffers::dispatch_buffer(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = sab::dispatch_sab(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = atomics::dispatch_atomics(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = enumerator::dispatch_enumerator(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = collections::dispatch_collection(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = array::dispatch_array(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = function::dispatch_function(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = array_callbacks::dispatch_array_callback(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = json::dispatch_json(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = date::dispatch_date(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = math::dispatch_math(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = object::dispatch_object(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = private::dispatch_private(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = regexp::dispatch_regexp(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = proxy::dispatch_proxy(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = primitive::dispatch_primitive(ctx, state, builtin, args) {
-        return result;
-    }
-    if matches!(
-        builtin,
-        Builtin::CreateMappedArgumentsObject | Builtin::CreateUnmappedArgumentsObject
-    ) {
-        return arguments::create(
-            ctx,
-            state,
-            builtin == Builtin::CreateMappedArgumentsObject,
-            args,
-        );
-    }
-    if let Some(result) = symbol::dispatch_symbol(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = string::dispatch_string(ctx, state, builtin, args) {
-        return result;
-    }
-    if let Some(result) = weak::dispatch_weak(ctx, state, builtin, args) {
-        return result;
-    }
-    if builtin == Builtin::PerformanceNow {
-        return node_perf_hooks::performance_now(state);
-    }
+}
+
+/// 未被任何模块 handler 认领的 builtin 走本函数：内部兜底 match 保持原线性链
+/// 的最终 `match builtin` 语义（含 console / 错误构造器 / eval 桥 / 迭代器 /
+/// 定时器 / 对象枚举等），未匹配的变体（历史上不可达的 IR builtin）落 `fail_dispatch`。
+fn dispatch_inline(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+) -> i64 {
     match builtin {
         Builtin::ScopeRecordCreate => {
             modules::create_scope_record(state).unwrap_or_else(|| fail_dispatch(ctx))

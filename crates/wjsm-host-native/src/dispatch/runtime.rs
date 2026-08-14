@@ -1,7 +1,9 @@
 use num_bigint::BigInt;
 use num_traits::{FromPrimitive, Zero};
 use wjsm_ir::{constants, value};
-use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext, PendingExceptionKind};
+use wjsm_native_abi::{
+    NativeRuntimeOp, NativeVmContext, PendingExceptionKind, COOPERATIVE_POLL_BUDGET,
+};
 
 use crate::{ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeConstantMaterializeError};
 
@@ -13,6 +15,10 @@ pub(super) fn dispatch_runtime(
 ) -> i64 {
     match operation {
         NativeRuntimeOp::CooperativePoll => {
+            // 生成代码在每个回边饱和减 `stack_budget_bytes`，耗尽后才进入本分支；
+            // 重置预算使后续回边继续走内联快路径（否则 budget 恒为 0，每次回边
+            // 都会重进本分支，内联退化为逐次 dispatcher 调用）。
+            ctx.stack_budget_bytes = COOPERATIVE_POLL_BUDGET;
             crate::inspector::poll(ctx, state);
             if let Err(error) = state.collect_garbage_if_needed(ctx) {
                 ctx.pending_exception_kind = PendingExceptionKind::InternalInvariant;
@@ -191,72 +197,15 @@ pub(super) fn dispatch_runtime(
             let [object, key, stored] = args else {
                 return fail_dispatch(ctx);
             };
-            if value::is_proxy(*object) {
-                return super::proxy::set(ctx, state, *object, *key, *stored, *object);
-            }
-            if value::is_array(*object) && state.text_matches(*key, "length") {
-                let Some(length) = array_length(state, *stored) else {
-                    return range_error(ctx, state, "Invalid array length");
-                };
-                return state
-                    .heap
-                    .set_array_length(value::decode_handle(*object), length)
-                    .map(|()| *stored)
-                    .unwrap_or_else(|_| fail_dispatch(ctx));
-            }
-            if value::is_regexp(*object) && state.text_matches(*key, "lastIndex") {
-                return super::regexp::set_last_index(ctx, state, &[*object, *stored]);
-            }
-            let Some(key) = property_key(state, *key) else {
+            set_property_impl(ctx, state, *object, *key, *stored)
+        }
+        NativeRuntimeOp::SetPropIc => {
+            let [object, key, stored, ic_slot_ptr] = args else {
                 return fail_dispatch(ctx);
             };
-            if value::is_array(*object) {
-                let handle = value::decode_handle(*object);
-                if let Some((_, setter, _)) = state.array_accessors.get(&(handle, key)).copied() {
-                    if value::is_callable(setter) {
-                        return state
-                            .invoke_callable(ctx, setter, *object, &[*stored])
-                            .map_or_else(|| fail_dispatch(ctx), |_| *stored);
-                    }
-                    return *stored;
-                }
-                state.note_array_property(handle, key);
-                state.array_properties.insert((handle, key), *stored);
-                state
-                    .array_property_flags
-                    .entry((handle, key))
-                    .or_insert(ASSIGNED_PROPERTY_FLAGS);
-                return *stored;
-            }
-            if value::is_callable(*object) {
-                if let Some((_, setter)) = callable_accessor_on_chain(state, *object, key) {
-                    if value::is_callable(setter) {
-                        let result = state.invoke_callable(ctx, setter, *object, &[*stored]);
-                        return result
-                            .map(|_| *stored)
-                            .unwrap_or_else(|| fail_dispatch(ctx));
-                    }
-                    return *stored;
-                }
-                state.callable_properties.insert((*object, key), *stored);
-                state
-                    .callable_property_flags
-                    .entry((*object, key))
-                    .or_insert(ASSIGNED_PROPERTY_FLAGS);
-                return *stored;
-            }
-            let receiver = *object;
-            match ordinary_set(
-                ctx,
-                state,
-                receiver,
-                encoded_property_key(key),
-                *stored,
-                receiver,
-            ) {
-                Ok(_) => *stored,
-                Err(exception) => exception,
-            }
+            let result = set_property_impl(ctx, state, *object, *key, *stored);
+            backfill_set_prop_ic(state, *object, *key, result, *ic_slot_ptr);
+            result
         }
         NativeRuntimeOp::DeleteProp => {
             let [object, key] = args else {
@@ -671,6 +620,129 @@ pub(super) fn dispatch_runtime(
             } else {
                 !equal
             })
+        }
+    }
+}
+
+/// 完整 [[Set]] 语义：proxy / 数组 length / regexp lastIndex / 数组命名属性 /
+/// callable 命名属性 / 普通对象 `ordinary_set`。返回写入后的值或异常。
+fn set_property_impl(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    stored: i64,
+) -> i64 {
+    if value::is_proxy(object) {
+        return super::proxy::set(ctx, state, object, key, stored, object);
+    }
+    if value::is_array(object) && state.text_matches(key, "length") {
+        let Some(length) = array_length(state, stored) else {
+            return range_error(ctx, state, "Invalid array length");
+        };
+        return state
+            .heap
+            .set_array_length(value::decode_handle(object), length)
+            .map(|()| stored)
+            .unwrap_or_else(|_| fail_dispatch(ctx));
+    }
+    if value::is_regexp(object) && state.text_matches(key, "lastIndex") {
+        return super::regexp::set_last_index(ctx, state, &[object, stored]);
+    }
+    let Some(key) = property_key(state, key) else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_array(object) {
+        let handle = value::decode_handle(object);
+        if let Some((_, setter, _)) = state.array_accessors.get(&(handle, key)).copied() {
+            if value::is_callable(setter) {
+                return state
+                    .invoke_callable(ctx, setter, object, &[stored])
+                    .map_or_else(|| fail_dispatch(ctx), |_| stored);
+            }
+            return stored;
+        }
+        state.note_array_property(handle, key);
+        state.array_properties.insert((handle, key), stored);
+        state
+            .array_property_flags
+            .entry((handle, key))
+            .or_insert(ASSIGNED_PROPERTY_FLAGS);
+        return stored;
+    }
+    if value::is_callable(object) {
+        if let Some((_, setter)) = callable_accessor_on_chain(state, object, key) {
+            if value::is_callable(setter) {
+                let result = state.invoke_callable(ctx, setter, object, &[stored]);
+                return result.map_or_else(|| fail_dispatch(ctx), |_| stored);
+            }
+            return stored;
+        }
+        state.callable_properties.insert((object, key), stored);
+        state
+            .callable_property_flags
+            .entry((object, key))
+            .or_insert(ASSIGNED_PROPERTY_FLAGS);
+        return stored;
+    }
+    let receiver = object;
+    match ordinary_set(
+        ctx,
+        state,
+        receiver,
+        encoded_property_key(key),
+        stored,
+        receiver,
+    ) {
+        Ok(_) => stored,
+        Err(exception) => exception,
+    }
+}
+
+/// SetPropIc 的 miss 回填：写入成功后，若属性已成为接收者自己的数据属性，回填
+/// `(shape_id, value_index)`（shape 迁移由 heap 在 `set_property` 内完成，这里
+/// 读的是写入后的新 shape）；accessor / proxy / 数组 / 字典 shape / 异常一律
+/// 永久退化 MEGAMORPHIC，此后每次写入都走宿主完整 [[Set]]。
+fn backfill_set_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, result: i64, ic_slot_ptr: i64) {
+    let ic_slot_ptr = ic_slot_ptr as *mut u32;
+    if value::is_exception(result) || !value::is_object(object) {
+        // SAFETY: 退化槽覆盖整个 16 字节，kind 重写清除残留命中。
+        unsafe {
+            std::ptr::write(ic_slot_ptr, 0);
+            std::ptr::write(ic_slot_ptr.add(1), 0);
+            std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
+            std::ptr::write(ic_slot_ptr.add(3), 0);
+        }
+        return;
+    }
+    let handle = value::decode_object_handle(object);
+    let Some(name_id) = property_key(state, key) else {
+        unsafe {
+            std::ptr::write(ic_slot_ptr, 0);
+            std::ptr::write(ic_slot_ptr.add(1), 0);
+            std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
+            std::ptr::write(ic_slot_ptr.add(3), 0);
+        }
+        return;
+    };
+    match state.heap.own_data_property_index(handle, name_id) {
+        Ok(Some((shape_id, value_index))) => {
+            // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 16` 计算，
+            // 16 字节对齐、4 个 u32 不越界；只在本 owner 线程写。
+            unsafe {
+                std::ptr::write(ic_slot_ptr, shape_id);
+                std::ptr::write(ic_slot_ptr.add(1), value_index);
+                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_OWN_DATA);
+                std::ptr::write(ic_slot_ptr.add(3), 0);
+            }
+        }
+        _ => {
+            unsafe {
+                std::ptr::write(ic_slot_ptr, 0);
+                std::ptr::write(ic_slot_ptr.add(1), 0);
+                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
+                std::ptr::write(ic_slot_ptr.add(3), 0);
+            }
         }
     }
 }
