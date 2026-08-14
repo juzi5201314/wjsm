@@ -387,45 +387,10 @@ pub fn native_variable_slots_for_segments(
     (builtin_slots, user_slots)
 }
 
-/// Compiler 自有、不进入 portable artifact 的 libcall。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u16)]
-pub enum NativeLibCall {
-    F64Modulo = 0,
-    F64Power = 1,
-    MemoryCopy = 2,
-
-    MemoryFill = 3,
-    IntegerDivide = 4,
-    IntegerRemainder = 5,
-}
-
-impl NativeLibCall {
-    pub const fn id(self) -> u16 {
-        self as u16
-    }
-
-    pub const fn symbol_name(self) -> &'static str {
-        match self {
-            Self::F64Modulo => "wjsm_native_f64_modulo",
-            Self::F64Power => "wjsm_native_f64_power",
-            Self::MemoryCopy => "wjsm_native_memory_copy",
-            Self::MemoryFill => "wjsm_native_memory_fill",
-            Self::IntegerDivide => "wjsm_native_integer_divide",
-            Self::IntegerRemainder => "wjsm_native_integer_remainder",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum NativeSignature {
-    SlowJsEntry = 0,
-    HostOperation = 1,
-    BinaryF64 = 2,
-    MemoryCopy = 3,
-    MemoryFill = 4,
-    BinaryI64 = 5,
+    HostOperation = 0,
 }
 /// Compiler 可引用的 process-lifetime runtime thunk。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -449,33 +414,6 @@ impl NativeHostSymbol {
         match self {
             Self::HostOperationDispatcher => NativeSignature::HostOperation,
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NativeSymbolDescriptor {
-    pub id: u16,
-    pub name: &'static str,
-    pub signature: NativeSignature,
-    pub may_gc: bool,
-    pub may_reenter: bool,
-}
-
-pub fn native_libcall_descriptor(libcall: NativeLibCall) -> NativeSymbolDescriptor {
-    let signature = match libcall {
-        NativeLibCall::F64Modulo | NativeLibCall::F64Power => NativeSignature::BinaryF64,
-        NativeLibCall::MemoryCopy => NativeSignature::MemoryCopy,
-        NativeLibCall::MemoryFill => NativeSignature::MemoryFill,
-        NativeLibCall::IntegerDivide | NativeLibCall::IntegerRemainder => {
-            NativeSignature::BinaryI64
-        }
-    };
-    NativeSymbolDescriptor {
-        id: libcall.id(),
-        name: libcall.symbol_name(),
-        signature,
-        may_gc: false,
-        may_reenter: false,
     }
 }
 
@@ -590,23 +528,6 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::DebugCheck,
         ] {
             hasher.update(operation.id().to_le_bytes());
-        }
-        for libcall in [
-            NativeLibCall::F64Modulo,
-            NativeLibCall::F64Power,
-            NativeLibCall::MemoryCopy,
-            NativeLibCall::MemoryFill,
-            NativeLibCall::IntegerDivide,
-            NativeLibCall::IntegerRemainder,
-        ] {
-            let descriptor = native_libcall_descriptor(libcall);
-            hasher.update(descriptor.id.to_le_bytes());
-            hasher.update(descriptor.name.as_bytes());
-            hasher.update((descriptor.signature as u16).to_le_bytes());
-            hasher.update([
-                u8::from(descriptor.may_gc),
-                u8::from(descriptor.may_reenter),
-            ]);
         }
         let symbol = NativeHostSymbol::HostOperationDispatcher;
         hasher.update(symbol.id().to_le_bytes());

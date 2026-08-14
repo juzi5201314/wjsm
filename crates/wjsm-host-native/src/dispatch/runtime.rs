@@ -2308,16 +2308,6 @@ pub(crate) fn error_to_string(
         .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
-pub(super) fn binary_f64(args: &[i64], operation: impl FnOnce(f64, f64) -> f64) -> i64 {
-    match args {
-        [left, right] => value::encode_f64(operation(
-            value::decode_f64(*left),
-            value::decode_f64(*right),
-        )),
-        _ => value::encode_handle(value::TAG_EXCEPTION, 0),
-    }
-}
-
 pub(crate) fn render_value(state: &NativeAgentState, encoded: i64) -> String {
     if value::is_f64(encoded) {
         let number = value::decode_f64(encoded);

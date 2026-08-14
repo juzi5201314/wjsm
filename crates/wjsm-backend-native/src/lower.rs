@@ -1205,6 +1205,38 @@ fn lower_instruction(
                 call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
             define_value(builder, variables, *dest, result)
         }
+        // 已证明 f64 的单参数 Math builtin：直接发 CLIF 浮点指令，零 host 往返。
+        // guard 即类型检查——参数未证明 f64 时本 arm 不匹配，落到下方通用 dispatcher 路径。
+        Instruction::CallBuiltin {
+            dest: Some(dest),
+            builtin:
+                builtin @ (Builtin::MathAbs
+                | Builtin::MathSqrt
+                | Builtin::MathCeil
+                | Builtin::MathFloor
+                | Builtin::MathTrunc
+                | Builtin::MathFround),
+            args,
+        } if f64_values.contains(dest) && args.len() == 1 => {
+            let input = use_value(builder, variables, args[0])?;
+            let input = builder
+                .ins()
+                .bitcast(types::F64, ir::MemFlagsData::new(), input);
+            let result = match builtin {
+                Builtin::MathAbs => builder.ins().fabs(input),
+                Builtin::MathSqrt => builder.ins().sqrt(input),
+                Builtin::MathCeil => builder.ins().ceil(input),
+                Builtin::MathFloor => builder.ins().floor(input),
+                Builtin::MathTrunc => builder.ins().trunc(input),
+                Builtin::MathFround => {
+                    let narrowed = builder.ins().fdemote(types::F32, input);
+                    builder.ins().fpromote(types::F64, narrowed)
+                }
+                _ => unreachable!("arm 模式已限定这六个 builtin"),
+            };
+            let result = box_f64_result(builder, result);
+            define_value(builder, variables, *dest, result)
+        }
         Instruction::CallBuiltin {
             dest,
             builtin,
@@ -2920,6 +2952,19 @@ fn infer_f64_values(program: &Program) -> HashMap<FunctionId, HashSet<ValueId>> 
                             value,
                             op: UnaryOp::Neg | UnaryOp::Pos,
                         } if f64_values.contains(value) => Some(*dest),
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin:
+                                Builtin::MathAbs
+                                | Builtin::MathSqrt
+                                | Builtin::MathCeil
+                                | Builtin::MathFloor
+                                | Builtin::MathTrunc
+                                | Builtin::MathFround,
+                            args,
+                        } if matches!(args.as_slice(), [arg] if f64_values.contains(arg)) => {
+                            Some(*dest)
+                        }
                         Instruction::Phi { dest, sources }
                             if !sources.is_empty()
                                 && sources

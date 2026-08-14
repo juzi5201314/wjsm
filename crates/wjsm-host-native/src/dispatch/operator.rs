@@ -12,7 +12,7 @@ use wjsm_native_abi::NativeVmContext;
 use super::bigint;
 use super::proxy;
 use super::runtime::{
-    abstract_equal, binary_f64, fail_dispatch, get_property, has_property, is_truthy,
+    abstract_equal, fail_dispatch, get_property, has_property, is_truthy,
     strict_equal, to_number, to_primitive, type_error,
 };
 use super::runtime::PrimitiveHint;
@@ -53,8 +53,6 @@ pub(super) fn dispatch_operator(
                 value::encode_bool(has_property(state, *object, *key))
             }
         }
-        Builtin::F64Mod => binary_f64(args, |left, right| left % right),
-        Builtin::F64Exp => binary_f64(args, f64::powf),
         Builtin::Throw => args
             .first()
             .and_then(|argument| state.create_exception(*argument))
