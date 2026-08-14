@@ -20,7 +20,7 @@ use wjsm_ir::{
 };
 use wjsm_native_abi::{
     COOPERATIVE_POLL_STEP_BYTES, NativeHostSymbol, NativeRootFrame, NativeRuntimeOp,
-    NativeVmContext, native_variable_names,
+    NativeSignature, NativeVmContext, native_variable_names,
 };
 
 use rayon::prelude::*;
@@ -560,6 +560,7 @@ fn compile_program_inner(
     let function_ids = declare_functions(&mut module, program, &signature)?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
     let inferred_f64 = infer_f64_values(program);
+    let math_thunks = declare_math_thunks(&mut module, program, &inferred_f64)?;
     let frame_locals = program.frame_local_variable_names_by_function();
     let boxed_frame_locals: Vec<BTreeSet<&str>> = program
         .functions()
@@ -594,6 +595,15 @@ fn compile_program_inner(
     let root_bitmaps = declare_root_bitmaps(&mut module, max_roots)?;
 
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
+    let math_thunk_decls: HashMap<Builtin, DeclaredFunction> = math_thunks
+        .iter()
+        .map(|(builtin, func_id)| {
+            (
+                *builtin,
+                DeclaredFunction::snapshot(module.declarations(), *func_id),
+            )
+        })
+        .collect();
     let bitmap_decls: Vec<DeclaredData> = root_bitmaps
         .iter()
         .map(|bitmap| DeclaredData::snapshot(module.declarations(), *bitmap))
@@ -619,6 +629,7 @@ fn compile_program_inner(
                 &signature,
                 function_ids[index],
                 &dispatcher_decl,
+                &math_thunk_decls,
                 &bitmap_decls,
                 inferred_f64
                     .get(&FunctionId(
@@ -701,6 +712,7 @@ fn compile_one_function(
     signature: &Signature,
     function_id: FuncId,
     dispatcher: &DeclaredFunction,
+    math_thunks: &HashMap<Builtin, DeclaredFunction>,
     root_bitmaps: &[DeclaredData],
     f64_values: &HashSet<ValueId>,
     variable_slots: &HashMap<String, u32>,
@@ -726,6 +738,7 @@ fn compile_one_function(
         ir_function,
         function_index,
         dispatcher,
+        math_thunks,
         f64_values,
         variable_slots,
         root_plan,
@@ -844,6 +857,78 @@ fn declare_host_dispatcher(module: &mut ObjectModule) -> Result<FuncId, NativeCo
         .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
 }
 
+/// 按需声明本程序真正走 typed 路径的 math thunk（模块级声明一次；函数内 import
+/// 复用之，避免每条调用重建签名）。只有 `infer_f64_values` 已证明 dest 且实参
+/// arity 与 thunk 签名一致的调用点才需要声明。
+fn declare_math_thunks(
+    module: &mut ObjectModule,
+    program: &Program,
+    inferred_f64: &HashMap<FunctionId, HashSet<ValueId>>,
+) -> Result<HashMap<Builtin, FuncId>, NativeCompileError> {
+    let mut used = HashSet::new();
+    for (index, function) in program.functions().iter().enumerate() {
+        let function_id = FunctionId(u32::try_from(index).expect("function index fits u32"));
+        let f64_values = inferred_f64
+            .get(&function_id)
+            .expect("analysis covers every function");
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin,
+                    args,
+                } = instruction
+                    && f64_values.contains(dest)
+                    && NativeHostSymbol::for_builtin(*builtin).is_some_and(|symbol| {
+                        args.len() == usize::from(symbol.signature().argument_count())
+                    })
+                {
+                    used.insert(*builtin);
+                }
+            }
+        }
+    }
+    let mut used: Vec<_> = used.into_iter().collect();
+    used.sort_by_key(|builtin| builtin.wire_id());
+    let unary_signature = math_thunk_signature(module, NativeSignature::F64Unary);
+    let binary_signature = math_thunk_signature(module, NativeSignature::F64Binary);
+    let mut declared = HashMap::with_capacity(used.len());
+    for builtin in used {
+        let symbol = NativeHostSymbol::for_builtin(builtin).expect("used 集合由 for_builtin 过滤");
+        // 同一 arity 的全部 thunk 共享同一份 Cranelift 签名，避免逐符号重建。
+        let signature = match symbol.signature() {
+            NativeSignature::F64Unary => &unary_signature,
+            NativeSignature::F64Binary => &binary_signature,
+            NativeSignature::HostOperation => {
+                unreachable!("math thunk 不存在 HostOperation 签名")
+            }
+        };
+        let func_id = module
+            .declare_function(symbol.symbol_name(), Linkage::Import, signature)
+            .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?;
+        declared.insert(builtin, func_id);
+    }
+    Ok(declared)
+}
+
+fn math_thunk_signature(module: &ObjectModule, signature: NativeSignature) -> Signature {
+    let mut clif_signature = module.make_signature();
+    match signature {
+        NativeSignature::F64Unary => {
+            clif_signature.params.push(AbiParam::new(types::F64));
+        }
+        NativeSignature::F64Binary => {
+            clif_signature.params.push(AbiParam::new(types::F64));
+            clif_signature.params.push(AbiParam::new(types::F64));
+        }
+        NativeSignature::HostOperation => {
+            unreachable!("math thunk 不存在 HostOperation 签名")
+        }
+    }
+    clif_signature.returns.push(AbiParam::new(types::F64));
+    clif_signature
+}
+
 fn slow_entry_signature(call_conv: CallConv) -> Signature {
     let mut signature = Signature::new(call_conv);
     signature.params.push(AbiParam::new(types::I64));
@@ -864,6 +949,7 @@ fn lower_function(
     ir_function: &wjsm_ir::Function,
     function_index: u32,
     host_dispatcher: &DeclaredFunction,
+    math_thunks: &HashMap<Builtin, DeclaredFunction>,
     f64_values: &HashSet<ValueId>,
     variable_slots: &HashMap<String, u32>,
     root_plan: &RootPlan,
@@ -894,6 +980,8 @@ fn lower_function(
     let boxed_local_indices = frame_local_indices(&boxed_local_order);
     let phi_edges = collect_phi_edges(ir_function);
     let dispatcher_ref = host_dispatcher.import(builder.func);
+    let mut imported_math_thunks: HashMap<Builtin, ir::FuncRef> =
+        HashMap::with_capacity(math_thunks.len());
     let slow_call_signature = builder.import_signature(slow_call_signature);
     let ctx_value = builder.block_params(entry)[0];
     let constants = program.constants();
@@ -945,6 +1033,8 @@ fn lower_function(
                 dispatcher_ref,
                 ctx_value,
                 f64_values,
+                math_thunks,
+                &mut imported_math_thunks,
                 slow_call_signature,
                 variable_slots,
                 &mut root_frame,
@@ -1084,6 +1174,8 @@ fn lower_instruction(
     dispatcher: ir::FuncRef,
     ctx: ir::Value,
     f64_values: &HashSet<ValueId>,
+    math_thunks: &HashMap<Builtin, DeclaredFunction>,
+    imported_math_thunks: &mut HashMap<Builtin, ir::FuncRef>,
     slow_call_signature: ir::SigRef,
     variable_slots: &HashMap<String, u32>,
     root_frame: &mut FrameLowering,
@@ -1237,6 +1329,55 @@ fn lower_instruction(
                     builder.ins().fpromote(types::F64, narrowed)
                 }
                 _ => unreachable!("arm 模式已限定这六个 builtin"),
+            };
+            let result = box_f64_result(builder, result);
+            define_value(builder, variables, *dest, result)
+        }
+        // 已证明 f64 的 21 个 libm Math builtin：typed native direct call。
+        // guard 即类型检查——实参未证明 f64 时落入下方 dispatcher 路径，
+        // 保留 to_number_coerced 与 BigInt TypeError 语义。
+        Instruction::CallBuiltin {
+            dest: Some(dest),
+            builtin,
+            args,
+        } if f64_values.contains(dest)
+            && NativeHostSymbol::for_builtin(*builtin).is_some_and(|symbol| {
+                args.len() == usize::from(symbol.signature().argument_count())
+            }) =>
+        {
+            let symbol = NativeHostSymbol::for_builtin(*builtin)
+                .context("guard 已限制为 math thunk builtin")?;
+            let thunk = import_math_thunk(builder, math_thunks, imported_math_thunks, *builtin)?;
+            let result = match symbol.signature() {
+                NativeSignature::F64Unary => {
+                    let input = use_value(builder, variables, args[0])?;
+                    let input = builder
+                        .ins()
+                        .bitcast(types::F64, ir::MemFlagsData::new(), input);
+                    let call = builder.ins().call(thunk, &[input]);
+                    *builder
+                        .inst_results(call)
+                        .first()
+                        .context("typed math thunk returned no result")?
+                }
+                NativeSignature::F64Binary => {
+                    let lhs = use_value(builder, variables, args[0])?;
+                    let rhs = use_value(builder, variables, args[1])?;
+                    let lhs = builder
+                        .ins()
+                        .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
+                    let rhs = builder
+                        .ins()
+                        .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
+                    let call = builder.ins().call(thunk, &[lhs, rhs]);
+                    *builder
+                        .inst_results(call)
+                        .first()
+                        .context("typed math thunk returned no result")?
+                }
+                NativeSignature::HostOperation => {
+                    unreachable!("math thunk 不存在 HostOperation 签名")
+                }
             };
             let result = box_f64_result(builder, result);
             define_value(builder, variables, *dest, result)
@@ -2460,6 +2601,24 @@ fn lower_value_operation(
     Ok(())
 }
 
+/// 每个函数按需 import 一次 typed math thunk，同函数内所有调用点复用同一 `FuncRef`。
+fn import_math_thunk(
+    builder: &mut FunctionBuilder<'_>,
+    math_thunks: &HashMap<Builtin, DeclaredFunction>,
+    imported: &mut HashMap<Builtin, ir::FuncRef>,
+    builtin: Builtin,
+) -> Result<ir::FuncRef> {
+    if let Some(func_ref) = imported.get(&builtin).copied() {
+        return Ok(func_ref);
+    }
+    let declaration = math_thunks
+        .get(&builtin)
+        .with_context(|| format!("math thunk {builtin:?} 未声明"))?;
+    let func_ref = declaration.import(builder.func);
+    imported.insert(builtin, func_ref);
+    Ok(func_ref)
+}
+
 fn call_dispatcher(
     builder: &mut FunctionBuilder<'_>,
     frame: &mut FrameLowering,
@@ -2969,6 +3128,17 @@ fn infer_f64_values(program: &Program) -> HashMap<FunctionId, HashSet<ValueId>> 
                         } if matches!(args.as_slice(), [arg] if f64_values.contains(arg)) => {
                             Some(*dest)
                         }
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin,
+                            args,
+                        } if NativeHostSymbol::for_builtin(*builtin).is_some_and(|symbol| {
+                            let arity = usize::from(symbol.signature().argument_count());
+                            args.len() == arity && args.iter().all(|arg| f64_values.contains(arg))
+                        }) =>
+                        {
+                            Some(*dest)
+                        }
                         Instruction::Phi { dest, sources }
                             if !sources.is_empty()
                                 && sources
@@ -3084,5 +3254,71 @@ fn gimli_endian(triple: &target_lexicon::Triple) -> gimli::RunTimeEndian {
     match triple.endianness().unwrap() {
         target_lexicon::Endianness::Little => gimli::RunTimeEndian::Little,
         target_lexicon::Endianness::Big => gimli::RunTimeEndian::Big,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wjsm_ir::{BasicBlock, Constant, Function};
+
+    #[test]
+    fn infer_f64_values_requires_exact_math_arity() {
+        let mut program = Program::new();
+        let number = program.add_constant(Constant::Number(0.5));
+        let mut function = Function::new("main", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: number,
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: number,
+        });
+        block.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(2)),
+            builtin: Builtin::MathSin,
+            args: vec![ValueId(0)],
+        });
+        block.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(3)),
+            builtin: Builtin::MathSin,
+            args: vec![],
+        });
+        block.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(4)),
+            builtin: Builtin::MathSin,
+            args: vec![ValueId(0), ValueId(1)],
+        });
+        block.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(5)),
+            builtin: Builtin::MathPow,
+            args: vec![ValueId(0), ValueId(1)],
+        });
+        block.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(6)),
+            builtin: Builtin::MathPow,
+            args: vec![ValueId(0)],
+        });
+        block.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(7)),
+            builtin: Builtin::MathPow,
+            args: vec![ValueId(0), ValueId(100)],
+        });
+        block.set_terminator(Terminator::Return { value: None });
+        function.push_block(block);
+        program.push_function(function);
+
+        let inferred = infer_f64_values(&program);
+        let f64_values = &inferred[&FunctionId(0)];
+        assert!(f64_values.contains(&ValueId(0)));
+        assert!(f64_values.contains(&ValueId(1)));
+        assert!(f64_values.contains(&ValueId(2)));
+        assert!(f64_values.contains(&ValueId(5)));
+        assert!(!f64_values.contains(&ValueId(3)));
+        assert!(!f64_values.contains(&ValueId(4)));
+        assert!(!f64_values.contains(&ValueId(6)));
+        assert!(!f64_values.contains(&ValueId(7)));
     }
 }

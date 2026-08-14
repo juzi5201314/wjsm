@@ -35,7 +35,13 @@ mod snapshot;
 
 pub use inspector::InspectorConfig;
 
-use dispatch::native_host_operation;
+use dispatch::{
+    native_host_operation, native_math_acos, native_math_acosh, native_math_asin,
+    native_math_asinh, native_math_atan, native_math_atan2, native_math_atanh, native_math_cbrt,
+    native_math_cos, native_math_cosh, native_math_exp, native_math_expm1, native_math_log,
+    native_math_log1p, native_math_log2, native_math_log10, native_math_pow, native_math_sin,
+    native_math_sinh, native_math_tan, native_math_tanh,
+};
 
 const DEFAULT_CALL_ARENA_SLOTS: usize = 64 * 1024;
 const FIRST_USER_SYMBOL_HANDLE: u32 = wjsm_ir::wk_symbol::UNSCOPABLES + 1;
@@ -383,11 +389,31 @@ pub struct NativeHostRegistry;
 
 impl NativeSymbolResolver for NativeHostRegistry {
     fn resolve(&self, symbol: NativeHostSymbol) -> Option<usize> {
-        match symbol {
-            NativeHostSymbol::HostOperationDispatcher => {
-                Some((native_host_operation as *const ()).addr())
-            }
-        }
+        let pointer = match symbol {
+            NativeHostSymbol::HostOperationDispatcher => native_host_operation as *const (),
+            NativeHostSymbol::MathAcos => native_math_acos as *const (),
+            NativeHostSymbol::MathAcosh => native_math_acosh as *const (),
+            NativeHostSymbol::MathAsin => native_math_asin as *const (),
+            NativeHostSymbol::MathAsinh => native_math_asinh as *const (),
+            NativeHostSymbol::MathAtan => native_math_atan as *const (),
+            NativeHostSymbol::MathAtanh => native_math_atanh as *const (),
+            NativeHostSymbol::MathAtan2 => native_math_atan2 as *const (),
+            NativeHostSymbol::MathCbrt => native_math_cbrt as *const (),
+            NativeHostSymbol::MathCos => native_math_cos as *const (),
+            NativeHostSymbol::MathCosh => native_math_cosh as *const (),
+            NativeHostSymbol::MathExp => native_math_exp as *const (),
+            NativeHostSymbol::MathExpm1 => native_math_expm1 as *const (),
+            NativeHostSymbol::MathLog => native_math_log as *const (),
+            NativeHostSymbol::MathLog1p => native_math_log1p as *const (),
+            NativeHostSymbol::MathLog10 => native_math_log10 as *const (),
+            NativeHostSymbol::MathLog2 => native_math_log2 as *const (),
+            NativeHostSymbol::MathSin => native_math_sin as *const (),
+            NativeHostSymbol::MathSinh => native_math_sinh as *const (),
+            NativeHostSymbol::MathTan => native_math_tan as *const (),
+            NativeHostSymbol::MathTanh => native_math_tanh as *const (),
+            NativeHostSymbol::MathPow => native_math_pow as *const (),
+        };
+        Some((pointer).addr())
     }
 }
 

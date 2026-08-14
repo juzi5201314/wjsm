@@ -6,6 +6,78 @@ use wjsm_native_abi::NativeVmContext;
 use super::runtime::{fail_dispatch, object_handle, to_int32, to_number_coerced, to_uint32};
 use crate::NativeAgentState;
 
+// ── typed f64 math thunk ────────────────────────────────────────────────
+//
+// generated code 在 `infer_f64_values` 证明实参为 f64 时直接以 `(F64)->F64` /
+// `(F64,F64)->F64` 调用这些 thunk，跳过 `CallBuiltin` → `call_dispatcher` 的
+// arena 打包 + builtin 跳表 + `to_number_coerced` 往返。thunk 必须与 dispatcher
+// 路径使用同一 Rust libm 实现，保证同一输入在 typed / untyped 路径下位级一致
+// （NaN 统一由 `box_f64_result` 规范化）。不依赖平台 libc 符号命名差异。
+
+pub unsafe extern "C" fn native_math_acos(value: f64) -> f64 {
+    f64::acos(value)
+}
+pub unsafe extern "C" fn native_math_acosh(value: f64) -> f64 {
+    f64::acosh(value)
+}
+pub unsafe extern "C" fn native_math_asin(value: f64) -> f64 {
+    f64::asin(value)
+}
+pub unsafe extern "C" fn native_math_asinh(value: f64) -> f64 {
+    f64::asinh(value)
+}
+pub unsafe extern "C" fn native_math_atan(value: f64) -> f64 {
+    f64::atan(value)
+}
+pub unsafe extern "C" fn native_math_atanh(value: f64) -> f64 {
+    f64::atanh(value)
+}
+pub unsafe extern "C" fn native_math_atan2(y: f64, x: f64) -> f64 {
+    f64::atan2(y, x)
+}
+pub unsafe extern "C" fn native_math_cbrt(value: f64) -> f64 {
+    f64::cbrt(value)
+}
+pub unsafe extern "C" fn native_math_cos(value: f64) -> f64 {
+    f64::cos(value)
+}
+pub unsafe extern "C" fn native_math_cosh(value: f64) -> f64 {
+    f64::cosh(value)
+}
+pub unsafe extern "C" fn native_math_exp(value: f64) -> f64 {
+    f64::exp(value)
+}
+pub unsafe extern "C" fn native_math_expm1(value: f64) -> f64 {
+    f64::exp_m1(value)
+}
+pub unsafe extern "C" fn native_math_log(value: f64) -> f64 {
+    f64::ln(value)
+}
+pub unsafe extern "C" fn native_math_log1p(value: f64) -> f64 {
+    f64::ln_1p(value)
+}
+pub unsafe extern "C" fn native_math_log10(value: f64) -> f64 {
+    f64::log10(value)
+}
+pub unsafe extern "C" fn native_math_log2(value: f64) -> f64 {
+    f64::log2(value)
+}
+pub unsafe extern "C" fn native_math_sin(value: f64) -> f64 {
+    f64::sin(value)
+}
+pub unsafe extern "C" fn native_math_sinh(value: f64) -> f64 {
+    f64::sinh(value)
+}
+pub unsafe extern "C" fn native_math_tan(value: f64) -> f64 {
+    f64::tan(value)
+}
+pub unsafe extern "C" fn native_math_tanh(value: f64) -> f64 {
+    f64::tanh(value)
+}
+pub unsafe extern "C" fn native_math_pow(base: f64, exponent: f64) -> f64 {
+    f64::powf(base, exponent)
+}
+
 pub(super) fn dispatch_math(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,

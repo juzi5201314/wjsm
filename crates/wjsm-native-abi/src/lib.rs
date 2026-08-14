@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 7;
+pub const NATIVE_ABI_VERSION: u32 = 8;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -387,19 +387,97 @@ pub fn native_variable_slots_for_segments(
     (builtin_slots, user_slots)
 }
 
+/// Generated code 可引用的 native thunk ABI 签名。
+///
+/// `may_gc` / `may_reenter` 为 false 的签名是「叶子」调用：generated code 可以
+/// 在不发布额外 GC root、不预留 call arena 的情况下直接调用。当前只有数学 thunk
+/// 属于这类；`HostOperation` 是统一 dispatcher，可能触发 GC / 重入，必须走完整
+/// arena + safepoint 路径。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum NativeSignature {
     HostOperation = 0,
+    /// `(F64) -> F64`
+    F64Unary = 1,
+    /// `(F64, F64) -> F64`
+    F64Binary = 2,
 }
+
+impl NativeSignature {
+    pub const fn may_gc(self) -> bool {
+        !matches!(self, Self::F64Unary | Self::F64Binary)
+    }
+
+    pub const fn may_reenter(self) -> bool {
+        !matches!(self, Self::F64Unary | Self::F64Binary)
+    }
+
+    pub const fn argument_count(self) -> u8 {
+        match self {
+            Self::HostOperation => 0,
+            Self::F64Unary => 1,
+            Self::F64Binary => 2,
+        }
+    }
+}
+
 /// Compiler 可引用的 process-lifetime runtime thunk。
+///
+/// 数学 thunk 使用统一的 Rust thunk 实现（见 `wjsm-host-native`），不依赖平台
+/// libc 的符号命名差异；ID 一旦发布必须保持稳定，只能追加不能重排。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum NativeHostSymbol {
     HostOperationDispatcher = 0,
+    MathAcos = 1,
+    MathAcosh = 2,
+    MathAsin = 3,
+    MathAsinh = 4,
+    MathAtan = 5,
+    MathAtanh = 6,
+    MathAtan2 = 7,
+    MathCbrt = 8,
+    MathCos = 9,
+    MathCosh = 10,
+    MathExp = 11,
+    MathExpm1 = 12,
+    MathLog = 13,
+    MathLog1p = 14,
+    MathLog10 = 15,
+    MathLog2 = 16,
+    MathSin = 17,
+    MathSinh = 18,
+    MathTan = 19,
+    MathTanh = 20,
+    MathPow = 21,
 }
 
 impl NativeHostSymbol {
+    pub const ALL: &[NativeHostSymbol] = &[
+        Self::HostOperationDispatcher,
+        Self::MathAcos,
+        Self::MathAcosh,
+        Self::MathAsin,
+        Self::MathAsinh,
+        Self::MathAtan,
+        Self::MathAtanh,
+        Self::MathAtan2,
+        Self::MathCbrt,
+        Self::MathCos,
+        Self::MathCosh,
+        Self::MathExp,
+        Self::MathExpm1,
+        Self::MathLog,
+        Self::MathLog1p,
+        Self::MathLog10,
+        Self::MathLog2,
+        Self::MathSin,
+        Self::MathSinh,
+        Self::MathTan,
+        Self::MathTanh,
+        Self::MathPow,
+    ];
+
     pub const fn id(self) -> u16 {
         self as u16
     }
@@ -407,13 +485,71 @@ impl NativeHostSymbol {
     pub const fn symbol_name(self) -> &'static str {
         match self {
             Self::HostOperationDispatcher => "wjsm_native_host_operation",
+            Self::MathAcos => "wjsm_native_math_acos",
+            Self::MathAcosh => "wjsm_native_math_acosh",
+            Self::MathAsin => "wjsm_native_math_asin",
+            Self::MathAsinh => "wjsm_native_math_asinh",
+            Self::MathAtan => "wjsm_native_math_atan",
+            Self::MathAtanh => "wjsm_native_math_atanh",
+            Self::MathAtan2 => "wjsm_native_math_atan2",
+            Self::MathCbrt => "wjsm_native_math_cbrt",
+            Self::MathCos => "wjsm_native_math_cos",
+            Self::MathCosh => "wjsm_native_math_cosh",
+            Self::MathExp => "wjsm_native_math_exp",
+            Self::MathExpm1 => "wjsm_native_math_expm1",
+            Self::MathLog => "wjsm_native_math_log",
+            Self::MathLog1p => "wjsm_native_math_log1p",
+            Self::MathLog10 => "wjsm_native_math_log10",
+            Self::MathLog2 => "wjsm_native_math_log2",
+            Self::MathSin => "wjsm_native_math_sin",
+            Self::MathSinh => "wjsm_native_math_sinh",
+            Self::MathTan => "wjsm_native_math_tan",
+            Self::MathTanh => "wjsm_native_math_tanh",
+            Self::MathPow => "wjsm_native_math_pow",
         }
     }
 
     pub const fn signature(self) -> NativeSignature {
         match self {
             Self::HostOperationDispatcher => NativeSignature::HostOperation,
+            Self::MathAtan2 | Self::MathPow => NativeSignature::F64Binary,
+            _ => NativeSignature::F64Unary,
         }
+    }
+
+    /// 需要 typed f64 直连的 Math builtin 到 thunk 的稳定映射。
+    pub const fn for_builtin(builtin: Builtin) -> Option<Self> {
+        Some(match builtin {
+            Builtin::MathAcos => Self::MathAcos,
+            Builtin::MathAcosh => Self::MathAcosh,
+            Builtin::MathAsin => Self::MathAsin,
+            Builtin::MathAsinh => Self::MathAsinh,
+            Builtin::MathAtan => Self::MathAtan,
+            Builtin::MathAtanh => Self::MathAtanh,
+            Builtin::MathAtan2 => Self::MathAtan2,
+            Builtin::MathCbrt => Self::MathCbrt,
+            Builtin::MathCos => Self::MathCos,
+            Builtin::MathCosh => Self::MathCosh,
+            Builtin::MathExp => Self::MathExp,
+            Builtin::MathExpm1 => Self::MathExpm1,
+            Builtin::MathLog => Self::MathLog,
+            Builtin::MathLog1p => Self::MathLog1p,
+            Builtin::MathLog10 => Self::MathLog10,
+            Builtin::MathLog2 => Self::MathLog2,
+            Builtin::MathSin => Self::MathSin,
+            Builtin::MathSinh => Self::MathSinh,
+            Builtin::MathTan => Self::MathTan,
+            Builtin::MathTanh => Self::MathTanh,
+            Builtin::MathPow => Self::MathPow,
+            _ => return None,
+        })
+    }
+
+    pub fn from_symbol_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|symbol| symbol.symbol_name() == name)
     }
 }
 
@@ -421,7 +557,7 @@ pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v7\0");
+        hasher.update(b"wjsm-native-abi-v8\0");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");
@@ -529,10 +665,21 @@ pub fn native_abi_hash() -> [u8; 32] {
         ] {
             hasher.update(operation.id().to_le_bytes());
         }
-        let symbol = NativeHostSymbol::HostOperationDispatcher;
-        hasher.update(symbol.id().to_le_bytes());
-        hasher.update(symbol.symbol_name().as_bytes());
-        hasher.update((symbol.signature() as u16).to_le_bytes());
+        for signature in [
+            NativeSignature::HostOperation,
+            NativeSignature::F64Unary,
+            NativeSignature::F64Binary,
+        ] {
+            hasher.update((signature as u16).to_le_bytes());
+            hasher.update([u8::from(signature.may_gc())]);
+            hasher.update([u8::from(signature.may_reenter())]);
+            hasher.update([signature.argument_count()]);
+        }
+        for symbol in NativeHostSymbol::ALL {
+            hasher.update(symbol.id().to_le_bytes());
+            hasher.update(symbol.symbol_name().as_bytes());
+            hasher.update((symbol.signature() as u16).to_le_bytes());
+        }
         hasher.update(include_bytes!("../../wjsm-ir/src/value.rs"));
         hasher.update(include_bytes!("../../wjsm-ir/src/constants.rs"));
         hasher.finalize().into()
@@ -583,6 +730,53 @@ mod tests {
         let op = NativeHostOp::from_builtin(Builtin::ConsoleLog);
         assert_eq!(NativeHostOp::from_id(op.id()), Some(op));
         assert_eq!(op.name(), "console.log");
+    }
+
+    #[test]
+    fn math_thunk_symbols_cover_all_typed_builtins() {
+        let typed = [
+            Builtin::MathAcos,
+            Builtin::MathAcosh,
+            Builtin::MathAsin,
+            Builtin::MathAsinh,
+            Builtin::MathAtan,
+            Builtin::MathAtanh,
+            Builtin::MathAtan2,
+            Builtin::MathCbrt,
+            Builtin::MathCos,
+            Builtin::MathCosh,
+            Builtin::MathExp,
+            Builtin::MathExpm1,
+            Builtin::MathLog,
+            Builtin::MathLog1p,
+            Builtin::MathLog10,
+            Builtin::MathLog2,
+            Builtin::MathSin,
+            Builtin::MathSinh,
+            Builtin::MathTan,
+            Builtin::MathTanh,
+            Builtin::MathPow,
+        ];
+        for builtin in typed {
+            let symbol = NativeHostSymbol::for_builtin(builtin).expect("typed builtin 有 thunk");
+            assert_eq!(
+                NativeHostSymbol::from_symbol_name(symbol.symbol_name()),
+                Some(symbol)
+            );
+            assert!(symbol.id() < 32);
+            assert!(!symbol.signature().may_gc());
+            assert!(!symbol.signature().may_reenter());
+        }
+        assert_eq!(NativeHostSymbol::for_builtin(Builtin::MathAbs), None);
+        assert_eq!(
+            NativeHostSymbol::from_symbol_name("wjsm_native_host_operation"),
+            Some(NativeHostSymbol::HostOperationDispatcher)
+        );
+        assert!(
+            NativeHostSymbol::HostOperationDispatcher
+                .signature()
+                .may_gc()
+        );
     }
 
     fn named_var_program(names: &[&str]) -> Program {

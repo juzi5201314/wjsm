@@ -996,8 +996,8 @@ fn build_entries(
 }
 
 fn resolve_process_symbol(name: &str, resolver: &dyn NativeSymbolResolver) -> Option<usize> {
-    if name == NativeHostSymbol::HostOperationDispatcher.symbol_name() {
-        return resolver.resolve(NativeHostSymbol::HostOperationDispatcher);
+    if let Some(symbol) = NativeHostSymbol::from_symbol_name(name) {
+        return resolver.resolve(symbol);
     }
     match name {
         "wjsm_native_memory_copy" => Some((native_memory_copy as *const ()).addr()),
