@@ -237,6 +237,26 @@ fn is_array_from_of_call(expr: &swc_ast::Expr) -> bool {
         swc_ast::MemberProp::Ident(prop) if matches!(prop.sym.as_ref(), "from" | "of")
     )
 }
+/// 判断方法名是否为「返回数组」的 Array.prototype 方法（`map`/`filter`/`slice`
+/// 等）。用于链式数组高阶函数 receiver 判定：这类方法在 receiver 为数组时
+/// 恒返回数组，其结果可作为下一链节的内建 receiver 继续展开。
+fn is_array_producing_proto_method(name: &str) -> bool {
+    matches!(
+        name,
+        "map"
+            | "filter"
+            | "flatMap"
+            | "flat"
+            | "concat"
+            | "splice"
+            | "sort"
+            | "copyWithin"
+            | "toSorted"
+            | "toReversed"
+            | "toSpliced"
+            | "with"
+    )
+}
 
 /// 判断表达式是否为 TypedArray 构造函数调用（`new Int8Array(...)` 等形式）。
 fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {

@@ -36,7 +36,7 @@ module {
     c33 = bool(true)
     c34 = bool(false)
 
-  fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
+  fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
       %0 = const c20
       %1 = load var $1.resolve
@@ -51,7 +51,7 @@ module {
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_2 [params: $3.$env, $3.$this, $3.value] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.value] [entry=bb0]:
     bb0:
       %0 = load var $3.value
       %1 = call builtin.console.log(%0)

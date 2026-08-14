@@ -38,11 +38,11 @@ module {
     c35 = bool(true)
     c36 = bool(false)
 
-  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @anon_1 [needs_prototype] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+  fn @anon_1 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = load var $2.v
       %1 = call builtin.console.log(%0)
@@ -54,11 +54,11 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @anon_2 [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @anon_2 [needs_prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @anon_3 [needs_prototype] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+  fn @anon_3 [needs_prototype] [direct_callable] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = load var $4.v
       %1 = call builtin.console.log(%0)
@@ -70,7 +70,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @anon_4 [needs_prototype] [params: $5.$env, $5.$this, $5.e] [entry=bb0]:
+  fn @anon_4 [needs_prototype] [direct_callable] [params: $5.$env, $5.$this, $5.e] [entry=bb0]:
     bb0:
       %0 = load var $5.e
       %1 = call builtin.console.log(%0)
@@ -82,7 +82,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

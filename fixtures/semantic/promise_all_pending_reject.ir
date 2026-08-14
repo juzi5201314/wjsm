@@ -76,13 +76,13 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @arrow_2 [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = const c32
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_3 [params: $4.$env, $4.$this, $4.reason] [entry=bb0]:
+  fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.reason] [entry=bb0]:
     bb0:
       %0 = load var $4.reason
       %1 = call builtin.console.log(%0)

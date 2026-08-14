@@ -34,7 +34,7 @@ module {
     c31 = number(5)
     c32 = bool(true)
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

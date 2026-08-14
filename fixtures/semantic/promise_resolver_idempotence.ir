@@ -43,7 +43,7 @@ module {
     c40 = bool(true)
     c41 = bool(false)
 
-  fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
+  fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
     bb0:
       %0 = const c21
       %1 = load var $1.resolve
@@ -158,26 +158,9 @@ module {
       %21 = const c20
       store var $0.calls, %21
       %22 = new_promise
-      %23 = const c27
       %24 = call builtin.promise.create_resolve_function(%22)
       %25 = call builtin.promise.create_reject_function(%22)
-      %26 = const c28
-      call %23, this=%26, args=[%24, %25]
-      %27 = const c32
-      %28 = const c33
-      store var $0.$shared_env, %28
-      %29 = new_object(capacity=1)
-      %30 = load var $env
-      set_proto %29, %30
-      store var $0.$shared_env, %29
-      %31 = load var $0.calls
-      %32 = const c34
-      %33 = set_prop %29, %32, %31
-      %34 = call builtin.create_closure(%27, %29)
-      %35 = const c35
-      %36 = call builtin.promise.then(%22, %34, %35)
-      %37 = is_exception %36
-      branch %37, bb2, bb1
+      jump bb6
     bb1:
       %39 = const c36
       %40 = const c36
@@ -197,4 +180,49 @@ module {
     bb4:
       %48 = call builtin.exception_value(%46)
       throw %48
+    bb5:
+      %27 = const c32
+      %28 = const c33
+      store var $0.$shared_env, %28
+      %29 = new_object(capacity=1)
+      %30 = load var $env
+      set_proto %29, %30
+      store var $0.$shared_env, %29
+      %31 = load var $0.calls
+      %32 = const c34
+      %33 = set_prop %29, %32, %31
+      %34 = call builtin.create_closure(%27, %29)
+      %35 = const c35
+      %36 = call builtin.promise.then(%22, %34, %35)
+      %37 = is_exception %36
+      branch %37, bb2, bb1
+    bb6:
+      %50 = const c21
+      %52 = const c22
+      %53 = call %24, this=%50, args=[%52]
+      %54 = is_exception %53
+      branch %54, bb8, bb7
+    bb7:
+      %56 = const c23
+      %58 = const c24
+      %59 = call %25, this=%56, args=[%58]
+      %60 = is_exception %59
+      branch %60, bb10, bb9
+    bb8:
+      %55 = call builtin.exception_value(%53)
+      throw %55
+    bb9:
+      %62 = const c25
+      %64 = const c26
+      %65 = call %24, this=%62, args=[%64]
+      %66 = is_exception %65
+      branch %66, bb12, bb11
+    bb10:
+      %61 = call builtin.exception_value(%59)
+      throw %61
+    bb11:
+      jump bb5
+    bb12:
+      %67 = call builtin.exception_value(%65)
+      throw %67
 }

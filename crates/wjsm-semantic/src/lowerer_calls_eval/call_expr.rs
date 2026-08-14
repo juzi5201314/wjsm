@@ -493,12 +493,12 @@ impl Lowerer {
                         );
                     }
                     // Array.prototype 方法调用优化（带 receiver guard）。
-                    // 仅静态已知 Array 绑定直连；Map/Set 的 forEach/entries 等必须走自身方法。
+                    // 仅静态已知 Array receiver 直连（含链式高阶函数中间结果）；
+                    // Map/Set 的 forEach/entries 等必须走自身方法。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(array_builtin) =
                             builtin_from_array_proto_method(&prop_ident.sym)
-                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
-                        && self.is_array_binding(receiver_ident)
+                        && self.is_array_producing_expr(member_expr.obj.as_ref())
                     {
                         return self.emit_proto_builtin_call(
                             array_builtin,

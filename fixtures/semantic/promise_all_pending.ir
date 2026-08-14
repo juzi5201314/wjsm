@@ -76,7 +76,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @arrow_2 [params: $3.$env, $3.$this, $3.values] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.values] [entry=bb0]:
     bb0:
       %0 = load var $3.values
       %1 = const c32

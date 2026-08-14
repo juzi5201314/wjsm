@@ -35,7 +35,7 @@ module {
     c32 = bool(true)
     c33 = bool(false)
 
-  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
     bb0:
       %0 = load var $1.p
       %1 = const c24
@@ -50,7 +50,7 @@ module {
       %6 = phi [(bb0, %2), (bb1, %5)]
       return %6
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

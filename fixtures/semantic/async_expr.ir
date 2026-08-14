@@ -89,7 +89,7 @@ module {
       promise_resolve %20, %19
       return
 
-  fn @anon_0 [needs_prototype] [params: $2.$env, $2.$this, $2.x] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.x] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c29
@@ -120,13 +120,13 @@ module {
       call builtin.async_function.resume(%5, %7, %17, %18, %19)
       return %4
 
-  fn @arrow_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
       %0 = load var $3.v
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

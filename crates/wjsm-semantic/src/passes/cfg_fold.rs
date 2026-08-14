@@ -4,9 +4,11 @@
 //! 把内联/EA 暴露的死指令、死块与可折叠分支清理干净。规则按序应用到不动点
 //! （每函数每轮全量重扫，上限 8 轮）：
 //!
-//! 1. **IsException 折叠**：`is_exception(new_object)` 恒 false（NewObject 分配
-//!    成功即普通对象；失败软上限 RangeError 的语义取舍见计划 Assumptions）；
-//!    `is_exception(const)` 恒 false（常量池不存在 TAG_EXCEPTION 编码）。
+//! 1. **IsException 折叠**：`is_exception(value)` 在 value 可证明非异常时恒
+//!    false——Const/NewObject/Compare（===/!== 永不抛）/NewArray，及所有
+//!    source 可证明非异常的 Phi（传递闭包）。NewObject 分配成功即普通对象；
+//!    失败软上限 RangeError 的语义取舍见计划 Assumptions。Binary/Unary 可能
+//!    抛异常（bigint 混合算术），不折叠。
 //! 2. **IsJsObject 折叠**：`is_js_object(new_object)` 恒 true（从 inline_for_ea
 //!    阶段 B 迁移，行为不变）。
 //! 3. **常量分支折叠**：Const 条件的 `Branch` / Const 值的 `Switch` → `Jump`。
@@ -18,7 +20,7 @@
 //!    专用规则：`get_prototype_from_constructor`（构造器原型为不可配置数据属性，
 //!    读取无副作用）在目标 `needs_prototype() == false` 时无条件删除。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wjsm_ir::{
     BasicBlockId, Builtin, Constant, ConstantId, FunctionId, Instruction, Module, Terminator,
@@ -27,6 +29,43 @@ use wjsm_ir::{
 
 use super::direct_call::{instr_uses, instruction_dest, terminator_uses};
 use super::inline_for_ea::replace_all_uses_of;
+
+/// 判断值是否可证明非异常（其 def 不可能产生 TAG_EXCEPTION）。
+/// 仅覆盖恒不抛异常的指令：Const/NewObject（分配成功即普通对象/数组）、
+/// Compare（===/!== 严格相等永不抛）、NewArray（数组分配），以及所有 source
+/// 都可证明非异常的 Phi（传递闭包）；循环 Phi 保守返回 false。
+///
+/// 注意：Binary/Unary 不可折叠——bigint 混合算术（`7n + 1`）、一元 `+bigint`、
+/// `delete`（严格模式不可配置属性）等都可能抛异常。
+fn is_provably_non_exception(defs: &HashMap<ValueId, Instruction>, value: ValueId) -> bool {
+    fn inner(
+        defs: &HashMap<ValueId, Instruction>,
+        value: ValueId,
+        visiting: &mut HashSet<ValueId>,
+    ) -> bool {
+        let Some(instr) = defs.get(&value) else {
+            return false;
+        };
+        match instr {
+            Instruction::Const { .. }
+            | Instruction::NewObject { .. }
+            | Instruction::Compare { .. }
+            | Instruction::NewArray { .. } => true,
+            Instruction::Phi { sources, .. } => {
+                if !visiting.insert(value) {
+                    return false;
+                }
+                let all_non_exception = sources
+                    .iter()
+                    .all(|source| inner(defs, source.value, visiting));
+                visiting.remove(&value);
+                all_non_exception
+            }
+            _ => false,
+        }
+    }
+    inner(defs, value, &mut HashSet::new())
+}
 
 /// 在模块常量池中查找指定常量；缺失时追加并返回新 ID。
 fn const_id_or_add(module: &mut Module, constant: Constant) -> ConstantId {
@@ -106,12 +145,9 @@ pub(crate) fn run(module: &mut Module) {
             for block in function.blocks_mut() {
                 let mut replace_sites: Vec<(usize, Instruction)> = Vec::new();
                 for (idx, instr) in block.instructions().iter().enumerate() {
-                    // 规则 1：is_exception(NewObject|Const) → false。
+                    // 规则 1：is_exception(可证明非异常值) → false。
                     if let Instruction::IsException { dest, value } = instr {
-                        let foldable = matches!(
-                            defs.get(value),
-                            Some(Instruction::NewObject { .. }) | Some(Instruction::Const { .. })
-                        );
+                        let foldable = is_provably_non_exception(&defs, *value);
                         if foldable {
                             replace_sites.push((
                                 idx,
@@ -391,6 +427,202 @@ mod tests {
         // is_exception 已折叠为 const false；NewObject 的 dest 仍被 return 引用。
         assert!(!text.contains("is_exception"), "got:\n{text}");
         assert!(text.contains("= const c"), "折叠常量缺失:\n{text}");
+    }
+
+    #[test]
+    fn folds_is_exception_on_compare() {
+        let mut module = Module::new();
+        let lhs = ValueId(0);
+        let rhs = ValueId(1);
+        let cmp = ValueId(2);
+        let ex = ValueId(3);
+        let c2 = number_id(&mut module, 2.0);
+        let c3 = number_id(&mut module, 3.0);
+        let b0 = block(0);
+        let mut b1 = block(1);
+        b1.push_instruction(Instruction::Const {
+            dest: lhs,
+            constant: c2,
+        });
+        b1.push_instruction(Instruction::Const {
+            dest: rhs,
+            constant: c3,
+        });
+        b1.push_instruction(Instruction::Compare {
+            dest: cmp,
+            op: wjsm_ir::CompareOp::StrictEq,
+            lhs,
+            rhs,
+        });
+        b1.push_instruction(Instruction::IsException {
+            dest: ex,
+            value: cmp,
+        });
+        b1.set_terminator(Terminator::Return { value: Some(ex) });
+        module.push_function({
+            let mut f = Function::new("cmp", BasicBlockId(1));
+            f.set_has_eval(false);
+            f.push_block(b0);
+            f.push_block(b1);
+            f
+        });
+
+        run(&mut module);
+
+        let text = module.dump_text();
+        assert!(!text.contains("is_exception"), "Compare 未折叠:\n{text}");
+        assert!(text.contains("= const c"), "折叠常量缺失:\n{text}");
+    }
+
+    #[test]
+    fn does_not_fold_is_exception_on_binary() {
+        let mut module = Module::new();
+        let lhs = ValueId(0);
+        let rhs = ValueId(1);
+        let bin = ValueId(2);
+        let ex = ValueId(3);
+        let c2 = number_id(&mut module, 2.0);
+        let c3 = number_id(&mut module, 3.0);
+        let b0 = block(0);
+        let mut b1 = block(1);
+        b1.push_instruction(Instruction::Const {
+            dest: lhs,
+            constant: c2,
+        });
+        b1.push_instruction(Instruction::Const {
+            dest: rhs,
+            constant: c3,
+        });
+        b1.push_instruction(Instruction::Binary {
+            dest: bin,
+            op: wjsm_ir::BinaryOp::Mul,
+            lhs,
+            rhs,
+        });
+        b1.push_instruction(Instruction::IsException {
+            dest: ex,
+            value: bin,
+        });
+        b1.set_terminator(Terminator::Return { value: Some(ex) });
+        module.push_function({
+            let mut f = Function::new("bin", BasicBlockId(1));
+            f.set_has_eval(false);
+            f.push_block(b0);
+            f.push_block(b1);
+            f
+        });
+
+        run(&mut module);
+
+        let text = module.dump_text();
+        assert!(text.contains("is_exception"), "Binary 不应被折叠:\n{text}");
+    }
+
+    #[test]
+    fn folds_is_exception_on_phi_of_pure_values() {
+        let mut module = Module::new();
+        let a = ValueId(0);
+        let b = ValueId(1);
+        let phi = ValueId(2);
+        let ex = ValueId(3);
+        let ca = number_id(&mut module, 1.0);
+        let cb = number_id(&mut module, 2.0);
+        let mut b0 = block(0);
+        let mut b1 = block(1);
+        let mut b2 = block(2);
+        let mut b3 = block(3);
+        b0.set_terminator(Terminator::Branch {
+            condition: ValueId(9),
+            true_block: BasicBlockId(1),
+            false_block: BasicBlockId(2),
+        });
+        b1.push_instruction(Instruction::Const {
+            dest: a,
+            constant: ca,
+        });
+        b1.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+        b2.push_instruction(Instruction::Const {
+            dest: b,
+            constant: cb,
+        });
+        b2.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+        b3.push_instruction(Instruction::Phi {
+            dest: phi,
+            sources: vec![
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(1),
+                    value: a,
+                },
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(2),
+                    value: b,
+                },
+            ],
+        });
+        b3.push_instruction(Instruction::IsException {
+            dest: ex,
+            value: phi,
+        });
+        b3.set_terminator(Terminator::Return { value: Some(ex) });
+        module.push_function({
+            let mut f = Function::new("phi_exc", BasicBlockId(0));
+            f.set_has_eval(false);
+            f.push_block(b0);
+            f.push_block(b1);
+            f.push_block(b2);
+            f.push_block(b3);
+            f
+        });
+
+        run(&mut module);
+
+        let text = module.dump_text();
+        assert!(!text.contains("is_exception"), "Phi 未折叠:\n{text}");
+        assert!(text.contains("= const c"), "折叠常量缺失:\n{text}");
+    }
+
+    #[test]
+    fn does_not_fold_is_exception_on_call() {
+        let mut module = Module::new();
+        let callee = ValueId(0);
+        let call = ValueId(1);
+        let ex = ValueId(2);
+        let b0 = block(0);
+        let mut b1 = block(1);
+        b1.push_instruction(Instruction::Const {
+            dest: callee,
+            constant: const_id_or_add(&mut module, Constant::Undefined),
+        });
+        b1.push_instruction(Instruction::Call {
+            dest: Some(call),
+            callee,
+            this_val: callee,
+            args: vec![],
+        });
+        b1.push_instruction(Instruction::IsException {
+            dest: ex,
+            value: call,
+        });
+        b1.set_terminator(Terminator::Return { value: Some(ex) });
+        module.push_function({
+            let mut f = Function::new("call_exc", BasicBlockId(1));
+            f.set_has_eval(false);
+            f.push_block(b0);
+            f.push_block(b1);
+            f
+        });
+
+        run(&mut module);
+
+        let text = module.dump_text();
+        assert!(
+            text.contains("is_exception"),
+            "Call 结果不应被折叠:\n{text}"
+        );
     }
 
     #[test]

@@ -32,14 +32,14 @@ module {
     c29 = bool(true)
     c30 = bool(false)
 
-  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
       %0 = load var $1.x
       %1 = const c23
       %2 = mul %0, %1
       return %2
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

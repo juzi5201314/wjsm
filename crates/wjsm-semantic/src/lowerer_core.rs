@@ -1196,6 +1196,35 @@ impl Lowerer {
             false
         }
     }
+    /// 判断表达式结果是否可静态确认为 Array：数组字面量、`new Array(...)`、
+    /// `Array.from/of(...)`（需 `Array` 未被作用域遮蔽），或「返回数组的数组
+    /// 原型方法」链（如 `arr.map(f).filter(g)` 的中间结果）。用于数组原型方法
+    /// 调用的 `CallBuiltin` 直连判定，使链式高阶函数逐链节内建化。
+    pub(crate) fn is_array_producing_expr(&self, expr: &swc_ast::Expr) -> bool {
+        if is_array_constructor_expr(expr) {
+            return true;
+        }
+        match expr {
+            swc_ast::Expr::Ident(ident) => self.is_array_binding(ident),
+            swc_ast::Expr::Call(call) => {
+                if is_array_from_of_call(expr) && self.scopes.lookup("Array").is_err() {
+                    return true;
+                }
+                let swc_ast::Callee::Expr(callee) = &call.callee else {
+                    return false;
+                };
+                let swc_ast::Expr::Member(member) = callee.as_ref() else {
+                    return false;
+                };
+                let swc_ast::MemberProp::Ident(prop) = &member.prop else {
+                    return false;
+                };
+                is_array_producing_proto_method(&prop.sym)
+                    && self.is_array_producing_expr(member.obj.as_ref())
+            }
+            _ => false,
+        }
+    }
 
     /// 检查指定 Ident 是否为已知的 TypedArray 绑定。
     pub(crate) fn is_typedarray_binding(&self, ident: &swc_ast::Ident) -> bool {

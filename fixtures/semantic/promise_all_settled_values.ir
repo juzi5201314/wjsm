@@ -44,7 +44,7 @@ module {
     c41 = bool(true)
     c42 = bool(false)
 
-  fn @arrow_0 [params: $1.$env, $1.$this, $1.results] [entry=bb0]:
+  fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.results] [entry=bb0]:
     bb0:
       %0 = load var $1.results
       %1 = const c26
@@ -130,7 +130,7 @@ module {
       %53 = call builtin.exception_value(%51)
       throw %53
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

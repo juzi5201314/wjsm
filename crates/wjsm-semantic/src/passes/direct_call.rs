@@ -211,9 +211,6 @@ pub fn run(module: &mut Module) {
             }
         }
     }
-    if immutable.is_empty() {
-        return;
-    }
 
     // 3. per 函数判定：env_required / has_new_target / resolvable_env_gets。
     let mut env_required: HashSet<FunctionId> = HashSet::new();

@@ -33,7 +33,7 @@ module {
     c30 = number(0)
     c31 = number(-1)
 
-  fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
       %0 = load var $1.x
       %1 = const c24
@@ -42,7 +42,7 @@ module {
       %2 = call builtin.abstract_compare(%0, %1, %3, %4)
       return %2
 
-  fn @$module_main [entry=bb0]:
+  fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0
