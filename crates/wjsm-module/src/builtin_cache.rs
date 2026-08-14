@@ -1,10 +1,9 @@
 //! builtin 段磁盘缓存：把 builtin 模块依赖闭包的 lower 产物序列化到
 //! `${WJSM_CACHE_DIR}/builtin_ir/<key>.bin`，避免每次冷启动重复 lower。
 //!
-//! 缓存键（[`builtin_cache_key`]）由 frontier（调用方需要的 builtin canonical 集合）、
-//! `emit_debug_checks` 与各 frontier 模块源码的 SHA-256 共同决定；[`BUILTIN_CACHE_VERSION`]
-//! 是语义版本号——**builtin_js/ 源码、lowerer（wjsm-semantic）或 IR 布局（wjsm-ir）
-//! 任一发生变化时都必须手动 bump**，否则可能命中语义过期但结构合法的旧缓存。
+//! `emit_debug_checks` 与构建期生成的 [`BUILTIN_CACHE_ABI_HASH`] 共同决定。该指纹
+//! 覆盖全部 builtin_js 源码及其 module/parser/semantic/IR lower 输入；这些输入任一
+//! 改变都会自动切换缓存命名空间，并拒绝旧载荷，不再依赖人工维护版本号。
 //!
 //! # 段结构
 //!
@@ -33,8 +32,7 @@ use wjsm_semantic::ModuleLoweringInput;
 
 use crate::builtin_modules::canonical_from_virtual_path;
 
-/// 缓存格式语义版本。builtin_js 源码 / lowerer / IR 布局变化时必须手动 bump。
-pub(crate) const BUILTIN_CACHE_VERSION: u64 = 2;
+include!(concat!(env!("OUT_DIR"), "/builtin_cache_abi_hash.rs"));
 
 /// builtin 段中每个模块的布局记录（与 lower 时的 ModuleId / 作用域布局一致）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -52,8 +50,8 @@ pub(crate) struct BuiltinModuleRecord {
 /// 一个 builtin 依赖闭包的完整 lower 产物（磁盘缓存的载荷）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BuiltinSegmentCacheFile {
-    /// 必须等于 [`BUILTIN_CACHE_VERSION`]，否则视为过期。
-    pub version: u64,
+    /// 构建 builtin 段时的 [`BUILTIN_CACHE_ABI_HASH`]，用于拒绝旧载荷。
+    pub cache_abi_hash: [u8; 32],
     /// 段内全部模块的布局记录（按 module_id 升序）。
     pub modules: Vec<BuiltinModuleRecord>,
     /// 段 IR：闭包内所有模块共同降级进入口函数（`$builtin_main`）的完整 `Program`。
@@ -70,38 +68,55 @@ pub(crate) struct BuiltinSegmentCacheFile {
 }
 
 /// 计算 builtin 段缓存键：
-/// `sha256(BUILTIN_CACHE_VERSION ‖ u8(emit_debug_checks) ‖ 每个 (canonical ‖ sha256(source)))`，
+/// `sha256(BUILTIN_CACHE_ABI_HASH ‖ u8(emit_debug_checks) ‖ 每个 canonical 名)`，
 /// 十六进制输出（64 字符）。
 ///
+/// [`BUILTIN_CACHE_ABI_HASH`] 覆盖全部 builtin_js 源码，因此也覆盖 frontier 的
+/// 传递依赖；它同时覆盖 module/parser/semantic/IR 的 lower 输入与 Cargo.lock。
 /// frontier 按 `BTreeSet` 排序迭代，键与元素顺序无关；`node:` 前缀先被归一化掉
 /// （与 `builtin_modules::lookup` 的规则一致）。未知 canonical 返回错误，避免生成
-/// 内容不确定的键。resolution options 与 root 有意不入键：builtin 源码是编译期常量、
-/// 自包含（只 import 其它 `node:` builtin），见模块文档的版本 bump 纪律。
+/// 内容不确定的键。resolution options 与 root 有意不入键：builtin 源码自包含，只 import
+/// 其它 `node:` builtin。
 pub(crate) fn builtin_cache_key(
     frontier: &BTreeSet<String>,
     emit_debug_checks: bool,
 ) -> Result<String, anyhow::Error> {
+    builtin_cache_key_with_abi_hash(frontier, emit_debug_checks, &BUILTIN_CACHE_ABI_HASH)
+}
+
+fn builtin_cache_key_with_abi_hash(
+    frontier: &BTreeSet<String>,
+    emit_debug_checks: bool,
+    cache_abi_hash: &[u8; 32],
+) -> Result<String, anyhow::Error> {
     let mut hasher = Sha256::new();
-    hasher.update(BUILTIN_CACHE_VERSION.to_le_bytes());
-    hasher.update([emit_debug_checks as u8]);
+    hasher.update(b"wjsm-builtin-ir-cache-v1\0");
+    hasher.update(cache_abi_hash);
+    hasher.update([u8::from(emit_debug_checks)]);
     for specifier in frontier {
         let canonical = specifier.strip_prefix("node:").unwrap_or(specifier);
-        let source = builtin_modules::source_for_canonical(canonical)
-            .with_context(|| format!("builtin cache key: 未知 builtin canonical {canonical:?}"))?;
-        hasher.update(canonical.as_bytes());
-        hasher.update(Sha256::digest(source.as_bytes()));
+        if builtin_modules::source_for_canonical(canonical).is_none() {
+            bail!("builtin cache key: 未知 builtin canonical {canonical:?}");
+        }
+        hash_cache_key_field(&mut hasher, canonical.as_bytes());
     }
     let digest = hasher.finalize();
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn hash_cache_key_field(hasher: &mut Sha256, field: &[u8]) {
+    let len = u64::try_from(field.len()).expect("缓存键字段长度应可表示为 u64");
+    hasher.update(len.to_le_bytes());
+    hasher.update(field);
+}
+
 /// 从 `${dir}/<key>.bin` 读取并校验 builtin 段。任何失败（缺文件、反序列化错误、
-/// 版本不匹配）都返回 `None`——调用方随后走 [`build_builtin_segment`] 重建。
+/// ABI 指纹不匹配）都返回 `None`——调用方随后走 [`build_builtin_segment`] 重建。
 ///
 /// 不做 `program.verify()` 门禁：部分 builtin 闭包（events/path/perf_hooks）在基线上
 /// 就存在死块校验告警（block has instructions but terminator is unreachable），运行时
 /// 与 native 编译均容忍；若把 verify 当命中条件，这些闭包的缓存永远不命中。
-/// 段与 plain 路径同源（同一 lowerer），结构合法由 bincode 解码 + 版本号保证。
+/// 段与 plain 路径同源（同一 lowerer），结构合法由 bincode 解码 + ABI 指纹保证。
 pub(crate) fn load_builtin_segment(dir: &Path, key: &str) -> Option<BuiltinSegmentCacheFile> {
     if let Some(segment) = memory_get(key) {
         return Some(segment);
@@ -110,7 +125,7 @@ pub(crate) fn load_builtin_segment(dir: &Path, key: &str) -> Option<BuiltinSegme
     let bytes = std::fs::read(path).ok()?;
     let (segment, _consumed): (BuiltinSegmentCacheFile, usize) =
         bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).ok()?;
-    if segment.version != BUILTIN_CACHE_VERSION {
+    if segment.cache_abi_hash != BUILTIN_CACHE_ABI_HASH {
         return None;
     }
     memory_put(key, &segment);
@@ -269,7 +284,7 @@ pub(crate) fn build_builtin_segment(
         .with_context(|| format!("builtin 段作用域总数 {} 超出 u32", metadata.scope_count))?;
 
     Ok(BuiltinSegmentCacheFile {
-        version: BUILTIN_CACHE_VERSION,
+        cache_abi_hash: BUILTIN_CACHE_ABI_HASH,
         modules: modules_record,
         program,
         scope_count,
@@ -364,6 +379,19 @@ mod tests {
     }
 
     #[test]
+    fn cache_key_changes_with_abi_fingerprint() {
+        let frontier = frontier(&["fs", "path"]);
+        let current =
+            builtin_cache_key_with_abi_hash(&frontier, false, &BUILTIN_CACHE_ABI_HASH).unwrap();
+        let mut changed_abi_hash = BUILTIN_CACHE_ABI_HASH;
+        changed_abi_hash[0] ^= 1;
+        let changed = builtin_cache_key_with_abi_hash(&frontier, false, &changed_abi_hash).unwrap();
+
+        assert_ne!(current, changed);
+        assert_eq!(builtin_cache_key(&frontier, false).unwrap(), current);
+    }
+
+    #[test]
     fn cache_key_normalizes_node_prefix() {
         assert_eq!(
             builtin_cache_key(&frontier(&["fs"]), false).unwrap(),
@@ -377,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn store_load_roundtrip_and_version_gate() {
+    fn store_load_roundtrip_and_abi_gate() {
         // 最小合法 Program：单个空入口函数（verify 可过）。
         let mut program = Program::new();
         let mut function =
@@ -390,7 +418,7 @@ mod tests {
         assert_eq!(entry_function_id, FunctionId(0));
 
         let segment = BuiltinSegmentCacheFile {
-            version: BUILTIN_CACHE_VERSION,
+            cache_abi_hash: BUILTIN_CACHE_ABI_HASH,
             modules: vec![BuiltinModuleRecord {
                 canonical: "fs".to_string(),
                 source_hash: [7u8; 32],
@@ -413,9 +441,9 @@ mod tests {
         let loaded = load_builtin_segment(&dir, "testkey").expect("roundtrip 应命中");
         assert_eq!(loaded, segment);
 
-        // 版本不匹配 → 视为过期，返回 None。
+        // ABI 指纹不匹配 → 视为过期，返回 None。
         let mut stale = segment.clone();
-        stale.version = BUILTIN_CACHE_VERSION + 1;
+        stale.cache_abi_hash[0] ^= 1;
         store_builtin_segment(&dir, "stale", &stale).unwrap();
         assert!(load_builtin_segment(&dir, "stale").is_none());
 
@@ -433,7 +461,7 @@ mod tests {
             false,
         )
         .expect("lower assert 闭包应成功");
-        assert_eq!(segment.version, BUILTIN_CACHE_VERSION);
+        assert_eq!(segment.cache_abi_hash, BUILTIN_CACHE_ABI_HASH);
 
         let canonicals: Vec<&str> = segment
             .modules
@@ -452,7 +480,7 @@ mod tests {
         assert_eq!(segment.modules[0].canonical, "assert");
 
         // 入口函数已改名为 $builtin_main（避免与用户段 $module_main 冲突），
-        // 且段程序通过 IR 校验（load_builtin_segment 的命中也依赖 verify 通过）。
+        // 且段程序通过 IR 校验。
         let index = usize::try_from(segment.entry_function_id.0).expect("u32 索引在 usize 内");
         assert_eq!(segment.program.functions()[index].name(), "$builtin_main");
         assert!(segment.program.verify().is_ok());
@@ -479,7 +507,7 @@ mod tests {
         let loaded = load_builtin_segment(&dir, "assert").expect("闭包段 roundtrip 应命中");
         // Program 常量含 NaN（assert/util 源码），f64 的 PartialEq 认为 NaN != NaN，
         // 不能整体比较；改为逐字段 + 结构不变量。
-        assert_eq!(loaded.version, segment.version);
+        assert_eq!(loaded.cache_abi_hash, segment.cache_abi_hash);
         assert_eq!(loaded.modules, segment.modules);
         assert_eq!(loaded.scope_count, segment.scope_count);
         assert_eq!(loaded.entry_function_id, segment.entry_function_id);

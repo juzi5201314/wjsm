@@ -17,5 +17,9 @@ wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-ir = { path = "../wjsm-ir" }
 
+[build-dependencies]
+sha2 = { workspace = true }
+walkdir = { workspace = true }
+
 [dev-dependencies]
 parking_lot = "0.12"

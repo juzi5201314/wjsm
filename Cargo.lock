@@ -4244,6 +4244,7 @@ dependencies = [
  "swc_core",
  "thiserror",
  "url",
+ "walkdir",
  "wjsm-artifact-format",
  "wjsm-ir",
  "wjsm-parser",
