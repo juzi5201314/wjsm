@@ -43,3 +43,9 @@ test-group = 'runtime-cache-delete'
 filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/) + test(/happy__node_builtin_perf_hooks_(histogram_clone|native_http)/)'
 threads-required = 'num-cpus'
 
+# host_table_reclaim：4MB 小堆 + ZGC + 20000 次闭包分配，本质是 GC 回收
+# 压力测试；单个约 1.5s（debug 模式 host 层未优化），并行争抢 CPU 后越过
+# 3s 硬门禁。要求独占执行槽，门禁本身不放宽。
+[[profile.default.overrides]]
+filter = 'test(host_table_reclaim)'
+threads-required = 'num-cpus'
