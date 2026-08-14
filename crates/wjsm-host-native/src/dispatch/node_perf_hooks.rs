@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use num_traits::ToPrimitive;
-use wjsm_ir::value;
+use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::{
@@ -214,6 +214,16 @@ fn now_ms(state: &mut NativeAgentState) -> f64 {
         .node_perf_hooks
         .origin
         .map_or(0.0, |origin| origin.elapsed().as_secs_f64() * 1000.0)
+}
+
+pub(super) fn dispatch_perf(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+) -> Option<i64> {
+    let _ = (ctx, builtin, args);
+    Some(performance_now(state))
 }
 
 pub(crate) fn performance_now(state: &mut NativeAgentState) -> i64 {

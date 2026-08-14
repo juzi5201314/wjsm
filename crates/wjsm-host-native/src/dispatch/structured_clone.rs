@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use wjsm_ir::value;
+use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::{
@@ -69,6 +69,16 @@ enum CloneNode {
     Buffer {
         backing: CloneBacking,
     },
+}
+
+pub(super) fn dispatch_structured_clone(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+) -> Option<i64> {
+    let _ = builtin;
+    Some(structured_clone(ctx, state, args))
 }
 
 pub(crate) fn structured_clone(

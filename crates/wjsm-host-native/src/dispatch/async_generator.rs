@@ -53,10 +53,6 @@ pub(super) fn dispatch_async_generator(
         Builtin::AsyncGeneratorReturn => request_or_return(ctx, state, args),
         Builtin::AsyncGeneratorThrow => request_or_throw(ctx, state, args),
         Builtin::AsyncIteratorFrom => async_iterator_from(ctx, state, args),
-        Builtin::IteratorNext if is_managed_async_iterator(state, args) => {
-            iterator_next(ctx, state, args)
-        }
-        Builtin::IteratorNext => return None,
         _ => return None,
     })
 }
@@ -77,7 +73,7 @@ pub(crate) fn is_async_generator(state: &NativeAgentState, receiver: i64) -> boo
             .contains_key(&value::decode_object_handle(receiver))
 }
 
-fn is_managed_async_iterator(state: &NativeAgentState, args: &[i64]) -> bool {
+pub(super) fn is_managed_async_iterator(state: &NativeAgentState, args: &[i64]) -> bool {
     args.first().is_some_and(|source| {
         is_async_generator(state, *source)
             || state.async_iterator_objects.contains(source)
@@ -194,7 +190,11 @@ fn async_iterator_from(
     }
 }
 
-fn iterator_next(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+pub(super) fn iterator_next_async(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
     let source = args
         .first()
         .copied()

@@ -71,6 +71,9 @@ pub(super) fn dispatch_function(
                 .invoke_callable(ctx, callee, this_value, &arguments)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
+        Builtin::CreateClosure => state
+            .create_closure(args)
+            .unwrap_or_else(|| fail_dispatch(ctx)),
         _ => return None,
     })
 }

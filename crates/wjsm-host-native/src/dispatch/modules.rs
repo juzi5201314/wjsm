@@ -308,6 +308,49 @@ pub(crate) fn configure(
     Ok(())
 }
 
+pub(super) fn dispatch_scope(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+) -> Option<i64> {
+    Some(match builtin {
+        Builtin::ScopeRecordCreate => {
+            create_scope_record(state).unwrap_or_else(|| fail_dispatch(ctx))
+        }
+        Builtin::ScopeRecordAddBinding => {
+            let [record, key, stored, initialized, constant] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            value::encode_bool(scope_record_add(
+                state,
+                *record,
+                *key,
+                *stored,
+                *initialized,
+                *constant,
+            ))
+        }
+        Builtin::ScopeRecordSetMeta => {
+            let [record, key, stored] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            if scope_record_set_meta(state, *record, *key, *stored) {
+                value::encode_undefined()
+            } else {
+                fail_dispatch(ctx)
+            }
+        }
+        Builtin::ScopeRecordDestroy => {
+            if let Some(record) = args.first() {
+                destroy_scope_record(state, *record);
+            }
+            value::encode_undefined()
+        }
+        _ => return None,
+    })
+}
+
 pub(super) fn dispatch_module(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,

@@ -1,5 +1,5 @@
 use wjsm_gc::PROTO_NULL_SENTINEL;
-use wjsm_ir::{Builtin, constants, value};
+use wjsm_ir::{Builtin, constants, value, wk_symbol, HEAP_TYPE_ARGUMENTS};
 use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
@@ -67,8 +67,157 @@ pub(super) fn dispatch_object(
         Builtin::ObjectFromEntries => from_entries(ctx, state, args),
         Builtin::ObjectGroupBy => group_by(ctx, state, args),
         Builtin::ObjectIsFrozen => is_sealed_or_frozen(ctx, state, args, true),
+        Builtin::ObjectProtoToString => object_proto_to_string(ctx, state, args),
+        Builtin::ObjectProtoValueOf => object_proto_value_of(ctx, state, args),
+        Builtin::ObjectHasOwn | Builtin::HasOwnProperty => has_own(ctx, state, args),
+        Builtin::CreateGlobalObject => create_global_object(ctx, state),
         _ => return None,
     })
+}
+
+/// `Object.prototype.toString`：解包 proxy 后按类型/内置 tag 生成 `[object Tag]`，
+/// 尊重 `Symbol.toStringTag` 自定义 tag。
+fn object_proto_to_string(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let Some(input) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    let tag_input = if value::is_proxy(input) {
+        state
+            .proxies
+            .get(usize::try_from(value::decode_proxy_handle(input)).unwrap_or(usize::MAX))
+            .and_then(|proxy| proxy.as_ref())
+            .map_or(input, |proxy| proxy.target)
+    } else {
+        input
+    };
+    let default_tag = if value::is_undefined(tag_input) {
+        "Undefined"
+    } else if value::is_null(tag_input) {
+        "Null"
+    } else if value::is_bool(tag_input) {
+        "Boolean"
+    } else if value::is_f64(tag_input) {
+        "Number"
+    } else if value::is_string(tag_input) {
+        "String"
+    } else if value::is_bigint(tag_input) {
+        "BigInt"
+    } else if value::is_symbol(tag_input) {
+        "Symbol"
+    } else if value::is_array(tag_input) {
+        "Array"
+    } else if value::is_callable(tag_input) {
+        "Function"
+    } else if value::is_regexp(tag_input) {
+        "RegExp"
+    } else if value::is_js_object(tag_input)
+        && state
+            .heap
+            .object_type(value::decode_handle(tag_input))
+            .is_ok_and(|kind| kind == u32::from(HEAP_TYPE_ARGUMENTS))
+    {
+        "Arguments"
+    } else if value::is_js_object(tag_input)
+        && state
+            .error_objects
+            .contains(&value::decode_handle(tag_input))
+    {
+        "Error"
+    } else if let Some(primitive) = value::is_js_object(tag_input)
+        .then(|| value::decode_handle(tag_input))
+        .and_then(|handle| state.boxed_primitives.get(&handle))
+    {
+        if value::is_bool(*primitive) {
+            "Boolean"
+        } else if value::is_f64(*primitive) {
+            "Number"
+        } else if value::is_string(*primitive) {
+            "String"
+        } else if value::is_bigint(*primitive) {
+            "BigInt"
+        } else if value::is_symbol(*primitive) {
+            "Symbol"
+        } else {
+            "Object"
+        }
+    } else {
+        "Object"
+    };
+    let tag = if value::is_null(input) || value::is_undefined(input) {
+        default_tag.to_owned()
+    } else {
+        let key = value::encode_handle(value::TAG_SYMBOL, wk_symbol::TO_STRING_TAG);
+        let custom = get_property(ctx, state, input, key).unwrap_or_else(|()| fail_dispatch(ctx));
+        if value::is_exception(custom) {
+            return custom;
+        }
+        state
+            .string(custom)
+            .and_then(|text| text.to_utf8())
+            .unwrap_or_else(|| default_tag.to_owned())
+    };
+    state
+        .intern_text(format!("[object {tag}]"), value::TAG_STRING)
+        .unwrap_or_else(|| fail_dispatch(ctx))
+}
+
+/// `Object.prototype.valueOf`：对象自身直接返回。
+fn object_proto_value_of(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let _ = state;
+    let _ = ctx;
+    args.first().copied().unwrap_or_else(|| fail_dispatch(ctx))
+}
+
+/// `Object.hasOwn` / `hasOwnProperty`：区分可调用对象的属性表与普通堆对象。
+fn has_own(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let [object, key] = args else {
+        return fail_dispatch(ctx);
+    };
+    let Some(key) = property_key(state, *key) else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_callable(*object) {
+        return value::encode_bool(
+            state.callable_properties.contains_key(&(*object, key))
+                || state.callable_accessors.contains_key(&(*object, key)),
+        );
+    }
+    let Some(object) = object_handle(*object) else {
+        return fail_dispatch(ctx);
+    };
+    state
+        .heap
+        .get_property(object, key)
+        .map(|property| value::encode_bool(property.is_some()))
+        .unwrap_or_else(|_| fail_dispatch(ctx))
+}
+
+/// 创建（或复用缓存的）全局对象，惰性初始化内置原型。
+fn create_global_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+) -> i64 {
+    if let Some(global) = state.global_object {
+        global
+    } else if state.ensure_intrinsic_prototypes().is_err() {
+        fail_dispatch(ctx)
+    } else {
+        match state.allocate_object(0, false) {
+            Ok(global) => {
+                state.global_object = Some(global);
+                global
+            }
+            Err(_) => fail_dispatch(ctx),
+        }
+    }
 }
 
 pub(crate) fn construct_object(

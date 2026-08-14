@@ -8,6 +8,20 @@ const DATA_FLAGS: u32 =
     (constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE) as u32;
 const HIDDEN_DATA_FLAGS: u32 = (constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE) as u32;
 
+pub(super) fn dispatch_arguments(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+) -> Option<i64> {
+    let mapped = match builtin {
+        Builtin::CreateMappedArgumentsObject => true,
+        Builtin::CreateUnmappedArgumentsObject => false,
+        _ => return None,
+    };
+    Some(create(ctx, state, mapped, args))
+}
+
 pub(super) fn create(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
