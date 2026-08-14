@@ -90,7 +90,7 @@ fn collect_fixtures(dir: &Path, suite_dir: &Path, suite: &str, cases: &mut Vec<(
             collect_fixtures(&path, suite_dir, suite, cases);
         } else {
             let ext = path.extension().and_then(|e| e.to_str());
-            if ext != Some("js") && ext != Some("ts") {
+            if ext != Some("js") && ext != Some("ts") && ext != Some("tsx") {
                 continue;
             }
 

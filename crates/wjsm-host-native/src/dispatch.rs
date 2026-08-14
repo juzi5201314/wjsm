@@ -18,6 +18,7 @@ pub(crate) mod fetch;
 mod function;
 pub(crate) mod generator;
 mod iterator;
+mod jsx;
 mod json;
 mod math;
 pub(crate) mod modules;
@@ -244,6 +245,7 @@ pub(super) fn dispatch_builtin(
             operator::dispatch_operator => Builtin::AbstractCompare | Builtin::AbstractEq | Builtin::StrictEq | Builtin::TypeOf | Builtin::InstanceOf | Builtin::In | Builtin::F64Mod | Builtin::F64Exp | Builtin::Throw | Builtin::ExceptionValue | Builtin::NewTarget | Builtin::Debugger | Builtin::IsCallable | Builtin::IsJsObject | Builtin::GetPrototypeFromConstructor,
             structured_clone::dispatch_structured_clone => Builtin::StructuredClone,
             timer::dispatch_timer => Builtin::SetTimeout | Builtin::SetInterval | Builtin::ClearTimeout | Builtin::ClearInterval,
+            jsx::dispatch_jsx => Builtin::JsxCreateElement,
         }
     }
 }
