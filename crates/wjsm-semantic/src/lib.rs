@@ -214,6 +214,30 @@ fn is_array_constructor_expr(expr: &swc_ast::Expr) -> bool {
     }
 }
 
+/// 判断表达式是否为 `Array.from(...)` / `Array.of(...)` 静态调用。
+/// 二者恒返回数组（否则抛异常）；是否真的落到内置 Array 由调用方用作用域判影。
+fn is_array_from_of_call(expr: &swc_ast::Expr) -> bool {
+    let swc_ast::Expr::Call(call) = expr else {
+        return false;
+    };
+    let swc_ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let swc_ast::Expr::Member(member) = callee.as_ref() else {
+        return false;
+    };
+    let swc_ast::Expr::Ident(obj) = member.obj.as_ref() else {
+        return false;
+    };
+    if obj.sym.as_ref() != "Array" {
+        return false;
+    }
+    matches!(
+        &member.prop,
+        swc_ast::MemberProp::Ident(prop) if matches!(prop.sym.as_ref(), "from" | "of")
+    )
+}
+
 /// 判断表达式是否为 TypedArray 构造函数调用（`new Int8Array(...)` 等形式）。
 fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
     if let swc_ast::Expr::New(new_expr) = expr

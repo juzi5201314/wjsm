@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+11 12 13
+0 undefined undefined
+--- stderr ---

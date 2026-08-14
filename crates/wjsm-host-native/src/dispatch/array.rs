@@ -3,8 +3,8 @@ use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
-    fail_dispatch, get_property, has_property, is_truthy, iterator_done, iterator_value,
-    strict_equal, to_number, to_string_coerced,
+    array_index, fail_dispatch, get_property, has_property, is_truthy, iterator_done,
+    iterator_value, strict_equal, to_number, to_string_coerced,
 };
 use crate::NativeAgentState;
 
@@ -38,6 +38,8 @@ pub(super) fn dispatch_array(
         Builtin::ArrayIsArray => {
             value::encode_bool(args.first().is_some_and(|value| value::is_array(*value)))
         }
+        Builtin::ArrayAllocate => array_allocate(ctx, state, args),
+        Builtin::ArrayHasElement => array_has_element(ctx, state, args),
         Builtin::ArrayFrom => array_from(ctx, state, args),
         Builtin::ArrayOf => state
             .allocate_array_values(args)
@@ -214,6 +216,67 @@ fn get(state: &NativeAgentState, handle: u32, index: u32) -> i64 {
 
 fn set(state: &NativeAgentState, handle: u32, index: u32, stored: i64) -> bool {
     state.heap.set_element(handle, index, stored as u64).is_ok()
+}
+
+/// `array.allocate(len)`：按长度创建全 hole 数组（length=len），供 map 结果容器。
+/// 显式填洞：新分配数组的元素槽为 0（解码为 +0.0），不填洞会让 map 结果把
+/// 未写入的洞误读为 0 而非缺失属性（与 `new Array(len)` 语义对齐）。
+fn array_allocate(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+    let Some(encoded) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    let Some(length) = to_number(state, encoded) else {
+        return fail_dispatch(ctx);
+    };
+    if !length.is_finite() || length < 0.0 || length > f64::from(u32::MAX) || length.fract() != 0.0
+    {
+        return fail_dispatch(ctx);
+    }
+    let length = length as u32;
+    let Ok(array) = state.allocate_object(length, true) else {
+        return fail_dispatch(ctx);
+    };
+    let handle = value::decode_handle(array);
+    for index in 0..length {
+        if state
+            .heap
+            .set_element(handle, index, value::encode_array_hole() as u64)
+            .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+    }
+    if length != 0
+        && state
+            .heap
+            .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_HOLEY)
+            .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    if state.heap.set_array_length(handle, length).is_err() {
+        return fail_dispatch(ctx);
+    }
+    array
+}
+
+/// `array.has_element(array, index)`：数组索引处存在非 hole 元素 → bool。
+fn array_has_element(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+    let [array, index] = args else {
+        return fail_dispatch(ctx);
+    };
+    if !value::is_array(*array) {
+        return fail_dispatch(ctx);
+    }
+    let handle = value::decode_handle(*array);
+    let Some(index) = array_index(state, *index) else {
+        return value::encode_bool(false);
+    };
+    match state.heap.get_element(handle, index) {
+        Ok(Some(stored)) => value::encode_bool(!value::is_array_hole(stored as i64)),
+        Ok(None) => value::encode_bool(false),
+        Err(_) => fail_dispatch(ctx),
+    }
 }
 
 fn integer(state: &NativeAgentState, encoded: Option<i64>, default: i64) -> Option<i64> {

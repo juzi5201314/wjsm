@@ -27,7 +27,7 @@ use super::cfg_fold::{self, terminator_successors};
 use crate::passes::direct_call::{instr_uses, instruction_dest, terminator_uses};
 
 /// 计算函数内最大的 ValueId。
-fn max_value_id_in_function(function: &wjsm_ir::Function) -> u32 {
+pub(crate) fn max_value_id_in_function(function: &wjsm_ir::Function) -> u32 {
     let mut max = 0u32;
     for block in function.blocks() {
         for instruction in block.instructions() {
@@ -531,7 +531,7 @@ fn collect_this_dests(function: &wjsm_ir::Function) -> Vec<ValueId> {
 }
 
 /// 查找或追加 `Constant::Undefined` 常量。
-fn undefined_const_id(module: &mut Module) -> ConstantId {
+pub(crate) fn undefined_const_id(module: &mut Module) -> ConstantId {
     for (i, c) in module.constants().iter().enumerate() {
         if matches!(c, Constant::Undefined) {
             return ConstantId(i as u32);
@@ -938,7 +938,7 @@ fn inline_static_candidate(
 /// 绕过语句级异常检查（try/catch 失效）。
 ///
 /// 返回 (tmp 变量名, catch 处理块)。找不到（调用点无语句级检查）→ None。
-fn find_exception_path(
+pub(crate) fn find_exception_path(
     function: &wjsm_ir::Function,
     block_idx: usize,
     instr_idx: usize,

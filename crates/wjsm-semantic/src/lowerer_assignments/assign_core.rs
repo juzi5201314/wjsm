@@ -435,8 +435,12 @@ impl Lowerer {
                     self.append_eval_var_leak_if_needed(&name, kind, rhs, store_block)?;
                 // 钉死后续语句入口，避免 new 的 continue 块与 Jump 把 store 落到死块。
                 self.expr_merge_block = Some(after_write_block);
-                // 更新 Array 绑定跟踪：arr = [...] / new Array(...) -> 标记；arr = 其他 -> 取消标记。
-                if is_array_constructor_expr(assign.right.as_ref()) {
+                // 更新 Array 绑定跟踪：arr = [...] / new Array(...) / Array.from/of -> 标记；
+                // arr = 其他 -> 取消标记。
+                if is_array_constructor_expr(assign.right.as_ref())
+                    || (is_array_from_of_call(assign.right.as_ref())
+                        && self.scopes.lookup("Array").is_err())
+                {
                     self.array_bindings.insert((scope_id, name.clone()));
                 } else {
                     self.array_bindings.remove(&(scope_id, name.clone()));

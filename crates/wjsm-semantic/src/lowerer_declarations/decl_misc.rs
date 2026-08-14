@@ -55,7 +55,9 @@ impl Lowerer {
                 // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型
                 if let swc_ast::Pat::Ident(binding) = &declarator.name {
                     let name = binding.id.sym.to_string();
-                    if is_array_constructor_expr(init)
+                    if (is_array_constructor_expr(init)
+                        || (is_array_from_of_call(init)
+                            && self.scopes.lookup("Array").is_err()))
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
                         self.array_bindings.insert((scope_id, name.clone()));

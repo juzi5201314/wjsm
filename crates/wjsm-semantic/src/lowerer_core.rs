@@ -1173,6 +1173,9 @@ impl Lowerer {
         }
         // direct_call pass：标记可直接调用的函数并替换绑定读取为 FunctionRef。
         crate::passes::direct_call::run(&mut self.module);
+        // array_inline pass：展开可静态解析回调的数组高阶函数为显式循环，
+        // 使 inline_for_ea 能内联 direct_callable 回调。
+        crate::passes::array_inline::run(&mut self.module);
         // inline_for_ea pass：构造器体 + 方法内联，使 EA/SR 能消除 new 分配。
         crate::passes::inline_for_ea::run(&mut self.module);
         // escape_scalar pass：逃逸分析 + 标量替换，消除局部 NewObject 分配。

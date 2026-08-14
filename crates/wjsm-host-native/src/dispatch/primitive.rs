@@ -85,6 +85,11 @@ pub(super) fn dispatch_primitive(
                 .intern_text(value::decode_bool(*boolean).to_string(), value::TAG_STRING)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
+        Builtin::ToBoolean => value::encode_bool(
+            args.first()
+                .copied()
+                .is_some_and(|argument| is_truthy(state, argument)),
+        ),
         _ => return None,
     })
 }

@@ -511,6 +511,13 @@ pub enum Builtin {
     // ── BigInt.prototype ──
     BigIntProtoToString,
     BigIntProtoValueOf,
+    // ── 数组内联优化辅助 builtin（array_inline pass）──
+    /// 按长度创建全 hole 数组（length=len），供 map 结果容器。
+    ArrayAllocate,
+    /// 判断数组索引处是否存在非 hole 元素。
+    ArrayHasElement,
+    /// JS truthiness → bool。
+    ToBoolean,
 }
 
 impl Builtin {
@@ -521,7 +528,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::BigIntProtoValueOf as u16
+        Self::ToBoolean as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1003,6 +1010,9 @@ impl Builtin {
             Self::RegExpProtoSplit => "RegExp.prototype[@@split]",
             Self::BigIntProtoToString => "BigInt.prototype.toString",
             Self::BigIntProtoValueOf => "BigInt.prototype.valueOf",
+            Self::ArrayAllocate => "array.allocate",
+            Self::ArrayHasElement => "array.has_element",
+            Self::ToBoolean => "to_boolean",
         }
     }
 }

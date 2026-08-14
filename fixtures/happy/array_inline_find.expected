@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+find 2
+findIndex 3
+some true
+every true
+every-false false
+find-num 0
+--- stderr ---

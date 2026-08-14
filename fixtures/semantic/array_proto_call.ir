@@ -26,8 +26,11 @@ module {
     c23 = number(2)
     c24 = functionref(@0)
     c25 = undefined
-    c26 = bool(true)
-    c27 = bool(false)
+    c26 = string("length")
+    c27 = number(0)
+    c28 = number(-1)
+    c29 = bool(true)
+    c30 = bool(false)
 
   fn @anon_0 [needs_prototype] [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
@@ -92,13 +95,57 @@ module {
       %26 = const c24
       %27 = const c25
       %28 = call builtin.create_closure(%26, %27)
-      %29 = call builtin.array.map(%25, %28)
-      %30 = is_exception %29
-      branch %30, bb2, bb1
+      jump bb3
     bb1:
       store var $0.b, %29
       return
     bb2:
       %31 = call builtin.exception_value(%29)
       throw %31
+    bb3:
+      %34 = call builtin.array.is_array(%25)
+      branch %34, bb5, bb4
+    bb4:
+      %32 = call builtin.array.map(%25, %28)
+      jump bb14
+    bb5:
+      %35 = const c26
+      %36 = get_prop %25, %35
+      %37 = const c27
+      %38 = const c20
+      %40 = const c0
+      %42 = const c30
+      %43 = call builtin.array.allocate(%36)
+      jump bb6
+    bb6:
+      %44 = phi [(bb5, %37), (bb12, %33)]
+      %45 = call builtin.abstract_compare(%44, %36, %42, %42)
+      branch %45, bb7, bb13
+    bb7:
+      %46 = call builtin.array.has_element(%25, %44)
+      branch %46, bb8, bb10
+    bb8:
+      %47 = get_elem %25, %44
+      %48 = call %28, this=%40, args=[%47, %44, %25]
+      %49 = is_exception %48
+      branch %49, bb11, bb9
+    bb9:
+      %50 = set_elem %43, %44, %48
+      jump bb12
+    bb10:
+      jump bb12
+    bb11:
+      %51 = call builtin.exception_value(%48)
+      throw %51
+    bb12:
+      %33 = add %44, %38
+      jump bb6
+    bb13:
+      jump bb14
+    bb14:
+      %29 = phi [(bb4, %32), (bb13, %43)]
+      jump bb15
+    bb15:
+      %30 = is_exception %29
+      branch %30, bb2, bb1
 }
