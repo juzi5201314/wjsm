@@ -1419,6 +1419,14 @@ impl NativeAgentState {
         ctx.function_table = image.entries().as_ptr();
         ctx.function_table_len = u32::try_from(image.entries().len()).ok()?;
         ctx.current_image_id = image_id;
+        // 与 function_table 同步：snapshot 恢复替换 heap 后句柄表基址会变，
+        // 生成代码的属性快链依赖这两个基址，必须在每次 image 激活时刷新。
+        ctx.handle_table_base = self.heap.handle_table_base();
+        ctx.ic_slots_base = image.ic_slots().cast::<u8>().cast_mut();
+        // 对象地址的「逻辑 → 虚拟」偏移：snapshot 恢复后 virtual_base 可能改变，
+        // 必须与 handle_table_base 同步刷新，属性快链才能把 entry 里的逻辑地址
+        // 换算成真实映射地址。
+        ctx.heap_object_delta = self.heap.object_address_delta();
         Some(())
     }
 
@@ -4021,6 +4029,9 @@ impl NativeRuntime {
         context.stack_low = stack_pointer.saturating_sub(8 * 1024 * 1024);
         context.stack_high = stack_pointer.saturating_add(1024 * 1024);
         context.stack_budget_bytes = 8 * 1024 * 1024;
+        // 句柄表基址：generated code 属性快链用；snapshot 恢复替换 heap 后由
+        // `activate_image` 重新同步（每次 execute 必经）。
+        context.handle_table_base = state.heap.handle_table_base();
         Ok(Self {
             state,
             vmctx,

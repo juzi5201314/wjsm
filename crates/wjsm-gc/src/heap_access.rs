@@ -343,6 +343,46 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.shape_id_at(object)
     }
 
+    /// handle region 基址；generated code 经 vmctx 的 `handle_table_base` 用它把
+    /// 句柄下标换算成 8 字节 entry 地址。region 生命周期与 handle table 相同。
+    pub fn handle_table_base(&self) -> *mut u8 {
+        self.handles.region_base()
+    }
+
+    /// 对象地址的「逻辑 → 虚拟」偏移（`virtual_base - logical_base`）；generated
+    /// code 的属性快链用它把 handle entry 里的逻辑对象地址换算成真实映射地址。
+    /// TestHeapMemory 的 virtual_base 即 logical_base，故测试下该值为 0。
+    pub fn object_address_delta(&self) -> i64 {
+        let virtual_base = self.memory.virtual_base() as i64;
+        let logical_base = i64::try_from(self.memory.logical_base())
+            .expect("logical heap base fits i64");
+        virtual_base - logical_base
+    }
+
+    /// 返回自有数据属性的 `(shape_id, value_index)`；accessor / 字典 shape /
+    /// 数组 / 缺失属性一律返回 `None`（快路径 miss，由 miss handler 决定回填）。
+    pub fn own_data_property_index(
+        &self,
+        handle: u32,
+        key: u32,
+    ) -> Result<Option<(u32, u32)>, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if self.object_at_is_array(object)? {
+            return Ok(None);
+        }
+        let shape_id = self.shape_id_at(object)?;
+        if self.shapes.is_dictionary(shape_id) {
+            return Ok(None);
+        }
+        let Some(prop) = self.shapes.lookup(shape_id, key) else {
+            return Ok(None);
+        };
+        if prop.is_accessor() {
+            return Ok(None);
+        }
+        Ok(Some((shape_id, prop.index)))
+    }
+
     pub fn set_prototype(&self, handle: u32, prototype: u32) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let header = self

@@ -21,6 +21,9 @@ use wjsm_native_abi::{NativeFunctionEntry, NativeHostSymbol, NativeSlowEntry};
 use crate::{NativeObject, NativeSymbolResolver};
 use platform::{ExecutableMapping, align_to_page, page_size};
 
+/// IC 缓冲上限：4M 槽 × 4 word = 16M u32 = 64 MiB，防御恶意/损坏的 cache 条目。
+const MAX_IC_BUFFER_WORDS: usize = 4_000_000 * 4;
+
 pub struct CompiledImage {
     image_id: u64,
     entries: Box<[NativeFunctionEntry]>,
@@ -28,6 +31,9 @@ pub struct CompiledImage {
     unwind: Option<UnwindRegistration>,
     code_bytes: usize,
     rodata_bytes: usize,
+    /// 每访问点 16 字节的 IC 槽区（零初始化 = Empty）；生成代码经 vmctx 的
+    /// `ic_slots_base` 访问，miss 时由宿主回填。
+    ic_slots: Box<[u32]>,
 }
 
 // SAFETY: `CompiledImage` 只包含发布后不可变的 RX/R 映射、typed entry 和 unwind token。
@@ -61,6 +67,14 @@ impl CompiledImage {
             .filter(|section| !section.executable)
             .map(|section| section.loaded_len)
             .sum();
+        let ic_word_count = usize::try_from(object.ic_slot_count())
+            .map_err(|_| ImageLoadError::InvalidIcSlotCount)?
+            .checked_mul(4)
+            .ok_or(ImageLoadError::InvalidIcSlotCount)?;
+        if ic_word_count > MAX_IC_BUFFER_WORDS {
+            return Err(ImageLoadError::InvalidIcSlotCount);
+        }
+        let ic_slots = vec![0_u32; ic_word_count].into_boxed_slice();
         Ok(Arc::new(Self {
             image_id,
             entries: entries.into_boxed_slice(),
@@ -68,6 +82,7 @@ impl CompiledImage {
             unwind,
             code_bytes,
             rodata_bytes,
+            ic_slots,
         }))
     }
 
@@ -85,6 +100,15 @@ impl CompiledImage {
 
     pub fn rodata_bytes(&self) -> usize {
         self.rodata_bytes
+    }
+
+    /// IC 区基址（16 字节/槽对齐到 16 字节）；无 IC 槽的 image 返回 null。
+    pub fn ic_slots(&self) -> *const u32 {
+        if self.ic_slots.is_empty() {
+            std::ptr::null()
+        } else {
+            self.ic_slots.as_ptr()
+        }
     }
 }
 
@@ -1206,6 +1230,8 @@ pub enum ImageLoadError {
     RelocationOutOfRange(String),
     #[error("native image address arithmetic overflow")]
     AddressOverflow,
+    #[error("native image declares an invalid IC slot count")]
+    InvalidIcSlotCount,
     #[error("native image section access is out of bounds")]
     SectionOutOfBounds,
     #[error("native executable memory operation failed: {0}")]

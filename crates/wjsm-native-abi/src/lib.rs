@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 5;
+pub const NATIVE_ABI_VERSION: u32 = 7;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -64,6 +64,14 @@ pub struct NativeVmContext {
     pub stack_budget_bytes: usize,
     pub raw_access_depth: u32,
     pub suspend_status: u32,
+    /// handle region 基址（8 字节对齐）；generated code 用它把句柄下标换算成
+    /// 8 字节 entry 地址。由宿主在 image 激活时与 `ic_slots_base` 同步设置。
+    pub handle_table_base: *mut u8,
+    /// 当前 image 的 IC 区基址（16 字节对齐）；无 IC 槽的 image 为 null。
+    pub ic_slots_base: *mut u8,
+    /// 对象地址的「逻辑 → 虚拟」偏移：handle entry 里的对象地址是 memory64
+    /// 逻辑偏移，属性快链须加此值才能直接 load 真实映射。
+    pub heap_object_delta: i64,
 }
 
 impl Default for NativeVmContext {
@@ -98,6 +106,9 @@ impl Default for NativeVmContext {
             stack_budget_bytes: 0,
             raw_access_depth: 0,
             suspend_status: 0,
+            handle_table_base: std::ptr::null_mut(),
+            ic_slots_base: std::ptr::null_mut(),
+            heap_object_delta: 0,
         }
     }
 }
@@ -237,6 +248,8 @@ pub enum NativeRuntimeOp {
     OptionalGetElem = 0x1_050b,
     GetSuperBase = 0x1_050c,
     GetSuperConstructor = 0x1_050d,
+    /// 带 IC 槽回填的 [[Get]]：`[object, key, ic_slot_ptr]`，miss 时回填槽。
+    GetPropIc = 0x1_050e,
     PrepareCall = 0x1_0600,
     PrepareConstruct = 0x1_0606,
     FinishCall = 0x1_0601,
@@ -296,6 +309,7 @@ impl NativeRuntimeOp {
             0x1_050b => Some(Self::OptionalGetElem),
             0x1_050c => Some(Self::GetSuperBase),
             0x1_050d => Some(Self::GetSuperConstructor),
+            0x1_050e => Some(Self::GetPropIc),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
@@ -454,7 +468,7 @@ pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v5\0");
+        hasher.update(b"wjsm-native-abi-v7\0");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");
@@ -473,6 +487,9 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, source_frame_head),
             offset_of!(NativeVmContext, stack_budget_bytes),
             offset_of!(NativeVmContext, raw_access_depth),
+            offset_of!(NativeVmContext, handle_table_base),
+            offset_of!(NativeVmContext, ic_slots_base),
+            offset_of!(NativeVmContext, heap_object_delta),
         ] {
             hasher.update(
                 u64::try_from(offset)
@@ -538,6 +555,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::OptionalGetElem,
             NativeRuntimeOp::GetSuperBase,
             NativeRuntimeOp::GetSuperConstructor,
+            NativeRuntimeOp::GetPropIc,
             NativeRuntimeOp::NewArray,
             NativeRuntimeOp::GetElem,
             NativeRuntimeOp::PrepareCall,

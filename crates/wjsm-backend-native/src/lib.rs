@@ -26,6 +26,8 @@ pub struct NativeObject {
     bytes: Arc<[u8]>,
     frame_bytes: Vec<u32>,
     function_count: u32,
+    /// lowering 预计算的 IC 槽总数（16 字节/槽）；运行时据此分配 IC 缓冲。
+    ic_slot_count: u32,
 }
 
 impl NativeObject {
@@ -39,6 +41,10 @@ impl NativeObject {
 
     pub fn function_count(&self) -> u32 {
         self.function_count
+    }
+
+    pub fn ic_slot_count(&self) -> u32 {
+        self.ic_slot_count
     }
 }
 

@@ -16,9 +16,11 @@ use crate::{
 };
 
 const CACHE_MAGIC: &[u8; 8] = b"WJSMNAT\0";
-const CACHE_SCHEMA: u32 = 2;
+const CACHE_SCHEMA: u32 = 3;
 const MAX_CACHE_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_CACHE_FUNCTIONS: u32 = 4_000_000;
+/// IC 槽上限：每槽 16 字节，4M 槽即 64 MiB 缓冲，远超任何真实程序。
+const MAX_CACHE_IC_SLOTS: u32 = 4_000_000;
 /// 自动淘汰上限：缓存总字节数超过该值后按 mtime 删最旧条目。
 /// 可用 `WJSM_CACHE_MAX_BYTES` 覆盖；`0` 表示禁用自动淘汰。
 const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -341,6 +343,7 @@ fn encode_cache_entry(
     for frame in object.frame_bytes() {
         bytes.extend_from_slice(&frame.to_le_bytes());
     }
+    bytes.extend_from_slice(&object.ic_slot_count().to_le_bytes());
     bytes.extend_from_slice(object.bytes());
     Ok(bytes)
 }
@@ -385,6 +388,12 @@ fn decode_cache_entry(
     for _ in 0..count {
         frame_bytes.push(decoder.u32()?);
     }
+    let ic_slot_count = decoder.u32()?;
+    if ic_slot_count > MAX_CACHE_IC_SLOTS {
+        return Err(NativeCacheError::Invalid(
+            "cached ic slot count exceeds limit".into(),
+        ));
+    }
     let object_len = usize::try_from(object_len).map_err(|_| NativeCacheError::LengthOverflow)?;
     let object: Arc<[u8]> = decoder.take(object_len)?.into();
     decoder.finish()?;
@@ -397,6 +406,7 @@ fn decode_cache_entry(
         bytes: object,
         frame_bytes,
         function_count,
+        ic_slot_count,
     })
 }
 

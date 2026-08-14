@@ -167,6 +167,11 @@ impl HandleRegion {
     fn committed_bytes(&self) -> u64 {
         self.committed_bytes.load(Ordering::SeqCst)
     }
+
+    /// handle region 基址；generated code 用它把句柄下标换算成 entry 地址。
+    const fn base_ptr(&self) -> *mut u8 {
+        self.base as *mut u8
+    }
 }
 
 /// V2 的 8-byte atomic handle table；不触碰 active 4-byte obj_table ABI。
@@ -221,6 +226,12 @@ impl HandleTableV2 {
 
     pub const fn entry_address(handle: HandleId) -> u64 {
         handle.get() as u64 * HANDLE_ENTRY_BYTES
+    }
+
+    /// handle region 基址（8 字节对齐，覆盖整个保留区）。generated code 通过
+    /// vmctx 的 `handle_table_base` 读取；region 生命周期与 handle table 相同。
+    pub const fn region_base(&self) -> *mut u8 {
+        self.region.base_ptr()
     }
 
     pub fn allocate_handle(&self) -> Result<HandleId, HandleTableError> {

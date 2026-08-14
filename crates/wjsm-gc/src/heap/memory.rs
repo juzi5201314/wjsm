@@ -51,4 +51,10 @@ pub trait GrowableHeapMemory: HeapMemory {
     fn maximum_byte_len(&self) -> u64;
     /// 把堆已提交区域增长到 `byte_len`。
     fn grow_to(&self, byte_len: u64) -> Result<(), String>;
+
+    /// 逻辑地址对应的真实虚拟基址。默认实现视逻辑地址即虚拟地址
+    /// （TestHeapMemory 语义）；真实平台后端（如 `NativeHeapMemory`）覆盖。
+    fn virtual_base(&self) -> *mut u8 {
+        self.logical_base() as *mut u8
+    }
 }

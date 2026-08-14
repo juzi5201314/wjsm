@@ -139,6 +139,15 @@ pub(super) fn dispatch_runtime(
             }
             result
         }
+        NativeRuntimeOp::GetPropIc => {
+            let [object, key, ic_slot_ptr] = args else {
+                return fail_dispatch(ctx);
+            };
+            let result =
+                get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx));
+            backfill_get_prop_ic(state, *object, *key, *ic_slot_ptr);
+            result
+        }
         NativeRuntimeOp::OptionalGetProp => {
             let [object, key] = args else {
                 return fail_dispatch(ctx);
@@ -840,6 +849,41 @@ fn ordinary_set_key(
 }
 
 pub(crate) const SYMBOL_PROPERTY_KEY_BIT: u32 = 1 << 31;
+
+/// GetPropIc 的 miss 回填：对象是普通对象且属性可被 OWN_DATA 快路径承载时
+/// 回填 `(shape_id, value_index)`；accessor / 字典 shape / 数组 / 缺失属性
+/// 一律永久退化 MEGAMORPHIC（此后每次访问都走宿主完整 [[Get]]）。
+fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_slot_ptr: i64) {
+    if !value::is_object(object) {
+        return;
+    }
+    let ic_slot_ptr = ic_slot_ptr as *mut u32;
+    let handle = value::decode_object_handle(object);
+    let Some(name_id) = property_key(state, key) else {
+        return;
+    };
+    match state.heap.own_data_property_index(handle, name_id) {
+        Ok(Some((shape_id, value_index))) => {
+            // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 16` 计算，
+            // IC 区基址 16 字节对齐、槽内 4 个 u32 不越界；只在本 owner 线程写。
+            unsafe {
+                std::ptr::write(ic_slot_ptr, shape_id);
+                std::ptr::write(ic_slot_ptr.add(1), value_index);
+                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_OWN_DATA);
+                std::ptr::write(ic_slot_ptr.add(3), 0);
+            }
+        }
+        _ => {
+            // SAFETY: 退化槽同样覆盖整个 16 字节，残留旧命中由 kind 重写清除。
+            unsafe {
+                std::ptr::write(ic_slot_ptr, 0);
+                std::ptr::write(ic_slot_ptr.add(1), 0);
+                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
+                std::ptr::write(ic_slot_ptr.add(3), 0);
+            }
+        }
+    }
+}
 
 pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<u32> {
     if value::is_string(encoded) {

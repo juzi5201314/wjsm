@@ -167,6 +167,10 @@ impl GrowableHeapMemory for NativeHeapMemory {
         self.inner.logical_base
     }
 
+    fn virtual_base(&self) -> *mut u8 {
+        self.inner.virtual_base
+    }
+
     fn maximum_byte_len(&self) -> u64 {
         self.inner.logical_base.saturating_add(self.inner.capacity)
     }
