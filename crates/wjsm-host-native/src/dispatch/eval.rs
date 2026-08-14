@@ -179,8 +179,9 @@ fn eval_binding_exists(
         return true;
     }
     let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
-    runtime::get_property(ctx, state, outer, key)
-        .is_ok_and(|property| !value::is_undefined(property) || runtime::has_property(state, outer, key))
+    runtime::get_property(ctx, state, outer, key).is_ok_and(|property| {
+        !value::is_undefined(property) || runtime::has_property(state, outer, key)
+    })
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {

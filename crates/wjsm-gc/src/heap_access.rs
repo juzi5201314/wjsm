@@ -354,8 +354,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     /// TestHeapMemory 的 virtual_base 即 logical_base，故测试下该值为 0。
     pub fn object_address_delta(&self) -> i64 {
         let virtual_base = self.memory.virtual_base() as i64;
-        let logical_base = i64::try_from(self.memory.logical_base())
-            .expect("logical heap base fits i64");
+        let logical_base =
+            i64::try_from(self.memory.logical_base()).expect("logical heap base fits i64");
         virtual_base - logical_base
     }
 

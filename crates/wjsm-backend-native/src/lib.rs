@@ -88,8 +88,8 @@ fn clif_verifier_enabled() -> bool {
 
 /// 全局 compiler 缓存，避免重复初始化 CPU 密集的 ISA builder。
 /// 测试套件中所有 compile 调用共享同一个 ISA 配置。
-static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> =
-    LazyLock::new(|| {
+static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = LazyLock::new(
+    || {
         if cfg!(not(target_pointer_width = "64")) {
             return Err(NativeCompileError::UnsupportedTargetCapability(
                 "direct native backend requires a 64-bit host".into(),
@@ -158,8 +158,8 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> =
         )
         .into();
         Ok(NativeCompiler { isa, settings_key })
-    });
-
+    },
+);
 
 impl NativeCompiler {
     /// 返回全局缓存的 compiler 的 clone（isa 内部是 Arc，clone 成本低）。
@@ -279,7 +279,9 @@ mod capability_tests {
         let compiler = NativeCompiler::new().expect("declared native host must initialize");
         let opt_level = configured_opt_level().expect("测试环境的 WJSM_OPT_LEVEL 必须合法");
         assert!(
-            compiler.settings_key().contains(&format!("opt={opt_level}")),
+            compiler
+                .settings_key()
+                .contains(&format!("opt={opt_level}")),
             "settings_key {:?} 未体现 opt_level {opt_level}",
             compiler.settings_key()
         );
@@ -531,7 +533,10 @@ mod tests {
             .prepare_program_with_slots(&user_b, &empty_slots, &NoSymbols)
             .expect("用户段 B 应独立编译");
         let after = segmented.stats();
-        assert!(after.hits > before.hits, "builtin 段必须按 Program digest 复用");
+        assert!(
+            after.hits > before.hits,
+            "builtin 段必须按 Program digest 复用"
+        );
         let _ = std::fs::remove_dir_all(cache_dir);
     }
 }

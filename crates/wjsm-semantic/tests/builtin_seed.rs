@@ -103,7 +103,11 @@ fn function_has_load(function: &Function, var_name: &str) -> bool {
     )
 }
 
-fn assert_entry_calls_builtin(program: &wjsm_ir::Program, function: &Function, entry_id: FunctionId) {
+fn assert_entry_calls_builtin(
+    program: &wjsm_ir::Program,
+    function: &Function,
+    entry_id: FunctionId,
+) {
     let instructions = function
         .blocks()
         .iter()

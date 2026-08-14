@@ -11,11 +11,11 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::bigint;
 use super::proxy;
-use super::runtime::{
-    abstract_equal, fail_dispatch, get_property, has_property, is_truthy,
-    strict_equal, to_number, to_primitive, type_error,
-};
 use super::runtime::PrimitiveHint;
+use super::runtime::{
+    abstract_equal, fail_dispatch, get_property, has_property, is_truthy, strict_equal, to_number,
+    to_primitive, type_error,
+};
 use crate::NativeAgentState;
 
 pub(super) fn dispatch_operator(
@@ -226,11 +226,7 @@ fn abstract_compare(state: &NativeAgentState, left: i64, right: i64) -> Option<O
     }
 }
 
-fn bigint_compare(
-    state: &NativeAgentState,
-    left: i64,
-    right: i64,
-) -> Option<Ordering> {
+fn bigint_compare(state: &NativeAgentState, left: i64, right: i64) -> Option<Ordering> {
     bigint::read(state, left)?.partial_cmp(&bigint::read(state, right)?)
 }
 

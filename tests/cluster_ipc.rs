@@ -65,7 +65,10 @@ fn write_temp_script(name: &str, source: &str) -> TempScript {
     name.hash(&mut hasher);
     source.hash(&mut hasher);
     let key = format!("{:016x}", hasher.finish());
-    let dir = std::env::temp_dir().join("wjsm-test-cache").join("cluster").join(&key);
+    let dir = std::env::temp_dir()
+        .join("wjsm-test-cache")
+        .join("cluster")
+        .join(&key);
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{name}.js"));
     if !path.exists() {

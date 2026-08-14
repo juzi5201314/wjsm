@@ -11,15 +11,15 @@ pub(crate) mod collections;
 mod console;
 pub(crate) mod date;
 mod date_methods;
+pub(crate) mod enumerator;
 mod errors;
 mod eval;
-pub(crate) mod enumerator;
 pub(crate) mod fetch;
 mod function;
 pub(crate) mod generator;
 mod iterator;
-mod jsx;
 mod json;
+mod jsx;
 mod math;
 pub(crate) mod modules;
 pub(crate) mod node_async_hooks;
@@ -57,17 +57,17 @@ pub(crate) use self::array::construct as construct_array;
 pub(crate) use self::errors::error_constructor;
 pub(crate) use self::object::construct_object;
 pub(crate) use self::runtime::SYMBOL_PROPERTY_KEY_BIT;
+use self::runtime::dispatch_runtime;
+use self::runtime::object_handle;
 pub(crate) use self::runtime::to_number as number_value;
 pub(crate) use self::runtime::{
     array_iterator, array_to_string, error_to_string, fail_dispatch, iterator_next_result,
     render_value, to_string_coerced,
 };
 pub(crate) use self::symbol::well_known_description;
-use self::runtime::dispatch_runtime;
-use self::runtime::object_handle;
 use crate::NativeAgentState;
 use num_bigint::BigInt;
-use wjsm_ir::{Builtin, value, dispatch_jumptable};
+use wjsm_ir::{Builtin, dispatch_jumptable, value};
 use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext, PendingExceptionKind};
 
 pub(crate) fn store_bigint(state: &mut NativeAgentState, input: BigInt) -> Option<i64> {

@@ -527,12 +527,10 @@ fn cache_dir_stats(directory: &Path) -> Option<(u64, u64)> {
             continue;
         }
         let path = entry.path();
-        let extension = path
-            .extension()
-            .and_then(|extension| extension.to_str());
+        let extension = path.extension().and_then(|extension| extension.to_str());
         let is_builtin_ir = is_builtin_ir_path(&path);
-        let is_cache_file = extension == Some("wnat")
-            || (extension == Some("bin") && is_builtin_ir);
+        let is_cache_file =
+            extension == Some("wnat") || (extension == Some("bin") && is_builtin_ir);
         if !is_cache_file {
             continue;
         }
@@ -622,7 +620,8 @@ fn collect_cache_entries(directory: &Path, out: &mut Vec<CacheEntry>) {
         let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
             continue;
         };
-        let is_cache_file = extension == "wnat" || (extension == "bin" && is_builtin_ir_path(&path));
+        let is_cache_file =
+            extension == "wnat" || (extension == "bin" && is_builtin_ir_path(&path));
         if !is_cache_file {
             continue;
         }
@@ -778,10 +777,7 @@ mod tests {
         fs::write(dir.join("keep.txt"), b"keep").expect("unrelated file should be written");
 
         evict_oldest(&dir, 0);
-        assert!(
-            dir.join("keep.txt").exists(),
-            "非缓存文件不应被 LRU 删除"
-        );
+        assert!(dir.join("keep.txt").exists(), "非缓存文件不应被 LRU 删除");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -19,8 +19,8 @@ use wjsm_ir::{
     FunctionId, Instruction, Program, Terminator, UnaryOp, ValueId, constants, value,
 };
 use wjsm_native_abi::{
-    NativeHostSymbol, NativeRootFrame, NativeRuntimeOp, NativeVmContext, native_variable_names,
-    COOPERATIVE_POLL_STEP_BYTES,
+    COOPERATIVE_POLL_STEP_BYTES, NativeHostSymbol, NativeRootFrame, NativeRuntimeOp,
+    NativeVmContext, native_variable_names,
 };
 
 use rayon::prelude::*;
@@ -359,7 +359,11 @@ fn declare_root_bitmaps(
         .collect()
 }
 
-fn root_frame_capacity(function: &wjsm_ir::Function, plan: &RootPlan, boxed_locals: usize) -> usize {
+fn root_frame_capacity(
+    function: &wjsm_ir::Function,
+    plan: &RootPlan,
+    boxed_locals: usize,
+) -> usize {
     let entry_roots = function.params().len().min(2);
     let temporary_roots = function
         .blocks()
@@ -1378,15 +1382,7 @@ fn lower_instruction(
         Instruction::GetProp { dest, object, key } => {
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_get_prop_ic(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    ctx,
-                    *dest,
-                    *object,
-                    *key,
-                    slot,
+                    builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, slot,
                 )
             } else {
                 lower_value_operation(
@@ -1409,15 +1405,7 @@ fn lower_instruction(
         } => {
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_set_prop_ic(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    ctx,
-                    *dest,
-                    *object,
-                    *key,
-                    *value,
+                    builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, *value,
                     slot,
                 )
             } else {
@@ -1497,15 +1485,7 @@ fn lower_instruction(
         Instruction::OptionalGetProp { dest, object, key } => {
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_optional_get_prop_ic(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    ctx,
-                    *dest,
-                    *object,
-                    *key,
-                    slot,
+                    builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, slot,
                 )
             } else {
                 lower_value_operation(
@@ -2021,7 +2001,9 @@ fn lower_get_prop_ic(
     let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
     let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
     let entry_addr = builder.ins().iadd(ht_base, entry_offset);
-    let entry = builder.ins().load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
+    let entry = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
     let state = builder.ins().band_imm_u(entry, 0xFFFF);
     let stable = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
@@ -2042,10 +2024,14 @@ fn lower_get_prop_ic(
 
     // IC 槽（16 字节）：word0 = shape_id(lo32) | value_index(hi32)，
     // word1 = kind(lo32) | proto_generation(hi32)。
-    let ic_word0 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
+    let ic_word0 = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
     let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
     let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
-    let ic_word1 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
+    let ic_word1 = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
     let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
     let kind_own = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
@@ -2060,13 +2046,13 @@ fn lower_get_prop_ic(
     // 第三级：对象地址已由 stable 确认有效，读 shape 并与 IC 槽比对。
     builder.switch_to_block(shape_check_block);
     builder.seal_block(shape_check_block);
-    let obj_word = builder.ins().load(types::I64, MemFlagsData::trusted(), addr, 8);
+    let obj_word = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, 8);
     let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
-    let shape_match = builder.ins().icmp(
-        ir::condcodes::IntCC::Equal,
-        obj_shape,
-        ic_shape,
-    );
+    let shape_match = builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, obj_shape, ic_shape);
     builder
         .ins()
         .brif(shape_match, hit_block, &[], miss_block, &[]);
@@ -2079,7 +2065,9 @@ fn lower_get_prop_ic(
         .ins()
         .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
     let value_addr = builder.ins().iadd(addr, value_offset);
-    let value = builder.ins().load(types::I64, MemFlagsData::trusted(), value_addr, 0);
+    let value = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
     define_value(builder, variables, dest, value)?;
     builder.ins().jump(merge_block, &[]);
 
@@ -2177,7 +2165,9 @@ fn lower_set_prop_ic(
     let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
     let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
     let entry_addr = builder.ins().iadd(ht_base, entry_offset);
-    let entry = builder.ins().load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
+    let entry = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
     let state = builder.ins().band_imm_u(entry, 0xFFFF);
     let stable = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
@@ -2193,10 +2183,14 @@ fn lower_set_prop_ic(
     );
     let addr = builder.ins().iadd(addr, heap_delta);
 
-    let ic_word0 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
+    let ic_word0 = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
     let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
     let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
-    let ic_word1 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
+    let ic_word1 = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
     let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
     let kind_own = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
@@ -2210,13 +2204,13 @@ fn lower_set_prop_ic(
 
     builder.switch_to_block(shape_check_block);
     builder.seal_block(shape_check_block);
-    let obj_word = builder.ins().load(types::I64, MemFlagsData::trusted(), addr, 8);
+    let obj_word = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, 8);
     let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
-    let shape_match = builder.ins().icmp(
-        ir::condcodes::IntCC::Equal,
-        obj_shape,
-        ic_shape,
-    );
+    let shape_match = builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, obj_shape, ic_shape);
     builder
         .ins()
         .brif(shape_match, hit_block, &[], miss_block, &[]);
@@ -2297,16 +2291,13 @@ fn lower_optional_get_prop_ic(
     );
 
     // 第零级：null / undefined 检查。
-    let is_null = builder.ins().icmp_imm_s(
-        ir::condcodes::IntCC::Equal,
-        obj,
-        value::encode_null(),
-    );
-    let is_undefined = builder.ins().icmp_imm_s(
-        ir::condcodes::IntCC::Equal,
-        obj,
-        value::encode_undefined(),
-    );
+    let is_null = builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_null());
+    let is_undefined =
+        builder
+            .ins()
+            .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_undefined());
     let is_nullish = builder.ins().bor(is_null, is_undefined);
 
     let nullish_block = builder.create_block();
@@ -2360,7 +2351,9 @@ fn lower_optional_get_prop_ic(
     let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
     let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
     let entry_addr = builder.ins().iadd(ht_base, entry_offset);
-    let entry = builder.ins().load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
+    let entry = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
     let state = builder.ins().band_imm_u(entry, 0xFFFF);
     let stable = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
@@ -2379,10 +2372,14 @@ fn lower_optional_get_prop_ic(
 
     // IC 槽（16 字节）：word0 = shape_id(lo32) | value_index(hi32)，
     // word1 = kind(lo32) | proto_generation(hi32)。
-    let ic_word0 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
+    let ic_word0 = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
     let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
     let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
-    let ic_word1 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
+    let ic_word1 = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
     let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
     let kind_own = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
@@ -2397,13 +2394,13 @@ fn lower_optional_get_prop_ic(
     // 第三级：对象地址已由 stable 确认有效，读 shape 并与 IC 槽比对。
     builder.switch_to_block(shape_check_block);
     builder.seal_block(shape_check_block);
-    let obj_word = builder.ins().load(types::I64, MemFlagsData::trusted(), addr, 8);
+    let obj_word = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, 8);
     let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
-    let shape_match = builder.ins().icmp(
-        ir::condcodes::IntCC::Equal,
-        obj_shape,
-        ic_shape,
-    );
+    let shape_match = builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, obj_shape, ic_shape);
     builder
         .ins()
         .brif(shape_match, hit_block, &[], miss_block, &[]);
@@ -2416,7 +2413,9 @@ fn lower_optional_get_prop_ic(
         .ins()
         .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
     let value_addr = builder.ins().iadd(addr, value_offset);
-    let value = builder.ins().load(types::I64, MemFlagsData::trusted(), value_addr, 0);
+    let value = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
     define_value(builder, variables, dest, value)?;
     builder.ins().jump(merge_block, &[]);
 
@@ -2685,7 +2684,10 @@ fn lower_cooperative_poll(
 ) -> Result<()> {
     let budget_addr = builder.ins().iadd_imm_s(
         ctx,
-        i64::from(vmctx_offset(offset_of!(NativeVmContext, stack_budget_bytes))?),
+        i64::from(vmctx_offset(offset_of!(
+            NativeVmContext,
+            stack_budget_bytes
+        ))?),
     );
     let budget = builder
         .ins()
@@ -2939,7 +2941,9 @@ fn infer_f64_values(program: &Program) -> HashMap<FunctionId, HashSet<ValueId>> 
                             }
                             None
                         }
-                        Instruction::LoadVar { dest, name } if f64_locals.contains(name.as_str()) => {
+                        Instruction::LoadVar { dest, name }
+                            if f64_locals.contains(name.as_str()) =>
+                        {
                             Some(*dest)
                         }
                         Instruction::Binary { dest, lhs, rhs, .. }

@@ -613,7 +613,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn split_builtin_segment_remaps_user_function_refs() {
         let mut program = Module::new();

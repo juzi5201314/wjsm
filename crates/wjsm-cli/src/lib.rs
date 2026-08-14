@@ -2027,7 +2027,7 @@ fn execute_artifact_in_process_with_config(
         let Some(native) = runtime.as_mut() else {
             unreachable!("runtime was initialized above")
         };
-        
+
         // 无条件重置 env 和 args，确保每个测试都从干净状态开始
         if let Err(error) = native.configure_environment(
             true,
@@ -2042,7 +2042,7 @@ fn execute_artifact_in_process_with_config(
         {
             return runtime_error_result(native, EXIT_RUNTIME_ERROR, error);
         }
-        
+
         let working_directory = cwd_override
             .map(Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok())

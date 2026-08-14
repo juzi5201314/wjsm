@@ -496,7 +496,15 @@ fn measure_rss(
     effective: &EffectiveConfig,
     cold: bool,
 ) -> Result<Option<u64>> {
-    measure_rss_with_env(scenario, rt, node_bin, wjsm_bin, effective, cold, apply_scenario_env)
+    measure_rss_with_env(
+        scenario,
+        rt,
+        node_bin,
+        wjsm_bin,
+        effective,
+        cold,
+        apply_scenario_env,
+    )
 }
 
 /// 固定迭代 RSS（BENCH_ITERATIONS）。
@@ -508,7 +516,15 @@ fn measure_fixed_iter_rss(
     effective: &EffectiveConfig,
     cold: bool,
 ) -> Result<Option<u64>> {
-    measure_rss_with_env(scenario, rt, node_bin, wjsm_bin, effective, cold, apply_fixed_iter_env)
+    measure_rss_with_env(
+        scenario,
+        rt,
+        node_bin,
+        wjsm_bin,
+        effective,
+        cold,
+        apply_fixed_iter_env,
+    )
 }
 
 /// 从 GNU time -v 的 stderr 提取最大驻留集。
@@ -574,12 +590,8 @@ fn print_table(report: &BenchReport) {
                 fmt_f64(wjsm.and_then(|rt| rt.ns_per_op), 1),
                 fmt_u64(node.and_then(|rt| rt.max_rss_kb)),
                 fmt_u64(wjsm.and_then(|rt| rt.max_rss_kb)),
-                fmt_u64(
-                    node.and_then(|rt| rt.fixed_iter_rss_kb),
-                ),
-                fmt_u64(
-                    wjsm.and_then(|rt| rt.fixed_iter_rss_kb),
-                ),
+                fmt_u64(node.and_then(|rt| rt.fixed_iter_rss_kb)),
+                fmt_u64(wjsm.and_then(|rt| rt.fixed_iter_rss_kb)),
             ]);
         }
     }

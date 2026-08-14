@@ -42,7 +42,8 @@ impl NativeAgentState {
 
     /// 删除 callable 侧表里 owner 为指定编码值的所有条目。
     fn retain_callable_owner(&mut self, owner: i64) {
-        self.callable_properties.retain(|(candidate, _), _| *candidate != owner);
+        self.callable_properties
+            .retain(|(candidate, _), _| *candidate != owner);
         self.callable_accessors
             .retain(|(candidate, _), _| *candidate != owner);
         self.callable_property_flags
@@ -189,7 +190,9 @@ impl NativeAgentState {
 /// null/undefined 等无独立下标表的永活（或另有管理）。
 fn host_value_is_live(retired: &[u32], live: &HostLiveSet, encoded: i64) -> bool {
     if value::is_object(encoded) || value::is_array(encoded) {
-        return retired.binary_search(&value::decode_handle(encoded)).is_err();
+        return retired
+            .binary_search(&value::decode_handle(encoded))
+            .is_err();
     }
     if value::is_closure(encoded) {
         return live.closures.contains(&value::decode_closure_idx(encoded));

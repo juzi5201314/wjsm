@@ -5,7 +5,7 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::node_async_hooks;
 use super::promise;
-use super::runtime::{type_error, to_number};
+use super::runtime::{to_number, type_error};
 use crate::NativeAgentState;
 
 pub(super) fn dispatch_timer(
@@ -53,9 +53,7 @@ fn schedule(
 fn clear(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     if let Some(timer) = args.first() {
         state.cancelled_timers.insert(value::decode_handle(*timer));
-        if let Some(exception) =
-            node_async_hooks::destroy_scheduled_resource(ctx, state, *timer)
-        {
+        if let Some(exception) = node_async_hooks::destroy_scheduled_resource(ctx, state, *timer) {
             return exception;
         }
     }

@@ -106,12 +106,16 @@ fn own_data_property_index_covers_data_accessor_dictionary_array_missing() {
         .unwrap()
         .expect("own data property must resolve");
     assert_eq!(shape_id, heap.shape_id(handle).unwrap());
-    assert_eq!(heap.get_property_slot(handle, 1).unwrap().unwrap().value, 42);
+    assert_eq!(
+        heap.get_property_slot(handle, 1).unwrap().unwrap().value,
+        42
+    );
     assert!(index < constants::DICTIONARY_THRESHOLD);
 
     // 2. accessor 属性 → None（值槽里是 getter/setter，快路径不可直读）
     let accessor_handle = publish(&heap);
-    heap.define_accessor_property(accessor_handle, 2, 1, 2).unwrap();
+    heap.define_accessor_property(accessor_handle, 2, 1, 2)
+        .unwrap();
     assert!(
         heap.own_data_property_index(accessor_handle, 2)
             .unwrap()
@@ -143,9 +147,5 @@ fn own_data_property_index_covers_data_accessor_dictionary_array_missing() {
     );
 
     // 5. 缺失属性 → None
-    assert!(
-        heap.own_data_property_index(handle, 999)
-            .unwrap()
-            .is_none()
-    );
+    assert!(heap.own_data_property_index(handle, 999).unwrap().is_none());
 }

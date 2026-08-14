@@ -263,8 +263,7 @@ pub fn lower_modules_with_builtin_seed(
 /// Call 的异常返回，再从 `$module_main` 传出。
 fn emit_builtin_entry_call(lowerer: &mut Lowerer, builtin: &BuiltinSegment) {
     let entry_block = lowerer.async_main_body_entry.unwrap_or(BasicBlockId(0));
-    let entry_block_idx =
-        usize::try_from(entry_block.0).expect("BasicBlockId 索引在 usize 内");
+    let entry_block_idx = usize::try_from(entry_block.0).expect("BasicBlockId 索引在 usize 内");
     let callee = lowerer.alloc_value();
     let this_val = lowerer.alloc_value();
     let dest = lowerer.alloc_value();
@@ -272,9 +271,8 @@ fn emit_builtin_entry_call(lowerer: &mut Lowerer, builtin: &BuiltinSegment) {
         .module
         .add_constant(Constant::FunctionRef(builtin.entry_function_id));
     let undef_const = lowerer.module.add_constant(Constant::Undefined);
-    let original = std::mem::take(
-        lowerer.current_function.blocks[entry_block_idx].instructions_mut(),
-    );
+    let original =
+        std::mem::take(lowerer.current_function.blocks[entry_block_idx].instructions_mut());
     let prefix = [
         Instruction::Const {
             dest: callee,

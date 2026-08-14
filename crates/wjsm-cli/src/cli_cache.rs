@@ -104,9 +104,7 @@ fn collect_entries(directory: &Path, out: &mut Vec<CacheEntry>) -> Result<()> {
             }
             continue;
         }
-        let extension = path
-            .extension()
-            .and_then(|extension| extension.to_str());
+        let extension = path.extension().and_then(|extension| extension.to_str());
         let is_builtin_ir = path
             .parent()
             .and_then(|parent| parent.file_name())

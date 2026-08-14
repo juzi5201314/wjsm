@@ -2,7 +2,7 @@ use num_bigint::BigInt;
 use num_traits::{FromPrimitive, Zero};
 use wjsm_ir::{constants, value};
 use wjsm_native_abi::{
-    NativeRuntimeOp, NativeVmContext, PendingExceptionKind, COOPERATIVE_POLL_BUDGET,
+    COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
 };
 
 use crate::{ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeConstantMaterializeError};
@@ -703,7 +703,13 @@ fn set_property_impl(
 /// `(shape_id, value_index)`（shape 迁移由 heap 在 `set_property` 内完成，这里
 /// 读的是写入后的新 shape）；accessor / proxy / 数组 / 字典 shape / 异常一律
 /// 永久退化 MEGAMORPHIC，此后每次写入都走宿主完整 [[Set]]。
-fn backfill_set_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, result: i64, ic_slot_ptr: i64) {
+fn backfill_set_prop_ic(
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    result: i64,
+    ic_slot_ptr: i64,
+) {
     let ic_slot_ptr = ic_slot_ptr as *mut u32;
     if value::is_exception(result) || !value::is_object(object) {
         // SAFETY: 退化槽覆盖整个 16 字节，kind 重写清除残留命中。
@@ -736,14 +742,12 @@ fn backfill_set_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, res
                 std::ptr::write(ic_slot_ptr.add(3), 0);
             }
         }
-        _ => {
-            unsafe {
-                std::ptr::write(ic_slot_ptr, 0);
-                std::ptr::write(ic_slot_ptr.add(1), 0);
-                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
-                std::ptr::write(ic_slot_ptr.add(3), 0);
-            }
-        }
+        _ => unsafe {
+            std::ptr::write(ic_slot_ptr, 0);
+            std::ptr::write(ic_slot_ptr.add(1), 0);
+            std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
+            std::ptr::write(ic_slot_ptr.add(3), 0);
+        },
     }
 }
 

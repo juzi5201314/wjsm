@@ -1,5 +1,5 @@
 use wjsm_gc::PROTO_NULL_SENTINEL;
-use wjsm_ir::{Builtin, constants, value, wk_symbol, HEAP_TYPE_ARGUMENTS};
+use wjsm_ir::{Builtin, HEAP_TYPE_ARGUMENTS, constants, value, wk_symbol};
 use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
@@ -201,10 +201,7 @@ fn has_own(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
 }
 
 /// 创建（或复用缓存的）全局对象，惰性初始化内置原型。
-fn create_global_object(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-) -> i64 {
+fn create_global_object(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
     if let Some(global) = state.global_object {
         global
     } else if state.ensure_intrinsic_prototypes().is_err() {

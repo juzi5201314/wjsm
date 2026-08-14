@@ -612,7 +612,9 @@ fn extend_microtask_roots(task: &NativeMicrotask, queue: &mut VecDeque<i64>) {
             queue.extend(arguments.iter().copied());
             queue.extend(*resource);
         }
-        NativeMicrotask::PromiseReaction { reaction, value, .. } => {
+        NativeMicrotask::PromiseReaction {
+            reaction, value, ..
+        } => {
             extend_reaction_roots(reaction, queue);
             queue.push_back(*value);
         }

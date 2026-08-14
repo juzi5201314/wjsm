@@ -6,9 +6,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use wjsm_artifact_format::{
-    ArtifactBuildInput, BuildOptions, ModuleManifest, PortableArtifact,
-};
+use wjsm_artifact_format::{ArtifactBuildInput, BuildOptions, ModuleManifest, PortableArtifact};
 
 use super::*;
 
@@ -27,13 +25,9 @@ pub(crate) struct HostSideTableStats {
 fn artifact(source: &str) -> PortableArtifact {
     let source: Arc<str> = source.into();
     let ast = wjsm_parser::parse_module(&source).expect("source should parse");
-    let program = wjsm_semantic::lower_module_with_source(
-        ast,
-        true,
-        Some(Arc::clone(&source)),
-        "input.js",
-    )
-    .expect("source should lower");
+    let program =
+        wjsm_semantic::lower_module_with_source(ast, true, Some(Arc::clone(&source)), "input.js")
+            .expect("source should lower");
     PortableArtifact::from_input(&ArtifactBuildInput {
         program: Arc::new(program),
         manifest: Arc::new(ModuleManifest::single("input.js", true)),
@@ -75,7 +69,11 @@ fn dead_closures_are_reclaimed() {
     assert_eq!(execution.stdout, b"60000\n");
     runtime.collect_garbage_now().expect("GC should run");
     let stats = runtime.host_side_table_stats();
-    assert!(stats.live_closures < 64, "live_closures={}", stats.live_closures);
+    assert!(
+        stats.live_closures < 64,
+        "live_closures={}",
+        stats.live_closures
+    );
     assert!(
         stats.function_closures < 64,
         "function_closures={}",
@@ -98,7 +96,11 @@ fn live_closure_survives_and_still_closes() {
     assert_eq!(execution.stdout, b"60000 42\n");
     runtime.collect_garbage_now().expect("GC should run");
     let stats = runtime.host_side_table_stats();
-    assert!(stats.live_closures >= 1, "live_closures={}", stats.live_closures);
+    assert!(
+        stats.live_closures >= 1,
+        "live_closures={}",
+        stats.live_closures
+    );
 }
 
 #[test]
@@ -112,16 +114,19 @@ fn interned_regexp_captures_are_reclaimed() {
     runtime.collect_garbage_now().expect("GC should run");
     let stats = runtime.host_side_table_stats();
     assert!(stats.string_ids < 4096, "string_ids={}", stats.string_ids);
-    assert!(stats.live_strings < 4096, "live_strings={}", stats.live_strings);
+    assert!(
+        stats.live_strings < 4096,
+        "live_strings={}",
+        stats.live_strings
+    );
 }
 
 #[test]
 fn dead_closures_do_not_pin_script_scopes() {
     let baseline = stats_after_gc("console.log(1);").scope_records;
-    let after = stats_after_gc(
-        "for(let i=0;i<200;i++){ eval('const add=(a)=>(b)=>a+b; add(1)(2);'); }",
-    )
-    .scope_records;
+    let after =
+        stats_after_gc("for(let i=0;i<200;i++){ eval('const add=(a)=>(b)=>a+b; add(1)(2);'); }")
+            .scope_records;
     assert!(
         after <= baseline + 8,
         "scope_records {after} 不应明显大于启动快照基线 {baseline}"
