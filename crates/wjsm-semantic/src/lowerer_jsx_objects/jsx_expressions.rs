@@ -21,7 +21,7 @@ impl Lowerer {
             swc_ast::Expr::Arrow(arrow) => self.lower_arrow_expr(arrow, block),
             swc_ast::Expr::Object(obj_expr) => self.lower_object_expr(obj_expr, block),
             swc_ast::Expr::Array(arr) => self.lower_array_expr(arr, block),
-            swc_ast::Expr::Member(member) => self.lower_member_expr(member, block),
+            swc_ast::Expr::Member(member) => self.lower_member_expr(member, block, false),
             swc_ast::Expr::This(_) => self.lower_this(block),
             swc_ast::Expr::New(new_expr) => {
                 let (val, new_block) = self.lower_new_expr(new_expr, block)?;
@@ -452,7 +452,7 @@ impl Lowerer {
         match expr {
             swc_ast::Expr::Member(member_expr) => {
                 let this_val = self.lower_expr(&member_expr.obj, block)?;
-                let callee_val = self.lower_member_expr(member_expr, block)?;
+                let callee_val = self.lower_member_expr(member_expr, block, false)?;
                 Ok((callee_val, this_val))
             }
             _ => {
@@ -477,7 +477,11 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         match oc.base.as_ref() {
-            swc_ast::OptChainBase::Member(member) => self.lower_member_expr(member, block),
+            swc_ast::OptChainBase::Member(member) => {
+                // `oc.optional` 为真才是真正的 `?.` 短路点；链上后续 `.b` 的
+                // 包装节点 `optional` 为假，按普通成员访问降低。
+                self.lower_member_expr(member, block, oc.optional)
+            }
             swc_ast::OptChainBase::Call(ocall) => {
                 // 可选调用 `f?.()`：必须发射 OptionalCall，不能降为普通 Call
                 // （否则 null/undefined 会被当成可调用对象）。

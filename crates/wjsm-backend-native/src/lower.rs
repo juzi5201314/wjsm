@@ -392,7 +392,7 @@ pub(crate) fn slots_from_program(
         .collect()
 }
 
-/// 为「常量字符串键的 GetProp」分配全局 IC 槽；返回每函数的 `dest → 槽下标`
+/// 为「常量字符串键的 GetProp / OptionalGetProp」分配全局 IC 槽；返回每函数的 `dest → 槽下标`
 /// 映射与总槽数。非字符串常量键（symbol / 数字 / 动态键）不分配，走宿主路径。
 ///
 /// ValueId 是函数局部命名，故 `Const` 定义表必须按函数隔离，避免跨函数误匹配。
@@ -411,10 +411,12 @@ fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
         let mut slots = HashMap::new();
         for block in function.blocks() {
             for instruction in block.instructions() {
-                let Instruction::GetProp { dest, key, .. } = instruction else {
-                    continue;
+                let (dest, key) = match instruction {
+                    Instruction::GetProp { dest, key, .. }
+                    | Instruction::OptionalGetProp { dest, key, .. } => (*dest, *key),
+                    _ => continue,
                 };
-                let Some(constant_id) = const_defs.get(key) else {
+                let Some(constant_id) = const_defs.get(&key) else {
                     continue;
                 };
                 let is_string = usize::try_from(constant_id.0)
@@ -422,7 +424,7 @@ fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
                     .and_then(|index| program.constants().get(index))
                     .is_some_and(|constant| matches!(constant, Constant::String(_)));
                 if is_string {
-                    slots.insert(*dest, slot_index);
+                    slots.insert(dest, slot_index);
                     slot_index += 1;
                 }
             }
@@ -1441,16 +1443,32 @@ fn lower_instruction(
             &[*object, *index, *value],
             Some(*dest),
         ),
-        Instruction::OptionalGetProp { dest, object, key } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
-            NativeRuntimeOp::OptionalGetProp,
-            &[*object, *key],
-            Some(*dest),
-        ),
+        Instruction::OptionalGetProp { dest, object, key } => {
+            if let Some(slot) = ic_slots.get(dest).copied() {
+                lower_optional_get_prop_ic(
+                    builder,
+                    variables,
+                    root_frame,
+                    dispatcher,
+                    ctx,
+                    *dest,
+                    *object,
+                    *key,
+                    slot,
+                )
+            } else {
+                lower_value_operation(
+                    builder,
+                    variables,
+                    root_frame,
+                    dispatcher,
+                    ctx,
+                    NativeRuntimeOp::OptionalGetProp,
+                    &[*object, *key],
+                    Some(*dest),
+                )
+            }
+        }
         Instruction::OptionalGetElem { dest, object, key } => lower_value_operation(
             builder,
             variables,
@@ -2015,6 +2033,191 @@ fn lower_get_prop_ic(
     builder.ins().jump(merge_block, &[]);
 
     // miss：宿主完整 [[Get]] + IC 回填；`ic_ptr` 作为回填目标传入。
+    builder.switch_to_block(miss_block);
+    builder.seal_block(miss_block);
+    let result = call_dispatcher(
+        builder,
+        root_frame,
+        dispatcher,
+        ctx,
+        NativeRuntimeOp::GetPropIc.id(),
+        &[obj, key_value, ic_ptr],
+    )?;
+    define_value(builder, variables, dest, result)?;
+    builder.ins().jump(merge_block, &[]);
+
+    builder.switch_to_block(merge_block);
+    builder.seal_block(merge_block);
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
+)]
+fn lower_optional_get_prop_ic(
+    builder: &mut FunctionBuilder<'_>,
+    variables: &HashMap<ValueId, Variable>,
+    root_frame: &mut FrameLowering,
+    dispatcher: ir::FuncRef,
+    ctx: ir::Value,
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    slot: u32,
+) -> Result<()> {
+    let pointer_type = builder.func.dfg.value_type(ctx);
+    let obj = use_value(builder, variables, object)?;
+    let key_value = use_value(builder, variables, key)?;
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+
+    // vmctx 基址：句柄表 region 与当前 image 的 IC 区。
+    let ht_base = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let ic_base = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
+    );
+
+    // IC 槽指针：基于 ic_base（当前 image 的 IC 区，始终映射），放在入口块计算
+    // 以支配所有后续分支（miss 分支需要它作为 GetPropIc 的回填目标）。
+    let ic_ptr = builder.ins().iadd_imm_s(
+        ic_base,
+        i64::from(slot) * i64::from(constants::IC_SLOT_SIZE),
+    );
+
+    // 第零级：null / undefined 检查。
+    let is_null = builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::Equal,
+        obj,
+        value::encode_null(),
+    );
+    let is_undefined = builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::Equal,
+        obj,
+        value::encode_undefined(),
+    );
+    let is_nullish = builder.ins().bor(is_null, is_undefined);
+
+    let nullish_block = builder.create_block();
+    let ic_entry_block = builder.create_block();
+    let entry_block = builder.create_block();
+    let shape_check_block = builder.create_block();
+    let hit_block = builder.create_block();
+    let miss_block = builder.create_block();
+    let merge_block = builder.create_block();
+
+    builder
+        .ins()
+        .brif(is_nullish, nullish_block, &[], ic_entry_block, &[]);
+
+    // nullish 分支：提前返回 undefined。
+    builder.switch_to_block(nullish_block);
+    builder.seal_block(nullish_block);
+    let undefined = builder.ins().iconst(types::I64, value::encode_undefined());
+    define_value(builder, variables, dest, undefined)?;
+    builder.ins().jump(merge_block, &[]);
+
+    // IC 分支入口：非 nullish 值走 IC 快路径。
+    builder.switch_to_block(ic_entry_block);
+    builder.seal_block(ic_entry_block);
+
+    // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
+    let boxed_bits = builder.ins().band_imm_s(obj, box_base);
+    let is_boxed = builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    let tag = builder.ins().ushr_imm_u(obj, 32);
+    let tag = builder.ins().band_imm_u(
+        tag,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_obj = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_OBJECT).expect("object tag fits i64"),
+    );
+    let tag_ok = builder.ins().band(is_boxed, is_obj);
+
+    // 第一级：标签必须是 TAG_OBJECT。
+    builder
+        .ins()
+        .brif(tag_ok, entry_block, &[], miss_block, &[]);
+
+    // 第二级：读句柄 entry 与 IC 槽，检查稳定态与 kind。
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+    let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
+    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
+    let entry_addr = builder.ins().iadd(ht_base, entry_offset);
+    let entry = builder.ins().load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
+    let state = builder.ins().band_imm_u(entry, 0xFFFF);
+    let stable = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        state,
+        i64::from(constants::HANDLE_STATE_STABLE_MIN),
+    );
+    // entry 里的对象地址是 memory64 逻辑偏移，须加 `heap_object_delta`
+    let addr = builder.ins().ushr_imm_u(entry, 16);
+    let heap_delta = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    let addr = builder.ins().iadd(addr, heap_delta);
+
+    // IC 槽（16 字节）：word0 = shape_id(lo32) | value_index(hi32)，
+    // word1 = kind(lo32) | proto_generation(hi32)。
+    let ic_word0 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
+    let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
+    let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
+    let ic_word1 = builder.ins().load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
+    let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
+    let kind_own = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        ic_kind,
+        i64::from(constants::IC_KIND_OWN_DATA),
+    );
+    let first_ok = builder.ins().band(stable, kind_own);
+    builder
+        .ins()
+        .brif(first_ok, shape_check_block, &[], miss_block, &[]);
+
+    // 第三级：对象地址已由 stable 确认有效，读 shape 并与 IC 槽比对。
+    builder.switch_to_block(shape_check_block);
+    builder.seal_block(shape_check_block);
+    let obj_word = builder.ins().load(types::I64, MemFlagsData::trusted(), addr, 8);
+    let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
+    let shape_match = builder.ins().icmp(
+        ir::condcodes::IntCC::Equal,
+        obj_shape,
+        ic_shape,
+    );
+    builder
+        .ins()
+        .brif(shape_match, hit_block, &[], miss_block, &[]);
+
+    // 命中：`HEAP_OBJECT_HEADER_SIZE + value_index * 8` 处直接 load 值槽。
+    builder.switch_to_block(hit_block);
+    builder.seal_block(hit_block);
+    let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3); // × 值槽 8 字节
+    let value_offset = builder
+        .ins()
+        .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    let value_addr = builder.ins().iadd(addr, value_offset);
+    let value = builder.ins().load(types::I64, MemFlagsData::trusted(), value_addr, 0);
+    define_value(builder, variables, dest, value)?;
+    builder.ins().jump(merge_block, &[]);
+
+    // miss：宿主完整 [[Get]] + IC 回填；`ic_ptr` 作为回填目标传入。
+    // 注意：到达 miss 分支时已确认 object 非 null/undefined，语义等价于 GetProp。
     builder.switch_to_block(miss_block);
     builder.seal_block(miss_block);
     let result = call_dispatcher(

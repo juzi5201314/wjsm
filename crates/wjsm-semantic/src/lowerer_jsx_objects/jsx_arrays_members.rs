@@ -56,10 +56,15 @@ impl Lowerer {
         Ok(arr_dest)
     }
 
+    /// 降低成员访问表达式。`is_optional` 为真表示这是可选链的短路点（`obj?.key`），
+    /// 默认路径改发 `OptionalGetProp` / `OptionalGetElem`，由后端对 null/undefined
+    /// 提前返回 undefined；提前返回的特殊形态（Symbol / Math / Number 常量、
+    /// Map/Set 内建）接收者恒非 nullish，不受该标志影响。
     pub(crate) fn lower_member_expr(
         &mut self,
         member: &swc_ast::MemberExpr,
         block: BasicBlockId,
+        is_optional: bool,
     ) -> Result<ValueId, LoweringError> {
         // Symbol.xxx → well-known symbol（须在 GetProp 之前，否则 key 会变成普通字符串）
         if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
@@ -180,7 +185,7 @@ impl Lowerer {
         let obj_val = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
         // 命名空间对象（`import * as ns`）的导出属性已作为 live getter 预装在对象上，
         // 普通 GetProp 即可触发 getter 取最新值，无需快照填充（#45）。
-        self.lower_member_expr_from_object(member, obj_val, &mut current_block)
+        self.lower_member_expr_from_object(member, obj_val, &mut current_block, is_optional)
     }
 
     pub(crate) fn lower_member_expr_from_object(
@@ -188,6 +193,7 @@ impl Lowerer {
         member: &swc_ast::MemberExpr,
         obj_val: ValueId,
         block: &mut BasicBlockId,
+        is_optional: bool,
     ) -> Result<ValueId, LoweringError> {
         let key = match &member.prop {
             swc_ast::MemberProp::Ident(ident) => {
@@ -284,28 +290,42 @@ impl Lowerer {
                         return Ok(dest);
                     }
                 }
-                // 默认走 GetProp 路径
-                self.current_function.append_instruction(
-                    *block,
+                // 默认走 GetProp 路径；可选链短路点改发 OptionalGetProp。
+                let instruction = if is_optional {
+                    Instruction::OptionalGetProp {
+                        dest,
+                        object: obj_val,
+                        key,
+                    }
+                } else {
                     Instruction::GetProp {
                         dest,
                         object: obj_val,
                         key,
-                    },
-                );
+                    }
+                };
+                self.current_function
+                    .append_instruction(*block, instruction);
             }
             // Computed（计算属性）：统一走 GetElem。GetElem 在后端按 key 类型分派——
             // 数组 + 数字 key → 元素；否则 → 命名属性（obj_get，处理对象/数组 .length/原型/函数）。
             // 旧逻辑「仅数字字面量用 GetElem，其余用 GetProp」会让 a[变量] 漏掉数组元素路径。
             swc_ast::MemberProp::Computed(_) => {
-                self.current_function.append_instruction(
-                    *block,
+                let instruction = if is_optional {
+                    Instruction::OptionalGetElem {
+                        dest,
+                        object: obj_val,
+                        key,
+                    }
+                } else {
                     Instruction::GetElem {
                         dest,
                         object: obj_val,
                         index: key,
-                    },
-                );
+                    }
+                };
+                self.current_function
+                    .append_instruction(*block, instruction);
             }
             _ => unreachable!(),
         }

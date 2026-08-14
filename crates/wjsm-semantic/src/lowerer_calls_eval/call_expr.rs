@@ -188,7 +188,7 @@ impl Lowerer {
         let dest;
         if Self::call_args_have_spread(args) {
             let callee_val =
-                self.lower_member_expr_from_object(member_expr, this_val, &mut call_block)?;
+                self.lower_member_expr_from_object(member_expr, this_val, &mut call_block, false)?;
             let (args_array, end_block) = self.lower_call_args_to_array(args, call_block)?;
             call_block = end_block;
             dest = self.alloc_value();
@@ -726,6 +726,7 @@ impl Lowerer {
                         member_expr,
                         this_val,
                         &mut member_block,
+                        false,
                     )?;
                     callee_block = member_block;
                 } else {
@@ -864,7 +865,7 @@ impl Lowerer {
                 if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
                     let obj = self.lower_expr(&member_expr.obj, block)?;
                     this_val = obj;
-                    callee_val = self.lower_member_expr(member_expr, block)?;
+                    callee_val = self.lower_member_expr(member_expr, block, false)?;
                     if let Some(mb) = self.expr_merge_block.take() {
                         callee_block = mb;
                     }
