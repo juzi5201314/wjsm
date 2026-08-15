@@ -26,7 +26,7 @@ pub struct NativeObject {
     bytes: Arc<[u8]>,
     frame_bytes: Vec<u32>,
     function_count: u32,
-    /// lowering 预计算的 IC 槽总数（16 字节/槽）；运行时据此分配 IC 缓冲。
+    /// lowering 预计算的 IC 槽总数（32 字节/槽）；运行时据此分配 IC 缓冲。
     ic_slot_count: u32,
 }
 

@@ -21,8 +21,8 @@ use wjsm_native_abi::{NativeFunctionEntry, NativeHostSymbol, NativeSlowEntry};
 use crate::{NativeObject, NativeSymbolResolver};
 use platform::{ExecutableMapping, align_to_page, page_size};
 
-/// IC 缓冲上限：4M 槽 × 4 word = 16M u32 = 64 MiB，防御恶意/损坏的 cache 条目。
-const MAX_IC_BUFFER_WORDS: usize = 4_000_000 * 4;
+/// IC 缓冲上限：4M 槽 × 8 word = 32M u32 = 128 MiB，防御恶意/损坏的 cache 条目。
+const MAX_IC_BUFFER_WORDS: usize = 4_000_000 * 8;
 
 pub struct CompiledImage {
     image_id: u64,
@@ -31,7 +31,7 @@ pub struct CompiledImage {
     unwind: Option<UnwindRegistration>,
     code_bytes: usize,
     rodata_bytes: usize,
-    /// 每访问点 16 字节的 IC 槽区（零初始化 = Empty）；生成代码经 vmctx 的
+    /// 每访问点 32 字节的 IC 槽区（零初始化 = Empty）；生成代码经 vmctx 的
     /// `ic_slots_base` 访问，miss 时由宿主回填。
     ic_slots: Box<[u32]>,
 }
@@ -69,7 +69,9 @@ impl CompiledImage {
             .sum();
         let ic_word_count = usize::try_from(object.ic_slot_count())
             .map_err(|_| ImageLoadError::InvalidIcSlotCount)?
-            .checked_mul(4)
+            .checked_mul(usize::try_from(wjsm_ir::constants::IC_SLOT_SIZE).unwrap_or(usize::MAX))
+            .ok_or(ImageLoadError::InvalidIcSlotCount)?
+            .checked_div(4)
             .ok_or(ImageLoadError::InvalidIcSlotCount)?;
         if ic_word_count > MAX_IC_BUFFER_WORDS {
             return Err(ImageLoadError::InvalidIcSlotCount);

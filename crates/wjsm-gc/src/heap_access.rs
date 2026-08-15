@@ -950,6 +950,54 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         }
     }
 
+    /// 属性 IC 回填专用：沿原型链查找首个可放入 CLIF 快路径的属性，并返回
+    /// `(holder_handle, value_slot_index, property)`。`value_slot_index` 对数据
+    /// 属性是值槽下标，对 accessor 是 getter 槽下标（与 IC 槽的 value_index
+    /// 语义一致）。只有普通对象（`HEAP_TYPE_OBJECT`）且 shape 非字典时才可安全
+    /// 地从 holder 值槽直接 load；数组/函数等旁挂属性表、proxy 原型、字典
+    /// shape 一律返回 `None`（由宿主退化 MEGAMORPHIC）。
+    pub fn get_property_slot_on_proto_chain_for_ic(
+        &self,
+        handle: u32,
+        key: u32,
+    ) -> Result<Option<(u32, u32, HeapAccessV2Property)>, HeapAccessV2Error> {
+        let mut current = handle;
+        loop {
+            // 高位标记的 proxy handle 不能 resolve 为 V2 heap 地址。
+            if current & 0x8000_0000 != 0 {
+                return Ok(None);
+            }
+            let object = self.resolve_handle(current)?;
+            let header = self
+                .memory
+                .load_word(HeapAddress::new(object))
+                .map_err(HeapAccessV2Error::Memory)?;
+            // 只接受普通对象：数组/函数/promise 等的命名属性在宿主旁挂表中，
+            // 直接读值槽会读到错误数据。
+            if self.object_type_at(object)? != u32::from(wjsm_ir::HEAP_TYPE_OBJECT) {
+                return Ok(None);
+            }
+            let shape_id = self.shape_id_at(object)?;
+            if self.shapes.is_dictionary(shape_id) {
+                return Ok(None);
+            }
+            if let Some(property) = self.shapes.lookup(shape_id, key) {
+                let value_slot_index = property.index;
+                return self
+                    .read_prop(object, &property)
+                    .map(|property| Some((current, value_slot_index, property)));
+            }
+            let prototype = header as u32;
+            if prototype == PROTO_NULL_SENTINEL || prototype == current {
+                return Ok(None);
+            }
+            if prototype & 0x8000_0000 != 0 {
+                return Ok(None);
+            }
+            current = prototype;
+        }
+    }
+
     pub fn define_accessor_property(
         &self,
         handle: u32,

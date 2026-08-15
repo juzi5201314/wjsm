@@ -112,7 +112,7 @@ pub(super) unsafe extern "C" fn native_host_operation(
         return fail_dispatch(ctx);
     };
 
-    if operation <= u32::from(Builtin::last_wire_id()) {
+    let result = if operation <= u32::from(Builtin::last_wire_id()) {
         let builtin_id = match u16::try_from(operation) {
             Ok(id) => id,
             Err(_) => return fail_dispatch(ctx),
@@ -120,12 +120,18 @@ pub(super) unsafe extern "C" fn native_host_operation(
         let Some(builtin) = Builtin::from_wire_id(builtin_id) else {
             return fail_dispatch(ctx);
         };
-        return dispatch_builtin(ctx, state, builtin, args);
-    }
-    let Some(operation) = NativeRuntimeOp::from_id(operation) else {
-        return fail_dispatch(ctx);
+        dispatch_builtin(ctx, state, builtin, args)
+    } else {
+        let Some(operation) = NativeRuntimeOp::from_id(operation) else {
+            return fail_dispatch(ctx);
+        };
+        dispatch_runtime(ctx, state, operation, args)
     };
-    dispatch_runtime(ctx, state, operation, args)
+    // 任何宿主操作都可能直接或间接改变 shape（builtin 会直接改 heap）；
+    // 这里统一同步 proto 世代，让生成代码中的 ProtoData/Accessor IC 在下次命中
+    // 前看到最新值。读锁极短，仅在所有宿主操作返回后执行一次。
+    ctx.proto_generation = state.heap.shapes().proto_generation();
+    result
 }
 
 fn rejected_call_error(

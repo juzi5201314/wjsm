@@ -154,6 +154,17 @@ pub(super) fn dispatch_runtime(
             backfill_get_prop_ic(state, *object, *key, *ic_slot_ptr);
             result
         }
+        NativeRuntimeOp::GetPropAccessor => {
+            let [getter, receiver] = args else {
+                return fail_dispatch(ctx);
+            };
+            if !value::is_callable(*getter) {
+                return value::encode_undefined();
+            }
+            state
+                .invoke_callable(ctx, *getter, *receiver, &[])
+                .unwrap_or_else(|| fail_dispatch(ctx))
+        }
         NativeRuntimeOp::OptionalGetProp => {
             let [object, key] = args else {
                 return fail_dispatch(ctx);
@@ -699,6 +710,37 @@ fn set_property_impl(
     }
 }
 
+/// 写满整个 32 字节 IC 槽；未用字段清零，防止残留旧值参与后续比较。
+///
+/// # Safety
+/// `slot` 必须指向当前 image IC 区内某个 32 字节槽的首个 u32，且仅本 owner 线程写。
+unsafe fn write_ic_slot(
+    slot: *mut u32,
+    shape_id: u32,
+    value_index: u32,
+    kind: u32,
+    proto_generation: u32,
+    holder_handle: u32,
+) {
+    // SAFETY: 调用方保证 slot 指向 8 个连续 u32；std::ptr::write 只写不读。
+    unsafe {
+        std::ptr::write(slot, shape_id);
+        std::ptr::write(slot.add(1), value_index);
+        std::ptr::write(slot.add(2), kind);
+        std::ptr::write(slot.add(3), proto_generation);
+        std::ptr::write(slot.add(4), holder_handle);
+        std::ptr::write(slot.add(5), 0);
+        std::ptr::write(slot.add(6), 0);
+        std::ptr::write(slot.add(7), 0);
+    }
+}
+
+/// SAFETY: 同 [`write_ic_slot`]。
+unsafe fn write_ic_slot_megamorphic(slot: *mut u32) {
+    // SAFETY: 调用方保证 slot 有效；退化槽 shape/value 清零后只留 kind。
+    unsafe { write_ic_slot(slot, 0, 0, constants::IC_KIND_MEGAMORPHIC, 0, 0) }
+}
+
 /// SetPropIc 的 miss 回填：写入成功后，若属性已成为接收者自己的数据属性，回填
 /// `(shape_id, value_index)`（shape 迁移由 heap 在 `set_property` 内完成，这里
 /// 读的是写入后的新 shape）；accessor / proxy / 数组 / 字典 shape / 异常一律
@@ -712,42 +754,35 @@ fn backfill_set_prop_ic(
 ) {
     let ic_slot_ptr = ic_slot_ptr as *mut u32;
     if value::is_exception(result) || !value::is_object(object) {
-        // SAFETY: 退化槽覆盖整个 16 字节，kind 重写清除残留命中。
-        unsafe {
-            std::ptr::write(ic_slot_ptr, 0);
-            std::ptr::write(ic_slot_ptr.add(1), 0);
-            std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
-            std::ptr::write(ic_slot_ptr.add(3), 0);
-        }
+        // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算。
+        unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
         return;
     }
     let handle = value::decode_object_handle(object);
     let Some(name_id) = property_key(state, key) else {
-        unsafe {
-            std::ptr::write(ic_slot_ptr, 0);
-            std::ptr::write(ic_slot_ptr.add(1), 0);
-            std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
-            std::ptr::write(ic_slot_ptr.add(3), 0);
-        }
+        // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算。
+        unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
         return;
     };
     match state.heap.own_data_property_index(handle, name_id) {
         Ok(Some((shape_id, value_index))) => {
-            // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 16` 计算，
-            // 16 字节对齐、4 个 u32 不越界；只在本 owner 线程写。
+            // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算，
+            // IC 区基址 16 字节对齐、槽内 8 个 u32 不越界；只在本 owner 线程写。
             unsafe {
-                std::ptr::write(ic_slot_ptr, shape_id);
-                std::ptr::write(ic_slot_ptr.add(1), value_index);
-                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_OWN_DATA);
-                std::ptr::write(ic_slot_ptr.add(3), 0);
-            }
+                write_ic_slot(
+                    ic_slot_ptr,
+                    shape_id,
+                    value_index,
+                    constants::IC_KIND_OWN_DATA,
+                    0,
+                    0,
+                )
+            };
         }
-        _ => unsafe {
-            std::ptr::write(ic_slot_ptr, 0);
-            std::ptr::write(ic_slot_ptr.add(1), 0);
-            std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
-            std::ptr::write(ic_slot_ptr.add(3), 0);
-        },
+        _ => {
+            // SAFETY: 退化槽覆盖整个 32 字节，kind 重写清除残留命中。
+            unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+        }
     }
 }
 
@@ -926,9 +961,9 @@ fn ordinary_set_key(
 
 pub(crate) const SYMBOL_PROPERTY_KEY_BIT: u32 = 1 << 31;
 
-/// GetPropIc 的 miss 回填：对象是普通对象且属性可被 OWN_DATA 快路径承载时
-/// 回填 `(shape_id, value_index)`；accessor / 字典 shape / 数组 / 缺失属性
-/// 一律永久退化 MEGAMORPHIC（此后每次访问都走宿主完整 [[Get]]）。
+/// GetPropIc 的 miss 回填：按「自有数据 → 原型链数据 → accessor」优先级回填
+/// CLIF 快路径；proxy / 字典 shape / 数组 / 缺失 / 非 callable accessor 一律
+/// 永久退化 MEGAMORPHIC（此后每次访问都走宿主完整 [[Get]]）。
 fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_slot_ptr: i64) {
     if !value::is_object(object) {
         return;
@@ -938,25 +973,90 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
     let Some(name_id) = property_key(state, key) else {
         return;
     };
+    // 优先级 1：自有数据属性（最常见；单 load 快路径）。
     match state.heap.own_data_property_index(handle, name_id) {
         Ok(Some((shape_id, value_index))) => {
-            // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 16` 计算，
-            // IC 区基址 16 字节对齐、槽内 4 个 u32 不越界；只在本 owner 线程写。
+            // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算，
+            // IC 区基址 16 字节对齐、槽内 8 个 u32 不越界；只在本 owner 线程写。
             unsafe {
-                std::ptr::write(ic_slot_ptr, shape_id);
-                std::ptr::write(ic_slot_ptr.add(1), value_index);
-                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_OWN_DATA);
-                std::ptr::write(ic_slot_ptr.add(3), 0);
+                write_ic_slot(
+                    ic_slot_ptr,
+                    shape_id,
+                    value_index,
+                    constants::IC_KIND_OWN_DATA,
+                    0,
+                    0,
+                )
+            };
+            return;
+        }
+        Ok(None) => {}
+        Err(_) => {
+            unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+            return;
+        }
+    }
+    // 优先级 2：原型链上的数据/accessor 属性。接收者 shape_id 是缓存键；
+    // 原型链属性还要额外记录 holder_handle 与当前 proto 世代。
+    let shape_id = match state.heap.shape_id(handle) {
+        Ok(shape_id) => shape_id,
+        Err(_) => {
+            unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+            return;
+        }
+    };
+    let generation = state.heap.shapes().proto_generation();
+    match state
+        .heap
+        .get_property_slot_on_proto_chain_for_ic(handle, name_id)
+    {
+        Ok(Some((holder_handle, value_slot_index, property))) => {
+            if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
+                let getter = property.getter as i64;
+                if value::is_callable(getter) {
+                    // SAFETY: 与 OWN_DATA 回填相同的 slot 写条件。
+                    unsafe {
+                        write_ic_slot(
+                            ic_slot_ptr,
+                            shape_id,
+                            value_slot_index,
+                            constants::IC_KIND_ACCESSOR,
+                            generation,
+                            holder_handle,
+                        )
+                    };
+                } else {
+                    unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+                }
+            } else if holder_handle == handle {
+                // 理论上 own_data_property_index 已覆盖；保留防御分支。
+                unsafe {
+                    write_ic_slot(
+                        ic_slot_ptr,
+                        shape_id,
+                        value_slot_index,
+                        constants::IC_KIND_OWN_DATA,
+                        0,
+                        0,
+                    )
+                };
+            } else {
+                // SAFETY: 与 OWN_DATA 回填相同的 slot 写条件。
+                unsafe {
+                    write_ic_slot(
+                        ic_slot_ptr,
+                        shape_id,
+                        value_slot_index,
+                        constants::IC_KIND_PROTO_DATA,
+                        generation,
+                        holder_handle,
+                    )
+                };
             }
         }
-        _ => {
-            // SAFETY: 退化槽同样覆盖整个 16 字节，残留旧命中由 kind 重写清除。
-            unsafe {
-                std::ptr::write(ic_slot_ptr, 0);
-                std::ptr::write(ic_slot_ptr.add(1), 0);
-                std::ptr::write(ic_slot_ptr.add(2), constants::IC_KIND_MEGAMORPHIC);
-                std::ptr::write(ic_slot_ptr.add(3), 0);
-            }
+        Ok(None) | Err(_) => {
+            // SAFETY: 退化槽覆盖整个 32 字节，残留旧命中由 kind 重写清除。
+            unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
         }
     }
 }

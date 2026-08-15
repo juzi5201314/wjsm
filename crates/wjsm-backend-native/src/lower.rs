@@ -375,6 +375,10 @@ fn root_frame_capacity(
             | Instruction::SuperCall { .. }
             | Instruction::ConstructCall { .. }
             | Instruction::OptionalCall { .. } => 1,
+            // IC accessor 命中时会把刚 load 出的 getter 作为临时 root 发布后再
+            // 调用宿主 invoke_callable；保守起见所有 GetProp/OptionalGetProp 都
+            // 预留一个临时槽（多预留不影响正确性）。
+            Instruction::GetProp { .. } | Instruction::OptionalGetProp { .. } => 1,
             _ => 0,
         })
         .max()
@@ -1524,6 +1528,7 @@ fn lower_instruction(
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_get_prop_ic(
                     builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, slot,
+                    roots,
                 )
             } else {
                 lower_value_operation(
@@ -1627,6 +1632,7 @@ fn lower_instruction(
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_optional_get_prop_ic(
                     builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, slot,
+                    roots,
                 )
             } else {
                 lower_value_operation(
@@ -2113,10 +2119,8 @@ fn lower_dynamic_binary(
     Ok(())
 }
 
-/// 常量字符串键的 GetProp 快路径：shape 精确命中时直接 load 值槽，miss 时经
-/// `GetPropIc` dispatcher 走完整 [[Get]] 并回填 IC 槽。三条判定缺一不可：
-/// 标签必须是 `TAG_OBJECT`（防非对象值 OOB 读句柄表）、handle entry 必须处于
-/// 稳定态（safepoint 同步 GC 后地址仍有效）、IC 槽必须是 OWN_DATA 且 shape 匹配。
+/// 常量字符串键的 GetProp 快路径入口：创建 merge 块后交给共享的非 nullish
+/// IC 核心。GetProp 与 OptionalGetProp 的非 nullish 分支语义相同。
 #[expect(
     clippy::too_many_arguments,
     reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
@@ -2131,6 +2135,50 @@ fn lower_get_prop_ic(
     object: ValueId,
     key: ValueId,
     slot: u32,
+    roots: &[ValueId],
+) -> Result<()> {
+    let merge_block = builder.create_block();
+    lower_get_prop_ic_non_nullish(
+        builder,
+        variables,
+        root_frame,
+        dispatcher,
+        ctx,
+        dest,
+        object,
+        key,
+        slot,
+        roots,
+        merge_block,
+    )?;
+    builder.switch_to_block(merge_block);
+    builder.seal_block(merge_block);
+    Ok(())
+}
+
+/// GetProp IC 的共享核心：调用方保证 `object` 已通过 OptionalGetProp 的
+/// nullish 检查（GetProp 自身无需）。命中路径有三条：
+/// - OWN_DATA：接收者 shape 命中后单 load 值槽；
+/// - PROTO_DATA：接收者 shape + proto 世代命中后，从 holder 值槽 load；
+/// - ACCESSOR：接收者 shape + proto 世代命中后 load getter，并直接
+///   `invoke_callable(getter, receiver)`（不查属性表）。
+/// 其余情况 miss 到 `GetPropIc` 走完整宿主 [[Get]] 并回填。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
+)]
+fn lower_get_prop_ic_non_nullish(
+    builder: &mut FunctionBuilder<'_>,
+    variables: &HashMap<ValueId, Variable>,
+    root_frame: &mut FrameLowering,
+    dispatcher: ir::FuncRef,
+    ctx: ir::Value,
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    slot: u32,
+    roots: &[ValueId],
+    merge_block: ir::Block,
 ) -> Result<()> {
     let pointer_type = builder.func.dfg.value_type(ctx);
     let obj = use_value(builder, variables, object)?;
@@ -2168,28 +2216,34 @@ fn lower_get_prop_ic(
     );
     let tag_ok = builder.ins().band(is_boxed, is_obj);
 
-    // IC 槽指针：基于 ic_base（当前 image 的 IC 区，始终映射），放在本块计算
+    // IC 槽指针：基于 ic_base（当前 image 的 IC 区，始终映射），放在入口块计算
     // 以支配所有后续分支（miss 分支需要它作为 GetPropIc 的回填目标）。
     let ic_ptr = builder.ins().iadd_imm_s(
         ic_base,
         i64::from(slot) * i64::from(constants::IC_SLOT_SIZE),
     );
 
+    let entry_block = builder.create_block();
+    let shape_check_block = builder.create_block();
+    let shape_hit_block = builder.create_block();
+    let own_hit_block = builder.create_block();
+    let holder_block = builder.create_block();
+    let holder_resolve_block = builder.create_block();
+    let holder_addr_block = builder.create_block();
+    let proto_hit_block = builder.create_block();
+    let accessor_hit_block = builder.create_block();
+    let miss_block = builder.create_block();
+
     // 第一级：标签必须是 TAG_OBJECT。**句柄表 entry 读取必须放在此分支之后**：
     // `trusted()`（notrap）load 允许 Cranelift 块内投机提前，若 entry 读取与
     // tag 检查同块，非对象值（字符串等）的 handle 可能落在未提交的 block，
     // 投机读取直接段错误。条件分支隔离后跨块提升不合法，entry 只在
     // `tag_ok` 为真（对象句柄必然已分配提交）后才读取。
-    let entry_block = builder.create_block();
-    let shape_check_block = builder.create_block();
-    let hit_block = builder.create_block();
-    let miss_block = builder.create_block();
-    let merge_block = builder.create_block();
     builder
         .ins()
         .brif(tag_ok, entry_block, &[], miss_block, &[]);
 
-    // 第二级：读句柄 entry 与 IC 槽，检查稳定态与 kind。
+    // 第二级：读接收者句柄 entry 与 IC 槽，检查稳定态与 kind。
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
     let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
@@ -2198,10 +2252,10 @@ fn lower_get_prop_ic(
     let entry = builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
-    let state = builder.ins().band_imm_u(entry, 0xFFFF);
+    let entry_state = builder.ins().band_imm_u(entry, 0xFFFF);
     let stable = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-        state,
+        entry_state,
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
     // entry 里的对象地址是 memory64 逻辑偏移，须加 `heap_object_delta`
@@ -2216,8 +2270,10 @@ fn lower_get_prop_ic(
     );
     let addr = builder.ins().iadd(addr, heap_delta);
 
-    // IC 槽（16 字节）：word0 = shape_id(lo32) | value_index(hi32)，
-    // word1 = kind(lo32) | proto_generation(hi32)。
+    // IC 槽（32 字节）：
+    // word0 = shape_id(lo32) | value_index(hi32)
+    // word1 = kind(lo32) | proto_generation(hi32)
+    // word2 = holder_handle(lo32) | reserved(hi32)
     let ic_word0 = builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
@@ -2227,12 +2283,29 @@ fn lower_get_prop_ic(
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
     let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
+    let ic_generation = builder.ins().ushr_imm_u(ic_word1, 32);
+    let ic_word2 = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 16);
+    let ic_holder = builder.ins().band_imm_u(ic_word2, i64::from(u32::MAX));
     let kind_own = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         ic_kind,
         i64::from(constants::IC_KIND_OWN_DATA),
     );
-    let first_ok = builder.ins().band(stable, kind_own);
+    let kind_proto = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        ic_kind,
+        i64::from(constants::IC_KIND_PROTO_DATA),
+    );
+    let kind_accessor = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        ic_kind,
+        i64::from(constants::IC_KIND_ACCESSOR),
+    );
+    let kind_holder = builder.ins().bor(kind_proto, kind_accessor);
+    let kind_supported = builder.ins().bor(kind_own, kind_holder);
+    let first_ok = builder.ins().band(stable, kind_supported);
     builder
         .ins()
         .brif(first_ok, shape_check_block, &[], miss_block, &[]);
@@ -2249,11 +2322,65 @@ fn lower_get_prop_ic(
         .icmp(ir::condcodes::IntCC::Equal, obj_shape, ic_shape);
     builder
         .ins()
-        .brif(shape_match, hit_block, &[], miss_block, &[]);
+        .brif(shape_match, shape_hit_block, &[], miss_block, &[]);
 
-    // 命中：`HEAP_OBJECT_HEADER_SIZE + value_index * 8` 处直接 load 值槽。
-    builder.switch_to_block(hit_block);
-    builder.seal_block(hit_block);
+    // shape 命中后按 kind 分派：OWN_DATA 直达自有值槽；其余先验 proto 世代。
+    builder.switch_to_block(shape_hit_block);
+    builder.seal_block(shape_hit_block);
+    builder
+        .ins()
+        .brif(kind_own, own_hit_block, &[], holder_block, &[]);
+
+    // ProtoData / Accessor：当前世代必须与填充时一致，否则原型链解析结果
+    // 可能已失效（原型 shape 变化），落宿主重新解析并回填。
+    builder.switch_to_block(holder_block);
+    builder.seal_block(holder_block);
+    let current_generation = builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, proto_generation))?,
+    );
+    let current_generation = builder.ins().uextend(types::I64, current_generation);
+    let generation_match = builder.ins().icmp(
+        ir::condcodes::IntCC::Equal,
+        current_generation,
+        ic_generation,
+    );
+    builder
+        .ins()
+        .brif(generation_match, holder_resolve_block, &[], miss_block, &[]);
+
+    // 解析 holder_handle → holder entry → holder 地址；entry 同样必须稳定。
+    builder.switch_to_block(holder_resolve_block);
+    builder.seal_block(holder_resolve_block);
+    let holder_entry_offset = builder.ins().ishl_imm_u(ic_holder, 3);
+    let holder_entry_addr = builder.ins().iadd(ht_base, holder_entry_offset);
+    let holder_entry =
+        builder
+            .ins()
+            .load(types::I64, MemFlagsData::trusted(), holder_entry_addr, 0);
+    let holder_state = builder.ins().band_imm_u(holder_entry, 0xFFFF);
+    let holder_stable = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        holder_state,
+        i64::from(constants::HANDLE_STATE_STABLE_MIN),
+    );
+    builder
+        .ins()
+        .brif(holder_stable, holder_addr_block, &[], miss_block, &[]);
+
+    builder.switch_to_block(holder_addr_block);
+    builder.seal_block(holder_addr_block);
+    let holder_addr = builder.ins().ushr_imm_u(holder_entry, 16);
+    let holder_addr = builder.ins().iadd(holder_addr, heap_delta);
+    builder
+        .ins()
+        .brif(kind_accessor, accessor_hit_block, &[], proto_hit_block, &[]);
+
+    // OWN_DATA 命中：`HEAP_OBJECT_HEADER_SIZE + value_index * 8` 处单 load。
+    builder.switch_to_block(own_hit_block);
+    builder.seal_block(own_hit_block);
     let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3); // × 值槽 8 字节
     let value_offset = builder
         .ins()
@@ -2263,6 +2390,45 @@ fn lower_get_prop_ic(
         .ins()
         .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
     define_value(builder, variables, dest, value)?;
+    builder.ins().jump(merge_block, &[]);
+
+    // PROTO_DATA 命中：从 holder 对象的值槽 load。
+    builder.switch_to_block(proto_hit_block);
+    builder.seal_block(proto_hit_block);
+    let proto_value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3);
+    let proto_value_offset = builder.ins().iadd_imm_s(
+        proto_value_shift,
+        i64::from(constants::HEAP_OBJECT_HEADER_SIZE),
+    );
+    let proto_value_addr = builder.ins().iadd(holder_addr, proto_value_offset);
+    let proto_value = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), proto_value_addr, 0);
+    define_value(builder, variables, dest, proto_value)?;
+    builder.ins().jump(merge_block, &[]);
+
+    // ACCESSOR 命中：load getter 后直接走宿主 invoke_callable。getter 是刚从
+    // 堆里读出的临时句柄，必须作为临时 root 发布后再发起可能触发 GC 的调用。
+    builder.switch_to_block(accessor_hit_block);
+    builder.seal_block(accessor_hit_block);
+    let getter_shift = builder.ins().ishl_imm_u(ic_val_idx, 3);
+    let getter_offset = builder
+        .ins()
+        .iadd_imm_s(getter_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    let getter_addr = builder.ins().iadd(holder_addr, getter_offset);
+    let getter = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), getter_addr, 0);
+    root_frame.publish(builder, variables, roots, &[getter])?;
+    let result = call_dispatcher(
+        builder,
+        root_frame,
+        dispatcher,
+        ctx,
+        NativeRuntimeOp::GetPropAccessor.id(),
+        &[getter, obj],
+    )?;
+    define_value(builder, variables, dest, result)?;
     builder.ins().jump(merge_block, &[]);
 
     // miss：宿主完整 [[Get]] + IC 回填；`ic_ptr` 作为回填目标传入。
@@ -2279,8 +2445,6 @@ fn lower_get_prop_ic(
     define_value(builder, variables, dest, result)?;
     builder.ins().jump(merge_block, &[]);
 
-    builder.switch_to_block(merge_block);
-    builder.seal_block(merge_block);
     Ok(())
 }
 
@@ -2457,32 +2621,9 @@ fn lower_optional_get_prop_ic(
     object: ValueId,
     key: ValueId,
     slot: u32,
+    roots: &[ValueId],
 ) -> Result<()> {
-    let pointer_type = builder.func.dfg.value_type(ctx);
     let obj = use_value(builder, variables, object)?;
-    let key_value = use_value(builder, variables, key)?;
-    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-
-    // vmctx 基址：句柄表 region 与当前 image 的 IC 区。
-    let ht_base = builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
-    let ic_base = builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        ctx,
-        vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
-    );
-
-    // IC 槽指针：基于 ic_base（当前 image 的 IC 区，始终映射），放在入口块计算
-    // 以支配所有后续分支（miss 分支需要它作为 GetPropIc 的回填目标）。
-    let ic_ptr = builder.ins().iadd_imm_s(
-        ic_base,
-        i64::from(slot) * i64::from(constants::IC_SLOT_SIZE),
-    );
 
     // 第零级：null / undefined 检查。
     let is_null = builder
@@ -2496,10 +2637,6 @@ fn lower_optional_get_prop_ic(
 
     let nullish_block = builder.create_block();
     let ic_entry_block = builder.create_block();
-    let entry_block = builder.create_block();
-    let shape_check_block = builder.create_block();
-    let hit_block = builder.create_block();
-    let miss_block = builder.create_block();
     let merge_block = builder.create_block();
 
     builder
@@ -2513,120 +2650,22 @@ fn lower_optional_get_prop_ic(
     define_value(builder, variables, dest, undefined)?;
     builder.ins().jump(merge_block, &[]);
 
-    // IC 分支入口：非 nullish 值走 IC 快路径。
+    // IC 分支入口：非 nullish 值走与 GetProp 相同的共享核心。
     builder.switch_to_block(ic_entry_block);
     builder.seal_block(ic_entry_block);
-
-    // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
-    let boxed_bits = builder.ins().band_imm_s(obj, box_base);
-    let is_boxed = builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
-    let tag = builder.ins().ushr_imm_u(obj, 32);
-    let tag = builder.ins().band_imm_u(
-        tag,
-        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
-    );
-    let is_obj = builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::Equal,
-        tag,
-        i64::try_from(value::TAG_OBJECT).expect("object tag fits i64"),
-    );
-    let tag_ok = builder.ins().band(is_boxed, is_obj);
-
-    // 第一级：标签必须是 TAG_OBJECT。
-    builder
-        .ins()
-        .brif(tag_ok, entry_block, &[], miss_block, &[]);
-
-    // 第二级：读句柄 entry 与 IC 槽，检查稳定态与 kind。
-    builder.switch_to_block(entry_block);
-    builder.seal_block(entry_block);
-    let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
-    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
-    let entry_addr = builder.ins().iadd(ht_base, entry_offset);
-    let entry = builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
-    let state = builder.ins().band_imm_u(entry, 0xFFFF);
-    let stable = builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-        state,
-        i64::from(constants::HANDLE_STATE_STABLE_MIN),
-    );
-    // entry 里的对象地址是 memory64 逻辑偏移，须加 `heap_object_delta`
-    let addr = builder.ins().ushr_imm_u(entry, 16);
-    let heap_delta = builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        ctx,
-        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
-    );
-    let addr = builder.ins().iadd(addr, heap_delta);
-
-    // IC 槽（16 字节）：word0 = shape_id(lo32) | value_index(hi32)，
-    // word1 = kind(lo32) | proto_generation(hi32)。
-    let ic_word0 = builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
-    let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
-    let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
-    let ic_word1 = builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
-    let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
-    let kind_own = builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::Equal,
-        ic_kind,
-        i64::from(constants::IC_KIND_OWN_DATA),
-    );
-    let first_ok = builder.ins().band(stable, kind_own);
-    builder
-        .ins()
-        .brif(first_ok, shape_check_block, &[], miss_block, &[]);
-
-    // 第三级：对象地址已由 stable 确认有效，读 shape 并与 IC 槽比对。
-    builder.switch_to_block(shape_check_block);
-    builder.seal_block(shape_check_block);
-    let obj_word = builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), addr, 8);
-    let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
-    let shape_match = builder
-        .ins()
-        .icmp(ir::condcodes::IntCC::Equal, obj_shape, ic_shape);
-    builder
-        .ins()
-        .brif(shape_match, hit_block, &[], miss_block, &[]);
-
-    // 命中：`HEAP_OBJECT_HEADER_SIZE + value_index * 8` 处直接 load 值槽。
-    builder.switch_to_block(hit_block);
-    builder.seal_block(hit_block);
-    let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3); // × 值槽 8 字节
-    let value_offset = builder
-        .ins()
-        .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
-    let value_addr = builder.ins().iadd(addr, value_offset);
-    let value = builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
-    define_value(builder, variables, dest, value)?;
-    builder.ins().jump(merge_block, &[]);
-
-    // miss：宿主完整 [[Get]] + IC 回填；`ic_ptr` 作为回填目标传入。
-    // 注意：到达 miss 分支时已确认 object 非 null/undefined，语义等价于 GetProp。
-    builder.switch_to_block(miss_block);
-    builder.seal_block(miss_block);
-    let result = call_dispatcher(
+    lower_get_prop_ic_non_nullish(
         builder,
+        variables,
         root_frame,
         dispatcher,
         ctx,
-        NativeRuntimeOp::GetPropIc.id(),
-        &[obj, key_value, ic_ptr],
+        dest,
+        object,
+        key,
+        slot,
+        roots,
+        merge_block,
     )?;
-    define_value(builder, variables, dest, result)?;
-    builder.ins().jump(merge_block, &[]);
 
     builder.switch_to_block(merge_block);
     builder.seal_block(merge_block);

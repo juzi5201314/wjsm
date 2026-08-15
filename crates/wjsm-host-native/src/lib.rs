@@ -1446,9 +1446,10 @@ impl NativeAgentState {
         ctx.function_table_len = u32::try_from(image.entries().len()).ok()?;
         ctx.current_image_id = image_id;
         // 与 function_table 同步：snapshot 恢复替换 heap 后句柄表基址会变，
-        // 生成代码的属性快链依赖这两个基址，必须在每次 image 激活时刷新。
+        // 生成代码的属性快链依赖这些基址，必须在每次 image 激活时刷新。
         ctx.handle_table_base = self.heap.handle_table_base();
         ctx.ic_slots_base = image.ic_slots().cast::<u8>().cast_mut();
+        ctx.proto_generation = self.heap.shapes().proto_generation();
         // 对象地址的「逻辑 → 虚拟」偏移：snapshot 恢复后 virtual_base 可能改变，
         // 必须与 handle_table_base 同步刷新，属性快链才能把 entry 里的逻辑地址
         // 换算成真实映射地址。

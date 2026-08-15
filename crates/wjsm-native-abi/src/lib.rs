@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 8;
+pub const NATIVE_ABI_VERSION: u32 = 9;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -75,10 +75,14 @@ pub struct NativeVmContext {
     pub stack_budget_bytes: usize,
     pub raw_access_depth: u32,
     pub suspend_status: u32,
+    /// 当前 `ShapeTable` 的 proto 世代。宿主在每次 dispatcher 调用返回后同步；
+    /// 生成代码用它校验 `kind=ProtoData/Accessor` 的 IC 槽是否仍有效。
+    pub proto_generation: u32,
     /// handle region 基址（8 字节对齐）；generated code 用它把句柄下标换算成
     /// 8 字节 entry 地址。由宿主在 image 激活时与 `ic_slots_base` 同步设置。
     pub handle_table_base: *mut u8,
     /// 当前 image 的 IC 区基址（16 字节对齐）；无 IC 槽的 image 为 null。
+    /// 槽大小 32 字节，槽内 `+0/+8/+16` 的 i64 load 仍满足 8 字节对齐。
     pub ic_slots_base: *mut u8,
     /// 对象地址的「逻辑 → 虚拟」偏移：handle entry 里的对象地址是 memory64
     /// 逻辑偏移，属性快链须加此值才能直接 load 真实映射。
@@ -117,6 +121,7 @@ impl Default for NativeVmContext {
             stack_budget_bytes: 0,
             raw_access_depth: 0,
             suspend_status: 0,
+            proto_generation: 0,
             handle_table_base: std::ptr::null_mut(),
             ic_slots_base: std::ptr::null_mut(),
             heap_object_delta: 0,
@@ -264,6 +269,9 @@ pub enum NativeRuntimeOp {
     /// 带 IC 槽回填的 [[Set]]：`[object, key, value, ic_slot_ptr]`，miss 时回填槽。
     /// 成功写入自有数据属性后回填 `(shape_id, value_index)`，其余一律退化 MEGAMORPHIC。
     SetPropIc = 0x1_050f,
+    /// accessor IC 命中后的直接 getter 调用：`[getter, receiver]`。
+    /// 仅由 CLIF 快路径在 shape + 世代命中后使用，宿主不再查属性表。
+    GetPropAccessor = 0x1_0510,
     PrepareCall = 0x1_0600,
     PrepareConstruct = 0x1_0606,
     FinishCall = 0x1_0601,
@@ -325,6 +333,7 @@ impl NativeRuntimeOp {
             0x1_050d => Some(Self::GetSuperConstructor),
             0x1_050e => Some(Self::GetPropIc),
             0x1_050f => Some(Self::SetPropIc),
+            0x1_0510 => Some(Self::GetPropAccessor),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
@@ -557,7 +566,7 @@ pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v8\0");
+        hasher.update(b"wjsm-native-abi-v9\0");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");
@@ -576,6 +585,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, source_frame_head),
             offset_of!(NativeVmContext, stack_budget_bytes),
             offset_of!(NativeVmContext, raw_access_depth),
+            offset_of!(NativeVmContext, proto_generation),
             offset_of!(NativeVmContext, handle_table_base),
             offset_of!(NativeVmContext, ic_slots_base),
             offset_of!(NativeVmContext, heap_object_delta),
@@ -649,6 +659,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::GetSuperConstructor,
             NativeRuntimeOp::GetPropIc,
             NativeRuntimeOp::SetPropIc,
+            NativeRuntimeOp::GetPropAccessor,
             NativeRuntimeOp::PrepareCall,
             NativeRuntimeOp::PrepareConstruct,
             NativeRuntimeOp::FinishCall,

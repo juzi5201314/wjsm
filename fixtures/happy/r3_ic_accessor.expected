@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+plain-getter: 400
+proto-getter: 1200
+changed-getter: 700
+shadow-getter: 40
+unshadow-getter: 7
+non-callable-getter: undefined
+dict-accessor: 77 1
+--- stderr ---
