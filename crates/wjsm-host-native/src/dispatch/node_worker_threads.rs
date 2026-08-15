@@ -982,7 +982,7 @@ fn compile_worker_artifact(
             root.join(path)
         };
         let module_root = path.parent().unwrap_or(root);
-        wjsm_module::bundle_program_with_options(
+        wjsm_module::lower_bundle_cached_with_options(
             &path,
             module_root,
             wjsm_module::ResolutionOptions::default(),
@@ -1258,4 +1258,29 @@ fn type_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState, message: 
     modules::named_error_object(state, "TypeError", message.into())
         .and_then(|error| state.create_exception(error))
         .unwrap_or_else(|| fail_dispatch(ctx))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn worker_file_uses_cached_builtin_segment() {
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/modules/async_local_worker");
+        let worker = fixture_root.join("worker.js");
+        let artifact = compile_worker_artifact(
+            worker.to_str().expect("fixture 路径必须是 UTF-8"),
+            false,
+            &fixture_root,
+        )
+        .expect("worker fixture 必须可以编译");
+
+        assert!(
+            artifact.program().split_builtin_segment().is_some(),
+            "worker 文件必须走 builtin 分段缓存路径"
+        );
+    }
 }

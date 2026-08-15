@@ -240,7 +240,7 @@ impl NativeRuntimeConfig {
 
     pub(crate) fn child_config(&self) -> Self {
         Self {
-            cache_dir: None,
+            cache_dir: self.cache_dir.clone(),
             gc_algorithm: self.gc_algorithm,
             max_heap_size: self.max_heap_size,
         }
@@ -4310,7 +4310,6 @@ impl NativeRuntime {
     fn host_side_table_stats(&self) -> crate::host_table_reclaim::HostSideTableStats {
         crate::host_table_reclaim::HostSideTableStats {
             live_closures: self.state.closures.iter().filter(|c| c.is_some()).count(),
-            closure_slots: self.state.closures.len(),
             function_closures: self.state.function_closures.len(),
             latest_function_closures: self.state.latest_function_closures.len(),
             live_strings: self
@@ -4390,6 +4389,21 @@ mod tests {
             GcAlgorithmKind::Zgc,
             "in-process 执行入口同样默认 zgc"
         );
+    }
+
+    #[test]
+    fn child_runtime_inherits_cache_directory() {
+        let cache_dir = std::path::PathBuf::from("/tmp/wjsm-native-cache");
+        let parent = NativeRuntimeConfig {
+            cache_dir: Some(cache_dir.clone()),
+            ..NativeRuntimeConfig::default()
+        };
+
+        let child = parent.child_config();
+
+        assert_eq!(child.cache_dir, Some(cache_dir));
+        assert_eq!(child.gc_algorithm, parent.gc_algorithm);
+        assert_eq!(child.max_heap_size, parent.max_heap_size);
     }
     fn artifact(source: &str) -> PortableArtifact {
         let source: Arc<str> = source.into();

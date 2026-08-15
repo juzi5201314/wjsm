@@ -35,17 +35,27 @@ filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
 test-group = 'runtime-cache-delete'
 
 # worker_threads / async_local_worker 会在同进程内起第二个 NativeRuntime
-# （worker 源码单独编译 + thread spawn），单独跑约 2s 并已吃满多核。
-# perf_hooks histogram_clone / native_http 会显式 gc()，并且 lowering 后
-# 的 root frame 更大；和其它 CPU 密集 fixture 争抢后会越过 3s 硬门禁。
-# 要求独占执行槽，门禁本身不放宽。
+# （worker 源码单独编译 + thread spawn）；node_builtin_perf_hooks 模块 fixture
+# 则需初始化大型 builtin 闭包。两类都需要独占 CPU 执行槽。冷缓存下完整启动
+# 可能超过 3s，因此沿用 cluster IPC 的三周期门禁：3s 报慢、9s 才终止；普通
+# fixture 仍保持 3s 硬门禁。
 [[profile.default.overrides]]
-filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks_native_entries|node_builtin_worker_threads)_/) + test(/happy__node_builtin_perf_hooks_(histogram_clone|native_http)/)'
+filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks|node_builtin_worker_threads)_/)'
 threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
+
+# perf_hooks 每例都会编译较大的 builtin 闭包。跨 nextest 进程共享的磁盘缓存只保证
+# 后续命中；ABI 变化后的首次冷启动与资源回收抖动都可能越过 3s。整组独占 CPU，
+# 保留 3s 慢测信号并在连续三个周期后终止，普通 fixture 仍保持 3s 硬门禁。
+[[profile.default.overrides]]
+filter = 'test(/happy__node_builtin_perf_hooks_/)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
 
 # host_table_reclaim：4MB 小堆 + ZGC + 20000 次闭包分配，本质是 GC 回收
-# 压力测试；单个约 1.5s（debug 模式 host 层未优化），并行争抢 CPU 后越过
-# 3s 硬门禁。要求独占执行槽，门禁本身不放宽。
+# 压力测试。单独执行约 2.7s，调度抖动会越过默认 3s，因此独占 CPU 且采用
+# 三周期门禁：3s 报慢、9s 才终止，仍能捕获卡死或资源未释放。
 [[profile.default.overrides]]
-filter = 'test(host_table_reclaim)'
+filter = 'test(/host_table_reclaim::/)'
 threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }

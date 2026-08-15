@@ -14,7 +14,6 @@ use super::*;
 #[derive(Debug, Default)]
 pub(crate) struct HostSideTableStats {
     pub live_closures: usize,
-    pub closure_slots: usize,
     pub function_closures: usize,
     pub latest_function_closures: usize,
     pub live_strings: usize,

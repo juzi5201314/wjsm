@@ -6,13 +6,14 @@ als.run('tls-context', () => {
   tlsHost.serverListen(0, '127.0.0.1', '', '', '').then(function (server) {
     console.log('listen', als.getStore());
     const port = tlsHost.serverPort(server);
-    tlsHost.serverAccept(server).then(function (socket) {
-      console.log('accept', als.getStore());
-      tlsHost.write(socket, 'hello');
-      tlsHost.end(socket);
-    });
+    const accepted = tlsHost.serverAccept(server);
     tlsHost.connect(port, '127.0.0.1', 'localhost', false, '').then(function (client) {
       console.log('connect', als.getStore());
+      accepted.then(function (socket) {
+        console.log('accept', als.getStore());
+        tlsHost.write(socket, 'hello');
+        tlsHost.end(socket);
+      });
       tlsHost.read(client).then(function () {
         console.log('read', als.getStore());
         tlsHost.destroy(client);
