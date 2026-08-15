@@ -113,7 +113,7 @@ fn hash_cache_key_field(hasher: &mut Sha256, field: &[u8]) {
 /// 从 `${dir}/<key>.bin` 读取并校验 builtin 段。任何失败（缺文件、反序列化错误、
 /// ABI 指纹不匹配）都返回 `None`——调用方随后走 [`build_builtin_segment`] 重建。
 ///
-/// 不做 `program.verify()` 门禁：部分 builtin 闭包（events/path/perf_hooks）在基线上
+/// 不做 `program.verify()` 门禁：部分 builtin 闭包（events/path）在基线上
 /// 就存在死块校验告警（block has instructions but terminator is unreachable），运行时
 /// 与 native 编译均容忍；若把 verify 当命中条件，这些闭包的缓存永远不命中。
 /// 段与 plain 路径同源（同一 lowerer），结构合法由 bincode 解码 + ABI 指纹保证。

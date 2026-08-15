@@ -772,11 +772,6 @@ mod tests {
     /// E2E（任务指定 fixture）：`lower_bundle_cached` 对 perf_hooks 的分段布局 +
     /// 缓存命中（issue #344）。
     ///
-    /// fixture 用 `require("node:perf_hooks")` 引入 builtin，frontier = {perf_hooks}。
-    /// 不做整体 verify()：perf_hooks 闭包在**基线提交（#344 之前）就存在**的
-    /// `clearTimelineEntries` 死块（block has instructions but terminator is unreachable）
-    /// 校验失败（wjsm-semantic 引擎问题，运行时 fixture 不受影响，见
-    /// `lower_bundle_cached_async_hooks_closure_verifies` 的 verify 覆盖）。
     #[test]
     fn lower_bundle_cached_perf_hooks_layout_and_cache_hit() {
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -789,6 +784,9 @@ mod tests {
         let program = bundler
             .lower_bundle_cached(&fixture)
             .expect("cached lower 应成功");
+        program
+            .verify()
+            .expect("perf_hooks 合并 Program 应通过 IR 校验");
 
         // 独立构建段（同 frontier/options），对照合并布局。
         let frontier = ["perf_hooks"].into_iter().map(str::to_string).collect();
