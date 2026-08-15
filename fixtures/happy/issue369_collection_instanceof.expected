@@ -1,0 +1,36 @@
+exit_code: 0
+--- stdout ---
+Map self: true boolean
+Set self: true boolean
+WeakMap self: true boolean
+WeakSet self: true boolean
+Map vs Set: false boolean
+Map vs WeakMap: false boolean
+Map vs WeakSet: false boolean
+Set vs Map: false boolean
+Set vs WeakMap: false boolean
+Set vs WeakSet: false boolean
+WeakMap vs Map: false boolean
+WeakMap vs Set: false boolean
+WeakMap vs WeakSet: false boolean
+WeakSet vs Map: false boolean
+WeakSet vs Set: false boolean
+WeakSet vs WeakMap: false boolean
+Map prototype: true true
+Set prototype: true true
+WeakMap prototype: true true
+WeakSet prototype: true true
+Prototype keys: 0 0 0 0
+Set constructor descriptor: false true true
+Set method descriptor: false true true
+WeakMap constructor descriptor: false true true
+WeakMap method descriptor: false true true
+WeakSet constructor descriptor: false true true
+WeakSet method descriptor: false true true
+Map constructor descriptor: false true true
+Map method descriptor: false true true
+Map method: 42
+Set method: true
+WeakMap method: 9
+WeakSet method: true
+--- stderr ---

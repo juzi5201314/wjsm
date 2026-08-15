@@ -50,17 +50,6 @@ new Response("body")                   // 可用
 const R = Response                      // undefined
 ```
 
-## Map / Set / WeakMap / WeakSet 的 instanceof
-
-这四个类型上的 `instanceof` 产生异常值（非布尔），不报错但结果不可靠：
-
-```js
-const m = new Map();
-m instanceof Map    // 不是 true，也不是 false（异常值）
-```
-
-需要类型判断时用 `Object.prototype.toString.call(m) === "[object Map]"` 或 `typeof` + 构造器检查替代。
-
 ## TDZ 静态判定
 
 `let` / `const` 的 Temporal Dead Zone 在 lowering 期静态判定。函数体内的前向引用会被拒绝——即使是合法的「延迟到声明后调用」模式：

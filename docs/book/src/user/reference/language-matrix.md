@@ -54,7 +54,7 @@
 | --- | --- | --- |
 | `Object`、`Array`、`Function` | 可用 | `Array.prototype` 方法是真实属性 |
 | `String` 方法 | 多数仅调用点 | `slice`/`concat`/`includes`/`startsWith`/`indexOf` 可取值传递，其余方法取值得到 `undefined` |
-| `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 这四者上的 `instanceof` 产生异常值而非布尔，见[限制](../runtime/limitations.md) |
+| `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 同构造器与跨构造器的 `instanceof` 返回布尔；其他构造器的 `instanceof` 边界仍以 fixture/test262 覆盖为准 |
 | `Promise` 及组合子 | 可用 | 含 `allSettled`、`withResolvers` |
 | `Proxy` / `Reflect` | 可用 | |
 | `BigInt` | 可用 | |

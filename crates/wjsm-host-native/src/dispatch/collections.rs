@@ -5,7 +5,7 @@ use super::runtime::{
     fail_dispatch, get_property, iterator_close, iterator_done, iterator_from, iterator_value,
     strict_equal, type_error,
 };
-use crate::{NativeAgentState, NativeCallableKind};
+use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind};
 
 #[derive(Clone, Copy)]
 pub(super) enum CollectionIteratorKind {
@@ -96,6 +96,56 @@ pub(crate) fn property(
         });
     }
     None
+}
+
+pub(crate) fn install_prototype_methods(
+    state: &mut NativeAgentState,
+    prototype: i64,
+    is_set: bool,
+) -> Result<(), ()> {
+    let methods: &[(&str, Builtin)] = if is_set {
+        &[
+            ("add", Builtin::SetProtoAdd),
+            ("clear", Builtin::MapSetClear),
+            ("delete", Builtin::SetProtoDelete),
+            ("entries", Builtin::MapSetEntries),
+            ("forEach", Builtin::MapSetForEach),
+            ("has", Builtin::SetProtoHas),
+            ("keys", Builtin::MapSetValues),
+            ("values", Builtin::MapSetValues),
+        ]
+    } else {
+        &[
+            ("clear", Builtin::MapSetClear),
+            ("delete", Builtin::MapSetDelete),
+            ("entries", Builtin::MapSetEntries),
+            ("forEach", Builtin::MapSetForEach),
+            ("get", Builtin::MapProtoGet),
+            ("has", Builtin::MapSetHas),
+            ("keys", Builtin::MapSetKeys),
+            ("set", Builtin::MapProtoSet),
+            ("values", Builtin::MapSetValues),
+        ]
+    };
+    let prototype = value::decode_handle(prototype);
+    for &(name, builtin) in methods {
+        let key = state
+            .intern_text(name.into(), value::TAG_STRING)
+            .map(value::decode_handle)
+            .ok_or(())?;
+        let callable = state
+            .native_callable(NativeCallableKind::Builtin(builtin, true))
+            .ok_or(())?;
+        state
+            .heap
+            .set_property(prototype, key, callable as u64)
+            .map_err(|_| ())?;
+        state
+            .heap
+            .update_property_flags(prototype, key, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn iterator_property(state: &NativeAgentState, receiver: i64, key: &str) -> Option<i64> {
@@ -218,15 +268,24 @@ pub(crate) fn next(
     result
 }
 
-fn collection_object(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> Option<i64> {
-    state
+fn collection_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    constructor: Builtin,
+) -> Option<i64> {
+    let object = state
         .allocate_object(4, false)
         .map_err(|_| fail_dispatch(ctx))
-        .ok()
+        .ok()?;
+    state
+        .set_collection_prototype(object, constructor)
+        .map_err(|()| fail_dispatch(ctx))
+        .ok()?;
+    Some(object)
 }
 
 fn construct_map(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(object) = collection_object(ctx, state) else {
+    let Some(object) = collection_object(ctx, state, Builtin::MapConstructor) else {
         return fail_dispatch(ctx);
     };
     state.maps.insert(value::decode_handle(object), Vec::new());
@@ -282,7 +341,7 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
     if value::is_exception(iterator) {
         return iterator;
     }
-    let Some(result) = collection_object(ctx, state) else {
+    let Some(result) = collection_object(ctx, state, Builtin::MapConstructor) else {
         let exception = fail_dispatch(ctx);
         return iterator_close(ctx, state, &[iterator, exception]);
     };
@@ -344,7 +403,7 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
 }
 
 fn construct_set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(object) = collection_object(ctx, state) else {
+    let Some(object) = collection_object(ctx, state, Builtin::SetConstructor) else {
         return fail_dispatch(ctx);
     };
     state.sets.insert(value::decode_handle(object), Vec::new());
@@ -665,12 +724,18 @@ pub(crate) fn set_values(state: &NativeAgentState, encoded: i64) -> Option<Vec<i
 
 pub(crate) fn create_map(state: &mut NativeAgentState) -> Option<i64> {
     let object = state.allocate_object(4, false).ok()?;
+    state
+        .set_collection_prototype(object, Builtin::MapConstructor)
+        .ok()?;
     state.maps.insert(value::decode_handle(object), Vec::new());
     Some(object)
 }
 
 pub(crate) fn create_set(state: &mut NativeAgentState) -> Option<i64> {
     let object = state.allocate_object(4, false).ok()?;
+    state
+        .set_collection_prototype(object, Builtin::SetConstructor)
+        .ok()?;
     state.sets.insert(value::decode_handle(object), Vec::new());
     Some(object)
 }

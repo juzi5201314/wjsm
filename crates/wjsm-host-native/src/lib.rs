@@ -56,6 +56,9 @@ const MAX_JS_CALL_DEPTH: u32 = 1024;
 pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERABLE as u32
     | wjsm_ir::constants::FLAG_CONFIGURABLE as u32
     | wjsm_ir::constants::FLAG_WRITABLE as u32;
+pub(crate) const BUILTIN_PROTOTYPE_PROPERTY_FLAGS: u32 =
+    wjsm_ir::constants::FLAG_CONFIGURABLE as u32
+        | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_PROTOTYPE_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_METADATA_FLAGS: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
 
@@ -976,6 +979,10 @@ struct NativeAgentState {
     array_prototype: Option<i64>,
     regexp_prototype: Option<i64>,
     symbol_prototype: Option<i64>,
+    map_prototype: Option<i64>,
+    set_prototype: Option<i64>,
+    weak_map_prototype: Option<i64>,
+    weak_set_prototype: Option<i64>,
     console_object: Option<i64>,
     native_callables: Vec<NativeCallableKind>,
     node_fs_bridge: Option<i64>,
@@ -1144,6 +1151,10 @@ impl NativeAgentState {
             array_prototype: None,
             regexp_prototype: None,
             symbol_prototype: None,
+            map_prototype: None,
+            set_prototype: None,
+            weak_map_prototype: None,
+            weak_set_prototype: None,
             console_object: None,
             array_constructor: None,
             node_net: dispatch::node_net::NodeNetState::default(),
@@ -1349,6 +1360,10 @@ impl NativeAgentState {
         self.array_prototype = None;
         self.regexp_prototype = None;
         self.symbol_prototype = None;
+        self.map_prototype = None;
+        self.set_prototype = None;
+        self.weak_map_prototype = None;
+        self.weak_set_prototype = None;
         self.array_constructor = None;
         self.global_object = None;
         self.console_object = None;
@@ -3419,6 +3434,23 @@ impl NativeAgentState {
                 .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
             return Some(prototype);
         }
+        if let Some((builtin, false)) = self.native_callable_builtin(callable)
+            && matches!(
+                builtin,
+                wjsm_ir::Builtin::MapConstructor
+                    | wjsm_ir::Builtin::SetConstructor
+                    | wjsm_ir::Builtin::WeakMapConstructor
+                    | wjsm_ir::Builtin::WeakSetConstructor
+            )
+            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+        {
+            let prototype = self.ensure_collection_prototype(callable, builtin)?;
+            self.callable_properties.insert((callable, key), prototype);
+            self.callable_property_flags
+                .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
+            return Some(prototype);
+        }
+
         if self
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
@@ -3490,6 +3522,85 @@ impl NativeAgentState {
             .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
         Some(prototype)
     }
+
+    fn ensure_collection_prototype(
+        &mut self,
+        constructor: i64,
+        builtin: wjsm_ir::Builtin,
+    ) -> Option<i64> {
+        let cached = match builtin {
+            wjsm_ir::Builtin::MapConstructor => self.map_prototype,
+            wjsm_ir::Builtin::SetConstructor => self.set_prototype,
+            wjsm_ir::Builtin::WeakMapConstructor => self.weak_map_prototype,
+            wjsm_ir::Builtin::WeakSetConstructor => self.weak_set_prototype,
+            _ => return None,
+        };
+        if let Some(prototype) = cached {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let prototype = self.allocate_object(10, false).ok()?;
+        let constructor_key = self
+            .intern_text("constructor".into(), value::TAG_STRING)
+            .map(value::decode_handle)?;
+        self.heap
+            .set_property(
+                value::decode_handle(prototype),
+                constructor_key,
+                constructor as u64,
+            )
+            .ok()?;
+        self.heap
+            .update_property_flags(
+                value::decode_handle(prototype),
+                constructor_key,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()?;
+        match builtin {
+            wjsm_ir::Builtin::MapConstructor => {
+                dispatch::collections::install_prototype_methods(self, prototype, false).ok()?;
+                self.map_prototype = Some(prototype);
+            }
+            wjsm_ir::Builtin::SetConstructor => {
+                dispatch::collections::install_prototype_methods(self, prototype, true).ok()?;
+                self.set_prototype = Some(prototype);
+            }
+            wjsm_ir::Builtin::WeakMapConstructor => {
+                dispatch::weak::install_prototype_methods(self, prototype, false).ok()?;
+                self.weak_map_prototype = Some(prototype);
+            }
+            wjsm_ir::Builtin::WeakSetConstructor => {
+                dispatch::weak::install_prototype_methods(self, prototype, true).ok()?;
+                self.weak_set_prototype = Some(prototype);
+            }
+            _ => return None,
+        }
+        Some(prototype)
+    }
+
+    fn set_collection_prototype(
+        &mut self,
+        object: i64,
+        builtin: wjsm_ir::Builtin,
+    ) -> Result<(), ()> {
+        let constructor = self
+            .native_callable(NativeCallableKind::Builtin(builtin, false))
+            .ok_or(())?;
+        let prototype_key = self
+            .intern_text("prototype".into(), value::TAG_STRING)
+            .map(value::decode_handle)
+            .ok_or(())?;
+        let prototype = self
+            .callable_property(constructor, prototype_key)
+            .filter(|prototype| value::is_object(*prototype))
+            .map(value::decode_handle)
+            .ok_or(())?;
+        self.heap
+            .set_prototype(value::decode_handle(object), prototype)
+            .map_err(|_| ())
+    }
+
     fn note_array_property(&mut self, handle: u32, key: u32) {
         let order = self.array_property_order.entry(handle).or_default();
         if !order.contains(&key) {

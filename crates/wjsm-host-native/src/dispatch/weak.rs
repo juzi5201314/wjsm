@@ -7,7 +7,7 @@ use super::modules;
 use super::promise::{self, NativeMicrotask, NativePromiseReaction, PromiseState};
 use super::runtime::fail_dispatch;
 use crate::side_tables::HostLiveSet;
-use crate::{NativeAgentState, NativeCallableKind};
+use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind};
 
 #[derive(Clone, Copy)]
 struct FinalizationCell {
@@ -109,6 +109,46 @@ pub(crate) fn property(state: &NativeAgentState, receiver: i64, key: &str) -> Op
     None
 }
 
+pub(crate) fn install_prototype_methods(
+    state: &mut NativeAgentState,
+    prototype: i64,
+    is_set: bool,
+) -> Result<(), ()> {
+    let methods: &[(&str, Builtin)] = if is_set {
+        &[
+            ("add", Builtin::WeakSetProtoAdd),
+            ("delete", Builtin::WeakSetProtoDelete),
+            ("has", Builtin::WeakSetProtoHas),
+        ]
+    } else {
+        &[
+            ("delete", Builtin::WeakMapProtoDelete),
+            ("get", Builtin::WeakMapProtoGet),
+            ("has", Builtin::WeakMapProtoHas),
+            ("set", Builtin::WeakMapProtoSet),
+        ]
+    };
+    let prototype = value::decode_handle(prototype);
+    for &(name, builtin) in methods {
+        let key = state
+            .intern_text(name.into(), value::TAG_STRING)
+            .map(value::decode_handle)
+            .ok_or(())?;
+        let callable = state
+            .native_callable(NativeCallableKind::Builtin(builtin, true))
+            .ok_or(())?;
+        state
+            .heap
+            .set_property(prototype, key, callable as u64)
+            .map_err(|_| ())?;
+        state
+            .heap
+            .update_property_flags(prototype, key, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .map_err(|_| ())?;
+    }
+    Ok(())
+}
+
 fn construct_weak_map(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -117,6 +157,12 @@ fn construct_weak_map(
     let Some(object) = weak_object(state) else {
         return fail_dispatch(ctx);
     };
+    if state
+        .set_collection_prototype(object, Builtin::WeakMapConstructor)
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
     state
         .weak
         .weak_maps
@@ -150,6 +196,12 @@ fn construct_weak_set(
     let Some(object) = weak_object(state) else {
         return fail_dispatch(ctx);
     };
+    if state
+        .set_collection_prototype(object, Builtin::WeakSetConstructor)
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
     state
         .weak
         .weak_sets
@@ -475,6 +527,10 @@ fn strong_reachable(
     queue.extend(state.object_prototype);
     queue.extend(state.array_prototype);
     queue.extend(state.regexp_prototype);
+    queue.extend(state.map_prototype);
+    queue.extend(state.set_prototype);
+    queue.extend(state.weak_map_prototype);
+    queue.extend(state.weak_set_prototype);
     queue.extend(state.console_object);
     queue.extend(state.process_object);
     queue.extend(state.process_env_object);
