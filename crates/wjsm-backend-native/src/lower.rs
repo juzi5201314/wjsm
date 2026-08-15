@@ -2053,11 +2053,64 @@ fn lower_dynamic_binary(
     lhs: ValueId,
     rhs: ValueId,
 ) -> Result<()> {
-    let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
     let lhs = use_value(builder, variables, lhs)?;
     let rhs = use_value(builder, variables, rhs)?;
+
+    // 位运算、% 与 ** 仍需 ToPrimitive/ToNumber/ToBigInt 等完整语义，继续走 dispatcher。
+    if !matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+    ) {
+        let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
+        let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
+        return define_value(builder, variables, dest, result);
+    }
+
+    // 守卫：两边必须都是原始 f64（非 NaN-boxed 的 number）才走原生指令。
+    // string 拼接、BigInt、对象 ToPrimitive 等 NaN-boxed 值一律 miss 落 dispatcher。
+    let lhs_is_number = emit_is_number(builder, lhs);
+    let rhs_is_number = emit_is_number(builder, rhs);
+    let both_numbers = builder.ins().band(lhs_is_number, rhs_is_number);
+
+    let fast_block = builder.create_block();
+    let slow_block = builder.create_block();
+    let merge_block = builder.create_block();
+    builder
+        .ins()
+        .brif(both_numbers, fast_block, &[], slow_block, &[]);
+
+    // 快路径：位模式即 IEEE-754 f64，直接 bitcast 后发原生浮点指令。
+    // NaN 在 box_f64_result 中规范化为运行时一致的正向 quiet NaN。
+    builder.switch_to_block(fast_block);
+    builder.seal_block(fast_block);
+    let lhs_f64 = builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
+    let rhs_f64 = builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
+    let result = match op {
+        BinaryOp::Add => builder.ins().fadd(lhs_f64, rhs_f64),
+        BinaryOp::Sub => builder.ins().fsub(lhs_f64, rhs_f64),
+        BinaryOp::Mul => builder.ins().fmul(lhs_f64, rhs_f64),
+        BinaryOp::Div => builder.ins().fdiv(lhs_f64, rhs_f64),
+        _ => unreachable!("guard restricts guarded binary operations"),
+    };
+    let result = box_f64_result(builder, result);
+    define_value(builder, variables, dest, result)?;
+    builder.ins().jump(merge_block, &[]);
+
+    // 慢路径：完整 JS 语义（ToPrimitive、string 拼接、BigInt、异常）。
+    builder.switch_to_block(slow_block);
+    builder.seal_block(slow_block);
+    let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
     let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
-    define_value(builder, variables, dest, result)
+    define_value(builder, variables, dest, result)?;
+    builder.ins().jump(merge_block, &[]);
+
+    builder.switch_to_block(merge_block);
+    builder.seal_block(merge_block);
+    Ok(())
 }
 
 /// 常量字符串键的 GetProp 快路径：shape 精确命中时直接 load 值槽，miss 时经
@@ -2795,6 +2848,14 @@ fn lower_terminator(
         }
     }
     Ok(())
+}
+
+fn emit_is_number(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+    let boxed_bits = builder.ins().band_imm_s(input, box_base);
+    builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::NotEqual, boxed_bits, box_base)
 }
 
 fn emit_is_exception(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {

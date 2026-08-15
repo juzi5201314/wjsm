@@ -341,6 +341,41 @@ mod tests {
         .expect("artifact should encode")
     }
 
+    /// 不可静态证明 f64 的二元运算（null 是 NaN-boxed 值），lowering 必须发射
+    /// 守卫快路径（原生 fadd）与 miss 落 dispatcher 的完整分支。
+    fn guarded_binary_artifact() -> PortableArtifact {
+        let mut program = Program::new();
+        let null = program.add_constant(Constant::Null);
+        let mut function = Function::new("main", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: null,
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: null,
+        });
+        block.push_instruction(Instruction::Binary {
+            dest: ValueId(2),
+            op: BinaryOp::Add,
+            lhs: ValueId(0),
+            rhs: ValueId(1),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+        function.push_block(block);
+        program.push_function(function);
+        PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("artifact should encode")
+    }
+
     #[test]
     fn compiles_arithmetic_to_native_object() {
         let compiler = NativeCompiler::new().expect("host ISA should be supported");
@@ -363,6 +398,21 @@ mod tests {
         assert!(diagnostics.clif.contains("function"));
         assert!(diagnostics.disassembly.contains("function 0: main"));
         assert!(!diagnostics.disassembly.trim().is_empty());
+    }
+
+    #[test]
+    fn guarded_binary_emits_native_fadd_with_dispatcher_fallback() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&guarded_binary_artifact())
+            .expect("guarded binary diagnostics should compile");
+        // 快路径：原生 fadd。
+        assert!(diagnostics.clif.contains("fadd"), "CLIF 应包含原生 fadd");
+        // 慢路径：miss 时落 DYNAMIC_BINARY_BASE + BinaryAdd.tag。
+        assert!(
+            diagnostics.clif.contains("0x0001_0000"),
+            "CLIF 应包含 BinaryAdd dispatcher 操作码"
+        );
     }
 
     /// 编译 arithmetic object 后，各平台必须产出对应 unwind section；
