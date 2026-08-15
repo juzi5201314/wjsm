@@ -1,4 +1,5 @@
 pub mod cache;
+mod f64_analysis;
 pub mod image;
 mod lower;
 mod root_plan;

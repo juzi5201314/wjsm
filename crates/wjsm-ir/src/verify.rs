@@ -445,6 +445,9 @@ fn verify_instruction_uses(
         Instruction::SetProp {
             object, key, value, ..
         }
+        | Instruction::CreateDataProperty {
+            object, key, value, ..
+        }
         | Instruction::SetElem {
             object,
             index: key,
@@ -712,7 +715,9 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::IsException { dest, .. }
         | Instruction::GuardSameFunction { dest, .. }
         | Instruction::EncodeException { dest, .. }
-        | Instruction::ExceptionToObject { dest, .. } => Some(*dest),
+        | Instruction::ExceptionToObject { dest, .. }
+        | Instruction::CreateDataProperty { dest, .. } => Some(*dest),
+
         Instruction::CallBuiltin { dest, .. }
         | Instruction::Call { dest, .. }
         | Instruction::SuperCall { dest, .. }

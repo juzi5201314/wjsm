@@ -9,9 +9,12 @@
 //! 保守策略：任何非上述模式的使用（Call、Return、StoreVar、Phi、LoadVar 等）→ 逃逸。
 
 use super::cfg_fold::terminator_successors;
-use super::direct_call::{collect_uses, instr_uses, terminator_uses};
+use super::direct_call::{collect_uses, instr_uses, instruction_dest, terminator_uses};
 use std::collections::{HashMap, HashSet};
-use wjsm_ir::{BasicBlockId, Constant, FunctionId, Instruction, Module, Terminator, ValueId};
+use wjsm_ir::{
+    BasicBlockId, Constant, FunctionId, Instruction, Module, Terminator, ValueId,
+    is_host_shared_variable,
+};
 
 /// 计算函数的支配集（迭代数据流，O(n²) 可接受，块数 ≤512）。
 ///
@@ -101,334 +104,608 @@ fn find_store_pos(function: &wjsm_ir::Function, name: &str) -> Option<(BasicBloc
     None
 }
 
-/// 收集函数内所有 `LoadVar(name)` 的位置与 dest。
-fn load_var_positions(
+#[derive(Clone, Debug)]
+struct PropertyWrite {
+    key: String,
+    block: BasicBlockId,
+    index: usize,
+    value: ValueId,
+}
+
+#[derive(Clone, Debug)]
+struct PropertyRead {
+    key: String,
+    block: BasicBlockId,
+    index: usize,
+    dest: ValueId,
+}
+
+#[derive(Clone, Debug)]
+struct CandidateAnalysis {
+    writes: Vec<PropertyWrite>,
+    reads: Vec<PropertyRead>,
+    delete_targets: Vec<(BasicBlockId, usize)>,
+    result_replacements: Vec<(ValueId, ValueId)>,
+    escapes: bool,
+}
+
+fn is_new_object_value(function: &wjsm_ir::Function, value: ValueId) -> bool {
+    function.blocks().iter().any(|block| {
+        block.instructions().iter().any(|instruction| {
+            matches!(instruction, Instruction::NewObject { dest, .. } if *dest == value)
+        })
+    })
+}
+
+fn collect_object_family(
     function: &wjsm_ir::Function,
-    name: &str,
-) -> Vec<(BasicBlockId, usize, ValueId)> {
-    let mut out = Vec::new();
-    for block in function.blocks() {
-        for (idx, ins) in block.instructions().iter().enumerate() {
-            if let Instruction::LoadVar { dest, name: n } = ins {
-                if n == name {
-                    out.push((block.id(), idx, *dest));
+    candidate_dest: ValueId,
+    dom: &[HashSet<BasicBlockId>],
+) -> Option<(
+    HashSet<ValueId>,
+    HashSet<String>,
+    Vec<(BasicBlockId, usize)>,
+)> {
+    let mut family = HashSet::from([candidate_dest]);
+    let mut forwarded_vars = HashSet::new();
+    let mut delete_targets = Vec::new();
+
+    loop {
+        let family_len = family.len();
+        let variable_len = forwarded_vars.len();
+        for block in function.blocks() {
+            for (index, instruction) in block.instructions().iter().enumerate() {
+                match instruction {
+                    Instruction::StoreVar { name, value } if family.contains(value) => {
+                        if is_host_shared_variable(name) {
+                            return None;
+                        }
+                        let Some((store_block, store_index)) = find_store_pos(function, name)
+                        else {
+                            return None;
+                        };
+                        if !can_forward_var(function, name, store_block, store_index, dom) {
+                            return None;
+                        }
+                        forwarded_vars.insert(name.clone());
+                        delete_targets.push((block.id(), index));
+                    }
+                    Instruction::LoadVar { name, dest } if forwarded_vars.contains(name) => {
+                        family.insert(*dest);
+                        delete_targets.push((block.id(), index));
+                    }
+                    Instruction::Phi { dest, sources }
+                        if sources.iter().any(|source| family.contains(&source.value)) =>
+                    {
+                        if sources.is_empty()
+                            || sources.iter().any(|source| {
+                                !family.contains(&source.value)
+                                    && !is_new_object_value(function, source.value)
+                            })
+                        {
+                            return None;
+                        }
+                        for source in sources {
+                            family.insert(source.value);
+                        }
+                        family.insert(*dest);
+                        delete_targets.push((block.id(), index));
+                    }
+                    Instruction::CreateDataProperty { dest, object, .. }
+                        if family.contains(object) =>
+                    {
+                        family.insert(*dest);
+                    }
+                    _ => {}
                 }
             }
         }
+        if family.len() == family_len && forwarded_vars.len() == variable_len {
+            break;
+        }
     }
-    out
+
+    Some((family, forwarded_vars, delete_targets))
 }
 
-/// 分析候选对象的所有 use（含转发变量的代理读）。
-///
-/// 返回 (slot_assignments, slot_reads, escapes, forwarded_var)：
-/// - `slot_assignments`：SetProp 常量键（字符串）→ 写入值；
-/// - `slot_reads`：GetProp 常量键（直接读候选 / 代理读 LoadVar dest）→ 读取 dest；
-/// - `escapes`：存在非白名单使用（Call/Return/Phi 等）；
-/// - `forwarded_var`：候选经唯一 `StoreVar(name)` 转发（所有 LoadVar 位于 store 之后）。
 fn analyze_candidate(
     function: &wjsm_ir::Function,
     candidate_dest: ValueId,
     const_strings: &HashMap<ValueId, String>,
     dom: &[HashSet<BasicBlockId>],
-) -> (
-    Vec<(String, ValueId, ValueId)>,
-    Vec<(String, ValueId)>,
-    bool,
-    Option<String>,
-) {
-    let uses = collect_uses(function, candidate_dest);
-    let mut escapes = false;
-    // 槽位按字符串 key 记录（内联克隆后同一属性名的 SetProp/GetProp 常量
-    // ValueId 不同，按 ValueId 匹配会失效）。
-    let mut slot_assignments: Vec<(String, ValueId, ValueId)> = Vec::new();
-    let mut slot_reads: Vec<(String, ValueId)> = Vec::new();
-    let mut forwarded_var: Option<String> = None;
+) -> CandidateAnalysis {
+    let Some((family, _, mut delete_targets)) =
+        collect_object_family(function, candidate_dest, dom)
+    else {
+        return CandidateAnalysis {
+            writes: Vec::new(),
+            reads: Vec::new(),
+            delete_targets: Vec::new(),
+            result_replacements: Vec::new(),
+            escapes: true,
+        };
+    };
+    let mut writes = Vec::new();
+    let mut reads = Vec::new();
+    let mut result_replacements = Vec::new();
+    let initial_keys: HashSet<String> = function
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            Instruction::CreateDataProperty { object, key, .. } if family.contains(object) => {
+                const_strings.get(key).cloned()
+            }
+            _ => None,
+        })
+        .collect();
+    let mut escapes = function.blocks().iter().any(|block| {
+        terminator_uses(block.terminator())
+            .into_iter()
+            .any(|value| family.contains(&value))
+    });
 
-    for use_instr in &uses {
-        match use_instr {
-            Instruction::SetProp {
-                dest,
-                object,
-                key,
-                value,
-            } if *object == candidate_dest => {
-                if let Some(s) = const_strings.get(key) {
-                    slot_assignments.push((s.clone(), *value, *dest));
-                } else {
-                    escapes = true;
+    for block in function.blocks() {
+        for (index, instruction) in block.instructions().iter().enumerate() {
+            match instruction {
+                Instruction::NewObject { dest, .. } if family.contains(dest) => {
+                    delete_targets.push((block.id(), index));
                 }
-            }
-            Instruction::GetProp { dest, object, key } if *object == candidate_dest => {
-                if let Some(s) = const_strings.get(key) {
-                    slot_reads.push((s.clone(), *dest));
-                } else {
-                    escapes = true;
+                Instruction::StoreVar { value, .. } if family.contains(value) => {
+                    delete_targets.push((block.id(), index));
                 }
-            }
-            Instruction::SetProto { object, .. } if *object == candidate_dest => {}
-            Instruction::CallBuiltin { builtin, .. }
-                if *builtin == wjsm_ir::Builtin::IsJsObject => {}
-            Instruction::StoreVar { name, value } if *value == candidate_dest => {
-                // 变量转发：唯一 StoreVar + 所有 LoadVar 位于 store 之后 → 可转发。
-                if let Some((sb, si)) = find_store_pos(function, name)
-                    && can_forward_var(function, name, sb, si, dom)
-                {
-                    forwarded_var = Some(name.clone());
-                } else {
-                    escapes = true;
+                Instruction::LoadVar { dest, .. } if family.contains(dest) => {
+                    delete_targets.push((block.id(), index));
                 }
-            }
-            _ => {
-                escapes = true;
-            }
-        }
-    }
-
-    // 代理读：转发变量的 LoadVar dest 的 use 按 GetProp 常量键分类。
-    if !escapes && let Some(var) = &forwarded_var {
-        for (_, _, load_dest) in load_var_positions(function, var) {
-            // `collect_uses` 只扫指令，不含终止器；`return o` / `throw o` /
-            // `if (o)` 里的 LoadVar dest 必须单独判定为逃逸，否则删掉
-            // NewObject/StoreVar/LoadVar 之后终止器会引用一个已不存在的 ValueId，
-            // 产出悬空 SSA（后端按未定义 local 发射，类型随 local 布局漂移）。
-            if used_in_terminator(function, load_dest) {
-                escapes = true;
-                break;
-            }
-            for use_instr in collect_uses(function, load_dest) {
-                match use_instr {
-                    Instruction::GetProp { dest, object, key } if *object == load_dest => {
-                        if let Some(s) = const_strings.get(key) {
-                            slot_reads.push((s.clone(), *dest));
-                        } else {
-                            escapes = true;
-                        }
+                Instruction::Phi { dest, sources } if family.contains(dest) => {
+                    if sources.iter().any(|source| !family.contains(&source.value)) {
+                        escapes = true;
                     }
-                    _ => {
+                    delete_targets.push((block.id(), index));
+                }
+                Instruction::CreateDataProperty {
+                    object, key, value, ..
+                } if family.contains(object) => {
+                    if family.contains(value) {
+                        escapes = true;
+                    }
+                    if let Some(key) = const_strings.get(key) {
+                        writes.push(PropertyWrite {
+                            key: key.clone(),
+                            block: block.id(),
+                            index,
+                            value: *value,
+                        });
+                        delete_targets.push((block.id(), index));
+                    } else {
                         escapes = true;
                     }
                 }
+                Instruction::SetProp {
+                    dest,
+                    object,
+                    key,
+                    value,
+                } if family.contains(object) => {
+                    let Some(key_name) = const_strings.get(key) else {
+                        escapes = true;
+                        continue;
+                    };
+                    // 仅处理已由 CreateDataProperty 建立的自有数据属性；
+                    // 对从原型继承的属性，[[Set]] 可能调用用户可变 accessor。
+                    if !initial_keys.contains(key_name) || family.contains(value) {
+                        escapes = true;
+                        continue;
+                    }
+                    writes.push(PropertyWrite {
+                        key: key_name.clone(),
+                        block: block.id(),
+                        index,
+                        value: *value,
+                    });
+                    // 普通对象 [[Set]] 成功时返回 stored；将结果替换为
+                    // value 后，原有 IsException 检查仍保留 Binary 等异常语义。
+                    result_replacements.push((*dest, *value));
+                    delete_targets.push((block.id(), index));
+                }
+                Instruction::GetProp { object, key, dest } if family.contains(object) => {
+                    if let Some(key) = const_strings.get(key) {
+                        reads.push(PropertyRead {
+                            key: key.clone(),
+                            block: block.id(),
+                            index,
+                            dest: *dest,
+                        });
+                        delete_targets.push((block.id(), index));
+                    } else {
+                        escapes = true;
+                    }
+                }
+                Instruction::SetProto { object, value } if family.contains(object) => {
+                    if family.contains(value) {
+                        escapes = true;
+                    }
+                    delete_targets.push((block.id(), index));
+                }
+                Instruction::CallBuiltin {
+                    dest,
+                    builtin,
+                    args,
+                } if *builtin == wjsm_ir::Builtin::IsJsObject
+                    && args.iter().any(|value| family.contains(value)) =>
+                {
+                    let result_has_use = dest.is_some_and(|value| {
+                        used_in_terminator(function, value)
+                            || !collect_uses(function, value).is_empty()
+                    });
+                    if args.len() != 1 || result_has_use {
+                        escapes = true;
+                    } else {
+                        delete_targets.push((block.id(), index));
+                    }
+                }
+                _ if instr_uses(instruction)
+                    .into_iter()
+                    .any(|value| family.contains(&value)) =>
+                {
+                    escapes = true;
+                }
+                _ => {}
             }
         }
     }
 
-    (slot_assignments, slot_reads, escapes, forwarded_var)
+    delete_targets.sort_unstable_by_key(|(block, index)| (block.0, *index));
+    delete_targets.dedup();
+    CandidateAnalysis {
+        writes,
+        reads,
+        delete_targets,
+        result_replacements,
+        escapes,
+    }
 }
+#[derive(Clone, Debug)]
+struct PropertyPhi {
+    block: BasicBlockId,
+    dest: ValueId,
+    sources: Vec<wjsm_ir::PhiSource>,
+}
+
+fn function_predecessors(function: &wjsm_ir::Function) -> Vec<Vec<BasicBlockId>> {
+    let mut predecessors = vec![Vec::new(); function.blocks().len()];
+    for block in function.blocks() {
+        for successor in terminator_successors(block.terminator()) {
+            predecessors[successor.0 as usize].push(block.id());
+        }
+    }
+    predecessors
+}
+
+fn reaching_value(state: &HashSet<usize>, writes: &[&PropertyWrite]) -> Option<ValueId> {
+    let mut values = state.iter().map(|index| writes[*index].value);
+    let first = values.next()?;
+    values.all(|value| value == first).then_some(first)
+}
+
+fn state_before_read(
+    block: BasicBlockId,
+    index: usize,
+    entry: &[HashSet<usize>],
+    write_at: &HashMap<(BasicBlockId, usize), usize>,
+) -> HashSet<usize> {
+    let mut state = entry[block.0 as usize].clone();
+    for instruction_index in 0..index {
+        if let Some(write) = write_at.get(&(block, instruction_index)) {
+            state.clear();
+            state.insert(*write);
+        }
+    }
+    state
+}
+
+fn next_value_id(function: &wjsm_ir::Function) -> u32 {
+    let mut next = 0_u32;
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let Some(dest) = instruction_dest(instruction) {
+                next = next.max(dest.0.saturating_add(1));
+            }
+            for value in instr_uses(instruction) {
+                next = next.max(value.0.saturating_add(1));
+            }
+            if let Instruction::Phi { sources, .. } = instruction {
+                for source in sources {
+                    next = next.max(source.value.0.saturating_add(1));
+                }
+            }
+        }
+        for value in terminator_uses(block.terminator()) {
+            next = next.max(value.0.saturating_add(1));
+        }
+    }
+    next
+}
+
+fn resolve_property_replacements(
+    function: &wjsm_ir::Function,
+    analysis: &CandidateAnalysis,
+    next_value: &mut u32,
+) -> Option<(HashMap<ValueId, ValueId>, Vec<PropertyPhi>)> {
+    let predecessors = function_predecessors(function);
+    let mut replacements = HashMap::new();
+    let mut phis = Vec::new();
+    let keys: HashSet<String> = analysis
+        .writes
+        .iter()
+        .map(|write| write.key.clone())
+        .collect();
+
+    for key in keys {
+        let writes: Vec<&PropertyWrite> = analysis
+            .writes
+            .iter()
+            .filter(|write| write.key == key)
+            .collect();
+        let mut write_at = HashMap::new();
+        for (index, write) in writes.iter().enumerate() {
+            write_at.insert((write.block, write.index), index);
+        }
+
+        let mut entry = vec![HashSet::new(); function.blocks().len()];
+        let mut exit = vec![HashSet::new(); function.blocks().len()];
+        loop {
+            let mut next_entry = vec![HashSet::new(); function.blocks().len()];
+            let mut next_exit = vec![HashSet::new(); function.blocks().len()];
+            for block in function.blocks() {
+                let block_index = block.id().0 as usize;
+                for predecessor in &predecessors[block_index] {
+                    next_entry[block_index].extend(exit[predecessor.0 as usize].iter().copied());
+                }
+                let mut state = next_entry[block_index].clone();
+                for index in 0..block.instructions().len() {
+                    if let Some(write) = write_at.get(&(block.id(), index)) {
+                        state.clear();
+                        state.insert(*write);
+                    }
+                }
+                next_exit[block_index] = state;
+            }
+            if next_entry == entry && next_exit == exit {
+                break;
+            }
+            entry = next_entry;
+            exit = next_exit;
+        }
+
+        // 多个到达写入且值不同的块需要一个 SSA 表示；先分配所有 dest，
+        // 这样循环头之间的回边可以互相引用已经确定的 ValueId。
+        let mut entry_phis = HashMap::<BasicBlockId, ValueId>::new();
+        for block in function.blocks() {
+            let block_index = block.id().0 as usize;
+            if !entry[block_index].is_empty()
+                && reaching_value(&entry[block_index], &writes).is_none()
+            {
+                let dest = ValueId(*next_value);
+                *next_value = next_value.saturating_add(1);
+                entry_phis.insert(block.id(), dest);
+            }
+        }
+
+        for (&block, &dest) in &entry_phis {
+            let incoming = &predecessors[block.0 as usize];
+            if incoming.is_empty() {
+                return None;
+            }
+            let mut sources = Vec::with_capacity(incoming.len());
+            for predecessor in incoming {
+                let predecessor_index = predecessor.0 as usize;
+                let value = reaching_value(&exit[predecessor_index], &writes).or_else(|| {
+                    let has_write = function.blocks()[predecessor_index]
+                        .instructions()
+                        .iter()
+                        .enumerate()
+                        .any(|(index, _)| write_at.contains_key(&(*predecessor, index)));
+                    (!has_write).then(|| entry_phis.get(predecessor).copied())?
+                });
+                let Some(value) = value else {
+                    return None;
+                };
+                sources.push(wjsm_ir::PhiSource {
+                    predecessor: *predecessor,
+                    value,
+                });
+            }
+            phis.push(PropertyPhi {
+                block,
+                dest,
+                sources,
+            });
+        }
+
+        for read in analysis.reads.iter().filter(|read| read.key == key) {
+            let state = state_before_read(read.block, read.index, &entry, &write_at);
+            let Some(value) =
+                reaching_value(&state, &writes).or_else(|| entry_phis.get(&read.block).copied())
+            else {
+                return None;
+            };
+            replacements.insert(read.dest, value);
+        }
+    }
+    Some((replacements, phis))
+}
+
+fn close_replacements(replacements: &mut HashMap<ValueId, ValueId>) {
+    let keys: Vec<_> = replacements.keys().copied().collect();
+    for key in keys {
+        let mut value = replacements[&key];
+        let mut seen = HashSet::new();
+        while let Some(next) = replacements.get(&value).copied() {
+            if next == value || !seen.insert(value) {
+                break;
+            }
+            value = next;
+        }
+        replacements.insert(key, value);
+    }
+}
+
+fn deleted_defs_are_unused(
+    original: &wjsm_ir::Function,
+    function: &wjsm_ir::Function,
+    delete_targets: &HashSet<(BasicBlockId, usize)>,
+) -> bool {
+    let deleted_defs: HashSet<_> = delete_targets
+        .iter()
+        .filter_map(|(block_id, index)| {
+            original
+                .block_by_id(*block_id)
+                .and_then(|block| block.instructions().get(*index))
+                .and_then(instruction_dest)
+        })
+        .collect();
+    for block in function.blocks() {
+        for (index, instruction) in block.instructions().iter().enumerate() {
+            if delete_targets.contains(&(block.id(), index)) {
+                continue;
+            }
+            if instr_uses(instruction)
+                .into_iter()
+                .any(|value| deleted_defs.contains(&value))
+            {
+                return false;
+            }
+            if let Instruction::Phi { sources, .. } = instruction
+                && sources
+                    .iter()
+                    .any(|source| deleted_defs.contains(&source.value))
+            {
+                return false;
+            }
+        }
+        if terminator_uses(block.terminator())
+            .into_iter()
+            .any(|value| deleted_defs.contains(&value))
+        {
+            return false;
+        }
+    }
+    true
+}
+
 pub(crate) fn run(module: &mut Module) {
-    // Eval 守卫：直接 eval 可以动态读写任意变量，保守禁用
-    if module.functions().iter().any(|f| f.has_eval()) {
+    if module
+        .functions()
+        .iter()
+        .any(|function| function.has_eval())
+    {
         return;
     }
 
-    // 迭代直到无变化（一个替换可能创造新的候选）
     let mut any_change = true;
     while any_change {
         any_change = false;
-
-        let func_count = module.functions().len();
-        for fid in 0..func_count {
-            let func_id = FunctionId(fid as u32);
-
-            // ── Phase 1: 只读分析 ──
-            // 先捕获常量表引用，避免与后续 module.function_mut() 冲突
-            let constants_base: Vec<Constant> = module.constants().to_vec();
-
-            let (needs_replacement, _) = {
-                let function = &module.functions()[fid];
-
-                // 构建常量字符串表与支配集。
-                let mut const_strings: HashMap<ValueId, String> = HashMap::new();
+        let constants_base = module.constants().to_vec();
+        for function_index in 0..module.functions().len() {
+            let mut candidates = Vec::new();
+            let mut replacements = HashMap::new();
+            let mut delete_targets = HashSet::new();
+            let mut property_phis = Vec::new();
+            {
+                let function = &module.functions()[function_index];
+                let mut const_strings = HashMap::new();
                 for block in function.blocks() {
                     for instruction in block.instructions() {
-                        if let Instruction::Const { dest, constant } = instruction {
-                            if let Some(Constant::String(s)) =
+                        if let Instruction::Const { dest, constant } = instruction
+                            && let Some(Constant::String(value)) =
                                 constants_base.get(constant.0 as usize)
-                            {
-                                const_strings.insert(*dest, s.clone());
-                            }
+                        {
+                            const_strings.insert(*dest, value.clone());
                         }
                     }
                 }
                 let dom = compute_dominators(function);
-
-                // 收集 NewObject 候选
-                let mut candidates: Vec<(ValueId, u32, BasicBlockId)> = Vec::new();
                 for block in function.blocks() {
                     for instruction in block.instructions() {
-                        if let Instruction::NewObject { dest, capacity } = instruction {
-                            candidates.push((*dest, *capacity, block.id()));
+                        if let Instruction::NewObject { dest, .. } = instruction
+                            && !used_in_terminator(function, *dest)
+                        {
+                            candidates.push((*dest, block.id()));
                         }
                     }
                 }
-
-                // 分析每个候选是否逃逸
-                let mut needs_replacement: Vec<(ValueId, BasicBlockId, Option<String>)> =
-                    Vec::new();
-
-                for (candidate_dest, _capacity, _def_block) in &candidates {
-                    // 检查终止器是否使用 candidate（Return、Branch 等）
-                    if used_in_terminator(function, *candidate_dest) {
+                let mut next_value = next_value_id(function);
+                for (candidate_dest, _definition_block) in candidates {
+                    let analysis =
+                        analyze_candidate(function, candidate_dest, &const_strings, &dom);
+                    if analysis.escapes || analysis.writes.is_empty() {
                         continue;
                     }
-
-                    let (slot_assignments, slot_reads, escapes, forwarded_var) =
-                        analyze_candidate(function, *candidate_dest, &const_strings, &dom);
-
-                    if !escapes && !slot_assignments.is_empty() {
-                        let all_reads_have_assignments = slot_reads.iter().all(|(read_key, _)| {
-                            slot_assignments.iter().any(|(key, _, _)| key == read_key)
-                        });
-
-                        if all_reads_have_assignments {
-                            needs_replacement.push((*candidate_dest, *_def_block, forwarded_var));
-                        }
-                    }
+                    let Some((candidate_replacements, candidate_phis)) =
+                        resolve_property_replacements(function, &analysis, &mut next_value)
+                    else {
+                        continue;
+                    };
+                    replacements.extend(candidate_replacements);
+                    replacements.extend(analysis.result_replacements);
+                    delete_targets.extend(analysis.delete_targets);
+                    property_phis.extend(candidate_phis);
                 }
+            }
 
-                (needs_replacement, const_strings)
-            };
-
-            if needs_replacement.is_empty() {
+            if replacements.is_empty() && delete_targets.is_empty() {
                 continue;
             }
+            close_replacements(&mut replacements);
+            for phi in &mut property_phis {
+                for source in &mut phi.sources {
+                    if let Some(value) = replacements.get(&source.value) {
+                        source.value = *value;
+                    }
+                }
+            }
 
-            // ── Phase 2: 应用替换 ──
+            let function_id = FunctionId(function_index as u32);
             let function = module
-                .function_mut(func_id)
+                .function_mut(function_id)
                 .expect("function id must be valid");
-
-            // 重建常量字符串表
-            let mut const_strings: HashMap<ValueId, String> = HashMap::new();
-            for block in function.blocks() {
-                for instruction in block.instructions() {
-                    if let Instruction::Const { dest, constant } = instruction {
-                        if let Some(Constant::String(s)) = constants_base.get(constant.0 as usize) {
-                            const_strings.insert(*dest, s.clone());
+            let mut preview = function.clone();
+            apply_value_replacements(&mut preview, &replacements);
+            if !deleted_defs_are_unused(function, &preview, &delete_targets) {
+                continue;
+            }
+            let replaced = apply_value_replacements(function, &replacements);
+            let mut by_block: HashMap<BasicBlockId, Vec<usize>> = HashMap::new();
+            for (block_id, index) in &delete_targets {
+                by_block.entry(*block_id).or_default().push(*index);
+            }
+            for (block_id, mut indices) in by_block {
+                indices.sort_unstable_by(|left, right| right.cmp(left));
+                indices.dedup();
+                if let Some(block) = function.block_by_id_mut(block_id) {
+                    let instructions = block.instructions_mut();
+                    for index in indices {
+                        if index < instructions.len() {
+                            instructions.remove(index);
                         }
                     }
                 }
             }
+            let had_property_phis = !property_phis.is_empty();
 
-            // 分析每个候选并构建替换映射
-            let dom = compute_dominators(function);
-            let mut all_replacements: HashMap<ValueId, ValueId> = HashMap::new();
-            let mut delete_targets: Vec<(BasicBlockId, usize)> = Vec::new();
-
-            for (candidate_dest, _def_block, forwarded_var) in &needs_replacement {
-                let (slot_assignments, slot_reads, escapes, _) =
-                    analyze_candidate(function, *candidate_dest, &const_strings, &dom);
-
-                if escapes {
-                    continue;
-                }
-
-                // 标量化对象写保持 SetProp 的完成值，并把属性读替换为最后写入值。
-                let mut assignment_map: HashMap<String, ValueId> = HashMap::new();
-                for (key, value, dest) in slot_assignments {
-                    assignment_map.insert(key, value);
-                    all_replacements.insert(dest, value);
-                }
-                for (read_key, read_dest) in &slot_reads {
-                    if let Some(assigned_value) = assignment_map.get(read_key) {
-                        all_replacements.insert(*read_dest, *assigned_value);
-                    }
-                }
-
-                // 记录 NewObject 指令删除
-                for block in function.blocks() {
-                    for (idx, instruction) in block.instructions().iter().enumerate() {
-                        if let Instruction::NewObject { dest, .. } = instruction {
-                            if *dest == *candidate_dest {
-                                delete_targets.push((block.id(), idx));
-                                any_change = true;
-                            }
-                        }
-                    }
-                }
-
-                // 记录转发变量的 StoreVar/LoadVar 指令删除（代理读替换后变死）。
-                if let Some(var) = forwarded_var {
-                    for block in function.blocks() {
-                        for (idx, instruction) in block.instructions().iter().enumerate() {
-                            match instruction {
-                                Instruction::StoreVar { name, .. }
-                                | Instruction::LoadVar { name, .. }
-                                    if name == var =>
-                                {
-                                    delete_targets.push((block.id(), idx));
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-
-                // 记录 SetProp/SetProto/CallBuiltin 指令删除
-                for block in function.blocks() {
-                    for (idx, instruction) in block.instructions().iter().enumerate() {
-                        match instruction {
-                            Instruction::SetProp { object, .. } if *object == *candidate_dest => {
-                                delete_targets.push((block.id(), idx));
-                            }
-                            Instruction::SetProto { object, .. } if *object == *candidate_dest => {
-                                delete_targets.push((block.id(), idx));
-                            }
-                            Instruction::CallBuiltin { builtin, .. }
-                                if *builtin == wjsm_ir::Builtin::IsJsObject =>
-                            {
-                                let instr_vals = instr_uses(instruction);
-                                if instr_vals.contains(candidate_dest) {
-                                    delete_targets.push((block.id(), idx));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+            for phi in property_phis {
+                if let Some(block) = function.block_by_id_mut(phi.block) {
+                    block.instructions_mut().insert(
+                        0,
+                        Instruction::Phi {
+                            dest: phi.dest,
+                            sources: phi.sources,
+                        },
+                    );
                 }
             }
-
-            // 标量化的 GetProp 指令：dest 已被替换成常量，但指令本身未被删除。
-            // 这使其 object 操作数（已删除的 NewObject dest）成为悬空引用，
-            // 属性快路径会把悬空对象解析为空值，导致 ic_backfill 和 obj_get
-            // 每次都收到空对象，IC 永久退化为 MEGAMORPHIC。
-            // 修复：凡 dest 在 all_replacements 中的 GetProp 一律加入删除列表。
-            if !all_replacements.is_empty() {
-                for block in function.blocks() {
-                    for (idx, instruction) in block.instructions().iter().enumerate() {
-                        if let Instruction::GetProp { dest, .. } = instruction {
-                            if all_replacements.contains_key(dest) {
-                                delete_targets.push((block.id(), idx));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 应用替换：遍历所有指令，替换 ValueId
-            let change = apply_value_replacements(function, &all_replacements);
-            any_change = any_change || change;
-
-            // 删除指令（从后往前删，避免索引偏移）
-            if !delete_targets.is_empty() {
-                let mut by_block: HashMap<BasicBlockId, Vec<usize>> = HashMap::new();
-                for (block_id, idx) in &delete_targets {
-                    by_block.entry(*block_id).or_default().push(*idx);
-                }
-                for (block_id, mut indices) in by_block {
-                    indices.sort_unstable_by(|a, b| b.cmp(a));
-                    indices.dedup();
-                    if let Some(block) = function.block_by_id_mut(block_id) {
-                        let instrs = block.instructions_mut();
-                        for idx in indices {
-                            if idx < instrs.len() {
-                                instrs.remove(idx);
-                            }
-                        }
-                    }
-                }
-                any_change = true;
-            }
+            any_change = replaced || !delete_targets.is_empty() || had_property_phis;
         }
     }
 }
@@ -515,6 +792,12 @@ fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId,
             }
         }
         Instruction::SetProp {
+            dest,
+            object,
+            key,
+            value,
+        }
+        | Instruction::CreateDataProperty {
             dest,
             object,
             key,

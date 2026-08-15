@@ -79,10 +79,10 @@ module {
       %22 = new_object(capacity=4)
       %23 = const c21
       %24 = const c22
-      %25 = set_prop %22, %24, %23
+      %25 = create_data_property %22, %24, %23
       %26 = const c23
       %27 = const c24
-      %28 = set_prop %22, %27, %26
+      %28 = create_data_property %22, %27, %26
       %29 = new_array(capacity=1)
       %30 = const c25
       call builtin.array.push(%29, %30)

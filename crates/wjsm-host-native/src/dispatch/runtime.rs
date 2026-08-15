@@ -210,6 +210,22 @@ pub(super) fn dispatch_runtime(
             };
             set_property_impl(ctx, state, *object, *key, *stored)
         }
+        NativeRuntimeOp::CreateDataProperty => {
+            let [object, key, stored] = args else {
+                return fail_dispatch(ctx);
+            };
+            if !value::is_object(*object) {
+                return fail_dispatch(ctx);
+            }
+            let Some(key) = property_key(state, *key) else {
+                return fail_dispatch(ctx);
+            };
+            state
+                .heap
+                .set_property(value::decode_object_handle(*object), key, *stored as u64)
+                .map(|()| *object)
+                .unwrap_or_else(|_| fail_dispatch(ctx))
+        }
         NativeRuntimeOp::SetPropIc => {
             let [object, key, stored, ic_slot_ptr] = args else {
                 return fail_dispatch(ctx);

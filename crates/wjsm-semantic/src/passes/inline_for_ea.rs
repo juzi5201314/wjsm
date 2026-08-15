@@ -157,6 +157,17 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             add(key);
             add(value);
         }
+        CreateDataProperty {
+            dest,
+            object,
+            key,
+            value,
+        } => {
+            add(dest);
+            add(object);
+            add(key);
+            add(value);
+        }
         DeleteProp { dest, object, key } => {
             add(dest);
             add(object);
@@ -364,6 +375,17 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(key);
             rep(value);
         }
+        CreateDataProperty {
+            dest,
+            object,
+            key,
+            value,
+        } => {
+            rep(dest);
+            rep(object);
+            rep(key);
+            rep(value);
+        }
         DeleteProp { dest, object, key } => {
             rep(dest);
             rep(object);
@@ -515,21 +537,6 @@ fn contains_excluded_instruction(function: &wjsm_ir::Function) -> bool {
     })
 }
 
-/// 收集函数内全部 `$this` 族 LoadVar 的 dest。
-fn collect_this_dests(function: &wjsm_ir::Function) -> Vec<ValueId> {
-    let mut dests = Vec::new();
-    for block in function.blocks() {
-        for ins in block.instructions() {
-            if let Instruction::LoadVar { dest, name } = ins {
-                if is_this_name(name) {
-                    dests.push(*dest);
-                }
-            }
-        }
-    }
-    dests
-}
-
 /// 查找或追加 `Constant::Undefined` 常量。
 pub(crate) fn undefined_const_id(module: &mut Module) -> ConstantId {
     for (i, c) in module.constants().iter().enumerate() {
@@ -551,6 +558,29 @@ struct StaticInlineCandidate {
     this_val: ValueId,
     args: Vec<ValueId>,
     dest: Option<ValueId>,
+    construct_object_returns: HashSet<BasicBlockId>,
+}
+
+fn classify_construct_return(
+    definitions: &HashMap<ValueId, Instruction>,
+    constants: &[Constant],
+    value: ValueId,
+) -> Option<bool> {
+    match definitions.get(&value) {
+        Some(Instruction::NewObject { .. }) | Some(Instruction::NewArray { .. }) => Some(true),
+        Some(Instruction::LoadVar { name, .. }) if is_this_name(name) => Some(false),
+        Some(Instruction::Const { constant, .. }) => match constants.get(constant.0 as usize) {
+            Some(
+                Constant::Number(_)
+                | Constant::String(_)
+                | Constant::Bool(_)
+                | Constant::Null
+                | Constant::Undefined,
+            ) => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// 阶段 A：静态多块内联的一轮。返回是否发生了任何内联。
@@ -635,16 +665,35 @@ fn static_inline_round(module: &mut Module) -> bool {
                 if !has_return {
                     continue;
                 }
+                let mut construct_object_returns = HashSet::new();
                 if is_construct {
-                    // 构造器附加条件：所有 Return 必须返回 $this（或空 return）。
-                    // 显式返回其他对象/原语具有特殊 `new` 语义，保守跳过。
-                    let this_dests = collect_this_dests(callee_func);
-                    let returns_this = callee_func.blocks().iter().all(|b| match b.terminator() {
-                        Terminator::Return { value: None } => true,
-                        Terminator::Return { value: Some(v) } => this_dests.contains(v),
-                        _ => true,
-                    });
-                    if !returns_this {
+                    // 仅内联无异常终止器、且每个返回值都能由 IR 定义证明为
+                    // `$this`/原语或对象。对象返回值必须在合流处保留为 `new`
+                    // 的结果；无法分类时继续走通用构造器路径。
+                    let returns_classified =
+                        callee_func
+                            .blocks()
+                            .iter()
+                            .all(|block| match block.terminator() {
+                                Terminator::Return { value: None } => true,
+                                Terminator::Return { value: Some(value) } => {
+                                    match classify_construct_return(
+                                        &per_func_defs[callee_idx],
+                                        &constants_snapshot,
+                                        *value,
+                                    ) {
+                                        Some(true) => {
+                                            construct_object_returns.insert(block.id());
+                                            true
+                                        }
+                                        Some(false) => true,
+                                        None => false,
+                                    }
+                                }
+                                Terminator::Throw { .. } => false,
+                                _ => true,
+                            });
+                    if !returns_classified {
                         continue;
                     }
                 }
@@ -657,6 +706,7 @@ fn static_inline_round(module: &mut Module) -> bool {
                     this_val: *this_val,
                     args: args.clone(),
                     dest: *dest,
+                    construct_object_returns,
                 });
             }
         }
@@ -805,15 +855,20 @@ fn inline_static_candidate(
         None
     };
     let mut return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
-    for clone in cloned_blocks.iter_mut() {
+    let mut construct_return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
+    for (original, clone) in callee_func.blocks().iter().zip(cloned_blocks.iter_mut()) {
         let term = clone.terminator().clone();
         match term {
             Terminator::Return { value } => {
-                if !candidate.is_construct {
-                    let mapped = match value {
-                        Some(v) => v,
-                        None => undefined_dest,
+                if candidate.is_construct {
+                    let selected = if candidate.construct_object_returns.contains(&original.id()) {
+                        value.unwrap_or(candidate.this_val)
+                    } else {
+                        candidate.this_val
                     };
+                    construct_return_records.push((clone.id(), selected));
+                } else {
+                    let mapped = value.unwrap_or(undefined_dest);
                     return_records.push((clone.id(), mapped));
                 }
                 clone.set_terminator(Terminator::Jump { target: b_post_id });
@@ -894,26 +949,26 @@ fn inline_static_candidate(
                 .find(|(old, _)| *old == v)
                 .map_or(v, |(_, new)| *new)
         };
-        if candidate.is_construct {
-            // 构造结果 == this（候选条件保证）。
-            if let Some(call_dest) = candidate.dest {
-                replace_all_uses_of(caller, call_dest, candidate.this_val);
-            }
-        } else if let Some(call_dest) = candidate.dest {
-            match return_records.len() {
+        if let Some(call_dest) = candidate.dest {
+            let records = if candidate.is_construct {
+                &construct_return_records
+            } else {
+                &return_records
+            };
+            match records.len() {
                 1 => {
-                    replace_all_uses_of(caller, call_dest, resolve_param(return_records[0].1));
+                    replace_all_uses_of(caller, call_dest, resolve_param(records[0].1));
                 }
                 n if n >= 2 => {
-                    // 多返回点：B_post 头部插入 phi。
+                    // 多返回点：B_post 头部插入 phi，保持每条控制流路径的结果。
                     let b_post = &mut caller.blocks_mut()[b_post_id.0 as usize];
-                    let mut sources = Vec::with_capacity(n);
-                    for (pred, value) in &return_records {
-                        sources.push(wjsm_ir::PhiSource {
+                    let sources = records
+                        .iter()
+                        .map(|(pred, value)| wjsm_ir::PhiSource {
                             predecessor: *pred,
                             value: resolve_param(*value),
-                        });
-                    }
+                        })
+                        .collect();
                     b_post.instructions_mut().insert(
                         0,
                         Instruction::Phi {

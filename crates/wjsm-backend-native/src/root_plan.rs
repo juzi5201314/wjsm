@@ -179,6 +179,7 @@ fn instruction_destination(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::NewObject { dest, .. }
         | Instruction::GetProp { dest, .. }
         | Instruction::SetProp { dest, .. }
+        | Instruction::CreateDataProperty { dest, .. }
         | Instruction::DeleteProp { dest, .. }
         | Instruction::NewArray { dest, .. }
         | Instruction::GetElem { dest, .. }

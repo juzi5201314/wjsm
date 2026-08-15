@@ -36,6 +36,9 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         GetProp { object, key, .. } => vec![*object, *key],
         SetProp {
             object, key, value, ..
+        }
+        | CreateDataProperty {
+            object, key, value, ..
         } => vec![*object, *key, *value],
         SetProto { object, value } => vec![*object, *value],
         GetElem { object, index, .. } => vec![*object, *index],
@@ -153,6 +156,7 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | NewObject { dest, .. }
         | GetProp { dest, .. }
         | SetProp { dest, .. }
+        | CreateDataProperty { dest, .. }
         | DeleteProp { dest, .. }
         | NewArray { dest, .. }
         | GetElem { dest, .. }

@@ -81,13 +81,37 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
+      %21 = new_object(capacity=4)
       %22 = const c20
+      %23 = const c21
+      %24 = set_prop %21, %23, %22
+      %25 = const c22
+      %26 = const c23
+      %27 = set_prop %21, %25, %26
       %28 = const c24
-      %43 = call builtin.console.log(%22)
+      %29 = const c25
+      %30 = set_prop %21, %29, %28
+      %31 = const c26
+      %32 = const c27
+      %33 = set_prop %21, %31, %32
+      %34 = const c28
+      %35 = const c29
+      %36 = set_prop %21, %35, %34
+      %37 = const c30
+      %38 = const c31
+      %39 = set_prop %21, %37, %38
+      store var $0.Color, %21
+      %40 = load var $0.Color
+      %41 = const c32
+      %42 = get_prop %40, %41
+      %43 = call builtin.console.log(%42)
       %44 = is_exception %43
       branch %44, bb2, bb1
     bb1:
-      %49 = call builtin.console.log(%28)
+      %46 = load var $0.Color
+      %47 = const c33
+      %48 = get_prop %46, %47
+      %49 = call builtin.console.log(%48)
       %50 = is_exception %49
       branch %50, bb4, bb3
     bb2:

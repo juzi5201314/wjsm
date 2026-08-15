@@ -83,7 +83,7 @@ module {
       %24 = const c22
       %25 = call builtin.create_closure(%23, %24)
       %26 = const c23
-      %27 = set_prop %22, %26, %25
+      %27 = create_data_property %22, %26, %25
       store var $0.handler, %22
       %28 = load var $0.target
       %29 = load var $0.handler

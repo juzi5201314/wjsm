@@ -406,6 +406,25 @@ impl Lowerer {
         );
         dest
     }
+    pub(crate) fn emit_create_data_property(
+        &mut self,
+        block: BasicBlockId,
+        object: ValueId,
+        key: ValueId,
+        value: ValueId,
+    ) -> ValueId {
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CreateDataProperty {
+                dest,
+                object,
+                key,
+                value,
+            },
+        );
+        dest
+    }
 
     pub(crate) fn emit_set_elem(
         &mut self,

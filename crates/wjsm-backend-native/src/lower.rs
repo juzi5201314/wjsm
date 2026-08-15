@@ -25,6 +25,7 @@ use wjsm_native_abi::{
 
 use rayon::prelude::*;
 
+use crate::f64_analysis::infer_f64_values;
 use crate::root_plan::RootPlan;
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::{NativeCompileError, NativeObject};
@@ -1567,6 +1568,21 @@ fn lower_instruction(
                 )
             }
         }
+        Instruction::CreateDataProperty {
+            dest,
+            object,
+            key,
+            value,
+        } => lower_value_operation(
+            builder,
+            variables,
+            root_frame,
+            dispatcher,
+            ctx,
+            NativeRuntimeOp::CreateDataProperty,
+            &[*object, *key, *value],
+            Some(*dest),
+        ),
         Instruction::DeleteProp { dest, object, key } => lower_value_operation(
             builder,
             variables,
@@ -3177,105 +3193,6 @@ fn boxed_frame_local_names<'a>(
         .collect()
 }
 
-fn infer_f64_values(program: &Program) -> HashMap<FunctionId, HashSet<ValueId>> {
-    let frame_locals = program.frame_local_variable_names_by_function();
-    let mut result = HashMap::with_capacity(program.functions().len());
-    for (index, function) in program.functions().iter().enumerate() {
-        let frame_locals = &frame_locals[index];
-        let mut f64_values = HashSet::new();
-        let mut f64_locals: HashSet<&str> = HashSet::new();
-        let mut mixed_locals: HashSet<&str> = HashSet::new();
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in function.blocks() {
-                for instruction in block.instructions() {
-                    let destination = match instruction {
-                        Instruction::Const { dest, constant }
-                            if matches!(
-                                program.constants().get(constant.0 as usize),
-                                Some(Constant::Number(_))
-                            ) =>
-                        {
-                            Some(*dest)
-                        }
-                        Instruction::StoreVar { name, value }
-                            if frame_locals.contains(name.as_str())
-                                && !mixed_locals.contains(name.as_str()) =>
-                        {
-                            if f64_values.contains(value) {
-                                if f64_locals.insert(name.as_str()) {
-                                    changed = true;
-                                }
-                            } else if mixed_locals.insert(name.as_str()) {
-                                f64_locals.remove(name.as_str());
-                                changed = true;
-                            }
-                            None
-                        }
-                        Instruction::LoadVar { dest, name }
-                            if f64_locals.contains(name.as_str()) =>
-                        {
-                            Some(*dest)
-                        }
-                        Instruction::Binary { dest, lhs, rhs, .. }
-                            if f64_values.contains(lhs) && f64_values.contains(rhs) =>
-                        {
-                            Some(*dest)
-                        }
-                        Instruction::Unary {
-                            dest,
-                            value,
-                            op: UnaryOp::Neg | UnaryOp::Pos,
-                        } if f64_values.contains(value) => Some(*dest),
-                        Instruction::CallBuiltin {
-                            dest: Some(dest),
-                            builtin:
-                                Builtin::MathAbs
-                                | Builtin::MathSqrt
-                                | Builtin::MathCeil
-                                | Builtin::MathFloor
-                                | Builtin::MathTrunc
-                                | Builtin::MathFround,
-                            args,
-                        } if matches!(args.as_slice(), [arg] if f64_values.contains(arg)) => {
-                            Some(*dest)
-                        }
-                        Instruction::CallBuiltin {
-                            dest: Some(dest),
-                            builtin,
-                            args,
-                        } if NativeHostSymbol::for_builtin(*builtin).is_some_and(|symbol| {
-                            let arity = usize::from(symbol.signature().argument_count());
-                            args.len() == arity && args.iter().all(|arg| f64_values.contains(arg))
-                        }) =>
-                        {
-                            Some(*dest)
-                        }
-                        Instruction::Phi { dest, sources }
-                            if !sources.is_empty()
-                                && sources
-                                    .iter()
-                                    .all(|source| f64_values.contains(&source.value)) =>
-                        {
-                            Some(*dest)
-                        }
-                        _ => None,
-                    };
-                    if destination.is_some_and(|destination| f64_values.insert(destination)) {
-                        changed = true;
-                    }
-                }
-            }
-        }
-        result.insert(
-            FunctionId(u32::try_from(index).expect("function index fits u32")),
-            f64_values,
-        );
-    }
-    result
-}
-
 fn box_f64_result(builder: &mut FunctionBuilder<'_>, result: ir::Value) -> ir::Value {
     let is_nan = builder
         .ins()
@@ -3433,5 +3350,121 @@ mod tests {
         assert!(!f64_values.contains(&ValueId(4)));
         assert!(!f64_values.contains(&ValueId(6)));
         assert!(!f64_values.contains(&ValueId(7)));
+    }
+
+    #[test]
+    fn infer_f64_values_propagates_through_direct_function_calls() {
+        let mut program = Program::new();
+        let number = program.add_constant(Constant::Number(1.0));
+        let function_ref = program.add_constant(Constant::FunctionRef(FunctionId(1)));
+
+        let mut caller = Function::new("main", BasicBlockId(0));
+        let mut caller_block = BasicBlock::new(BasicBlockId(0));
+        caller_block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: number,
+        });
+        caller_block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: function_ref,
+        });
+        caller_block.push_instruction(Instruction::Call {
+            dest: Some(ValueId(2)),
+            callee: ValueId(1),
+            this_val: ValueId(0),
+            args: vec![ValueId(0)],
+        });
+        caller_block.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+        caller.push_block(caller_block);
+        program.push_function(caller);
+
+        let mut callee = Function::new("add1", BasicBlockId(0));
+        callee.set_params(vec!["$env".into(), "$this".into(), "x".into()]);
+        let mut callee_block = BasicBlock::new(BasicBlockId(0));
+        callee_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "x".into(),
+        });
+        callee_block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: number,
+        });
+        callee_block.push_instruction(Instruction::Binary {
+            dest: ValueId(2),
+            op: BinaryOp::Add,
+            lhs: ValueId(0),
+            rhs: ValueId(1),
+        });
+        callee_block.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+        callee.push_block(callee_block);
+        program.push_function(callee);
+
+        let inferred = infer_f64_values(&program);
+        assert!(inferred[&FunctionId(0)].contains(&ValueId(2)));
+        assert!(inferred[&FunctionId(1)].contains(&ValueId(0)));
+        assert!(inferred[&FunctionId(1)].contains(&ValueId(2)));
+    }
+
+    #[test]
+    fn infer_f64_values_rejects_escaped_function_references() {
+        let mut program = Program::new();
+        let number = program.add_constant(Constant::Number(1.0));
+        let function_ref = program.add_constant(Constant::FunctionRef(FunctionId(1)));
+
+        let mut caller = Function::new("main", BasicBlockId(0));
+        let mut caller_block = BasicBlock::new(BasicBlockId(0));
+        caller_block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: number,
+        });
+        caller_block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: function_ref,
+        });
+        caller_block.push_instruction(Instruction::StoreVar {
+            name: "escaped".into(),
+            value: ValueId(1),
+        });
+        caller_block.push_instruction(Instruction::Call {
+            dest: Some(ValueId(2)),
+            callee: ValueId(1),
+            this_val: ValueId(0),
+            args: vec![ValueId(0)],
+        });
+        caller_block.set_terminator(Terminator::Return { value: None });
+        caller.push_block(caller_block);
+        program.push_function(caller);
+
+        let mut callee = Function::new("add1", BasicBlockId(0));
+        callee.set_params(vec!["$env".into(), "$this".into(), "x".into()]);
+        let mut callee_block = BasicBlock::new(BasicBlockId(0));
+        callee_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "x".into(),
+        });
+        callee_block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: number,
+        });
+        callee_block.push_instruction(Instruction::Binary {
+            dest: ValueId(2),
+            op: BinaryOp::Add,
+            lhs: ValueId(0),
+            rhs: ValueId(1),
+        });
+        callee_block.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+        callee.push_block(callee_block);
+        program.push_function(callee);
+
+        let inferred = infer_f64_values(&program);
+        assert!(!inferred[&FunctionId(0)].contains(&ValueId(2)));
+        assert!(!inferred[&FunctionId(1)].contains(&ValueId(0)));
+        assert!(!inferred[&FunctionId(1)].contains(&ValueId(2)));
     }
 }

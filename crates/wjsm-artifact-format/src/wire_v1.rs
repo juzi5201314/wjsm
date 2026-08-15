@@ -530,6 +530,18 @@ fn encode_instruction(
             encoder.u32(*line);
             encoder.u32(*col);
         }
+        Instruction::CreateDataProperty {
+            dest,
+            object,
+            key,
+            value,
+        } => {
+            encoder.u16(37);
+            value_id(encoder, *dest);
+            value_id(encoder, *object);
+            value_id(encoder, *key);
+            value_id(encoder, *value);
+        }
     }
     Ok(())
 }
@@ -736,6 +748,18 @@ fn decode_instruction(
             line: decoder.u32()?,
             col: decoder.u32()?,
         }),
+        37 => {
+            let dest = next_value(decoder)?;
+            let object = next_value(decoder)?;
+            let key = next_value(decoder)?;
+            let value = next_value(decoder)?;
+            Ok(Instruction::CreateDataProperty {
+                dest,
+                object,
+                key,
+                value,
+            })
+        }
         _ => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),
     }
 }

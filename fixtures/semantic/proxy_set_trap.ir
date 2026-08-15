@@ -94,14 +94,14 @@ module {
       %21 = new_object(capacity=4)
       %22 = const c20
       %23 = const c21
-      %24 = set_prop %21, %23, %22
+      %24 = create_data_property %21, %23, %22
       store var $0.target, %21
       %25 = new_object(capacity=4)
       %26 = const c24
       %27 = const c25
       %28 = call builtin.create_closure(%26, %27)
       %29 = const c26
-      %30 = set_prop %25, %29, %28
+      %30 = create_data_property %25, %29, %28
       store var $0.handler, %25
       %31 = load var $0.target
       %32 = load var $0.handler

@@ -11,7 +11,7 @@ use thiserror::Error;
 use wjsm_ir::{Builtin, Program};
 
 const MAGIC: &[u8; 8] = b"WJSMART\0";
-const FORMAT_VERSION: u16 = 2;
+const FORMAT_VERSION: u16 = 3;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;
@@ -660,14 +660,29 @@ mod tests {
     fn sample_input() -> ArtifactBuildInput {
         let mut program = Program::new();
         let constant = program.add_constant(Constant::Number(3.0));
+        let key = program.add_constant(Constant::String("x".to_string()));
         let mut function = Function::new("main", BasicBlockId(0));
         let mut block = BasicBlock::new(BasicBlockId(0));
         block.push_instruction(wjsm_ir::Instruction::Const {
             dest: ValueId(0),
             constant,
         });
+        block.push_instruction(wjsm_ir::Instruction::NewObject {
+            dest: ValueId(1),
+            capacity: 1,
+        });
+        block.push_instruction(wjsm_ir::Instruction::Const {
+            dest: ValueId(2),
+            constant: key,
+        });
+        block.push_instruction(wjsm_ir::Instruction::CreateDataProperty {
+            dest: ValueId(3),
+            object: ValueId(1),
+            key: ValueId(2),
+            value: ValueId(0),
+        });
         block.set_terminator(Terminator::Return {
-            value: Some(ValueId(0)),
+            value: Some(ValueId(3)),
         });
         function.push_block(block);
         program.push_function(function);

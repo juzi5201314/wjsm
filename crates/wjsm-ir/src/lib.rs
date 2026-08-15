@@ -1088,6 +1088,15 @@ pub enum Instruction {
         key: ValueId,
         value: ValueId,
     },
+    /// 以 own data property 语义创建对象属性，不触发原型链 setter。
+    /// 成功时返回 object，失败时返回 TAG_EXCEPTION。
+    CreateDataProperty {
+        dest: ValueId,
+        object: ValueId,
+        key: ValueId,
+        value: ValueId,
+    },
+
     /// 删除对象属性，返回布尔值表示是否成功删除
     DeleteProp {
         dest: ValueId,
@@ -1341,6 +1350,17 @@ impl fmt::Display for Instruction {
             } => {
                 write!(formatter, "{dest} = set_prop {object}, {key}, {value}")
             }
+            Self::CreateDataProperty {
+                dest,
+                object,
+                key,
+                value,
+            } => {
+                write!(
+                    formatter,
+                    "{dest} = create_data_property {object}, {key}, {value}"
+                )
+            }
             Self::DeleteProp { dest, object, key } => {
                 write!(formatter, "{dest} = delete_prop {object}, {key}")
             }
@@ -1542,6 +1562,17 @@ impl Instruction {
                 *key = f(*key);
             }
             Self::SetProp {
+                dest,
+                object,
+                key,
+                value,
+            } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *key = f(*key);
+                *value = f(*value);
+            }
+            Self::CreateDataProperty {
                 dest,
                 object,
                 key,

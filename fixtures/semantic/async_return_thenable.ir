@@ -101,7 +101,7 @@ module {
       %17 = const c30
       %18 = call builtin.create_closure(%16, %17)
       %19 = const c31
-      %20 = set_prop %15, %19, %18
+      %20 = create_data_property %15, %19, %18
       %21 = load var $1.$promise
       promise_resolve %21, %15
       return
