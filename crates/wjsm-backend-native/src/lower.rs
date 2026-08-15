@@ -321,7 +321,7 @@ fn frame_offset(offset: usize) -> Result<i32> {
     i32::try_from(offset).context("native root frame field offset exceeds i32")
 }
 
-fn declare_root_bitmaps(
+pub(crate) fn declare_root_bitmaps(
     module: &mut ObjectModule,
     max_roots: usize,
 ) -> Result<Vec<DataId>, NativeCompileError> {
@@ -360,7 +360,7 @@ fn declare_root_bitmaps(
         .collect()
 }
 
-fn root_frame_capacity(
+pub(crate) fn root_frame_capacity(
     function: &wjsm_ir::Function,
     plan: &RootPlan,
     boxed_locals: usize,
@@ -406,7 +406,7 @@ pub(crate) fn slots_from_program(
 /// 映射与总槽数。非字符串常量键（symbol / 数字 / 动态键）不分配，走宿主路径。
 ///
 /// ValueId 是函数局部命名，故 `Const` 定义表必须按函数隔离，避免跨函数误匹配。
-fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
+pub(crate) fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
     let mut per_function = Vec::with_capacity(program.functions().len());
     let mut slot_index = 0_u32;
     for function in program.functions() {
@@ -445,6 +445,76 @@ fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
     (per_function, slot_index)
 }
 
+/// 每函数的反馈槽 plan：`(block, instruction) → 全局槽下标`。
+///
+/// 槽只按指令形态分配（Binary/Unary/Compare/CallBuiltin 与四种 call 系列全部计入，
+/// 静态已证明 f64 或 typed-thunk 的指令不会写自己的槽），因此 base image 与运行时
+/// 特化 overlay 对同一 Program 必然得到完全一致的编号——overlay 生成代码经由
+/// vmctx 的 `feedback_slots_base` 继续写 base image 的槽，编号错位会把反馈记到
+/// 别的调用点上。`LoadArgument`/`LoadCallEnv`/`FinishCall` 等内部 bookkeeping
+/// 操作不分配槽；Shape IC 继续使用自己的 IC 槽。
+#[derive(Debug, Default)]
+pub(crate) struct FeedbackSitePlan {
+    per_function: Vec<HashMap<(BasicBlockId, usize), u32>>,
+    total: u32,
+}
+
+impl FeedbackSitePlan {
+    pub(crate) fn total_slots(&self) -> u32 {
+        self.total
+    }
+
+    pub(crate) fn function_slots(&self, index: usize) -> &HashMap<(BasicBlockId, usize), u32> {
+        self.per_function
+            .get(index)
+            .expect("feedback plan covers every function")
+    }
+}
+
+pub(crate) fn allocate_feedback_slots(program: &Program) -> FeedbackSitePlan {
+    let mut per_function = Vec::with_capacity(program.functions().len());
+    let mut slot_index = 0_u32;
+    for function in program.functions() {
+        let mut slots = HashMap::new();
+        for block in function.blocks() {
+            for (instruction_index, instruction) in block.instructions().iter().enumerate() {
+                if instruction_owns_feedback_slot(instruction) {
+                    slots.insert((block.id(), instruction_index), slot_index);
+                    slot_index += 1;
+                }
+            }
+        }
+        per_function.push(slots);
+    }
+    FeedbackSitePlan {
+        per_function,
+        total: slot_index,
+    }
+}
+
+/// 判定一条指令是否是「可观察动态语义」的反馈槽候选。
+///
+/// 只看指令形态、不看 `infer_f64_values` 的结论：静态证明会随特化种子变化，
+/// 若槽编号依赖分析结果，base 与 overlay 的编号就会错位。
+fn instruction_owns_feedback_slot(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Binary { .. }
+            | Instruction::Unary { .. }
+            | Instruction::Compare { .. }
+            | Instruction::CallBuiltin { .. }
+            | Instruction::Call { .. }
+            | Instruction::OptionalCall { .. }
+            | Instruction::SuperCall { .. }
+            | Instruction::ConstructCall { .. }
+    )
+}
+
+/// Program 的反馈槽总数；cache 命中时与条目内记录的计数校验。
+pub(crate) fn feedback_site_count(program: &Program) -> u32 {
+    allocate_feedback_slots(program).total_slots()
+}
+
 pub(crate) fn compile_program(
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     program: &Program,
@@ -462,35 +532,35 @@ pub(crate) fn compile_program_diagnostics(
 }
 
 /// 一个函数的并行 codegen 产物；合并阶段串行喂进 `ObjectModule`。
-struct CompiledFunction {
-    alignment: u64,
-    bytes: Vec<u8>,
-    relocs: Vec<ModuleReloc>,
-    frame_bytes: u32,
-    code_len: u64,
-    unwind: UnwindInfo,
-    clif: String,
-    disassembly: String,
+pub(crate) struct CompiledFunction {
+    pub(crate) alignment: u64,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) relocs: Vec<ModuleReloc>,
+    pub(crate) frame_bytes: u32,
+    pub(crate) code_len: u64,
+    pub(crate) unwind: UnwindInfo,
+    pub(crate) clif: String,
+    pub(crate) disassembly: String,
 }
 
 /// 并行 worker 需要的 module 声明快照。
 ///
 /// worker 线程不持有 `ObjectModule`（它不是 `Sync`），只带走 import 一个已声明
 /// 函数 / 数据对象所需的全部信息，等价于 `Module::declare_{func,data}_in_func`。
-struct DeclaredFunction {
+pub(crate) struct DeclaredFunction {
     id: FuncId,
     signature: Signature,
     colocated: bool,
 }
 
-struct DeclaredData {
+pub(crate) struct DeclaredData {
     id: DataId,
     colocated: bool,
     tls: bool,
 }
 
 impl DeclaredFunction {
-    fn snapshot(declarations: &ModuleDeclarations, id: FuncId) -> Self {
+    pub(crate) fn snapshot(declarations: &ModuleDeclarations, id: FuncId) -> Self {
         let decl = declarations.get_function_decl(id);
         Self {
             id,
@@ -500,7 +570,7 @@ impl DeclaredFunction {
     }
 
     /// 等价于 `Module::declare_func_in_func`，但只依赖快照。
-    fn import(&self, func: &mut Function) -> ir::FuncRef {
+    pub(crate) fn import(&self, func: &mut Function) -> ir::FuncRef {
         let signature = func.import_signature(self.signature.clone());
         let user_name_ref = func.declare_imported_user_function(ir::UserExternalName {
             namespace: 0,
@@ -516,7 +586,7 @@ impl DeclaredFunction {
 }
 
 impl DeclaredData {
-    fn snapshot(declarations: &ModuleDeclarations, id: DataId) -> Self {
+    pub(crate) fn snapshot(declarations: &ModuleDeclarations, id: DataId) -> Self {
         let decl = declarations.get_data_decl(id);
         Self {
             id,
@@ -617,6 +687,8 @@ fn compile_program_inner(
 
     // IC 槽预计算：常量字符串键的 GetProp 在编译期固定槽位，miss 回填由宿主完成。
     let (ic_slots, ic_slot_count) = allocate_ic_slots(program);
+    // 反馈槽预计算：只按指令形态编号，保证与运行时特化 overlay 的编号一致。
+    let feedback_plan = allocate_feedback_slots(program);
 
     // 每个函数的 lower + Cranelift compile 相互独立，只读上面的声明快照；
     // 合并进 object 的写入阶段仍然串行，保证 relocation / 符号表顺序确定。
@@ -647,6 +719,8 @@ fn compile_program_inner(
                 &frame_locals[index],
                 &boxed_frame_locals[index],
                 &ic_slots[index],
+                feedback_plan.function_slots(index),
+                None,
                 collect_diagnostics,
             )
         })
@@ -699,6 +773,7 @@ fn compile_program_inner(
             function_count: u32::try_from(program.functions().len())
                 .map_err(|_| NativeCompileError::Capacity("function count"))?,
             ic_slot_count,
+            feedback_slot_count: feedback_plan.total_slots(),
         },
         clif,
         disassembly,
@@ -708,7 +783,7 @@ fn compile_program_inner(
 /// 单个函数的完整 codegen：IR → CLIF → 机器码 + relocation + unwind info。
 /// 不接触 `ObjectModule`，可安全并行执行。
 #[allow(clippy::too_many_arguments)]
-fn compile_one_function(
+pub(crate) fn compile_one_function(
     isa: &cranelift_codegen::isa::OwnedTargetIsa,
     target_config: cranelift_codegen::isa::TargetFrontendConfig,
     program: &Program,
@@ -726,6 +801,8 @@ fn compile_one_function(
     frame_local_names: &BTreeSet<&str>,
     boxed_local_names: &BTreeSet<&str>,
     ic_slots: &HashMap<ValueId, u32>,
+    feedback_slots: &HashMap<(BasicBlockId, usize), u32>,
+    specialized_tags: Option<&[wjsm_native_abi::NativeFeedbackTag]>,
     collect_diagnostics: bool,
 ) -> Result<CompiledFunction, NativeCompileError> {
     let function_index =
@@ -752,6 +829,8 @@ fn compile_one_function(
         frame_local_names,
         boxed_local_names,
         ic_slots,
+        feedback_slots,
+        specialized_tags,
     )
     .map_err(|error| NativeCompileError::Lowering {
         function: FunctionId(function_index),
@@ -845,13 +924,17 @@ fn declare_functions(
         .collect()
 }
 
-fn declare_host_dispatcher(module: &mut ObjectModule) -> Result<FuncId, NativeCompileError> {
+pub(crate) fn declare_host_dispatcher(
+    module: &mut ObjectModule,
+) -> Result<FuncId, NativeCompileError> {
     let pointer_type = module.target_config().pointer_type();
     let mut signature = module.make_signature();
     signature.params.push(AbiParam::new(pointer_type));
     signature.params.push(AbiParam::new(types::I32));
     signature.params.push(AbiParam::new(pointer_type));
     signature.params.push(AbiParam::new(types::I32));
+    // ABI v10：反馈槽指针；非反馈调用点传 null。
+    signature.params.push(AbiParam::new(pointer_type));
     signature.returns.push(AbiParam::new(types::I64));
     module
         .declare_function(
@@ -865,7 +948,7 @@ fn declare_host_dispatcher(module: &mut ObjectModule) -> Result<FuncId, NativeCo
 /// 按需声明本程序真正走 typed 路径的 math thunk（模块级声明一次；函数内 import
 /// 复用之，避免每条调用重建签名）。只有 `infer_f64_values` 已证明 dest 且实参
 /// arity 与 thunk 签名一致的调用点才需要声明。
-fn declare_math_thunks(
+pub(crate) fn declare_math_thunks(
     module: &mut ObjectModule,
     program: &Program,
     inferred_f64: &HashMap<FunctionId, HashSet<ValueId>>,
@@ -934,7 +1017,7 @@ fn math_thunk_signature(module: &ObjectModule, signature: NativeSignature) -> Si
     clif_signature
 }
 
-fn slow_entry_signature(call_conv: CallConv) -> Signature {
+pub(crate) fn slow_entry_signature(call_conv: CallConv) -> Signature {
     let mut signature = Signature::new(call_conv);
     signature.params.push(AbiParam::new(types::I64));
     signature.params.push(AbiParam::new(types::I64));
@@ -946,7 +1029,7 @@ fn slow_entry_signature(call_conv: CallConv) -> Signature {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lower_function(
+pub(crate) fn lower_function(
     function: &mut Function,
     builder_context: &mut FunctionBuilderContext,
     target_config: cranelift_codegen::isa::TargetFrontendConfig,
@@ -963,6 +1046,8 @@ fn lower_function(
     frame_local_names: &BTreeSet<&str>,
     boxed_local_names: &BTreeSet<&str>,
     ic_slots: &HashMap<ValueId, u32>,
+    feedback_slots: &HashMap<(BasicBlockId, usize), u32>,
+    specialized_tags: Option<&[wjsm_native_abi::NativeFeedbackTag]>,
 ) -> Result<()> {
     let slow_call_signature = function.signature.clone();
     let mut builder = FunctionBuilder::new(function, builder_context);
@@ -1011,6 +1096,7 @@ fn lower_function(
         &mut root_frame,
         &frame_locals,
         &boxed_local_indices,
+        specialized_tags,
     )?;
 
     for block in ir_function.blocks() {
@@ -1029,6 +1115,10 @@ fn lower_function(
             }
             let roots = root_plan.before_instruction(block.id(), instruction_index);
             root_frame.publish(&mut builder, &variables, roots, &[])?;
+            let feedback_ptr = feedback_slots
+                .get(&(block.id(), instruction_index))
+                .map(|slot| emit_feedback_slot_ptr(&mut builder, ctx_value, *slot))
+                .transpose()?;
             lower_instruction(
                 &mut builder,
                 instruction,
@@ -1047,6 +1137,7 @@ fn lower_function(
                 &frame_locals,
                 &boxed_local_indices,
                 ic_slots,
+                feedback_ptr,
             )?;
         }
         if has_suspend {
@@ -1086,6 +1177,7 @@ fn lower_function_parameters(
     root_frame: &mut FrameLowering,
     frame_locals: &HashMap<String, Variable>,
     frame_local_indices: &HashMap<String, usize>,
+    specialized_tags: Option<&[wjsm_native_abi::NativeFeedbackTag]>,
 ) -> Result<()> {
     let native_params = builder
         .block_params(builder.current_block().context("missing entry block")?)
@@ -1133,18 +1225,46 @@ fn lower_function_parameters(
             0 => env,
             1 => this_value,
             _ => {
-                let argument = builder.ins().iconst(
-                    types::I64,
-                    i64::try_from(index - 2).context("parameter index exceeds i64")?,
-                );
-                call_dispatcher(
-                    builder,
-                    root_frame,
-                    dispatcher,
-                    ctx,
-                    NativeRuntimeOp::LoadArgument.id(),
-                    &[args_base, args_len, argument],
-                )?
+                // 特化 body：profile 覆盖的参数由 wrapper 的入口守卫背书，直接从
+                // call arena 读取（wrapper 已验证 args_count 覆盖全部 tagged 参数，
+                // 且每个参数的 tag 与 profile 一致），跳过 LoadArgument 的
+                // dispatcher 往返；未覆盖的参数保留通用 LoadArgument 默认语义。
+                if let Some(tags) = specialized_tags
+                    && let Some(_tag) = tags.get(index - 2)
+                {
+                    let pointer_type = builder.func.dfg.value_type(ctx);
+                    let args_base_u32 = builder.ins().uextend(types::I64, native_params[3]);
+                    let arena_base = builder.ins().load(
+                        pointer_type,
+                        MemFlagsData::trusted(),
+                        ctx,
+                        vmctx_offset(offset_of!(NativeVmContext, call_arena_slots))?,
+                    );
+                    let slot_offset = i64::try_from(index - 2)
+                        .context("parameter index exceeds i64")?
+                        .checked_mul(size_of::<i64>() as i64)
+                        .context("call arena offset overflows")?;
+                    let args_base_bytes = builder.ins().ishl_imm_u(args_base_u32, 3);
+                    let param_bytes = builder.ins().iadd_imm_s(args_base_bytes, slot_offset);
+                    let address = builder.ins().iadd(arena_base, param_bytes);
+                    builder
+                        .ins()
+                        .load(types::I64, MemFlagsData::trusted(), address, 0)
+                } else {
+                    let argument = builder.ins().iconst(
+                        types::I64,
+                        i64::try_from(index - 2).context("parameter index exceeds i64")?,
+                    );
+                    call_dispatcher(
+                        builder,
+                        root_frame,
+                        dispatcher,
+                        ctx,
+                        NativeRuntimeOp::LoadArgument.id(),
+                        &[args_base, args_len, argument],
+                        None,
+                    )?
+                }
             }
         };
         if let Some(local) = frame_locals.get(storage_name).copied() {
@@ -1165,6 +1285,7 @@ fn lower_function_parameters(
             ctx,
             NativeRuntimeOp::StoreVar.id(),
             &[slot, value],
+            None,
         )?;
     }
     Ok(())
@@ -1188,6 +1309,7 @@ fn lower_instruction(
     frame_locals: &HashMap<String, Variable>,
     frame_local_indices: &HashMap<String, usize>,
     ic_slots: &HashMap<ValueId, u32>,
+    feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
     match instruction {
         Instruction::Const {
@@ -1217,6 +1339,7 @@ fn lower_instruction(
                         ctx,
                         NativeRuntimeOp::MaterializeFunction.id(),
                         &[index],
+                        None,
                     )?
                 }
                 Constant::NativeCallableEval => builder
@@ -1240,6 +1363,7 @@ fn lower_instruction(
                         ctx,
                         operation.id(),
                         &[index],
+                        None,
                     )?;
                     if matches!(constant, Constant::RegExp { .. }) {
                         return_if_exception(builder, result, root_frame, ctx)?;
@@ -1275,7 +1399,16 @@ fn lower_instruction(
             define_value(builder, variables, *dest, result)
         }
         Instruction::Binary { dest, op, lhs, rhs } => lower_dynamic_binary(
-            builder, variables, root_frame, dispatcher, ctx, *dest, *op, *lhs, *rhs,
+            builder,
+            variables,
+            root_frame,
+            dispatcher,
+            ctx,
+            *dest,
+            *op,
+            *lhs,
+            *rhs,
+            feedback_ptr,
         ),
         Instruction::Unary { dest, op, value } => {
             if f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) {
@@ -1293,8 +1426,15 @@ fn lower_instruction(
             } else {
                 let operation = DYNAMIC_UNARY_BASE + u32::from(unary_tag(*op));
                 let input = use_value(builder, variables, *value)?;
-                let result =
-                    call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[input])?;
+                let result = call_dispatcher(
+                    builder,
+                    root_frame,
+                    dispatcher,
+                    ctx,
+                    operation,
+                    &[input],
+                    feedback_ptr,
+                )?;
                 define_value(builder, variables, *dest, result)
             }
         }
@@ -1302,8 +1442,15 @@ fn lower_instruction(
             let operation = DYNAMIC_COMPARE_BASE + u32::from(compare_tag(*op));
             let lhs = use_value(builder, variables, *lhs)?;
             let rhs = use_value(builder, variables, *rhs)?;
-            let result =
-                call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
+            let result = call_dispatcher(
+                builder,
+                root_frame,
+                dispatcher,
+                ctx,
+                operation,
+                &[lhs, rhs],
+                feedback_ptr,
+            )?;
             define_value(builder, variables, *dest, result)
         }
         // 已证明 f64 的单参数 Math builtin：直接发 CLIF 浮点指令，零 host 往返。
@@ -1403,6 +1550,7 @@ fn lower_instruction(
                 ctx,
                 u32::from(builtin.wire_id()),
                 &values,
+                feedback_ptr,
             )?;
             if let Some(dest) = dest {
                 define_value(builder, variables, *dest, result)?;
@@ -1428,6 +1576,7 @@ fn lower_instruction(
             false,
             root_frame,
             roots,
+            feedback_ptr,
         ),
         Instruction::SuperCall {
             dest,
@@ -1453,6 +1602,7 @@ fn lower_instruction(
             *forward_args,
             root_frame,
             roots,
+            feedback_ptr,
         ),
         Instruction::ConstructCall {
             dest,
@@ -1473,6 +1623,7 @@ fn lower_instruction(
             false,
             root_frame,
             roots,
+            feedback_ptr,
         ),
         Instruction::OptionalCall {
             dest,
@@ -1491,6 +1642,7 @@ fn lower_instruction(
             args,
             root_frame,
             roots,
+            feedback_ptr,
         ),
         Instruction::StringConcatVa { dest, parts } => lower_value_operation(
             builder,
@@ -1510,6 +1662,7 @@ fn lower_instruction(
                 ctx,
                 Builtin::PromiseCreate.wire_id().into(),
                 &[],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1522,6 +1675,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::NewObject.id(),
                 &[capacity],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1612,6 +1766,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::NewArray.id(),
                 &[capacity],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1681,6 +1836,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::GetSuperBase.id(),
                 &[],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1692,6 +1848,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::GetSuperConstructor.id(),
                 &[],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1719,6 +1876,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::GuardSameFunction.id(),
                 &[callee, function],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1731,6 +1889,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::CollectRestArguments.id(),
                 &[skip],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1751,6 +1910,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::CreateException.id(),
                 &[input],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1762,6 +1922,7 @@ fn lower_instruction(
             ctx,
             Builtin::PromiseInstanceResolve,
             &[*promise, *value],
+            None,
         ),
         Instruction::PromiseReject { promise, reason } => lower_builtin_operation(
             builder,
@@ -1771,6 +1932,7 @@ fn lower_instruction(
             ctx,
             Builtin::PromiseInstanceReject,
             &[*promise, *reason],
+            None,
         ),
         Instruction::ExceptionToObject { dest, value: input } => {
             let input = use_value(builder, variables, *input)?;
@@ -1781,6 +1943,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::ExceptionValue.id(),
                 &[input],
+                None,
             )?;
             define_value(builder, variables, *dest, result)
         }
@@ -1805,6 +1968,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::StoreVar.id(),
                 &[slot, value],
+                None,
             )?;
             Ok(())
         }
@@ -1825,6 +1989,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::LoadVar.id(),
                 &[slot],
+                None,
             )?;
             define_value(builder, variables, *dest, value)
         }
@@ -1841,6 +2006,7 @@ fn lower_instruction(
                 ctx,
                 Builtin::AsyncFunctionSuspend.wire_id().into(),
                 &[promise, suspend_state],
+                None,
             )?;
             root_frame.unlink(builder, ctx)?;
             builder.ins().return_(&[result]);
@@ -1855,6 +2021,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::LoadCallEnv.id(),
                 &[],
+                None,
             )?;
             root_frame.publish(builder, variables, roots, &[continuation])?;
             let slot = builder.ins().iconst(types::I64, value::encode_f64(0.0));
@@ -1868,6 +2035,7 @@ fn lower_instruction(
                 ctx,
                 Builtin::ContinuationSaveVar.wire_id().into(),
                 &[continuation, slot, suspend_state],
+                None,
             )?;
             root_frame.unlink(builder, ctx)?;
             builder.ins().return_(&[result]);
@@ -1884,6 +2052,7 @@ fn lower_instruction(
                 ctx,
                 NativeRuntimeOp::DebugCheck.id(),
                 &[function, line, col],
+                None,
             )?;
             Ok(())
         }
@@ -1905,6 +2074,7 @@ fn lower_call_instruction(
     forward_args: bool,
     root_frame: &mut FrameLowering,
     roots: &[ValueId],
+    feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
     let callee = use_value(builder, variables, callee)?;
     let this_value = use_value(builder, variables, this_value)?;
@@ -1922,6 +2092,7 @@ fn lower_call_instruction(
         ctx,
         operation.id(),
         &call_args,
+        feedback_ptr,
     )?;
     let args_len = if forward_args {
         let entry_block = builder
@@ -1951,6 +2122,7 @@ fn lower_call_instruction(
         ctx,
         NativeRuntimeOp::LoadCallEnv.id(),
         &[],
+        None,
     )?;
     let call = builder.ins().call_indirect(
         slow_call_signature,
@@ -1966,6 +2138,7 @@ fn lower_call_instruction(
         ctx,
         NativeRuntimeOp::FinishCall.id(),
         &[],
+        None,
     )?;
     if let Some(destination) = destination {
         define_value(builder, variables, destination, result)?;
@@ -1985,6 +2158,7 @@ fn lower_optional_call_instruction(
     args: &[ValueId],
     root_frame: &mut FrameLowering,
     roots: &[ValueId],
+    feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
     let encoded_callee = use_value(builder, variables, callee)?;
     let nullish = call_dispatcher(
@@ -1994,6 +2168,7 @@ fn lower_optional_call_instruction(
         ctx,
         NativeRuntimeOp::UnaryIsNullish.id(),
         &[encoded_callee],
+        None,
     )?;
     let is_nullish = builder.ins().icmp_imm_s(
         ir::condcodes::IntCC::Equal,
@@ -2029,6 +2204,7 @@ fn lower_optional_call_instruction(
         false,
         root_frame,
         roots,
+        feedback_ptr,
     )?;
     builder.ins().jump(continuation, &[]);
 
@@ -2044,6 +2220,7 @@ fn lower_builtin_operation(
     ctx: ir::Value,
     builtin: Builtin,
     args: &[ValueId],
+    feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
     let args = args
         .iter()
@@ -2056,6 +2233,7 @@ fn lower_builtin_operation(
         ctx,
         builtin.wire_id().into(),
         &args,
+        feedback_ptr,
     )?;
     if builtin == Builtin::PromiseInstanceResolve || builtin == Builtin::PromiseInstanceReject {
         return Ok(());
@@ -2074,6 +2252,7 @@ fn lower_dynamic_binary(
     op: BinaryOp,
     lhs: ValueId,
     rhs: ValueId,
+    feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
     let lhs = use_value(builder, variables, lhs)?;
     let rhs = use_value(builder, variables, rhs)?;
@@ -2084,8 +2263,24 @@ fn lower_dynamic_binary(
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
     ) {
         let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
-        let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
+        let result = call_dispatcher(
+            builder,
+            root_frame,
+            dispatcher,
+            ctx,
+            operation,
+            &[lhs, rhs],
+            feedback_ptr,
+        )?;
         return define_value(builder, variables, dest, result);
+    }
+
+    // #389 的 number 快路径不经过 dispatcher，二元反馈必须在守卫前内联更新，
+    // number/number 热路径才可被观察。更新覆盖 fast/slow 两条路径，因此下方
+    // 慢路径的 dispatcher 调用传 null 槽，避免同一次执行重复计数。
+    if let Some(slot) = feedback_ptr {
+        let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
+        emit_inline_binary_feedback(builder, ctx, slot, operation, lhs, rhs);
     }
 
     // 守卫：两边必须都是原始 f64（非 NaN-boxed 的 number）才走原生指令。
@@ -2126,13 +2321,158 @@ fn lower_dynamic_binary(
     builder.switch_to_block(slow_block);
     builder.seal_block(slow_block);
     let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
-    let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation, &[lhs, rhs])?;
+    let result = call_dispatcher(
+        builder,
+        root_frame,
+        dispatcher,
+        ctx,
+        operation,
+        &[lhs, rhs],
+        None,
+    )?;
     define_value(builder, variables, dest, result)?;
     builder.ins().jump(merge_block, &[]);
 
     builder.switch_to_block(merge_block);
     builder.seal_block(merge_block);
     Ok(())
+}
+
+/// 计算一个 boxed 值的反馈 tag 码：number → `0x1f`，NaN-box 值 → 自身 tag。
+
+/// 反馈槽字段 offset（`wjsm-ir::constants` 的 u32）转 CLIF 用的 i32。
+pub(crate) fn feedback_offset_i32(offset: u32) -> i32 {
+    i32::try_from(offset).expect("feedback slot offset fits i32")
+}
+
+pub(crate) fn emit_feedback_tag_code(
+    builder: &mut FunctionBuilder<'_>,
+    input: ir::Value,
+) -> ir::Value {
+    let is_number = emit_is_number(builder, input);
+    let tag = builder.ins().ushr_imm_u(input, 32);
+    let tag = builder.ins().band_imm_u(
+        tag,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let number_code = builder.ins().iconst(
+        types::I64,
+        i64::from(wjsm_native_abi::NativeFeedbackTag::Number.code()),
+    );
+    builder.ins().select(is_number, number_code, tag)
+}
+
+/// 守卫二元运算的零分配反馈更新：与宿主 dispatcher 的记录共享同一套槽字段协议。
+///
+/// 只写 tag 签名与计数（目标字段恒 0：二元操作没有调用目标）；签名变化时
+/// 重置连续计数。`ctx.flags` 未置反馈位时整个更新被跳过，generic 对照路径
+/// 零开销。
+fn emit_inline_binary_feedback(
+    builder: &mut FunctionBuilder<'_>,
+    ctx: ir::Value,
+    slot: ir::Value,
+    operation: u32,
+    lhs: ir::Value,
+    rhs: ir::Value,
+) {
+    let flags = builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, flags)).expect("vmctx flags offset fits i32"),
+    );
+    let enabled = builder.ins().band_imm_u(
+        flags,
+        i64::from(wjsm_native_abi::NATIVE_FLAGS_FEEDBACK_ENABLED),
+    );
+    let enabled = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, enabled, 0);
+
+    let update_block = builder.create_block();
+    let skip_block = builder.create_block();
+    let continuation = builder.create_block();
+    builder
+        .ins()
+        .brif(enabled, update_block, &[], skip_block, &[]);
+
+    builder.switch_to_block(update_block);
+    builder.seal_block(update_block);
+    let lhs_code = emit_feedback_tag_code(builder, lhs);
+    let rhs_code = emit_feedback_tag_code(builder, rhs);
+    // 签名 = count(2) | lhs_tag << 4 | rhs_tag << 10，与 encode_feedback_tag_signature 一致。
+    let count = builder.ins().iconst(types::I64, 2);
+    let lhs_shifted = builder.ins().ishl_imm_u(lhs_code, 4);
+    let rhs_shifted = builder.ins().ishl_imm_u(rhs_code, 10);
+    let signature = builder.ins().bor(count, lhs_shifted);
+    let signature = builder.ins().bor(signature, rhs_shifted);
+    let previous = builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_TAG_SIGNATURE_OFFSET),
+    );
+    builder.ins().store(
+        MemFlagsData::trusted(),
+        signature,
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_TAG_SIGNATURE_OFFSET),
+    );
+    let same_signature = builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, previous, signature);
+    let consecutive = builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_CONSECUTIVE_OFFSET),
+    );
+    let incremented = builder.ins().iadd_imm_s(consecutive, 1);
+    let restart = builder.ins().iconst(types::I32, 1);
+    let next_consecutive = builder.ins().select(same_signature, incremented, restart);
+    builder.ins().store(
+        MemFlagsData::trusted(),
+        next_consecutive,
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_CONSECUTIVE_OFFSET),
+    );
+    let total = builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_TOTAL_OFFSET),
+    );
+    let total = builder.ins().iadd_imm_s(total, 1);
+    builder.ins().store(
+        MemFlagsData::trusted(),
+        total,
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_TOTAL_OFFSET),
+    );
+    let operation_value = builder.ins().iconst(types::I32, i64::from(operation));
+    builder.ins().store(
+        MemFlagsData::trusted(),
+        operation_value,
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_OPERATION_OFFSET),
+    );
+    let recording = builder
+        .ins()
+        .iconst(types::I32, i64::from(constants::FEEDBACK_STATE_RECORDING));
+    builder.ins().store(
+        MemFlagsData::trusted(),
+        recording,
+        slot,
+        feedback_offset_i32(constants::FEEDBACK_SLOT_STATE_OFFSET),
+    );
+    builder.ins().jump(continuation, &[]);
+
+    builder.switch_to_block(skip_block);
+    builder.seal_block(skip_block);
+    builder.ins().jump(continuation, &[]);
+
+    builder.switch_to_block(continuation);
+    builder.seal_block(continuation);
 }
 
 /// 常量字符串键的 GetProp 快路径入口：创建 merge 块后交给共享的非 nullish
@@ -2456,6 +2796,7 @@ fn lower_get_prop_ic_non_nullish(
         ctx,
         NativeRuntimeOp::GetPropAccessor.id(),
         &[getter, obj],
+        None,
     )?;
     define_value(builder, variables, dest, result)?;
     builder.ins().jump(merge_block, &[]);
@@ -2470,6 +2811,7 @@ fn lower_get_prop_ic_non_nullish(
         ctx,
         NativeRuntimeOp::GetPropIc.id(),
         &[obj, key_value, ic_ptr],
+        None,
     )?;
     define_value(builder, variables, dest, result)?;
     builder.ins().jump(merge_block, &[]);
@@ -2627,6 +2969,7 @@ fn lower_set_prop_ic(
         ctx,
         NativeRuntimeOp::SetPropIc.id(),
         &[obj, key_value, stored, ic_ptr],
+        None,
     )?;
     define_value(builder, variables, dest, result)?;
     builder.ins().jump(merge_block, &[]);
@@ -2715,7 +3058,15 @@ fn lower_value_operation(
         .iter()
         .map(|value| use_value(builder, variables, *value))
         .collect::<Result<Vec<_>>>()?;
-    let result = call_dispatcher(builder, root_frame, dispatcher, ctx, operation.id(), &args)?;
+    let result = call_dispatcher(
+        builder,
+        root_frame,
+        dispatcher,
+        ctx,
+        operation.id(),
+        &args,
+        None,
+    )?;
     if let Some(destination) = destination {
         define_value(builder, variables, destination, result)?;
     }
@@ -2740,6 +3091,28 @@ fn import_math_thunk(
     Ok(func_ref)
 }
 
+/// 计算反馈槽地址：`ctx.feedback_slots_base + slot × FEEDBACK_SLOT_SIZE`。
+///
+/// 反馈区由当前 base image 持有；特化 overlay 永不激活为 current image，其生成
+/// 代码同样经由 vmctx 基址写 base image 的槽，编号在两种编译间保持一致。
+fn emit_feedback_slot_ptr(
+    builder: &mut FunctionBuilder<'_>,
+    ctx: ir::Value,
+    slot: u32,
+) -> Result<ir::Value> {
+    let pointer_type = builder.func.dfg.value_type(ctx);
+    let base = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, feedback_slots_base))?,
+    );
+    let offset = i64::from(slot)
+        .checked_mul(i64::from(constants::FEEDBACK_SLOT_SIZE))
+        .context("feedback slot offset exceeds i64")?;
+    Ok(builder.ins().iadd_imm_s(base, offset))
+}
+
 fn call_dispatcher(
     builder: &mut FunctionBuilder<'_>,
     frame: &mut FrameLowering,
@@ -2747,6 +3120,7 @@ fn call_dispatcher(
     ctx: ir::Value,
     operation: u32,
     args: &[ir::Value],
+    feedback_slot: Option<ir::Value>,
 ) -> Result<ir::Value> {
     let byte_len = args
         .len()
@@ -2774,9 +3148,14 @@ fn call_dispatcher(
         types::I32,
         i64::try_from(args.len()).context("host operation argument count exceeds i64")?,
     );
-    let call = builder
-        .ins()
-        .call(dispatcher, &[ctx, operation, args_pointer, count]);
+    let feedback_slot = match feedback_slot {
+        Some(slot) => slot,
+        None => builder.ins().iconst(pointer_type, 0),
+    };
+    let call = builder.ins().call(
+        dispatcher,
+        &[ctx, operation, args_pointer, count, feedback_slot],
+    );
     builder
         .inst_results(call)
         .first()
@@ -2828,6 +3207,7 @@ fn lower_terminator(
                 ctx,
                 NativeRuntimeOp::IsTruthy.id(),
                 &[condition],
+                None,
             )?;
             let condition = builder.ins().icmp_imm_s(
                 ir::condcodes::IntCC::NotEqual,
@@ -2905,6 +3285,7 @@ fn lower_terminator(
                 ctx,
                 NativeRuntimeOp::CreateException.id(),
                 &[value],
+                None,
             )?;
             root_frame.unlink(builder, ctx)?;
             builder.ins().return_(&[exception]);
@@ -2918,7 +3299,7 @@ fn lower_terminator(
     Ok(())
 }
 
-fn emit_is_number(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
+pub(crate) fn emit_is_number(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let boxed_bits = builder.ins().band_imm_s(input, box_base);
     builder
@@ -3015,6 +3396,7 @@ fn lower_cooperative_poll(
         ctx,
         NativeRuntimeOp::CooperativePoll.id(),
         &[],
+        None,
     )?;
     return_if_exception(builder, result, root_frame, ctx)?;
     builder.ins().jump(continue_block, &[]);
@@ -3158,7 +3540,7 @@ fn pin_initialized_frame_locals(
     root_frame.pin_frame_locals(builder, &values)
 }
 
-fn boxed_frame_local_names<'a>(
+pub(crate) fn boxed_frame_local_names<'a>(
     function: &'a wjsm_ir::Function,
     frame_locals: &BTreeSet<&'a str>,
     inferred_f64: &HashMap<FunctionId, HashSet<ValueId>>,
@@ -3268,7 +3650,7 @@ fn compare_tag(op: CompareOp) -> u16 {
     }
 }
 
-fn libcall_name(libcall: ir::LibCall) -> String {
+pub(crate) fn libcall_name(libcall: ir::LibCall) -> String {
     use ir::LibCall;
     match libcall {
         LibCall::Memcpy => "wjsm_native_memory_copy".into(),
@@ -3280,7 +3662,7 @@ fn libcall_name(libcall: ir::LibCall) -> String {
 }
 
 /// 把 object 侧 endianness 转成 gimli 的 writer endian；本后端只支持小端目标。
-fn gimli_endian(triple: &target_lexicon::Triple) -> gimli::RunTimeEndian {
+pub(crate) fn gimli_endian(triple: &target_lexicon::Triple) -> gimli::RunTimeEndian {
     match triple.endianness().unwrap() {
         target_lexicon::Endianness::Little => gimli::RunTimeEndian::Little,
         target_lexicon::Endianness::Big => gimli::RunTimeEndian::Big,

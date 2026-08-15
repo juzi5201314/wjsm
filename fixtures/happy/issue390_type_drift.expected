@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+number 11325
+string x1
+bigint TypeError
+object 10
+boolean 2
+--- stderr ---

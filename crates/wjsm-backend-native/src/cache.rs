@@ -16,11 +16,13 @@ use crate::{
 };
 
 const CACHE_MAGIC: &[u8; 8] = b"WJSMNAT\0";
-const CACHE_SCHEMA: u32 = 3;
+const CACHE_SCHEMA: u32 = 4;
 const MAX_CACHE_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_CACHE_FUNCTIONS: u32 = 4_000_000;
 /// IC 槽上限：每槽 16 字节，4M 槽即 64 MiB 缓冲，远超任何真实程序。
 const MAX_CACHE_IC_SLOTS: u32 = 4_000_000;
+/// 反馈槽上限：4M 槽 × 48 字节 = 192 MiB，防御恶意/损坏条目。
+const MAX_CACHE_FEEDBACK_SLOTS: u32 = 4_000_000;
 /// 自动淘汰上限：缓存总字节数超过该值后按 mtime 删最旧条目。
 /// 可用 `WJSM_CACHE_MAX_BYTES` 覆盖；`0` 表示禁用自动淘汰。
 const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -103,7 +105,9 @@ pub struct NativeImageRepository {
 
 #[derive(Default)]
 struct RepositoryState {
-    images: HashMap<NativeCacheKey, Arc<CompiledImage>>,
+    /// 弱引用条目：调用方持有的 `Arc` 决定 image 生命周期；没有 owner 的 image
+    /// 可被回收，再次 prepare 时重新编译/重新读盘。overlay 永不进入 repository。
+    images: HashMap<NativeCacheKey, std::sync::Weak<CompiledImage>>,
     inflight: HashMap<NativeCacheKey, Arc<InflightGate>>,
 }
 
@@ -161,10 +165,12 @@ impl NativeImageRepository {
                     .state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Some(image) = state.images.get(&key).cloned() {
+                if let Some(image) = state.images.get(&key).and_then(std::sync::Weak::upgrade) {
                     self.stats.hits.fetch_add(1, Ordering::Relaxed);
                     return Ok(image);
                 }
+                // 上一个 owner 已释放：清除失效弱引用，按 miss 重编译。
+                state.images.remove(&key);
                 if let Some(gate) = state.inflight.get(&key) {
                     (Arc::clone(gate), false)
                 } else {
@@ -195,7 +201,7 @@ impl NativeImageRepository {
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.inflight.remove(&key);
                 if let Ok(image) = &prepared {
-                    state.images.insert(key.clone(), Arc::clone(image));
+                    state.images.insert(key.clone(), Arc::downgrade(image));
                 }
             }
             let mut done = gate
@@ -232,15 +238,25 @@ impl NativeImageRepository {
     ) -> Result<Arc<CompiledImage>, NativeCacheError> {
         if let Some(directory) = &self.cache_dir {
             match load_cache_entry(directory, key) {
-                Ok(Some(object)) => match CompiledImage::load(&object, key.image_id(), resolver) {
-                    Ok(image) => {
-                        self.stats.hits.fetch_add(1, Ordering::Relaxed);
-                        return Ok(image);
+                Ok(Some(object)) => {
+                    // 缓存命中仍按当前 Program 重算反馈槽数并校验：槽编号是
+                    // base image 与特化 overlay 的共享契约，不一致即视为损坏。
+                    let expected_feedback = crate::lower::feedback_site_count(program);
+                    let loaded = if object.feedback_slot_count() == expected_feedback {
+                        CompiledImage::load(&object, key.image_id(), resolver)
+                    } else {
+                        Err(ImageLoadError::InvalidFeedbackSlotCount)
+                    };
+                    match loaded {
+                        Ok(image) => {
+                            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+                            return Ok(image);
+                        }
+                        Err(_) => {
+                            self.invalidate(directory, key);
+                        }
                     }
-                    Err(_) => {
-                        self.invalidate(directory, key);
-                    }
-                },
+                }
                 Ok(None) => {}
                 Err(_) => self.invalidate(directory, key),
             }
@@ -344,6 +360,7 @@ fn encode_cache_entry(
         bytes.extend_from_slice(&frame.to_le_bytes());
     }
     bytes.extend_from_slice(&object.ic_slot_count().to_le_bytes());
+    bytes.extend_from_slice(&object.feedback_slot_count().to_le_bytes());
     bytes.extend_from_slice(object.bytes());
     Ok(bytes)
 }
@@ -394,6 +411,12 @@ fn decode_cache_entry(
             "cached ic slot count exceeds limit".into(),
         ));
     }
+    let feedback_slot_count = decoder.u32()?;
+    if feedback_slot_count > MAX_CACHE_FEEDBACK_SLOTS {
+        return Err(NativeCacheError::Invalid(
+            "cached feedback slot count exceeds limit".into(),
+        ));
+    }
     let object_len = usize::try_from(object_len).map_err(|_| NativeCacheError::LengthOverflow)?;
     let object: Arc<[u8]> = decoder.take(object_len)?.into();
     decoder.finish()?;
@@ -407,6 +430,7 @@ fn decode_cache_entry(
         frame_bytes,
         function_count,
         ic_slot_count,
+        feedback_slot_count,
     })
 }
 

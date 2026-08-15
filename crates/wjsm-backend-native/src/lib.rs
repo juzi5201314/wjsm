@@ -1,9 +1,10 @@
 pub mod cache;
-mod f64_analysis;
+pub(crate) mod f64_analysis;
 pub mod image;
-mod lower;
-mod root_plan;
-mod unwind;
+pub(crate) mod lower;
+pub(crate) mod root_plan;
+pub(crate) mod specialize;
+pub(crate) mod unwind;
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -29,6 +30,8 @@ pub struct NativeObject {
     function_count: u32,
     /// lowering 预计算的 IC 槽总数（32 字节/槽）；运行时据此分配 IC 缓冲。
     ic_slot_count: u32,
+    /// lowering 预计算的类型反馈槽总数（48 字节/槽）；运行时据此分配反馈缓冲。
+    feedback_slot_count: u32,
 }
 
 impl NativeObject {
@@ -46,6 +49,10 @@ impl NativeObject {
 
     pub fn ic_slot_count(&self) -> u32 {
         self.ic_slot_count
+    }
+
+    pub fn feedback_slot_count(&self) -> u32 {
+        self.feedback_slot_count
     }
 }
 
@@ -206,6 +213,38 @@ impl NativeCompiler {
         let slots = lower::slots_from_program(program)?;
         lower::compile_program_diagnostics(Arc::clone(&self.isa), program, &slots)
     }
+    /// 使用运行时反馈 profile 编译进程内特化 overlay。
+    pub fn compile_specialized_function(
+        &self,
+        program: &wjsm_ir::Program,
+        variable_slots: &HashMap<String, u32>,
+        function: wjsm_ir::FunctionId,
+        argument_tags: &[wjsm_native_abi::NativeFeedbackTag],
+        collect_diagnostics: bool,
+    ) -> Result<NativeCompilationDiagnostics, specialize::SpecializationError> {
+        let profile = specialize::SpecializationProfile {
+            function,
+            argument_tags: argument_tags.into(),
+        };
+        specialize::compile_specialized(
+            Arc::clone(&self.isa),
+            program,
+            variable_slots,
+            &profile,
+            collect_diagnostics,
+        )
+    }
+
+    /// 特化失败但不影响 JavaScript 语义时返回的内部诊断类型。
+    pub fn specialized_diagnostics(
+        &self,
+        program: &wjsm_ir::Program,
+        variable_slots: &HashMap<String, u32>,
+        function: wjsm_ir::FunctionId,
+        argument_tags: &[wjsm_native_abi::NativeFeedbackTag],
+    ) -> Result<NativeCompilationDiagnostics, specialize::SpecializationError> {
+        self.compile_specialized_function(program, variable_slots, function, argument_tags, true)
+    }
 }
 
 fn set_flag(
@@ -295,16 +334,17 @@ mod capability_tests {
     any(target_os = "linux", target_os = "windows")
 ))]
 mod tests {
-    use std::sync::Arc;
-
     use object::{Object as _, ObjectSection as _};
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use wjsm_artifact_format::{
         ArtifactBuildInput, BuildOptions, ModuleManifest, PortableArtifact,
     };
     use wjsm_ir::{
-        BasicBlock, BasicBlockId, BinaryOp, Constant, Function, Instruction, Program, Terminator,
-        ValueId,
+        BasicBlock, BasicBlockId, BinaryOp, Constant, Function, FunctionId, Instruction, Program,
+        Terminator, ValueId,
     };
+    use wjsm_native_abi::NativeFeedbackTag;
 
     use super::*;
 
@@ -414,6 +454,61 @@ mod tests {
             diagnostics.clif.contains("0x0001_0000"),
             "CLIF 应包含 BinaryAdd dispatcher 操作码"
         );
+    }
+
+    #[test]
+    fn specialized_overlay_emits_guard_body_and_generic_fallback() {
+        let mut program = Program::new();
+        let one = program.add_constant(Constant::Number(1.0));
+        let mut function = Function::new("add1", BasicBlockId(0));
+        function.set_params(vec!["$env".into(), "$this".into(), "x".into()]);
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "x".into(),
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: one,
+        });
+        block.push_instruction(Instruction::Binary {
+            dest: ValueId(2),
+            op: BinaryOp::Add,
+            lhs: ValueId(0),
+            rhs: ValueId(1),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+        function.push_block(block);
+        program.push_function(function);
+
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .specialized_diagnostics(
+                &program,
+                &HashMap::new(),
+                FunctionId(0),
+                &[NativeFeedbackTag::Number],
+            )
+            .expect("number profile should produce a specialized overlay");
+        assert!(
+            diagnostics.clif.contains("brif"),
+            "wrapper should guard tags"
+        );
+        assert!(
+            diagnostics.clif.contains("call_indirect"),
+            "wrapper should fall back to the base slow entry"
+        );
+        assert!(
+            diagnostics.clif.contains("fadd"),
+            "typed body should use native fadd"
+        );
+        assert!(
+            diagnostics.clif.contains("specialized wrapper"),
+            "diagnostics should include the specialized wrapper"
+        );
+        assert_eq!(diagnostics.object.function_count(), 2);
     }
 
     /// 编译 arithmetic object 后，各平台必须产出对应 unwind section；

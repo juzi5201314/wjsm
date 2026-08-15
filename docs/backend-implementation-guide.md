@@ -70,9 +70,11 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 `NATIVE_ABI_HASH` 覆盖 generated code 可见的 vmctx/CallArgs/frame layout、host/runtime operation signatures 与 value constants。任何布局或协议变化都必须改变 hash，并使旧 native cache miss。
 
+`NativeCompiler::compile_specialized_function` 只接受已验证 `Program`、目标函数、变量槽快照和实际参数 tag profile。wrapper 保持 `NativeSlowEntry` ABI，入口 tag 不符时读取 base function table 的 slow entry 回落；命中时 number 参数直接从 call arena 进入 seeded f64 lowering。typed body 继续复用 generic dispatcher、Shape IC、`RootPlan`、W^X 与 unwind 路径，局部 guard miss 不回滚副作用。
+
 ## 3. Native image 与 cache
 
-`NativeImageRepository` 是进程内 image 与磁盘 cache 的唯一 owner。磁盘路径来自调用方传入的 `cache_dir`；CLI / in-process 入口只在 `WJSM_CACHE_DIR` 有值时打开，没有 `$HOME/.cache/wjsm` 回落。`NativeCacheKey` 绑定：
+`NativeImageRepository` 是 base image 内存去重与磁盘 cache 的唯一协调者，不是强生命周期 owner。磁盘路径来自调用方传入的 `cache_dir`；CLI / in-process 入口只在 `WJSM_CACHE_DIR` 有值时打开，没有 `$HOME/.cache/wjsm` 回落。`NativeCacheKey` 绑定：
 
 - portable artifact digest；
 - native ABI hash；
@@ -85,7 +87,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 磁盘缓存有自动 LRU 上限：每次 store 后节流检查目录总字节（顶层 `*.wnat` 与 `builtin_ir/*.bin` 一并统计），超过上限按 mtime 删除最旧条目直到低于上限。上限默认 256 MiB，`WJSM_CACHE_MAX_BYTES` 可覆盖；`0` 禁用自动淘汰。手动管理走 `wjsm cache stats / clear / prune --max-bytes N`。淘汰只删条目文件，不触碰同目录下的其它文件；删除与 `create_new + rename` 原子写入无竞态。
 
-`CompiledImage` 拥有 executable mappings、entry table、source metadata 与 unwind registration。drop 顺序必须先注销 unwind，再释放 mapping；function table 中不得永久缓存裸 code pointer。
+`CompiledImage` 拥有 executable mappings、entry table、反馈/IC buffer 与 unwind registration。base image 由 runtime `Arc` 持有；repository 只保存 `Weak`。特化 overlay 通过 `load_single_entry` 复用 strict relocation、RW→RX 与 unwind 注册，但不分配自己的反馈/IC buffer、不进入 repository 或磁盘 cache。drop 顺序必须先注销 unwind，再释放 mapping；function table 与选择表不得永久缓存裸 code pointer。
 
 ## 4. NativeRuntime ownership
 
@@ -93,7 +95,8 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 - owner-thread 约束与 pinned `NativeVmContext`；
 - 一个 `NativeAgentState`；
-- 一个 `NativeImageRepository`；
+- 一个只持 `Weak<CompiledImage>` 的 `NativeImageRepository`；
+- 一个按需启动 bounded worker 的 `SpecializationCoordinator`；
 - 一个 production ManagedHeap/HandleTableV2；
 - 启动时固定的 Mark-Sweep、G1 或 ZGC collector；
 - module、Promise、continuation、worker、scheduler、snapshot、inspector 与 host side tables。
@@ -102,12 +105,14 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 1. 校验 owner thread，重置输出并恢复 startup snapshot；
 2. 由 repository 对 artifact 执行进程内命中、可选磁盘 load 或 direct compile；
-3. 配置 module manifest、program/image registry 与 source metadata；
-4. 发布当前 image 与 call/root/source frame；
-5. 调用 typed native entry；
-6. drain Promise/microtask/external event loop；
-7. materialize/传播 JS exception，关闭 child resources；
-8. 返回 stdout/stderr/exit code/cache stats。
+3. 配置 module manifest、program/image registry、反馈槽与 source metadata；
+4. 发布当前 base image 与 call/root/source frame；
+5. 在 dispatcher owner 边界 drain 后台编译结果，经 strict loader 发布或丢弃 overlay；
+6. `PrepareCall` 按 site/target/tag signature、IC epoch 与 prototype generation 选择 overlay 或 generic entry；
+7. 调用 native entry，并由 activation `Arc` pin 住正在执行的 overlay；
+8. drain Promise/microtask/external event loop；
+9. materialize/传播 JS exception，关闭 child resources；
+10. 返回 stdout/stderr/exit code/cache stats。
 
 每个 worker/test262 agent 创建独立 runtime/heap/scheduler。跨 agent 仅通过 structured clone、SAB/Atomics 与 IPC 传递；不得读取另一 agent 的 handle 或共享 mutable runtime table。
 
@@ -167,6 +172,8 @@ cargo run -- build -e 'console.log(1)' -o /tmp/hello.wjsm
 cargo run -- validate /tmp/hello.wjsm
 cargo run -- run /tmp/hello.wjsm
 ```
+
+`WJSM_DISABLE_SPECIALIZATION=1` 用同一 binary 关闭反馈与 overlay，供 generic AOT 行为/性能对照。typed overlay 可通过 `NativeCompiler::specialized_diagnostics` 检查 wrapper tag guard、base `call_indirect` fallback 与 body 的 f64 指令；该诊断不加载或发布 image。
 
 提交前至少执行与改动 owner 对应的窄测试。终态门包括：
 

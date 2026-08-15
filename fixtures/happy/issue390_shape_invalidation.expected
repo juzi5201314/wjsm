@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+warm 150
+transition 1 2
+write 5
+prototype 7
+accessor-read 12
+accessor-write 30 20
+proxy-read 99
+proxy-write 99 31
+--- stderr ---

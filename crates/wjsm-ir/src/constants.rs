@@ -237,6 +237,42 @@ pub const IC_KIND_MEGAMORPHIC: u32 = 3;
 /// shape + 直接原型 + 世代命中后直接 `invoke_callable(getter, receiver)`。
 pub const IC_KIND_ACCESSOR: u32 = 4;
 
+// ── 类型反馈槽布局（Issue #390 运行时特化）──────────────────────────────────
+// 每个「可观察动态语义」的调用点在编译期分配一个 48 字节反馈槽，由 image loader
+// 分配零初始化缓冲；宿主 dispatcher 与生成代码的守卫快路径都原地写它，owner
+// thread 在 PrepareCall 边界读取并驱动热函数特化。
+//
+// +0  u64 last_target_image_id  PrepareCall 系列解析出的目标 image
+// +8  u64 last_tag_signature    参数 tag 签名（低 4 位 tag 数，随后每 6 位一个 tag）
+// +16 u32 consecutive_count     目标与签名均未变化的连续命中数
+// +20 u32 total_count           总命中数
+// +24 u32 caller_function       分配该槽的函数下标（首次更新时写入）
+// +28 u32 site_index            全局反馈槽下标（首次更新时写入）
+// +32 u32 last_target_function  目标函数在其 image 内的下标
+// +36 u32 operation             观察到的 dispatcher operation / builtin id
+// +40 u32 state                 0=Empty 1=Recording 2=Disabled
+// +44 u32 reserved              保留清零
+pub const FEEDBACK_SLOT_SIZE: u32 = 48;
+pub const FEEDBACK_SLOT_TARGET_IMAGE_OFFSET: u32 = 0;
+pub const FEEDBACK_SLOT_TAG_SIGNATURE_OFFSET: u32 = 8;
+pub const FEEDBACK_SLOT_CONSECUTIVE_OFFSET: u32 = 16;
+pub const FEEDBACK_SLOT_TOTAL_OFFSET: u32 = 20;
+pub const FEEDBACK_SLOT_CALLER_FUNCTION_OFFSET: u32 = 24;
+pub const FEEDBACK_SLOT_SITE_INDEX_OFFSET: u32 = 28;
+pub const FEEDBACK_SLOT_TARGET_FUNCTION_OFFSET: u32 = 32;
+pub const FEEDBACK_SLOT_OPERATION_OFFSET: u32 = 36;
+pub const FEEDBACK_SLOT_STATE_OFFSET: u32 = 40;
+pub const FEEDBACK_SLOT_RESERVED_OFFSET: u32 = 44;
+/// 目标与 tag 签名连续相同达到该次数后，宿主把该调用点列为特化编译候选。
+pub const FEEDBACK_STABLE_THRESHOLD: u32 = 100;
+/// 单个调用点最多观察的实际参数 tag 数；超出部分不进入签名。
+pub const FEEDBACK_MAX_TAGS: u32 = 10;
+/// 单个调用点保留的特化 tag-signature 版本上限。
+pub const FEEDBACK_MAX_VARIANTS_PER_SITE: u32 = 2;
+pub const FEEDBACK_STATE_EMPTY: u32 = 0;
+pub const FEEDBACK_STATE_RECORDING: u32 = 1;
+pub const FEEDBACK_STATE_DISABLED: u32 = 2;
+
 // ── 数组 ElementsKind（header pad 首字节）──────────────────────────────────
 // kind 存在对象头 `+5`（pad 区首字节），**不借 capacity 的高位**：
 // capacity 有十余处读写点（publish/relocate/array_shape/GC 扫描/handle remap…），
@@ -322,6 +358,22 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         ("ic_kind_proto_data", IC_KIND_PROTO_DATA),
         ("ic_kind_megamorphic", IC_KIND_MEGAMORPHIC),
         ("ic_kind_accessor", IC_KIND_ACCESSOR),
+        // 反馈槽布局：dispatcher 与生成代码共享写协议，改变字段解释方式 → 进 ABI。
+        ("feedback_slot_size", FEEDBACK_SLOT_SIZE),
+        (
+            "feedback_slot_tag_signature_offset",
+            FEEDBACK_SLOT_TAG_SIGNATURE_OFFSET,
+        ),
+        (
+            "feedback_slot_consecutive_offset",
+            FEEDBACK_SLOT_CONSECUTIVE_OFFSET,
+        ),
+        ("feedback_stable_threshold", FEEDBACK_STABLE_THRESHOLD),
+        ("feedback_max_tags", FEEDBACK_MAX_TAGS),
+        (
+            "feedback_max_variants_per_site",
+            FEEDBACK_MAX_VARIANTS_PER_SITE,
+        ),
         // handle entry 状态编码：codegen 发布对象时写入，快链据此判定稳定态。
         ("handle_state_stable_min", HANDLE_STATE_STABLE_MIN),
         ("handle_state_stable_young", HANDLE_STATE_STABLE_YOUNG),

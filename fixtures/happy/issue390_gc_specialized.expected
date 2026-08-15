@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+checksum 90000
+number 372
+string 1<native-addr>
+object 375
+after-gc 377
+--- stderr ---

@@ -161,6 +161,7 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         state,
         NativeRuntimeOp::SetProp,
         &[outer, *key, *stored],
+        None,
     )
 }
 

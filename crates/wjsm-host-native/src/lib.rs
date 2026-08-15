@@ -24,14 +24,15 @@ use wjsm_gc::{
 use wjsm_host::RuntimeString;
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
-    MAX_NATIVE_ROOT_BITMAP_WORDS, NativeHostSymbol, NativeRuntimeOp, NativeSlowEntry,
-    NativeVmContext, PendingExceptionKind, native_variable_names,
-    native_variable_slots_for_segments,
+    MAX_NATIVE_ROOT_BITMAP_WORDS, NativeFeedbackSlot, NativeFeedbackTag, NativeHostSymbol,
+    NativeRuntimeOp, NativeSlowEntry, NativeVmContext, PendingExceptionKind,
+    encode_feedback_tag_signature, native_variable_names, native_variable_slots_for_segments,
 };
 mod dispatch;
 mod inspector;
 mod side_tables;
 mod snapshot;
+mod specialization;
 
 pub use inspector::InspectorConfig;
 
@@ -41,6 +42,9 @@ use dispatch::{
     native_math_cos, native_math_cosh, native_math_exp, native_math_expm1, native_math_log,
     native_math_log1p, native_math_log2, native_math_log10, native_math_pow, native_math_sin,
     native_math_sinh, native_math_tan, native_math_tanh,
+};
+use specialization::{
+    CompilationRequest, SpecializationCoordinator, ValidatedFeedbackSlot, VariantKey,
 };
 
 const DEFAULT_CALL_ARENA_SLOTS: usize = 64 * 1024;
@@ -200,6 +204,10 @@ pub struct NativeRuntimeConfig {
     pub cache_dir: Option<PathBuf>,
     pub gc_algorithm: GcAlgorithmKind,
     pub max_heap_size: u64,
+    /// 运行时类型反馈与热函数特化开关；`WJSM_DISABLE_SPECIALIZATION=1` 时关闭，
+    /// 用于同 binary 的 generic AOT 对照。关闭时不启动反馈 worker、不发布 overlay，
+    /// generic lowering、IC 与全部语义路径保持不变。
+    pub specialization_enabled: bool,
 }
 
 impl Default for NativeRuntimeConfig {
@@ -208,6 +216,7 @@ impl Default for NativeRuntimeConfig {
             cache_dir: None,
             gc_algorithm: GcAlgorithmKind::Zgc,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
+            specialization_enabled: true,
         }
     }
 }
@@ -221,10 +230,13 @@ impl NativeRuntimeConfig {
             .transpose()
             .map_err(NativeRuntimeError::Configuration)?
             .unwrap_or(GcAlgorithmKind::Zgc);
+        let specialization_enabled =
+            std::env::var("WJSM_DISABLE_SPECIALIZATION").ok().as_deref() != Some("1");
         Ok(Self {
             cache_dir,
             gc_algorithm,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
+            specialization_enabled,
         })
     }
 
@@ -238,11 +250,17 @@ impl NativeRuntimeConfig {
         self
     }
 
+    pub fn with_specialization_enabled(mut self, enabled: bool) -> Self {
+        self.specialization_enabled = enabled;
+        self
+    }
+
     pub(crate) fn child_config(&self) -> Self {
         Self {
             cache_dir: self.cache_dir.clone(),
             gc_algorithm: self.gc_algorithm,
             max_heap_size: self.max_heap_size,
+            specialization_enabled: self.specialization_enabled,
         }
     }
 }
@@ -378,6 +396,7 @@ pub fn execute_with_writer_with_options(
         cache_dir: options.cache_dir,
         gc_algorithm: options.gc_algorithm,
         max_heap_size: options.max_heap_size,
+        specialization_enabled: NativeRuntimeConfig::from_environment(None)?.specialization_enabled,
     })?;
     runtime.configure_environment(options.inherit_env, options.env)?;
     let execution = runtime.execute(&artifact, &options.module_root, &options.working_directory)?;
@@ -774,6 +793,9 @@ struct NativeActivation {
     new_target: i64,
     home_object: Option<wjsm_ir::HomeObject>,
     function: Option<NativeFunctionRef>,
+    /// PrepareCall 选择特化 overlay 时 pin 住其 image，直到 FinishCall 弹出
+    /// activation 才允许释放 RX mapping（LRU 淘汰只从选择表移除 Arc）。
+    specialized_image: Option<Arc<CompiledImage>>,
 }
 
 struct NativeRegExp {
@@ -861,6 +883,11 @@ struct NativeAgentState {
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     current_image_id: u64,
     programs: HashMap<u64, NativeProgramState>,
+    retained_images: HashMap<u64, Arc<CompiledImage>>,
+    program_snapshots: HashMap<u64, Arc<wjsm_ir::Program>>,
+    variable_slot_snapshots: HashMap<u64, Arc<HashMap<String, u32>>>,
+    ic_epochs: HashMap<u64, u64>,
+    specialization: Option<SpecializationCoordinator>,
     function_lengths: Vec<u32>,
     function_names: Vec<String>,
     function_source_spans: Vec<Option<wjsm_ir::SourceSpan>>,
@@ -1001,8 +1028,11 @@ struct NativeArrayIterator {
 impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
         let heap = Self::fresh_heap(config.max_heap_size)?;
-        let repository =
-            NativeImageRepository::new(NativeCompiler::new()?, config.cache_dir.clone());
+        let compiler = NativeCompiler::new()?;
+        let repository = NativeImageRepository::new(compiler.clone(), config.cache_dir.clone());
+        let specialization = config
+            .specialization_enabled
+            .then(|| SpecializationCoordinator::new(compiler));
         let eval_callable = NativeCallableKind::Builtin(wjsm_ir::Builtin::EvalIndirect, false);
         Ok(Self {
             output: RefCell::new(Vec::new()),
@@ -1032,8 +1062,13 @@ impl NativeAgentState {
             function_home_objects: Vec::new(),
             current_image_id: 0,
             programs: HashMap::new(),
+            program_snapshots: HashMap::new(),
+            variable_slot_snapshots: HashMap::new(),
+            ic_epochs: HashMap::new(),
+            specialization,
             images: HashMap::new(),
             function_lengths: Vec::new(),
+            retained_images: HashMap::new(),
             function_names: Vec::new(),
             function_source_spans: Vec::new(),
             image_source_files: HashMap::new(),
@@ -1277,8 +1312,14 @@ impl NativeAgentState {
         self.builtin_image_id = None;
         self.user_image_id = None;
         self.user_function_count = None;
+        self.retained_images.extend(self.images.drain());
+        self.program_snapshots.clear();
+        self.variable_slot_snapshots.clear();
+        self.ic_epochs.clear();
         self.programs.clear();
-        self.images.clear();
+        if let Some(coordinator) = self.specialization.as_mut() {
+            coordinator.reset_runtime_state();
+        }
         self.image_source_files.clear();
         self.process_object = None;
         self.process_env_object = None;
@@ -1420,6 +1461,11 @@ impl NativeAgentState {
     ) {
         let image_id = image.image_id();
         self.images.insert(image_id, image);
+        self.program_snapshots
+            .insert(image_id, Arc::new(program.clone()));
+        self.variable_slot_snapshots
+            .insert(image_id, Arc::new(variable_slots.clone()));
+        self.ic_epochs.insert(image_id, 0);
         self.programs.insert(
             image_id,
             Self::program_state(program, variable_slots, shared_module_slots),
@@ -1449,6 +1495,7 @@ impl NativeAgentState {
         // 生成代码的属性快链依赖这些基址，必须在每次 image 激活时刷新。
         ctx.handle_table_base = self.heap.handle_table_base();
         ctx.ic_slots_base = image.ic_slots().cast::<u8>().cast_mut();
+        ctx.feedback_slots_base = image.feedback_slots();
         ctx.proto_generation = self.heap.shapes().proto_generation();
         // 对象地址的「逻辑 → 虚拟」偏移：snapshot 恢复后 virtual_base 可能改变，
         // 必须与 handle_table_base 同步刷新，属性快链才能把 entry 里的逻辑地址
@@ -1662,6 +1709,12 @@ impl NativeAgentState {
             .entries()
             .get(usize::try_from(function.function_index).ok()?)?;
         i64::try_from(entry.slow_entry as usize).ok()
+    }
+
+    fn bump_ic_epoch(&mut self, image_id: u64) {
+        if let Some(epoch) = self.ic_epochs.get_mut(&image_id) {
+            *epoch = epoch.saturating_add(1);
+        }
     }
 
     fn callable_function(&self, callable: i64) -> Option<NativeFunctionRef> {
@@ -2648,11 +2701,235 @@ impl NativeAgentState {
             .is_some_and(|proxy| !proxy.revoked && self.is_callable_value(proxy.target))
     }
 
+    fn validated_feedback_slot(&self, pointer: *mut u8) -> Option<ValidatedFeedbackSlot> {
+        if pointer.is_null() {
+            return None;
+        }
+        let image = self.images.get(&self.current_image_id)?;
+        let base = image.feedback_slots();
+        if base.is_null() {
+            return None;
+        }
+        let slot_size = usize::try_from(wjsm_ir::constants::FEEDBACK_SLOT_SIZE).ok()?;
+        let byte_len = usize::try_from(image.feedback_slot_count())
+            .ok()?
+            .checked_mul(slot_size)?;
+        let base_address = base.addr();
+        let pointer_address = pointer.addr();
+        let offset = pointer_address.checked_sub(base_address)?;
+        if offset >= byte_len || offset % slot_size != 0 {
+            return None;
+        }
+        let site_index = u32::try_from(offset / slot_size).ok()?;
+        Some(ValidatedFeedbackSlot::new(
+            pointer.cast(),
+            self.current_image_id,
+            site_index,
+        ))
+    }
+
+    fn feedback_tags(arguments: &[i64]) -> Option<Box<[NativeFeedbackTag]>> {
+        if arguments.len() > usize::try_from(wjsm_ir::constants::FEEDBACK_MAX_TAGS).ok()? {
+            return None;
+        }
+        let tags = arguments
+            .iter()
+            .copied()
+            .map(NativeFeedbackTag::of)
+            .collect::<Box<[_]>>();
+        if tags.iter().any(|tag| {
+            matches!(
+                tag,
+                NativeFeedbackTag::Exception
+                    | NativeFeedbackTag::Iterator
+                    | NativeFeedbackTag::Enumerator
+                    | NativeFeedbackTag::ScopeRecord
+                    | NativeFeedbackTag::ArrayHole
+                    | NativeFeedbackTag::Other
+            )
+        }) {
+            return None;
+        }
+        Some(tags)
+    }
+
+    fn load_feedback_slot(slot: ValidatedFeedbackSlot) -> NativeFeedbackSlot {
+        // SAFETY: `ValidatedFeedbackSlot` 只能由当前 image 反馈区的范围与槽边界校验创建；
+        // 使用 unaligned 访问，不依赖 `Box<[u8]>` 的静态对齐类型。
+        unsafe { slot.slot().read_unaligned() }
+    }
+
+    fn store_feedback_slot(slot: ValidatedFeedbackSlot, value: NativeFeedbackSlot) {
+        // SAFETY: 与 `load_feedback_slot` 相同，且 owner thread 是反馈区唯一写入者。
+        unsafe { slot.slot().write_unaligned(value) };
+    }
+
+    fn record_value_feedback(
+        &mut self,
+        feedback: ValidatedFeedbackSlot,
+        operation: u32,
+        arguments: &[i64],
+    ) {
+        let Some(tags) = Self::feedback_tags(arguments) else {
+            let mut slot = Self::load_feedback_slot(feedback);
+            slot.state = wjsm_ir::constants::FEEDBACK_STATE_DISABLED;
+            Self::store_feedback_slot(feedback, slot);
+            return;
+        };
+        let signature = encode_feedback_tag_signature(&tags);
+        let mut slot = Self::load_feedback_slot(feedback);
+        let same = slot.last_target_image_id == 0 && slot.last_tag_signature == signature;
+        slot.last_target_image_id = 0;
+        slot.last_target_function = 0;
+        slot.last_tag_signature = signature;
+        slot.consecutive_count = if same {
+            slot.consecutive_count.saturating_add(1)
+        } else {
+            1
+        };
+        slot.total_count = slot.total_count.saturating_add(1);
+        slot.caller_function = self
+            .activations
+            .last()
+            .and_then(|activation| activation.function)
+            .map_or(0, |function| function.function_index);
+        slot.site_index = feedback.site_index;
+        slot.operation = operation;
+        slot.state = wjsm_ir::constants::FEEDBACK_STATE_RECORDING;
+        Self::store_feedback_slot(feedback, slot);
+    }
+
+    fn drain_specialization_results(&mut self) {
+        let Some(mut coordinator) = self.specialization.take() else {
+            return;
+        };
+        for result in coordinator.drain_results() {
+            let request = result.request;
+            let Some(object) = result.object else {
+                continue;
+            };
+            let Some(program) = self.program_snapshots.get(&request.key.target_image_id) else {
+                continue;
+            };
+            let Some(variable_slots) = self
+                .variable_slot_snapshots
+                .get(&request.key.target_image_id)
+            else {
+                continue;
+            };
+            if !Arc::ptr_eq(program, &request.program)
+                || !Arc::ptr_eq(variable_slots, &request.variable_slots)
+                || !self.images.contains_key(&request.key.caller_image_id)
+                || !self.images.contains_key(&request.key.target_image_id)
+                || self
+                    .ic_epochs
+                    .get(&request.key.target_image_id)
+                    .copied()
+                    .unwrap_or(0)
+                    != request.ic_epoch
+                || u64::from(self.heap.shapes().proto_generation()) != request.proto_generation
+            {
+                continue;
+            }
+            let image_id = coordinator.next_image_id();
+            let symbol = format!("wjsm_function_{}", request.key.target_function);
+            let Ok(image) = CompiledImage::load_single_entry(
+                &object,
+                image_id,
+                request.key.target_function,
+                &symbol,
+                &NativeHostRegistry,
+            ) else {
+                continue;
+            };
+            coordinator.publish(
+                request.key,
+                image,
+                request.ic_epoch,
+                request.proto_generation,
+            );
+        }
+        self.specialization = Some(coordinator);
+    }
+
+    fn select_specialized_entry(
+        &mut self,
+        feedback: ValidatedFeedbackSlot,
+        function: NativeFunctionRef,
+        arguments: &[i64],
+        generic_entry: i64,
+    ) -> Option<i64> {
+        let Some(tags) = Self::feedback_tags(arguments) else {
+            let mut slot = Self::load_feedback_slot(feedback);
+            slot.state = wjsm_ir::constants::FEEDBACK_STATE_DISABLED;
+            Self::store_feedback_slot(feedback, slot);
+            return Some(generic_entry);
+        };
+        let tag_signature = encode_feedback_tag_signature(&tags);
+        let key = VariantKey {
+            caller_image_id: feedback.caller_image_id,
+            site_index: feedback.site_index,
+            target_image_id: function.image_id,
+            target_function: function.function_index,
+            tag_signature,
+        };
+        let mut slot = Self::load_feedback_slot(feedback);
+        let same = slot.last_target_image_id == function.image_id
+            && slot.last_target_function == function.function_index
+            && slot.last_tag_signature == tag_signature;
+        slot.last_target_image_id = function.image_id;
+        slot.last_target_function = function.function_index;
+        slot.last_tag_signature = tag_signature;
+        slot.consecutive_count = if same {
+            slot.consecutive_count.saturating_add(1)
+        } else {
+            1
+        };
+        slot.total_count = slot.total_count.saturating_add(1);
+        slot.caller_function = self
+            .activations
+            .iter()
+            .rev()
+            .nth(1)
+            .and_then(|activation| activation.function)
+            .map_or(0, |caller| caller.function_index);
+        slot.site_index = feedback.site_index;
+        slot.operation = NativeRuntimeOp::PrepareCall.id();
+        slot.state = wjsm_ir::constants::FEEDBACK_STATE_RECORDING;
+        Self::store_feedback_slot(feedback, slot);
+
+        let ic_epoch = self.ic_epochs.get(&function.image_id).copied().unwrap_or(0);
+        let proto_generation = u64::from(self.heap.shapes().proto_generation());
+        if let Some(image) = self
+            .specialization
+            .as_mut()
+            .and_then(|coordinator| coordinator.select(key, ic_epoch, proto_generation))
+        {
+            let entry = image.entries().first()?;
+            self.activations.last_mut()?.specialized_image = Some(Arc::clone(&image));
+            return i64::try_from(entry.slow_entry as usize).ok();
+        }
+        if slot.consecutive_count >= wjsm_ir::constants::FEEDBACK_STABLE_THRESHOLD {
+            let program = Arc::clone(self.program_snapshots.get(&function.image_id)?);
+            let variable_slots = Arc::clone(self.variable_slot_snapshots.get(&function.image_id)?);
+            self.specialization.as_mut()?.enqueue(CompilationRequest {
+                key,
+                program,
+                variable_slots,
+                argument_tags: tags,
+                ic_epoch,
+                proto_generation,
+            });
+        }
+        Some(generic_entry)
+    }
+
     fn prepare_call(
         &mut self,
         ctx: &mut NativeVmContext,
         args: &[i64],
         construct: bool,
+        feedback_slot: Option<ValidatedFeedbackSlot>,
     ) -> Option<i64> {
         let (&callee, arguments) = args.split_first()?;
         let (function, environment, entry) = if value::is_function(callee) {
@@ -2738,9 +3015,15 @@ impl NativeAgentState {
             },
             home_object: function.and_then(|function| function.home_object),
             function,
+            specialized_image: None,
         });
         ctx.call_arena_active_len = end;
         ctx.js_call_depth += 1;
+        if let (Some(slot), Some(function)) = (feedback_slot, function) {
+            // 反馈记录与 overlay 选择只影响返回的 entry 地址；激活/变量保存协议
+            // 已经完成，overlay 入口失配时 wrapper 自行回落 base entry。
+            return self.select_specialized_entry(slot, function, arguments, entry);
+        }
         Some(entry)
     }
     fn prepare_super_call(
@@ -2748,6 +3031,7 @@ impl NativeAgentState {
         ctx: &mut NativeVmContext,
         args: &[i64],
         forward_args: bool,
+        feedback_slot: Option<ValidatedFeedbackSlot>,
     ) -> Option<i64> {
         let activation = self.activations.last()?;
         let new_target = activation.new_target;
@@ -2762,7 +3046,7 @@ impl NativeAgentState {
         } else {
             args.to_vec()
         };
-        let entry = self.prepare_call(ctx, &prepared, true)?;
+        let entry = self.prepare_call(ctx, &prepared, true, feedback_slot)?;
         self.activations.last_mut()?.new_target = new_target;
         Some(entry)
     }
@@ -2777,6 +3061,7 @@ impl NativeAgentState {
             new_target: value::encode_undefined(),
             home_object: None,
             function: None,
+            specialized_image: None,
         });
         ctx.js_call_depth += 1;
     }
@@ -2961,7 +3246,7 @@ impl NativeAgentState {
         let mut prepared = Vec::with_capacity(arguments.len() + 1);
         prepared.push(callee);
         prepared.extend_from_slice(arguments);
-        let entry = self.prepare_call(ctx, &prepared, false)?;
+        let entry = self.prepare_call(ctx, &prepared, false, None)?;
         self.activations.last_mut()?.new_target = new_target;
         let args_count = u32::try_from(arguments.len()).ok()?;
         let args_base = ctx.call_arena_active_len.checked_sub(args_count)?;
@@ -4051,6 +4336,12 @@ impl NativeRuntime {
         let context = Pin::as_mut(&mut vmctx).get_mut();
         context.heap_state = std::ptr::from_mut(state.as_mut()).cast();
         context.call_arena_slots = state.call_arena.as_mut_ptr();
+        // 反馈开关位：生成代码的守卫快路径据此决定是否内联更新反馈槽。
+        context.flags = if state.runtime_config.specialization_enabled {
+            wjsm_native_abi::NATIVE_FLAGS_FEEDBACK_ENABLED
+        } else {
+            0
+        };
         context.call_arena_capacity = u32::try_from(state.call_arena.len())
             .map_err(|_| NativeRuntimeError::Invariant("call arena exceeds u32".into()))?;
         context.stack_low = stack_pointer.saturating_sub(8 * 1024 * 1024);
@@ -4404,6 +4695,7 @@ mod tests {
         assert_eq!(child.cache_dir, Some(cache_dir));
         assert_eq!(child.gc_algorithm, parent.gc_algorithm);
         assert_eq!(child.max_heap_size, parent.max_heap_size);
+        assert_eq!(child.specialization_enabled, parent.specialization_enabled);
     }
     fn artifact(source: &str) -> PortableArtifact {
         let source: Arc<str> = source.into();
@@ -4434,6 +4726,39 @@ mod tests {
                 std::path::Path::new("."),
             )
             .expect("source should execute")
+    }
+
+    fn execute_source_with_specialization(source: &str, enabled: bool) -> NativeExecution {
+        let artifact = artifact(source);
+        let config = NativeRuntimeConfig::default().with_specialization_enabled(enabled);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("native runtime should initialize");
+        runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .expect("source should execute")
+    }
+
+    #[test]
+    fn specialization_toggle_preserves_drift_output() {
+        let source = r#"
+            function addOne(value) { return value + 1; }
+            function invoke(value) { return addOne(value); }
+            let sum = 0;
+            for (let i = 0; i < 150; i++) sum += invoke(i);
+            console.log(sum, invoke("x"));
+            try { invoke(1n); } catch (error) { console.log(error.name); }
+            console.log(invoke({ valueOf() { return 9; } }));
+        "#;
+        let enabled = execute_source_with_specialization(source, true);
+        let disabled = execute_source_with_specialization(source, false);
+        assert_eq!(enabled.stdout, disabled.stdout);
+        assert_eq!(enabled.stderr, disabled.stderr);
+        assert_eq!(enabled.exit_code, disabled.exit_code);
+        assert_eq!(enabled.value, disabled.value);
     }
 
     fn empty_fn(name: &str) -> wjsm_ir::Function {

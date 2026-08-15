@@ -5,6 +5,7 @@ use wjsm_native_abi::{
     COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
 };
 
+use crate::specialization::ValidatedFeedbackSlot;
 use crate::{ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeConstantMaterializeError};
 
 pub(super) fn dispatch_runtime(
@@ -12,6 +13,7 @@ pub(super) fn dispatch_runtime(
     state: &mut NativeAgentState,
     operation: NativeRuntimeOp,
     args: &[i64],
+    feedback_slot: Option<ValidatedFeedbackSlot>,
 ) -> i64 {
     match operation {
         NativeRuntimeOp::CooperativePoll => {
@@ -427,17 +429,20 @@ pub(super) fn dispatch_runtime(
                 Err(exception) => exception,
             }
         }
-        NativeRuntimeOp::PrepareCall => state.prepare_call(ctx, args, false).unwrap_or_else(|| {
-            state.prepare_rejected_call(
-                ctx,
-                args.first()
-                    .copied()
-                    .unwrap_or_else(value::encode_undefined),
-                false,
-            )
-        }),
-        NativeRuntimeOp::PrepareConstruct => {
-            state.prepare_call(ctx, args, true).unwrap_or_else(|| {
+        NativeRuntimeOp::PrepareCall => state
+            .prepare_call(ctx, args, false, feedback_slot)
+            .unwrap_or_else(|| {
+                state.prepare_rejected_call(
+                    ctx,
+                    args.first()
+                        .copied()
+                        .unwrap_or_else(value::encode_undefined),
+                    false,
+                )
+            }),
+        NativeRuntimeOp::PrepareConstruct => state
+            .prepare_call(ctx, args, true, feedback_slot)
+            .unwrap_or_else(|| {
                 state.prepare_rejected_call(
                     ctx,
                     args.first()
@@ -445,13 +450,13 @@ pub(super) fn dispatch_runtime(
                         .unwrap_or_else(value::encode_undefined),
                     true,
                 )
-            })
-        }
+            }),
         NativeRuntimeOp::PrepareSuperCall | NativeRuntimeOp::PrepareSuperCallForward => state
             .prepare_super_call(
                 ctx,
                 args,
                 operation == NativeRuntimeOp::PrepareSuperCallForward,
+                feedback_slot,
             )
             .unwrap_or_else(|| {
                 state.prepare_rejected_call(

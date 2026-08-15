@@ -16,13 +16,15 @@ use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_ARM64_RUNTIME_FUNCTION
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_RUNTIME_FUNCTION_ENTRY as PlatformRuntimeFunction;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Diagnostics::Debug::{RtlAddFunctionTable, RtlDeleteFunctionTable};
-use wjsm_native_abi::{NativeFunctionEntry, NativeHostSymbol, NativeSlowEntry};
+use wjsm_native_abi::{NativeFeedbackSlot, NativeFunctionEntry, NativeHostSymbol, NativeSlowEntry};
 
 use crate::{NativeObject, NativeSymbolResolver};
 use platform::{ExecutableMapping, align_to_page, page_size};
 
 /// IC 缓冲上限：4M 槽 × 8 word = 32M u32 = 128 MiB，防御恶意/损坏的 cache 条目。
 const MAX_IC_BUFFER_WORDS: usize = 4_000_000 * 8;
+/// 反馈缓冲上限：4M 槽 × 48 字节 = 192 MiB，防御恶意/损坏的 cache 条目。
+const MAX_FEEDBACK_BUFFER_BYTES: usize = 4_000_000 * 48;
 
 pub struct CompiledImage {
     image_id: u64,
@@ -34,6 +36,10 @@ pub struct CompiledImage {
     /// 每访问点 32 字节的 IC 槽区（零初始化 = Empty）；生成代码经 vmctx 的
     /// `ic_slots_base` 访问，miss 时由宿主回填。
     ic_slots: Box<[u32]>,
+    /// 每调用点 48 字节的类型反馈槽区（零初始化 = Empty）；生成代码经 vmctx 的
+    /// `feedback_slots_base` 访问。特化 overlay image 不分配该缓冲——它永不激活
+    /// 为 current image，其生成代码经由 vmctx 继续写 base image 的反馈区。
+    feedback_slots: Box<[NativeFeedbackSlot]>,
 }
 
 // SAFETY: `CompiledImage` 只包含发布后不可变的 RX/R 映射、typed entry 和 unwind token。
@@ -77,6 +83,18 @@ impl CompiledImage {
             return Err(ImageLoadError::InvalidIcSlotCount);
         }
         let ic_slots = vec![0_u32; ic_word_count].into_boxed_slice();
+        let feedback_slot_count = usize::try_from(object.feedback_slot_count())
+            .map_err(|_| ImageLoadError::InvalidFeedbackSlotCount)?;
+        let feedback_bytes = feedback_slot_count
+            .checked_mul(
+                usize::try_from(wjsm_ir::constants::FEEDBACK_SLOT_SIZE).unwrap_or(usize::MAX),
+            )
+            .ok_or(ImageLoadError::InvalidFeedbackSlotCount)?;
+        if feedback_bytes > MAX_FEEDBACK_BUFFER_BYTES {
+            return Err(ImageLoadError::InvalidFeedbackSlotCount);
+        }
+        let feedback_slots =
+            vec![NativeFeedbackSlot::default(); feedback_slot_count].into_boxed_slice();
         Ok(Arc::new(Self {
             image_id,
             entries: entries.into_boxed_slice(),
@@ -85,6 +103,84 @@ impl CompiledImage {
             code_bytes,
             rodata_bytes,
             ic_slots,
+            feedback_slots,
+        }))
+    }
+
+    /// 只加载一个导出 symbol 作为 entry 的 overlay 通道（运行时特化专用）。
+    ///
+    /// 与 [`Self::load`] 共享同一套 RW → relocation → RX、unwind 注册与 Drop
+    /// 顺序，但：entry 的 `local_function_id` 是 base image 内的函数下标（调用
+    /// 帧/栈回溯共享 base 身份），typed entry 不注册为 JS function table entry，
+    /// 也不分配 IC/反馈缓冲（overlay 生成代码经 vmctx 继续使用 base 的区域）。
+    /// overlay 永不写入 repository、磁盘 cache 或分发制品。
+    pub fn load_single_entry(
+        object: &NativeObject,
+        image_id: u64,
+        local_function_id: u32,
+        exported_symbol: &str,
+        resolver: &dyn NativeSymbolResolver,
+    ) -> Result<Arc<Self>, ImageLoadError> {
+        let file = object::File::parse(object.bytes())?;
+        validate_object(&file)?;
+        let mut loaded = load_sections(&file, resolver)?;
+        apply_relocations(&file, &mut loaded, resolver)?;
+        patch_platform_unwind(&file, &mut loaded)?;
+        finalize_sections(&loaded)?;
+        let symbol = file
+            .symbol_by_name(exported_symbol)
+            .ok_or_else(|| ImageLoadError::UnknownSymbol(exported_symbol.to_owned()))?;
+        let SymbolSection::Section(section) = symbol.section() else {
+            return Err(ImageLoadError::UnknownSymbol(exported_symbol.to_owned()));
+        };
+        let locations: HashMap<_, _> = loaded
+            .sections
+            .iter()
+            .enumerate()
+            .filter_map(|(position, section)| section.index.map(|index| (index, position)))
+            .collect();
+        let position = locations
+            .get(&section)
+            .copied()
+            .ok_or_else(|| ImageLoadError::UnknownSymbol(exported_symbol.to_owned()))?;
+        let address = loaded.sections[position].address(&loaded.mapping, symbol.address())?;
+        let pointer = std::ptr::with_exposed_provenance::<u8>(address);
+        // SAFETY: 与 build_entries 同一验证链——symbol 指向已验证、已重定位并最终
+        // 设为 RX 的 slow-entry 函数，映射由返回的 CompiledImage 持有。
+        let slow_entry = unsafe { std::mem::transmute::<*const u8, NativeSlowEntry>(pointer) };
+        let frame_bytes = *object
+            .frame_bytes()
+            .first()
+            .ok_or(ImageLoadError::AddressOverflow)?;
+        let entries = vec![NativeFunctionEntry {
+            slow_entry,
+            local_function_id,
+            frame_bytes,
+            image_id: 0,
+        }]
+        .into_boxed_slice();
+        let unwind = Some(register_unwind(&loaded)?);
+        let code_bytes = loaded
+            .sections
+            .iter()
+            .filter(|section| section.executable)
+            .map(|section| section.loaded_len)
+            .sum();
+        let rodata_bytes = loaded
+            .sections
+            .iter()
+            .filter(|section| !section.executable)
+            .map(|section| section.loaded_len)
+            .sum();
+        Ok(Arc::new(Self {
+            image_id,
+            entries,
+            mapping: loaded.mapping,
+            unwind,
+            code_bytes,
+            rodata_bytes,
+            ic_slots: Box::new([]),
+            feedback_slots: Box::new([]),
         }))
     }
 
@@ -102,6 +198,19 @@ impl CompiledImage {
 
     pub fn rodata_bytes(&self) -> usize {
         self.rodata_bytes
+    }
+
+    pub fn feedback_slot_count(&self) -> u32 {
+        u32::try_from(self.feedback_slots.len()).unwrap_or(0)
+    }
+
+    /// 反馈区基址（16 字节/槽对齐到 16 字节）；无反馈槽的 image（含 overlay）为 null。
+    pub fn feedback_slots(&self) -> *mut u8 {
+        if self.feedback_slots.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            self.feedback_slots.as_ptr().cast::<u8>().cast_mut()
+        }
     }
 
     /// IC 区基址（16 字节/槽对齐到 16 字节）；无 IC 槽的 image 返回 null。
@@ -1234,6 +1343,8 @@ pub enum ImageLoadError {
     AddressOverflow,
     #[error("native image declares an invalid IC slot count")]
     InvalidIcSlotCount,
+    #[error("native image declares an invalid feedback slot count")]
+    InvalidFeedbackSlotCount,
     #[error("native image section access is out of bounds")]
     SectionOutOfBounds,
     #[error("native executable memory operation failed: {0}")]

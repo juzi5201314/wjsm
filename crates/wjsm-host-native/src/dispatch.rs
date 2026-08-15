@@ -86,6 +86,7 @@ pub(super) unsafe extern "C" fn native_host_operation(
     operation: u32,
     args: *const i64,
     args_count: u32,
+    feedback_slot: *mut u8,
 ) -> i64 {
     // SAFETY: generated code passes its pinned vmctx pointer; dispatcher checks null before use and
     // does not retain the reference beyond this synchronous call.
@@ -112,6 +113,34 @@ pub(super) unsafe extern "C" fn native_host_operation(
         return fail_dispatch(ctx);
     };
 
+    // owner 边界：先收敛后台特化编译结果（发布/丢弃都不阻塞 JS），再校验反馈槽。
+    let feedback = if state.runtime_config.specialization_enabled {
+        state.drain_specialization_results();
+        state.validated_feedback_slot(feedback_slot)
+    } else {
+        None
+    };
+    let record_value_feedback = feedback.is_some()
+        && !matches!(
+            NativeRuntimeOp::from_id(operation),
+            Some(
+                NativeRuntimeOp::PrepareCall
+                    | NativeRuntimeOp::PrepareConstruct
+                    | NativeRuntimeOp::PrepareSuperCall
+                    | NativeRuntimeOp::PrepareSuperCallForward
+            )
+        );
+    if record_value_feedback {
+        if let Some(feedback) = feedback {
+            state.record_value_feedback(feedback, operation, args);
+        }
+    }
+
+    let runtime_operation = if operation <= u32::from(Builtin::last_wire_id()) {
+        None
+    } else {
+        NativeRuntimeOp::from_id(operation)
+    };
     let result = if operation <= u32::from(Builtin::last_wire_id()) {
         let builtin_id = match u16::try_from(operation) {
             Ok(id) => id,
@@ -122,11 +151,23 @@ pub(super) unsafe extern "C" fn native_host_operation(
         };
         dispatch_builtin(ctx, state, builtin, args)
     } else {
-        let Some(operation) = NativeRuntimeOp::from_id(operation) else {
+        let Some(operation) = runtime_operation else {
             return fail_dispatch(ctx);
         };
-        dispatch_runtime(ctx, state, operation, args)
+        dispatch_runtime(ctx, state, operation, args, feedback)
     };
+    if runtime_operation.is_some_and(|operation| {
+        matches!(
+            operation,
+            NativeRuntimeOp::SetProp
+                | NativeRuntimeOp::CreateDataProperty
+                | NativeRuntimeOp::DeleteProp
+                | NativeRuntimeOp::SetProto
+                | NativeRuntimeOp::SetPropIc
+        )
+    }) {
+        state.bump_ic_epoch(ctx.current_image_id);
+    }
     // 任何宿主操作都可能直接或间接改变 shape（builtin 会直接改 heap）；
     // 这里统一同步 proto 世代，让生成代码中的 ProtoData/Accessor IC 在下次命中
     // 前看到最新值。读锁极短，仅在所有宿主操作返回后执行一次。

@@ -18,13 +18,33 @@ struct DirectCallInfo {
 }
 
 pub(crate) fn infer_f64_values(program: &Program) -> HashMap<FunctionId, HashSet<ValueId>> {
+    infer_f64_values_with_param_seeds(program, &HashMap::new())
+}
+
+/// 以「调用方保证第 i 个 JS 参数是 number」的种子运行同一套 fixpoint 分析。
+///
+/// 种子只把更多参数标记为 f64 起点，不改变传播规则；用于运行时特化编译时，
+/// 让 wrapper 的入口 tag 守卫背书下的参数衍生值获得 f64 证明。base 编译
+/// （无种子）与 overlay 编译（有种子）共享同一分析实现。
+pub(crate) fn infer_f64_values_with_param_seeds(
+    program: &Program,
+    seeds: &HashMap<FunctionId, Vec<bool>>,
+) -> HashMap<FunctionId, HashSet<ValueId>> {
     let call_info = collect_direct_calls(program);
     let function_count = program.functions().len();
     let frame_locals = program.frame_local_variable_names_by_function();
     let mut f64_params: Vec<Vec<bool>> = program
         .functions()
         .iter()
-        .map(|function| vec![false; function.params().len().saturating_sub(2)])
+        .enumerate()
+        .map(|(index, function)| {
+            let empty = vec![false; function.params().len().saturating_sub(2)];
+            let function_id = FunctionId(u32::try_from(index).expect("function index fits u32"));
+            match seeds.get(&function_id) {
+                Some(seed) => seed.clone(),
+                None => empty,
+            }
+        })
         .collect();
     let mut return_f64 = vec![false; function_count];
     let mut inferred = vec![HashSet::new(); function_count];

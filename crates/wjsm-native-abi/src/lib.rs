@@ -13,11 +13,15 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 9;
+pub const NATIVE_ABI_VERSION: u32 = 10;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
 pub const BARRIER_VERSION: u32 = 1;
+
+/// `NativeVmContext::flags` 的位定义：bit0 置位时生成代码的守卫快路径才内联
+/// 更新反馈槽（宿主在 runtime 构造时按 `specialization_enabled` 写入）。
+pub const NATIVE_FLAGS_FEEDBACK_ENABLED: u32 = 1;
 
 /// 每次循环回边生成的代码从 `NativeVmContext::stack_budget_bytes` 扣除的字节数。
 ///
@@ -84,6 +88,10 @@ pub struct NativeVmContext {
     /// 当前 image 的 IC 区基址（16 字节对齐）；无 IC 槽的 image 为 null。
     /// 槽大小 32 字节，槽内 `+0/+8/+16` 的 i64 load 仍满足 8 字节对齐。
     pub ic_slots_base: *mut u8,
+    /// 当前 image 的类型反馈区基址（16 字节对齐）；无反馈槽的 image 为 null。
+    /// 槽大小 [`wjsm_ir::constants::FEEDBACK_SLOT_SIZE`]；特化 overlay 永不激活为
+    /// current image，其生成代码经由本基址继续写 base image 的反馈槽。
+    pub feedback_slots_base: *mut u8,
     /// 对象地址的「逻辑 → 虚拟」偏移：handle entry 里的对象地址是 memory64
     /// 逻辑偏移，属性快链须加此值才能直接 load 真实映射。
     pub heap_object_delta: i64,
@@ -124,6 +132,7 @@ impl Default for NativeVmContext {
             proto_generation: 0,
             handle_table_base: std::ptr::null_mut(),
             ic_slots_base: std::ptr::null_mut(),
+            feedback_slots_base: std::ptr::null_mut(),
             heap_object_delta: 0,
         }
     }
@@ -136,6 +145,104 @@ pub struct NativeSourceSlot {
     pub function_index: u32,
     pub line: u32,
     pub column: u32,
+    pub reserved: u32,
+}
+
+/// 反馈槽记录的值类别。判别值是稳定 5-bit 编码：NaN-box tag 直接沿用其
+/// 数值（生成代码用 `(v >> 32) & 0x1f` 一步算出），原始 f64（未被 NaN-box 的
+/// number）是独立 [`Self::Number`] 类别占用 `0x1f`，二者保证不碰撞。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum NativeFeedbackTag {
+    NativeCallable = 0x00,
+    String = 0x01,
+    Undefined = 0x02,
+    Null = 0x03,
+    Boolean = 0x04,
+    Exception = 0x05,
+    Iterator = 0x06,
+    Enumerator = 0x07,
+    Object = 0x08,
+    Function = 0x09,
+    Closure = 0x0a,
+    Array = 0x0b,
+    Bound = 0x0c,
+    BigInt = 0x0d,
+    Symbol = 0x0e,
+    RegExp = 0x0f,
+    Proxy = 0x10,
+    ScopeRecord = 0x11,
+    ArrayHole = 0x12,
+    /// 未知/未来新增的内部值类别。
+    Other = 0x13,
+    /// 原始 f64 number；生成代码 `select(is_number, 0x1f, tag)` 直接得出。
+    Number = 0x1f,
+}
+
+impl NativeFeedbackTag {
+    /// 按运行时编码判别一个 boxed 值的反馈类别。
+    pub fn of(encoded: i64) -> Self {
+        use wjsm_ir::value;
+        if value::is_f64(encoded) {
+            return Self::Number;
+        }
+        let tag = ((encoded as u64) >> 32) & value::TAG_MASK;
+        match tag {
+            value::TAG_UNDEFINED => Self::Undefined,
+            value::TAG_NULL => Self::Null,
+            value::TAG_BOOL => Self::Boolean,
+            value::TAG_STRING => Self::String,
+            value::TAG_BIGINT => Self::BigInt,
+            value::TAG_SYMBOL => Self::Symbol,
+            value::TAG_FUNCTION => Self::Function,
+            value::TAG_CLOSURE => Self::Closure,
+            value::TAG_BOUND => Self::Bound,
+            value::TAG_NATIVE_CALLABLE => Self::NativeCallable,
+            value::TAG_OBJECT => Self::Object,
+            value::TAG_ARRAY => Self::Array,
+            value::TAG_REGEXP => Self::RegExp,
+            value::TAG_PROXY => Self::Proxy,
+            value::TAG_EXCEPTION => Self::Exception,
+            value::TAG_ITERATOR => Self::Iterator,
+            value::TAG_ENUMERATOR => Self::Enumerator,
+            value::TAG_SCOPE_RECORD => Self::ScopeRecord,
+            value::TAG_ARRAY_HOLE => Self::ArrayHole,
+            _ => Self::Other,
+        }
+    }
+
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+}
+
+/// 把至多 [`wjsm_ir::constants::FEEDBACK_MAX_TAGS`] 个 tag 打包成 64 位签名：
+/// 低 4 位是 tag 数，随后每个 tag 占 6 位（判别值 ≤ 31，6 位留出余量）。
+pub fn encode_feedback_tag_signature(tags: &[NativeFeedbackTag]) -> u64 {
+    let capped = tags
+        .len()
+        .min(wjsm_ir::constants::FEEDBACK_MAX_TAGS as usize);
+    let mut signature = capped as u64;
+    for (index, tag) in tags.iter().take(capped).enumerate() {
+        signature |= u64::from(tag.code()) << (4 + 6 * index);
+    }
+    signature
+}
+
+/// 反馈槽的 `#[repr(C)]` 字段访问视图；布局常量见
+/// `wjsm_ir::constants::FEEDBACK_SLOT_*`，二者由编译期断言绑定。
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C, align(16))]
+pub struct NativeFeedbackSlot {
+    pub last_target_image_id: u64,
+    pub last_tag_signature: u64,
+    pub consecutive_count: u32,
+    pub total_count: u32,
+    pub caller_function: u32,
+    pub site_index: u32,
+    pub last_target_function: u32,
+    pub operation: u32,
+    pub state: u32,
     pub reserved: u32,
 }
 
@@ -437,6 +544,11 @@ impl NativeSignature {
 ///
 /// 数学 thunk 使用统一的 Rust thunk 实现（见 `wjsm-host-native`），不依赖平台
 /// libc 的符号命名差异；ID 一旦发布必须保持稳定，只能追加不能重排。
+///
+/// `HostOperationDispatcher` 的 C ABI 自 ABI v10 起为五参数：
+/// `(ctx: *mut NativeVmContext, operation: u32, args: *const i64, args_count: u32,
+/// feedback_slot: *mut u8) -> i64`；非反馈调用点传 null 槽指针，反馈调用点传
+/// 当前 image 反馈区内的 48 字节槽地址。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum NativeHostSymbol {
@@ -569,7 +681,7 @@ pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v9\0");
+        hasher.update(b"wjsm-native-abi-v10\0");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");
@@ -577,6 +689,7 @@ pub fn native_abi_hash() -> [u8; 32] {
         hash_layout::<NativeRootFrame>(&mut hasher, b"NativeRootFrame");
         hash_layout::<NativeSourceFrame>(&mut hasher, b"NativeSourceFrame");
         hash_layout::<NativeSourceSlot>(&mut hasher, b"NativeSourceSlot");
+        hash_layout::<NativeFeedbackSlot>(&mut hasher, b"NativeFeedbackSlot");
         hash_layout::<CallArgs>(&mut hasher, b"CallArgs");
         for offset in [
             offset_of!(NativeVmContext, abi_version),
@@ -591,6 +704,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, proto_generation),
             offset_of!(NativeVmContext, handle_table_base),
             offset_of!(NativeVmContext, ic_slots_base),
+            offset_of!(NativeVmContext, feedback_slots_base),
             offset_of!(NativeVmContext, heap_object_delta),
         ] {
             hasher.update(
@@ -599,6 +713,29 @@ pub fn native_abi_hash() -> [u8; 32] {
                     .to_le_bytes(),
             );
         }
+        // 反馈槽字段 offset 与 tag 编码版本：dispatcher 五参数协议的可观察契约。
+        for offset in [
+            offset_of!(NativeFeedbackSlot, last_target_image_id),
+            offset_of!(NativeFeedbackSlot, last_tag_signature),
+            offset_of!(NativeFeedbackSlot, consecutive_count),
+            offset_of!(NativeFeedbackSlot, total_count),
+            offset_of!(NativeFeedbackSlot, caller_function),
+            offset_of!(NativeFeedbackSlot, site_index),
+            offset_of!(NativeFeedbackSlot, last_target_function),
+            offset_of!(NativeFeedbackSlot, operation),
+            offset_of!(NativeFeedbackSlot, state),
+        ] {
+            hasher.update(
+                u64::try_from(offset)
+                    .expect("feedback slot offset fits u64")
+                    .to_le_bytes(),
+            );
+        }
+        hasher.update(wjsm_ir::constants::FEEDBACK_SLOT_SIZE.to_le_bytes());
+        hasher.update([
+            NativeFeedbackTag::Number.code(),
+            NativeFeedbackTag::Other.code(),
+        ]);
         for version in [
             NATIVE_ABI_VERSION,
             CALL_GATE_VERSION,
@@ -721,6 +858,47 @@ const _: () = {
     assert!(offset_of!(CallArgs, base) == 0);
     assert!(offset_of!(CallArgs, len) == 4);
     assert!(size_of::<PendingExceptionKind>() == 4);
+    // 反馈槽视图必须与 wjsm-ir::constants 的布局常量逐字段一致。
+    assert!(size_of::<NativeFeedbackSlot>() == 48);
+    assert!(size_of::<NativeFeedbackSlot>() == wjsm_ir::constants::FEEDBACK_SLOT_SIZE as usize);
+    assert!(
+        offset_of!(NativeFeedbackSlot, last_target_image_id)
+            == wjsm_ir::constants::FEEDBACK_SLOT_TARGET_IMAGE_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, last_tag_signature)
+            == wjsm_ir::constants::FEEDBACK_SLOT_TAG_SIGNATURE_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, consecutive_count)
+            == wjsm_ir::constants::FEEDBACK_SLOT_CONSECUTIVE_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, total_count)
+            == wjsm_ir::constants::FEEDBACK_SLOT_TOTAL_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, caller_function)
+            == wjsm_ir::constants::FEEDBACK_SLOT_CALLER_FUNCTION_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, site_index)
+            == wjsm_ir::constants::FEEDBACK_SLOT_SITE_INDEX_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, last_target_function)
+            == wjsm_ir::constants::FEEDBACK_SLOT_TARGET_FUNCTION_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, operation)
+            == wjsm_ir::constants::FEEDBACK_SLOT_OPERATION_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, state)
+            == wjsm_ir::constants::FEEDBACK_SLOT_STATE_OFFSET as usize
+    );
+    assert!(NativeFeedbackTag::Number.code() <= 0x1f);
+    assert!(NativeFeedbackTag::Other.code() <= 0x1f);
 };
 
 #[cfg(test)]
@@ -745,6 +923,77 @@ mod tests {
         let op = NativeHostOp::from_builtin(Builtin::ConsoleLog);
         assert_eq!(NativeHostOp::from_id(op.id()), Some(op));
         assert_eq!(op.name(), "console.log");
+    }
+
+    #[test]
+    fn feedback_tags_distinguish_number_from_boxed_values() {
+        use wjsm_ir::value;
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_f64(1.5)),
+            NativeFeedbackTag::Number
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_f64(f64::NAN)),
+            NativeFeedbackTag::Number
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_undefined()),
+            NativeFeedbackTag::Undefined
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_null()),
+            NativeFeedbackTag::Null
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_bool(true)),
+            NativeFeedbackTag::Boolean
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_handle(value::TAG_STRING, 7)),
+            NativeFeedbackTag::String
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_handle(value::TAG_BIGINT, 7)),
+            NativeFeedbackTag::BigInt
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_handle(value::TAG_OBJECT, 7)),
+            NativeFeedbackTag::Object
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_handle(value::TAG_FUNCTION, 7)),
+            NativeFeedbackTag::Function
+        );
+    }
+
+    #[test]
+    fn feedback_tag_signature_packs_count_then_tags() {
+        let tags = [
+            NativeFeedbackTag::Number,
+            NativeFeedbackTag::Number,
+            NativeFeedbackTag::String,
+        ];
+        let signature = encode_feedback_tag_signature(&tags);
+        assert_eq!(signature & 0xf, 3);
+        assert_eq!(
+            (signature >> 4) & 0x3f,
+            u64::from(NativeFeedbackTag::Number.code())
+        );
+        assert_eq!(
+            (signature >> 10) & 0x3f,
+            u64::from(NativeFeedbackTag::Number.code())
+        );
+        assert_eq!(
+            (signature >> 16) & 0x3f,
+            u64::from(NativeFeedbackTag::String.code())
+        );
+        // 超出 FEEDBACK_MAX_TAGS 的 tag 只影响计数截断，不产生越界位。
+        let many = vec![NativeFeedbackTag::Number; 32];
+        let capped = encode_feedback_tag_signature(&many);
+        assert_eq!(
+            capped & 0xf,
+            u64::from(wjsm_ir::constants::FEEDBACK_MAX_TAGS)
+        );
     }
 
     #[test]
