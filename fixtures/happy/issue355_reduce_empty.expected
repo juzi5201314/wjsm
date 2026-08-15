@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+array reduce: true
+array reduceRight: true
+typedarray reduce: true
+typedarray reduceRight: true
+normal exit
+--- stderr ---

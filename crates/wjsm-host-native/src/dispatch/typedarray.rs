@@ -8,7 +8,7 @@ use num_traits::ToPrimitive;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{fail_dispatch, is_truthy, render_value, strict_equal, to_number};
+use super::runtime::{fail_dispatch, is_truthy, render_value, strict_equal, to_number, type_error};
 use crate::NativeAgentState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1060,7 +1060,7 @@ fn reduce(
         initial
     } else {
         let Some(index) = iter.next() else {
-            return fail_dispatch(ctx);
+            return type_error(ctx, state, "Reduce of empty array with no initial value");
         };
         get_element(state, receiver, index).unwrap_or_else(value::encode_undefined)
     };

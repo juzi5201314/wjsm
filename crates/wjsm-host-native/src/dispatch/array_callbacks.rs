@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{fail_dispatch, is_truthy, render_value, to_number};
+use super::runtime::{fail_dispatch, is_truthy, render_value, to_number, type_error};
 use crate::NativeAgentState;
 
 pub(super) fn dispatch_array_callback(
@@ -257,7 +257,7 @@ fn reduce(
     } else {
         loop {
             let Some(index) = indices.get(position).copied() else {
-                return fail_dispatch(ctx);
+                return type_error(ctx, state, "Reduce of empty array with no initial value");
             };
             position += 1;
             let Some(element) =
