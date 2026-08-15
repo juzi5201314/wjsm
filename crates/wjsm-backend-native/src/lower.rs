@@ -2273,7 +2273,7 @@ fn lower_get_prop_ic_non_nullish(
     // IC 槽（32 字节）：
     // word0 = shape_id(lo32) | value_index(hi32)
     // word1 = kind(lo32) | proto_generation(hi32)
-    // word2 = holder_handle(lo32) | reserved(hi32)
+    // word2 = holder_handle(lo32) | expected_proto(hi32)
     let ic_word0 = builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
@@ -2288,6 +2288,7 @@ fn lower_get_prop_ic_non_nullish(
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 16);
     let ic_holder = builder.ins().band_imm_u(ic_word2, i64::from(u32::MAX));
+    let ic_expected_proto = builder.ins().ushr_imm_u(ic_word2, 32);
     let kind_own = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         ic_kind,
@@ -2324,17 +2325,28 @@ fn lower_get_prop_ic_non_nullish(
         .ins()
         .brif(shape_match, shape_hit_block, &[], miss_block, &[]);
 
-    // shape 命中后按 kind 分派：OWN_DATA 直达自有值槽；其余先验 proto 世代。
+    // shape 命中后按 kind 分派：OWN_DATA 直达自有值槽；其余先校验直接原型与世代。
     builder.switch_to_block(shape_hit_block);
     builder.seal_block(shape_hit_block);
     builder
         .ins()
         .brif(kind_own, own_hit_block, &[], holder_block, &[]);
 
-    // ProtoData / Accessor：当前世代必须与填充时一致，否则原型链解析结果
-    // 可能已失效（原型 shape 变化），落宿主重新解析并回填。
+    // ProtoData / Accessor：同一 shape 的 receiver 可以有不同直接原型，故先比较
+    // 对象头里的 proto handle；再比较原型世代以覆盖链上属性或原型变化。
     builder.switch_to_block(holder_block);
     builder.seal_block(holder_block);
+    let receiver_header = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, 0);
+    let receiver_proto = builder
+        .ins()
+        .band_imm_u(receiver_header, i64::from(u32::MAX));
+    let proto_match = builder.ins().icmp(
+        ir::condcodes::IntCC::Equal,
+        receiver_proto,
+        ic_expected_proto,
+    );
     let current_generation = builder.ins().load(
         types::I32,
         MemFlagsData::trusted(),
@@ -2347,9 +2359,10 @@ fn lower_get_prop_ic_non_nullish(
         current_generation,
         ic_generation,
     );
+    let holder_valid = builder.ins().band(proto_match, generation_match);
     builder
         .ins()
-        .brif(generation_match, holder_resolve_block, &[], miss_block, &[]);
+        .brif(holder_valid, holder_resolve_block, &[], miss_block, &[]);
 
     // 解析 holder_handle → holder entry → holder 地址；entry 同样必须稳定。
     builder.switch_to_block(holder_resolve_block);

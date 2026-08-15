@@ -206,21 +206,23 @@ pub const HEAP_OBJECT_VALUE_SLOT_SIZE: u32 = 8;
 // +8  u32 kind          0=Empty 1=OwnData 2=ProtoData 3=Megamorphic 4=Accessor
 // +12 u32 proto_generation  kind=ProtoData/Accessor 时填充时的原型世代
 // +16 u32 holder_handle  kind=ProtoData/Accessor 时属性所在对象的句柄
-// +20..+28 reserved      保留清零，避免旧代码读半槽
+// +20 u32 expected_proto kind=ProtoData/Accessor 时 receiver 的直接原型句柄
+// +24..+28 reserved      保留清零，避免旧代码读半槽
 //
 // 空槽判定用 `kind == 0`（而非 shape_id == 0）——`SHAPE_ID_EMPTY` 是合法 shape。
 // IC 区由 data segment 的零填充自动初始化为 Empty，无需运行时初始化。
 //
 // shape 变化会自动使 IC 失效（命中前提是 shape_id 精确相等）；原型链/accessor
-// 命中额外比对 `proto_generation`，由宿主 `ShapeTable` 在原型形状变化时 bump。
-// 生成代码经 `NativeVmContext::proto_generation` 读取当前世代。
+// 命中额外比对 receiver 的直接原型句柄与 `proto_generation`，后者由宿主
+// `ShapeTable` 在原型形状变化时 bump。生成代码从对象头和
+// `NativeVmContext::proto_generation` 分别读取两项。
 pub const IC_SLOT_SIZE: u32 = 32;
 pub const IC_SLOT_SHAPE_ID_OFFSET: u32 = 0;
 pub const IC_SLOT_VALUE_INDEX_OFFSET: u32 = 4;
 pub const IC_SLOT_KIND_OFFSET: u32 = 8;
 pub const IC_SLOT_PROTO_GENERATION_OFFSET: u32 = 12;
 pub const IC_SLOT_HOLDER_HANDLE_OFFSET: u32 = 16;
-pub const IC_SLOT_RESERVED0_OFFSET: u32 = 20;
+pub const IC_SLOT_EXPECTED_PROTO_OFFSET: u32 = 20;
 pub const IC_SLOT_RESERVED1_OFFSET: u32 = 24;
 pub const IC_SLOT_RESERVED2_OFFSET: u32 = 28;
 /// 空槽：从未命中过，miss 处理器负责回填。
@@ -232,7 +234,7 @@ pub const IC_KIND_PROTO_DATA: u32 = 2;
 /// 退化：proxy / 字典 shape / 数组命名属性 / 非 callable accessor → 此后永久落宿主。
 pub const IC_KIND_MEGAMORPHIC: u32 = 3;
 /// accessor 属性：getter 在 `holder_handle` 的值槽 `value_index` 里；
-/// shape + 世代命中后直接 `invoke_callable(getter, receiver)`。
+/// shape + 直接原型 + 世代命中后直接 `invoke_callable(getter, receiver)`。
 pub const IC_KIND_ACCESSOR: u32 = 4;
 
 // ── 数组 ElementsKind（header pad 首字节）──────────────────────────────────
@@ -312,6 +314,10 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         // IC 区插在 data segment 与 heap_start 之间，改变对象堆基址 → 进 ABI。
         ("ic_slot_size", IC_SLOT_SIZE),
         ("ic_slot_holder_handle_offset", IC_SLOT_HOLDER_HANDLE_OFFSET),
+        (
+            "ic_slot_expected_proto_offset",
+            IC_SLOT_EXPECTED_PROTO_OFFSET,
+        ),
         ("ic_kind_own_data", IC_KIND_OWN_DATA),
         ("ic_kind_proto_data", IC_KIND_PROTO_DATA),
         ("ic_kind_megamorphic", IC_KIND_MEGAMORPHIC),

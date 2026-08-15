@@ -721,6 +721,7 @@ unsafe fn write_ic_slot(
     kind: u32,
     proto_generation: u32,
     holder_handle: u32,
+    expected_proto: u32,
 ) {
     // SAFETY: 调用方保证 slot 指向 8 个连续 u32；std::ptr::write 只写不读。
     unsafe {
@@ -729,7 +730,7 @@ unsafe fn write_ic_slot(
         std::ptr::write(slot.add(2), kind);
         std::ptr::write(slot.add(3), proto_generation);
         std::ptr::write(slot.add(4), holder_handle);
-        std::ptr::write(slot.add(5), 0);
+        std::ptr::write(slot.add(5), expected_proto);
         std::ptr::write(slot.add(6), 0);
         std::ptr::write(slot.add(7), 0);
     }
@@ -738,7 +739,7 @@ unsafe fn write_ic_slot(
 /// SAFETY: 同 [`write_ic_slot`]。
 unsafe fn write_ic_slot_megamorphic(slot: *mut u32) {
     // SAFETY: 调用方保证 slot 有效；退化槽 shape/value 清零后只留 kind。
-    unsafe { write_ic_slot(slot, 0, 0, constants::IC_KIND_MEGAMORPHIC, 0, 0) }
+    unsafe { write_ic_slot(slot, 0, 0, constants::IC_KIND_MEGAMORPHIC, 0, 0, 0) }
 }
 
 /// SetPropIc 的 miss 回填：写入成功后，若属性已成为接收者自己的数据属性，回填
@@ -774,6 +775,7 @@ fn backfill_set_prop_ic(
                     shape_id,
                     value_index,
                     constants::IC_KIND_OWN_DATA,
+                    0,
                     0,
                     0,
                 )
@@ -986,6 +988,7 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
                     constants::IC_KIND_OWN_DATA,
                     0,
                     0,
+                    0,
                 )
             };
             return;
@@ -996,10 +999,17 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
             return;
         }
     }
-    // 优先级 2：原型链上的数据/accessor 属性。接收者 shape_id 是缓存键；
-    // 原型链属性还要额外记录 holder_handle 与当前 proto 世代。
+    // 优先级 2：原型链上的数据/accessor 属性。接收者 shape 和直接原型共同
+    // 决定解析结果，链上形状变化另由 proto 世代覆盖。
     let shape_id = match state.heap.shape_id(handle) {
         Ok(shape_id) => shape_id,
+        Err(_) => {
+            unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+            return;
+        }
+    };
+    let expected_proto = match state.heap.prototype(handle) {
+        Ok(prototype) => prototype,
         Err(_) => {
             unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
             return;
@@ -1023,6 +1033,7 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
                             constants::IC_KIND_ACCESSOR,
                             generation,
                             holder_handle,
+                            expected_proto,
                         )
                     };
                 } else {
@@ -1038,6 +1049,7 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
                         constants::IC_KIND_OWN_DATA,
                         0,
                         0,
+                        0,
                     )
                 };
             } else {
@@ -1050,6 +1062,7 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
                         constants::IC_KIND_PROTO_DATA,
                         generation,
                         holder_handle,
+                        expected_proto,
                     )
                 };
             }

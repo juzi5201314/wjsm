@@ -44,14 +44,14 @@
 //! # 原型链 IC 的失效协议
 //!
 //! IC 命中的前提是 `obj_shape == ic_shape` 精确相等，所以「接收者自身」的任何形状
-//! 变化会自动使 IC 失效。但原型链上的属性（`kind=ProtoData`，方法调用的主路径）
+//! 变化会自动使 IC 失效。但原型链上的属性（`kind=ProtoData/Accessor`）
 //! 还要防住两件事：接收者的 proto 被换掉、以及链中任意一环长出遮蔽属性。
 //!
 //! 本模块用一个**全局 proto 世代计数器**覆盖这两种情况：凡是被当作某个对象原型的
 //! 句柄（[`ShapeTable::note_prototype`] 登记）发生形状变化，就 bump
-//! [`ShapeTable::proto_generation`]；`kind=ProtoData` 的 IC 槽记录填充时的世代，
-//! 命中要求世代相等。原型在 bootstrap 之后极少长属性，所以 bump 罕见；一次 bump
-//! 让所有原型链 IC 一起重新预热，代价远低于逐槽反向依赖表。
+//! [`ShapeTable::proto_generation`]；`kind=ProtoData/Accessor` 的 IC 槽记录填充时
+//! 的世代，命中要求世代相等。原型在 bootstrap 之后极少长属性，所以 bump 罕见；
+//! 一次 bump 让所有原型链 IC 一起重新预热，代价远低于逐槽反向依赖表。
 //!
 //! proto **句柄本身**换掉（`o.__proto__ = x`）由 IC 槽内缓存的 `expected_proto`
 //! 比较覆盖，不需要 bump 世代。
@@ -320,7 +320,7 @@ impl ShapeTable {
         inner.prototypes.insert(handle);
     }
 
-    /// 当前 proto 世代；`kind=ProtoData` 的 IC 槽命中要求世代相等。
+    /// 当前 proto 世代；`kind=ProtoData/Accessor` 的 IC 槽命中要求世代相等。
     pub fn proto_generation(&self) -> u32 {
         self.inner.read().proto_generation
     }

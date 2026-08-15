@@ -279,7 +279,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     /// 发布新对象：header 写 proto / value_capacity / 空 shape，并登记 handle entry。
-    /// `capacity` 是**值槽**容量（8 字节/槽），不是属性数。
+    /// 调用方随后通过 `set_prototype` 完成原型绑定；该步骤也会使复用的 prototype
+    /// handle 对应的原型链 IC 世代失效。`capacity` 是**值槽**容量（8 字节/槽），不是属性数。
     pub fn publish_object(
         &self,
         handle: u32,

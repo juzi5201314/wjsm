@@ -80,6 +80,40 @@ fn relocated_allocation_is_reused_only_after_epoch_grace_period() {
 }
 
 #[test]
+fn reused_prototype_handle_invalidates_proto_generation() {
+    let layout = Arc::new(ManagedHeapLayout::new(1024 * 1024, 64 * 1024).unwrap());
+    let memory = TestHeapMemory::for_layout(&layout);
+    let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
+    let heap = HeapAccessV2::with_handles(memory, layout, handles).unwrap();
+    let prototype = heap.allocate_handle().unwrap();
+    let receiver = heap.allocate_handle().unwrap();
+    let header_bytes = u64::from(constants::HEAP_OBJECT_HEADER_SIZE);
+
+    let (prototype_object, _) = heap.reserve_nlab(header_bytes).unwrap();
+    heap.publish_object(prototype, prototype_object, PROTO_NULL_SENTINEL, 0)
+        .unwrap();
+    let (receiver_object, _) = heap.reserve_nlab(header_bytes).unwrap();
+    heap.publish_object(receiver, receiver_object, PROTO_NULL_SENTINEL, 0)
+        .unwrap();
+    heap.set_prototype(receiver, prototype).unwrap();
+    let generation = heap.shapes().proto_generation();
+
+    // 模拟 GC 清扫旧 receiver 与 prototype；回收顺序让 prototype handle 先复用。
+    heap.retire_handle(receiver).unwrap();
+    heap.retire_handle(prototype).unwrap();
+    heap.advance_epoch_and_reclaim();
+    heap.advance_epoch_and_reclaim();
+    assert_eq!(heap.allocate_handle().unwrap(), prototype);
+
+    let (replacement_object, _) = heap.reserve_nlab(header_bytes).unwrap();
+    heap.publish_object(prototype, replacement_object, PROTO_NULL_SENTINEL, 0)
+        .unwrap();
+    // NativeRuntime 的对象分配在 publish 后调用 set_prototype；该绑定必须使旧 IC 失效。
+    heap.set_prototype(prototype, PROTO_NULL_SENTINEL).unwrap();
+    assert_ne!(heap.shapes().proto_generation(), generation);
+}
+
+#[test]
 fn own_data_property_index_covers_data_accessor_dictionary_array_missing() {
     const HEAP_BYTES: u64 = 1024 * 1024;
 
