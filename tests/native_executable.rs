@@ -110,6 +110,18 @@ fn build_native_executable(args: &[&str], output: &std::path::Path) {
     assert!(output.is_file(), "native executable should be created");
 }
 
+fn build_wjsm(args: &[&str], output: &std::path::Path) {
+    let wjsm = env!("CARGO_BIN_EXE_wjsm");
+    let status = Command::new(wjsm)
+        .args(["build", "-o"])
+        .arg(output)
+        .args(args)
+        .status()
+        .expect("wjsm build should spawn");
+    assert!(status.success(), "wjsm build .wjsm failed: {status}");
+    assert!(output.is_file(), "portable artifact should be created");
+}
+
 fn relocate_and_hide_sources(
     packed: &std::path::Path,
     project: &std::path::Path,
@@ -163,6 +175,152 @@ fn native_executable_keeps_virtual_identity_after_relocate() {
     assert!(
         !stdout.contains(&dir.to_string_lossy().replace('\\', "/")),
         "resolve must not echo the build-machine path, got {stdout}"
+    );
+}
+
+#[test]
+fn native_executable_from_wjsm_keeps_virtual_identity_after_relocate() {
+    let dir = scratch_dir();
+    let project = dir.join("project");
+    let out_dir = dir.join("out");
+    let run_dir = dir.join("run");
+    std::fs::create_dir_all(&project).expect("project dir");
+    std::fs::create_dir_all(&out_dir).expect("out dir");
+    let entry = project.join("main.js");
+    let dep = project.join("dep.js");
+    std::fs::write(
+        &entry,
+        "import './dep.js';\nconsole.log(import.meta.resolve('./dep.js'));\n",
+    )
+    .expect("entry");
+    std::fs::write(&dep, "export const value = 1;\n").expect("dep");
+    let artifact = out_dir.join("app.wjsm");
+    build_wjsm(
+        &[
+            "--root",
+            project.to_str().expect("utf8"),
+            entry.to_str().expect("utf8"),
+        ],
+        &artifact,
+    );
+    let output = out_dir.join(exe_name("app"));
+    build_native_executable(
+        &[
+            "--root",
+            project.to_str().expect("utf8"),
+            artifact.to_str().expect("utf8"),
+        ],
+        &output,
+    );
+
+    let relocated = relocate_and_hide_sources(&output, &project, &run_dir);
+    let run = run_relocated(&relocated);
+    assert!(
+        run.status.success(),
+        "packed .wjsm executable failed: status={} stdout={} stderr={}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout).replace('\\', "/");
+    assert_eq!(stdout.trim(), "file:///wjsm-exec/dep.js");
+    assert!(
+        !stdout.contains(&dir.to_string_lossy().replace('\\', "/")),
+        "resolve must not echo the build-machine path, got {stdout}"
+    );
+}
+
+#[test]
+fn native_executable_from_wjsm_without_sources_fails() {
+    let dir = scratch_dir();
+    let project = dir.join("project");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&project).expect("project dir");
+    std::fs::create_dir_all(&out_dir).expect("out dir");
+    let entry = project.join("main.js");
+    std::fs::write(&entry, "console.log(1);\n").expect("entry");
+    let artifact = out_dir.join("app.wjsm");
+    build_wjsm(&[entry.to_str().expect("utf8")], &artifact);
+    let output = out_dir.join(exe_name("missing"));
+    let wjsm = env!("CARGO_BIN_EXE_wjsm");
+    let stub = env!("CARGO_BIN_EXE_wjsm-exec");
+    let result = Command::new(wjsm)
+        .args(["build", "--format", "native-executable", "-o"])
+        .arg(&output)
+        .arg(&artifact)
+        .env("WJSM_EXEC_STUB", stub)
+        .output()
+        .expect("wjsm build should spawn");
+    assert!(
+        !result.status.success(),
+        "packing .wjsm without sources must fail"
+    );
+    assert!(
+        !output.exists(),
+        "failed pack must not write the executable"
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("failed to include artifact module") || stderr.contains("pass --root"),
+        "missing source should mention the artifact module, got {stderr}"
+    );
+}
+
+#[test]
+fn native_executable_from_wjsm_auto_includes_static_worker() {
+    let dir = scratch_dir();
+    let project = dir.join("project");
+    let out_dir = dir.join("out");
+    let run_dir = dir.join("run");
+    std::fs::create_dir_all(&project).expect("project dir");
+    std::fs::create_dir_all(&out_dir).expect("out dir");
+    std::fs::write(
+        project.join("main.js"),
+        r#"
+const { Worker } = require('worker_threads');
+const w = new Worker('./worker.js');
+w.on('message', (m) => {
+  console.log(m);
+  w.terminate();
+});
+w.on('exit', () => process.exit(0));
+"#,
+    )
+    .expect("entry");
+    std::fs::write(
+        project.join("worker.js"),
+        "const { parentPort } = require('worker_threads');\nparentPort.postMessage('from-wjsm');\n",
+    )
+    .expect("worker");
+    let artifact = out_dir.join("app.wjsm");
+    build_wjsm(
+        &[
+            "--root",
+            project.to_str().expect("utf8"),
+            project.join("main.js").to_str().expect("utf8"),
+        ],
+        &artifact,
+    );
+    let output = out_dir.join(exe_name("wjsm-worker"));
+    build_native_executable(
+        &[
+            "--root",
+            project.to_str().expect("utf8"),
+            artifact.to_str().expect("utf8"),
+        ],
+        &output,
+    );
+    let relocated = relocate_and_hide_sources(&output, &project, &run_dir);
+    let run = run_relocated(&relocated);
+    assert!(
+        run.status.success(),
+        "packed .wjsm worker failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("from-wjsm"),
+        "packed .wjsm worker stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
     );
 }
 

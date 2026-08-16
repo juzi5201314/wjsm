@@ -17,7 +17,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 use wjsm_artifact_format::{
-    ArtifactBuildInput, ArtifactLimits, BuildOptions, ModuleManifest, PortableArtifact,
+    ArtifactBuildInput, ArtifactLimits, BuildOptions, ManifestModule, ModuleKind, ModuleManifest,
+    PortableArtifact,
 };
 use wjsm_ir::Program;
 use wjsm_parser as parser;
@@ -583,8 +584,18 @@ fn compile_native_executable_artifact(
                 let bytes = fs::read(&path).with_context(|| {
                     format!("failed to read portable artifact '{}'", path.display())
                 })?;
-                let files = snapshot_includes(include_root(root, path.parent())?, include)?;
-                Ok((bytes, files))
+                let artifact = decode_artifact_bytes(bytes)?;
+                let module_root = include_root(root, path.parent())?;
+                let entry = portable_artifact_entry_path(&module_root, artifact.manifest())?;
+                compile_native_executable_from_file(
+                    &entry,
+                    Some(module_root.as_path()),
+                    script,
+                    verify_ir,
+                    debug_codegen,
+                    &options,
+                    include,
+                )
             } else if path_is_stdin(&path) {
                 let (source, _) = read_input_for_parse(&path)?;
                 let bytes = compile_source_with_identity(
@@ -628,6 +639,34 @@ fn snapshot_includes(root: PathBuf, include: &[PathBuf]) -> Result<BTreeMap<Stri
     apply_snapshot_includes(&store, include)?;
     wjsm_module::include_static_runtime_entries(&store)?;
     Ok(store.recorded_files())
+}
+
+/// `.wjsm` 只有主机身份 IR；打包必须从清单入口重新 lowering，才能写入虚拟身份与快照。
+fn portable_artifact_entry_path(root: &Path, manifest: &ModuleManifest) -> Result<PathBuf> {
+    let entry = manifest
+        .modules
+        .iter()
+        .find(|module| module.id == manifest.entry)
+        .ok_or_else(|| anyhow::anyhow!("portable artifact is missing its entry module"))?;
+    if !manifest_module_has_disk_source(entry) {
+        bail!(
+            "portable artifact entry '{}' has no on-disk source",
+            entry.logical_url
+        );
+    }
+    let path = wjsm_module::logical_url_path(root, &entry.logical_url)?;
+    if !path.is_file() {
+        bail!(
+            "failed to include artifact module '{}' under '{}'; pass --root to the original source tree",
+            entry.logical_url,
+            root.display()
+        );
+    }
+    Ok(path)
+}
+
+fn manifest_module_has_disk_source(module: &ManifestModule) -> bool {
+    module.kind != ModuleKind::Builtin && !module.logical_url.starts_with("node:")
 }
 
 fn apply_snapshot_includes(
