@@ -323,8 +323,9 @@ fn cmd_build(
             bail!("refusing to write a native executable to stdout; use `-o <path>`");
         }
         wjsm_exec_format::locate_exec_stub().context("failed to locate wjsm-exec stub")?;
-        let artifact_bytes = compile_cli_artifact(cli, input, eval, root, script)?;
-        native_exec::write_native_executable(&artifact_bytes, output)?;
+        let (artifact_bytes, module_root) =
+            compile_cli_artifact_with_root(cli, input, eval, root, script)?;
+        native_exec::write_native_executable(&artifact_bytes, &module_root, output)?;
         if cli.verbose_enabled(1) {
             eprintln!("Wrote native executable to {}", output.display());
         }
@@ -483,28 +484,50 @@ fn compile_cli_artifact(
     root: Option<&Path>,
     script: bool,
 ) -> Result<Vec<u8>> {
+    compile_cli_artifact_with_root(cli, input, eval, root, script).map(|(bytes, _)| bytes)
+}
+
+fn compile_cli_artifact_with_root(
+    cli: &Cli,
+    input: &Option<PathBuf>,
+    eval: &Option<String>,
+    root: Option<&Path>,
+    script: bool,
+) -> Result<(Vec<u8>, PathBuf)> {
     match resolve_input(input, eval)? {
-        InputSource::Inline(code) => compile_source(
-            &code,
-            None,
-            script,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
-        ),
+        InputSource::Inline(code) => {
+            let module_root = resolved_module_root(source_module_root(None));
+            let bytes = compile_source(
+                &code,
+                None,
+                script,
+                cli.should_verify_ir(),
+                cli.wants_debug_codegen(),
+            )?;
+            Ok((bytes, module_root))
+        }
         InputSource::File(path) => {
             if path.extension().and_then(|extension| extension.to_str()) == Some("wjsm") {
-                fs::read(&path).with_context(|| {
+                let bytes = fs::read(&path).with_context(|| {
                     format!("failed to read portable artifact '{}'", path.display())
-                })
+                })?;
+                let module_root = resolved_module_root(
+                    root.map(Path::to_path_buf)
+                        .or_else(|| path.parent().map(Path::to_path_buf))
+                        .unwrap_or_else(|| PathBuf::from(".")),
+                );
+                Ok((bytes, module_root))
             } else if path_is_stdin(&path) {
                 let (source, _) = read_input_for_parse(&path)?;
-                compile_source(
+                let module_root = resolved_module_root(source_module_root(None));
+                let bytes = compile_source(
                     &source,
                     None,
                     script,
                     cli.should_verify_ir(),
                     cli.wants_debug_codegen(),
-                )
+                )?;
+                Ok((bytes, module_root))
             } else {
                 compile_from_file_input(
                     &path,
@@ -517,6 +540,10 @@ fn compile_cli_artifact(
             }
         }
     }
+}
+
+fn resolved_module_root(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
 }
 
 fn decode_artifact(path: &Path) -> Result<PortableArtifact> {
@@ -1861,16 +1888,17 @@ fn compile_from_file_input(
     verify_ir: bool,
     debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, PathBuf)> {
     let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
             let input =
                 lower_bundle_artifact_input(&entry, &root, resolution_options, debug_codegen)?;
-            Ok(PortableArtifact::from_input(&input)
+            let bytes = PortableArtifact::from_input(&input)
                 .map_err(|error| anyhow::anyhow!("portable artifact encoding failed: {error}"))?
                 .bytes()
-                .to_vec())
+                .to_vec();
+            Ok((bytes, resolved_module_root(root)))
         }
         CompilePlan::SingleSource {
             source,
@@ -1878,15 +1906,18 @@ fn compile_from_file_input(
             logical_url,
             source_path: _,
             module_root,
-        } => compile_source_with_identity(
-            &source,
-            Some(filename.as_str()),
-            &logical_url,
-            module_root,
-            script,
-            verify_ir,
-            debug_codegen,
-        ),
+        } => {
+            let bytes = compile_source_with_identity(
+                &source,
+                Some(filename.as_str()),
+                &logical_url,
+                module_root.clone(),
+                script,
+                verify_ir,
+                debug_codegen,
+            )?;
+            Ok((bytes, resolved_module_root(module_root)))
+        }
     }
 }
 

@@ -20,7 +20,7 @@ Guest 侧已经具备受限 linker：`CompiledImage::load` 只接受 Cranelift o
 
 ```text
 [预链 wjsm-exec stub（rustc 在构建 wjsm 时链接）]
-[payload：PortableArtifact + 1～2 个 NativeObject + ABI/codegen/target 元数据]
+[payload：PortableArtifact + 1～2 个 NativeObject + ABI/codegen/target 元数据 + 打包期 module_root]
 [footer：WJSMEXEC magic、version、offset、length、digest]
 ```
 
@@ -28,7 +28,7 @@ Guest 侧已经具备受限 linker：`CompiledImage::load` 只接受 Cranelift o
 
 ### 2. 构建时预编译，启动跳过 codegen
 
-payload 同时携带 canonical `.wjsm` 与预编译 `NativeObject`。有 `$builtin_main` 时按 ADR 0015 切成两段 object，与 `NativeRuntime::execute` 一致。启动用预编译 object 发布 image，不走 `NativeCompiler::compile`。`.wjsm` 仍用于 manifest、`install_program`、eval 与 worker；丢掉 IR 会变成残缺语义。
+payload 同时携带 canonical `.wjsm`、预编译 `NativeObject` 与打包期 `module_root`（与 CLI `--root` / 源码树一致，不是输出文件目录）。有 `$builtin_main` 时按 ADR 0015 切成两段 object，与 `NativeRuntime::execute` 一致。启动用预编译 object 发布 image，不走 `NativeCompiler::compile`。`.wjsm` 仍用于 manifest、`install_program`、eval 与 worker；丢掉 IR 会变成残缺语义。stub 必须用 payload 里的 `module_root` 做 file key 与运行时解析。
 
 ### 3. 系统 linker 只出现在构建 wjsm 时
 

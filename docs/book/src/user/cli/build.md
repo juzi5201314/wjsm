@@ -23,7 +23,7 @@ wjsm build app.ts --format native-executable -o /tmp/app
 
 ## 输出格式
 
-`--format wjsm` 是默认且可跨平台携带的制品格式。`--format native-executable` 在当前宿主上打包预链 `wjsm-exec` stub 与预编译 native object，得到可直接运行的 ELF/PE。只支持 `--stage compile`；失败时不创建或覆盖输出文件。runtime 私有 object 本身不是 executable。
+`--format wjsm` 是默认且可跨平台携带的制品格式。`--format native-executable` 在当前宿主上打包预链 `wjsm-exec` stub 与预编译 native object，得到可直接运行的 ELF/PE。只支持 `--stage compile`；失败时不创建或覆盖输出文件。runtime 私有 object 本身不是 executable。打包后的可执行文件用编译期 `--root` / 源码树做 module root，不用输出文件所在目录。
 
 ## 验证
 

@@ -33,7 +33,7 @@ fn run() -> Result<ExitCode, RunError> {
     runtime.configure_environment(true, std::iter::empty::<(String, String)>())?;
     runtime.configure_process_arguments(std::env::args())?;
     let working_directory = std::env::current_dir().unwrap_or_else(|_| exe.clone());
-    let module_root = exe.parent().unwrap_or(working_directory.as_path());
+    let module_root = std::path::Path::new(&payload.module_root);
     let execution =
         runtime.execute_precompiled(&artifact, &images, module_root, &working_directory)?;
     io::stdout().write_all(&execution.stdout)?;

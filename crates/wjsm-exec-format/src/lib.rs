@@ -11,7 +11,7 @@ use thiserror::Error;
 /// footer 固定 64 字节，始终位于文件末尾。
 pub const FOOTER_LEN: usize = 64;
 pub const FOOTER_MAGIC: &[u8; 8] = b"WJSMEXEC";
-pub const PAYLOAD_SCHEMA: u32 = 1;
+pub const PAYLOAD_SCHEMA: u32 = 2;
 pub const FORMAT_VERSION: u16 = 1;
 
 const MAX_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -39,6 +39,8 @@ pub struct ExecPayload {
     pub target: String,
     pub cranelift_version: String,
     pub settings: String,
+    /// 打包期 module root，与 CLI `--root` / 源码树一致。
+    pub module_root: String,
     pub artifact: Vec<u8>,
     pub objects: Vec<EncodedNativeObject>,
 }
@@ -261,6 +263,10 @@ fn encode_payload(payload: &ExecPayload) -> Result<Vec<u8>, ExecFormatError> {
     encode_string(&mut bytes, &payload.target)?;
     encode_string(&mut bytes, &payload.cranelift_version)?;
     encode_string(&mut bytes, &payload.settings)?;
+    if payload.module_root.is_empty() {
+        return Err(ExecFormatError::Invalid("module root is empty".into()));
+    }
+    encode_string(&mut bytes, &payload.module_root)?;
     encode_blob(&mut bytes, &payload.artifact, MAX_ARTIFACT_BYTES)?;
     let object_count =
         u32::try_from(payload.objects.len()).map_err(|_| ExecFormatError::LengthOverflow)?;
@@ -301,6 +307,10 @@ fn decode_payload(bytes: &[u8]) -> Result<ExecPayload, ExecFormatError> {
     let target = decoder.string()?;
     let cranelift_version = decoder.string()?;
     let settings = decoder.string()?;
+    let module_root = decoder.string()?;
+    if module_root.is_empty() {
+        return Err(ExecFormatError::Invalid("module root is empty".into()));
+    }
     let artifact = decoder.blob(MAX_ARTIFACT_BYTES)?;
     let object_count = decoder.u32()?;
     if object_count == 0 || object_count > MAX_OBJECTS {
@@ -319,6 +329,7 @@ fn decode_payload(bytes: &[u8]) -> Result<ExecPayload, ExecFormatError> {
         target,
         cranelift_version,
         settings,
+        module_root,
         artifact,
         objects,
     })
@@ -458,6 +469,7 @@ mod tests {
             target: ExecPayload::host_target(),
             cranelift_version: "0.134.3".into(),
             settings: "opt=speed".into(),
+            module_root: "/project".into(),
             artifact: b"WJSMART artifact".to_vec(),
             objects: vec![EncodedNativeObject {
                 bytes: b"object-bytes".to_vec(),
@@ -467,6 +479,16 @@ mod tests {
                 feedback_slot_count: 4,
             }],
         }
+    }
+
+    #[test]
+    fn pack_rejects_empty_module_root() {
+        let mut payload = sample_payload();
+        payload.module_root.clear();
+        assert!(matches!(
+            pack(b"stub", &payload),
+            Err(ExecFormatError::Invalid(message)) if message.contains("module root")
+        ));
     }
 
     #[test]
