@@ -1,5 +1,5 @@
-// GitHub #384: an object literal's deferred method/accessor body may read the
-// let/const binding whose initializer is creating that object.
+// GitHub #384：直接对象字面量 initializer 的延迟方法/访问器体可以引用
+// 正在初始化该对象的当前 let/const binding（只有 let 可赋值或更新）。
 const set = {
   forEach(action) {
     action(set);
