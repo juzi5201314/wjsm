@@ -1,9 +1,33 @@
 use super::*;
 
 impl Lowerer {
-    /// 获取或创建当前外层函数的共享 env 对象，并确保所有捕获变量都已写入。
-    /// 同一外层函数中的多个闭包共享同一个 env 对象，保证可变捕获变量的修改对所有闭包可见。
+    /// 获取闭包创建点可见的环境。按迭代绑定位于独立子环境，函数级共享绑定
+    /// 保持在稳定父环境中，避免把 `var` 或外层 `let` 错误复制为每轮私有值。
     pub(crate) fn ensure_shared_env(
+        &mut self,
+        block: BasicBlockId,
+        captured: &[CapturedBinding],
+        span: Span,
+    ) -> Result<ValueId, LoweringError> {
+        let has_iteration_capture = captured
+            .iter()
+            .any(|binding| self.iteration_env_for_binding(binding).is_some());
+        if !has_iteration_capture {
+            return self.ensure_function_shared_env(block, captured, span);
+        }
+
+        let stable_captures = captured
+            .iter()
+            .filter(|binding| self.iteration_env_for_binding(binding).is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        let _ = self.ensure_function_shared_env(block, &stable_captures, span)?;
+        let current_block = self.resolve_store_block(block);
+        Ok(self.load_current_iteration_env(current_block))
+    }
+
+    /// 获取或创建当前函数调用帧的稳定共享环境。
+    fn ensure_function_shared_env(
         &mut self,
         block: BasicBlockId,
         captured: &[CapturedBinding],
@@ -189,6 +213,205 @@ impl Lowerer {
         self.expr_merge_block = Some(merge);
 
         Ok(env_val)
+    }
+
+    pub(crate) fn iteration_env_for_binding(
+        &self,
+        binding: &CapturedBinding,
+    ) -> Option<&IterationEnvFrame> {
+        let function_scope_id = self.current_function_scope_id();
+        self.iteration_env_stack.iter().rev().find(|frame| {
+            frame.function_scope_id == function_scope_id && frame.bindings.contains(binding)
+        })
+    }
+
+    fn current_iteration_env(&self) -> Option<&IterationEnvFrame> {
+        let function_scope_id = self.current_function_scope_id();
+        self.iteration_env_stack
+            .iter()
+            .rev()
+            .find(|frame| frame.function_scope_id == function_scope_id)
+    }
+
+    pub(crate) fn prepare_iteration_env(
+        &mut self,
+        block: BasicBlockId,
+        bindings: Vec<CapturedBinding>,
+    ) -> Result<(BasicBlockId, IterationEnvFrame), LoweringError> {
+        let parent_ir_name = if let Some(parent) = self.current_iteration_env() {
+            parent.ir_name.clone()
+        } else {
+            let _ = self.ensure_function_shared_env(block, &[], DUMMY_SP)?;
+            self.shared_env_ir_name()
+        };
+        let block = self.resolve_store_block(block);
+        let name = format!("$iteration_env.{}", self.next_temp);
+        self.next_temp += 1;
+        let scope_id = self
+            .scopes
+            .declare(&name, VarKind::Let, true)
+            .map_err(|message| self.error(DUMMY_SP, message))?;
+        let frame = IterationEnvFrame {
+            function_scope_id: self.current_function_scope_id(),
+            bindings,
+            ir_name: format!("${scope_id}.{name}"),
+            parent_ir_name,
+        };
+        Ok((block, frame))
+    }
+
+    fn create_iteration_env_object(
+        &mut self,
+        block: BasicBlockId,
+        frame: &IterationEnvFrame,
+    ) -> ValueId {
+        let parent = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: parent,
+                name: frame.parent_ir_name.clone(),
+            },
+        );
+        let env = self.alloc_value();
+        let capacity = u32::try_from(frame.bindings.len())
+            .expect("iteration binding count fits object capacity");
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: env,
+                capacity,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProto {
+                object: env,
+                value: parent,
+            },
+        );
+        env
+    }
+
+    fn store_iteration_env(
+        &mut self,
+        block: BasicBlockId,
+        frame: &IterationEnvFrame,
+        env: ValueId,
+    ) {
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: frame.ir_name.clone(),
+                value: env,
+            },
+        );
+    }
+
+    pub(crate) fn initialize_iteration_env(
+        &mut self,
+        block: BasicBlockId,
+        frame: &IterationEnvFrame,
+        copy_previous: bool,
+    ) {
+        let previous_env = copy_previous.then(|| {
+            let value = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: value,
+                    name: frame.ir_name.clone(),
+                },
+            );
+            value
+        });
+        let env = self.create_iteration_env_object(block, frame);
+        for binding in &frame.bindings {
+            let value = self.alloc_value();
+            let load = if let Some(previous_env) = previous_env {
+                let key = self.append_env_key_const(block, binding);
+                Instruction::GetProp {
+                    dest: value,
+                    object: previous_env,
+                    key,
+                }
+            } else {
+                Instruction::LoadVar {
+                    dest: value,
+                    name: binding.var_ir_name(),
+                }
+            };
+            self.current_function.append_instruction(block, load);
+            let key = self.append_env_key_const(block, binding);
+            self.emit_set_prop(block, env, key, value);
+        }
+        self.store_iteration_env(block, frame, env);
+    }
+
+    pub(crate) fn initialize_empty_iteration_env(
+        &mut self,
+        block: BasicBlockId,
+        frame: &IterationEnvFrame,
+    ) {
+        let env = self.create_iteration_env_object(block, frame);
+        self.store_iteration_env(block, frame, env);
+    }
+
+    pub(crate) fn load_current_iteration_env(&mut self, block: BasicBlockId) -> ValueId {
+        let ir_name = self
+            .current_iteration_env()
+            .expect("iteration env stack underflow")
+            .ir_name
+            .clone();
+        let env = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: env,
+                name: ir_name,
+            },
+        );
+        env
+    }
+
+    pub(crate) fn load_iteration_env_for_binding(
+        &mut self,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+    ) -> ValueId {
+        let ir_name = self
+            .iteration_env_for_binding(binding)
+            .expect("iteration binding without environment")
+            .ir_name
+            .clone();
+        let env = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: env,
+                name: ir_name,
+            },
+        );
+        env
+    }
+
+    pub(crate) fn load_iteration_binding(
+        &mut self,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+    ) -> ValueId {
+        let env = self.load_iteration_env_for_binding(block, binding);
+        let key = self.append_env_key_const(block, binding);
+        let value = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetProp {
+                dest: value,
+                object: env,
+                key,
+            },
+        );
+        value
     }
 
     fn create_shared_env_object(

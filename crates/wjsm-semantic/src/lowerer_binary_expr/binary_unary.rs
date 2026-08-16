@@ -671,7 +671,11 @@ impl Lowerer {
                     .map_err(|msg| self.error(update.span(), msg))?;
 
                 let binding = CapturedBinding::new(name.clone(), scope_id);
-                if self.binding_belongs_to_current_function(&binding)
+                if self.iteration_env_for_binding(&binding).is_some() {
+                    let env = self.load_iteration_env_for_binding(block, &binding);
+                    let key = self.append_env_key_const(block, &binding);
+                    Target::Captured(env, key)
+                } else if self.binding_belongs_to_current_function(&binding)
                     && self.is_shared_binding(&binding)
                 {
                     return self.lower_update_shared_local(
@@ -680,9 +684,7 @@ impl Lowerer {
                         format!("${scope_id}.{name}"),
                         &binding,
                     );
-                }
-
-                if !self.binding_belongs_to_current_function(&binding) {
+                } else if !self.binding_belongs_to_current_function(&binding) {
                     self.record_capture(binding.clone());
                     let start_env = self.load_env_object(block);
                     let (owner_block, owner_env) =
@@ -969,7 +971,7 @@ impl Lowerer {
         self.current_function.append_instruction(
             local_block,
             Instruction::StoreVar {
-                name: ir_name,
+                name: ir_name.clone(),
                 value: local_new,
             },
         );
@@ -990,6 +992,13 @@ impl Lowerer {
         let (env_num, env_new) = self.append_update_math(env_block, env_old, update.op);
         let write_result = self.emit_set_prop(env_block, env_val, key_val, env_new);
         let env_continue = self.lower_value_exception_branch(env_block, write_result)?;
+        self.current_function.append_instruction(
+            env_continue,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: env_new,
+            },
+        );
         let env_result = if update.prefix { env_new } else { env_num };
         self.current_function
             .set_terminator(env_continue, Terminator::Jump { target: merge });

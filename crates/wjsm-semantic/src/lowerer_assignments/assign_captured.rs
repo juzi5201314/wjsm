@@ -52,7 +52,9 @@ impl Lowerer {
         binding: &CapturedBinding,
     ) -> Result<ValueId, LoweringError> {
         let mut current_block = block;
-        let env_val = if self.binding_belongs_to_current_function(binding) {
+        let env_val = if self.iteration_env_for_binding(binding).is_some() {
+            self.load_iteration_env_for_binding(current_block, binding)
+        } else if self.binding_belongs_to_current_function(binding) {
             let env_val =
                 self.ensure_shared_env(current_block, std::slice::from_ref(binding), assign.span)?;
             current_block = self.resolve_store_block(current_block);
@@ -60,7 +62,7 @@ impl Lowerer {
         } else {
             self.record_capture(binding.clone());
             let start_env = self.load_env_object(current_block);
-            let (owner_block, owner_env) = if self.captured_binding_at_env_depth_zero(&binding) {
+            let (owner_block, owner_env) = if self.captured_binding_at_env_depth_zero(binding) {
                 // 深度 0 捕获：owner 就是 $env，跳过 has_own + get_proto_of 链查找
                 (current_block, start_env)
             } else {

@@ -376,7 +376,10 @@ impl Lowerer {
         while_stmt: &swc_ast::WhileStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
+        let captured = self.loop_body_captured_bindings(&while_stmt.body);
+        self.mark_stable_loop_captures(&captured, &[]);
+        block = self.initialize_stable_loop_captures(block, &captured, &[])?;
 
         let header = self.current_function.new_block();
         let body = self.current_function.new_block();
@@ -430,7 +433,10 @@ impl Lowerer {
         do_while: &swc_ast::DoWhileStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
+        let captured = self.loop_body_captured_bindings(&do_while.body);
+        self.mark_stable_loop_captures(&captured, &[]);
+        block = self.initialize_stable_loop_captures(block, &captured, &[])?;
 
         let body = self.current_function.new_block();
         let condition = self.current_function.new_block();
@@ -509,22 +515,14 @@ impl Lowerer {
                     if var_decl.kind != swc_ast::VarDeclKind::Var {
                         self.predeclare_var_decl(var_decl)?;
                     }
-                    // 必须使用 lower_var_decl 返回的继续块：can_throw 初始化器会插入
-                    // 异常分叉（lower_value_exception_branch），store 落在分叉的
-                    // continue 块上；若沿用 init 前的旧块，后面的
-                    // set_terminator(Jump{header}) 会覆盖异常分叉的 Branch，
-                    // 使 store 孤立、循环头读到未初始化的变量（issue #346）。
+                    // 初始化器可能插入异常分叉，后续 CFG 必须从真实继续块接续。
                     match self.lower_var_decl(var_decl, StmtFlow::Open(block))? {
-                        StmtFlow::Open(cont) => cont,
-                        // lower_var_decl 无 return/throw 路径，必然 Open；防御性兜底：
-                        // 若未来引入 Terminated，init 不可达则整个 for 循环不可达。
+                        StmtFlow::Open(continuation) => continuation,
                         StmtFlow::Terminated => return Ok(StmtFlow::Terminated),
                     }
                 }
                 swc_ast::VarDeclOrExpr::Expr(expr) => {
                     let _ = self.lower_expr(expr, block)?;
-                    // 表达式 init 的异常分叉在 lower_expr 内部（经 continuation 机制），
-                    // 继续块由下方 resolve_store_block 解析，沿用原 block 即可。
                     block
                 }
             }
@@ -532,55 +530,84 @@ impl Lowerer {
             block
         };
 
-        let init_end = self.resolve_store_block(block);
+        let captured = self.loop_body_captured_bindings(&for_stmt.body);
+        let iteration_bindings = match &for_stmt.init {
+            Some(swc_ast::VarDeclOrExpr::VarDecl(declaration)) => {
+                self.loop_head_iteration_bindings(declaration, &captured, false)?
+            }
+            _ => Vec::new(),
+        };
+        self.mark_stable_loop_captures(&captured, &iteration_bindings);
+
+        let mut init_end = self.resolve_store_block(block);
+        init_end =
+            self.initialize_stable_loop_captures(init_end, &captured, &iteration_bindings)?;
+        let iteration_frame = if iteration_bindings.is_empty() {
+            None
+        } else {
+            let (continuation, frame) = self.prepare_iteration_env(init_end, iteration_bindings)?;
+            init_end = continuation;
+            self.initialize_iteration_env(init_end, &frame, false);
+            Some(frame)
+        };
+
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
+        let per_iteration = iteration_frame
+            .as_ref()
+            .map(|_| self.current_function.new_block());
         let update = self.current_function.new_block();
         let exit = self.current_function.new_block();
 
         self.current_function
             .set_terminator(init_end, Terminator::Jump { target: header });
+        if let Some(frame) = &iteration_frame {
+            self.iteration_env_stack.push(frame.clone());
+        }
 
         self.label_stack.push(LabelContext {
             label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
             break_target: exit,
-            continue_target: Some(update),
+            continue_target: Some(per_iteration.unwrap_or(update)),
             iterator_to_close: None,
         });
 
-        // condition
         if let Some(test) = &for_stmt.test {
-            let cond = self.lower_expr(test, header)?;
+            let condition = self.lower_expr(test, header)?;
             let branch_header = self.resolve_store_block(header);
             self.current_function.set_terminator(
                 branch_header,
                 Terminator::Branch {
-                    condition: cond,
+                    condition,
                     true_block: body_block,
                     false_block: exit,
                 },
             );
         } else {
-            // no condition → always true
-            let true_val = self.load_bool_constant(true, header);
+            let condition = self.load_bool_constant(true, header);
             self.current_function.set_terminator(
                 header,
                 Terminator::Branch {
-                    condition: true_val,
+                    condition,
                     true_block: body_block,
                     false_block: exit,
                 },
             );
         }
 
-        // body
         let body_flow = self.lower_stmt(&for_stmt.body, StmtFlow::Open(body_block))?;
+        let body_continuation = per_iteration.unwrap_or(update);
         let _ = self
             .current_function
-            .ensure_jump_or_terminated(body_flow, update);
+            .ensure_jump_or_terminated(body_flow, body_continuation);
 
-        // update
+        if let (Some(per_iteration), Some(frame)) = (per_iteration, &iteration_frame) {
+            self.initialize_iteration_env(per_iteration, frame, true);
+            self.current_function
+                .set_terminator(per_iteration, Terminator::Jump { target: update });
+        }
+
         if let Some(update_expr) = &for_stmt.update {
             let _ = self.lower_expr(update_expr, update)?;
         }
@@ -589,6 +616,11 @@ impl Lowerer {
             .set_terminator(update_end, Terminator::Jump { target: header });
 
         self.label_stack.pop();
+        if iteration_frame.is_some() {
+            self.iteration_env_stack
+                .pop()
+                .expect("iteration env stack underflow");
+        }
 
         Ok(StmtFlow::Open(exit))
     }

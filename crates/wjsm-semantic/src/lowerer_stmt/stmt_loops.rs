@@ -40,7 +40,16 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         self.declare_for_head_bindings(&for_in.left)?;
+        let captured = self.loop_body_captured_bindings(&for_in.body);
+        let iteration_bindings = match &for_in.left {
+            swc_ast::ForHead::VarDecl(declaration) => {
+                self.loop_head_iteration_bindings(declaration, &captured, true)?
+            }
+            _ => Vec::new(),
+        };
+        self.mark_stable_loop_captures(&captured, &iteration_bindings);
         let mut block = self.ensure_open(flow)?;
+        block = self.initialize_stable_loop_captures(block, &captured, &iteration_bindings)?;
 
         let rhs = self.lower_expr(&for_in.right, block)?;
         block = self.resolve_store_block(block);
@@ -55,6 +64,13 @@ impl Lowerer {
                 args: vec![rhs],
             },
         );
+        let iteration_frame = if iteration_bindings.is_empty() {
+            None
+        } else {
+            let (continuation, frame) = self.prepare_iteration_env(block, iteration_bindings)?;
+            block = continuation;
+            Some(frame)
+        };
 
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
@@ -112,12 +128,21 @@ impl Lowerer {
             },
         );
 
+        if let Some(frame) = &iteration_frame {
+            self.initialize_empty_iteration_env(body_block, frame);
+            self.iteration_env_stack.push(frame.clone());
+        }
         let body_entry = self.lower_for_in_of_lhs(&for_in.left, key_val, body_block)?;
 
         let body_flow = self.lower_stmt(&for_in.body, StmtFlow::Open(body_entry))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, next);
+        if iteration_frame.is_some() {
+            self.iteration_env_stack
+                .pop()
+                .expect("iteration env stack underflow");
+        }
 
         // next
         self.current_function.append_instruction(
@@ -163,7 +188,16 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         self.declare_for_head_bindings(&for_of.left)?;
+        let captured = self.loop_body_captured_bindings(&for_of.body);
+        let iteration_bindings = match &for_of.left {
+            swc_ast::ForHead::VarDecl(declaration) => {
+                self.loop_head_iteration_bindings(declaration, &captured, true)?
+            }
+            _ => Vec::new(),
+        };
+        self.mark_stable_loop_captures(&captured, &iteration_bindings);
         let mut block = self.ensure_open(flow)?;
+        block = self.initialize_stable_loop_captures(block, &captured, &iteration_bindings)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;
         block = self.resolve_store_block(block);
@@ -179,6 +213,13 @@ impl Lowerer {
             },
         );
         block = self.lower_value_exception_branch(block, iter_handle)?;
+        let iteration_frame = if iteration_bindings.is_empty() {
+            None
+        } else {
+            let (continuation, frame) = self.prepare_iteration_env(block, iteration_bindings)?;
+            block = continuation;
+            Some(frame)
+        };
 
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
@@ -239,12 +280,21 @@ impl Lowerer {
             },
         );
 
+        if let Some(frame) = &iteration_frame {
+            self.initialize_empty_iteration_env(body_block, frame);
+            self.iteration_env_stack.push(frame.clone());
+        }
         let body_entry = self.lower_for_in_of_lhs(&for_of.left, value_val, body_block)?;
 
         let body_flow = self.lower_stmt(&for_of.body, StmtFlow::Open(body_entry))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, next_block);
+        if iteration_frame.is_some() {
+            self.iteration_env_stack
+                .pop()
+                .expect("iteration env stack underflow");
+        }
 
         self.label_stack.pop();
 
@@ -291,7 +341,16 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         self.declare_for_head_bindings(&for_of.left)?;
+        let captured = self.loop_body_captured_bindings(&for_of.body);
+        let iteration_bindings = match &for_of.left {
+            swc_ast::ForHead::VarDecl(declaration) => {
+                self.loop_head_iteration_bindings(declaration, &captured, true)?
+            }
+            _ => Vec::new(),
+        };
+        self.mark_stable_loop_captures(&captured, &iteration_bindings);
         let mut block = self.ensure_open(flow)?;
+        block = self.initialize_stable_loop_captures(block, &captured, &iteration_bindings)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;
         block = self.resolve_store_block(block);
@@ -319,6 +378,13 @@ impl Lowerer {
                 value: iter_handle,
             },
         );
+        let iteration_frame = if iteration_bindings.is_empty() {
+            None
+        } else {
+            let (continuation, frame) = self.prepare_iteration_env(block, iteration_bindings)?;
+            block = continuation;
+            Some(frame)
+        };
 
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
@@ -517,12 +583,21 @@ impl Lowerer {
             },
         );
 
+        if let Some(frame) = &iteration_frame {
+            self.initialize_empty_iteration_env(body_block, frame);
+            self.iteration_env_stack.push(frame.clone());
+        }
         let body_entry = self.lower_for_in_of_lhs(&for_of.left, value_val, body_block)?;
 
         let body_flow = self.lower_stmt(&for_of.body, StmtFlow::Open(body_entry))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, header);
+        if iteration_frame.is_some() {
+            self.iteration_env_stack
+                .pop()
+                .expect("iteration env stack underflow");
+        }
 
         self.label_stack.pop();
 
@@ -556,16 +631,9 @@ impl Lowerer {
                     let (scope_id, _) = self
                         .scopes
                         .lookup(&name)
-                        .map_err(|msg| self.error(pat.span(), msg))?;
-                    let ir_name = format!("${scope_id}.{name}");
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::StoreVar {
-                            name: ir_name,
-                            value,
-                        },
-                    );
-                    Ok(block)
+                        .map_err(|message| self.error(pat.span(), message))?;
+                    let binding = CapturedBinding::new(name, scope_id);
+                    self.store_binding_value(block, &binding, value, pat.span(), true)
                 }
                 swc_ast::Pat::Object(_) | swc_ast::Pat::Array(_) | swc_ast::Pat::Assign(_) => {
                     self.lower_destructure_pattern(pat, value, block, VarKind::Let)
@@ -590,14 +658,14 @@ impl Lowerer {
                             self.scopes
                                 .mark_initialised(&name)
                                 .map_err(|msg| self.error(var_decl.span, msg))?;
-                            let ir_name = format!("${scope_id}.{name}");
-                            self.current_function.append_instruction(
+                            let binding = CapturedBinding::new(name, scope_id);
+                            block = self.store_binding_value(
                                 block,
-                                Instruction::StoreVar {
-                                    name: ir_name,
-                                    value,
-                                },
-                            );
+                                &binding,
+                                value,
+                                var_decl.span,
+                                true,
+                            )?;
                         }
                         _ => {
                             block = self.lower_destructure_pattern(

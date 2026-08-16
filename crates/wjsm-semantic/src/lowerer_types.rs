@@ -9,6 +9,14 @@ pub(crate) type ExpressionContinuationFrame = (
     Option<BasicBlockId>,
 );
 
+#[derive(Clone)]
+pub(crate) struct IterationEnvFrame {
+    pub(crate) function_scope_id: usize,
+    pub(crate) bindings: Vec<CapturedBinding>,
+    pub(crate) ir_name: String,
+    pub(crate) parent_ir_name: String,
+}
+
 pub(crate) struct Lowerer {
     pub(crate) module: Module,
     pub(crate) next_value: u32,
@@ -77,6 +85,8 @@ pub(crate) struct Lowerer {
     pub(crate) object_method_deferred_body_depth: u32,
     /// 每层函数的共享 env 对象（ValueId + 已注册捕获变量集合 + 最后写入的 block + 是否 dominate 全部后续 block）。
     pub(crate) shared_env_stack: Vec<Option<SharedEnvFrame>>,
+    /// 当前正在 lowering 的按迭代词法环境；嵌套循环按原型链连接。
+    pub(crate) iteration_env_stack: Vec<IterationEnvFrame>,
     // ── 模块系统相关 ────────────────────────────────────────────────────────
     /// 当前正在编译的模块 ID（用于多模块编译）
     pub(crate) current_module_id: Option<wjsm_ir::ModuleId>,

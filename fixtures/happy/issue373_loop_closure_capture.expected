@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+0,1,2
+3,3,3
+while=3
+closure-write=3
+function=0,1,2
+0:0,0:1,1:0,1:1
+before=3
+7,7
+for-in=a,b
+for-of=4,5
+--- stderr ---

@@ -107,6 +107,9 @@ impl Lowerer {
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
+        if self.iteration_env_for_binding(&binding).is_some() {
+            return Ok(self.load_iteration_binding(block, &binding));
+        }
         if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
             return self.load_captured_binding(block, &binding);
         }
@@ -418,7 +421,10 @@ impl Lowerer {
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
-        if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
+        if !self.binding_belongs_to_current_function(&binding)
+            || self.is_shared_binding(&binding)
+            || self.iteration_env_for_binding(&binding).is_some()
+        {
             return self.lower_assign_captured(assign, block, &binding);
         }
 
@@ -553,7 +559,11 @@ impl Lowerer {
                 value,
             },
         );
-        if self.is_shared_binding(binding) {
+        if self.iteration_env_for_binding(binding).is_some() {
+            let env = self.load_iteration_env_for_binding(store_block, binding);
+            let key = self.append_env_key_const(store_block, binding);
+            self.emit_set_prop(store_block, env, key, value);
+        } else if self.is_shared_binding(binding) {
             let env_val =
                 self.ensure_shared_env(store_block, std::slice::from_ref(binding), span)?;
             store_block = self.resolve_store_block(store_block);

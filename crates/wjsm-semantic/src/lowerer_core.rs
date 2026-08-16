@@ -92,6 +92,7 @@ impl Lowerer {
             lexical_home_object: None,
             function_lexical_home_object_stack: Vec::new(),
             shared_env_stack: Vec::new(),
+            iteration_env_stack: Vec::new(),
             current_module_id: None,
             import_bindings: std::collections::HashMap::new(),
             export_map: std::collections::HashMap::new(),
