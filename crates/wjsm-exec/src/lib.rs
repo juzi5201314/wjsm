@@ -61,12 +61,8 @@ fn run() -> Result<ExitCode, RunError> {
             .find(|module| module.id == artifact.manifest().entry)
             .map(|module| module.logical_url.as_str())
             .unwrap_or("main.js");
-        match compile_snapshot_entry(&store, entry, true) {
-            Ok(debug_artifact) => {
-                runtime.execute_with_store(&debug_artifact, store, &working_directory)?
-            }
-            Err(_) => runtime.execute_with_store(&artifact, store, &working_directory)?,
-        }
+        let debug_artifact = compile_snapshot_entry(&store, entry, true)?;
+        runtime.execute_with_store(&debug_artifact, store, &working_directory)?
     } else {
         runtime.execute_precompiled(&artifact, &images, store, &working_directory)?
     };

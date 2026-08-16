@@ -55,7 +55,7 @@ slow-timeout = { period = '3s', terminate-after = 3 }
 # native-executable 集成测试每次都打包 stub+payload，再冷启动 packed exe；
 # worker 用例还会在子线程二次编译。3s 报慢，连续三个周期才终止。
 [[profile.default.overrides]]
-filter = 'binary(native_executable)'
+filter = 'binary(/native_executable/)'
 threads-required = 'num-cpus'
 slow-timeout = { period = '3s', terminate-after = 3 }
 

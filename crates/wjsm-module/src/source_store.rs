@@ -161,6 +161,24 @@ impl ModuleSourceStore {
         Ok((logical, bytes))
     }
 
+    /// 把内存中的源文件记入 Recording store，供 `-e` / stdin 打包。
+    pub fn record_logical(&self, logical_url: &str, bytes: impl Into<Vec<u8>>) -> Result<()> {
+        validate_snapshot_logical_url(logical_url)?;
+        match self {
+            Self::Recording(store) => {
+                store
+                    .recorded
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(logical_url.to_string(), bytes.into());
+                Ok(())
+            }
+            Self::Disk(_) | Self::Snapshot(_) => {
+                bail!("record_logical requires a recording store")
+            }
+        }
+    }
+
     pub fn exists(&self, path: &Path) -> bool {
         self.is_file(path) || self.is_dir(path)
     }
@@ -536,5 +554,19 @@ mod tests {
         assert_eq!(filename, "/wjsm-exec/app.js");
         assert_eq!(dirname, "/wjsm-exec");
         assert_eq!(url, "file:///wjsm-exec/app.js");
+    }
+
+    #[test]
+    fn recording_store_records_logical_inline_source() {
+        let root = scratch();
+        let store = ModuleSourceStore::recording(&root);
+        store
+            .record_logical("eval.js", b"console.log(1);\n".to_vec())
+            .expect("record");
+        let recorded = store.recorded_files();
+        assert_eq!(
+            recorded.get("eval.js").map(Vec::as_slice),
+            Some(b"console.log(1);\n".as_slice())
+        );
     }
 }

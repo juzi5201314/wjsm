@@ -576,7 +576,12 @@ fn compile_native_executable_artifact(
                 verify_ir,
                 debug_codegen,
             )?;
-            let files = snapshot_includes(include_root(root, None)?, include)?;
+            let files = snapshot_inline_source(
+                "eval.js",
+                code.as_bytes(),
+                include_root(root, None)?,
+                include,
+            )?;
             Ok((bytes, files))
         }
         InputSource::File(path) => {
@@ -607,7 +612,12 @@ fn compile_native_executable_artifact(
                     verify_ir,
                     debug_codegen,
                 )?;
-                let files = snapshot_includes(include_root(root, None)?, include)?;
+                let files = snapshot_inline_source(
+                    "eval.js",
+                    source.as_bytes(),
+                    include_root(root, None)?,
+                    include,
+                )?;
                 Ok((bytes, files))
             } else {
                 compile_native_executable_from_file(
@@ -634,8 +644,21 @@ fn include_root(root: Option<&Path>, fallback: Option<&Path>) -> Result<PathBuf>
     std::env::current_dir().context("failed to determine include root")
 }
 
-fn snapshot_includes(root: PathBuf, include: &[PathBuf]) -> Result<BTreeMap<String, Vec<u8>>> {
+fn snapshot_inline_source(
+    logical_url: &str,
+    source: &[u8],
+    root: PathBuf,
+    include: &[PathBuf],
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let store = wjsm_module::ModuleSourceStore::recording(&root);
+    store.record_logical(logical_url, source.to_vec())?;
+    finish_snapshot(store, include)
+}
+
+fn finish_snapshot(
+    store: wjsm_module::ModuleSourceStore,
+    include: &[PathBuf],
+) -> Result<BTreeMap<String, Vec<u8>>> {
     apply_snapshot_includes(&store, include)?;
     wjsm_module::include_static_runtime_entries(&store)?;
     Ok(store.recorded_files())

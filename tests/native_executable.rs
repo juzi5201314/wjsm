@@ -1,21 +1,14 @@
 //! 同宿主 native-executable：打包 stub+overlay 后直接运行。
 
+mod native_exec;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
-
-fn scratch_dir() -> PathBuf {
-    let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir()
-        .join("wjsm-test-cache")
-        .join("native-exec")
-        .join(format!("{}-{id}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).expect("scratch dir");
-    path
-}
+use native_exec::{
+    build_native_executable, build_wjsm, exe_name, relocate_and_hide_sources, run_relocated,
+    scratch_dir,
+};
 
 #[test]
 fn native_executable_prints_one() {
@@ -83,63 +76,6 @@ fn native_executable_runs_hello_fixture() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(run.stdout, b"Hello, World!\n");
-}
-
-fn exe_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
-}
-
-fn build_native_executable(args: &[&str], output: &std::path::Path) {
-    let wjsm = env!("CARGO_BIN_EXE_wjsm");
-    let stub = env!("CARGO_BIN_EXE_wjsm-exec");
-    let status = Command::new(wjsm)
-        .args(["build", "--format", "native-executable", "-o"])
-        .arg(output)
-        .args(args)
-        .env("WJSM_EXEC_STUB", stub)
-        .status()
-        .expect("wjsm build should spawn");
-    assert!(
-        status.success(),
-        "wjsm build --format native-executable failed: {status}"
-    );
-    assert!(output.is_file(), "native executable should be created");
-}
-
-fn build_wjsm(args: &[&str], output: &std::path::Path) {
-    let wjsm = env!("CARGO_BIN_EXE_wjsm");
-    let status = Command::new(wjsm)
-        .args(["build", "-o"])
-        .arg(output)
-        .args(args)
-        .status()
-        .expect("wjsm build should spawn");
-    assert!(status.success(), "wjsm build .wjsm failed: {status}");
-    assert!(output.is_file(), "portable artifact should be created");
-}
-
-fn relocate_and_hide_sources(
-    packed: &std::path::Path,
-    project: &std::path::Path,
-    run_dir: &std::path::Path,
-) -> PathBuf {
-    std::fs::create_dir_all(run_dir).expect("run dir");
-    let relocated = run_dir.join(packed.file_name().expect("exe name"));
-    std::fs::copy(packed, &relocated).expect("copy exe");
-    let _ = std::fs::remove_file(packed);
-    std::fs::remove_dir_all(project).expect("hide source tree");
-    relocated
-}
-
-fn run_relocated(exe: &std::path::Path) -> std::process::Output {
-    Command::new(exe)
-        .current_dir(exe.parent().expect("run dir"))
-        .output()
-        .expect("packed executable should spawn")
 }
 
 #[test]
